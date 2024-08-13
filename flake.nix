@@ -128,7 +128,6 @@
           "bench" = cmd "Run benchmarks, including test utils"
             "${cargo} bench --features test_utils";
 
-           # FIXME align with `bench`?
           "bench:host" = cmd "Run host Criterion benchmarks"
             "${cargo} criterion";
 
@@ -207,9 +206,6 @@
       in rec {
         devShells.default = pkgs.mkShell {
           name = "beehive";
-
-          # NOTE: blst requires --target=wasm32 support in Clang, which MacOS system clang doesn't provide
-          stdenv = pkgs.clangStdenv;
 
           nativeBuildInputs = with pkgs;
             [
