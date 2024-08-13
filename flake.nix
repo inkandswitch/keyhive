@@ -238,6 +238,9 @@
             # See https://github.com/nextest-rs/nextest/issues/267
             export DYLD_FALLBACK_LIBRARY_PATH="$(rustc --print sysroot)/lib"
             export NIX_LDFLAGS="-F${pkgs.darwin.apple_sdk.frameworks.CoreFoundation}/Library/Frameworks -framework CoreFoundation $NIX_LDFLAGS";
+          ''
+          + ''
+            menu
           '';
         };
 
