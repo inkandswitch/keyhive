@@ -7,13 +7,13 @@ Group membership in Beehive has two main concepts: a membership CRDT, and a vari
 ```mermaid
 flowchart
     subgraph Legend
-        direction TB
+        direction RL
         successor -->|after| predecessor
     end
 ```
 
 ```mermaid
-flowchart
+flowchart RL
     subgraph docA
         direction TB
         
@@ -51,7 +51,7 @@ flowchart
         
         rootAdminAddsBob --> initAdmins
         rootAdminAddsAlice --> initAdmins
-        aliceAddsCarol --> rootAdminAddsAlice
+        aliceAddsCarol ----> rootAdminAddsAlice
         bobRemovesCarol --> rootAdminAddsBob
 
         aliceAddsWriters --> rootAdminAddsAlice
@@ -71,6 +71,7 @@ flowchart
     aliceAddsWriters -.-> aliceAddsDan
 
     addAdminsGroup -.-> rootAdminAddsBob
+    addAdminsGroupB -.-> aliceAddsWriters
 ```
 
 # State Transition
