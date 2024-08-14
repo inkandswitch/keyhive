@@ -8,7 +8,7 @@ Group membership in Beehive has two main concepts: a membership CRDT, and a vari
 flowchart
     subgraph Legend
         direction TB
-        successor --> predecessor
+        successor -->|after| predecessor
     end
 ```
 
