@@ -78,6 +78,39 @@ flowchart RL
 
 The state of a 
 
+FIXME: batch signatures (since signatures don't compress)
+
+$$
+\begin{align*}
+&\delta & ::= & \quad \textsf{AddStatelessAgent} \quad & \textsf{agentId} \quad & \quad                             & \textsf{publicKey} \quad & \textsf{signature} \\
+&       &   | & \quad \textsf{AddStatefulAgent}  \quad & \textsf{agentId} \quad & \textsf{agentStateHeads}    \quad & \textsf{publicKey} \quad & \textsf{signature} \\
+&       &   | & \quad \textsf{RemoveAgent}       \quad & \textsf{agentId} \quad & \textsf{documentStateHeads} \quad & \textsf{publicKey} \quad & \textsf{signature} \\
+\end{align*}
+$$
+
+
+FIXME alternate version from teh paper:
+
+FIXME on add, do we need agent heads, or just the removals? If only removals for efficiency, keep them in a Merkle Set, and reference the root? Given that this is concurrent taht may not work...
+FIXME need to include agent heads in revocations?
+FIXME discuss deny listing
+FIXME do we need to include the proofhead since we can materialize the view. It may make it fster to provide a Merkle proof & compare to the tombstone set
+        ...that imples that we define a way to reference auth state heads in a merkle tree, but we may not actually be able to do that thanks to EC
+        ... nope, we've opted to allow re-adds, so no tombstone set
+
+TODO: fix formatting; I just find this easier to read as a personal quirk 
+$$
+\begin{align*}
+&\delta & ::= & \quad \textsf{AddStatelessAgent} \quad & \textsf{agentId} \quad &                                & \textsf{documentStateHeads} \quad & \textsf{publicKey} \quad & \textsf{signature} \\
+&       &   | & \quad \textsf{AddStatefulAgent}  \quad & \textsf{agentId} \quad & \textsf{agentStateHeads} \quad & \textsf{documentStateHeads} \quad & \textsf{publicKey} \quad & \textsf{signature} \\
+&       &   | & \quad \textsf{RemoveAgent}       \quad & \textsf{agentId} \quad & \textsf{agentStateHeads} \quad & \textsf{documentStateHeads} \quad & \textsf{publicKey} \quad & \textsf{signature} \\
+\end{align*}
+$$
+
+### Re-Adds
+
+
+
 # Delegated Authority
 
 ## Transitive Authority
