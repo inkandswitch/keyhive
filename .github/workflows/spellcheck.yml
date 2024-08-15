@@ -12,5 +12,5 @@ jobs:
       - uses: actions/checkout@v3
       - uses: matheus23/md-spellcheck-action@v4.2.2
         with:
-          files-to-check: "*.md"
+          files-to-check: "**/*.md"
           words-to-ignore-file: ".github/workflows/dictionary.txt"

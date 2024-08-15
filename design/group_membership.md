@@ -1,6 +1,6 @@
 # Group Membership
 
-Group membership in Beehive has two main concepts: a membership CRDT, and a variant of object capabilities adapted to an eventually consistent setting. We propose naming this class of capabilities "Convergent Capabilities", or "concap" for short.
+Group membership in Beehive has two main concepts: a membership op-based CRDT, and a variant of object capabilities adapted to an eventually consistent setting. We propose naming this class of capabilities "Convergent Capabilities", or "concap" for short.
 
 To keep the nuber of pieces small in the example, we will use a short hierarchy: admins (arbitrary access) and read-only. 
 
@@ -148,6 +148,7 @@ FIXME do we need to include the proofhead since we can materialize the view. It 
         ... nope, we've opted to allow re-adds, so no tombstone set
 
 TODO: fix formatting; I just find this easier to read as a personal quirk 
+
 $$
 \begin{align*}
 &\delta & ::= & \quad \textsf{AddStatelessAgent} \quad & \textsf{agentId} \quad &                                & \textsf{documentStateHeads} \quad & \textsf{publicKey} \quad & \textsf{signature} \\
@@ -158,7 +159,7 @@ $$
 
 ## Materialization
 
-Materialization if access at a certain level proceeds recursively. Given read access to the caveats of each group, a complete list of users and their capabilities ($\langle \textsf{agentId}, \textsf{agentOrDocId}, \textsf{[restrictions]} \rangle$). The lowest level of rights in the preset is `pull`, which only requires knowing the current public key of leaf agents.
+Materialization if access at a certain level proceeds recursively. Given read access to the caveats of each group, a complete list of users and their capabilities $\langle \textsf{agentId}, \textsf{agentOrDocId}, \textsf{[restrictions]} \rangle$. The lowest level of rights in the preset is `pull`, which only requires knowing the current public key of leaf agents.
 
 In this case, we have the following authority for Doc A:
 
