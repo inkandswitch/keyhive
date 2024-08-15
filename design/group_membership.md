@@ -18,55 +18,43 @@ flowchart
 
 ```mermaid
 flowchart RL
-    subgraph docA
-        direction TB
-        
-        subgraph DocAState
-            direction RL
-            
+    subgraph docA[Document A]
+        subgraph DocAState[Doc State]
             opA4 --> opA2 --> opA1
             opA4 --> opA3 --> opA1
         end
 
-        subgraph DocAAuth
-            direction TB
-        
-            addAdminsGroup --> initDocAAuth
+        subgraph DocAAuth[Doc Auth]
+            addAdminsGroup["Doc A Root\n----------------------\nAdd Team Group"] --> initDocAAuth["Doc A Root\n---------------------\nSelf Certified Init"]
         end
     end
 
-    subgraph docB
-        direction TB
-        
-        subgraph DocBState
+    subgraph docB[Document B]
+        subgraph DocBState[Doc State]
             opB4 --> opB2 --> opB1
             opB4 --> opB3 --> opB1
         end
 
-        subgraph DocBAuth
+        subgraph DocBAuth[Doc Auth]
             direction TB
         
             addAdminsGroupB --> initDocBAuth
-            Francine --> initDocBAuth
+            addFrancine["Doc B Root\n----------------\nAdd Francine"] --> initDocBAuth["Doc B Root\n---------------------\nSelf-Certified Init"]
         end
     end
 
-    subgraph admins
-        direction TB
-        
-        rootAdminAddsBob --> initAdmins
-        rootAdminAddsAlice --> initAdmins
-        aliceAddsCarol ----> rootAdminAddsAlice
-        bobRemovesCarol --> rootAdminAddsBob
+    subgraph admins[Team Group]
+        rootAdminAddsBob["Team Root\n---------------\nAdd Bob"] --> initAdmins["Team Root\n---------------------\nSelf-Certified Init"]
+        rootAdminAddsAlice["Team Root\n---------------\nAdd Alice"] --> initAdmins
+        aliceAddsCarol["Alice\n------------\nAdd Carol"] ----> rootAdminAddsAlice
+        bobRemovesCarol["Bob\n-----------------\nRemove Carol"] --> rootAdminAddsBob
 
-        aliceAddsReaders --> rootAdminAddsAlice
+        aliceAddsReaders["Alice\n-----------------------\nAdd Readers Group"] --> rootAdminAddsAlice
     end
 
-    subgraph readers
-        direction TB
-
-        bobAddsErin --> initReaders
-        aliceAddsDan --> initReaders
+    subgraph readers[Readers Group]
+        bobAddsErin["Bob\n----------\nAdd Erin"] --> initReaders["Readers Root\n---------------------\nSelf-Certified Init"]
+        aliceAddsDan["Alice\n----------\nAdd Dan"] --> initReaders
     end
 
     bobRemovesCarol -.-> opA3
@@ -77,6 +65,8 @@ flowchart RL
 
     addAdminsGroup -.-> rootAdminAddsBob
     addAdminsGroupB -.-> aliceAddsReaders
+
+    addAdminsGroup -----> opA1
 ```
 
 ### Materialized View
