@@ -2,6 +2,8 @@
 
 Group membership in Beehive has two main concepts: a membership CRDT, and a variant of object capabilities adapted to an eventually consistent setting. We propose naming this class of capabilities "Convergent Capabilities", or "concap" for short.
 
+To keep the nuber of pieces small in the example, we will use a short hierarchy: admins (arbitrary access) and read-only. 
+
 ## Example
 
 ```mermaid
@@ -54,24 +56,24 @@ flowchart RL
         aliceAddsCarol ----> rootAdminAddsAlice
         bobRemovesCarol --> rootAdminAddsBob
 
-        aliceAddsWriters --> rootAdminAddsAlice
+        aliceAddsReaders --> rootAdminAddsAlice
     end
 
-    subgraph writers
+    subgraph readers
         direction TB
 
-        bobAddsErin --> initWriters
-        aliceAddsDan --> initWriters
+        bobAddsErin --> initReaders
+        aliceAddsDan --> initReaders
     end
 
     bobRemovesCarol -.-> opA3
     bobRemovesCarol -...-> opB4
 
-    aliceAddsWriters -.-> bobAddsErin
-    aliceAddsWriters -.-> aliceAddsDan
+    aliceAddsReaders -.-> bobAddsErin
+    aliceAddsReaders -.-> aliceAddsDan
 
     addAdminsGroup -.-> rootAdminAddsBob
-    addAdminsGroupB -.-> aliceAddsWriters
+    addAdminsGroupB -.-> aliceAddsReaders
 ```
 
 # State Transition
@@ -107,7 +109,46 @@ $$
 \end{align*}
 $$
 
-### Re-Adds
+## Materialization
+
+Materialization if access at a certain level proceeds recursively. Given read access to the caveats of each group, a complete list of usres and their capabilities ($\lange \textsf{agentId}, \textsf{agentorDocId}, \textsf{[restrictions]} \rangle$). The lowest level of rights in the preset is `pull`, which only requires knowing the public key of leaf agents.
+
+```mermaid
+flowchart TB
+    subgraph docA
+        direction TB
+
+        docARoot
+    end
+
+    subgraph docB
+        direction TB
+
+        docBRoot
+    end
+
+    subgraph admins
+        direction TB
+
+        AliceA
+        BobA
+        CarolA
+    end
+
+    subgraph readers
+        direction TB
+
+        Erin
+        Dan
+    end
+
+    admins --> docA
+    admins --> docB
+
+    readers --> admins
+```
+
+## Re-Adds
 
 
 
