@@ -6,6 +6,8 @@ To keep the nuber of pieces small in the example, we will use a short hierarchy:
 
 ## Example
 
+### Objects & Causal State
+
 ```mermaid
 flowchart
     subgraph Legend
@@ -77,6 +79,60 @@ flowchart RL
     addAdminsGroupB -.-> aliceAddsReaders
 ```
 
+### Materialized View
+
+The above example materialized to the following:
+
+```mermaid
+flowchart TB
+    subgraph read_only
+        direction TB
+
+        subgraph readers
+            direction TB
+
+            Erin
+            Dan
+
+            reader_root
+        end
+
+        Francine
+
+        subgraph also_write
+            subgraph also_change_membership
+                subgraph admins
+                    direction TB
+
+                    Alice
+                    Bob
+                    Carol
+
+                    admin_root_pk
+                end
+
+                subgraph docA
+                    direction TB
+
+                    docA_root_pk
+                end
+
+                subgraph docB
+                    direction TB
+
+                    docB_root_pk
+                end
+            end
+        end
+    end
+
+    admins --> docA
+    admins --> docB
+
+    Francine ~~~ readers
+    readers --> admins
+```
+
 # State Transition
 
 The state of a 
@@ -112,55 +168,7 @@ $$
 
 ## Materialization
 
-Materialization if access at a certain level proceeds recursively. Given read access to the caveats of each group, a complete list of usres and their capabilities ($\lange \textsf{agentId}, \textsf{agentorDocId}, \textsf{[restrictions]} \rangle$). The lowest level of rights in the preset is `pull`, which only requires knowing the public key of leaf agents.
-
-```mermaid
-flowchart TB
-    subgraph read_only
-        direction TB
-
-        subgraph readers
-            direction TB
-
-            Erin
-            Dan
-            Francine
-
-            reader_root
-        end
-
-        subgraph also_write
-            subgraph also_change_membership
-                subgraph admins
-                    direction TB
-
-                    Alice
-                    Bob
-                    Carol
-
-                    admin_root_pk
-                end
-
-                subgraph docA
-                    direction TB
-
-                    docA_root_pk
-                end
-
-                subgraph docB
-                    direction TB
-
-                    docB_root_pk
-                end
-            end
-        end
-    end
-
-    admins --> docA
-    admins --> docB
-
-    readers --> admins
-```
+Materialization if access at a certain level proceeds recursively. Given read access to the caveats of each group, a complete list of users and their capabilities ($\langle \textsf{agentId}, \textsf{agentOrDocId}, \textsf{[restrictions]} \rangle$). The lowest level of rights in the preset is `pull`, which only requires knowing the current public key of leaf agents.
 
 In this case, we have the following authority for Doc A:
 
@@ -171,7 +179,7 @@ In this case, we have the following authority for Doc A:
 | Carol       | ✅         | ✅              | ✅             | ✅                         |
 | Dan         | ✅         | ✅              | ❌             | ❌                         |
 | Erin        | ✅         | ✅              | ❌             | ❌                         |
-| Francin     | ❌         | ❌              | ❌             | ❌                         |
+| Francine    | ❌         | ❌              | ❌             | ❌                         |
 | Reader Root | ✅         | ✅              | ❌             | ❌                         |
 | Admin Root  | ✅         | ✅              | ✅             | ✅                         |
 | Doc A Root  | ✅         | ✅              | ✅             | ✅                         |
