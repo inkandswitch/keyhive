@@ -260,6 +260,37 @@ flowchart TB
     InitMap -.->|self-certified by| docRoot -.->|self-certified by| _docPK
 ```
 
+## Encrypted Op State
+
+Note that the above may not all be available as cleartext. For example, a Puller will see the [Document] example above as something along the following lines:
+
+```mermaid
+flowchart TB
+    subgraph Document
+        direction TB
+
+        _docPK["Document Root (Public Key)"]
+
+        subgraph docGroup[Document Membership]
+            docRootAddsSingleton["Doc Root\n--------------------\nAdd Singleton PK"] --> docRoot[Document Root\n----------------------\nSelf Certifying Init]
+            docRootAddsAnotherGroup["Doc Root\n------------------------------\nAdd Ink & Switch Group"] --> docRoot
+            singetonRemovesAnotherGroup[Singleton\n----------------------------------\nRemove Ink & Switch Group] --> docRootAddsSingleton
+            singetonRemovesAnotherGroup --> docRootAddsAnotherGroup
+        end
+
+        subgraph ops[Document Operations]
+            someStuff[Encrypted Bytes]
+        end
+
+        addKeyFoo -.->|somewhere inside| ops
+    end
+
+    singetonRemovesAnotherGroup -.->|lock state after| addKeyFoo["Document PK @ Op Hash"]
+    docRoot -.->|self-certified by| _docPK
+```
+
+This enough information for them to know may request document bytes, but not enough to actually decrypt the document state.
+
 # Delegation
 
 ## Attenuated Authority
