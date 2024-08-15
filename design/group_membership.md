@@ -144,7 +144,10 @@ enum AuthAction {
   // Arguably this could be expressed as AddGroup with group_heads: vec![singleton.id].
   // It's a noop if you give a stateless agent a different head,
   // since you will never be able to apply the op.
-  AddSingleton { id: PublicKey },
+  AddSingleton { 
+    id: PublicKey,
+    attenuate: FIXME,
+  },
   
   // Add Group includes docs, since Doc :< Group
   // Since Group :< Singleton, you *could* add a group that way,
@@ -152,7 +155,8 @@ enum AuthAction {
   // (which may or may not be desirable, depending on the domain)
   AddGroup { 
     id: PublicKey, 
-    group_heads: Vec<Hash> 
+    attenuate: FIXME,
+    group_heads: Vec<Hash>,
   },
   
   RemoveAgent { id: PublicKey },
