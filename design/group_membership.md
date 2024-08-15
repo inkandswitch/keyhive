@@ -115,31 +115,43 @@ Materialization if access at a certain level proceeds recursively. Given read ac
 
 ```mermaid
 flowchart TB
-    subgraph docA
+    subgraph read_only
         direction TB
 
-        docARoot
-    end
+        subgraph readers
+            direction TB
 
-    subgraph docB
-        direction TB
+            Erin
+            Dan
 
-        docBRoot
-    end
+            reader_root
+        end
 
-    subgraph admins
-        direction TB
+        subgraph also_write
+            subgraph also_change_membership
+                subgraph admins
+                    direction TB
 
-        AliceA
-        BobA
-        CarolA
-    end
+                    Alice
+                    Bob
+                    Carol
 
-    subgraph readers
-        direction TB
+                    admin_root_pk
+                end
 
-        Erin
-        Dan
+                subgraph docA
+                    direction TB
+
+                    docA_root_pk
+                end
+
+                subgraph docB
+                    direction TB
+
+                    docB_root_pk
+                end
+            end
+        end
     end
 
     admins --> docA
@@ -147,6 +159,24 @@ flowchart TB
 
     readers --> admins
 ```
+
+In this case, we have the following authority:
+
+| Agent       | Pull | E2EE Read | Write | Change Membership |
+|-------------|------|-----------|-------|-------------------|
+| Alice       | ✅   | ✅        | ✅    | ✅                |
+| Bob         | ✅   | ✅        | ✅    | ✅                |
+| Carol       | ✅   | ✅        | ✅    | ✅                |
+| Erin        | ✅   | ✅        | ❌    | ❌                |
+| Dan         | ✅   | ✅        | ❌    | ❌                |
+| Reader Root | ✅   | ✅        | ❌    | ❌                |
+| Admin Root  | ✅   | ✅        | ✅    | ✅                |
+| Doc A Root  | ✅   | ✅        | ✅    | ✅                |
+| Doc B Root  | ✅   | ✅        | ✅    | ✅                |
+
+### Auth Roots
+
+Auth roots are
 
 ## Re-Adds
 
