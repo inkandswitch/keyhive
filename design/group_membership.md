@@ -45,6 +45,7 @@ flowchart RL
             direction TB
         
             addAdminsGroupB --> initDocBAuth
+            Francine --> initDocBAuth
         end
     end
 
@@ -123,6 +124,7 @@ flowchart TB
 
             Erin
             Dan
+            Francine
 
             reader_root
         end
@@ -160,19 +162,35 @@ flowchart TB
     readers --> admins
 ```
 
-In this case, we have the following authority:
+In this case, we have the following authority for Doc A:
 
-| Agent       | Pull | E2EE Read | Write | Change Membership |
-|-------------|------|-----------|-------|-------------------|
-| Alice       | ✅   | ✅        | ✅    | ✅                |
-| Bob         | ✅   | ✅        | ✅    | ✅                |
-| Carol       | ✅   | ✅        | ✅    | ✅                |
-| Erin        | ✅   | ✅        | ❌    | ❌                |
-| Dan         | ✅   | ✅        | ❌    | ❌                |
-| Reader Root | ✅   | ✅        | ❌    | ❌                |
-| Admin Root  | ✅   | ✅        | ✅    | ✅                |
-| Doc A Root  | ✅   | ✅        | ✅    | ✅                |
-| Doc B Root  | ✅   | ✅        | ✅    | ✅                |
+| Agent       | Pull Doc A | E2EE Read Doc A | Write to Doc A | Change Membership on Doc A |
+|-------------|------------|-----------------|----------------|----------------------------|
+| Alice       | ✅         | ✅              | ✅             | ✅                         |
+| Bob         | ✅         | ✅              | ✅             | ✅                         |
+| Carol       | ✅         | ✅              | ✅             | ✅                         |
+| Dan         | ✅         | ✅              | ❌             | ❌                         |
+| Erin        | ✅         | ✅              | ❌             | ❌                         |
+| Francin     | ❌         | ❌              | ❌             | ❌                         |
+| Reader Root | ✅         | ✅              | ❌             | ❌                         |
+| Admin Root  | ✅         | ✅              | ✅             | ✅                         |
+| Doc A Root  | ✅         | ✅              | ✅             | ✅                         |
+| Doc B Root  | ❌         | ❌              | ❌             | ❌                         |
+
+And for Doc B:
+
+| Agent       | Pull Doc B | E2EE Read Doc B | Write to Doc B | Change Membership on Doc B |
+|-------------|------------|-----------------|----------------|----------------------------|
+| Alice       | ✅         | ✅              | ✅             | ✅                         |
+| Bob         | ✅         | ✅              | ✅             | ✅                         |
+| Carol       | ✅         | ✅              | ✅             | ✅                         |
+| Dan         | ✅         | ✅              | ❌             | ❌                         |
+| Erin        | ✅         | ✅              | ❌             | ❌                         |
+| Francine    | ✅         | ✅              | ❌             | ❌                         |
+| Reader Root | ✅         | ✅              | ❌             | ❌                         |
+| Admin Root  | ✅         | ✅              | ✅             | ✅                         |
+| Doc A Root  | ❌         | ❌              | ❌             | ❌                         |
+| Doc B Root  | ✅         | ✅              | ✅             | ✅                         |
 
 ### Auth Roots
 
