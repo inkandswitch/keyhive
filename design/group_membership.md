@@ -75,10 +75,10 @@ The above example materialized to the following:
 
 ```mermaid
 flowchart TB
-    subgraph read_only
+    subgraph read_only[Read Only]
         direction TB
 
-        subgraph readers
+        subgraph readers[Readers Group]
             direction TB
 
             Erin
@@ -89,9 +89,9 @@ flowchart TB
 
         Francine
 
-        subgraph also_write
-            subgraph also_change_membership
-                subgraph admins
+        subgraph also_write[Also Can Write]
+            subgraph also_change_membership[Unrestricted]
+                subgraph admins[Team Group]
                     direction TB
 
                     Alice
@@ -101,16 +101,16 @@ flowchart TB
                     admin_root_pk
                 end
 
-                subgraph docA
+                subgraph docA[Document A]
                     direction TB
 
-                    docA_root_pk
+                    docA_root_pk[Doc A Root]
                 end
 
-                subgraph docB
+                subgraph docB[Document B]
                     direction TB
 
-                    docB_root_pk
+                    docB_root_pk[Doc B Root]
                 end
             end
         end
@@ -119,8 +119,12 @@ flowchart TB
     admins --> docA
     admins --> docB
 
-    Francine ~~~ readers
+    Francine ---> docB
     readers --> admins
+
+    style read_only fill:blue,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;;
+    style also_write fill:purple,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
+    style also_change_membership fill:darkred,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
 ```
 
 # State Transition
@@ -141,7 +145,7 @@ TODO: fix formatting; I just find this easier to read as a personal quirk
 
 ```rust
 enum AuthAction {
-  // Arguably this could be expressed as AddGroup with group_heads: vec![singleton.id].
+  // Arguably this could be expressed as AddGroup with group_heads: vec![singleton.id] or possibly vec![]
   // It's a noop if you give a stateless agent a different head,
   // since you will never be able to apply the op.
   AddSingleton { 
@@ -207,12 +211,13 @@ And for Doc B:
 | Doc A Root  | ❌         | ❌              | ❌             | ❌                         |
 | Doc B Root  | ✅         | ✅              | ✅             | ✅                         |
 
-### Auth Roots
+### Roots
 
-Auth roots are
+Auth roots are the key pair associtated to a group. These are self-certifying (since their public key is the document ID), and 
 
 ## Re-Adds
 
+Re-adding a user is supported as long as the new add is causally after the removal.
 
 # Anatomy
 
