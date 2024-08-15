@@ -12,7 +12,7 @@ To keep the nuber of pieces small in the example, we will use a short hierarchy:
 flowchart
     subgraph Legend
         direction RL
-        successor -->|after| predecessor
+        successor["Successor Op Author\n--------------------------\nSuccessor Op Payload"] -->|after| predecessor["Predessor Op Author\n-----------------------------\nPredecessor Op Payload"]
     end
 ```
 
