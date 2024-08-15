@@ -205,7 +205,7 @@ All groups MUST be represented by a "root" keypair. A
 
 ```mermaid
 flowchart TB
-    subgraph singleton
+    subgraph Singleton
         _singletonPK["Singleton Public Key"]
     end
 ```
@@ -214,33 +214,49 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    subgraph group
-        _groupPK["Group Root (Public Key)"]
-        subgraph membership
-            rootAddsAlice[Group Root Adds Alice] --> groupRoot[Group Root]
-            rootAddsBob[Group Root Adds Bob] --> groupRoot
-            aliceAddsCarol[Alice Adds Carol] --> rootAddsAlice
+    subgraph Group
+        direction TB
 
-            removeCarol[Bob Removes Carol] --> rootAddsBob
-            removeCarol[Bob Removes Carol] --> aliceAddsCarol
-            bobAddsIas[Bob Adds Ink & Switch Group] ---> rootAddsBob
+        _groupPK["Group Root (Public Key)"]
+
+        subgraph membership[Group Membership]
+            rootAddsAlice[Group Root\n-------------\nAdd Alice] --> groupRoot[Group Root\n----------------------\nSelf Certifying Init]
+            rootAddsBob[Group Root\n-------------\nAdd Bob] --> groupRoot
+            aliceAddsCarol[Alice\n------------\nAdd Carol] --> rootAddsAlice
+
+            removeCarol[Bob\n----------------\nRemove Carol] --> rootAddsBob
+            removeCarol --> aliceAddsCarol
+            bobAddsIas[Bob\n-----------------------------\nAdd Ink & Switch Group] ---> rootAddsBob
         end
     end
+
+    groupRoot -.->|implied by| _groupPK
 ```
 
 ## Documents
 
 ```mermaid
 flowchart TB
-    subgraph doc
-        _docPK["Doc Root (Public Key)"]
+    subgraph Document
+        direction TB
 
-        subgraph docGroup
-            docRootAddsSingleton["Doc Root Adds Singleton PK"] --> docRoot[Document Root]
-            docRootAddsAnotherGroup[Doc Root Adds Ink & Switch Group] --> docRootAddsSingleton["Doc Root Adds Singleton"]
-            singetonRemovesAnotherGroup[Singleton Removes Ink & Switch Group] --> docRootAddsSingleton
+        subgraph docGroup[Document Membership]
+            docRootAddsSingleton["Doc Root\n----------------\nAdds Singleton PK"] --> docRoot[Document Root\n----------------------\nSelf Certifying Init]
+            docRootAddsAnotherGroup["Doc Root\n------------------------------\nAdd Ink & Switch Group"] --> docRootAddsSingleton["Doc Root\n------------------\nAdds Singleton"]
+            singetonRemovesAnotherGroup[Singleton\n----------------------------------\nRemove Ink & Switch Group] --> docRootAddsSingleton
         end
+
+        subgraph ops[Document Operations]
+            addKeyFoo["Ink & Switch\n---------------\nfoo := 1"] --> InitMap[Document Root\n------------------\nInitialize Map]
+            removeKeyFoo["Singleton\n---------------------\nRemove Key ''foo''"] --> addKeyFoo
+            addKeyBar["Singleton\n-----------\nbar := 2"] --> addKeyFoo
+        end
+
+        _docPK["Document Root (Public Key)"]
     end
+
+    singetonRemovesAnotherGroup -.-> addKeyFoo
+    _docPK ~~~~~ docGroup
 ```
 
 # Delegation
