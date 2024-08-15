@@ -240,10 +240,13 @@ flowchart TB
     subgraph Document
         direction TB
 
+        _docPK["Document Root (Public Key)"]
+
         subgraph docGroup[Document Membership]
-            docRootAddsSingleton["Doc Root\n----------------\nAdds Singleton PK"] --> docRoot[Document Root\n----------------------\nSelf Certifying Init]
-            docRootAddsAnotherGroup["Doc Root\n------------------------------\nAdd Ink & Switch Group"] --> docRootAddsSingleton["Doc Root\n------------------\nAdds Singleton"]
+            docRootAddsSingleton["Doc Root\n--------------------\nAdd Singleton PK"] --> docRoot[Document Root\n----------------------\nSelf Certifying Init]
+            docRootAddsAnotherGroup["Doc Root\n------------------------------\nAdd Ink & Switch Group"] --> docRoot
             singetonRemovesAnotherGroup[Singleton\n----------------------------------\nRemove Ink & Switch Group] --> docRootAddsSingleton
+            singetonRemovesAnotherGroup --> docRootAddsAnotherGroup
         end
 
         subgraph ops[Document Operations]
@@ -251,12 +254,10 @@ flowchart TB
             removeKeyFoo["Singleton\n---------------------\nRemove Key ''foo''"] --> addKeyFoo
             addKeyBar["Singleton\n-----------\nbar := 2"] --> addKeyFoo
         end
-
-        _docPK["Document Root (Public Key)"]
     end
 
-    singetonRemovesAnotherGroup -.-> addKeyFoo
-    _docPK ~~~~~ docGroup
+    singetonRemovesAnotherGroup -.->|lock state after| addKeyFoo
+    InitMap -.->|self-certified by| docRoot -.->|self-certified by| _docPK
 ```
 
 # Delegation
