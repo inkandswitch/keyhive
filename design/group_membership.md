@@ -138,17 +138,7 @@ flowchart TB
 The state of a 
 
 FIXME: batch signatures (since signatures don't compress)
-
-$$
-\begin{align*}
-&\delta & ::= & \quad \textsf{AddStatelessAgent} \quad & \textsf{agentId} \quad & \quad                             & \textsf{publicKey} \quad & \textsf{signature} \\
-&       &   | & \quad \textsf{AddStatefulAgent}  \quad & \textsf{agentId} \quad & \textsf{agentStateHeads}    \quad & \textsf{publicKey} \quad & \textsf{signature} \\
-&       &   | & \quad \textsf{RemoveAgent}       \quad & \textsf{agentId} \quad & \textsf{documentStateHeads} \quad & \textsf{publicKey} \quad & \textsf{signature} \\
-\end{align*}
-$$
-
-
-FIXME alternate version from teh paper:
+IXME alternate version from teh paper:
 
 FIXME on add, do we need agent heads, or just the removals? If only removals for efficiency, keep them in a Merkle Set, and reference the root? Given that this is concurrent taht may not work...
 FIXME need to include agent heads in revocations?
@@ -208,9 +198,40 @@ Auth roots are
 
 
 
-# Delegated Authority
+# Delegation
 
-## Transitive Authority
+## Attenuated Authority
+
+## Transitive Access
+
+# Device Management
+
+This strategy does not distinguish between users, groups, and public keys. In a sense, public keys are stateless singleton groups.
+
+```mermaid
+flowchart TB
+    doc1[Patchwork Document] -.->|read only| alice
+    doc2[Jacquard Document] -.->|read & write| alice
+
+    alice["''Alice''"]
+
+    aliceLaptop[Alice's Laptop]
+    aliceTablet[Alice's Tablet]
+    alicePhone[Alice's Phone]
+    
+    aliceFirefox[Firefox WebCrypto Context]
+    aliceWebWorker1[Web Worker 1]
+    aliceWebWorker2[Web Worker 2]
+    aliceWebWorker3[Web Worker 3]
+
+    alice -->|all| aliceLaptop -->|all| aliceFirefox
+    aliceFirefox -->|only Patchwork| aliceWebWorker1
+    aliceFirefox -->|only Jacquard| aliceWebWorker2
+    aliceFirefox -->|all| aliceWebWorker3
+    
+    alice -->|all| aliceTablet
+    alice -->|only Jacquard read| alicePhone
+```
 
 ## Applications to [Collection Sync]
 
