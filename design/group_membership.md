@@ -122,9 +122,9 @@ flowchart TB
     Francine ---> docB
     readers --> admins
 
-    style read_only fill:blue,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;;
-    style also_write fill:purple,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
-    style also_change_membership fill:darkred,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
+    style read_only color:white,fill:blue,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;;
+    style also_write color:white,fill:purple,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
+    style also_change_membership color:white,fill:darkred,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
 ```
 
 # State Transition
