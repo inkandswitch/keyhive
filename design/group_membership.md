@@ -153,7 +153,9 @@ enum AuthAction {
   AddGroup { 
     id: PublicKey, 
     group_heads: Vec<Hash> 
-  }
+  },
+  
+  RemoveAgent { id: PublicKey },
 }
 
 struct AuthOp {
