@@ -197,6 +197,51 @@ Auth roots are
 ## Re-Adds
 
 
+# Anatomy
+
+All groups MUST be represented by a "root" keypair. A 
+
+## Stateless Singletons
+
+```mermaid
+flowchart TB
+    subgraph singleton
+        _singletonPK["Singleton Public Key"]
+    end
+```
+
+## Stateful Groups
+
+```mermaid
+flowchart TB
+    subgraph group
+        _groupPK["Group Root (Public Key)"]
+        subgraph membership
+            rootAddsAlice[Group Root Adds Alice] --> groupRoot[Group Root]
+            rootAddsBob[Group Root Adds Bob] --> groupRoot
+            aliceAddsCarol[Alice Adds Carol] --> rootAddsAlice
+
+            removeCarol[Bob Removes Carol] --> rootAddsBob
+            removeCarol[Bob Removes Carol] --> aliceAddsCarol
+            bobAddsIas[Bob Adds Ink & Switch Group] ---> rootAddsBob
+        end
+    end
+```
+
+## Documents
+
+```mermaid
+flowchart TB
+    subgraph doc
+        _docPK["Doc Root (Public Key)"]
+
+        subgraph docGroup
+            docRootAddsSingleton["Doc Root Adds Singleton PK"] --> docRoot[Document Root]
+            docRootAddsAnotherGroup[Doc Root Adds Ink & Switch Group] --> docRootAddsSingleton["Doc Root Adds Singleton"]
+            singetonRemovesAnotherGroup[Singleton Removes Ink & Switch Group] --> docRootAddsSingleton
+        end
+    end
+```
 
 # Delegation
 
@@ -210,27 +255,33 @@ This strategy does not distinguish between users, groups, and public keys. In a 
 
 ```mermaid
 flowchart TB
-    doc1[Patchwork Document] -.->|read only| alice
-    doc2[Jacquard Document] -.->|read & write| alice
 
-    alice["''Alice''"]
+    doc1["Meeting Notes\n(Patchwork)"] -->|read only| ias
+    doc2["LaTeX Paper\n(Jacquard)"] -->|read & write| ias
+    doc3["Kid's Homework\n(Patchwork)"] -->|read| alice
 
-    aliceLaptop[Alice's Laptop]
-    aliceTablet[Alice's Tablet]
-    alicePhone[Alice's Phone]
-    
-    aliceFirefox[Firefox WebCrypto Context]
-    aliceWebWorker1[Web Worker 1]
-    aliceWebWorker2[Web Worker 2]
-    aliceWebWorker3[Web Worker 3]
+    ias["Ink & Switch\n(Beehive Group)"] -->|all| alice
 
-    alice -->|all| aliceLaptop -->|all| aliceFirefox
-    aliceFirefox -->|only Patchwork| aliceWebWorker1
-    aliceFirefox -->|only Jacquard| aliceWebWorker2
-    aliceFirefox -->|all| aliceWebWorker3
-    
-    alice -->|all| aliceTablet
-    alice -->|only Jacquard read| alicePhone
+    subgraph alicedomain[" "]
+        alice["''Alice''\n(Beehive Group)"]
+
+        aliceLaptop[Alice's Laptop]
+        aliceTablet[Alice's Tablet]
+        alicePhone[Alice's Phone]
+        
+        aliceFirefox[Firefox WebCrypto Context]
+        aliceWebWorker1[Web Worker 1]
+        aliceWebWorker2[Web Worker 2]
+        aliceWebWorker3[Web Worker 3]
+
+        alice -->|all| aliceLaptop -->|all| aliceFirefox
+        aliceFirefox -->|only Patchwork| aliceWebWorker1
+        aliceFirefox -->|only Jacquard| aliceWebWorker2
+        aliceFirefox -->|all| aliceWebWorker3
+        
+        alice -->|all| aliceTablet
+        alice -->|only Jacquard read| alicePhone
+    end
 ```
 
 ## Applications to [Collection Sync]
