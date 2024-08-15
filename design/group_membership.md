@@ -139,13 +139,33 @@ FIXME do we need to include the proofhead since we can materialize the view. It 
 
 TODO: fix formatting; I just find this easier to read as a personal quirk 
 
-$$
-\begin{align*}
-&\delta & ::= & \quad \textsf{AddStatelessAgent} \quad & \textsf{agentId} \quad &                                & \textsf{documentStateHeads} \quad & \textsf{publicKey} \quad & \textsf{signature} \\
-&       &   | & \quad \textsf{AddStatefulAgent}  \quad & \textsf{agentId} \quad & \textsf{agentStateHeads} \quad & \textsf{documentStateHeads} \quad & \textsf{publicKey} \quad & \textsf{signature} \\
-&       &   | & \quad \textsf{RemoveAgent}       \quad & \textsf{agentId} \quad & \textsf{agentStateHeads} \quad & \textsf{documentStateHeads} \quad & \textsf{publicKey} \quad & \textsf{signature} \\
-\end{align*}
-$$
+```rust
+enum AuthAction {
+  // Arguably this could be expressed as AddGroup with group_heads: vec![singleton.id].
+  // It's a noop if you give a stateless agent a different head,
+  // since you will never be able to apply the op.
+  AddSingleton { id: PublicKey },
+  
+  // Add Group includes docs, since Doc :< Group
+  // Since Group :< Singleton, you *could* add a group that way,
+  // but it would add at the start of its history 
+  // (which may or may not be desirable, depending on the domain)
+  AddGroup { 
+    id: PublicKey, 
+    group_heads: Vec<Hash> 
+  }
+}
+
+struct AuthOp {
+  action: AuthAction, // ⬆️
+  
+  auth_pred: Vec<Hash>, 
+  doc_heads: Vec<(DocId, Hash)>,
+  
+  author: PublicKey,
+  signature: Signature
+}
+```
 
 ## Materialization
 
