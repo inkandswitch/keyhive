@@ -1,8 +1,16 @@
 # Group Membership
 
+# Abstract
+
 Group membership in Beehive has two main concepts: a membership op-based CRDT, and a variant of object capabilities adapted to an eventually consistent setting. We propose naming this class of capabilities "Convergent Capabilities", or "concap" for short.
 
-## Notational Conventions
+# Conventions
+
+## Language
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in [BCP 14] when, and only when, they appear in all capitals, as shown here.
+
+## Diagrams
 
 There are several diagrams below. We use the following graphical conventions:
 
@@ -16,9 +24,9 @@ flowchart
 
 # Agents
 
-"Agents" in Beehive represent some locus of control. They are distinguished by other entities in the system by being able to sign operations. As such, Agents MUST be represented by a "root" keypair which acts as their ID.
+"Agents" in Beehive represent some principal that is capable of receiving, delegating, and exercising authority. They are distinguished by other entities in the system by being able to cryptographically sign operations. As such, Agents MUST be represented by a "root" keypair which acts as their ID.
 
-Entities form a subtyping hierarchy: `Document :< Stateful :< Stateless`.
+Agents form a subtyping hierarchy: `Document :< Stateful :< Stateless`.
 
 ``` rust
 // Pseudocode
@@ -140,7 +148,7 @@ flowchart TB
 
 This enough information for the sync server to know may request document bytes, but not enough to actually decrypt the document state.
 
-# Example
+# Authority Networks
 
 ## Objects & Causal State
 
@@ -253,7 +261,7 @@ flowchart BT
     style also_change_membership color:white,fill:darkred,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
 ```
 
-Validating capabilities proceeds recursively. Given read access to the caveats of each group, a complete list of users and their capabilities $\langle \textsf{agentId}, \textsf{agentOrDocId}, \textsf{[restrictions]} \rangle$. The lowest level of rights in the preset is `pull`, which only requires knowing the current public key of leaf agents.
+Validating capabilities proceeds recursively. Given read access to the caveats of each group, a complete list of users and their capabilities. The lowest level of rights MUST be `pull`, which only requires knowing the current public key of leaf agents.
 
 In this case, we have the following authority for Doc A:
 
@@ -356,9 +364,15 @@ Re-adding a user is supported as long as the new add is causally after the remov
 
 # Delegation
 
+Any [Agent] MAY delegate its authority over some other Agent to others.
+
+Restricting sub-delegation MUST NOT be permitted. It is well known that attempting to do so leads to worse outcomes (e.g. users sharing secret keys), and prevents desirable behaviour such as sub-delegating very narrow authority ([PoLA]) to emphemeral workers.
+
 ## Attenuated Authority
 
 ## Transitive Access
+
+
 
 # Device Management
 
@@ -407,4 +421,5 @@ flowchart TB
 
 <!-- External Links -->
 
+[BCP 14]: https://datatracker.ietf.org/doc/bcp14/
 [Collection Sync]: ./collection_sync.md
