@@ -287,7 +287,7 @@ And for Doc B:
 | Carol       | ✅         | ✅              | ✅             | ✅                         |
 | Dan         | ✅         | ✅              | ❌             | ❌                         |
 | Erin        | ✅         | ✅              | ❌             | ❌                         |
-| Francine    | ✅         | ✅              | ❌             | ❌                         |
+| Francine    | ✅         | ❌              | ❌             | ❌                         |
 | Reader Root | ✅         | ✅              | ❌             | ❌                         |
 | Admin Root  | ✅         | ✅              | ✅             | ✅                         |
 | Doc A Root  | ❌         | ❌              | ❌             | ❌                         |
@@ -371,7 +371,7 @@ sequenceDiagram
     Doc ->> Doc: 🐣 Init
     Doc ->> Ink & Switch: 🎟️ Delegate(Doc, Write)
 
-    Note over Ink & Switch,Mallory: Add Users to Ink & Switch
+    Note over Ink & Switch,Mallory: Add users to Ink & Switch
 
     Ink & Switch ->> PvH: 🎟️ Delegate all (including manage membership)
     Ink & Switch ->> Mallory: 🎟️ Delegate [Doc: Write]
