@@ -507,29 +507,12 @@ flowchart LR
 
 For simplicity, in this scenario BigCo and Ink & Switch have delegated to each other full control (shown in green). While they have different members, they can be considered a single group because they've codelegated.
 
-## Attenuated Authority
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # Device Management
 
 This strategy does not distinguish between users, groups, and public keys. In a sense, public keys are stateless singleton groups.
 
 ```mermaid
 flowchart TB
-
     doc1["Meeting Notes\n(Patchwork)"] -->|read only| ias
     doc2["LaTeX Paper\n(Jacquard)"] -->|read & write| ias
     doc3["Kid's Homework\n(Patchwork)"] -->|read| alice
@@ -543,18 +526,15 @@ flowchart TB
         aliceTablet[Alice's Tablet]
         alicePhone[Alice's Phone]
         
-        aliceFirefox[Firefox WebCrypto Context]
-        aliceWebWorker1[Web Worker 1]
-        aliceWebWorker2[Web Worker 2]
-        aliceWebWorker3[Web Worker 3]
+        alicePW[Homework App WebCrypto Context]
+        aliceJQ[LaTeX Editor WebCrypto Context]
 
-        alice -->|all| aliceLaptop -->|all| aliceFirefox
-        aliceFirefox -->|only Patchwork| aliceWebWorker1
-        aliceFirefox -->|only Jacquard| aliceWebWorker2
-        aliceFirefox -->|all| aliceWebWorker3
+        aliceLaptop -->|only Homework Doc| alicePW
+        aliceLaptop -->|only LaTeX Doc| aliceJQ
         
         alice -->|all| aliceTablet
-        alice -->|all| alicePhone -->|only Jacquard read| NotificationsApp[Notifications App]
+        alice -->|all| aliceLaptop
+        alice -->|all| alicePhone -->|only LaTeX Doc read| NotificationsApp[Notifications App]
     end
 ```
 
