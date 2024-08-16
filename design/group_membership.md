@@ -538,10 +538,6 @@ flowchart TB
     end
 ```
 
-## Subsumption
-
-FIXME for ephemeral workers
-
 # Applications to [Collection Sync]
 
 
