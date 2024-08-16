@@ -503,55 +503,9 @@ flowchart LR
     ias --> pvh
 
     linkStyle 2,3 stroke:green;
-    linkStyle 1 stroke:red;
 ```
 
-For simplicity, in this scenario BigCo and Ink & Switch have delegated to each other full control (shown in green). While they have different members, they can be considered a single group because they've codelegated. If the Meeting Notes document revokes BigCo (in red), Ink & Switch also loses access since there is no path of authority to them.
-
-If instead Ink & Switch had been granted its own access to Meeting Notes (in orange), BigCo still has access through Ink & Switch.
-
-``` mermaid
-flowchart LR
-    subgraph Docs
-        j["LaTeX Document\n(Jacquard)"]
-        p["Meeting Notes\n(Patchwork)"]
-    end
-
-    subgraph Groups
-        ias[Ink & Switch]
-        bigco[BigCo]
-    end
-
-    subgraph Users
-        pvh[Peter]
-        ajg[Alex]
-        bez[Brooke]
-    end
-
-    j --> ias
-    p --> bigco
-
-    ias ---> bigco
-    bigco --> ias
-
-    bigco --> bez
-    bigco --> ajg
-
-    ias --> ajg
-    ias --> pvh
-
-    p ~~~ bigco
-    p -.-> ias
-
-    linkStyle 2,3 stroke:green;
-    linkStyle 1 stroke:red;
-    linkStyle 9 stroke:orange;
-```
-
-This behavior may be surprising on first glance: BigCo was revoked, but they're still authorized! That intuition assumes a few things:
-
-1. That there is some mechanism to make user IDs scarce and trusted. Such a mechanism MAY be added outside of Beehive to restrict who is accepted into the system (e.g. a root authority that validates that all users have a valid company email). Otherwise, malicious Agents can still retain access generating new keys or groups.
-2. In practice, preventing delegation leads users to share keys, which is a worse trade-off (breaking best practices of keys never leaving the device).
+For simplicity, in this scenario BigCo and Ink & Switch have delegated to each other full control (shown in green). While they have different members, they can be considered a single group because they've codelegated.
 
 ## Attenuated Authority
 
