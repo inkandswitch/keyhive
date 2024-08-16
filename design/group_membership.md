@@ -2,6 +2,132 @@
 
 Group membership in Beehive has two main concepts: a membership op-based CRDT, and a variant of object capabilities adapted to an eventually consistent setting. We propose naming this class of capabilities "Convergent Capabilities", or "concap" for short.
 
+# Agents
+
+"Agents" in Beehive represent some locus of control. They are distinguished by other entities in the system by being able to sign operations. As such, Agents MUST be represented by a "root" keypair which acts as their ID.
+
+Entities form a subtyping hierarchy: `Doc :< Group :< Singleton`.
+
+``` rust
+// Pseudocode
+enum Agent {
+    Stateless { id: PublicKey },
+    Stateful { 
+        id: PublicKey,
+        auth_state: Vec<AuthOp>
+    },
+    Document {
+        id: PublicKey,
+        auth_ops: Vec<AuthOp>,
+        content_ops: Vec<AutomergeOp>
+    }
+}
+```
+
+## Stateless
+
+The simplest form of Agent is a public key with no associated state. Almost (but not all) ops in Beehive are signed by Stateless Agents. These are typically the leaf keys in a [group hierarchy].
+
+Some examples of Stateless Agents include Passkeys, non-extractable WebCrypto keys, hardware keys, or other keys limited by application context.
+
+There is no mechanism to rotate a stateless key itself. However, managing key rotation and/or multiple keys (e.g. [for all of a user's devices]) is possible via [Stateful Agents].
+
+```mermaid
+flowchart TB
+    subgraph Singleton
+        _singletonPK["Singleton Public Key"]
+    end
+```
+
+## Stateful
+
+Stateful Agents add authorization state. The operations that make up the state's history MUST be rooted in (begin at) the Stateful Agent's public key.
+
+Once another Agent is grated control of it, the Stateful Agent MAY delete its secret key.
+
+A very common pattern is for the creator of an Agent to include ionctsructions to add itself to the child's membership upon initialization. This is known as [Membership by Parenthood].
+
+```mermaid
+flowchart TB
+    subgraph Group
+        direction TB
+
+        _groupPK["Group Root (Public Key)"]
+
+        subgraph membership[Group Membership]
+            rootAddsAlice[Group Root\n-------------\nAdd Alice] --> groupRoot[Group Root\n----------------------\nSelf Certifying Init]
+            rootAddsBob[Group Root\n-------------\nAdd Bob] --> groupRoot
+            aliceAddsCarol[Alice\n------------\nAdd Carol] --> rootAddsAlice
+
+            removeCarol[Bob\n----------------\nRemove Carol] --> rootAddsBob
+            removeCarol --> aliceAddsCarol
+            bobAddsIas[Bob\n-----------------------------\nAdd Ink & Switch Group] ---> rootAddsBob
+        end
+    end
+
+    groupRoot -.->|implied by| _groupPK
+```
+
+## Documents
+
+Documents are a subtype of Stateful Agents. They add stateful document content in addition to stateful auth. This is important so that the document content can self-certify the associated auth history.
+
+```mermaid
+flowchart TB
+    subgraph Document
+        direction TB
+
+        _docPK["Document Root (Public Key)"]
+
+        subgraph docGroup[Document Membership]
+            docRootAddsSingleton["Doc Root\n--------------------\nAdd Singleton PK"] --> docRoot[Document Root\n----------------------\nSelf Certifying Init]
+            docRootAddsAnotherGroup["Doc Root\n------------------------------\nAdd Ink & Switch Group"] --> docRoot
+            singetonRemovesAnotherGroup[Singleton\n----------------------------------\nRemove Ink & Switch Group] --> docRootAddsSingleton
+            singetonRemovesAnotherGroup --> docRootAddsAnotherGroup
+        end
+
+        subgraph ops[Document Operations]
+            addKeyFoo["Ink & Switch\n---------------\nfoo := 1"] --> InitMap[Document Root\n------------------\nInitialize Map]
+            removeKeyFoo["Singleton\n---------------------\nRemove Key ''foo''"] --> addKeyFoo
+            addKeyBar["Singleton\n-----------\nbar := 2"] --> addKeyFoo
+        end
+    end
+
+    singetonRemovesAnotherGroup -.->|lock state after| addKeyFoo
+    InitMap -.->|self-certified by| docRoot -.->|self-certified by| _docPK
+```
+
+### Encrypted Op State
+
+Note that the above may not all be available as cleartext to all participants. For example, a sync server (which only has [Pull] rights) will see the [Document] example above as something along the following lines:
+
+```mermaid
+flowchart TB
+    subgraph Document
+        direction TB
+
+        _docPK["Document Root (Public Key)"]
+
+        subgraph docGroup[Document Membership]
+            docRootAddsSingleton["Doc Root\n--------------------\nAdd Singleton PK"] --> docRoot[Document Root\n----------------------\nSelf Certifying Init]
+            docRootAddsAnotherGroup["Doc Root\n------------------------------\nAdd Ink & Switch Group"] --> docRoot
+            singetonRemovesAnotherGroup[Singleton\n----------------------------------\nRemove Ink & Switch Group] --> docRootAddsSingleton
+            singetonRemovesAnotherGroup --> docRootAddsAnotherGroup
+        end
+
+        subgraph ops[Document Operations]
+            someStuff[Encrypted Bytes]
+        end
+
+        addKeyFoo -.->|somewhere inside| ops
+    end
+
+    singetonRemovesAnotherGroup -.->|lock state after| addKeyFoo["Document PK @ Op Hash"]
+    docRoot -.->|self-certified by| _docPK
+```
+
+This enough information for the sync server to know may request document bytes, but not enough to actually decrypt the document state.
+
 ## Example
 
 ### Objects & Causal State
@@ -17,7 +143,7 @@ flowchart
 ```mermaid
 flowchart RL
     subgraph docA[Document A]
-        subgraph DocAState[Doc State]
+        subgraph DocAState[Doc Content]
             opA4 --> opA2 --> opA1
             opA4 --> opA3 --> opA1
         end
@@ -28,7 +154,7 @@ flowchart RL
     end
 
     subgraph docB[Document B]
-        subgraph DocBState[Doc State]
+        subgraph DocBState[Doc Content]
             opB4 --> opB2 --> opB1
             opB4 --> opB3 --> opB1
         end
@@ -170,8 +296,12 @@ enum AuthAction {
 struct AuthOp {
   action: AuthAction, // ⬆️
   
+  /// The 
   auth_pred: Vec<Hash>, 
-  doc_heads: Vec<(DocId, Hash)>,
+  
+  /// All heads for all known updated documents.
+  /// In effect, this locks the auth change to occur *after* content updates.
+  doc_heads: BTreeMap<DocId, Vec<Hash>>,
   
   author: PublicKey,
   signature: Signature
@@ -220,99 +350,6 @@ Auth roots are the key pair associtated to a group. These are self-certifying (s
 
 Re-adding a user is supported as long as the new add is causally after the removal.
 
-# Anatomy
-
-All groups MUST be represented by a "root" keypair. A 
-
-## Stateless Singletons
-
-```mermaid
-flowchart TB
-    subgraph Singleton
-        _singletonPK["Singleton Public Key"]
-    end
-```
-
-## Stateful Groups
-
-```mermaid
-flowchart TB
-    subgraph Group
-        direction TB
-
-        _groupPK["Group Root (Public Key)"]
-
-        subgraph membership[Group Membership]
-            rootAddsAlice[Group Root\n-------------\nAdd Alice] --> groupRoot[Group Root\n----------------------\nSelf Certifying Init]
-            rootAddsBob[Group Root\n-------------\nAdd Bob] --> groupRoot
-            aliceAddsCarol[Alice\n------------\nAdd Carol] --> rootAddsAlice
-
-            removeCarol[Bob\n----------------\nRemove Carol] --> rootAddsBob
-            removeCarol --> aliceAddsCarol
-            bobAddsIas[Bob\n-----------------------------\nAdd Ink & Switch Group] ---> rootAddsBob
-        end
-    end
-
-    groupRoot -.->|implied by| _groupPK
-```
-
-## Documents
-
-```mermaid
-flowchart TB
-    subgraph Document
-        direction TB
-
-        _docPK["Document Root (Public Key)"]
-
-        subgraph docGroup[Document Membership]
-            docRootAddsSingleton["Doc Root\n--------------------\nAdd Singleton PK"] --> docRoot[Document Root\n----------------------\nSelf Certifying Init]
-            docRootAddsAnotherGroup["Doc Root\n------------------------------\nAdd Ink & Switch Group"] --> docRoot
-            singetonRemovesAnotherGroup[Singleton\n----------------------------------\nRemove Ink & Switch Group] --> docRootAddsSingleton
-            singetonRemovesAnotherGroup --> docRootAddsAnotherGroup
-        end
-
-        subgraph ops[Document Operations]
-            addKeyFoo["Ink & Switch\n---------------\nfoo := 1"] --> InitMap[Document Root\n------------------\nInitialize Map]
-            removeKeyFoo["Singleton\n---------------------\nRemove Key ''foo''"] --> addKeyFoo
-            addKeyBar["Singleton\n-----------\nbar := 2"] --> addKeyFoo
-        end
-    end
-
-    singetonRemovesAnotherGroup -.->|lock state after| addKeyFoo
-    InitMap -.->|self-certified by| docRoot -.->|self-certified by| _docPK
-```
-
-## Encrypted Op State
-
-Note that the above may not all be available as cleartext. For example, a Puller will see the [Document] example above as something along the following lines:
-
-```mermaid
-flowchart TB
-    subgraph Document
-        direction TB
-
-        _docPK["Document Root (Public Key)"]
-
-        subgraph docGroup[Document Membership]
-            docRootAddsSingleton["Doc Root\n--------------------\nAdd Singleton PK"] --> docRoot[Document Root\n----------------------\nSelf Certifying Init]
-            docRootAddsAnotherGroup["Doc Root\n------------------------------\nAdd Ink & Switch Group"] --> docRoot
-            singetonRemovesAnotherGroup[Singleton\n----------------------------------\nRemove Ink & Switch Group] --> docRootAddsSingleton
-            singetonRemovesAnotherGroup --> docRootAddsAnotherGroup
-        end
-
-        subgraph ops[Document Operations]
-            someStuff[Encrypted Bytes]
-        end
-
-        addKeyFoo -.->|somewhere inside| ops
-    end
-
-    singetonRemovesAnotherGroup -.->|lock state after| addKeyFoo["Document PK @ Op Hash"]
-    docRoot -.->|self-certified by| _docPK
-```
-
-This enough information for them to know may request document bytes, but not enough to actually decrypt the document state.
 
 # Delegation
 
