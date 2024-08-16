@@ -296,20 +296,6 @@ And for Doc B:
 
 # State Transition
 
-The state of a 
-
-FIXME: batch signatures (since signatures don't compress)
-IXME alternate version from teh paper:
-
-FIXME on add, do we need agent heads, or just the removals? If only removals for efficiency, keep them in a Merkle Set, and reference the root? Given that this is concurrent taht may not work...
-FIXME need to include agent heads in revocations?
-FIXME discuss deny listing
-FIXME do we need to include the proofhead since we can materialize the view. It may make it fster to provide a Merkle proof & compare to the tombstone set
-        ...that imples that we define a way to reference auth state heads in a merkle tree, but we may not actually be able to do that thanks to EC
-        ... nope, we've opted to allow re-adds, so no tombstone set
-
-TODO: fix formatting; I just find this easier to read as a personal quirk 
-
 ```rust
 pub struct Attenuation {
     group_id: Option<GroupId>,
@@ -355,12 +341,11 @@ struct AuthOp {
 
 ### Roots
 
-Auth roots are the key pair associtated to a group. These are self-certifying (since their public key is the document ID), and 
+Auth roots are the key pair associtated to a group. Since their public key is the document ID, these are REQUIRED to make delegation chains "self-certifying".
 
 ## Re-Adds
 
-Re-adding a user is supported as long as the new add is causally after the removal.
-
+Re-adding a user is supported as long as the new add occurs causally after the removal.
 
 # Delegation
 
@@ -405,7 +390,7 @@ flowchart TB
         aliceFirefox -->|all| aliceWebWorker3
         
         alice -->|all| aliceTablet
-        alice -->|only Jacquard read| alicePhone
+        alice -->|all| alicePhone -->|only Jacquard read| NotificationsApp[Notifications App]
     end
 ```
 
@@ -417,7 +402,7 @@ flowchart TB
 
 ## Differences from Object Capabilities (ocap)
 
-## Differences from Certificate Capabilities / SPKI
+## Differences from Certificate Capabilities (SPKI)
 
 <!-- External Links -->
 
