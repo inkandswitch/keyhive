@@ -2,8 +2,6 @@
 
 Group membership in Beehive has two main concepts: a membership op-based CRDT, and a variant of object capabilities adapted to an eventually consistent setting. We propose naming this class of capabilities "Convergent Capabilities", or "concap" for short.
 
-To keep the nuber of pieces small in the example, we will use a short hierarchy: admins (arbitrary access) and read-only. 
-
 ## Example
 
 ### Objects & Causal State
@@ -74,54 +72,52 @@ flowchart RL
 The above example materialized to the following:
 
 ```mermaid
-flowchart TB
-    subgraph read_only[Read Only]
-        direction TB
-
-        subgraph readers[Readers Group]
-            direction TB
-
-            Erin
-            Dan
-
-            reader_root
-        end
-
+%%{ init: { 'themeVariables': { 'lineColor': '#FFF' } } }%%
+flowchart BT
+    subgraph pullers[Pull]
         Francine
 
-        subgraph also_write[Also Can Write]
-            subgraph also_change_membership[Unrestricted]
-                subgraph admins[Team Group]
-                    direction TB
+        subgraph read_only[Read]
+            subgraph readers[Readers Group]
+                direction TB
 
-                    Alice
-                    Bob
-                    Carol
+                Erin
+                Dan
 
-                    admin_root_pk
-                end
+                reader_root
+            end
 
-                subgraph docA[Document A]
-                    direction TB
+            subgraph also_write[Write]
+                subgraph also_change_membership[Unrestricted]
+                    subgraph admins[Team Group]
+                        direction TB
 
-                    docA_root_pk[Doc A Root]
-                end
+                        Alice
+                        Bob
+                        Carol
 
-                subgraph docB[Document B]
-                    direction TB
+                        admin_root_pk
+                    end
 
-                    docB_root_pk[Doc B Root]
+                    subgraph docA[Document A]
+                        docA_root_pk[Doc A Root]
+                    end
+
+                    subgraph docB[Document B]
+                        docB_root_pk[Doc B Root]
+                    end
                 end
             end
         end
     end
 
-    admins --> docA
-    admins --> docB
+    docA --> admins
+    docB --> admins
 
-    Francine ---> docB
-    readers --> admins
+    docB --> Francine
+    admins --> readers
 
+    style pullers color:white,fill:darkblue,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;;
     style read_only color:white,fill:blue,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;;
     style also_write color:white,fill:purple,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
     style also_change_membership color:white,fill:darkred,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
@@ -144,13 +140,18 @@ FIXME do we need to include the proofhead since we can materialize the view. It 
 TODO: fix formatting; I just find this easier to read as a personal quirk 
 
 ```rust
+pub struct Attenuation {
+    group_id: Option<GroupId>,
+    predicate: RestrictionDsl // FIXME: TBD
+}
+
 enum AuthAction {
   // Arguably this could be expressed as AddGroup with group_heads: vec![singleton.id] or possibly vec![]
   // It's a noop if you give a stateless agent a different head,
   // since you will never be able to apply the op.
   AddSingleton { 
     id: PublicKey,
-    attenuate: FIXME,
+    attenuation: Attenuation
   },
   
   // Add Group includes docs, since Doc :< Group
@@ -159,8 +160,8 @@ enum AuthAction {
   // (which may or may not be desirable, depending on the domain)
   AddGroup { 
     id: PublicKey, 
-    attenuate: FIXME,
-    group_heads: Vec<Hash>,
+    attenuation: Attenuation,
+    group_heads: Vec<Hash>, // REMINDER: this is the group being added's heads (aud), NOT the group being added to (iss)
   },
   
   RemoveAgent { id: PublicKey },
