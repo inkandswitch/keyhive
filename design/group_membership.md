@@ -6,7 +6,7 @@ Group membership in Beehive has two main concepts: a membership op-based CRDT, a
 
 "Agents" in Beehive represent some locus of control. They are distinguished by other entities in the system by being able to sign operations. As such, Agents MUST be represented by a "root" keypair which acts as their ID.
 
-Entities form a subtyping hierarchy: `Doc :< Group :< Singleton`.
+Entities form a subtyping hierarchy: `Doc :< Stateful :< Stateless`.
 
 ``` rust
 // Pseudocode
@@ -24,7 +24,7 @@ enum Agent {
 }
 ```
 
-## Stateless
+## Stateless (AKA "Singleton")
 
 The simplest form of Agent is a public key with no associated state. Almost (but not all) ops in Beehive are signed by Stateless Agents. These are typically the leaf keys in a [group hierarchy].
 
@@ -39,7 +39,7 @@ flowchart TB
     end
 ```
 
-## Stateful
+## Stateful (AKA "Group")
 
 Stateful Agents add authorization state. The operations that make up the state's history MUST be rooted in (begin at) the Stateful Agent's public key.
 
@@ -68,7 +68,7 @@ flowchart TB
     groupRoot -.->|implied by| _groupPK
 ```
 
-## Documents
+## Document
 
 Documents are a subtype of Stateful Agents. They add stateful document content in addition to stateful auth. This is important so that the document content can self-certify the associated auth history.
 
@@ -97,7 +97,7 @@ flowchart TB
     InitMap -.->|self-certified by| docRoot -.->|self-certified by| _docPK
 ```
 
-### Encrypted Op State
+### Encrypted Content
 
 Note that the above may not all be available as cleartext to all participants. For example, a sync server (which only has [Pull] rights) will see the [Document] example above as something along the following lines:
 
@@ -128,9 +128,9 @@ flowchart TB
 
 This enough information for the sync server to know may request document bytes, but not enough to actually decrypt the document state.
 
-## Example
+# Example
 
-### Objects & Causal State
+## Objects & Causal State
 
 ```mermaid
 flowchart
