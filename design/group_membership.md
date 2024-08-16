@@ -345,17 +345,47 @@ Auth roots are the key pair associtated to a group. Since their public key is th
 
 ## Re-Adds
 
-Re-adding a user is supported as long as the new add occurs causally after the removal.
+Re-adding a user is supported as long as the new add occurs causally after the relevant Agent revocation.
 
 # Delegation
 
-Any [Agent] MAY delegate its authority over some other Agent to others.
+Any [Agent] MAY delegate its authority over _it's own capabilities_ to others.
 
-Restricting sub-delegation MUST NOT be permitted. It is well known that attempting to do so leads to worse outcomes (e.g. users sharing secret keys), and prevents desirable behaviour such as sub-delegating very narrow authority ([PoLA]) to emphemeral workers.
+Restricting _sub-delegation_ of an Agent's capabilities MUST NOT be permitted. It is well known that attempting to do so leads to worse outcomes (e.g. users sharing secret keys), and prevents desirable behaviour such as sub-delegating very narrow authority ([PoLA]) to emphemeral workers.
+
+## Transitive Authority
+
+Recall that [capabilities] come in the following variants: pull, read, mutate, and membership maintainer. All of these MAY be attenuated. For example, an Agent MAY be granted the ability to alter the membership of an external group or document.
+
+```mermaid
+sequenceDiagram
+    autonumber
+
+    participant Doc
+    participant Ink & Switch
+    actor PvH
+    actor Mallory
+
+    Note over Doc,Ink & Switch: Setup Groups
+    Ink & Switch ->> Ink & Switch: 🐣 Init
+    Doc ->> Doc: 🐣 Init
+    Doc ->> Ink & Switch: 🎟️ Delegate(Doc, Write)
+
+    Note over Ink & Switch,Mallory: Add Users to Ink & Switch
+
+    Ink & Switch ->> PvH: 🎟️ Delegate all (including manage membership)
+    Ink & Switch ->> Mallory: 🎟️ Delegate(Doc, Write)
+
+    Note over Doc,Mallory: Users mutate Doc ➊ ➋ ➌ ➍ ➎ ➏ ➐ ➑ ➒ ➓
+    PvH -->> Doc: ✍️ Write Op1 (authorized by ➋→➌→➍)
+    Mallory -->> Doc: ✍️ Write Op2 (authorized by ➋→➌→➎)
+
+    Note over Doc,Mallory: Mallory Revoked
+    PvH -->> Ink & Switch: 💔 Revoke Mallory (authorized by ➊→➍)
+    Mallory --x Doc: 🚫 Write Op3 (REJECTED becuase ➑)
+```
 
 ## Attenuated Authority
-
-## Transitive Access
 
 
 
