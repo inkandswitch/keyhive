@@ -377,8 +377,8 @@ sequenceDiagram
     Ink & Switch ->> Mallory: 🎟️ Delegate [Doc: Write]
 
     Note over Doc,Mallory: Users write ops to Doc
-    PvH -->> Doc: ✍️ Write Op1 (authorized by ➋→➌→➍)
-    Mallory -->> Doc: ✍️ Write Op2 (authorized by ➋→➌→➎)
+    PvH -->> Doc: ✍️ Write Op1 (authorized by ➋→➌→➍←➊)
+    Mallory -->> Doc: ✍️ Write Op2 (authorized by ➋→➌→➎←➊)
 
     Note over Doc,Mallory: Mallory Revoked
     PvH -->> Ink & Switch: 💔 Revoke Mallory (authorized by ➊→➍)
