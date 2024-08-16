@@ -148,64 +148,9 @@ flowchart TB
 
 This enough information for the sync server to know may request document bytes, but not enough to actually decrypt the document state.
 
-# Authority Graphs
+### Cross-Group Dependencies
 
-A change to group membership MAY be causally dependent on the state of another group or document content (and vice versa).
-
-## Example
-
-```mermaid
-flowchart RL
-    subgraph docA[Document A]
-        subgraph DocAState[Doc Content]
-            opA4 --> opA2 --> opA1
-            opA4 --> opA3 --> opA1
-        end
-
-        subgraph DocAAuth[Doc Auth]
-            addAdminsGroup["Doc A Root\n----------------------\nAdd Team Group"] --> initDocAAuth["Doc A Root\n---------------------\nSelf Certified Init"]
-        end
-    end
-
-    subgraph docB[Document B]
-        subgraph DocBState[Doc Content]
-            opB4 --> opB2 --> opB1
-            opB4 --> opB3 --> opB1
-        end
-
-        subgraph DocBAuth[Doc Auth]
-            direction TB
-        
-            addAdminsGroupB --> initDocBAuth
-            addFrancine["Doc B Root\n----------------\nAdd Francine"] --> initDocBAuth["Doc B Root\n---------------------\nSelf-Certified Init"]
-        end
-    end
-
-    subgraph admins[Team Group]
-        rootAdminAddsBob["Team Root\n---------------\nAdd Bob"] --> initAdmins["Team Root\n---------------------\nSelf-Certified Init"]
-        rootAdminAddsAlice["Team Root\n---------------\nAdd Alice"] --> initAdmins
-        aliceAddsCarol["Alice\n------------\nAdd Carol"] ----> rootAdminAddsAlice
-        bobRemovesCarol["Bob\n-----------------\nRemove Carol"] --> rootAdminAddsBob
-
-        aliceAddsReaders["Alice\n-----------------------\nAdd Readers Group"] --> rootAdminAddsAlice
-    end
-
-    subgraph readers[Readers Group]
-        bobAddsErin["Bob\n----------\nAdd Erin"] --> initReaders["Readers Root\n---------------------\nSelf-Certified Init"]
-        aliceAddsDan["Alice\n----------\nAdd Dan"] --> initReaders
-    end
-
-    bobRemovesCarol -.-> opA3
-    bobRemovesCarol -...-> opB4
-
-    aliceAddsReaders -.-> bobAddsErin
-    aliceAddsReaders -.-> aliceAddsDan
-
-    addAdminsGroup -.-> rootAdminAddsBob
-    addAdminsGroupB -.-> aliceAddsReaders
-
-    addAdminsGroup -----> opA1
-```
+In addition to content and authority operations depending on each other inside a Group, they MAY include causal dependencies into others.
 
 ``` mermaid
 flowchart
@@ -280,6 +225,65 @@ flowchart
 
     style opsA fill:blue;
     style opsB fill:blue;
+```
+
+# Authority Graphs
+
+A change to group membership MAY be causally dependent on the state of another group or document content (and vice versa).
+
+## Example
+
+```mermaid
+flowchart RL
+    subgraph docA[Document A]
+        subgraph DocAState[Doc Content]
+            opA4 --> opA2 --> opA1
+            opA4 --> opA3 --> opA1
+        end
+
+        subgraph DocAAuth[Doc Auth]
+            addAdminsGroup["Doc A Root\n----------------------\nAdd Team Group"] --> initDocAAuth["Doc A Root\n---------------------\nSelf Certified Init"]
+        end
+    end
+
+    subgraph docB[Document B]
+        subgraph DocBState[Doc Content]
+            opB4 --> opB2 --> opB1
+            opB4 --> opB3 --> opB1
+        end
+
+        subgraph DocBAuth[Doc Auth]
+            direction TB
+        
+            addAdminsGroupB --> initDocBAuth
+            addFrancine["Doc B Root\n----------------\nAdd Francine"] --> initDocBAuth["Doc B Root\n---------------------\nSelf-Certified Init"]
+        end
+    end
+
+    subgraph admins[Team Group]
+        rootAdminAddsBob["Team Root\n---------------\nAdd Bob"] --> initAdmins["Team Root\n---------------------\nSelf-Certified Init"]
+        rootAdminAddsAlice["Team Root\n---------------\nAdd Alice"] --> initAdmins
+        aliceAddsCarol["Alice\n------------\nAdd Carol"] ----> rootAdminAddsAlice
+        bobRemovesCarol["Bob\n-----------------\nRemove Carol"] --> rootAdminAddsBob
+
+        aliceAddsReaders["Alice\n-----------------------\nAdd Readers Group"] --> rootAdminAddsAlice
+    end
+
+    subgraph readers[Readers Group]
+        bobAddsErin["Bob\n----------\nAdd Erin"] --> initReaders["Readers Root\n---------------------\nSelf-Certified Init"]
+        aliceAddsDan["Alice\n----------\nAdd Dan"] --> initReaders
+    end
+
+    bobRemovesCarol -.-> opA3
+    bobRemovesCarol -...-> opB4
+
+    aliceAddsReaders -.-> bobAddsErin
+    aliceAddsReaders -.-> aliceAddsDan
+
+    addAdminsGroup -.-> rootAdminAddsBob
+    addAdminsGroupB -.-> aliceAddsReaders
+
+    addAdminsGroup -----> opA1
 ```
 
 ### Materialized View
