@@ -374,9 +374,9 @@ sequenceDiagram
     Note over Ink & Switch,Mallory: Add Users to Ink & Switch
 
     Ink & Switch ->> PvH: 🎟️ Delegate all (including manage membership)
-    Ink & Switch ->> Mallory: 🎟️ Delegate(Doc, Write)
+    Ink & Switch ->> Mallory: 🎟️ Delegate [Doc: Write]
 
-    Note over Doc,Mallory: Users mutate Doc ➊ ➋ ➌ ➍ ➎ ➏ ➐ ➑ ➒ ➓
+    Note over Doc,Mallory: Users write ops to Doc
     PvH -->> Doc: ✍️ Write Op1 (authorized by ➋→➌→➍)
     Mallory -->> Doc: ✍️ Write Op2 (authorized by ➋→➌→➎)
 
