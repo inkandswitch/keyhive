@@ -207,6 +207,81 @@ flowchart RL
     addAdminsGroup -----> opA1
 ```
 
+``` mermaid
+flowchart
+    subgraph DocumentAgent[Document A Agent]
+        _docPK["Document A Root (Public Key)"]
+
+        subgraph docAGroup[Document A Membership]
+            docRoot
+            docRootAddsAnotherGroup
+            docRootAddsSingleton
+            docRootAddsSingleton
+            singetonRemovesAnotherGroup
+        end
+
+        subgraph opsA[Document A Content]
+            InitMap
+            addKeyFoo
+            
+            addKeyBar
+            removeKeyFoo
+        end
+    end
+
+    removeKeyFoo["Carol\n---------------------\nRemove Key ''foo''"] --> addKeyFoo
+    addKeyFoo["Dan\n---------------\nfoo := 1"] --> InitMap[Document Root\n------------------\nInitialize Map]
+
+    addKeyBar["Carol\n-----------------------\nbar := Document B"] ----> addKeyFoo
+    
+    docRootAddsSingleton["Doc A Root\n--------------------\nAdd Carol PK"] --> docRoot[Document Root\n----------------------\nSelf Certifying Init]
+    docRootAddsAnotherGroup["Doc Root\n-----------\nAdd Dan"] --> docRoot
+    singetonRemovesAnotherGroup[Carol\n---------------\nRemove Dan] --> docRootAddsSingleton
+    singetonRemovesAnotherGroup --> docRootAddsAnotherGroup
+
+    singetonRemovesAnotherGroup -.->|lock state after| addKeyFoo
+    singetonRemovesAnotherGroup -.-> docBRootAddsAnotherGroup
+    InitMap -.->|self-certified by| docRoot -.->|self-certified by| _docPK
+
+    subgraph DocumentAgent2[Document B Agent]
+        _docBPK["Document B Root (Public Key)"]
+
+        subgraph docBGroup[Document B Membership]
+        
+            docBRoot
+            docBRootAddsSingleton
+            docBRootAddsAnotherGroup
+            bobAddsDocA
+            docBRootAddsAnotherGroup
+        end
+
+        subgraph opsB[Document B Content]
+            addCharH["Alice\n----------\npush('H')"] --> InitStringB[Document Root\n------------------\nInitialize String]
+            addCharI["Alice\n---------\npush('i')"] --> addCharH
+            addCharExp["Bob\n----------\npush('!')"] --> addCharI
+        end
+    end
+
+    InitStringB-.->|self-certified by| docBRoot -.->|self-certified by| _docBPK
+    addCharH -.-> docBRootAddsAnotherGroup
+    docBRootAddsSingleton -.-> addCharI
+    addCharExp -.-> docBRootAddsSingleton
+
+    addKeyBar -.-> addCharExp
+
+    docBRootAddsSingleton["Doc Root\n--------------\nAdd Bob PK"] --> docBRoot[Document Root\n----------------------\nSelf Certifying Init]
+    docBRootAddsAnotherGroup["Doc Root\n-----------\nAdd Alice"] --> docBRoot
+
+    bobAddsDocA["Bob\n-----------\nAdd Document A"] -..-> docRoot
+    bobAddsDocA --> docBRootAddsAnotherGroup
+
+    style docBGroup fill:green;
+    style docAGroup fill:green;
+
+    style opsA fill:blue;
+    style opsB fill:blue;
+```
+
 ### Materialized View
 
 The above example materializes to the following:
@@ -257,8 +332,8 @@ flowchart BT
     docB --> Francine
     admins --> readers
 
-    style pullers color:white,fill:darkblue,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;;
-    style read_only color:white,fill:blue,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;;
+    style pullers color:white,fill:darkblue,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
+    style read_only color:white,fill:blue,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
     style also_write color:white,fill:purple,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
     style also_change_membership color:white,fill:darkred,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
 ```
@@ -429,7 +504,7 @@ flowchart LR
 
 For simplicity, in this scenario BigCo and Ink & Switch have delegated to each other full control (shown in green). While they have different members, they can be considered a single group because they've codelegated. If the Meeting Notes document revokes BigCo (in red), Ink & Switch also loses access since there is no path of authority to them.
 
-If instead Ink & Switch had been granted its own access to Meeting Notes (in orange), BigCo still has access through Ink & Switch. FIXME make decision if this is treated as authority flow vs tombstones.
+If instead Ink & Switch had been granted its own access to Meeting Notes (in orange), BigCo still has access through Ink & Switch.
 
 ``` mermaid
 flowchart LR
@@ -469,7 +544,24 @@ flowchart LR
     linkStyle 9 stroke:orange;
 ```
 
+This behavior may be surprising on first glance: BigCo was revoked, but they're still authorized! That intuition assumes a few things:
+
+1. That there is some mechanism to make user IDs scarce and trusted. Such a mechanism MAY be added outside of Beehive to restrict who is accepted into the system (e.g. a root authority that validates that all users have a valid company email). Otherwise, malicious Agents can still retain access generating new keys or groups.
+2. In practice, preventing delegation leads users to share keys, which is a worse trade-off (breaking best practices of keys never leaving the device).
+
 ## Attenuated Authority
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
