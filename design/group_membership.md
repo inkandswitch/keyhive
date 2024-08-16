@@ -342,7 +342,7 @@ flowchart BT
     style also_change_membership color:white,fill:darkred,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
 ```
 
-Validating capabilities proceeds recursively. Given read access to the caveats of each group, a complete list of users and their capabilities. The lowest level of rights MUST be `pull`, which only requires knowing the current public key of leaf agents.
+Validating [capabilities] proceeds recursively. Given read access to the caveats of each group, a complete list of users and their capabilities. The lowest level of rights MUST be `pull`, which only requires knowing the current public key of leaf agents.
 
 In this case, we have the following authority for Doc A:
 
@@ -438,7 +438,7 @@ Restricting _sub-delegation_ of an Agent's capabilities MUST NOT be permitted. I
 
 ## Transitive Authority
 
-Recall that [capabilities come in the following categories]: pull, read, mutate, and manager. All of these MAY be attenuated. For example, an Agent MAY be granted the ability to alter the membership of an external group or document.
+Recall that [capabilities come in the following categories][capabilities]: pull, read, mutate, and manager. All of these MAY be attenuated. For example, an Agent MAY be granted the ability to alter the membership of an external group or document.
 
 ```mermaid
 sequenceDiagram
@@ -540,19 +540,10 @@ flowchart TB
 
 # Applications to [Collection Sync]
 
-
-
-# FAQ
-
-## Differences from Access Control Lists (ACLs)
-
-## Differences from Object Capabilities (ocap)
-
-## Differences from Certificate Capabilities (SPKI)
+Chunk providers (sync servers and peers) need to know which documents that Agents are permitted to pull. Ideally this is done in as few round trips as possible. The requester may not know of all the documents that are allowed to pull. To find the releveant documents, the provider walks the auth graph, starting from the requester. Every reachable document is included in the collection, and sent to the user in one response. If the requester knows of more documents that were not included, it either means that the provider is missing auth operations, and can prove access by pushing the relevant auth histories to the provider at the start of a second round.
 
 <!-- External Links -->
 
 [BCP 14]: https://datatracker.ietf.org/doc/bcp14/
 [Collection Sync]: ./collection_sync.md
-
- FIXME move to concap doc: We propose naming this class of capabilities "Convergent Capabilities", or "concap" for short.
+ [capabilities]: ./convergent_capabilities.md
