@@ -34,7 +34,7 @@ There is no mechanism to rotate a stateless key itself. However, managing key ro
 
 ```mermaid
 flowchart TB
-    subgraph Singleton
+    subgraph StatelessAgent
         _singletonPK["Singleton Public Key"]
     end
 ```
@@ -49,7 +49,7 @@ A very common pattern is for the creator of an Agent to include ionctsructions t
 
 ```mermaid
 flowchart TB
-    subgraph Group
+    subgraph StatefulAgent
         direction TB
 
         _groupPK["Group Root (Public Key)"]
@@ -74,7 +74,7 @@ Documents are a subtype of Stateful Agents. They add stateful document content i
 
 ```mermaid
 flowchart TB
-    subgraph Document
+    subgraph DocumentAgent
         direction TB
 
         _docPK["Document Root (Public Key)"]
@@ -103,7 +103,7 @@ Note that the above may not all be available as cleartext to all participants. F
 
 ```mermaid
 flowchart TB
-    subgraph Document
+    subgraph DocumentAgent
         direction TB
 
         _docPK["Document Root (Public Key)"]
