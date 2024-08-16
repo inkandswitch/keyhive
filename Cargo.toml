@@ -3,6 +3,7 @@
 resolver = "2"
 members = [
     "beehive_core",
+    "beelay/beelay-core",
 ]
 
 [workspace.package]
