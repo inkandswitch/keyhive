@@ -2,12 +2,12 @@ use std::collections::{HashMap, HashSet};
 
 use beelay_core::{
     io::{IoAction, IoResult},
-    Audience, BundleSpec, PeerAddress, PeerId, RequestId, RpcResponse, SignedMessage, SnapshotId,
+    Audience, BundleSpec, OutboundRequestId, PeerAddress, RpcResponse, SignedMessage, SnapshotId,
     StoryResult, UnixTimestamp,
 };
 pub use beelay_core::{
     AddLink, Commit, CommitBundle, CommitHash, CommitOrBundle, DocumentHeads, DocumentId,
-    Forwarding, StorageKey, StreamDirection, SyncDocResult,
+    Forwarding, PeerId, StorageKey, StreamDirection, SyncDocResult,
 };
 use ed25519_dalek::SigningKey;
 use error::ConnectionError;
@@ -389,7 +389,7 @@ enum Message {
         Forwarding,
         futures::channel::oneshot::Sender<(
             beelay_core::EndpointId,
-            mpsc::Receiver<(beelay_core::RequestId, beelay_core::SignedMessage)>,
+            mpsc::Receiver<(beelay_core::OutboundRequestId, beelay_core::SignedMessage)>,
         )>,
     ),
     UnregisterEndpoint(
@@ -400,7 +400,7 @@ enum Message {
         SignedMessage,
         futures::channel::oneshot::Sender<beelay_core::RpcResponse>,
     ),
-    HandleResponse(RequestId, RpcResponse),
+    HandleResponse(OutboundRequestId, RpcResponse),
     CreateDoc(oneshot::Sender<DocumentId>),
     AddCommits(oneshot::Sender<Vec<BundleSpec>>, DocumentId, Vec<Commit>),
     SyncDoc(
@@ -754,7 +754,7 @@ enum AwaitingStory {
     RegisterEndpoint(
         oneshot::Sender<(
             beelay_core::EndpointId,
-            mpsc::Receiver<(beelay_core::RequestId, beelay_core::SignedMessage)>,
+            mpsc::Receiver<(beelay_core::OutboundRequestId, beelay_core::SignedMessage)>,
         )>,
     ),
     UnregisterEndpoint(oneshot::Sender<()>),

@@ -5,6 +5,7 @@ members = [
     "beehive_wasm",
     "beelay/beelay-core",
     "beelay/beelay",
+    "beelay/beelay-cli",
     "beelay/test-utils",
 ]
 

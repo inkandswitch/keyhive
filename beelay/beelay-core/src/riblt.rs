@@ -40,12 +40,6 @@ pub(crate) struct SymbolMapping {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct RandomMapping {
-    prng: u64,
-    last_idx: u64,
-}
-
-#[derive(Clone, Copy)]
 pub(crate) struct HashedSymbol<T: Symbol + Copy> {
     symbol: T,
     hash: u64,
@@ -80,6 +74,12 @@ pub(crate) struct Decoder<T: Symbol + Copy> {
     window: Encoder<T>,
     decodable: Vec<i64>,
     num_decoded: u64,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RandomMapping {
+    prng: u64,
+    last_idx: u64,
 }
 
 impl RandomMapping {

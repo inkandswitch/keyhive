@@ -46,10 +46,10 @@ impl crate::Beelay {
     /// }
     /// ```
     #[cfg(feature = "axum")]
-    pub async fn accept_axum<S, H: AsRef<str>>(
+    pub async fn accept_axum<S>(
         &self,
         stream: S,
-        receive_hostname: Option<H>,
+        receive_hostname: Option<&str>,
         forwarding: Forwarding,
     ) -> Result<(), Error>
     where
@@ -66,7 +66,7 @@ impl crate::Beelay {
         self.connect_tokio_websocket(
             stream,
             StreamDirection::Accepting {
-                receive_audience: receive_hostname.map(|s| s.as_ref().to_string()),
+                receive_audience: receive_hostname.map(|s| s.to_string()),
             },
             forwarding,
         )
