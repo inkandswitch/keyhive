@@ -2,7 +2,7 @@
 
 # Abstract
 
-Group membership in Beehive has two main concepts: a membership op-based CRDT, and a variant of object capabilities adapted to an eventually consistent setting. We propose naming this class of capabilities "Convergent Capabilities", or "concap" for short.
+Beehive maintains groups with mutable membership (additions and removals). This has two main concepts: a membership op-based CRDT, and a variant of object capabilities adapted to an eventually consistent setting. Some groups are associated with Automerge documents. Membership changes and document content MAY causally depend on each other. This document describes how to maintain this group membership.
 
 # Conventions
 
@@ -148,9 +148,11 @@ flowchart TB
 
 This enough information for the sync server to know may request document bytes, but not enough to actually decrypt the document state.
 
-# Authority Networks
+# Authority Graphs
 
-## Objects & Causal State
+A change to group membership MAY be causally dependent on the state of another group or document content (and vice versa).
+
+## Example
 
 ```mermaid
 flowchart RL
@@ -207,7 +209,7 @@ flowchart RL
 
 ### Materialized View
 
-The above example materialized to the following:
+The above example materializes to the following:
 
 ```mermaid
 %%{ init: { 'themeVariables': { 'lineColor': '#FFF' } } }%%
@@ -294,7 +296,7 @@ And for Doc B:
 | Doc B Root  | ✅         | ✅              | ✅             | ✅                         |
 
 
-# State Transition
+# Auth State Transition
 
 ```rust
 pub struct Attenuation {
@@ -345,7 +347,9 @@ Auth roots are the key pair associtated to a group. Since their public key is th
 
 ## Re-Adds
 
-Re-adding a user is supported as long as the new add occurs causally after the relevant Agent revocation.
+An Agent MAY be re-added to a group. In this case, the re-add operation MUST (transitively) causally succeed that Agent's revocation.
+
+Note that for purposes of [seniority], the re-added Agent's seniority MUST be calculated from their earliest add (prior to the revocation).
 
 # Delegation
 
@@ -355,7 +359,7 @@ Restricting _sub-delegation_ of an Agent's capabilities MUST NOT be permitted. I
 
 ## Transitive Authority
 
-Recall that [capabilities] come in the following variants: pull, read, mutate, and membership maintainer. All of these MAY be attenuated. For example, an Agent MAY be granted the ability to alter the membership of an external group or document.
+Recall that [capabilities come in the following categories]: pull, read, mutate, and manager. All of these MAY be attenuated. For example, an Agent MAY be granted the ability to alter the membership of an external group or document.
 
 ```mermaid
 sequenceDiagram
@@ -383,6 +387,86 @@ sequenceDiagram
     Note over Doc,Mallory: Mallory Revoked
     PvH -->> Ink & Switch: 💔 Revoke Mallory (authorized by ➊→➍)
     Mallory --x Doc: 🚫 Write Op3 (REJECTED becuase ➑)
+```
+
+### Cycles
+
+Group delegations MUST form a directed graph, which MAY contain cycles. For example:
+
+``` mermaid
+flowchart LR
+    subgraph Docs
+        j["LaTeX Document\n(Jacquard)"]
+        p["Meeting Notes\n(Patchwork)"]
+    end
+
+    subgraph Groups
+        ias[Ink & Switch]
+        bigco[BigCo]
+    end
+
+    subgraph Users
+        pvh[Peter]
+        ajg[Alex]
+        bez[Brooke]
+    end
+
+    j --> ias
+    p --> bigco
+
+    ias ---> bigco
+    bigco --> ias
+
+    bigco --> bez
+    bigco --> ajg
+
+    ias --> ajg
+    ias --> pvh
+
+    linkStyle 2,3 stroke:green;
+    linkStyle 1 stroke:red;
+```
+
+For simplicity, in this scenario BigCo and Ink & Switch have delegated to each other full control (shown in green). While they have different members, they can be considered a single group because they've codelegated. If the Meeting Notes document revokes BigCo (in red), Ink & Switch also loses access since there is no path of authority to them.
+
+If instead Ink & Switch had been granted its own access to Meeting Notes (in orange), BigCo still has access through Ink & Switch. FIXME make decision if this is treated as authority flow vs tombstones.
+
+``` mermaid
+flowchart LR
+    subgraph Docs
+        j["LaTeX Document\n(Jacquard)"]
+        p["Meeting Notes\n(Patchwork)"]
+    end
+
+    subgraph Groups
+        ias[Ink & Switch]
+        bigco[BigCo]
+    end
+
+    subgraph Users
+        pvh[Peter]
+        ajg[Alex]
+        bez[Brooke]
+    end
+
+    j --> ias
+    p --> bigco
+
+    ias ---> bigco
+    bigco --> ias
+
+    bigco --> bez
+    bigco --> ajg
+
+    ias --> ajg
+    ias --> pvh
+
+    p ~~~ bigco
+    p -.-> ias
+
+    linkStyle 2,3 stroke:green;
+    linkStyle 1 stroke:red;
+    linkStyle 9 stroke:orange;
 ```
 
 ## Attenuated Authority
@@ -424,7 +508,13 @@ flowchart TB
     end
 ```
 
-## Applications to [Collection Sync]
+## Subsumption
+
+FIXME for ephemeral workers
+
+# Applications to [Collection Sync]
+
+
 
 # FAQ
 
@@ -438,3 +528,5 @@ flowchart TB
 
 [BCP 14]: https://datatracker.ietf.org/doc/bcp14/
 [Collection Sync]: ./collection_sync.md
+
+ FIXME move to concap doc: We propose naming this class of capabilities "Convergent Capabilities", or "concap" for short.
