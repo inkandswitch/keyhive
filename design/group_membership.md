@@ -2,11 +2,23 @@
 
 Group membership in Beehive has two main concepts: a membership op-based CRDT, and a variant of object capabilities adapted to an eventually consistent setting. We propose naming this class of capabilities "Convergent Capabilities", or "concap" for short.
 
+## Notational Conventions
+
+There are several diagrams below. We use the following graphical conventions:
+
+```mermaid
+flowchart
+    subgraph Legend
+        direction RL
+        successor["Successor Op Author\n--------------------------\nSuccessor Op Payload"] -->|after| predecessor["Predessor Op Author\n-----------------------------\nPredecessor Op Payload"]
+    end
+```
+
 # Agents
 
 "Agents" in Beehive represent some locus of control. They are distinguished by other entities in the system by being able to sign operations. As such, Agents MUST be represented by a "root" keypair which acts as their ID.
 
-Entities form a subtyping hierarchy: `Doc :< Stateful :< Stateless`.
+Entities form a subtyping hierarchy: `Document :< Stateful :< Stateless`.
 
 ``` rust
 // Pseudocode
@@ -26,7 +38,7 @@ enum Agent {
 
 ## Stateless (AKA "Singleton")
 
-The simplest form of Agent is a public key with no associated state. Almost (but not all) ops in Beehive are signed by Stateless Agents. These are typically the leaf keys in a [group hierarchy].
+The simplest Agent variant is a public key with no associated state. Almost (but not all) ops in Beehive are signed by Stateless Agents. These are typically the leaf keys in a [group hierarchy].
 
 Some examples of Stateless Agents include Passkeys, non-extractable WebCrypto keys, hardware keys, or other keys limited by application context.
 
@@ -34,7 +46,7 @@ There is no mechanism to rotate a stateless key itself. However, managing key ro
 
 ```mermaid
 flowchart TB
-    subgraph StatelessAgent
+    subgraph StatelessAgent[Stateless Agent]
         _singletonPK["Singleton Public Key"]
     end
 ```
@@ -49,7 +61,7 @@ A very common pattern is for the creator of an Agent to include ionctsructions t
 
 ```mermaid
 flowchart TB
-    subgraph StatefulAgent
+    subgraph StatefulAgent[Stateful Agent]
         direction TB
 
         _groupPK["Group Root (Public Key)"]
@@ -74,7 +86,7 @@ Documents are a subtype of Stateful Agents. They add stateful document content i
 
 ```mermaid
 flowchart TB
-    subgraph DocumentAgent
+    subgraph DocumentAgent[Document Agent]
         direction TB
 
         _docPK["Document Root (Public Key)"]
@@ -103,7 +115,7 @@ Note that the above may not all be available as cleartext to all participants. F
 
 ```mermaid
 flowchart TB
-    subgraph DocumentAgent
+    subgraph DocumentAgent[Document Agent]
         direction TB
 
         _docPK["Document Root (Public Key)"]
@@ -122,7 +134,7 @@ flowchart TB
         addKeyFoo -.->|somewhere inside| ops
     end
 
-    singetonRemovesAnotherGroup -.->|lock state after| addKeyFoo["Document PK @ Op Hash"]
+    singetonRemovesAnotherGroup -.->|lock state after| addKeyFoo(["Document PK @ Op Hash"])
     docRoot -.->|self-certified by| _docPK
 ```
 
@@ -131,14 +143,6 @@ This enough information for the sync server to know may request document bytes, 
 # Example
 
 ## Objects & Causal State
-
-```mermaid
-flowchart
-    subgraph Legend
-        direction RL
-        successor["Successor Op Author\n--------------------------\nSuccessor Op Payload"] -->|after| predecessor["Predessor Op Author\n-----------------------------\nPredecessor Op Payload"]
-    end
-```
 
 ```mermaid
 flowchart RL
@@ -249,6 +253,39 @@ flowchart BT
     style also_change_membership color:white,fill:darkred,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
 ```
 
+Validating capabilities proceeds recursively. Given read access to the caveats of each group, a complete list of users and their capabilities $\langle \textsf{agentId}, \textsf{agentOrDocId}, \textsf{[restrictions]} \rangle$. The lowest level of rights in the preset is `pull`, which only requires knowing the current public key of leaf agents.
+
+In this case, we have the following authority for Doc A:
+
+| Agent       | Pull Doc A | E2EE Read Doc A | Write to Doc A | Change Membership on Doc A |
+|-------------|------------|-----------------|----------------|----------------------------|
+| Alice       | ✅         | ✅              | ✅             | ✅                         |
+| Bob         | ✅         | ✅              | ✅             | ✅                         |
+| Carol       | ✅         | ✅              | ✅             | ✅                         |
+| Dan         | ✅         | ✅              | ❌             | ❌                         |
+| Erin        | ✅         | ✅              | ❌             | ❌                         |
+| Francine    | ❌         | ❌              | ❌             | ❌                         |
+| Reader Root | ✅         | ✅              | ❌             | ❌                         |
+| Admin Root  | ✅         | ✅              | ✅             | ✅                         |
+| Doc A Root  | ✅         | ✅              | ✅             | ✅                         |
+| Doc B Root  | ❌         | ❌              | ❌             | ❌                         |
+
+And for Doc B:
+
+| Agent       | Pull Doc B | E2EE Read Doc B | Write to Doc B | Change Membership on Doc B |
+|-------------|------------|-----------------|----------------|----------------------------|
+| Alice       | ✅         | ✅              | ✅             | ✅                         |
+| Bob         | ✅         | ✅              | ✅             | ✅                         |
+| Carol       | ✅         | ✅              | ✅             | ✅                         |
+| Dan         | ✅         | ✅              | ❌             | ❌                         |
+| Erin        | ✅         | ✅              | ❌             | ❌                         |
+| Francine    | ✅         | ✅              | ❌             | ❌                         |
+| Reader Root | ✅         | ✅              | ❌             | ❌                         |
+| Admin Root  | ✅         | ✅              | ✅             | ✅                         |
+| Doc A Root  | ❌         | ❌              | ❌             | ❌                         |
+| Doc B Root  | ✅         | ✅              | ✅             | ✅                         |
+
+
 # State Transition
 
 The state of a 
@@ -268,7 +305,7 @@ TODO: fix formatting; I just find this easier to read as a personal quirk
 ```rust
 pub struct Attenuation {
     group_id: Option<GroupId>,
-    predicate: RestrictionDsl // FIXME: TBD
+    ceveats: CeveatDsl // FIXME: TBD
 }
 
 enum AuthAction {
@@ -307,40 +344,6 @@ struct AuthOp {
   signature: Signature
 }
 ```
-
-## Materialization
-
-Materialization if access at a certain level proceeds recursively. Given read access to the caveats of each group, a complete list of users and their capabilities $\langle \textsf{agentId}, \textsf{agentOrDocId}, \textsf{[restrictions]} \rangle$. The lowest level of rights in the preset is `pull`, which only requires knowing the current public key of leaf agents.
-
-In this case, we have the following authority for Doc A:
-
-| Agent       | Pull Doc A | E2EE Read Doc A | Write to Doc A | Change Membership on Doc A |
-|-------------|------------|-----------------|----------------|----------------------------|
-| Alice       | ✅         | ✅              | ✅             | ✅                         |
-| Bob         | ✅         | ✅              | ✅             | ✅                         |
-| Carol       | ✅         | ✅              | ✅             | ✅                         |
-| Dan         | ✅         | ✅              | ❌             | ❌                         |
-| Erin        | ✅         | ✅              | ❌             | ❌                         |
-| Francine    | ❌         | ❌              | ❌             | ❌                         |
-| Reader Root | ✅         | ✅              | ❌             | ❌                         |
-| Admin Root  | ✅         | ✅              | ✅             | ✅                         |
-| Doc A Root  | ✅         | ✅              | ✅             | ✅                         |
-| Doc B Root  | ❌         | ❌              | ❌             | ❌                         |
-
-And for Doc B:
-
-| Agent       | Pull Doc B | E2EE Read Doc B | Write to Doc B | Change Membership on Doc B |
-|-------------|------------|-----------------|----------------|----------------------------|
-| Alice       | ✅         | ✅              | ✅             | ✅                         |
-| Bob         | ✅         | ✅              | ✅             | ✅                         |
-| Carol       | ✅         | ✅              | ✅             | ✅                         |
-| Dan         | ✅         | ✅              | ❌             | ❌                         |
-| Erin        | ✅         | ✅              | ❌             | ❌                         |
-| Francine    | ✅         | ✅              | ❌             | ❌                         |
-| Reader Root | ✅         | ✅              | ❌             | ❌                         |
-| Admin Root  | ✅         | ✅              | ✅             | ✅                         |
-| Doc A Root  | ❌         | ❌              | ❌             | ❌                         |
-| Doc B Root  | ✅         | ✅              | ✅             | ✅                         |
 
 ### Roots
 
