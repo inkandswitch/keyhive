@@ -234,4 +234,4 @@ flowchart
 ```
 
 <!-- External Links -->
-[Group Membership](./group_membership.md)
+[Group Membership]: ./group_membership.md
