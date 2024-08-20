@@ -214,7 +214,6 @@
               self.packages.${system}.irust
               (pkgs.hiPrio pkgs.rust-bin.nightly.latest.rustfmt)
 
-              pkgs.pandoc
               pkgs.wasm-pack
               chromedriver
               protobuf
