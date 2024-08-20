@@ -132,6 +132,10 @@ In this scenario, the following would need to be added to the sync collection fo
   * Meeting Notes (content & group membership)
   * Week 32 Notes (content & group membership)
   * Week 33 Notes (content & group membership)
+  
+## Reverse Lookup
+  
+Even though this search involves a reverse lookup on the links, it can be treated as a valid materialization of the delegation operations. There is nothing preventing an implementation from materializing both forward and backward views of the data.
 
 # Cycles
 
