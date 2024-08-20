@@ -161,27 +161,77 @@ flowchart
         bob_tablet(["Bob's Tablet"])
     end
 
-    docB -.-> docA
-    docA -.-> alice
-    docB -.-> bob
+    docB --> docA
+    docA --> alice
+    docB --> bob
 
-    alice -.-> bob
+    alice --> bob
     bob --> alice
 
     alice --> alice_phone
     alice --> alice_laptop
 
-    bob -.-> bob_phone
-    bob -.-> bob_tablet
-
-    linkStyle 0,1,2,4,5 stroke:red;
+    bob --> bob_phone
+    bob --> bob_tablet
 ```
 
 Due to this, the node discovery MUST be run to a fixed point. Memoization is RECOMMENDED to improve the performance of such lookups.
 
-Using the example above, we know that any node that has a path to Alice automatically has a path to Doc A, Doc B, and Bob. Alice's Phone's path is highlighted in red.
+Using the example above, we know that any node that has a path to Alice automatically has a path to Doc A, Doc B, and Bob. Alice's Phone's reachable subgraph is given below:
 
-Any node that has a path to Bob also has a path to Alice, Doc A and Doc B. Therefore, by virtue of a path to Alice, Alice's Laptop can automatically assume access to Doc A, Doc B, and Bob. Bob's Tablet's paths is denoted with a dotted line.
+```mermaid
+flowchart
+    subgraph Documents
+        docA[("DocA")]
+        docB[("DocB")]
+    end
+
+    subgraph Groups
+        bob{{"Bob"}}
+        alice{{"Alice"}}
+    end
+
+    subgraph Devices
+        alice_phone(["Alice's Phone"])
+    end
+
+    docB -.-> docA
+    docA --> alice
+    docB --> bob
+
+    alice -.-> bob
+    bob --> alice
+
+    alice --> alice_phone
+```
+
+Any node that has a path to Bob also has a path to Alice, Doc A and Doc B. Therefore, by virtue of a path to Alice, Alice's Laptop can automatically assume access to Doc A, Doc B, and Bob. Bob's Tablet's reachable subgraph is given below:
+
+```mermaid
+flowchart
+    subgraph Documents
+        docA[("DocA")]
+        docB[("DocB")]
+    end
+
+    subgraph Groups
+        bob{{"Bob"}}
+        alice{{"Alice"}}
+    end
+
+    subgraph Devices
+        bob_tablet(["Bob's Tablet"])
+    end
+
+    docB -.-> docA
+    docA --> alice
+    docB --> bob
+
+    alice --> bob
+    bob -.-> alice
+
+    bob --> bob_tablet
+```
 
 <!-- External Links -->
 [Group Membership](./group_membership.md)
