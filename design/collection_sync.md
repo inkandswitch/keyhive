@@ -14,7 +14,7 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 
 # Discovery
 
-Collecton sync proceeds from a specific replica's public key to the Document IDs (also public keys) that they have access to
+Collecton sync proceeds from a specific replica's public key to the Document IDs (also public keys) that they have Pull Access to. This proceeds via traversal of the directed graph in reverse (from delegate to delegator), and collecting all reachable nodes.
 
 ```mermaid
 flowchart
