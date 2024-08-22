@@ -303,4 +303,107 @@ flowchart TD
     style e fill:red;
 ```
 
+## Archival Strategy
 
+To reduce the duplication across chunks, we can merge chunks into larger runs. _Extremely_ generally, ops much earlier in the causal history are less likely to have siblings. Under this assumption, we can use a metric like hash hardness to determine ranges with a backoff.
+
+One such metric is to decrease the hash hardness as chunks are generated. In essence, this is a search problem on the causal graph, splitting it into probablistically smaller regions the nearer it gets to the latest head. This strategy is stable across all replicas with shared history, and produces stable subsumptions.
+
+(Forgive me, I added more ops under `ig0000` to make the chunk more illustrative)
+
+```mermaid
+flowchart TD
+    d(u0n7c2)
+    c(f36c09)
+    e(644dn9)
+    j(f34bk0)
+    h(z3fgb8)
+    g(a5j200)
+    i(8ui0n7)
+    a(8vxt00)
+    b(roib8a)
+    f(ig0000)
+
+    subgraph four["0000"]
+        f
+        c
+        e
+
+        f --> x(g6t000) --> y(634v03) --> z(xde4g2) --> o(83bd7xa)
+        e --> w(8ubx00) --> z
+    end
+
+    subgraph two["00"]
+        subgraph B[" "]
+            a
+            b
+            d
+            cB(f36c09)
+            eB(644dn9)
+
+            b --> cB --> eB
+            d --> eB
+        end
+
+        subgraph C [" "]
+            g --> dA(u0n7c2) --> eA(644dn9)
+        end
+    end
+
+    subgraph Heads["None (i.e. heads)"]
+        subgraph D[" "]
+            h
+            j
+        end
+
+        subgraph E[" "]
+            i
+        end
+    end
+
+    a --> b
+    c --> e
+    h --> g
+    i ---> a
+    i --> f
+    j --> h
+    b --> d
+    f --> c
+    B ~~~~~~ four
+
+    eB --> w
+    eA --> w
+
+    style c fill:red;
+    style cB fill:red;
+
+    style d fill:red;
+    style dA fill:red;
+
+    style e fill:red;
+    style eA fill:red;
+    style eB fill:red;
+```
+
+## Merging & Encryption
+
+Under encryption, the contents cannot be inspected, and the same ops may be encrypted with a different key (yielding a different ciphertext). An [Agent] with [Pull] access may want to know which graniular chunks can be be retired after a period of time. This is achived by nothing the head hashed and metric used:
+
+```rust
+struct EncryptedChunk {
+    head: Vec<Hash>,
+    hardness: u8,
+    contains: Vec<(Hash, MaxHardness)>,
+}
+```
+
+We do need to note the hardness in additon to the hash, since the two togethre uniquely determine the reulting subgraph. We only need to note the maximum hardness used, since hardness is a monotone function. We cannot only rely on the zeros in the hash because we may have used a weaker metric to calculate the region.
+
+> [!NOTE]
+> This is — in a sense — a known plaintext attack _against ourselves_ in the common case where we produce the exact same chunk prior to encryption. This means that any encryption method used MUST be secure against known plaintext.
+
+# Aversarial Garbage Collection
+
+# Future Directions
+
+This chunking strategy can also be used to generate stable flattened histories (AKA "squash compression").
