@@ -6,7 +6,7 @@ It is [conjectured][Zooko's Triangle] that having a naming scheme that is crypto
 
 Since there is a large nuber of such binding solutions — each with their own tradeoffs — the core Beehive design intentionally leaves questions of human-readable identifiers out of scope. However, many developers are not experts in the finer distinctions between authz, authn, and identity. As such, Beehive "should" include some lightweight, loosely coupled, default identity mechanism, with the ability to replace this with a more sophisticated mechanism such as DNS, ENS, the Name Name System, etc.
 
-> [!DANGER]
+> [!CAUTION]
 > It is extremely important to note that edge names SHOULD NOT be considered authoritative. There is no verifiable proof behind these names other than a claim by some entity in the graph.
 
 # From Pet Names to Edge Names
@@ -55,9 +55,6 @@ Note that these names are _extremely loose_ and depend on the exact path of name
 You can also discover others names for you, such as `edgename://D04/That Person That I Met Once in Berlin`.
 
 This is especially helpful with address book documents controlled by groups, since this can be  gg
-
-> [!CAUTION]
-> Nothing prevents someone from using an incorrect label to impersonate another user. An egde name is only as trusted as the issuer.
 
 <!-- External Links -->
 [Spritely pet names]: https://spritely.institute/static/papers/petnames.html
