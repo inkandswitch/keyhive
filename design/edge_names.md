@@ -54,11 +54,11 @@ Note that these names are _extremely loose_ and depend on the exact path of name
 
 You can also discover others names for you, such as `edgename://D04/That Person That I Met Once in Berlin`.
 
-This is especially helpful with address book documents controlled by groups, since this 
+This is especially helpful with address book documents controlled by groups, since this can be  gg
 
 > [!CAUTION]
 > Nothing prevents someone from using an incorrect label to impersonate another user. An egde name is only as trusted as the issuer.
 
 <!-- External Links -->
 [Spritely pet names]: https://spritely.institute/static/papers/petnames.html
-[Zooko's Truangle]: https://en.wikipedia.org/wiki/Zooko's_triangle
+[Zooko's Triangle]: https://en.wikipedia.org/wiki/Zooko's_triangle
