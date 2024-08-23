@@ -1,8 +1,5 @@
 # Stable Chunking
 
-End-to-end encryption (E2EE) 
-
-
 Take the following causal graph on two replicas.
 
 ```mermaid
