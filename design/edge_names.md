@@ -15,7 +15,7 @@ Since there is a large nuber of such binding solutions — each with their own 
 
 The downside is that each agent now must name all others, which is impractical for many applications.
 
-Edge names (EN) relax the PN privacy restriction to gain a minimalist name discovery system. Instead of a root authority that hands out unique names, each agent MAY share its name bindings. These MUST be namespaced by that agent's identifier. Proceeding recursively, an agent starts from their own bindings, and appends the names on the paths to the other reachable agents. This is arguably the most bare name setting for groups.
+[Edge names][Spritely pet names] (EN) relax the PN privacy restriction to gain a minimalist name discovery system. Instead of a root authority that hands out unique names, each agent MAY share its name bindings. These MUST be namespaced by that agent's identifier. Proceeding recursively, an agent starts from their own bindings, and appends the names on the paths to the other reachable agents. This is arguably the most bare name setting for groups.
 
 > [!WARNING]
 > Note that in an EN system, there are no _universal_ names beyond cryptographic identifiers. This meets the underlying need of a common name (typically a public key) and decentralized name discovery.
@@ -46,7 +46,6 @@ flowchart TD
     gl -->|Pete| pvh
 ```
 
-
 Note that these names are _extremely loose_ and depend on the exact path of name authorities. By convention in this document, we will use the familiar URL format since it represents paths under an authority. For example:
 
 * `edgename:PvH` (i.e. your name for `6Mk`) FIXME URL structure
@@ -57,7 +56,9 @@ You can also discover others names for you, such as `edgename://D04/That Person 
 
 This is especially helpful with address book documents controlled by groups, since this 
 
-Impersonatoin
+> [!CAUTION]
+> Nothing prevents someone from using an incorrect label to impersonate another user. An egde name is only as trusted as the issuer.
 
-
-
+<!-- External Links -->
+[Spritely pet names]: https://spritely.institute/static/papers/petnames.html
+[Zooko's Truangle]: https://en.wikipedia.org/wiki/Zooko's_triangle
