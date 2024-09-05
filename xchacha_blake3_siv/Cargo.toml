@@ -1,5 +1,5 @@
 [package]
-name = "xchacha_blake3_mickey"
+name = "xchacha_blake3_siv"
 version = "0.1.0"
 edition = "2021"
 

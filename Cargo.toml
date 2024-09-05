@@ -2,7 +2,7 @@
 
 resolver = "2"
 members = [
-    "xchacha_blake3_mickey",
+    "xchacha_blake3_siv",
 ]
 
 [workspace.package]
