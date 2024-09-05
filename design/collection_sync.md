@@ -14,7 +14,7 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 
 # Discovery
 
-Collecton sync proceeds from a specific replica's public key to the Document IDs (also public keys) that they have Pull Access to. This proceeds via traversal of the directed graph in reverse (from delegate to delegator), and collecting all reachable nodes.
+Collection sync proceeds from a specific replica's public key to the Document IDs (also public keys) that they have Pull Access to. This proceeds via traversal of the directed graph in reverse (from delegate to delegator), and collecting all reachable nodes.
 
 ```mermaid
 flowchart
@@ -112,7 +112,7 @@ Even though this search involves a reverse lookup on the links, it can be treate
 
 # Cycles
 
-Recall that [cycles and reduendant links are permitted in the authority graph].
+Recall that [cycles and redundant links are permitted in the authority graph].
 
 ```mermaid
 flowchart

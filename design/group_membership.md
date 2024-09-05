@@ -24,7 +24,7 @@ flowchart
 
 # Agents
 
-"Agents" in Beehive represent some principal that is capable of receiving, delegating, and exercising authority. They are distinguished by other entities in the system by being able to cryptographically sign operations. As such, Agents MUST be represented by a "root" keypair which acts as their ID.
+"Agents" in Beehive represent some principal that is capable of receiving, delegating, and exercising authority. They are distinguished by other entities in the system by being able to cryptographically sign operations. As such, Agents MUST be represented by a "root" key pair which acts as their ID.
 
 Agents form a subtyping hierarchy: `Document :< Stateful :< Stateless`.
 
@@ -65,7 +65,7 @@ Stateful Agents add authorization state. The operations that make up the state's
 
 Once another Agent is grated control of it, the Stateful Agent MAY delete its secret key.
 
-A very common pattern is for the creator of an Agent to include ionctsructions to add itself to the child's membership upon initialization. This is known as [Membership by Parenthood].
+A very common pattern is for the creator of an Agent to include instructions to add itself to the child's membership upon initialization. This is known as [Membership by Parenthood].
 
 ```mermaid
 flowchart TB
@@ -422,7 +422,7 @@ struct AuthOp {
 
 ### Roots
 
-Auth roots are the key pair associtated to a group. Since their public key is the document ID, these are REQUIRED to make delegation chains "self-certifying".
+Auth roots are the key pair associated to a group. Since their public key is the document ID, these are REQUIRED to make delegation chains "self-certifying".
 
 ## Re-Adds
 
@@ -434,7 +434,7 @@ Note that for purposes of [seniority], the re-added Agent's seniority MUST be ca
 
 Any [Agent] MAY delegate its authority over _it's own capabilities_ to others.
 
-Restricting _sub-delegation_ of an Agent's capabilities MUST NOT be permitted. It is well known that attempting to do so leads to worse outcomes (e.g. users sharing secret keys), and prevents desirable behaviour such as sub-delegating very narrow authority ([PoLA]) to emphemeral workers.
+Restricting _sub-delegation_ of an Agent's capabilities MUST NOT be permitted. It is well known that attempting to do so leads to worse outcomes (e.g. users sharing secret keys), and prevents desirable behavior such as sub-delegating very narrow authority ([PoLA]) to ephemeral workers.
 
 ## Transitive Authority
 
@@ -505,7 +505,7 @@ flowchart LR
     linkStyle 2,3 stroke:green;
 ```
 
-For simplicity, in this scenario BigCo and Ink & Switch have delegated to each other full control (shown in green). While they have different members, they can be considered a single group because they've codelegated.
+For simplicity, in this scenario BigCo and Ink & Switch have delegated to each other full control (shown in green). While they have different members, they can be considered a single group because they've co-delegated.
 
 # Device Management
 
@@ -540,7 +540,7 @@ flowchart TB
 
 # Applications to [Collection Sync]
 
-Chunk providers (sync servers and peers) need to know which documents that Agents are permitted to pull. Ideally this is done in as few round trips as possible. The requester may not know of all the documents that are allowed to pull. To find the releveant documents, the provider walks the auth graph, starting from the requester. Every reachable document is included in the collection, and sent to the user in one response. If the requester knows of more documents that were not included, it either means that the provider is missing auth operations, and can prove access by pushing the relevant auth histories to the provider at the start of a second round.
+Chunk providers (sync servers and peers) need to know which documents that Agents are permitted to pull. Ideally this is done in as few round trips as possible. The requester may not know of all the documents that are allowed to pull. To find the relevant documents, the provider walks the auth graph, starting from the requester. Every reachable document is included in the collection, and sent to the user in one response. If the requester knows of more documents that were not included, it either means that the provider is missing auth operations, and can prove access by pushing the relevant auth histories to the provider at the start of a second round.
 
 <!-- External Links -->
 

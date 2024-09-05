@@ -46,7 +46,7 @@ This strategy also commits to a specific key (and reduadanctly commits to the me
 Note that to avoid allocating space for the entire payload in the nonce preimage (on creation and validation), we first hash the content.
 
 > [!NOTE]
-> The extra hash step mentioned above may be superflous, need to double check
+> The extra hash step mentioned above may be superfluous, need to double check
 >
 > — expede
 
@@ -61,7 +61,7 @@ Note that to avoid allocating space for the entire payload in the nonce preimage
 | Read Access Revocation   | DCGKA's in-built PCS mechanism                                                        |
 | Transitive Read Access   | DCKGA + Capabilities                                                                  |
 | Granular Write Access    | Modified (partition tolerant) OCap, predicate attenuation                             |
-| Write Revocation         | Causality locking, backdating detection, default to "whiteout" (skip materialisation) |
+| Write Revocation         | Causality locking, backdating detection, default to "whiteout" (skip materialization) |
 
 <!-- External Links -->
 [encryptment]: https://eprint.iacr.org/2019/016.pdf
