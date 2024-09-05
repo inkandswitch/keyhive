@@ -7,8 +7,8 @@ FIXME TL;DR
 NOTE: this also gives a way to handle "branch heads".
 
 ```rust
-struct IDPointer {
-    doc_id: DocumentId,
+struct SoftPointer {
+    agent_id: AgentId,
     heads: Vec<OpHash>,
 }
 ```
