@@ -1,0 +1,16 @@
+name: "spellcheck"
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  spellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: matheus23/md-spellcheck-action@v4.2.2
+        with:
+          files-to-check: "**/*.md"
+          words-to-ignore-file: ".github/workflows/dictionary.txt"

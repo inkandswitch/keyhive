@@ -7,16 +7,16 @@
 
 ## Assumptions
 
-* It is not possible to materialise an Automerge document without access to all events, back to genesis
+* It is not possible to materialize an Automerge document without access to all events, back to genesis
 * Post-compromise security (PCS) requires that a new, unique, random key is generated periodically (ideally on every change)
-* Preventing someone from accessing future updates to a document involves removing their agent ID from the group, and thus removing their public keys from future symmetric key derivtion
+* Preventing someone from accessing future updates to a document involves removing their agent ID from the group, and thus removing their public keys from future symmetric key derivation
 * [Group membership][Group Membership] is intended to change over time, so any agent that has access now should automatically have access to all prior history, even if they weren't part of the group at the time that block was written
 
 ## Key Management
 
-Storing and transmitting all keys for an arbitrarily-sized store is possible, but fragile and unwieldly. Under the assumption that granting an entrypoint to the document at a point in history should reveal the entire history, our strategy is to include the keys for direct causal ancestors in each block.
+Storing and transmitting all keys for an arbitrarily-sized store is possible, but fragile and unwieldly. Under the assumption that granting an entry point to the document at a point in history should reveal the entire history, our strategy is to include the keys for direct causal ancestors in each block.
 
-While it would be ideal to prevent break-ins from reading prior messages (forward secrecy), doing so imposes a high burden to manage many keys. In the naive scenario, missing any keys from the history prevents (complete) document materialisation.
+While it would be ideal to prevent break-ins from reading prior messages (forward secrecy), doing so imposes a high burden to manage many keys. In the naive scenario, missing any keys from the history prevents (complete) document materialization.
 
 ## Crypt Store
 
