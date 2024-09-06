@@ -1,4 +1,6 @@
 /// FIXME Based on https://kerkour.com/chacha20-blake3
+use cipher::KeyIvInit;
+use cipher::StreamCipher;
 
 pub struct Siv {
     pub bytes: [u8; 32],
@@ -17,62 +19,77 @@ pub struct XChaCha20Blake3Siv {
 impl XChaCha20Blake3Siv {
     pub fn new(
         key: &[u8; 32],
-        domain_separator: Vec<u8>,
+        mut domain_separator: Vec<u8>,
         plaintext: Vec<u8>,
     ) -> XChaCha20Blake3Siv {
         //
 
-        let siv = Siv::new(key, plaintext, domain_separator);
+        let siv = Siv::new(key, plaintext.clone(), domain_separator.clone());
 
         // subKey := HChaCha20(key, nonce[0:16])
-        let chacha20_kdf = chacha20::new(key, &siv.bytes[0..16]);
+        let subkey: [u8; 32] =
+            blake3::derive_key(std::str::from_utf8(key).expect("FIXME"), &siv.bytes[0..16]);
 
         // chaCha20Blake3Cipher := chacha20Blake3.New(subKey, nonce[16:24])
-        // cipherTextWithTag := chaCha20Blake3Cipher.encrypt(plaintext, additionalData)
-        //
-        // return cipherTextWithTag
-
-        // subKey [32]byte := chaCha20Kdf.XORKeyStream([16]byte{0x00} || nonce[8:24])
-        let subkey = chacha20_kdf.apply_keystream_b2b([0; 16].extend(&mut nonce.bytes[8..24]));
-
-        // chaCha20Blake3Cipher := chacha20Blake3.New(subKey, nonce[24:32])
-        let cipher = chacha20::XChaCha20::new_from_slice(subkey); // , &nonce.bytes[24..32]);
+        let mut cipher =
+            chacha20::XChaCha20::new_from_slices(subkey.as_slice(), &siv.bytes[16..24])
+                .expect("FIXME");
 
         // cipherTextWithTag := chaCha20Blake3Cipher.encrypt(plaintext, additionalData)
-        let ciphertext = cipher.encrypt(&plaintext, domain_separator); // FIXME double check
+        domain_separator.extend(plaintext);
+        let input = domain_separator.as_slice();
+
+        let mut ciphertext_buf = vec![];
+        cipher
+            .apply_keystream_b2b(&input, &mut ciphertext_buf)
+            .expect("FIXME");
 
         // return cipherTextWithTag
         XChaCha20Blake3Siv {
-            mac: Mac::new(ciphertext.clone(), key, domain_separator),
-            ciphertext,
+            mac: Mac::new(ciphertext_buf.clone(), key, domain_separator.clone()),
+            ciphertext: ciphertext_buf,
             domain_separator,
         }
     }
 
-    pub fn decrypt(
-        &self,
-        key: &[u8; 32],
-        domain_separator: Vec<u8>,
-    ) -> Result<Vec<u8>, &'static str> {
-        let expected_mac = Mac::new(self.ciphertext.clone(), key, domain_separator);
+    pub fn decrypt(&self, key: &[u8; 32]) -> Result<Vec<u8>, &'static str> {
+        let expected_mac = Mac::new(self.ciphertext.clone(), key, self.domain_separator.clone());
 
         if expected_mac.bytes != self.mac.bytes {
             return Err("Invalid MAC");
         }
 
-        let nonce = Siv::new(key, self.ciphertext.clone(), domain_separator);
-        let plaintext = chacha20::decrypt(key, &nonce.bytes, &self.ciphertext);
+        let nonce = Siv::new(key, self.ciphertext.clone(), self.domain_separator.clone());
+        let mut chacha = chacha20::XChaCha20::new_from_slices(
+            blake3::derive_key(
+                std::str::from_utf8(key).expect("FIXME"),
+                &nonce.bytes[0..16],
+            )
+            .as_slice(),
+            &nonce.bytes[16..24],
+        )
+        .expect("FIXME");
 
-        Ok(plaintext)
+        let mut plaintext_buf = vec![];
+        chacha
+            .apply_keystream_b2b(self.ciphertext.as_slice(), &mut plaintext_buf)
+            .expect("FIXME"); // FIXME (&nonce.bytes, &self.ciphertext);
+
+        // FIXME more checks?
+
+        Ok(plaintext_buf)
     }
 }
 
 impl Siv {
     /// Misuse resistent nonce
     /// FIXME function name?
-    pub fn new(key: &[u8; 32], mut plaintext: Vec<u8>, mut domain_separator: Vec<u8>) -> Siv {
+    pub fn new(key: &[u8; 32], plaintext: Vec<u8>, domain_separator: Vec<u8>) -> Siv {
+        let mut foo = plaintext.clone();
+        foo.append(&mut domain_separator.clone());
+
         Siv {
-            bytes: *blake3::keyed_hash(key, plaintext.append(&mut domain_separator)).as_bytes(),
+            bytes: *blake3::keyed_hash(key, &foo).as_bytes(),
         }
     }
 }

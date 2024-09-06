@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 blake3 = "1.5"
 chacha20 = "0.9.1"
+cipher = "0.4.4"
