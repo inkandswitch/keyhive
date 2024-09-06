@@ -19,6 +19,7 @@ pub struct XChaCha20Blake3Siv {
 impl XChaCha20Blake3Siv {
     pub fn new(
         key: &[u8; 32],
+        // FIXME Per the BLAKE3 docs: Given cryptographic key material of any length and a context string of any length, this function outputs a 32-byte derived subkey. The context string should be hardcoded, globally unique, and application-specific. A good default format for such strings is "[application] [commit timestamp] [purpose]", e.g., "example.com 2019-12-25 16:18:03 session tokens v1".
         mut domain_separator: Vec<u8>,
         plaintext: Vec<u8>,
     ) -> XChaCha20Blake3Siv {
@@ -27,8 +28,13 @@ impl XChaCha20Blake3Siv {
         let siv = Siv::new(key, plaintext.clone(), domain_separator.clone());
 
         // subKey := HChaCha20(key, nonce[0:16])
-        let subkey: [u8; 32] =
-            blake3::derive_key(std::str::from_utf8(key).expect("FIXME"), &siv.bytes[0..16]);
+        // FIXME actually use HChaCha instead of BLAKE3
+        let mut key_vec = key.to_vec();
+        key_vec.extend(&siv.bytes[0..16]);
+        let subkey: [u8; 32] = blake3::derive_key(
+            std::str::from_utf8(domain_separator.clone().as_slice()).expect("FIXME"),
+            key_vec.as_slice(),
+        );
 
         // chaCha20Blake3Cipher := chacha20Blake3.New(subKey, nonce[16:24])
         let mut cipher =

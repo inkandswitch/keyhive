@@ -1,0 +1,6 @@
+[package]
+name = "beehive_group"
+version = "0.1.0"
+
+[dependencies]
+xchacha_blake3_siv = "0.1.0"
