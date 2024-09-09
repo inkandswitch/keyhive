@@ -3,10 +3,12 @@ use std::collections::BTreeMap;
 
 pub mod access;
 pub mod agent;
+pub mod capability;
 
 use crate::{
     access::{Access, Admin, Append, Pull, Read},
     agent::{document::Document, stateful::Stateful, stateless::Stateless, Agent},
+    capability::Capability,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,7 +20,7 @@ pub struct CurrentAgent {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Op();
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Store(pub BTreeMap<Agent, Capability>);
 
 pub enum BeehiveOp {
