@@ -1,34 +1,73 @@
-pub struct Agent {
-    public_key: [u8; 32],
+use blake3::Hash;
+use ed25519_dalek::{SigningKey, VerifyingKey};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Stateless {
+    verifier: VerifingKey,
 }
 
-pub struct Admin();
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CurrentAgent {
+    verifier: VerifyingKey,
+    signer: SigningKey,
+}
 
-pub struct Append {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Stateful {
+    verifier: Verifier,
+    state: BTreeMap<Hash, Op>,
+}
 
-};
+pub trait Agent {
+    fn public_key(&self) -> [u8; 32];
+}
 
-pub struct Read();
+impl Agent for Stateless {
+    fn public_key(&self) -> [u8; 32] {
+        self.public_key()
+    }
+}
 
-pub struct Pull();
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Admin;
 
-pub enum Capability {
-    Admin, // FIXME ... do we need this, or is it just an unresirtcted wirter?
-    Write,
-    Read,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Append {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Read;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Pull;
+
+// FIXME to and froms
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Access {
     Pull,
+    Read,
+    Write(Append),
+    Admin, // FIXME revoker?
 }
 
-pub enum BeehiveOp {
+pub struct Capability<'a> {
+    // delegate: &Agent,
+    subject: &'a Group,
+    can: Access,
+}
+
+pub struct Store(pub BTreeMap<Agent, Capability>);
+
+pub enum BeehiveOp<'a> {
     Delegate {
         who: PublicKey,
-        what: Capability
+        what: Capability<'a>,
     },
 
     RevokeAgent {
         // FIXME should be the specific cap, not user?
-        who: PublicKey
-    }
+        who: PublicKey,
+    },
 }
 
 /// Materialized gorup
