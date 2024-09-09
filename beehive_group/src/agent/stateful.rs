@@ -2,6 +2,8 @@ use blake3::Hash;
 use ed25519_dalek::VerifyingKey;
 use std::collections::BTreeMap;
 
+use crate::access::Access;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Op();
 
@@ -16,5 +18,21 @@ impl PartialOrd for Stateful {
         self.verifier
             .to_bytes()
             .partial_cmp(&other.verifier.to_bytes())
+    }
+}
+
+pub struct Materialized {
+    pub id: VerifyingKey,
+    pub delegates: BTreeMap<VerifyingKey, Access>,
+}
+
+impl Stateful {
+    pub fn materialize(&self) -> Result<Materialized, ()> {
+        todo!();
+
+        Ok(Materialized {
+            id: VerifyingKey::from_bytes(&[0; 32]).unwrap(),
+            delegates: BTreeMap::new(),
+        })
     }
 }
