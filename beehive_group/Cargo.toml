@@ -1,4 +1,5 @@
 [package]
+
 name = "beehive_group"
 version = "0.1.0"
 
@@ -8,7 +9,10 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+
 ed25519-dalek = "2.1"
 blake3 = "1.5"
+serde = { workspace = true }
 signature = "2.2"
+topological-sort = "0.2.2"
 xchacha_blake3_siv = { path = "../xchacha_blake3_siv" }

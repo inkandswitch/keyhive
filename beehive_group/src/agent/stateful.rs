@@ -1,13 +1,13 @@
-use blake3::Hash;
 use ed25519_dalek::VerifyingKey;
 use std::collections::BTreeMap;
 
 use crate::access::Access;
+use crate::hash::Hash;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Op();
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Stateful {
     verifier: VerifyingKey,
     state: BTreeMap<Hash, Op>,
@@ -30,9 +30,9 @@ impl Stateful {
     pub fn materialize(&self) -> Result<Materialized, ()> {
         todo!();
 
-        Ok(Materialized {
-            id: VerifyingKey::from_bytes(&[0; 32]).unwrap(),
-            delegates: BTreeMap::new(),
-        })
+        // Ok(Materialized {
+        //     id: VerifyingKey::from_bytes(&[0; 32]).unwrap(),
+        //     delegates: BTreeMap::new(),
+        // })
     }
 }

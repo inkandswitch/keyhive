@@ -1,18 +1,61 @@
-use crate::agent::stateful::Stateful;
-use crate::agent::stateless::Stateless;
+use std::collections::BTreeMap;
+use topological_sort::{DependencyLink, TopologicalSort};
+
+use crate::agent::Agentic;
 use crate::capability::Capability;
+use crate::hash::Hash;
 
+pub mod delegation;
+pub mod revocation;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Operation {
-    Delegate {
-        from: Stateless,
-        to: Stateful,
+    Delegation(delegation::Delegation),
+    Revocation(revocation::Revocation),
+}
 
-        group: Stateless,
-        what: Capability,
-    },
+impl Operation {
+    // FIXME replace topoligical_sort with our own conflict resolution mechanism?
+    pub fn to_auth_dependencies(
+        &self,
+        store: &BTreeMap<Hash, Operation>,
+    ) -> Vec<DependencyLink<Operation>> {
+        match self {
+            Operation::Delegation(delegation) => delegation.to_auth_dependencies(store),
+            Operation::Revocation(_revocation) => todo!(), // revocation.to_auth_dependencies(),
+        }
+    }
+}
 
-    RevokeAgent {
-        // FIXME should be the specific cap, not user?
-        who: Stateless,
-    },
+pub fn materialize(
+    heads: Vec<Operation>,
+    store: BTreeMap<Hash, Operation>,
+) -> BTreeMap<Agentic, Vec<Capability>> {
+    // FIXME use custom linearizer
+    let mut linearized = heads
+        .into_iter()
+        .fold(TopologicalSort::new(), |mut acc, op| {
+            let links = op.to_auth_dependencies(&store);
+            for link in links {
+                acc.add_link(link.clone())
+            }
+
+            acc
+        });
+
+    let mut materialized: BTreeMap<Agentic, Vec<Capability>> = BTreeMap::new();
+
+    while let Some(op) = linearized.next() {
+        match op {
+            Operation::Delegation(delegation) => {
+                materialized.insert(delegation.to.into(), vec![delegation.capability]);
+            }
+            Operation::Revocation(_revocation) => {
+                // FIXME
+                todo!();
+            }
+        }
+    }
+
+    materialized
 }

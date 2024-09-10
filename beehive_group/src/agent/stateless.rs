@@ -1,7 +1,7 @@
 use super::traits::Agent;
 use ed25519_dalek::VerifyingKey;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Stateless {
     verifier: VerifyingKey,
 }
