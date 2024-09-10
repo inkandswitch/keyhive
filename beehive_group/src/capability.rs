@@ -1,5 +1,5 @@
 use crate::access::Access;
-use crate::agent::stateless::Stateless;
+use crate::principal::stateless::Stateless;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Capability {

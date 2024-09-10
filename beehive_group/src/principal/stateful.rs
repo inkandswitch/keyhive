@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use crate::access::Access;
 use crate::hash::Hash;
 
+use super::traits::Identifiable;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Op();
 
@@ -34,5 +36,11 @@ impl Stateful {
         //     id: VerifyingKey::from_bytes(&[0; 32]).unwrap(),
         //     delegates: BTreeMap::new(),
         // })
+    }
+}
+
+impl Identifiable for Stateful {
+    fn id(&self) -> [u8; 32] {
+        self.verifier.to_bytes()
     }
 }

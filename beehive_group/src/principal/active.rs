@@ -1,13 +1,12 @@
-use super::traits::Agent;
-use ed25519_dalek::VerifyingKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Stateless {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Active {
     verifier: VerifyingKey,
+    signer: SigningKey,
 }
 
-// FIXME needed?
-impl PartialOrd for Stateless {
+impl PartialOrd for Active {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.verifier
             .to_bytes()
@@ -15,14 +14,8 @@ impl PartialOrd for Stateless {
     }
 }
 
-impl Ord for Stateless {
+impl Ord for Active {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.verifier.to_bytes().cmp(&other.verifier.to_bytes())
-    }
-}
-
-impl Agent for Stateless {
-    fn public_key(&self) -> [u8; 32] {
-        self.verifier.to_bytes()
     }
 }

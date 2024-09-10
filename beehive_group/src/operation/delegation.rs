@@ -1,11 +1,9 @@
 use std::collections::BTreeMap;
 use topological_sort::DependencyLink;
 
-use crate::agent::document::Document;
-use crate::agent::stateful::Stateful;
-use crate::agent::stateless::Stateless;
 use crate::capability::Capability;
 use crate::hash::Hash;
+use crate::principal::{document::Document, stateful::Stateful, stateless::Stateless};
 
 use super::Operation;
 

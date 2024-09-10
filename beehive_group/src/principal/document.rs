@@ -3,6 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::hash::Hash;
 
+use super::traits::Identifiable;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Op;
 
@@ -11,6 +13,7 @@ pub struct Document {
     pub verifier: VerifyingKey,
     pub state_ops: BTreeMap<Hash, Op>,
     pub content_ops: BTreeSet<u8>, // FIXME automerge content
+                                   // FIXME just cache view directly on the object?
 }
 
 impl PartialOrd for Document {
@@ -29,5 +32,11 @@ impl PartialOrd for Document {
             }
             _ => None,
         }
+    }
+}
+
+impl Identifiable for Document {
+    fn id(&self) -> [u8; 32] {
+        self.verifier.to_bytes()
     }
 }

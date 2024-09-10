@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 use topological_sort::{DependencyLink, TopologicalSort};
 
-use crate::agent::Agentic;
 use crate::capability::Capability;
 use crate::hash::Hash;
+use crate::principal::agent::Agent;
 
 pub mod delegation;
 pub mod revocation;
@@ -30,7 +30,7 @@ impl Operation {
 pub fn materialize(
     heads: Vec<Operation>,
     store: BTreeMap<Hash, Operation>,
-) -> BTreeMap<Agentic, Vec<Capability>> {
+) -> BTreeMap<Agent, Vec<Capability>> {
     // FIXME use custom linearizer
     let mut linearized = heads
         .into_iter()
@@ -43,7 +43,7 @@ pub fn materialize(
             acc
         });
 
-    let mut materialized: BTreeMap<Agentic, Vec<Capability>> = BTreeMap::new();
+    let mut materialized: BTreeMap<Agent, Vec<Capability>> = BTreeMap::new();
 
     while let Some(op) = linearized.next() {
         match op {
