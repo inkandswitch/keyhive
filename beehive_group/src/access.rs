@@ -16,5 +16,5 @@ pub enum Access {
     Pull,
     Read,
     Write(Append),
-    Admin, // FIXME revoker?
+    Admin, // FIXME revoker? also: remember that agents MUSY be able to revoke themselevs to do things like key rotation
 }

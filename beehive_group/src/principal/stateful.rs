@@ -1,8 +1,8 @@
+use crate::access::Access;
+use crate::hash::CAStore;
+use crate::operation::Operation;
 use ed25519_dalek::VerifyingKey;
 use std::collections::BTreeMap;
-
-use crate::access::Access;
-use crate::hash::Hash;
 
 use super::traits::Identifiable;
 
@@ -12,7 +12,7 @@ pub struct Op();
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Stateful {
     verifier: VerifyingKey,
-    state: BTreeMap<Hash, Op>,
+    auth_ops: CAStore<Operation>,
 }
 
 impl PartialOrd for Stateful {

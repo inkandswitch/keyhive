@@ -1,9 +1,8 @@
+use crate::capability::Capability;
+use crate::hash::CAStore;
+use crate::principal::agent::Agent;
 use std::collections::BTreeMap;
 use topological_sort::{DependencyLink, TopologicalSort};
-
-use crate::capability::Capability;
-use crate::hash::Hash;
-use crate::principal::agent::Agent;
 
 pub mod delegation;
 pub mod revocation;
@@ -18,7 +17,7 @@ impl Operation {
     // FIXME replace topoligical_sort with our own conflict resolution mechanism?
     pub fn to_auth_dependencies(
         &self,
-        store: &BTreeMap<Hash, Operation>,
+        store: &CAStore<Operation>,
     ) -> Vec<DependencyLink<Operation>> {
         match self {
             Operation::Delegation(delegation) => delegation.to_auth_dependencies(store),
@@ -29,7 +28,7 @@ impl Operation {
 
 pub fn materialize(
     heads: Vec<Operation>,
-    store: BTreeMap<Hash, Operation>,
+    store: CAStore<Operation>,
 ) -> BTreeMap<Agent, Vec<Capability>> {
     // FIXME use custom linearizer
     let mut linearized = heads

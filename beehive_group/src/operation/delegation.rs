@@ -1,9 +1,7 @@
-use std::collections::BTreeMap;
-use topological_sort::DependencyLink;
-
 use crate::capability::Capability;
-use crate::hash::Hash;
+use crate::hash::{CAStore, Hash};
 use crate::principal::{document::Document, stateful::Stateful, stateless::Stateless};
+use topological_sort::DependencyLink;
 
 use super::Operation;
 
@@ -12,14 +10,14 @@ pub struct Delegation {
     pub from: Stateless,
     pub to: Stateful, // FIXME or doc
     pub capability: Capability,
-    pub after_auth: Vec<Hash>, // FIXME newtype auth hash vs doc hash?
-    pub after_content: Vec<(Document, Hash)>,
+    pub after_auth: Vec<Hash<Operation>>,
+    pub after_content: Vec<(Document, Hash<()>)>, // FIXME
 }
 
 impl Delegation {
     pub fn to_auth_dependencies(
         &self,
-        _store: &BTreeMap<Hash, Operation>,
+        _store: &CAStore<Operation>,
     ) -> Vec<DependencyLink<Operation>> {
         todo!()
         // self.after_auth
