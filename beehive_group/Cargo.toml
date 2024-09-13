@@ -10,9 +10,15 @@ rust-version.workspace = true
 
 [dependencies]
 
-ed25519-dalek = "2.1"
 blake3 = "1.5"
+ed25519-dalek = "2.1"
 serde = { workspace = true }
 signature = "2.2"
+thiserror = { workspace = true }
 topological-sort = "0.2.2"
 xchacha_blake3_siv = { path = "../xchacha_blake3_siv" }
+x25519-dalek = { version = "2.0", features = ["getrandom", "static_secrets"] }
+
+# FIXME for now
+chacha20poly1305 = "0.10.1"
+generic-array = "1.1.0"

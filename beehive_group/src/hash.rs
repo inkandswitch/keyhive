@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 #[derive(Debug)]
 pub struct Hash<T> {
-    raw: blake3::Hash,
+    pub raw: blake3::Hash,
     phantom: PhantomData<T>,
 }
 
@@ -43,6 +43,89 @@ impl<T> std::hash::Hash for Hash<T> {
         H: std::hash::Hasher,
     {
         self.raw.hash(state)
+    }
+}
+
+impl<T> From<blake3::Hash> for Hash<T> {
+    fn from(hash: blake3::Hash) -> Self {
+        Self {
+            raw: hash,
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<T> From<[u8; 32]> for Hash<T> {
+    fn from(bytes: [u8; 32]) -> Self {
+        Self {
+            raw: blake3::Hash::from(bytes),
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<T> From<Hash<T>> for blake3::Hash {
+    fn from(hash: Hash<T>) -> blake3::Hash {
+        hash.raw
+    }
+}
+
+impl<T> From<Hash<T>> for [u8; 32] {
+    fn from(hash: Hash<T>) -> [u8; 32] {
+        hash.raw.into()
+    }
+}
+
+impl<T> Hash<T> {
+    pub fn hash(to_hash: T) -> Self
+    where
+        T: Into<Vec<u8>>,
+    {
+        Self {
+            raw: blake3::hash(to_hash.into().as_slice()),
+            phantom: PhantomData,
+        }
+    }
+
+    pub fn hash_slice(slice: &[u8]) -> Self {
+        Self {
+            raw: blake3::hash(slice),
+            phantom: PhantomData,
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.raw.as_bytes()
+    }
+
+    // FIXME make a trait for levels?
+    pub fn trailing_zero_bytes(&self) -> u8 {
+        let mut count = 0;
+
+        for byte in self.raw.as_bytes().into_iter().rev() {
+            if *byte == 0 {
+                count += 1;
+            } else {
+                break;
+            }
+        }
+
+        count
+    }
+
+    pub fn trailing_zeros(&self) -> u8 {
+        let mut count = 0;
+
+        for byte in self.raw.as_bytes().into_iter().rev() {
+            let zeros = byte.count_zeros() as u8;
+            count += zeros;
+
+            if zeros != 8 {
+                break;
+            }
+        }
+
+        count
     }
 }
 
@@ -114,6 +197,7 @@ impl<T: Clone + std::hash::Hash> std::hash::Hash for CAStore<T> {
             .clone()
             .into_keys()
             .collect::<Vec<Hash<T>>>()
+            .sort()
             .hash(state) // FIXME use BLAKE3
     }
 }
