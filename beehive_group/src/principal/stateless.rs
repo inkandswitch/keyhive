@@ -1,12 +1,51 @@
-use super::traits::Identifiable;
+use super::traits::Verifiable;
+use crate::hash::Hash;
 use ed25519_dalek::VerifyingKey;
+use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// FIXME make sure signed
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Stateless {
-    verifier: VerifyingKey,
+    pub verifier: VerifyingKey,
+    pub sharing_prekeys: BTreeSet<VerifyingKey>,
 }
 
-// FIXME needed?
+impl From<VerifyingKey> for Stateless {
+    fn from(verifier: VerifyingKey) -> Self {
+        Stateless {
+            verifier,
+            sharing_prekeys: BTreeSet::new(),
+        }
+    }
+}
+
+// FIXME pub type SignedStateless = Signed<Stateless>;
+
+pub struct StatelessOp {
+    pub verifier: VerifyingKey,
+    pub op: ReadKeyOp, // FIXME I assume that prekeys are better than using the verifier key as a Montgomery
+    pub pred: BTreeSet<Hash<Stateless>>,
+}
+
+// FIXME move to each Doc
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ReadKeyOp {
+    Add(AddReadKey),
+    Remove(VerifyingKey),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AddReadKey {
+    pub group: VerifyingKey,
+    pub key: x25519_dalek::PublicKey,
+}
+
+pub enum PrekeyOp {
+    Add(VerifyingKey),
+    Remove(VerifyingKey),
+}
+
 impl PartialOrd for Stateless {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.verifier
@@ -21,8 +60,10 @@ impl Ord for Stateless {
     }
 }
 
-impl Identifiable for Stateless {
-    fn id(&self) -> [u8; 32] {
-        self.verifier.to_bytes()
+impl Verifiable for Stateless {
+    fn verifying_key(&self) -> VerifyingKey {
+        self.verifier
     }
 }
+
+// FIXME Read key ops

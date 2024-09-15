@@ -10,7 +10,7 @@ pub mod delegation;
 pub mod revocation;
 pub mod store;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Operation {
     Delegation(delegation::Delegation),
     Revocation(revocation::Revocation),

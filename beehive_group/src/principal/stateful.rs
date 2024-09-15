@@ -1,18 +1,26 @@
+use super::traits::Verifiable;
 use crate::access::Access;
 use crate::hash::CAStore;
 use crate::operation::Operation;
 use ed25519_dalek::VerifyingKey;
 use std::collections::BTreeMap;
 
-use super::traits::Identifiable;
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Op();
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Stateful {
-    verifier: VerifyingKey,
-    auth_ops: CAStore<Operation>,
+    pub verifier: VerifyingKey,
+    pub auth_ops: CAStore<Operation>,
+}
+
+impl From<VerifyingKey> for Stateful {
+    fn from(verifier: VerifyingKey) -> Self {
+        Stateful {
+            verifier,
+            auth_ops: CAStore::new(),
+        }
+    }
 }
 
 impl PartialOrd for Stateful {
@@ -20,6 +28,12 @@ impl PartialOrd for Stateful {
         self.verifier
             .to_bytes()
             .partial_cmp(&other.verifier.to_bytes())
+    }
+}
+
+impl Ord for Stateful {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.verifier.to_bytes().cmp(&other.verifier.to_bytes())
     }
 }
 
@@ -39,8 +53,8 @@ impl Stateful {
     }
 }
 
-impl Identifiable for Stateful {
-    fn id(&self) -> [u8; 32] {
-        self.verifier.to_bytes()
+impl Verifiable for Stateful {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.verifier
     }
 }

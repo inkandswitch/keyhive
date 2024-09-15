@@ -15,7 +15,7 @@ pub struct Pull;
 pub enum Access {
     Pull,
     Read,
-    Write(Append),
+    Write,
     Admin, // FIXME revoker? also: remember that agents MUSY be able to revoke themselevs to do things like key rotation
 }
 

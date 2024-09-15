@@ -8,14 +8,16 @@ use topological_sort::DependencyLink;
 
 use super::Operation;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Delegation {
-    pub from: Stateless,
-    pub to: Agent,
     pub subject: Stateful, // FIXME or doc
     pub can: Access,
 
+    pub from: Stateless,
     pub proof: Vec<Hash<Operation>>,
+
+    pub to: Agent,
+
     pub after_auth: Vec<Hash<Operation>>,
     // pub after_content: Vec<(Document, Hash<ContentOp>)>, // FIXME
 }

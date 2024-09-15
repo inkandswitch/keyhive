@@ -1,40 +1,107 @@
 use crate::access::Access;
-use crate::crypto::{Encrypted, Signed};
+use crate::crypto::{Encrypted, SharingPublicKey, Signed};
 use crate::hash::Hash;
 use crate::principal::agent::Agent;
+use crate::principal::traits::Verifiable;
 use chacha20poly1305::AeadInPlace;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub struct Group<'a> {
     pub id: [u8; 32],
-    pub members: BTreeMap<&'a Agent, Access>,
+    pub direct_members: BTreeMap<&'a Agent, Access>,
 }
+
+pub struct GroupStore<'a> {
+    pub groups: BTreeMap<[u8; 32], Group<'a>>,
+}
+
+impl<'a> GroupStore<'a> {
+    pub fn new() -> Self {
+        GroupStore {
+            groups: BTreeMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, group: Group<'a>) {
+        self.groups.insert(group.id, group);
+    }
+
+    pub fn get(&self, id: &[u8; 32]) -> Option<&Group> {
+        self.groups.get(id)
+    }
+
+    pub fn transative_members(&self, group: &'a Group) -> BTreeMap<&Agent, Access> {
+        struct GroupAccess<'a> {
+            agent: &'a Agent,
+            agent_access: Access,
+            parent_access: Access,
+        }
+
+        let mut explore: Vec<GroupAccess<'a>> = vec![];
+
+        for (k, v) in group.direct_members.iter() {
+            explore.push(GroupAccess {
+                agent: k,
+                agent_access: *v,
+                parent_access: Access::Admin,
+            });
+        }
+
+        let mut caps: BTreeMap<&Agent, Access> = BTreeMap::new();
+
+        while !explore.is_empty() {
+            if let Some(GroupAccess {
+                agent: member,
+                agent_access: access,
+                parent_access,
+            }) = explore.pop()
+            {
+                match member {
+                    Agent::Stateless(_) => {
+                        let current_path_access = access.min(parent_access);
+
+                        let best_access = if let Some(prev_found_path_access) = caps.get(&member) {
+                            (*prev_found_path_access).max(current_path_access)
+                        } else {
+                            current_path_access
+                        };
+
+                        caps.insert(member, best_access);
+                    }
+                    _ => {
+                        if let Some(group) = self.groups.get(&member.id()) {
+                            for (mem, pow) in group.direct_members.clone() {
+                                let current_path_access = access.min(pow).min(parent_access);
+
+                                let best_access =
+                                    if let Some(prev_found_path_access) = caps.get(&mem) {
+                                        (*prev_found_path_access).max(current_path_access)
+                                    } else {
+                                        current_path_access
+                                    };
+
+                                explore.push(GroupAccess {
+                                    agent: mem,
+                                    agent_access: best_access,
+                                    parent_access,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        caps
+    }
+}
+
+////////////////
 
 // FIXME Placeholder
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct XChaChaKey {
     bytes: [u8; 32],
-}
-
-pub struct Ciphertext {
-    bytes: Vec<u8>,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct SharingPublicKey {
-    key: x25519_dalek::PublicKey,
-}
-
-impl PartialOrd for SharingPublicKey {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.key.as_bytes().partial_cmp(other.key.as_bytes())
-    }
-}
-
-impl Ord for SharingPublicKey {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.key.as_bytes().cmp(other.key.as_bytes())
-    }
 }
 
 pub fn dcgka_2m_broadcast(
@@ -68,6 +135,7 @@ pub fn dcgka_2m_broadcast(
         bytes.append(&mut key.bytes.to_vec());
 
         let wrapped_key: Encrypted<chacha20poly1305::XChaCha20Poly1305> = Encrypted {
+            nonce: nonce.as_slice().try_into().expect("FIXME"),
             ciphertext: bytes,
             _phantom: std::marker::PhantomData,
         };

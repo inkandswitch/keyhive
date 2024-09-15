@@ -3,7 +3,7 @@ use crate::principal::agent::Agent;
 use crate::principal::stateful::Stateful;
 use crate::principal::stateless::Stateless;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Revocation {
     // FIXME should be the specific cap, not user?
     pub subject: Stateful,
