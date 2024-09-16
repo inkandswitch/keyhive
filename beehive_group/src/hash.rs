@@ -77,12 +77,12 @@ impl<T> From<Hash<T>> for [u8; 32] {
 }
 
 impl<T> Hash<T> {
-    pub fn hash(to_hash: T) -> Self
+    pub fn hash(preimage: T) -> Self
     where
         T: Into<Vec<u8>>,
     {
         Self {
-            raw: blake3::hash(to_hash.into().as_slice()),
+            raw: blake3::hash(preimage.into().as_slice()),
             phantom: PhantomData,
         }
     }
@@ -149,6 +149,19 @@ impl<T: std::hash::Hash> CAStore<T> {
     pub fn new() -> Self {
         Self {
             store: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn from_iter<I>(iter: I) -> Self
+    where
+        T: Into<Vec<u8>> + Clone,
+        I: IntoIterator<Item = T>,
+    {
+        Self {
+            store: iter
+                .into_iter()
+                .map(|preimage| (Hash::hash(preimage.clone()), preimage))
+                .collect(),
         }
     }
 

@@ -155,7 +155,6 @@ pub struct SetReadKeyOp {
 //     pub read_key_ops: Signed<MyReadKeyOps>,
 // }
 
-// IDB
 pub struct MyReadKeyOps {
     // FIXME use a single signture?
     pub cold_call_ops: BTreeSet<SetReadKeyOp>,

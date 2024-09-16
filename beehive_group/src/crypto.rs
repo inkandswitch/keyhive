@@ -10,6 +10,18 @@ pub struct Signed<T> {
     pub signature: ed25519_dalek::Signature,
 }
 
+impl<T> From<Signed<T>> for Vec<u8>
+where
+    Vec<u8>: From<T>,
+{
+    fn from(signed: Signed<T>) -> Self {
+        let mut buf: Vec<u8> = signed.payload.into();
+        buf.append(&mut signed.verifying_key.to_bytes().to_vec());
+        buf.append(&mut signed.signature.to_vec());
+        buf
+    }
+}
+
 impl<T: PartialOrd> PartialOrd for Signed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self
