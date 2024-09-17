@@ -1,22 +1,17 @@
-use crate::access::Access;
-use crate::capability::Capability;
-use crate::hash::{CAStore, Hash};
-use crate::principal::{
-    agent::Agent, document::Document, stateful::Stateful, stateless::Stateless,
-};
-use topological_sort::DependencyLink;
-
 use super::Operation;
+use crate::access::Access;
+use crate::crypto::hash::Hash;
+use crate::principal::{membered::MemberedId, stateless::Stateless};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Delegation {
-    pub subject: Stateful, // FIXME or doc
+    pub subject: MemberedId, // FIXME ref?
     pub can: Access,
 
     pub from: Stateless,
     pub proof: Vec<Hash<Operation>>,
 
-    pub to: Agent,
+    pub to: Stateless, // FIXME an ID, not statelsss.. make &Agent? AgentId?
 
     pub after_auth: Vec<Hash<Operation>>,
     // pub after_content: Vec<(Document, Hash<ContentOp>)>, // FIXME

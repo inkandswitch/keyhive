@@ -1,53 +1,79 @@
 use crate::access::Access;
-use crate::crypto::{Encrypted, SharingPublicKey, Signed};
-use crate::hash::Hash;
+use crate::crypto::{encrypted::Encrypted, hash::Hash, share_key::ShareKey, signed::Signed};
 use crate::principal::agent::Agent;
+use crate::principal::group::Group;
+use crate::principal::membered::Membered;
+use crate::principal::stateless::Stateless;
 use crate::principal::traits::Verifiable;
 use chacha20poly1305::AeadInPlace;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub struct Group<'a> {
-    pub id: [u8; 32],
-    pub direct_members: BTreeMap<&'a Agent, Access>,
+// FIXME rneame membership
+// #[derive(Debug, Clone, PartialEq, Eq)]
+// pub struct Group<'a> {
+//     pub id: Stateless,
+//     pub direct_members: BTreeMap<&'a Agent, Access>,
+// }
+//
+// impl PartialOrd for Group<'_> {
+//     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+//         match self.id.as_bytes().partial_cmp(&other.id.as_bytes()) {
+//             Some(Ordering::Equal) => self.direct_members.partial_cmp(&other.direct_members),
+//             otherwise => otherwise,
+//         }
+//     }
+// }
+//
+// impl Ord for Group<'_> {
+//     fn cmp(&self, other: &Self) -> Ordering {
+//         match self.id.as_bytes().cmp(&other.id.as_bytes()) {
+//             Ordering::Equal => self.direct_members.cmp(&other.direct_members),
+//             otherwise => otherwise,
+//         }
+//     }
+// }
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GroupStore {
+    pub groups: BTreeMap<Stateless, Membered>,
 }
 
-pub struct GroupStore<'a> {
-    pub groups: BTreeMap<[u8; 32], Group<'a>>,
-}
-
-impl<'a> GroupStore<'a> {
+impl GroupStore {
     pub fn new() -> Self {
         GroupStore {
             groups: BTreeMap::new(),
         }
     }
 
-    pub fn insert(&mut self, group: Group<'a>) {
-        self.groups.insert(group.id, group);
+    pub fn insert(&mut self, membered: Membered) {
+        self.groups
+            .insert(membered.verifying_key().clone().into(), membered);
     }
 
-    pub fn get(&self, id: &[u8; 32]) -> Option<&Group> {
+    pub fn get(&self, id: &Stateless) -> Option<&Membered> {
         self.groups.get(id)
     }
 
-    pub fn transative_members(&self, group: &'a Group) -> BTreeMap<&Agent, Access> {
-        struct GroupAccess<'a> {
-            agent: &'a Agent,
+    // FIXME shoudl be more like this:
+    // pub fn transative_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
+    pub fn transative_members(&self, group: &Group) -> BTreeMap<Agent, Access> {
+        struct GroupAccess {
+            agent: Agent,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess<'a>> = vec![];
+        let mut explore: Vec<GroupAccess> = vec![];
 
-        for (k, v) in group.direct_members.iter() {
+        for (k, v) in group.delegates.iter() {
             explore.push(GroupAccess {
-                agent: k,
+                agent: k.clone(),
                 agent_access: *v,
                 parent_access: Access::Admin,
             });
         }
 
-        let mut caps: BTreeMap<&Agent, Access> = BTreeMap::new();
+        let mut caps: BTreeMap<Agent, Access> = BTreeMap::new();
 
         while !explore.is_empty() {
             if let Some(GroupAccess {
@@ -69,8 +95,8 @@ impl<'a> GroupStore<'a> {
                         caps.insert(member, best_access);
                     }
                     _ => {
-                        if let Some(group) = self.groups.get(&member.id()) {
-                            for (mem, pow) in group.direct_members.clone() {
+                        if let Some(group) = self.groups.get(&member.verifying_key().into()) {
+                            for (mem, pow) in group.members() {
                                 let current_path_access = access.min(pow).min(parent_access);
 
                                 let best_access =
@@ -107,12 +133,12 @@ pub struct XChaChaKey {
 pub fn dcgka_2m_broadcast(
     key: &XChaChaKey,
     sharer_key: &x25519_dalek::StaticSecret,
-    public_keys: BTreeSet<&SharingPublicKey>,
-) -> BTreeMap<SharingPublicKey, Encrypted<chacha20poly1305::XChaCha20Poly1305>> {
+    public_keys: BTreeSet<&ShareKey>,
+) -> BTreeMap<ShareKey, Encrypted<chacha20poly1305::XChaCha20Poly1305>> {
     let mut wrapped_key_map = BTreeMap::new();
 
     for pk in public_keys {
-        let shared_secret: x25519_dalek::SharedSecret = sharer_key.diffie_hellman(&pk.key);
+        let shared_secret: x25519_dalek::SharedSecret = sharer_key.diffie_hellman(&pk.0);
         // FIXME convert shared secret to bytes
         // encrypt payload
 

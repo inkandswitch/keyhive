@@ -1,7 +1,9 @@
+use super::membered::MemberedId;
 use super::stateless::Stateless;
 use super::traits::Verifiable;
 use crate::access::Access;
-use crate::crypto::Signed;
+use crate::crypto::share_key::ShareKey;
+use crate::crypto::signed::Signed;
 use crate::operation::delegation::Delegation;
 use crate::operation::Operation;
 use crate::principal::agent::Agent;
@@ -12,23 +14,18 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Document {
     pub authorizations: BTreeMap<Agent, Access>,
-    pub reader_keys: BTreeMap<Agent, x25519_dalek::PublicKey>, // FIXME May remove if TreeKEM instead of ART
+    pub reader_keys: BTreeMap<Agent, ShareKey>, // FIXME May remove if TreeKEM instead of ART
     // NOTE: as expected, separate keys are still safer https://doc.libsodium.org/quickstart#do-i-need-to-add-a-signature-to-encrypted-messages-to-detect-if-they-have-been-tampered-with
-    pub state: DocumentInternal,
-}
-
-impl Document {
-    pub fn new(parent: Stateless) -> Self {
-        DocumentInternal::new(parent).materialize()
-    }
+    pub state: DocumentState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DocumentInternal {
+pub struct DocumentState {
     pub verifier: VerifyingKey,
     pub authority_ops: BTreeSet<Signed<Operation>>,
     pub content_ops: BTreeSet<u8>, // FIXME automerge content
                                    // FIXME just cache view directly on the object?
+                                   // FIXME also maybe just reference AM doc heads?
 }
 
 impl PartialOrd for Document {
@@ -49,7 +46,7 @@ impl Verifiable for Document {
     }
 }
 
-impl PartialOrd for DocumentInternal {
+impl PartialOrd for DocumentState {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match self
             .verifier
@@ -70,28 +67,29 @@ impl PartialOrd for DocumentInternal {
     }
 }
 
-impl Ord for DocumentInternal {
+impl Ord for DocumentState {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.verifier.to_bytes().cmp(&other.verifier.to_bytes())
     }
 }
 
-impl Verifiable for DocumentInternal {
+impl Verifiable for DocumentState {
     fn verifying_key(&self) -> VerifyingKey {
         self.verifier
     }
 }
 
-impl DocumentInternal {
+impl DocumentState {
     pub fn new(parent: Stateless) -> Self {
         let mut rng = rand::rngs::OsRng;
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
-        let verifier: VerifyingKey = signing_key.verifying_key();
+        let doc_verifier: VerifyingKey = signing_key.verifying_key();
 
         let init = Operation::Delegation(Delegation {
-            subject: verifier.into(),
+            subject: MemberedId::DocumentId(doc_verifier.into()),
 
-            from: verifier.into(),
+            from: doc_verifier.into(),
+
             to: parent.into(),
             can: Access::Admin,
 
@@ -104,13 +102,9 @@ impl DocumentInternal {
         // FIXME zeroize signing key
 
         Self {
-            verifier,
+            verifier: doc_verifier,
             authority_ops: BTreeSet::from_iter([signed_init]),
             content_ops: BTreeSet::new(),
         }
-    }
-
-    pub fn materialize(self) -> Document {
-        todo!()
     }
 }

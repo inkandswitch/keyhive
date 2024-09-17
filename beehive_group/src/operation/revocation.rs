@@ -1,12 +1,13 @@
-use crate::hash::Hash;
-use crate::principal::agent::Agent;
-use crate::principal::stateful::Stateful;
+// FIXME move to Group
+
+use crate::crypto::hash::Hash;
+use crate::principal::membered::MemberedId;
 use crate::principal::stateless::Stateless;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Revocation {
     // FIXME should be the specific cap, not user?
-    pub subject: Stateful,
+    pub subject: MemberedId,
     pub revoker: Stateless,
     pub revoke: Hash<super::delegation::Delegation>,
 

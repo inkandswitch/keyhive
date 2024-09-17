@@ -1,7 +1,5 @@
 use super::delegation::Delegation;
-use crate::hash::CAStore;
-use crate::hash::Hash;
-use std::collections::BTreeMap;
+use crate::crypto::hash::Hash;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CausalOp<'a> {

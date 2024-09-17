@@ -1,10 +1,12 @@
-use crate::capability::Capability;
-use crate::hash::{CAStore, Hash};
+use crate::access::Access;
+use crate::crypto::hash::{CAStore, Hash};
 use crate::principal::agent::Agent;
+use crate::principal::membered::Membered;
+use crate::principal::stateless::Stateless;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
-use topological_sort::{DependencyLink, TopologicalSort};
+use topological_sort::TopologicalSort;
 
 pub mod delegation;
 pub mod revocation;
@@ -19,8 +21,8 @@ pub enum Operation {
 impl From<Operation> for Vec<u8> {
     fn from(op: Operation) -> Self {
         match op {
-            Operation::Delegation(delegation) => todo!(), // delegation.into(),
-            Operation::Revocation(revocation) => todo!(), // revocation.into(),
+            Operation::Delegation(_delegation) => todo!(), // delegation.into(),
+            Operation::Revocation(_revocation) => todo!(), // revocation.into(),
         }
     }
 }
@@ -33,11 +35,12 @@ impl Operation {
         }
     }
 
-    pub fn subject(&self) -> &crate::principal::stateful::Stateful {
-        match self {
-            Operation::Delegation(delegation) => &delegation.subject,
-            Operation::Revocation(revocation) => &revocation.subject,
-        }
+    pub fn subject(&self) -> &Membered {
+        todo!()
+        // match self {
+        //     Operation::Delegation(delegation) => &delegation.subject,
+        //     Operation::Revocation(revocation) => &revocation.subject,
+        // }
     }
 
     // NOTE: cmplete transitive history
@@ -123,6 +126,16 @@ impl Operation {
 
         Ok(None)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Capability {
+    // delegate: &Agent,
+    subject: Stateless, // FIXME rename to ID, but needs to be stateful or doc
+    can: Access,
+
+    delegator: Stateless,
+    delegate: Stateless,
 }
 
 pub struct WipCap<'a> {

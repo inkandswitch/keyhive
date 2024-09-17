@@ -43,10 +43,10 @@ pub enum OtherAccess {
         access: DocAccess,
     },
     Auth {
-        group: crate::principal::stateful::Stateful,
+        group: crate::principal::group::Group,
         access: AuthAccess,
     },
     Pull {
-        group: crate::principal::stateful::Stateful,
+        group: crate::principal::group::Group,
     },
 }
