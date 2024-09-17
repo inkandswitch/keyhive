@@ -2,8 +2,8 @@ use crate::access::Access;
 use crate::crypto::{encrypted::Encrypted, hash::Hash, share_key::ShareKey, signed::Signed};
 use crate::principal::agent::Agent;
 use crate::principal::group::Group;
+use crate::principal::individual::Individual;
 use crate::principal::membered::Membered;
-use crate::principal::stateless::Stateless;
 use crate::principal::traits::Verifiable;
 use chacha20poly1305::AeadInPlace;
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 // FIXME rneame membership
 // #[derive(Debug, Clone, PartialEq, Eq)]
 // pub struct Group<'a> {
-//     pub id: Stateless,
+//     pub id: Individual,
 //     pub direct_members: BTreeMap<&'a Agent, Access>,
 // }
 //
@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GroupStore {
-    pub groups: BTreeMap<Stateless, Membered>,
+    pub groups: BTreeMap<Individual, Membered>,
 }
 
 impl GroupStore {
@@ -50,7 +50,7 @@ impl GroupStore {
             .insert(membered.verifying_key().clone().into(), membered);
     }
 
-    pub fn get(&self, id: &Stateless) -> Option<&Membered> {
+    pub fn get(&self, id: &Individual) -> Option<&Membered> {
         self.groups.get(id)
     }
 
@@ -83,7 +83,7 @@ impl GroupStore {
             }) = explore.pop()
             {
                 match member {
-                    Agent::Stateless(_) => {
+                    Agent::Individual(_) => {
                         let current_path_access = access.min(parent_access);
 
                         let best_access = if let Some(prev_found_path_access) = caps.get(&member) {

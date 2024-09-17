@@ -167,7 +167,7 @@ impl<T: std::hash::Hash> CAStore<T> {
 
     pub fn insert(&mut self, value: T) -> Hash<T>
     where
-        T: Clone + Into<Vec<u8>>,
+        T: Clone + Into<Vec<u8>>, // FIXME hash insteaf of vecu8
     {
         let bytes: Vec<u8> = value.clone().into();
         let key: Hash<T> = Hash {
@@ -179,12 +179,12 @@ impl<T: std::hash::Hash> CAStore<T> {
         key
     }
 
-    pub fn get(&self, hash: &Hash<T>) -> Option<&T> {
-        self.store.get(hash)
-    }
-
     pub fn remove(&mut self, hash: &Hash<T>) -> Option<T> {
         self.store.remove(hash)
+    }
+
+    pub fn get(&self, hash: &Hash<T>) -> Option<&T> {
+        self.store.get(hash)
     }
 
     pub fn len(&self) -> usize {

@@ -1,8 +1,8 @@
 use crate::access::Access;
 use crate::crypto::hash::{CAStore, Hash};
 use crate::principal::agent::Agent;
+use crate::principal::individual::Individual;
 use crate::principal::membered::Membered;
-use crate::principal::stateless::Stateless;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -131,11 +131,11 @@ impl Operation {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Capability {
     // delegate: &Agent,
-    subject: Stateless, // FIXME rename to ID, but needs to be stateful or doc
+    subject: Individual, // FIXME rename to ID, but needs to be stateful or doc
     can: Access,
 
-    delegator: Stateless,
-    delegate: Stateless,
+    delegator: Individual,
+    delegate: Individual,
 }
 
 pub struct WipCap<'a> {

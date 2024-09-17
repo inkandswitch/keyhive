@@ -1,10 +1,10 @@
 use super::agent::Agent;
+use super::identifier::Identifier;
 use super::membered::MemberedId;
-use super::{stateless::Stateless, traits::Verifiable};
+use super::{individual::Individual, traits::Verifiable};
 use crate::{
     access::Access,
-    crypto::hash::CAStore,
-    crypto::signed::Signed,
+    crypto::{hash::CAStore, signed::Signed},
     operation::{delegation::Delegation, Operation},
 };
 use ed25519_dalek::VerifyingKey;
@@ -14,19 +14,19 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Group {
-    pub id: Stateless,
+    pub id: Identifier,
     pub delegates: BTreeMap<Agent, Access>,
 }
 
 impl Verifiable for Group {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.id.verifier
+        self.id.verifying_key
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GroupState {
-    pub id: Stateless,
+    pub id: Identifier,
     pub authority_ops: CAStore<Signed<Operation>>,
 }
 
@@ -55,7 +55,7 @@ impl From<VerifyingKey> for GroupState {
 // }
 
 impl GroupState {
-    pub fn new(parent: Stateless) -> Self {
+    pub fn new(parent: Individual) -> Self {
         let mut rng = rand::rngs::OsRng;
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
         let verifier: VerifyingKey = signing_key.verifying_key();
@@ -84,6 +84,6 @@ impl GroupState {
 
 impl Verifiable for GroupState {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.id.verifier
+        self.id.verifying_key
     }
 }

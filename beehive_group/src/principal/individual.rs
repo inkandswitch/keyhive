@@ -1,36 +1,42 @@
+use super::identifier::Identifier;
 use super::traits::Verifiable;
 use crate::crypto::hash::Hash;
 use ed25519_dalek::VerifyingKey;
 use std::collections::BTreeSet;
-// FIXME make sure Signed
-
-// FIXME rename actor?
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Stateless {
-    pub verifier: VerifyingKey,
+pub struct Individual {
+    pub id: Identifier,
 }
 
-impl Stateless {
+impl Individual {
     pub fn as_bytes(&self) -> [u8; 32] {
-        self.verifier.to_bytes()
+        self.id.to_bytes()
     }
 
     pub fn as_slice(&self) -> &[u8] {
-        self.verifier.as_bytes().as_slice()
+        self.id.as_bytes().as_slice()
     }
 }
 
-impl From<VerifyingKey> for Stateless {
+impl From<VerifyingKey> for Individual {
     fn from(verifier: VerifyingKey) -> Self {
-        Stateless { verifier }
+        Individual {
+            id: verifier.into(),
+        }
     }
 }
 
-pub struct StatelessOp {
+impl From<Identifier> for Individual {
+    fn from(id: Identifier) -> Self {
+        Individual { id }
+    }
+}
+
+pub struct IndividualOp {
     pub verifier: VerifyingKey,
     pub op: ReadKeyOp, // FIXME I assume that prekeys are better than using the verifier key as a Montgomery
-    pub pred: BTreeSet<Hash<Stateless>>,
+    pub pred: BTreeSet<Hash<Individual>>,
 }
 
 // FIXME move to each Doc
@@ -51,24 +57,20 @@ pub enum PrekeyOp {
     Remove(VerifyingKey),
 }
 
-impl PartialOrd for Stateless {
+impl PartialOrd for Individual {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.verifier
-            .to_bytes()
-            .partial_cmp(&other.verifier.to_bytes())
+        self.id.to_bytes().partial_cmp(&other.id.to_bytes())
     }
 }
 
-impl Ord for Stateless {
+impl Ord for Individual {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.verifier.to_bytes().cmp(&other.verifier.to_bytes())
+        self.id.to_bytes().cmp(&other.id.to_bytes())
     }
 }
 
-impl Verifiable for Stateless {
+impl Verifiable for Individual {
     fn verifying_key(&self) -> VerifyingKey {
-        self.verifier
+        self.id.verifying_key
     }
 }
-
-// FIXME Read key ops

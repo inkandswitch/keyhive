@@ -1,5 +1,6 @@
+use super::identifier::Identifier;
+use super::individual::Individual;
 use super::membered::MemberedId;
-use super::stateless::Stateless;
 use super::traits::Verifiable;
 use crate::access::Access;
 use crate::crypto::share_key::ShareKey;
@@ -8,6 +9,7 @@ use crate::operation::delegation::Delegation;
 use crate::operation::Operation;
 use crate::principal::agent::Agent;
 use ed25519_dalek::VerifyingKey;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 // Materialized
@@ -21,7 +23,7 @@ pub struct Document {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DocumentState {
-    pub verifier: VerifyingKey,
+    pub id: Identifier,
     pub authority_ops: BTreeSet<Signed<Operation>>,
     pub content_ops: BTreeSet<u8>, // FIXME automerge content
                                    // FIXME just cache view directly on the object?
@@ -29,35 +31,31 @@ pub struct DocumentState {
 }
 
 impl PartialOrd for Document {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.state.partial_cmp(&other.state)
     }
 }
 
 impl Ord for Document {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.state.cmp(&other.state)
     }
 }
 
 impl Verifiable for Document {
     fn verifying_key(&self) -> VerifyingKey {
-        self.state.verifier
+        self.state.id.verifying_key
     }
 }
 
 impl PartialOrd for DocumentState {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match self
-            .verifier
-            .to_bytes()
-            .partial_cmp(&other.verifier.to_bytes())
-        {
-            Some(std::cmp::Ordering::Equal) => {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.id.as_bytes().partial_cmp(&other.id.as_bytes()) {
+            Some(Ordering::Equal) => {
                 if self.authority_ops == other.authority_ops
                     && self.content_ops == other.content_ops
                 {
-                    Some(std::cmp::Ordering::Equal)
+                    Some(Ordering::Equal)
                 } else {
                     None
                 }
@@ -68,27 +66,27 @@ impl PartialOrd for DocumentState {
 }
 
 impl Ord for DocumentState {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.verifier.to_bytes().cmp(&other.verifier.to_bytes())
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.id.as_bytes().cmp(&other.id.as_bytes())
     }
 }
 
 impl Verifiable for DocumentState {
     fn verifying_key(&self) -> VerifyingKey {
-        self.verifier
+        self.id.verifying_key
     }
 }
 
 impl DocumentState {
-    pub fn new(parent: Stateless) -> Self {
+    pub fn new(parent: Individual) -> Self {
         let mut rng = rand::rngs::OsRng;
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
-        let doc_verifier: VerifyingKey = signing_key.verifying_key();
+        let id: Identifier = signing_key.verifying_key().into();
 
         let init = Operation::Delegation(Delegation {
-            subject: MemberedId::DocumentId(doc_verifier.into()),
+            subject: MemberedId::DocumentId(id),
 
-            from: doc_verifier.into(),
+            from: id.into(), // FIXME would be nice if this was CBC
 
             to: parent.into(),
             can: Access::Admin,
@@ -102,7 +100,7 @@ impl DocumentState {
         // FIXME zeroize signing key
 
         Self {
-            verifier: doc_verifier,
+            id,
             authority_ops: BTreeSet::from_iter([signed_init]),
             content_ops: BTreeSet::new(),
         }

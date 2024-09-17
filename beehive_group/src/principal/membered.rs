@@ -1,7 +1,7 @@
 use super::agent::Agent;
 use super::document::Document;
 use super::group::Group;
-use super::stateless::Stateless;
+use super::identifier::Identifier;
 use super::traits::Verifiable;
 use crate::access::Access;
 use std::collections::BTreeMap;
@@ -34,6 +34,6 @@ impl Verifiable for Membered {
 // FIXE pass proof of existence?
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MemberedId {
-    GroupId(Stateless),
-    DocumentId(Stateless),
+    GroupId(Identifier),
+    DocumentId(Identifier),
 }
