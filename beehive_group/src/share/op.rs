@@ -1,18 +1,15 @@
-use crate::crypto::{share_key::ShareKey, signed::Signed};
+use crate::crypto::share_key::ShareKey;
 use crate::principal::stateless::Stateless;
-use std::collections::BTreeSet;
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Add {
     pub id: Stateless,
     pub sharing_pubkey: ShareKey,
 }
 
-pub struct Retire {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Replace {
     pub id: Stateless,
-    pub sharing_pubkey: ShareKey,
-}
-
-pub struct Store {
-    pub additions: BTreeSet<Signed<Add>>,
-    pub retirements: BTreeSet<Signed<Retire>>,
+    pub prev: ShareKey,
+    pub next: ShareKey,
 }
