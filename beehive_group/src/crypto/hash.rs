@@ -232,6 +232,10 @@ impl<T: std::hash::Hash> CAStore<T> {
     pub fn into_values(self) -> impl Iterator<Item = T> {
         self.store.into_values()
     }
+
+    pub fn contains_key(&self, hash: &Hash<T>) -> bool {
+        self.store.contains_key(hash)
+    }
 }
 
 impl<T: Clone + std::hash::Hash> std::hash::Hash for CAStore<T> {

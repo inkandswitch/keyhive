@@ -1,3 +1,7 @@
+pub mod delegation;
+pub mod revocation;
+pub mod store;
+
 use crate::crypto::hash::{CAStore, Hash};
 use crate::crypto::signed::Signed;
 use crate::principal::agent::Agent;
@@ -8,10 +12,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use thiserror::Error;
 use topological_sort::TopologicalSort;
-
-pub mod delegation;
-pub mod revocation;
-pub mod store;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Operation {
@@ -79,58 +79,85 @@ impl Operation {
     pub fn ancestors<'a>(
         &'a self,
         ops: &'a CAStore<Signed<Operation>>,
-    ) -> Result<BTreeSet<Signed<Operation>>, AncestorError> {
+    ) -> Result<(BTreeSet<Signed<Operation>>, usize), AncestorError> {
         if self.after_auth().is_empty() {
-            return Ok(BTreeSet::new());
+            return Ok((BTreeSet::new(), 0));
         }
 
         let mut ancestors = BTreeSet::new();
-        let mut head_hashes: Vec<Hash<Signed<Operation>>> = self.after_auth().to_vec();
+        let mut head_hashes: Vec<(&Hash<Signed<Operation>>, usize)> =
+            self.after_auth().iter().map(|hash| (&hash, 0)).collect();
+
         let mut touched_root = false;
 
         while !head_hashes.is_empty() {
-            if let Some(head_hash) = head_hashes.pop() {
+            if let Some((head_hash, longest_known_path)) = head_hashes.pop() {
+                if ops.contains_key(&head_hash) {
+                    continue;
+                }
+
                 if let Some(op) = ops.get(&head_hash) {
                     if op.payload.subject() != self.subject() {
                         return Err(AncestorError::MismatchedSubject(self.subject().clone()));
                     }
 
-                    ancestors.insert(op.clone());
+                    ancestors.insert((op.clone(), longest_known_path + 1));
 
                     if op.payload.after_auth().is_empty() {
                         touched_root = true;
                     }
 
                     for parent in op.payload.after_auth() {
-                        head_hashes.push(parent.clone());
+                        head_hashes.push((parent, longest_known_path + 1));
                     }
                 } else {
-                    return Err(AncestorError::DependencyNotAvailable(head_hash));
+                    return Err(AncestorError::DependencyNotAvailable(*head_hash));
                 }
             }
         }
 
         if !touched_root {
-            return Err(AncestorError::Unrooted(ancestors));
+            todo!()
+            // return Err(AncestorError::Unrooted(ancestors.0));
         }
 
-        Ok(ancestors)
+        Ok(ancestors.into_iter().fold(
+            (BTreeSet::new(), 0),
+            |(mut acc_set, acc_count), (op, count)| {
+                acc_set.insert(op);
+                if count > acc_count {
+                    (acc_set, count)
+                } else {
+                    (acc_set, acc_count)
+                }
+            },
+        ))
     }
 
-    pub fn topsort<'a>(
-        mut heads: Vec<&'a Signed<Operation>>,
-        ops: &'a CAStore<Signed<Operation>>,
-    ) -> Result<Vec<&'a Signed<Operation>>, AncestorError> {
-        let mut elements_with_ancestors: BTreeMap<
+    pub fn topsort(
+        mut heads: Vec<Hash<Signed<Operation>>>,
+        ops: &CAStore<Signed<Operation>>,
+    ) -> Result<Vec<Signed<Operation>>, AncestorError> {
+        let mut ops_with_ancestors: BTreeMap<
             Hash<Signed<Operation>>,
-            (&Signed<Operation>, BTreeSet<&Signed<Operation>>),
+            (&Signed<Operation>, BTreeSet<Signed<Operation>>, usize),
         > = BTreeMap::new();
 
         let mut sorted = vec![];
 
         while !heads.is_empty() {
-            if let Some(op) = heads.pop() {
-                let ancestors = op.payload.ancestors(ops).expect("FIXME");
+            if let Some(hash) = heads.pop() {
+                if ops_with_ancestors.contains_key(head) {
+                    continue;
+                }
+
+                if let Some(op) = ops.get(&hash) {
+                    let ancestors = op.payload.ancestors(ops)?;
+                    let longest_path = todo!("Find longest path");
+                    ops_with_ancestors.insert(hash.clone(), (op, ancestors, longest_path));
+                } else {
+                    return Err(AncestorError::DependencyNotAvailable(hash));
+                }
             }
         }
 
