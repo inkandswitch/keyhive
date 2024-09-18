@@ -6,6 +6,7 @@ use super::traits::Verifiable;
 use crate::access::Access;
 use crate::crypto::signed::Signed;
 use crate::operation::delegation::Delegation;
+use crate::operation::revocation::Revocation;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -39,13 +40,14 @@ impl Membered {
         }
     }
 
-    // pub fn revoke_member(&mut self, agent: Agent) {
-    //     match self {
-    //         Membered::Group(group) => {
-    //             group.revoke(revocation);
-    //         } // Membered::Document(_document) => todo!(), // document.revoke_authorization(agent),
-    //     }
-    // }
+    pub fn revoke_member(&mut self, revocation: Signed<Revocation>) {
+        match self {
+            Membered::Group(group) => {
+                group.revoke(revocation);
+            }
+            Membered::Document(_document) => todo!(), // document.revoke_authorization(agent),
+        }
+    }
 }
 
 impl Verifiable for Membered {
@@ -62,4 +64,13 @@ impl Verifiable for Membered {
 pub enum MemberedId {
     GroupId(Identifier),
     DocumentId(Identifier),
+}
+
+impl Verifiable for MemberedId {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        match self {
+            MemberedId::GroupId(group_id) => group_id.verifying_key(),
+            MemberedId::DocumentId(document_id) => document_id.verifying_key(),
+        }
+    }
 }

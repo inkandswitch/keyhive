@@ -5,7 +5,7 @@ use super::{
 use crate::{
     access::Access,
     crypto::{hash::CAStore, signed::Signed},
-    operation::{delegation::Delegation, revocation::Revocation, Operation},
+    operation::{delegation::Delegation, revocation::Revocation},
 };
 use ed25519_dalek::VerifyingKey;
 use std::collections::BTreeMap;
@@ -20,6 +20,11 @@ pub struct Group {
 impl Group {
     pub fn add_member(&mut self, delegation: Signed<Delegation>) {
         self.state.delegations.insert(delegation.into());
+        todo!() // rebuild, later do IVM
+    }
+
+    pub fn revoke(&mut self, revocation: Signed<Revocation>) {
+        self.state.revocations.insert(revocation.into());
         todo!() // rebuild, later do IVM
     }
 }
