@@ -62,6 +62,17 @@ pub enum AncestorError {
 }
 
 impl Operation {
+    pub fn is_delegation(&self) -> bool {
+        match self {
+            Operation::Delegation(_) => true,
+            Operation::Revocation(_) => false,
+        }
+    }
+
+    pub fn is_revocation(&self) -> bool {
+        !self.is_delegation()
+    }
+
     pub fn after_auth(&self) -> &[Hash<Signed<Operation>>] {
         match self {
             Operation::Delegation(delegation) => &delegation.after_auth.as_slice(),
@@ -86,7 +97,7 @@ impl Operation {
 
         let mut ancestors = BTreeSet::new();
         let mut head_hashes: Vec<(&Hash<Signed<Operation>>, usize)> =
-            self.after_auth().iter().map(|hash| (&hash, 0)).collect();
+            self.after_auth().iter().map(|hash| (hash, 0)).collect();
 
         let mut touched_root = false;
 
@@ -143,23 +154,57 @@ impl Operation {
             (&Signed<Operation>, BTreeSet<Signed<Operation>>, usize),
         > = BTreeMap::new();
 
-        let mut sorted = vec![];
-
         while !heads.is_empty() {
             if let Some(hash) = heads.pop() {
-                if ops_with_ancestors.contains_key(head) {
+                if ops_with_ancestors.contains_key(&hash) {
                     continue;
                 }
 
                 if let Some(op) = ops.get(&hash) {
                     let ancestors = op.payload.ancestors(ops)?;
-                    let longest_path = todo!("Find longest path");
-                    ops_with_ancestors.insert(hash.clone(), (op, ancestors, longest_path));
+                    ops_with_ancestors.insert(hash.clone(), (op, ancestors.0, ancestors.1));
                 } else {
                     return Err(AncestorError::DependencyNotAvailable(hash));
                 }
             }
         }
+
+        let mut seen = BTreeSet::new();
+        let mut adjacencies = BTreeMap::new();
+
+        for (hash, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
+            seen.insert(hash);
+
+            for other_hash in op_ancestors.iter() {
+                if let Some(other_op) = ops_with_ancestors.get(other_hash) {
+                    if op_ancestors.is_subset(&other_op.1) {
+                        adjacencies
+                            .entry(other_hash.clone())
+                            .or_insert_with(Vec::new)
+                            .push(hash.clone());
+                    }
+
+                    if op_ancestors.is_superset(&other_op.1) {
+                        adjacencies
+                            .entry(hash.clone())
+                            .or_insert_with(Vec::new)
+                            .push(other_hash.clone());
+                    }
+
+                    // Concurrent, so check revocations
+                    if op.is_revocation() {
+                        match longest_path.cmp(&other_op.2) {
+                            Ordering::Less => todo!(), // op is prior to op_ha sh
+                            Ordering::Greater => todo!(), // op is after op_hash
+                            Ordering::Equal => todo!(), // Use hash to tiebreak
+                        }
+                    }
+                }
+
+            todo!()
+        }
+
+        let mut sorted = vec![];
 
         // let mut graph = BTreeMap::new();
         // for (hash, op) in ops.iter() {
