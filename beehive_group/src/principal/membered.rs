@@ -7,7 +7,9 @@ use crate::access::Access;
 use crate::crypto::signed::Signed;
 use crate::operation::delegation::Delegation;
 use crate::operation::revocation::Revocation;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Membered {
@@ -60,10 +62,19 @@ impl Verifiable for Membered {
 }
 
 // FIXE pass proof of existence?
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum MemberedId {
     GroupId(Identifier),
     DocumentId(Identifier),
+}
+
+impl fmt::Display for MemberedId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            MemberedId::GroupId(group_id) => write!(f, "{}", group_id),
+            MemberedId::DocumentId(document_id) => write!(f, "{}", document_id),
+        }
+    }
 }
 
 impl Verifiable for MemberedId {

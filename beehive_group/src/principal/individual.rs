@@ -1,12 +1,20 @@
 use super::identifier::Identifier;
 use super::traits::Verifiable;
 use crate::crypto::hash::Hash;
+use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Individual {
     pub id: Identifier,
+}
+
+impl std::fmt::Display for Individual {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", BASE64_STANDARD.encode(self.id.to_bytes()))
+    }
 }
 
 impl Individual {

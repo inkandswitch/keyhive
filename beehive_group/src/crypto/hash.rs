@@ -1,9 +1,39 @@
+use serde::Deserialize;
+use std::fmt;
 use std::marker::PhantomData;
 
 #[derive(Debug)]
 pub struct Hash<T> {
     pub raw: blake3::Hash,
     phantom: PhantomData<T>,
+}
+
+impl<T> serde::Serialize for Hash<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.raw.as_bytes().serialize(serializer)
+    }
+}
+
+impl<'de, T> serde::Deserialize<'de> for Hash<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Hash<T>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let bytes: [u8; 32] = Deserialize::deserialize(deserializer)?;
+        Ok(Hash {
+            raw: blake3::Hash::from(bytes),
+            phantom: PhantomData,
+        })
+    }
+}
+
+impl<T> fmt::Display for Hash<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Hash({})", self.raw.to_hex())
+    }
 }
 
 impl<T> Copy for Hash<T> {}

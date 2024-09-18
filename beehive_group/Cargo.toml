@@ -10,15 +10,18 @@ rust-version.workspace = true
 
 [dependencies]
 
+base64 = "0.22"
 blake3 = "1.5"
-ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
 serde = { workspace = true }
+serde_bytes = "0.11.15"
+serde_json = "1.0"
 signature = "2.2"
 thiserror = { workspace = true }
 rand = "0.8.5"
 topological-sort = "0.2.2"
 xchacha_blake3_siv = { path = "../xchacha_blake3_siv" }
-x25519-dalek = { version = "2.0", features = ["getrandom", "static_secrets"] }
+x25519-dalek = { version = "2.0", features = ["getrandom", "serde", "static_secrets"] }
 
 # FIXME for now
 chacha20poly1305 = "0.10.1"

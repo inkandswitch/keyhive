@@ -1,6 +1,7 @@
 use ed25519_dalek::Signer;
 use ed25519_dalek::Verifier;
 use std::cmp::Ordering;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8,6 +9,18 @@ pub struct Signed<T> {
     pub payload: T,
     pub verifying_key: ed25519_dalek::VerifyingKey,
     pub signature: ed25519_dalek::Signature,
+}
+
+impl<T: fmt::Display> fmt::Display for Signed<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Signed {{ payload: {}, verifying_key: {}, signature: {} }}",
+            self.payload,
+            serde_json::to_string(self.verifying_key.as_bytes()).expect("FIXME"),
+            self.signature
+        )
+    }
 }
 
 impl<T: Clone> Signed<T>

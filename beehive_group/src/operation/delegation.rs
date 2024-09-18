@@ -5,6 +5,7 @@ use crate::crypto::hash::Hash;
 use crate::crypto::signed::Signed;
 use crate::principal::agent::Agent;
 use crate::principal::{identifier::Identifier, membered::MemberedId};
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Delegation {
@@ -18,6 +19,16 @@ pub struct Delegation {
 
     pub after_auth: Vec<Hash<Signed<Operation>>>,
     // pub after_content: Vec<(Document, Hash<ContentOp>)>, // FIXME
+}
+
+impl fmt::Display for Delegation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Delegation: {} can {} from {} to {:?}", // FIXME :?
+            self.subject, self.can, self.from, self.to
+        )
+    }
 }
 
 impl From<Delegation> for Vec<u8> {

@@ -1,10 +1,18 @@
 // FIXME move to ActorId?
 
 use super::traits::Verifiable;
+use serde::{Deserialize, Serialize};
+use std::fmt;
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Identifier {
     pub verifying_key: ed25519_dalek::VerifyingKey,
+}
+
+impl fmt::Display for Identifier {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", serde_json::to_string(self).expect("FIXME"))
+    }
 }
 
 impl PartialOrd for Identifier {
