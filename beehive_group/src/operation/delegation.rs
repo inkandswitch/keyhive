@@ -17,3 +17,9 @@ pub struct Delegation {
     pub after_auth: Vec<Hash<Operation>>,
     // pub after_content: Vec<(Document, Hash<ContentOp>)>, // FIXME
 }
+
+impl From<Delegation> for Vec<u8> {
+    fn from(_delegation: Delegation) -> Vec<u8> {
+        todo!()
+    }
+}

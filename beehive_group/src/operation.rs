@@ -16,6 +16,18 @@ pub enum Operation {
     Revocation(revocation::Revocation),
 }
 
+impl From<delegation::Delegation> for Operation {
+    fn from(delegation: delegation::Delegation) -> Self {
+        Operation::Delegation(delegation)
+    }
+}
+
+impl From<revocation::Revocation> for Operation {
+    fn from(revocation: revocation::Revocation) -> Self {
+        Operation::Revocation(revocation)
+    }
+}
+
 impl From<Operation> for Vec<u8> {
     fn from(op: Operation) -> Self {
         match op {

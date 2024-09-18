@@ -4,6 +4,7 @@ use super::traits::Verifiable;
 use crate::access::Access;
 use crate::capability::Capability;
 use crate::crypto::share_key::ShareKey;
+use crate::crypto::signed::Signed;
 use crate::operation::delegation::Delegation;
 use crate::principal::agent::Agent;
 use crate::principal::group::GroupState;
@@ -30,10 +31,14 @@ impl Active {
         }
     }
 
+    pub fn sign<T: Clone + Into<Vec<u8>>>(&self, payload: &T) -> Signed<T> {
+        Signed::<T>::sign(payload, &self.signer)
+    }
+
     // FIXME put this on Capability?
     pub fn delegate_group(
         &self,
-        cap: Capability,
+        cap: &mut Capability,
         attenuate: Access,
         to: Agent,
     ) -> Result<Capability, Error> {
@@ -42,21 +47,21 @@ impl Active {
         }
 
         let unsigned_delegation = Delegation {
-            subject: cap.subject.id(),
+            subject: cap.subject.member_id(),
             can: attenuate,
-            to,
+            to: to.clone(),
             from: self.id,
             proof: vec![],
             after_auth: vec![], // FIXME
         };
 
         // FIXME sign delegation
-        let delegation = todo!();
+        let delegation: Signed<Delegation> = self.sign(&unsigned_delegation);
 
-        cap.subject.add_delegation(delegation);
+        cap.subject.add_member(delegation.clone());
 
         Ok(Capability {
-            subject: cap.subject,
+            subject: cap.subject.clone(),
             can: attenuate,
 
             delegator: Agent::Individual(self.id.into()),

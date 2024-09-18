@@ -56,6 +56,7 @@ impl GroupStore {
 
     // FIXME shoudl be more like this:
     // pub fn transative_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
+    // FIXME return path as well?
     pub fn transative_members(&self, group: &Group) -> BTreeMap<Agent, Access> {
         struct GroupAccess {
             agent: Agent,
@@ -65,7 +66,7 @@ impl GroupStore {
 
         let mut explore: Vec<GroupAccess> = vec![];
 
-        for (k, v) in group.delegates.iter() {
+        for (k, (v, _)) in group.delegates.iter() {
             explore.push(GroupAccess {
                 agent: k.clone(),
                 agent_access: *v,
@@ -96,7 +97,7 @@ impl GroupStore {
                     }
                     _ => {
                         if let Some(group) = self.groups.get(&member.verifying_key().into()) {
-                            for (mem, pow) in group.members() {
+                            for (mem, (pow, _proof)) in group.members() {
                                 let current_path_access = access.min(pow).min(parent_access);
 
                                 let best_access =
