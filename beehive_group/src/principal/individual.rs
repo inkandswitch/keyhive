@@ -52,11 +52,6 @@ pub struct AddReadKey {
     pub key: x25519_dalek::PublicKey,
 }
 
-pub enum PrekeyOp {
-    Add(VerifyingKey),
-    Remove(VerifyingKey),
-}
-
 impl PartialOrd for Individual {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.id.to_bytes().partial_cmp(&other.id.to_bytes())

@@ -1,20 +1,75 @@
+use super::identifier::Identifier;
+use super::individual::Individual;
 use super::traits::Verifiable;
+use crate::access::Access;
+use crate::capability::Capability;
 use crate::crypto::share_key::ShareKey;
+use crate::operation::delegation::Delegation;
+use crate::principal::agent::Agent;
+use crate::principal::group::GroupState;
+use crate::principal::membered::MemberedId;
+use crate::util::hidden::Hidden;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt::Debug;
-
-// FIXME also add sharing preivate keys
 
 #[derive(Clone)]
 pub struct Active {
-    verifier: VerifyingKey,
+    id: Identifier,
     signer: SigningKey,
     share_key_pairs: BTreeMap<ShareKey, x25519_dalek::StaticSecret>,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Hidden;
+impl Active {
+    pub fn new(id: Identifier, signer: SigningKey) -> Self {
+        Self {
+            id,
+            signer,
+            share_key_pairs: BTreeMap::new(),
+        }
+    }
+
+    // FIXME put this on Capability?
+    pub fn delegate_group(
+        &self,
+        cap: Capability,
+        attenuate: Access,
+        to: Agent,
+    ) -> Result<Capability, Error> {
+        if attenuate > cap.can {
+            return Err(Error::Escelation);
+        }
+
+        let unsigned_delegation = Delegation {
+            subject: cap.subject.id(),
+            can: attenuate,
+            to,
+            from: self.id,
+            proof: vec![],
+            after_auth: vec![], // FIXME
+        };
+
+        // FIXME sign delegation
+        let delegation = todo!();
+
+        cap.subject.add_delegation(delegation);
+
+        Ok(Capability {
+            subject: cap.subject,
+            can: attenuate,
+
+            delegator: Agent::Individual(self.id.into()),
+            delegate: to,
+
+            proof: delegation,
+        })
+    }
+}
+
+pub enum Error {
+    Escelation,
+}
 
 impl Debug for Active {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -25,8 +80,8 @@ impl Debug for Active {
             .collect();
 
         f.debug_struct("Active")
-            .field("verifier", &self.verifier)
-            .field("signer", &"SigningKey")
+            .field("id", &self.id)
+            .field("signer", &Hidden)
             .field("share_key_pairs", &keypairs_hidden_secret_keys)
             .finish()
     }
@@ -48,7 +103,7 @@ impl Debug for Active {
 
 impl Verifiable for Active {
     fn verifying_key(&self) -> VerifyingKey {
-        self.verifier
+        self.id.verifying_key
     }
 }
 

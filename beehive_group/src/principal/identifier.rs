@@ -1,5 +1,7 @@
 // FIXME move to ActorId?
 
+use super::traits::Verifiable;
+
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct Identifier {
     pub verifying_key: ed25519_dalek::VerifyingKey,
@@ -18,6 +20,12 @@ impl Ord for Identifier {
         self.verifying_key
             .as_bytes()
             .cmp(&other.verifying_key.as_bytes())
+    }
+}
+
+impl Verifiable for Identifier {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.verifying_key
     }
 }
 

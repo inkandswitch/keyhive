@@ -2,6 +2,7 @@ use super::agent::Agent;
 use super::identifier::Identifier;
 use super::membered::MemberedId;
 use super::{individual::Individual, traits::Verifiable};
+use crate::capability::Capability;
 use crate::{
     access::Access,
     crypto::{hash::CAStore, signed::Signed},
@@ -9,8 +10,6 @@ use crate::{
 };
 use ed25519_dalek::VerifyingKey;
 use std::collections::BTreeMap;
-
-// FIXME rnemae statelss to ID?
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Group {
@@ -23,6 +22,10 @@ impl Verifiable for Group {
         self.id.verifying_key
     }
 }
+
+// impl Group {
+//     pub fn delegate()
+// }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GroupState {
@@ -79,6 +82,19 @@ impl GroupState {
             id: verifier.into(),
             authority_ops: CAStore::from_iter([signed_init]),
         }
+    }
+
+    pub fn get_capability(&self, agent: Agent) -> Option<Capability> {
+        self.authority_ops.iter().find_map(|op| match op {
+            Operation::Delegation(delegation) => {
+                if delegation.to == agent {
+                    Some(delegation.can)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
     }
 }
 
