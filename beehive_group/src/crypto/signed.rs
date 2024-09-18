@@ -1,4 +1,5 @@
 use ed25519_dalek::Signer;
+use ed25519_dalek::Verifier;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
@@ -7,6 +8,20 @@ pub struct Signed<T> {
     pub payload: T,
     pub verifying_key: ed25519_dalek::VerifyingKey,
     pub signature: ed25519_dalek::Signature,
+}
+
+impl<T: Clone> Signed<T>
+where
+    Vec<u8>: From<T>,
+{
+    pub fn verify(&self) -> Result<(), signature::Error> {
+        self.verifying_key
+            // FIXME                            vvvvvvvv
+            .verify(
+                Vec::<u8>::from(self.payload.clone()).as_slice(),
+                &self.signature,
+            )
+    }
 }
 
 impl<T> From<Signed<T>> for Vec<u8>

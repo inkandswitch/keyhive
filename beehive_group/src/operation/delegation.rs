@@ -1,6 +1,8 @@
+// FIXME move opetaion to same level
 use super::Operation;
 use crate::access::Access;
 use crate::crypto::hash::Hash;
+use crate::crypto::signed::Signed;
 use crate::principal::agent::Agent;
 use crate::principal::{identifier::Identifier, membered::MemberedId};
 
@@ -14,7 +16,7 @@ pub struct Delegation {
 
     pub to: Agent, // FIXME an ID, not statelsss.. make &Agent? AgentId?
 
-    pub after_auth: Vec<Hash<Operation>>,
+    pub after_auth: Vec<Hash<Signed<Operation>>>,
     // pub after_content: Vec<(Document, Hash<ContentOp>)>, // FIXME
 }
 
