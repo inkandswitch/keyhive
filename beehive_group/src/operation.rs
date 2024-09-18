@@ -51,11 +51,11 @@ impl From<Operation> for Vec<u8> {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Error)]
 pub enum AncestorError {
+    #[error("Operation history is unrooted")]
+    Unrooted,
+
     #[error("Mismatched subject: {0}")]
     MismatchedSubject(MemberedId),
-
-    #[error("Unrooted: {0:?}")] // FIXME debug
-    Unrooted(BTreeSet<Signed<Operation>>),
 
     #[error("Dependency not available: {0}")]
     DependencyNotAvailable(Hash<Signed<Operation>>),
@@ -90,9 +90,9 @@ impl Operation {
     pub fn ancestors<'a>(
         &'a self,
         ops: &'a CAStore<Signed<Operation>>,
-    ) -> Result<(BTreeSet<Signed<Operation>>, usize), AncestorError> {
+    ) -> Result<(CAStore<Signed<Operation>>, usize), AncestorError> {
         if self.after_auth().is_empty() {
-            return Ok((BTreeSet::new(), 0));
+            return Ok((CAStore::new(), 0));
         }
 
         let mut ancestors = BTreeSet::new();
@@ -128,12 +128,11 @@ impl Operation {
         }
 
         if !touched_root {
-            todo!()
-            // return Err(AncestorError::Unrooted(ancestors.0));
+            return Err(AncestorError::Unrooted);
         }
 
         Ok(ancestors.into_iter().fold(
-            (BTreeSet::new(), 0),
+            (CAStore::new(), 0),
             |(mut acc_set, acc_count), (op, count)| {
                 acc_set.insert(op);
                 if count > acc_count {
@@ -151,7 +150,7 @@ impl Operation {
     ) -> Result<Vec<Signed<Operation>>, AncestorError> {
         let mut ops_with_ancestors: BTreeMap<
             Hash<Signed<Operation>>,
-            (&Signed<Operation>, BTreeSet<Signed<Operation>>, usize),
+            (&Signed<Operation>, CAStore<Signed<Operation>>, usize),
         > = BTreeMap::new();
 
         while !heads.is_empty() {
@@ -170,76 +169,58 @@ impl Operation {
         }
 
         let mut seen = BTreeSet::new();
-        let mut adjacencies = BTreeMap::new();
+        let mut adjacencies: TopologicalSort<Signed<Operation>> =
+            topological_sort::TopologicalSort::new();
 
         for (hash, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
             seen.insert(hash);
 
-            for other_hash in op_ancestors.iter() {
-                if let Some(other_op) = ops_with_ancestors.get(other_hash) {
-                    if op_ancestors.is_subset(&other_op.1) {
-                        adjacencies
-                            .entry(other_hash.clone())
-                            .or_insert_with(Vec::new)
-                            .push(hash.clone());
+            for (other_hash, other_op) in op_ancestors.iter() {
+                if let Some((_, other_ancestors, other_longest_path)) =
+                    ops_with_ancestors.get(other_hash)
+                {
+                    let ancestor_set: BTreeSet<Signed<Operation>> =
+                        op_ancestors.clone().into_values().collect();
+
+                    let other_ancestor_set: BTreeSet<Signed<Operation>> =
+                        other_ancestors.clone().into_values().collect();
+
+                    if ancestor_set.is_subset(&other_ancestor_set) {
+                        adjacencies.add_dependency(other_op.clone(), (*op).clone());
                     }
 
-                    if op_ancestors.is_superset(&other_op.1) {
-                        adjacencies
-                            .entry(hash.clone())
-                            .or_insert_with(Vec::new)
-                            .push(other_hash.clone());
+                    if ancestor_set.is_superset(&other_ancestor_set) {
+                        adjacencies.add_dependency((*op).clone(), other_op.clone());
                     }
 
                     // Concurrent, so check revocations
-                    if op.is_revocation() {
-                        match longest_path.cmp(&other_op.2) {
-                            Ordering::Less => todo!(), // op is prior to op_ha sh
-                            Ordering::Greater => todo!(), // op is after op_hash
-                            Ordering::Equal => todo!(), // Use hash to tiebreak
+                    if op.payload.is_revocation() {
+                        match longest_path.cmp(&other_longest_path) {
+                            Ordering::Less => {
+                                adjacencies.add_dependency((*op).clone(), other_op.clone())
+                            }
+                            Ordering::Greater => {
+                                adjacencies.add_dependency(other_op.clone(), (*op).clone())
+                            }
+                            Ordering::Equal => match other_hash.cmp(hash) {
+                                Ordering::Less => {
+                                    adjacencies.add_dependency((*op).clone(), other_op.clone())
+                                }
+                                Ordering::Greater => {
+                                    adjacencies.add_dependency(other_op.clone(), (*op).clone())
+                                }
+                                Ordering::Equal => {
+                                    todo!("why are you comparing with yourself? LOL")
+                                }
+                            },
                         }
                     }
+                } else {
+                    return Err(AncestorError::DependencyNotAvailable(other_hash.clone()));
                 }
-
-            todo!()
+            }
         }
 
-        let mut sorted = vec![];
-
-        // let mut graph = BTreeMap::new();
-        // for (hash, op) in ops.iter() {
-        //     let after_auth = op.payload.after_auth();
-        //     for parent in after_auth {
-        //         graph
-        //             .entry(parent.clone())
-        //             .or_insert_with(Vec::new)
-        //             .push(hash.clone());
-        //     }
-        // }
-
-        // let mut sorted = Vec::new();
-        // let mut visited = BTreeSet::new();
-        // let mut stack = Vec::new();
-
-        // for (hash, _) in ops.iter() {
-        //     stack.push(hash.clone());
-        //     while let Some(node) = stack.pop() {
-        //         if visited.contains(&node) {
-        //             continue;
-        //         }
-
-        //         if let Some(children) = graph.get(&node) {
-        //             stack.push(node.clone());
-        //             for child in children {
-        //                 stack.push(child.clone());
-        //             }
-        //         } else {
-        //             visited.insert(node.clone());
-        //             sorted.push(ops.get(&node).unwrap());
-        //         }
-        //     }
-        // }
-
-        Ok(sorted)
+        Ok(adjacencies.into_iter().collect())
     }
 }
