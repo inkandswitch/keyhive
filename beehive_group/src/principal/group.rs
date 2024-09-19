@@ -1,4 +1,5 @@
 use super::{agent::Agent, identifier::Identifier, traits::Verifiable};
+use crate::operation::Operation;
 use crate::{
     access::Access,
     crypto::signed::Signed,
@@ -17,15 +18,39 @@ pub struct Group {
 
 impl Group {
     pub fn materialize(state: state::GroupState) -> Self {
-        // PSEUDOCODE
-        // walk graph adding all parents to nodes
-        //   ^^ this can probably be put directly on Operation
-        // build a partial order
-        //
+        let delegates = Operation::topsort(todo!(), state.ops())
+            .expect("FIXME")
+            .iter()
+            .fold(BTreeMap::new(), |acc, signed| match signed {
+                Signed {
+                    payload: Operation::Delegation(delegation),
+                    signature,
+                    verifying_key,
+                } => {
+                    acc.insert(
+                        delegation.to,
+                        (
+                            delegation.can,
+                            Signed {
+                                payload: *delegation,
+                                signature: *signature,
+                                verifying_key: *verifying_key,
+                            },
+                        ),
+                    );
 
-        // Note to self: verify upon adding, not here
-
-        let delegates = todo!();
+                    acc
+                }
+                Signed {
+                    payload: Operation::Revocation(revocation),
+                    ..
+                } =>
+                // FIXME allow downgrading instead of straight removal?
+                {
+                    acc.remove(&revocation.revoke.payload.to);
+                    acc
+                }
+            });
 
         Group {
             id: state.id.into(),
