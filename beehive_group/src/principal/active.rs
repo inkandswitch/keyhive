@@ -7,7 +7,7 @@ use crate::crypto::share_key::ShareKey;
 use crate::crypto::signed::Signed;
 use crate::operation::delegation::Delegation;
 use crate::principal::agent::Agent;
-use crate::principal::group::GroupState;
+use crate::principal::group::state::GroupState;
 use crate::principal::membered::MemberedId;
 use crate::util::hidden::Hidden;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};

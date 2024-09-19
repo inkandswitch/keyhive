@@ -12,17 +12,20 @@ use crate::{
 };
 use ed25519_dalek::VerifyingKey;
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GroupState {
     pub id: Identifier,
-    pub ops: CAStore<Signed<Operation>>,
+    pub heads: BTreeSet<Hash<Signed<Operation>>>, // FIXME nonempty
+    pub ops: CAStore<Signed<Operation>>,          // FIXME nonempty
 }
 
 impl From<VerifyingKey> for GroupState {
     fn from(verifier: VerifyingKey) -> Self {
         GroupState {
             id: verifier.into(),
+            heads: BTreeSet::new(),
             ops: CAStore::new(),
         }
     }
@@ -40,6 +43,7 @@ impl PartialOrd for GroupState {
 
 impl Ord for GroupState {
     fn cmp(&self, other: &Self) -> Ordering {
+        // FIXME use all fields
         match self.id.to_bytes().cmp(&other.id.to_bytes()) {
             Ordering::Equal => self.ops.len().cmp(&other.ops.len()),
             other => other,
@@ -69,9 +73,10 @@ impl GroupState {
 
         // FIXME zeroize signing key
 
-        Self {
+        GroupState {
             id: verifier.into(),
-            ops: CAStore::from_iter([signed_init.into()]),
+            heads: BTreeSet::from_iter([Hash::hash(signed_init.clone())]),
+            ops: CAStore::from_iter([signed_init]),
         }
     }
 

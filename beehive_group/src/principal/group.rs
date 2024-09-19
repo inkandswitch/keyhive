@@ -18,21 +18,22 @@ pub struct Group {
 
 impl Group {
     pub fn materialize(state: state::GroupState) -> Self {
-        let delegates = Operation::topsort(todo!(), state.ops())
+        // FIXME oof that's a lot of cloning to get the heads
+        let delegates = Operation::topsort(state.heads.clone().into_iter().collect(), &state.ops)
             .expect("FIXME")
             .iter()
-            .fold(BTreeMap::new(), |acc, signed| match signed {
+            .fold(BTreeMap::new(), |mut acc, signed| match signed {
                 Signed {
                     payload: Operation::Delegation(delegation),
                     signature,
                     verifying_key,
                 } => {
                     acc.insert(
-                        delegation.to,
+                        delegation.to.clone(),
                         (
                             delegation.can,
                             Signed {
-                                payload: *delegation,
+                                payload: delegation.clone(),
                                 signature: *signature,
                                 verifying_key: *verifying_key,
                             },
@@ -59,15 +60,18 @@ impl Group {
         }
     }
 
-    pub fn add_member(&mut self, delegation: Signed<Delegation>) {
-        self.state.delegations.insert(delegation.into());
-        todo!() // rebuild, later do IVM
-    }
+    // pub fn add_member(&mut self, delegation: Signed<Delegation>) {
+    //     FIXME check subject, signature, find dependencies or quarantine
+    //     ...look at the quarantine and see if any of them depend on this one
+    //     ...etc etc
+    //     self.state.delegations.insert(delegation.into());
+    //     todo!() // rebuild, later do IVM
+    // }
 
-    pub fn revoke(&mut self, revocation: Signed<Revocation>) {
-        self.state.revocations.insert(revocation.into());
-        todo!() // rebuild, later do IVM
-    }
+    // pub fn revoke(&mut self, revocation: Signed<Revocation>) {
+    //     self.state.revocations.insert(revocation.into());
+    //     todo!() // rebuild, later do IVM
+    // }
 }
 
 impl Verifiable for Group {
