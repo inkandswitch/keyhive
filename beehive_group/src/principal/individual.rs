@@ -43,7 +43,7 @@ impl From<Identifier> for Individual {
 
 pub struct IndividualOp {
     pub verifier: VerifyingKey,
-    pub op: ReadKeyOp, // FIXME I assume that prekeys are better than using the verifier key as a Montgomery
+    pub op: ReadKeyOp,
     pub pred: BTreeSet<Hash<Individual>>,
 }
 
@@ -82,8 +82,10 @@ impl Verifiable for Individual {
 mod tests {
     use super::*;
 
+    // FIXME proptest
+
     #[test]
-    fn test_individual() {
+    fn test_to_bytes() {
         let id = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()).verifying_key();
 
         let individual: Individual = id.into();

@@ -13,8 +13,8 @@ use std::fmt::Debug;
 
 #[derive(Clone)]
 pub struct Active {
-    signer: SigningKey,
-    share_key_pairs: BTreeMap<ShareKey, x25519_dalek::StaticSecret>,
+    pub signer: SigningKey,
+    pub share_key_pairs: BTreeMap<ShareKey, x25519_dalek::StaticSecret>,
 }
 
 impl Active {
@@ -25,7 +25,7 @@ impl Active {
         }
     }
 
-    pub fn gen() -> Self {
+    pub fn generate() -> Self {
         let signer = SigningKey::generate(&mut rand::thread_rng());
         Self::new(signer)
     }

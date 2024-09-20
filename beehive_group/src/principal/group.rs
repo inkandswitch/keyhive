@@ -25,6 +25,21 @@ impl Group {
         self.state.id
     }
 
+    pub fn add_member(&mut self, signed_delegation: Signed<Delegation>) {
+        // FIXME check subject, signature, find dependencies or quarantine
+        // ...look at the quarantine and see if any of them depend on this one
+        // ...etc etc
+        // FIXME check that delegation is authorized
+        self.delegates.insert(
+            signed_delegation.payload.to.clone(),
+            (signed_delegation.payload.can, signed_delegation.clone()),
+        );
+
+        self.state
+            .ops
+            .insert(signed_delegation.map(|delegation| delegation.into()).into());
+    }
+
     pub fn create(parents: Vec<Agent>) -> Group {
         let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let group_id = group_signer.verifying_key().into();
@@ -174,6 +189,54 @@ mod tests {
         (gs, [group0, group1, group2, group3])
     }
 
+    fn setup_cyclic_store(alice: &Individual, bob: &Individual) -> (GroupStore, [Group; 10]) {
+        let group0 = Group::create(vec![alice.clone().into()]);
+        let group1 = Group::create(vec![bob.clone().into()]);
+
+        let group2 = Group::create(vec![group1.clone().into()]);
+        let group3 = Group::create(vec![group2.clone().into(), group2.clone().into()]);
+        let group4 = Group::create(vec![group3.clone().into(), group2.clone().into()]);
+        let group5 = Group::create(vec![group4.clone().into(), group2.clone().into()]);
+        let group6 = Group::create(vec![group5.clone().into(), group2.clone().into()]);
+        let group7 = Group::create(vec![group6.clone().into(), group2.clone().into()]);
+        let group8 = Group::create(vec![group7.clone().into(), group2.clone().into()]);
+        let mut group9 = Group::create(vec![group8.clone().into(), alice.clone().into()]);
+
+        let active = Active::generate();
+
+        group9.add_member(Signed::sign(
+            Delegation {
+                subject: MemberedId::GroupId(group9.id()),
+                from: group9.id(),
+                to: alice.clone().into(),
+                can: Access::Admin,
+                proof: vec![],
+                after_auth: vec![],
+            },
+            &active.signer,
+        ));
+
+        let mut gs = GroupStore::new();
+        // FIXME horrifying
+        gs.insert(group0.clone().into());
+        gs.insert(group1.clone().into());
+        gs.insert(group2.clone().into());
+        gs.insert(group3.clone().into());
+        gs.insert(group4.clone().into());
+        gs.insert(group5.clone().into());
+        gs.insert(group6.clone().into());
+        gs.insert(group7.clone().into());
+        gs.insert(group8.clone().into());
+        gs.insert(group9.clone().into());
+
+        (
+            gs,
+            [
+                group0, group1, group2, group3, group4, group5, group6, group7, group8, group9,
+            ],
+        )
+    }
+
     #[test]
     fn test_transitive_self() {
         let alice = setup_user();
@@ -226,6 +289,20 @@ mod tests {
 
         assert_eq!(
             g3_mems,
+            BTreeMap::from_iter([(alice.into(), Access::Admin), (bob.into(), Access::Admin)])
+        );
+    }
+
+    #[test]
+    fn test_transitive_cycles() {
+        let alice = setup_user();
+        let bob = setup_user();
+
+        let (gs, [_, _, _, _, _, _, _, _, _, g9]) = setup_cyclic_store(&alice, &bob);
+        let g9_mems: BTreeMap<Agent, Access> = gs.transative_members(&g9);
+
+        assert_eq!(
+            g9_mems,
             BTreeMap::from_iter([(alice.into(), Access::Admin), (bob.into(), Access::Admin)])
         );
     }

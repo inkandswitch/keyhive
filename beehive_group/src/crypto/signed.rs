@@ -109,6 +109,14 @@ impl<T: Clone + Into<Vec<u8>>> Signed<T> {
             signature: signer.sign(payload_bytes.as_slice()),
         }
     }
+
+    pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
+        Signed {
+            payload: f(self.payload),
+            verifying_key: self.verifying_key,
+            signature: self.signature,
+        }
+    }
 }
 
 // impl<T: PartialOrd> PartialOrd for Signed<T> {
