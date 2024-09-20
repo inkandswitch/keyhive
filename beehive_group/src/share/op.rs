@@ -15,7 +15,7 @@ pub struct Update {
 impl From<Update> for Vec<u8> {
     fn from(update: Update) -> Vec<u8> {
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&update.id.as_bytes());
+        bytes.extend_from_slice(&update.id.to_bytes());
         bytes.extend_from_slice(&update.add.0.to_bytes());
 
         for replace in update.replaces {

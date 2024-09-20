@@ -18,7 +18,7 @@ impl std::fmt::Display for Individual {
 }
 
 impl Individual {
-    pub fn as_bytes(&self) -> [u8; 32] {
+    pub fn to_bytes(&self) -> [u8; 32] {
         self.id.to_bytes()
     }
 
@@ -75,5 +75,18 @@ impl Ord for Individual {
 impl Verifiable for Individual {
     fn verifying_key(&self) -> VerifyingKey {
         self.id.verifying_key
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_individual() {
+        let id = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()).verifying_key();
+
+        let individual: Individual = id.into();
+        assert_eq!(individual.to_bytes(), id.to_bytes());
     }
 }
