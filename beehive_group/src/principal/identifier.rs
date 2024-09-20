@@ -44,6 +44,10 @@ impl From<ed25519_dalek::VerifyingKey> for Identifier {
 }
 
 impl Identifier {
+    pub fn new(verifying_key: ed25519_dalek::VerifyingKey) -> Self {
+        Self { verifying_key }
+    }
+
     pub fn to_bytes(&self) -> [u8; 32] {
         self.verifying_key.to_bytes()
     }

@@ -13,7 +13,7 @@ pub struct Delegation {
     pub can: Access,
 
     pub from: Identifier,
-    pub proof: Vec<Hash<Operation>>,
+    pub proof: Vec<Hash<Operation>>, // FIXME option<Hash<Operation>>?
 
     pub to: Agent, // FIXME an ID, not statelsss.. make &Agent? AgentId?
 

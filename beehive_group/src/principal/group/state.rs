@@ -80,21 +80,44 @@ impl GroupState {
         }
     }
 
-    pub fn add_op(
-        &mut self,
-        op: Signed<Operation>,
-    ) -> Result<Hash<Signed<Operation>>, signature::Error> {
+    pub fn add_op(&mut self, op: Signed<Operation>) -> Result<Hash<Signed<Operation>>, AddError> {
         if *op.payload.subject() != MemberedId::GroupId(self.id.into()) {
             panic!("FIXME")
             // return Err(signature::Error::InvalidSubject);
         }
 
-        op.verify().map(|_| self.ops.insert(op))
+        if op.verify().is_err() {
+            panic!("FIXME")
+            // return Err(signature::Error::InvalidSignature);
+        }
+
+        // FIXME also check if this op needs to go into the quarantine/buffer
+
+        let is_head = op
+            .payload
+            .after_auth()
+            .iter()
+            .any(|dep| self.heads.remove(dep));
+
+        if is_head {
+            self.heads.insert(Hash::hash(op.clone()));
+        }
+
+        Ok(self.ops.insert(op))
     }
 
     pub fn get_capability(&self) {
         todo!()
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AddError {
+    #[error("Invalid subject")]
+    InvalidSubject,
+
+    #[error("Invalid signature")]
+    InvalidSignature(#[from] signature::Error),
 }
 
 impl Verifiable for GroupState {

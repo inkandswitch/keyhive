@@ -164,7 +164,7 @@ impl<T> Hash<T> {
 
 #[derive(Debug, Clone)]
 pub struct CAStore<T> {
-    store: std::collections::HashMap<Hash<T>, T>,
+    store: std::collections::BTreeMap<Hash<T>, T>,
 }
 
 impl<T: PartialEq + std::hash::Hash> PartialEq for CAStore<T> {
@@ -178,7 +178,7 @@ impl<T: Eq + std::hash::Hash> Eq for CAStore<T> {}
 impl<T: std::hash::Hash> CAStore<T> {
     pub fn new() -> Self {
         Self {
-            store: std::collections::HashMap::new(),
+            store: std::collections::BTreeMap::new(),
         }
     }
 
@@ -231,6 +231,10 @@ impl<T: std::hash::Hash> CAStore<T> {
 
     pub fn into_values(self) -> impl Iterator<Item = T> {
         self.store.into_values()
+    }
+
+    pub fn into_keys(self) -> impl Iterator<Item = Hash<T>> {
+        self.store.into_keys()
     }
 
     pub fn contains_key(&self, hash: &Hash<T>) -> bool {

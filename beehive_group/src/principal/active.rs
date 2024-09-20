@@ -1,5 +1,4 @@
 use super::identifier::Identifier;
-use super::individual::Individual;
 use super::traits::Verifiable;
 use crate::access::Access;
 use crate::capability::Capability;
@@ -7,31 +6,64 @@ use crate::crypto::share_key::ShareKey;
 use crate::crypto::signed::Signed;
 use crate::operation::delegation::Delegation;
 use crate::principal::agent::Agent;
-use crate::principal::group::state::GroupState;
-use crate::principal::membered::MemberedId;
 use crate::util::hidden::Hidden;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::fmt::Debug;
 
 #[derive(Clone)]
 pub struct Active {
-    id: Identifier,
     signer: SigningKey,
     share_key_pairs: BTreeMap<ShareKey, x25519_dalek::StaticSecret>,
 }
 
 impl Active {
-    pub fn new(id: Identifier, signer: SigningKey) -> Self {
+    pub fn new(signer: SigningKey) -> Self {
         Self {
-            id,
             signer,
             share_key_pairs: BTreeMap::new(),
         }
     }
 
-    pub fn sign<T: Clone + Into<Vec<u8>>>(&self, payload: &T) -> Signed<T> {
+    pub fn gen() -> Self {
+        let signer = SigningKey::generate(&mut rand::thread_rng());
+        Self::new(signer)
+    }
+
+    pub fn create_group(&self) -> Group {
+        let user: Individual = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
+            .verifying_key()
+            .into();
+
+        let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+        let group_id = signer.verifying_key().into();
+
+        let delegation = Delegation {
+            subject: MemberedId::GroupId(id),
+            from: id,
+            to: user.into(),
+            can: Access::Read,
+            proof: vec![],
+            after_auth: vec![],
+        };
+
+        let signed_delegation = Signed::sign(delegation, &signer);
+
+        let grou p = Group {
+            delegates: BTreeMap::new(),
+            state: crate::principal::group::state::GroupState {
+                id,
+                heads: BTreeSet::new(),
+                ops: vec![signed_delegation],
+            },
+        };
+    }
+
+    pub fn id(&self) -> Identifier {
+        self.signer.verifying_key().into()
+    }
+
+    pub fn sign<T: Clone + Into<Vec<u8>>>(&self, payload: T) -> Signed<T> {
         Signed::<T>::sign(payload, &self.signer)
     }
 
@@ -50,13 +82,13 @@ impl Active {
             subject: cap.subject.member_id(),
             can: attenuate,
             to: to.clone(),
-            from: self.id,
+            from: self.id(),
             proof: vec![],
             after_auth: vec![], // FIXME
         };
 
         // FIXME sign delegation
-        let delegation: Signed<Delegation> = self.sign(&unsigned_delegation);
+        let delegation: Signed<Delegation> = self.sign(unsigned_delegation);
 
         cap.subject.add_member(delegation.clone());
 
@@ -64,7 +96,7 @@ impl Active {
             subject: cap.subject.clone(),
             can: attenuate,
 
-            delegator: Agent::Individual(self.id.into()),
+            delegator: Agent::Individual(self.id().into()),
             delegate: to,
 
             proof: delegation,
@@ -85,7 +117,7 @@ impl Debug for Active {
             .collect();
 
         f.debug_struct("Active")
-            .field("id", &self.id)
+            .field("id", &self.id())
             .field("signer", &Hidden)
             .field("share_key_pairs", &keypairs_hidden_secret_keys)
             .finish()
@@ -108,7 +140,7 @@ impl Debug for Active {
 
 impl Verifiable for Active {
     fn verifying_key(&self) -> VerifyingKey {
-        self.id.verifying_key
+        self.id().verifying_key
     }
 }
 

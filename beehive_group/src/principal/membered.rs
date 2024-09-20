@@ -20,7 +20,7 @@ pub enum Membered {
 impl Membered {
     pub fn member_id(&self) -> MemberedId {
         match self {
-            Membered::Group(group) => MemberedId::GroupId(group.id.clone()),
+            Membered::Group(group) => MemberedId::GroupId(group.id().clone()),
             Membered::Document(_document) => todo!(), // MemberedId::DocumentId(document.id.clone()),
         }
     }

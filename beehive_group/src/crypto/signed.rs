@@ -97,13 +97,14 @@ impl<T: Hash> Hash for Signed<T> {
     }
 }
 
+// FIXME also put this on Active
 // FIXME move to Active
 impl<T: Clone + Into<Vec<u8>>> Signed<T> {
-    pub fn sign(payload: &T, signer: &ed25519_dalek::SigningKey) -> Self {
+    pub fn sign(payload: T, signer: &ed25519_dalek::SigningKey) -> Self {
         let payload_bytes: Vec<u8> = payload.clone().into();
 
         Signed {
-            payload: payload.clone(), // FIXME weird clone
+            payload,
             verifying_key: signer.verifying_key(),
             signature: signer.sign(payload_bytes.as_slice()),
         }
