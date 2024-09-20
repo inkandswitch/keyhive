@@ -95,7 +95,7 @@ impl DocumentState {
             after_auth: vec![],
         });
 
-        let signed_init = Signed::sign(&init, &signing_key);
+        let signed_init = Signed::sign(init, &signing_key);
 
         // FIXME zeroize signing key
 

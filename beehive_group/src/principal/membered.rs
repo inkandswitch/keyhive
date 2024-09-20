@@ -54,6 +54,18 @@ impl Membered {
     }
 }
 
+impl From<Group> for Membered {
+    fn from(group: Group) -> Self {
+        Membered::Group(group)
+    }
+}
+
+impl From<Document> for Membered {
+    fn from(document: Document) -> Self {
+        Membered::Document(document)
+    }
+}
+
 impl Verifiable for Membered {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         match self {
@@ -70,6 +82,15 @@ pub enum MemberedId {
     DocumentId(Identifier),
 }
 
+impl MemberedId {
+    pub fn to_bytes(&self) -> [u8; 32] {
+        match self {
+            MemberedId::GroupId(group_id) => group_id.to_bytes(),
+            MemberedId::DocumentId(document_id) => document_id.to_bytes(),
+        }
+    }
+}
+
 impl fmt::Display for MemberedId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -84,6 +105,15 @@ impl Verifiable for MemberedId {
         match self {
             MemberedId::GroupId(group_id) => group_id.verifying_key(),
             MemberedId::DocumentId(document_id) => document_id.verifying_key(),
+        }
+    }
+}
+
+impl From<MemberedId> for Identifier {
+    fn from(membered_id: MemberedId) -> Self {
+        match membered_id {
+            MemberedId::GroupId(group_id) => group_id,
+            MemberedId::DocumentId(document_id) => document_id,
         }
     }
 }

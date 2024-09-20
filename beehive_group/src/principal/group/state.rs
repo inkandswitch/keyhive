@@ -69,7 +69,7 @@ impl GroupState {
         }
         .into();
 
-        let signed_init: Signed<Operation> = Signed::sign(&init, &signing_key);
+        let signed_init: Signed<Operation> = Signed::sign(init, &signing_key);
 
         // FIXME zeroize signing key
 

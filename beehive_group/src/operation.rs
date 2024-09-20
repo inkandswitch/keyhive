@@ -43,7 +43,7 @@ impl From<revocation::Revocation> for Operation {
 impl From<Operation> for Vec<u8> {
     fn from(op: Operation) -> Self {
         match op {
-            Operation::Delegation(_delegation) => todo!(), // delegation.into(),
+            Operation::Delegation(delegation) => delegation.into(),
             Operation::Revocation(_revocation) => todo!(), // revocation.into(),
         }
     }

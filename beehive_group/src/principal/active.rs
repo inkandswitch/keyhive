@@ -30,35 +30,6 @@ impl Active {
         Self::new(signer)
     }
 
-    pub fn create_group(&self) -> Group {
-        let user: Individual = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
-            .verifying_key()
-            .into();
-
-        let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let group_id = signer.verifying_key().into();
-
-        let delegation = Delegation {
-            subject: MemberedId::GroupId(id),
-            from: id,
-            to: user.into(),
-            can: Access::Read,
-            proof: vec![],
-            after_auth: vec![],
-        };
-
-        let signed_delegation = Signed::sign(delegation, &signer);
-
-        let grou p = Group {
-            delegates: BTreeMap::new(),
-            state: crate::principal::group::state::GroupState {
-                id,
-                heads: BTreeSet::new(),
-                ops: vec![signed_delegation],
-            },
-        };
-    }
-
     pub fn id(&self) -> Identifier {
         self.signer.verifying_key().into()
     }

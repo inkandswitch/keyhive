@@ -124,6 +124,7 @@ impl Verifiable for Group {
 mod tests {
     use super::*;
 
+    use super::store::GroupStore;
     use crate::operation::delegation::Delegation;
     use crate::principal::{active::Active, individual::Individual, membered::MemberedId};
     use std::collections::BTreeSet;
@@ -165,6 +166,17 @@ mod tests {
         let group2 = Group::create(vec![group0.clone().into()]);
         let group3 = Group::create(vec![group1.clone().into(), group2.clone().into()]);
 
-        assert_eq!(1, 1);
+        let mut gs = GroupStore::new();
+        gs.insert(group0.clone().into());
+        gs.insert(group1.clone().into());
+        gs.insert(group2.clone().into());
+        gs.insert(group3.clone().into());
+
+        let g0_mems: BTreeMap<Agent, Access> = gs.transative_members(&group0);
+
+        assert_eq!(
+            g0_mems,
+            BTreeMap::from_iter([(user.clone().into(), Access::Admin)])
+        );
     }
 }
