@@ -2,6 +2,7 @@ use crate::access::Access;
 use crate::crypto::{encrypted::Encrypted, hash::Hash, share_key::ShareKey, signed::Signed};
 use crate::principal::agent::Agent;
 use crate::principal::group::Group;
+use crate::principal::identifier::Identifier;
 use crate::principal::individual::Individual;
 use crate::principal::membered::Membered;
 use crate::principal::traits::Verifiable;
@@ -10,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GroupStore {
-    pub groups: BTreeMap<Individual, Membered>,
+    pub groups: BTreeMap<Identifier, Membered>,
 }
 
 impl GroupStore {
@@ -25,8 +26,12 @@ impl GroupStore {
             .insert(membered.verifying_key().clone().into(), membered);
     }
 
-    pub fn get(&self, id: &Individual) -> Option<&Membered> {
+    pub fn get(&self, id: &Identifier) -> Option<&Membered> {
         self.groups.get(id)
+    }
+
+    pub fn ids(&self) -> BTreeSet<&Identifier> {
+        self.groups.keys().collect()
     }
 
     // FIXME shoudl be more like this:
@@ -102,8 +107,8 @@ impl GroupStore {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_test() {
-        assert_eq!(1, 1);
-    }
+    // #[test]
+    // fn test_test() {
+    //     assert_eq!(1, 1);
+    // }
 }

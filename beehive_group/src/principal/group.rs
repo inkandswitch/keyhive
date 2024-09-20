@@ -36,7 +36,7 @@ impl Group {
                     subject: MemberedId::GroupId(group_id),
                     from: group_id,
                     to: parent.clone(),
-                    can: Access::Read,
+                    can: Access::Admin,
                     proof: vec![],
                     after_auth: vec![],
                 };
@@ -129,54 +129,104 @@ mod tests {
     use crate::principal::{active::Active, individual::Individual, membered::MemberedId};
     use std::collections::BTreeSet;
 
-    #[test]
-    fn test_materialization() {
-        let user: Individual = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
+    fn setup_user() -> Individual {
+        ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
             .verifying_key()
-            .into();
+            .into()
+    }
 
-        /*
-                        ┌───────────┐
-                        │           │
-        ┌──────────────▶│   User    │
-        │               │           │
-        │               └─────▲─────┘
-        │                     │
-        │                     │
-        │               ┌───────────┐
-        │               │           │
-        │        ┌─────▶│  Group 0  │◀─────┐
-        │        │      │           │      │
-        │        │      └───────────┘      │
-        │  ┌───────────┐             ┌───────────┐
-        │  │           │             │           │
-        └──│  Group 1  │             │  Group 2  │
+    fn setup_store(alice: &Individual, bob: &Individual) -> (GroupStore, [Group; 4]) {
+        /*              ┌───────────┐        ┌───────────┐
+                        │           │        │           │
+        ╔══════════════▶│   Alice   │        │    Bob    │
+        ║               │           │        │           │
+        ║               └─────▲─────┘        └───────────┘
+        ║                     │                    ▲
+        ║                     │                    ║
+        ║               ┌───────────┐              ║
+        ║               │           │              ║
+        ║        ┌─────▶│  Group 0  │◀─────┐       ║
+        ║        │      │           │      │       ║
+        ║        │      └───────────┘      │       ║
+        ║  ┌───────────┐             ┌───────────┐ ║
+        ║  │           │             │           │ ║
+        ╚══│  Group 1  │             │  Group 2  │═╝
            │           │             │           │
-           └───────────┘             └───────────┘
-                 ▲                         ▲
+           └─────▲─────┘             └─────▲─────┘
                  │      ┌───────────┐      │
                  │      │           │      │
                  └──────│  Group 3  │──────┘
                         │           │
-                        └───────────┘
-         */
+                        └───────────┘ */
 
-        let group0 = Group::create(vec![user.clone().into()]);
-        let group1 = Group::create(vec![user.clone().into(), group0.clone().into()]);
-        let group2 = Group::create(vec![group0.clone().into()]);
+        let group0 = Group::create(vec![alice.clone().into()]);
+        let group1 = Group::create(vec![alice.clone().into(), group0.clone().into()]);
+        let group2 = Group::create(vec![group0.clone().into(), bob.clone().into()]);
         let group3 = Group::create(vec![group1.clone().into(), group2.clone().into()]);
 
         let mut gs = GroupStore::new();
+        // FIXME horrifying
         gs.insert(group0.clone().into());
         gs.insert(group1.clone().into());
         gs.insert(group2.clone().into());
         gs.insert(group3.clone().into());
 
-        let g0_mems: BTreeMap<Agent, Access> = gs.transative_members(&group0);
+        (gs, [group0, group1, group2, group3])
+    }
+
+    #[test]
+    fn test_transitive_self() {
+        let alice = setup_user();
+        let bob = setup_user();
+
+        let (gs, [g0, _g1, _g2, _g3]) = setup_store(&alice, &bob);
+        let g0_mems: BTreeMap<Agent, Access> = gs.transative_members(&g0);
 
         assert_eq!(
             g0_mems,
-            BTreeMap::from_iter([(user.clone().into(), Access::Admin)])
+            BTreeMap::from_iter([(alice.into(), Access::Admin)])
+        );
+    }
+
+    #[test]
+    fn test_transitive_one() {
+        let alice = setup_user();
+        let bob = setup_user();
+
+        let (gs, [_g0, g1, _g2, _g3]) = setup_store(&alice, &bob);
+        let g1_mems: BTreeMap<Agent, Access> = gs.transative_members(&g1);
+
+        assert_eq!(
+            g1_mems,
+            BTreeMap::from_iter([(alice.into(), Access::Admin)])
+        );
+    }
+
+    #[test]
+    fn test_transitive_two() {
+        let alice = setup_user();
+        let bob = setup_user();
+
+        let (gs, [_g0, _g1, g2, _g3]) = setup_store(&alice, &bob);
+        let g2_mems: BTreeMap<Agent, Access> = gs.transative_members(&g2);
+
+        assert_eq!(
+            g2_mems,
+            BTreeMap::from_iter([(alice.into(), Access::Admin), (bob.into(), Access::Admin)])
+        );
+    }
+
+    #[test]
+    fn test_transitive_tree() {
+        let alice = setup_user();
+        let bob = setup_user();
+
+        let (gs, [_g0, _g1, _g2, g3]) = setup_store(&alice, &bob);
+        let g3_mems: BTreeMap<Agent, Access> = gs.transative_members(&g3);
+
+        assert_eq!(
+            g3_mems,
+            BTreeMap::from_iter([(alice.into(), Access::Admin), (bob.into(), Access::Admin)])
         );
     }
 }
