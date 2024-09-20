@@ -306,4 +306,36 @@ mod tests {
             BTreeMap::from_iter([(alice.into(), Access::Admin), (bob.into(), Access::Admin)])
         );
     }
+
+    #[test]
+    fn test_add_member() {
+        let alice = setup_user();
+        let bob = setup_user();
+        let carol = setup_user();
+
+        let (mut gs, [mut g0, _, _, _]) = setup_store(&alice, &bob);
+
+        let active = Active::generate();
+
+        g0.add_member(Signed::sign(
+            Delegation {
+                subject: MemberedId::GroupId(g0.id()),
+                from: active.id(),
+                to: carol.clone().into(),
+                can: Access::Admin,
+                proof: vec![],
+                after_auth: vec![],
+            },
+            &active.signer,
+        ));
+
+        gs.insert(g0.clone().into());
+
+        let g0_mems: BTreeMap<Agent, Access> = gs.transative_members(&g0);
+
+        assert_eq!(
+            g0_mems,
+            BTreeMap::from_iter([(alice.into(), Access::Admin), (carol.into(), Access::Admin)])
+        );
+    }
 }
