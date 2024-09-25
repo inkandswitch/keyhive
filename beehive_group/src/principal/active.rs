@@ -1,4 +1,5 @@
 use super::identifier::Identifier;
+use super::individual::Individual;
 use super::traits::Verifiable;
 use crate::access::Access;
 use crate::capability::Capability;
@@ -17,11 +18,18 @@ pub struct Active {
     pub share_key_pairs: BTreeMap<ShareKey, x25519_dalek::StaticSecret>,
 }
 
+// FIXME?
+impl std::fmt::Display for Active {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.id())
+    }
+}
+
 impl Active {
     pub fn new(signer: SigningKey) -> Self {
         Self {
             signer,
-            share_key_pairs: BTreeMap::new(),
+            share_key_pairs: BTreeMap::new(), // FIXME
         }
     }
 
@@ -30,6 +38,7 @@ impl Active {
         Self::new(signer)
     }
 
+    // FIXME remove
     pub fn id(&self) -> Identifier {
         self.signer.verifying_key().into()
     }
@@ -97,17 +106,31 @@ impl Debug for Active {
 
 // impl PartialOrd for Active {
 //     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-//         self.verifier
+//         self.verifying_key()
 //             .to_bytes()
-//             .partial_cmp(&other.verifier.to_bytes())
+//             .partial_cmp(&other.verifying_key().to_bytes())
 //     }
 // }
 //
 // impl Ord for Active {
 //     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-//         self.verifier.to_bytes().cmp(&other.verifier.to_bytes())
+//         self.verifying_key()
+//             .to_bytes()
+//             .cmp(&other.verifying_key().to_bytes())
 //     }
 // }
+
+impl From<Active> for Agent {
+    fn from(active: Active) -> Self {
+        Agent::Individual(active.id().into())
+    }
+}
+
+impl From<Active> for Individual {
+    fn from(active: Active) -> Self {
+        active.id().into()
+    }
+}
 
 impl Verifiable for Active {
     fn verifying_key(&self) -> VerifyingKey {
@@ -118,5 +141,19 @@ impl Verifiable for Active {
 impl Signer<Signature> for Active {
     fn try_sign(&self, message: &[u8]) -> Result<Signature, signature::Error> {
         self.signer.try_sign(message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sign() {
+        let active = Active::generate();
+        let message = "hello world".as_bytes();
+        let signed = active.sign(message);
+
+        assert!(signed.verify().is_ok());
     }
 }

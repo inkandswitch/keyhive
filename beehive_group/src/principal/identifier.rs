@@ -1,6 +1,7 @@
 // FIXME move to ActorId?
 
 use super::traits::Verifiable;
+use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -11,7 +12,11 @@ pub struct Identifier {
 
 impl fmt::Display for Identifier {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", serde_json::to_string(self).expect("FIXME"))
+        write!(
+            f,
+            "{}",
+            BASE64_STANDARD.encode(&self.verifying_key.to_bytes())
+        )
     }
 }
 
@@ -46,6 +51,13 @@ impl From<ed25519_dalek::VerifyingKey> for Identifier {
 impl Identifier {
     pub fn new(verifying_key: ed25519_dalek::VerifyingKey) -> Self {
         Self { verifying_key }
+    }
+
+    pub fn generate() -> Self {
+        Self {
+            verifying_key: ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
+                .verifying_key(),
+        }
     }
 
     pub fn to_bytes(&self) -> [u8; 32] {

@@ -29,7 +29,7 @@ impl Membered {
     pub fn members(&self) -> BTreeMap<Agent, (Access, Signed<Delegation>)> {
         match self {
             Membered::Group(group) => group.delegates.clone(), // FIXME NEEDS lifetimes, just being slapdash here
-            Membered::Document(_document) => todo!(),          // document.authorizations.clone(),
+            Membered::Document(document) => document.delegates.clone(),
         }
     }
 
@@ -51,6 +51,15 @@ impl Membered {
         //     }
         //     Membered::Document(_document) => todo!(), // document.revoke_authorization(agent),
         // }
+    }
+}
+
+impl From<Membered> for Agent {
+    fn from(membered: Membered) -> Self {
+        match membered {
+            Membered::Group(group) => group.into(),
+            Membered::Document(document) => document.into(),
+        }
     }
 }
 

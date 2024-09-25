@@ -6,12 +6,13 @@ use crate::principal::identifier::Identifier;
 use crate::principal::individual::Individual;
 use crate::principal::membered::Membered;
 use crate::principal::traits::Verifiable;
+use base64::prelude::*;
 use chacha20poly1305::AeadInPlace;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GroupStore {
-    pub groups: BTreeMap<Identifier, Membered>,
+    pub groups: BTreeMap<Identifier, Group>,
 }
 
 impl GroupStore {
@@ -21,12 +22,26 @@ impl GroupStore {
         }
     }
 
-    pub fn insert(&mut self, membered: Membered) {
+    pub fn pretty_print_direct_pks(&self) -> Vec<String> {
         self.groups
-            .insert(membered.verifying_key().clone().into(), membered);
+            .values()
+            .map(|pk| BASE64_STANDARD.encode(pk.verifying_key()))
+            .collect()
     }
 
-    pub fn get(&self, id: &Identifier) -> Option<&Membered> {
+    pub fn insert(&mut self, group: Group) {
+        self.groups
+            .insert(group.verifying_key().clone().into(), group);
+    }
+
+    pub fn create_group(&mut self, parents: Vec<&Agent>) -> &Group {
+        let new_group: Group = Group::create(parents);
+        let new_group_id: Identifier = new_group.verifying_key().into(); // FIXME add helper method
+        self.insert(new_group);
+        self.get(&new_group_id).expect("FIXME")
+    }
+
+    pub fn get(&self, id: &Identifier) -> Option<&Group> {
         self.groups.get(id)
     }
 
@@ -77,7 +92,7 @@ impl GroupStore {
                     }
                     _ => {
                         if let Some(group) = self.groups.get(&member.verifying_key().into()) {
-                            for (mem, (pow, _proof)) in group.members() {
+                            for (mem, (pow, _proof)) in group.delegates.clone() {
                                 let current_path_access = access.min(pow).min(parent_access);
 
                                 let best_access =

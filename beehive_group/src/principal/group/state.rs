@@ -1,3 +1,4 @@
+use super::super::agent::Agent;
 use crate::operation::Operation;
 use crate::principal::{
     identifier::Identifier, individual::Individual, membered::MemberedId, traits::Verifiable,
@@ -104,6 +105,20 @@ impl GroupState {
         }
 
         Ok(self.ops.insert(op))
+    }
+
+    pub fn delegations_for(&self, agent: &Agent) -> Vec<Signed<Delegation>> {
+        self.ops
+            .iter()
+            .filter_map(|(_, op)| {
+                if let Operation::Delegation(delegation) = &op.payload {
+                    if delegation.to == *agent {
+                        return Some(op.clone().map(|_| delegation.clone()));
+                    }
+                }
+                None
+            })
+            .collect()
     }
 
     pub fn get_capability(&self) {

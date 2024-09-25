@@ -9,6 +9,7 @@ use crate::{
     crypto::signed::Signed,
     operation::{delegation::Delegation, revocation::Revocation},
 };
+use base64::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod state;
@@ -18,6 +19,12 @@ pub mod store;
 pub struct Group {
     pub delegates: BTreeMap<Agent, (Access, Signed<Delegation>)>,
     pub state: state::GroupState,
+}
+
+impl std::fmt::Display for Group {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", BASE64_STANDARD.encode(self.state.id.as_bytes()))
+    }
 }
 
 impl Group {
@@ -40,7 +47,8 @@ impl Group {
             .insert(signed_delegation.map(|delegation| delegation.into()).into());
     }
 
-    pub fn create(parents: Vec<Agent>) -> Group {
+    // FIXME "new"... OBVIOUSLY
+    pub fn create(parents: Vec<&Agent>) -> Group {
         let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let group_id = group_signer.verifying_key().into();
 
@@ -50,7 +58,7 @@ impl Group {
                 let del = Delegation {
                     subject: MemberedId::GroupId(group_id),
                     from: group_id,
-                    to: parent.clone(),
+                    to: (*parent).clone(),
                     can: Access::Admin,
                     proof: vec![],
                     after_auth: vec![],
@@ -59,7 +67,7 @@ impl Group {
                 let signed_op = Signed::sign(del.clone().into(), &group_signer);
                 let signed_del = Signed::sign(del, &group_signer);
 
-                mem_acc.insert(parent.clone(), (Access::Admin, signed_del.clone()));
+                mem_acc.insert((*parent).clone(), (Access::Admin, signed_del.clone()));
 
                 op_acc.insert(signed_op);
                 (op_acc, mem_acc)
@@ -115,6 +123,19 @@ impl Group {
         Group { state, delegates }
     }
 
+    pub fn revoke(&mut self, signed_revocation: Signed<Revocation>) {
+        // FIXME check subject, signature, find dependencies or quarantine
+        // ...look at the quarantine and see if any of them depend on this one
+        // ...etc etc
+        // FIXME check that delegation is authorized
+        self.delegates
+            .remove(&signed_revocation.payload.revoke.payload.to);
+
+        self.state
+            .ops
+            .insert(signed_revocation.map(|revocation| revocation.into()).into());
+    }
+
     // pub fn add_member(&mut self, delegation: Signed<Delegation>) {
     //     FIXME check subject, signature, find dependencies or quarantine
     //     ...look at the quarantine and see if any of them depend on this one
@@ -142,7 +163,6 @@ mod tests {
     use super::store::GroupStore;
     use crate::operation::delegation::Delegation;
     use crate::principal::{active::Active, individual::Individual, membered::MemberedId};
-    use std::collections::BTreeSet;
 
     fn setup_user() -> Individual {
         ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
@@ -180,7 +200,7 @@ mod tests {
         let group3 = Group::create(vec![group1.clone().into(), group2.clone().into()]);
 
         let mut gs = GroupStore::new();
-        // FIXME horrifying
+        // FIXME horrifying clones 😱
         gs.insert(group0.clone().into());
         gs.insert(group1.clone().into());
         gs.insert(group2.clone().into());

@@ -144,6 +144,8 @@ impl Operation {
         ))
     }
 
+    // FIXME verified gdp
+
     pub fn topsort(
         mut heads: Vec<Hash<Signed<Operation>>>,
         ops: &CAStore<Signed<Operation>>,
@@ -222,5 +224,20 @@ impl Operation {
         }
 
         Ok(adjacencies.into_iter().collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::hash::Hash;
+    use crate::crypto::signed::Signed;
+    use crate::principal::agent::Agent;
+    use crate::principal::membered::Membered;
+    use crate::principal::membered::MemberedId;
+
+    #[test]
+    fn test_topsort() {
+        todo!()
     }
 }
