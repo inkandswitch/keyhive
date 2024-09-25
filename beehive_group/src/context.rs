@@ -1,4 +1,6 @@
 use crate::access::Access;
+use crate::crypto::encrypted::Encrypted;
+use crate::crypto::share_key::ShareKey;
 use crate::crypto::signed::Signed;
 use crate::operation::revocation::Revocation;
 use crate::operation::Operation;
@@ -13,8 +15,9 @@ use crate::principal::identifier::Identifier;
 use crate::principal::individual::Individual;
 use crate::principal::membered::{Membered, MemberedId};
 use crate::principal::traits::Verifiable;
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
+use crate::scratch::dcgka_2m_broadcast;
+use chacha20poly1305::AeadInPlace;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone)]
 pub struct Context {
@@ -40,6 +43,10 @@ impl Context {
         }
     }
 
+    pub fn id(&self) -> Identifier {
+        self.active.id()
+    }
+
     pub fn create_group(&mut self, coparents: Vec<&Agent>) -> &Group {
         let mut parents = coparents.clone();
         let self_agent = self.active.clone().into();
@@ -54,36 +61,58 @@ impl Context {
         self.docs.create_document(parents)
     }
 
-    pub fn revoke_agent(&mut self, to_revoke: &Agent, from: &mut Membered) {
+    // pub fn encrypt(
+    //     &self,
+    //     data: Vec<u8>,
+    //     public_keys: BTreeSet<&ShareKey>,
+    // ) -> (
+    //     Encrypted<Vec<u8>>,
+    //     Encrypted<chacha20poly1305::XChaChaPoly1305>,
+    // ) {
+    //     let symmetric_key: [u8; 32] = rand::thread_rng();
+    //     dcgka_2m_broadcast(key, data, public_keys)
+    // }
+
+    pub fn revoke(&mut self, to_revoke: &Agent, from: &mut Membered) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
         // FIXME check that delegation is authorized
         //
         match from {
-            Membered::Group(group) => {
+            Membered::Group(og_group) => {
                 // let mut owned_group = group.clone();
-                let revoke = group.state.delegations_for(to_revoke).pop().expect("FIXME");
-                let proof = group
-                    .state
-                    .delegations_for(&self.active.clone().into())
-                    .pop()
+                let group = self
+                    .groups
+                    .groups
+                    .get_mut(&og_group.state.id)
                     .expect("FIXME");
 
                 group.delegates.remove(to_revoke);
-                group.state.ops.insert(Signed::sign(
-                    Revocation {
-                        subject: MemberedId::GroupId(group.state.id.into()),
-                        revoker: self.active.clone().into(),
-                        revoke,
-                        proof,
-                    }
-                    .into(),
-                    &self.active.signer,
-                ));
+
+                // FIXME
+                if let Some(revoke) = group.state.delegations_for(to_revoke).pop() {
+                    let proof = group
+                        .state
+                        .delegations_for(&self.active.clone().into())
+                        .pop()
+                        .expect("FIXME");
+
+                    group.state.ops.insert(Signed::sign(
+                        Revocation {
+                            subject: MemberedId::GroupId(group.state.id.into()),
+                            revoker: self.active.clone().into(),
+                            revoke,
+                            proof,
+                        }
+                        .into(),
+                        &self.active.signer,
+                    ));
+                }
             }
-            Membered::Document(doc) => {
+            Membered::Document(og_doc) => {
                 // let mut doc = d.clone();
+                let doc = self.docs.docs.get_mut(&og_doc.state.id).expect("FIXME");
                 let revoke = doc.state.delegations_for(to_revoke).pop().expect("FIXME");
                 let proof = doc
                     .state
@@ -104,6 +133,60 @@ impl Context {
                 ));
             }
         }
+    }
+
+    pub fn transitive_docs(&self) -> BTreeMap<Document, Access> {
+        let mut explore: Vec<(Membered, Access)> = vec![];
+        let mut caps: BTreeMap<Document, Access> = BTreeMap::new();
+        let mut seen: BTreeSet<Identifier> = BTreeSet::new();
+
+        for doc in self.docs.docs.values() {
+            seen.insert(doc.state.id);
+
+            if let Some((access, _proof)) = doc.delegates.get(&self.active.clone().into()) {
+                caps.insert(doc.clone(), access.clone());
+            }
+        }
+
+        for group in self.groups.groups.values() {
+            seen.insert(group.state.id);
+
+            if let Some((access, _proof)) = group.delegates.get(&self.active.clone().into()) {
+                explore.push((group.clone().into(), access.clone()));
+            }
+        }
+
+        while !explore.is_empty() {
+            if let Some((group, _access)) = explore.pop() {
+                for doc in self.docs.docs.values() {
+                    if seen.contains(&doc.state.id) {
+                        continue;
+                    }
+
+                    if let Some((access, _proof)) = doc.delegates.get(&self.active.clone().into()) {
+                        caps.insert(doc.clone(), access.clone());
+                    }
+                }
+
+                for (id, focus_group) in self.groups.groups.iter() {
+                    if seen.contains(&focus_group.state.id) {
+                        continue;
+                    }
+
+                    if group.member_id() == MemberedId::GroupId(*id) {
+                        continue;
+                    }
+
+                    if let Some((access, _proof)) =
+                        focus_group.delegates.get(&self.active.clone().into())
+                    {
+                        explore.push((focus_group.clone().into(), access.clone()));
+                    }
+                }
+            }
+        }
+
+        caps
     }
 
     // FIXME

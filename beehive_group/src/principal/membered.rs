@@ -63,6 +63,18 @@ impl From<Membered> for Agent {
     }
 }
 
+impl TryFrom<Agent> for Membered {
+    type Error = &'static str; // FIXME
+
+    fn try_from(agent: Agent) -> Result<Self, Self::Error> {
+        match agent {
+            Agent::Group(group) => Ok(Membered::Group(group)),
+            Agent::Document(document) => Ok(Membered::Document(document)),
+            _ => Err("Agent is not a membered type"),
+        }
+    }
+}
+
 impl From<Group> for Membered {
     fn from(group: Group) -> Self {
         Membered::Group(group)
