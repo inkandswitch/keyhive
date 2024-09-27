@@ -1,13 +1,18 @@
+use super::document::Document;
 use super::identifier::Identifier;
 use super::individual::Individual;
 use super::traits::Verifiable;
 use crate::access::Access;
 use crate::capability::Capability;
+use crate::crypto::encrypted::Encrypted;
 use crate::crypto::share_key::ShareKey;
 use crate::crypto::signed::Signed;
+use crate::crypto::siv::Key;
+use crate::crypto::siv::Siv;
 use crate::principal::agent::Agent;
 use crate::principal::group::operation::delegation::Delegation;
 use crate::util::hidden::Hidden;
+use chacha20poly1305::AeadInPlace;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -82,6 +87,35 @@ impl Active {
             proof: delegation,
         })
     }
+
+    pub fn encrypt_to(
+        &self,
+        doc: &Document,
+        to: &Individual,
+        message: &mut [u8],
+    ) -> Encrypted<&[u8]> {
+        let recipient_share_pk = doc.reader_keys.get(to).expect("FIXME");
+        let our_pk = doc.reader_keys.get(&self.id().into()).expect("FIXME");
+        let our_sk = self.share_key_pairs.get(our_pk).expect("FIXME");
+
+        let shared_secret = our_sk.diffie_hellman(&recipient_share_pk.clone().into());
+        let chacha_key: chacha20poly1305::XChaCha20Poly1305 =
+            chacha20poly1305::KeyInit::new_from_slice(shared_secret.as_bytes()).expect("FIXME");
+
+        // FIXME deterministic, misuse resistent
+        let prenonce = rand::random::<[u8; 24]>();
+        let nonce = chacha20poly1305::XNonce::from_slice(&prenonce);
+
+        let siv = Siv::new(*shared_secret.as_bytes(), message, doc);
+
+        // FIXME
+        let bytes: Vec<u8> = chacha_key
+            .encrypt_in_place_detached(&siv.as_xnonce(), &[], message) // FIXME use AEAD
+            .expect("FIXME")
+            .to_vec();
+
+        Encrypted::new(nonce.clone().into(), bytes)
+    }
 }
 
 pub enum Error {
@@ -103,22 +137,6 @@ impl Debug for Active {
             .finish()
     }
 }
-
-// impl PartialOrd for Active {
-//     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-//         self.verifying_key()
-//             .to_bytes()
-//             .partial_cmp(&other.verifying_key().to_bytes())
-//     }
-// }
-//
-// impl Ord for Active {
-//     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-//         self.verifying_key()
-//             .to_bytes()
-//             .cmp(&other.verifying_key().to_bytes())
-//     }
-// }
 
 impl From<Active> for Agent {
     fn from(active: Active) -> Self {

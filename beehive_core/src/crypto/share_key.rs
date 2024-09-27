@@ -30,3 +30,9 @@ impl Ord for ShareKey {
         self.0.as_bytes().cmp(&other.0.as_bytes())
     }
 }
+
+impl From<ShareKey> for x25519_dalek::PublicKey {
+    fn from(key: ShareKey) -> Self {
+        key.0
+    }
+}

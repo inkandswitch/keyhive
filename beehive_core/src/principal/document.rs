@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Document {
     pub delegates: BTreeMap<Agent, (Access, Signed<Delegation>)>,
-    pub reader_keys: BTreeMap<Agent, ShareKey>, // FIXME May remove if TreeKEM instead of ART
+    pub reader_keys: BTreeMap<Individual, ShareKey>, // FIXME May remove if TreeKEM instead of ART
     // NOTE: as expected, separate keys are still safer https://doc.libsodium.org/quickstart#do-i-need-to-add-a-signature-to-encrypted-messages-to-detect-if-they-have-been-tampered-with
     pub state: DocumentState,
 }
