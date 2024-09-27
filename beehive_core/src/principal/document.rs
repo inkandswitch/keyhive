@@ -1,15 +1,15 @@
 use super::identifier::Identifier;
 use super::individual::Individual;
-use super::membered::Membered;
 use super::membered::MemberedId;
 use super::traits::Verifiable;
 use crate::access::Access;
-use crate::crypto::hash::{CAStore, Hash};
+use crate::crypto::hash::Hash;
 use crate::crypto::share_key::ShareKey;
 use crate::crypto::signed::Signed;
-use crate::operation::delegation::Delegation;
-use crate::operation::Operation;
 use crate::principal::agent::Agent;
+use crate::principal::group::operation::delegation::Delegation;
+use crate::principal::group::operation::Operation;
+use crate::util::content_addressed_map::CaMap;
 use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
 use std::cmp::Ordering;
@@ -36,7 +36,7 @@ impl Document {
         let doc_id = doc_signer.verifying_key().into(); // FIXME zero out after
 
         let (ops, delegates) = parents.iter().fold(
-            (CAStore::new(), BTreeMap::new()),
+            (CaMap::new(), BTreeMap::new()),
             |(mut op_acc, mut mem_acc), parent| {
                 let del = Delegation {
                     subject: MemberedId::DocumentId(doc_id),
@@ -139,7 +139,7 @@ impl Document {
 pub struct DocumentState {
     pub id: Identifier,
     pub auth_heads: BTreeSet<Hash<Signed<Operation>>>,
-    pub authority_ops: CAStore<Signed<Operation>>,
+    pub authority_ops: CaMap<Signed<Operation>>,
     pub content_ops: BTreeSet<u8>, // FIXME automerge content
                                    // FIXME just cache view directly on the object?
                                    // FIXME also maybe just reference AM doc heads?
@@ -217,7 +217,7 @@ impl DocumentState {
         Self {
             id,
             auth_heads: BTreeSet::from_iter([Hash::hash(signed_init.clone())]),
-            authority_ops: CAStore::from_iter([signed_init]),
+            authority_ops: CaMap::from_iter([signed_init]),
             content_ops: BTreeSet::new(),
         }
     }

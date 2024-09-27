@@ -1,6 +1,6 @@
 [package]
 
-name = "beehive_group"
+name = "beehive_core"
 version = "0.1.0"
 
 authors.workspace = true

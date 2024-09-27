@@ -10,6 +10,27 @@ pub struct Identifier {
     pub verifying_key: ed25519_dalek::VerifyingKey,
 }
 
+impl Identifier {
+    pub fn new(verifying_key: ed25519_dalek::VerifyingKey) -> Self {
+        Self { verifying_key }
+    }
+
+    pub fn generate() -> Self {
+        Self {
+            verifying_key: ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
+                .verifying_key(),
+        }
+    }
+
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.verifying_key.to_bytes()
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        self.verifying_key.as_bytes()
+    }
+}
+
 impl fmt::Display for Identifier {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -47,28 +68,6 @@ impl From<ed25519_dalek::VerifyingKey> for Identifier {
         Self { verifying_key }
     }
 }
-
-impl Identifier {
-    pub fn new(verifying_key: ed25519_dalek::VerifyingKey) -> Self {
-        Self { verifying_key }
-    }
-
-    pub fn generate() -> Self {
-        Self {
-            verifying_key: ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
-                .verifying_key(),
-        }
-    }
-
-    pub fn to_bytes(&self) -> [u8; 32] {
-        self.verifying_key.to_bytes()
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        self.verifying_key.as_bytes()
-    }
-}
-
 // #[derive(Debug, Clone, Hash)]
 // pub struct Identifier<T> {
 //     pub verifying_key: ed25519_dalek::VerifyingKey,

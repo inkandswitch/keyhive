@@ -1,15 +1,13 @@
 use super::super::agent::Agent;
-use crate::operation::Operation;
+use super::operation::Operation;
+use super::operation::{delegation::Delegation, revocation::Revocation};
 use crate::principal::{
     identifier::Identifier, individual::Individual, membered::MemberedId, traits::Verifiable,
 };
+use crate::util::content_addressed_map::CaMap;
 use crate::{
     access::Access,
-    crypto::{
-        hash::{CAStore, Hash},
-        signed::Signed,
-    },
-    operation::{delegation::Delegation, revocation::Revocation},
+    crypto::{hash::Hash, signed::Signed},
 };
 use ed25519_dalek::VerifyingKey;
 use std::cmp::Ordering;
@@ -19,7 +17,7 @@ use std::collections::BTreeSet;
 pub struct GroupState {
     pub id: Identifier,
     pub heads: BTreeSet<Hash<Signed<Operation>>>, // FIXME nonempty
-    pub ops: CAStore<Signed<Operation>>,          // FIXME nonempty
+    pub ops: CaMap<Signed<Operation>>,            // FIXME nonempty
 }
 
 impl From<VerifyingKey> for GroupState {
@@ -27,7 +25,7 @@ impl From<VerifyingKey> for GroupState {
         GroupState {
             id: verifier.into(),
             heads: BTreeSet::new(),
-            ops: CAStore::new(),
+            ops: CaMap::new(),
         }
     }
 }
@@ -77,7 +75,7 @@ impl GroupState {
         GroupState {
             id: verifier.into(),
             heads: BTreeSet::from_iter([Hash::hash(signed_init.clone())]),
-            ops: CAStore::from_iter([signed_init]),
+            ops: CaMap::from_iter([signed_init]),
         }
     }
 

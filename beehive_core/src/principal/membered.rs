@@ -1,12 +1,12 @@
 use super::agent::Agent;
 use super::document::Document;
+use super::group::operation::delegation::Delegation;
+use super::group::operation::revocation::Revocation;
 use super::group::Group;
 use super::identifier::Identifier;
 use super::traits::Verifiable;
 use crate::access::Access;
 use crate::crypto::signed::Signed;
-use crate::operation::delegation::Delegation;
-use crate::operation::revocation::Revocation;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;

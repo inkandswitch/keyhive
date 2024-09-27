@@ -2,13 +2,13 @@ use crate::access::Access;
 use crate::crypto::encrypted::Encrypted;
 use crate::crypto::share_key::ShareKey;
 use crate::crypto::signed::Signed;
-use crate::operation::revocation::Revocation;
-use crate::operation::Operation;
 use crate::principal::active::Active;
 use crate::principal::agent::Agent;
 use crate::principal::document::DocStore;
 use crate::principal::document::Document;
 use crate::principal::document::DocumentState;
+use crate::principal::group::operation::revocation::Revocation;
+use crate::principal::group::operation::Operation;
 use crate::principal::group::store::GroupStore;
 use crate::principal::group::Group;
 use crate::principal::identifier::Identifier;
@@ -19,12 +19,25 @@ use crate::scratch::dcgka_2m_broadcast;
 use chacha20poly1305::AeadInPlace;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Context {
     pub active: Active,
     pub individuals: BTreeSet<Individual>,
     pub groups: GroupStore,
     pub docs: DocStore,
+    pub prekeys: BTreeMap<ShareKey, x25519_dalek::StaticSecret>,
+}
+
+impl std::fmt::Debug for Context {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let prekey_ids = self.prekeys.keys().collect::<Vec<&ShareKey>>();
+
+        write!(
+            f,
+            "Context {{ active: {:?}, individuals: {:?}, groups: {:?}, docs: {:?}, prekeys: {:?} }}",
+            self.active, self.individuals, self.groups, self.docs, prekey_ids
+        )
+    }
 }
 
 impl From<Context> for Agent {
@@ -40,6 +53,7 @@ impl Context {
             individuals: Default::default(),
             groups: Default::default(),
             docs: Default::default(),
+            prekeys: Default::default(),
         }
     }
 
@@ -267,110 +281,4 @@ impl Context {
 
         caps
     }
-}
-
-pub fn demo() -> Context {
-    // ┌──────────┐
-    // │   Hive   │▒
-    // │ Context  │▒
-    // │  ("Me")  │▒
-    // └──────────┘▒
-    //  ▒▒▒▒▒▒▒▒▒▒▒▒
-    let mut hive = Context::new();
-
-    // Some remote users
-    //          ┏━━━━━━━━━━┓
-    //          ┃  Alice   ┃
-    //  ┌───────┃          ┃─ ─ ─ ─ ─ ─ ─ ┐
-    //  │       ┗━━━━━━━━━━┛              │
-    //  │             │                   ▼
-    //  │             │              ┌──────────┐
-    //  │             │              │   Hive   │▒
-    //  ▼             ▼              │ Context  │▒
-    // ┌──────────┐  ┌──────────┐    │  ("Me")  │▒
-    // │ Alice's  │  │ Alice's  │    └──────────┘▒
-    // │  Phone   │  │  Laptop  │     ▒▒▒▒▒▒▒▒▒▒▒▒
-    // └──────────┘  └──────────┘
-
-    println!("Setting up Alice's device group");
-    let alice_phone = Individual::generate().into();
-    println!("...Alice's phone {}", alice_phone);
-
-    let alice_laptop = Individual::generate().into();
-    println!("...Alice's laptop {}", alice_laptop);
-
-    let alice_ref = hive.create_group(vec![&alice_phone, &alice_laptop]);
-    let alice: Agent = alice_ref.clone().into();
-    println!("...Attach to Alice device group");
-    println!("");
-
-    println!("Setting up Bob's device group");
-    let bob_phone = Individual::generate().into();
-    println!("...Bob's phone {}", bob_phone);
-
-    let bob_tablet = Individual::generate().into();
-    println!("...Bob's tablet {}", bob_tablet);
-
-    let bob_ref = hive.create_group(vec![&bob_tablet, &bob_phone]);
-    let bob = bob_ref.clone().into();
-    println!("...Attach to Bob's device group");
-    println!("");
-
-    // Setup Teams
-    //                 ┏━━━━━━━━━━┓
-    //                 ┃  Ink &   ┃
-    //       ┌─────────┃  Switch  ┃───────────┐
-    //       ▼         ┗━━━━━━━━━━┛           ▼
-    // ┏━━━━━━━━━━┓          │          ┏━━━━━━━━━━┓
-    // ┃  Alice   ┃          │          ┃   Bob    ┃
-    // ┃          ┃─ ─ ─ ─   │   ┌ ─ ─ ─┃          ┃
-    // ┗━━━━━━━━━━┛       │  │          ┗━━━━━━━━━━┛
-    //                       │   │
-    //                    ▼  ▼   ▼
-    //                 ┌──────────┐
-    //                 │   Hive   │▒
-    //                 │ Context  │▒
-    //                 │  ("Me")  │▒
-    //                 └──────────┘▒
-    //                  ▒▒▒▒▒▒▒▒▒▒▒▒
-    let inkandswitch_ref = hive.create_group(vec![&alice, &bob]);
-    let inkandswitch: Agent = inkandswitch_ref.clone().into();
-    println!("Setting up Ink & Switch group {}", inkandswitch);
-
-    let beehive_team_ref = hive.create_group(vec![&inkandswitch.clone().into()]);
-    let beehive_team: Agent = beehive_team_ref.clone().into();
-    println!("Setting up Beehive Team group {}", beehive_team);
-
-    // ╔══════════╗
-    // ║   Team   ║
-    // ║  Travel  ║
-    // ║ Details  ║
-    // ╚══════════╝
-    //       │
-    //       ▼
-    // ┏━━━━━━━━━━┓
-    // ┃  Ink &   ┃
-    // ┃  Switch  ┃
-    // ┗━━━━━━━━━━┛
-    let team_travel_doc_ref = hive.create_doc(vec![&inkandswitch.clone().into()]);
-    let team_travel_doc: Agent = team_travel_doc_ref.clone().into();
-    println!("Setting up Team Travel doc {}", team_travel_doc.clone());
-
-    let lab_note_doc_ref = hive.create_doc(vec![&beehive_team.clone().into(), &team_travel_doc]);
-    let lnid = lab_note_doc_ref.clone();
-    let lab_note_doc: Agent = lab_note_doc_ref.clone().into();
-    println!("Setting up Lab Note doc {}", lab_note_doc);
-
-    // let group_pks = hive.groups.pretty_print_direct_pks();
-    // for pk in group_pks.iter() {
-    //     println!("{}", pk);
-    // }
-
-    let all_mems = hive.transitive_members(&lnid);
-    let lab_note_mems: Vec<&Agent> = all_mems.keys().collect();
-    for mem in lab_note_mems.clone().into_iter() {
-        println!("Member: {}", mem);
-    }
-
-    hive
 }

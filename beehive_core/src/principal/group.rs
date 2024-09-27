@@ -1,19 +1,17 @@
+pub mod operation;
+pub mod state;
+pub mod store;
+
 use super::{
     agent::Agent, identifier::Identifier, individual::Individual, membered::MemberedId,
     traits::Verifiable,
 };
-use crate::crypto::hash::{CAStore, Hash};
-use crate::operation::Operation;
-use crate::{
-    access::Access,
-    crypto::signed::Signed,
-    operation::{delegation::Delegation, revocation::Revocation},
-};
+use crate::util::content_addressed_map::CaMap;
+use crate::{access::Access, crypto::signed::Signed};
 use base64::prelude::*;
+use operation::Operation;
+use operation::{delegation::Delegation, revocation::Revocation};
 use std::collections::{BTreeMap, BTreeSet};
-
-pub mod state;
-pub mod store;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Group {
@@ -53,7 +51,7 @@ impl Group {
         let group_id = group_signer.verifying_key().into();
 
         let (ops, delegates) = parents.iter().fold(
-            (CAStore::new(), BTreeMap::new()),
+            (CaMap::new(), BTreeMap::new()),
             |(mut op_acc, mut mem_acc), parent| {
                 let del = Delegation {
                     subject: MemberedId::GroupId(group_id),

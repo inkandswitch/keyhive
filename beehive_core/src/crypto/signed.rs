@@ -1,10 +1,11 @@
 use ed25519_dalek::Signer;
 use ed25519_dalek::Verifier;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signed<T> {
     pub payload: T,
     pub verifying_key: ed25519_dalek::VerifyingKey,

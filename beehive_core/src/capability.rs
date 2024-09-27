@@ -1,7 +1,7 @@
 use crate::access::Access;
 use crate::crypto::{hash::Hash, signed::Signed};
-use crate::operation::delegation::Delegation;
 use crate::principal::agent::Agent;
+use crate::principal::group::operation::delegation::Delegation;
 use crate::principal::membered::Membered;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

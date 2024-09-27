@@ -1,17 +1,18 @@
-pub mod delegation;
-pub mod revocation;
-pub mod store;
-
-use crate::crypto::hash::{CAStore, Hash};
+use crate::crypto::hash::Hash;
 use crate::crypto::signed::Signed;
 use crate::principal::agent::Agent;
 use crate::principal::membered::Membered;
 use crate::principal::membered::MemberedId;
+use crate::util::content_addressed_map::CaMap;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use thiserror::Error;
 use topological_sort::TopologicalSort;
+
+pub mod delegation;
+pub mod revocation;
+pub mod store;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Operation {
@@ -89,10 +90,10 @@ impl Operation {
 
     pub fn ancestors<'a>(
         &'a self,
-        ops: &'a CAStore<Signed<Operation>>,
-    ) -> Result<(CAStore<Signed<Operation>>, usize), AncestorError> {
+        ops: &'a CaMap<Signed<Operation>>,
+    ) -> Result<(CaMap<Signed<Operation>>, usize), AncestorError> {
         if self.after_auth().is_empty() {
-            return Ok((CAStore::new(), 0));
+            return Ok((CaMap::new(), 0));
         }
 
         let mut ancestors = BTreeSet::new();
@@ -132,7 +133,7 @@ impl Operation {
         }
 
         Ok(ancestors.into_iter().fold(
-            (CAStore::new(), 0),
+            (CaMap::new(), 0),
             |(mut acc_set, acc_count), (op, count)| {
                 acc_set.insert(op);
                 if count > acc_count {
@@ -148,11 +149,11 @@ impl Operation {
 
     pub fn topsort(
         mut heads: Vec<Hash<Signed<Operation>>>,
-        ops: &CAStore<Signed<Operation>>,
+        ops: &CaMap<Signed<Operation>>,
     ) -> Result<Vec<Signed<Operation>>, AncestorError> {
         let mut ops_with_ancestors: BTreeMap<
             Hash<Signed<Operation>>,
-            (&Signed<Operation>, CAStore<Signed<Operation>>, usize),
+            (&Signed<Operation>, CaMap<Signed<Operation>>, usize),
         > = BTreeMap::new();
 
         while !heads.is_empty() {

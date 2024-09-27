@@ -2,7 +2,7 @@
 
 resolver = "2"
 members = [
-    "beehive_group",
+    "beehive_core",
     "xchacha_blake3_siv",
 ]
 

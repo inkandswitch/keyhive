@@ -1,14 +1,20 @@
+pub mod state;
+
 use super::identifier::Identifier;
 use super::traits::Verifiable;
 use crate::crypto::hash::Hash;
+use crate::crypto::share_key::ShareKey;
 use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
+use state::PrekeyState;
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Individual {
     pub id: Identifier,
+    pub prekeys: BTreeSet<ShareKey>,
+    pub prekey_state: PrekeyState,
 }
 
 impl std::fmt::Display for Individual {
@@ -17,32 +23,23 @@ impl std::fmt::Display for Individual {
     }
 }
 
-impl Individual {
-    pub fn generate() -> Self {
-        let id = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()).verifying_key();
-        Individual { id: id.into() }
-    }
-
-    pub fn to_bytes(&self) -> [u8; 32] {
-        self.id.to_bytes()
-    }
-
-    pub fn as_slice(&self) -> &[u8] {
-        self.id.as_bytes().as_slice()
-    }
-}
-
 impl From<VerifyingKey> for Individual {
     fn from(verifier: VerifyingKey) -> Self {
         Individual {
             id: verifier.into(),
+            prekeys: BTreeSet::new(),
+            prekey_state: PrekeyState::new(),
         }
     }
 }
 
 impl From<Identifier> for Individual {
     fn from(id: Identifier) -> Self {
-        Individual { id }
+        Individual {
+            id,
+            prekeys: BTreeSet::new(),
+            prekey_state: PrekeyState::new(),
+        }
     }
 }
 
