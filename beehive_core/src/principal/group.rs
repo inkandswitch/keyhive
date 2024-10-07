@@ -158,8 +158,8 @@ impl Verifiable for Group {
 mod tests {
     use super::*;
 
+    use super::operation::delegation::Delegation;
     use super::store::GroupStore;
-    use crate::operation::delegation::Delegation;
     use crate::principal::{active::Active, individual::Individual, membered::MemberedId};
 
     fn setup_user() -> Individual {
@@ -192,10 +192,10 @@ mod tests {
                         │           │
                         └───────────┘ */
 
-        let group0 = Group::create(vec![alice.clone().into()]);
-        let group1 = Group::create(vec![alice.clone().into(), group0.clone().into()]);
-        let group2 = Group::create(vec![group0.clone().into(), bob.clone().into()]);
-        let group3 = Group::create(vec![group1.clone().into(), group2.clone().into()]);
+        let group0 = Group::create(vec![&alice.clone().into()]);
+        let group1 = Group::create(vec![&alice.clone().into(), &group0.clone().into()]);
+        let group2 = Group::create(vec![&group0.clone().into(), &bob.clone().into()]);
+        let group3 = Group::create(vec![&group1.clone().into(), &group2.clone().into()]);
 
         let mut gs = GroupStore::new();
         // FIXME horrifying clones 😱
@@ -208,17 +208,17 @@ mod tests {
     }
 
     fn setup_cyclic_store(alice: &Individual, bob: &Individual) -> (GroupStore, [Group; 10]) {
-        let group0 = Group::create(vec![alice.clone().into()]);
-        let group1 = Group::create(vec![bob.clone().into()]);
+        let group0 = Group::create(vec![&alice.clone().into()]);
+        let group1 = Group::create(vec![&bob.clone().into()]);
 
-        let group2 = Group::create(vec![group1.clone().into()]);
-        let group3 = Group::create(vec![group2.clone().into(), group2.clone().into()]);
-        let group4 = Group::create(vec![group3.clone().into(), group2.clone().into()]);
-        let group5 = Group::create(vec![group4.clone().into(), group2.clone().into()]);
-        let group6 = Group::create(vec![group5.clone().into(), group2.clone().into()]);
-        let group7 = Group::create(vec![group6.clone().into(), group2.clone().into()]);
-        let group8 = Group::create(vec![group7.clone().into(), group2.clone().into()]);
-        let mut group9 = Group::create(vec![group8.clone().into(), alice.clone().into()]);
+        let group2 = Group::create(vec![&group1.clone().into()]);
+        let group3 = Group::create(vec![&group2.clone().into(), &group2.clone().into()]);
+        let group4 = Group::create(vec![&group3.clone().into(), &group2.clone().into()]);
+        let group5 = Group::create(vec![&group4.clone().into(), &group2.clone().into()]);
+        let group6 = Group::create(vec![&group5.clone().into(), &group2.clone().into()]);
+        let group7 = Group::create(vec![&group6.clone().into(), &group2.clone().into()]);
+        let group8 = Group::create(vec![&group7.clone().into(), &group2.clone().into()]);
+        let mut group9 = Group::create(vec![&group8.clone().into(), &alice.clone().into()]);
 
         let active = Active::generate();
 

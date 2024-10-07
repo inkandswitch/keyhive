@@ -91,6 +91,6 @@ mod tests {
         let id = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()).verifying_key();
 
         let individual: Individual = id.into();
-        assert_eq!(individual.to_bytes(), id.to_bytes());
+        assert_eq!(individual.id.to_bytes(), id.to_bytes());
     }
 }

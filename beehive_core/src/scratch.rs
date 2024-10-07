@@ -45,7 +45,7 @@ pub fn dcgka_2m_broadcast(
         bytes.append(&mut key.bytes.to_vec());
 
         let wrapped_key: Encrypted<chacha20poly1305::XChaCha20Poly1305> = Encrypted {
-            nonce: nonce.as_slice().try_into().expect("FIXME"),
+            nonce: (*nonce).into(),
             ciphertext: bytes,
             _phantom: std::marker::PhantomData,
         };

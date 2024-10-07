@@ -1,5 +1,6 @@
 use crate::principal::document::Document;
 use chacha20poly1305::KeyInit;
+use generic_array::GenericArray;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 
@@ -52,5 +53,11 @@ impl From<[u8; 24]> for Siv {
 impl From<Siv> for chacha20poly1305::XNonce {
     fn from(siv: Siv) -> Self {
         Self::from_slice(&siv.0).clone()
+    }
+}
+
+impl From<chacha20poly1305::XNonce> for Siv {
+    fn from(nonce: chacha20poly1305::XNonce) -> Self {
+        Siv(nonce.into())
     }
 }
