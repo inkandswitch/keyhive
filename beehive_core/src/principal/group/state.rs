@@ -1,6 +1,6 @@
 use super::super::agent::Agent;
+use super::operation::delegation::Delegation;
 use super::operation::Operation;
-use super::operation::{delegation::Delegation, revocation::Revocation};
 use crate::principal::{
     identifier::Identifier, individual::Individual, membered::MemberedId, traits::Verifiable,
 };

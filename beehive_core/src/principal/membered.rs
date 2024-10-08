@@ -34,23 +34,21 @@ impl Membered {
     }
 
     pub fn add_member(&mut self, delegation: Signed<Delegation>) {
-        todo!()
-        // match self {
-        //     Membered::Group(group) => {
-        //         group.add_member(delegation);
-        //     }
-        //     Membered::Document(_document) => todo!(), // document.add_authorization(agent, access, delegation),
-        // }
+        match self {
+            Membered::Group(group) => {
+                group.add_member(delegation);
+            }
+            Membered::Document(_document) => todo!(), // document.add_authorization(agent, access, delegation),
+        }
     }
 
     pub fn revoke_member(&mut self, revocation: Signed<Revocation>) {
-        todo!()
-        // match self {
-        //     Membered::Group(group) => {
-        //         group.revoke(revocation);
-        //     }
-        //     Membered::Document(_document) => todo!(), // document.revoke_authorization(agent),
-        // }
+        match self {
+            Membered::Group(group) => {
+                group.revoke(revocation);
+            }
+            Membered::Document(_document) => todo!(), // document.revoke_authorization(agent),
+        }
     }
 }
 

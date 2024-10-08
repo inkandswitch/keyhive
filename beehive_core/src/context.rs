@@ -5,17 +5,13 @@ use crate::principal::active::Active;
 use crate::principal::agent::Agent;
 use crate::principal::document::DocStore;
 use crate::principal::document::Document;
-use crate::principal::document::DocumentState;
 use crate::principal::group::operation::revocation::Revocation;
-use crate::principal::group::operation::Operation;
 use crate::principal::group::store::GroupStore;
 use crate::principal::group::Group;
 use crate::principal::identifier::Identifier;
 use crate::principal::individual::Individual;
 use crate::principal::membered::{Membered, MemberedId};
 use crate::principal::traits::Verifiable;
-use crate::scratch::dcgka_2m_broadcast;
-use chacha20poly1305::AeadInPlace;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone)]
@@ -25,24 +21,6 @@ pub struct Context {
     pub groups: GroupStore,
     pub docs: DocStore,
     pub prekeys: BTreeMap<ShareKey, x25519_dalek::StaticSecret>,
-}
-
-impl std::fmt::Debug for Context {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let prekey_ids = self.prekeys.keys().collect::<Vec<&ShareKey>>();
-
-        write!(
-            f,
-            "Context {{ active: {:?}, individuals: {:?}, groups: {:?}, docs: {:?}, prekeys: {:?} }}",
-            self.active, self.individuals, self.groups, self.docs, prekey_ids
-        )
-    }
-}
-
-impl From<Context> for Agent {
-    fn from(context: Context) -> Self {
-        context.active.into()
-    }
 }
 
 impl Context {
@@ -279,5 +257,23 @@ impl Context {
         }
 
         caps
+    }
+}
+
+impl std::fmt::Debug for Context {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let prekey_ids = self.prekeys.keys().collect::<Vec<&ShareKey>>();
+
+        write!(
+            f,
+            "Context {{ active: {:?}, individuals: {:?}, groups: {:?}, docs: {:?}, prekeys: {:?} }}",
+            self.active, self.individuals, self.groups, self.docs, prekey_ids
+        )
+    }
+}
+
+impl From<Context> for Agent {
+    fn from(context: Context) -> Self {
+        context.active.into()
     }
 }

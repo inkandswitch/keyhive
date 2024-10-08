@@ -1,13 +1,9 @@
 use crate::access::Access;
-use crate::crypto::{encrypted::Encrypted, hash::Hash, share_key::ShareKey, signed::Signed};
 use crate::principal::agent::Agent;
 use crate::principal::group::Group;
 use crate::principal::identifier::Identifier;
-use crate::principal::individual::Individual;
-use crate::principal::membered::Membered;
 use crate::principal::traits::Verifiable;
 use base64::prelude::*;
-use chacha20poly1305::AeadInPlace;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord)]

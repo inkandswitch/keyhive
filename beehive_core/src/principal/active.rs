@@ -7,7 +7,6 @@ use crate::capability::Capability;
 use crate::crypto::encrypted::Encrypted;
 use crate::crypto::share_key::ShareKey;
 use crate::crypto::signed::Signed;
-use crate::crypto::siv::Key;
 use crate::crypto::siv::Siv;
 use crate::principal::agent::Agent;
 use crate::principal::group::operation::delegation::Delegation;
@@ -21,13 +20,6 @@ use std::fmt::Debug;
 pub struct Active {
     pub signer: SigningKey,
     pub share_key_pairs: BTreeMap<ShareKey, x25519_dalek::StaticSecret>,
-}
-
-// FIXME?
-impl std::fmt::Display for Active {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.id())
-    }
 }
 
 impl Active {
@@ -120,6 +112,12 @@ impl Active {
 
 pub enum Error {
     Escelation,
+}
+
+impl std::fmt::Display for Active {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.id())
+    }
 }
 
 impl Debug for Active {

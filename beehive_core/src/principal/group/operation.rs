@@ -1,7 +1,5 @@
 use crate::crypto::hash::Hash;
 use crate::crypto::signed::Signed;
-use crate::principal::agent::Agent;
-use crate::principal::membered::Membered;
 use crate::principal::membered::MemberedId;
 use crate::util::content_addressed_map::CaMap;
 use std::cmp::Ordering;

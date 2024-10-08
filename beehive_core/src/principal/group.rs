@@ -2,10 +2,7 @@ pub mod operation;
 pub mod state;
 pub mod store;
 
-use super::{
-    agent::Agent, identifier::Identifier, individual::Individual, membered::MemberedId,
-    traits::Verifiable,
-};
+use super::{agent::Agent, identifier::Identifier, membered::MemberedId, traits::Verifiable};
 use crate::util::content_addressed_map::CaMap;
 use crate::{access::Access, crypto::signed::Signed};
 use base64::prelude::*;

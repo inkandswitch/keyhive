@@ -1,4 +1,3 @@
-use super::Individual;
 use crate::crypto::share_key::ShareKey;
 use crate::crypto::signed::Signed;
 use crate::util::content_addressed_map::CaMap;
