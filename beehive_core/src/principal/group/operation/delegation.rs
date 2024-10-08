@@ -11,13 +11,18 @@ use std::fmt;
 pub struct Delegation {
     pub subject: MemberedId, // FIXME ref?
     pub can: Access,
-
+    /// The delegator
     pub from: Identifier,
-    pub proof: Vec<Hash<Operation>>, // FIXME option<Hash<Operation>>?
-
+    /// The operation that added the delegator/from.
+    // FIXME: Invariant: these should only be Operation::Delegation
+    pub delegator_proof: Option<Hash<Signed<Operation>>>,
+    /// The delegate
     pub to: Agent, // FIXME an ID, not statelsss.. make &Agent? AgentId?
 
-    pub after_auth: Vec<Hash<Signed<Operation>>>,
+    /// Multiple branches could have revoked this agent. We need to prove
+    /// we're after all of them.
+    // FIXME: Invariant: these should only be Operation::Revocation
+    pub after_revocations: Vec<Hash<Signed<Operation>>>,
     // pub after_content: Vec<(Document, Hash<ContentOp>)>, // FIXME
 }
 

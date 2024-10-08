@@ -46,9 +46,9 @@ impl GroupStore {
     }
 
     // FIXME shoudl be more like this:
-    // pub fn transative_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
+    // pub fn transitive_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
     // FIXME return path as well?
-    pub fn transative_members(&self, group: &Group) -> BTreeMap<Agent, Access> {
+    pub fn transitive_members(&self, group: &Group) -> BTreeMap<Agent, Access> {
         struct GroupAccess {
             agent: Agent,
             agent_access: Access,

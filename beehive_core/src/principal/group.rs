@@ -2,12 +2,15 @@ pub mod operation;
 pub mod state;
 pub mod store;
 
+use super::auth_state::AuthState;
 use super::{agent::Agent, identifier::Identifier, membered::MemberedId, traits::Verifiable};
+use crate::crypto::hash::Hash;
 use crate::util::content_addressed_map::CaMap;
 use crate::{access::Access, crypto::signed::Signed};
 use base64::prelude::*;
 use operation::Operation;
 use operation::{delegation::Delegation, revocation::Revocation};
+use state::AddError;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -28,9 +31,30 @@ impl Group {
     }
 
     pub fn add_member(&mut self, signed_delegation: Signed<Delegation>) {
-        // FIXME check subject, signature, find dependencies or quarantine
+        signed_delegation
+            // FIXME should be able to use just ? once this fn returns Result
+            .verify()
+            .map_err(AddError::InvalidSignature)
+            .expect("FIXME");
+        if signed_delegation.payload.subject != MemberedId::GroupId(self.id()) {
+            panic!("FIXME");
+            // return AddError::InvalidSubject;
+        }
+
+        // Check that this delegation derives transitively from the group root
+        let _ancestors = Operation::Delegation(signed_delegation.payload.clone())
+            // FIXME should be able to use just ? once this fn returns Result
+            .ancestors(&self.state.ops) //.expect("FIXME");
+            .map_err(AddError::Ancestor)
+            .expect("FIXME")
+            .0;
+        // FIXME: What are the conditions we need to check for? Do we expect after_auth
+        // for all non-root add_member calls?
+
+        // FIXME find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
+
         // FIXME check that delegation is authorized
         self.delegates.insert(
             signed_delegation.payload.to.clone(),
@@ -55,8 +79,8 @@ impl Group {
                     from: group_id,
                     to: (*parent).clone(),
                     can: Access::Admin,
-                    proof: vec![],
-                    after_auth: vec![],
+                    delegator_proof: None,
+                    after_revocations: vec![],
                 };
 
                 let signed_op = Signed::sign(del.clone().into(), &group_signer);
@@ -151,6 +175,28 @@ impl Verifiable for Group {
     }
 }
 
+impl AuthState for Group {
+    fn id(&self) -> Identifier {
+        self.state.id()
+    }
+
+    fn auth_heads(&self) -> &BTreeSet<Hash<Signed<Operation>>> {
+        self.state.auth_heads()
+    }
+
+    fn auth_heads_mut(&mut self) -> &mut BTreeSet<Hash<Signed<Operation>>> {
+        self.state.auth_heads_mut()
+    }
+
+    fn auth_ops(&self) -> &CaMap<Signed<Operation>> {
+        self.state.auth_ops()
+    }
+
+    fn auth_ops_mut(&mut self) -> &mut CaMap<Signed<Operation>> {
+        self.state.auth_ops_mut()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,8 +271,8 @@ mod tests {
                 from: group9.id(),
                 to: alice.clone().into(),
                 can: Access::Admin,
-                proof: vec![],
-                after_auth: vec![],
+                delegator_proof: None,
+                after_revocations: vec![],
             },
             &active.signer,
         ));
@@ -258,7 +304,7 @@ mod tests {
         let bob = setup_user();
 
         let (gs, [g0, _g1, _g2, _g3]) = setup_store(&alice, &bob);
-        let g0_mems: BTreeMap<Agent, Access> = gs.transative_members(&g0);
+        let g0_mems: BTreeMap<Agent, Access> = gs.transitive_members(&g0);
 
         assert_eq!(
             g0_mems,
@@ -272,7 +318,7 @@ mod tests {
         let bob = setup_user();
 
         let (gs, [_g0, g1, _g2, _g3]) = setup_store(&alice, &bob);
-        let g1_mems: BTreeMap<Agent, Access> = gs.transative_members(&g1);
+        let g1_mems: BTreeMap<Agent, Access> = gs.transitive_members(&g1);
 
         assert_eq!(
             g1_mems,
@@ -286,7 +332,7 @@ mod tests {
         let bob = setup_user();
 
         let (gs, [_g0, _g1, g2, _g3]) = setup_store(&alice, &bob);
-        let g2_mems: BTreeMap<Agent, Access> = gs.transative_members(&g2);
+        let g2_mems: BTreeMap<Agent, Access> = gs.transitive_members(&g2);
 
         assert_eq!(
             g2_mems,
@@ -300,7 +346,7 @@ mod tests {
         let bob = setup_user();
 
         let (gs, [_g0, _g1, _g2, g3]) = setup_store(&alice, &bob);
-        let g3_mems: BTreeMap<Agent, Access> = gs.transative_members(&g3);
+        let g3_mems: BTreeMap<Agent, Access> = gs.transitive_members(&g3);
 
         assert_eq!(
             g3_mems,
@@ -314,7 +360,7 @@ mod tests {
         let bob = setup_user();
 
         let (gs, [_, _, _, _, _, _, _, _, _, g9]) = setup_cyclic_store(&alice, &bob);
-        let g9_mems: BTreeMap<Agent, Access> = gs.transative_members(&g9);
+        let g9_mems: BTreeMap<Agent, Access> = gs.transitive_members(&g9);
 
         assert_eq!(
             g9_mems,
@@ -338,19 +384,73 @@ mod tests {
                 from: active.id(),
                 to: carol.clone().into(),
                 can: Access::Admin,
-                proof: vec![],
-                after_auth: vec![],
+                delegator_proof: None,
+                after_revocations: vec![],
             },
             &active.signer,
         ));
 
         gs.insert(g0.clone().into());
 
-        let g0_mems: BTreeMap<Agent, Access> = gs.transative_members(&g0);
+        let g0_mems: BTreeMap<Agent, Access> = gs.transitive_members(&g0);
 
         assert_eq!(
             g0_mems,
             BTreeMap::from_iter([(alice.into(), Access::Admin), (carol.into(), Access::Admin)])
         );
+    }
+
+    #[test]
+    // FIXME: When add_member returns Error, use that instead
+    #[should_panic]
+    fn test_add_member_with_invalid_subject() {
+        let alice = setup_user();
+        let bob = setup_user();
+        let carol = setup_user();
+        let dan = setup_user();
+        let erin = setup_user();
+
+        let (_, [mut g0, _, _, _]) = setup_store(&alice, &bob);
+        let (_, [mut g1, _, _, _]) = setup_store(&carol, &dan);
+
+        let active = Active::generate();
+
+        g0.add_member(Signed::sign(
+            Delegation {
+                subject: MemberedId::GroupId(g1.id()),
+                from: active.id(),
+                to: erin.clone().into(),
+                can: Access::Admin,
+                delegator_proof: None,
+                after_revocations: vec![],
+            },
+            &active.signer,
+        ));
+    }
+
+    #[test]
+    // FIXME: When add_member returns Error, use that instead
+    #[should_panic]
+    fn test_add_member_with_invalid_delegation() {
+        let alice = setup_user();
+        let bob = setup_user();
+        let carol = setup_user();
+        let dan = setup_user();
+
+        let (_, [mut g0, _, _, _]) = setup_store(&alice, &bob);
+
+        let active = Active::generate();
+
+        g0.add_member(Signed::sign(
+            Delegation {
+                subject: MemberedId::GroupId(g0.id()),
+                from: carol.id,
+                to: dan.clone().into(),
+                can: Access::Admin,
+                delegator_proof: None,
+                after_revocations: vec![],
+            },
+            &active.signer,
+        ));
     }
 }

@@ -63,8 +63,8 @@ impl Active {
             can: attenuate,
             to: to.clone(),
             from: self.id(),
-            proof: vec![],
-            after_auth: vec![], // FIXME
+            delegator_proof: None,
+            after_revocations: vec![], // FIXME
         };
 
         // FIXME sign delegation

@@ -1,3 +1,5 @@
+use super::auth_state::AuthState;
+use super::group::state::GroupState;
 use super::identifier::Identifier;
 use super::individual::Individual;
 use super::membered::MemberedId;
@@ -26,7 +28,7 @@ pub struct Document {
 
 impl std::fmt::Display for Document {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", BASE64_STANDARD.encode(self.state.id.as_bytes()))
+        write!(f, "{}", BASE64_STANDARD.encode(self.state.id().as_bytes()))
     }
 }
 
@@ -43,8 +45,8 @@ impl Document {
                     from: doc_id,
                     to: (*parent).clone(),
                     can: Access::Admin,
-                    proof: vec![],
-                    after_auth: vec![],
+                    delegator_proof: None,
+                    after_revocations: vec![],
                 };
 
                 let signed_op = Signed::sign(del.clone().into(), &doc_signer);
@@ -60,9 +62,11 @@ impl Document {
         Document {
             delegates,
             state: DocumentState {
-                id: doc_id,
-                auth_heads: BTreeSet::from_iter(ops.clone().into_keys()),
-                authority_ops: ops,
+                group_state: GroupState {
+                    id: doc_id,
+                    heads: BTreeSet::from_iter(ops.clone().into_keys()),
+                    ops,
+                },
                 content_ops: BTreeSet::new(),
             },
             reader_keys: BTreeMap::new(), // FIXME
@@ -70,7 +74,7 @@ impl Document {
     }
 
     pub fn id(&self) -> Identifier {
-        self.state.id
+        self.state.id()
     }
 
     pub fn add_member(&mut self, signed_delegation: Signed<Delegation>) {
@@ -83,16 +87,15 @@ impl Document {
             (signed_delegation.payload.can, signed_delegation.clone()),
         );
 
-        self.state
-            .authority_ops
+        self.auth_ops_mut()
             .insert(signed_delegation.map(|delegation| delegation.into()).into());
     }
 
     pub fn materialize(state: DocumentState) -> Self {
         // FIXME oof that's a lot of cloning to get the heads
         let delegates = Operation::topsort(
-            state.auth_heads.clone().into_iter().collect(),
-            &state.authority_ops,
+            state.auth_heads().clone().into_iter().collect(),
+            state.auth_ops(),
         )
         .expect("FIXME")
         .iter()
@@ -137,9 +140,7 @@ impl Document {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DocumentState {
-    pub id: Identifier,
-    pub auth_heads: BTreeSet<Hash<Signed<Operation>>>,
-    pub authority_ops: CaMap<Signed<Operation>>,
+    pub group_state: GroupState,
     pub content_ops: BTreeSet<u8>, // FIXME automerge content
                                    // FIXME just cache view directly on the object?
                                    // FIXME also maybe just reference AM doc heads?
@@ -159,17 +160,15 @@ impl Ord for Document {
 
 impl Verifiable for Document {
     fn verifying_key(&self) -> VerifyingKey {
-        self.state.id.verifying_key
+        self.state.id().verifying_key
     }
 }
 
 impl PartialOrd for DocumentState {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.id.as_bytes().partial_cmp(&other.id.as_bytes()) {
+        match self.id().as_bytes().partial_cmp(other.id().as_bytes()) {
             Some(Ordering::Equal) => {
-                if self.authority_ops == other.authority_ops
-                    && self.content_ops == other.content_ops
-                {
+                if self.auth_ops() == other.auth_ops() && self.content_ops == other.content_ops {
                     Some(Ordering::Equal)
                 } else {
                     None
@@ -182,58 +181,72 @@ impl PartialOrd for DocumentState {
 
 impl Ord for DocumentState {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.id.as_bytes().cmp(&other.id.as_bytes())
+        self.id().as_bytes().cmp(other.id().as_bytes())
     }
 }
 
 impl Verifiable for DocumentState {
     fn verifying_key(&self) -> VerifyingKey {
-        self.id.verifying_key
+        self.id().verifying_key
+    }
+}
+
+impl AuthState for Document {
+    fn id(&self) -> Identifier {
+        self.state.id()
+    }
+
+    fn auth_heads(&self) -> &BTreeSet<Hash<Signed<Operation>>> {
+        self.state.auth_heads()
+    }
+
+    fn auth_heads_mut(&mut self) -> &mut BTreeSet<Hash<Signed<Operation>>> {
+        self.state.auth_heads_mut()
+    }
+
+    fn auth_ops(&self) -> &CaMap<Signed<Operation>> {
+        self.state.auth_ops()
+    }
+
+    fn auth_ops_mut(&mut self) -> &mut CaMap<Signed<Operation>> {
+        self.state.auth_ops_mut()
     }
 }
 
 impl DocumentState {
     pub fn new(parent: Individual) -> Self {
-        let mut rng = rand::rngs::OsRng;
-        let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
-        let id: Identifier = signing_key.verifying_key().into();
-
-        let init = Operation::Delegation(Delegation {
-            subject: MemberedId::DocumentId(id),
-
-            from: id.into(), // FIXME would be nice if this was CBC
-
-            to: parent.into(),
-            can: Access::Admin,
-
-            proof: vec![],
-            after_auth: vec![],
-        });
-
-        let signed_init = Signed::sign(init, &signing_key);
-
-        // FIXME zeroize signing key
+        let group_state = GroupState::new(parent);
 
         Self {
-            id,
-            auth_heads: BTreeSet::from_iter([Hash::hash(signed_init.clone())]),
-            authority_ops: CaMap::from_iter([signed_init]),
+            group_state,
             content_ops: BTreeSet::new(),
         }
     }
 
     pub fn delegations_for(&self, agent: &Agent) -> Vec<Signed<Delegation>> {
-        self.authority_ops
-            .iter()
-            .filter_map(|(_, op)| {
-                if let Operation::Delegation(delegation) = &op.payload {
-                    if delegation.to == *agent {
-                        return Some(op.clone().map(|_| delegation.clone()));
-                    }
-                }
-                None
-            })
-            .collect()
+        self.group_state.delegations_for(agent)
+    }
+}
+
+impl AuthState for DocumentState {
+    fn id(&self) -> Identifier {
+        self.group_state.id
+    }
+
+    fn auth_heads(&self) -> &BTreeSet<Hash<Signed<Operation>>> {
+        &self.group_state.heads
+    }
+
+    fn auth_heads_mut(&mut self) -> &mut BTreeSet<Hash<Signed<Operation>>> {
+        &mut self.group_state.heads
+    }
+
+    fn auth_ops(&self) -> &CaMap<Signed<Operation>> {
+        &self.group_state.ops
+    }
+
+    fn auth_ops_mut(&mut self) -> &mut CaMap<Signed<Operation>> {
+        &mut self.group_state.ops
     }
 }
 
@@ -259,9 +272,9 @@ impl DocStore {
     }
 
     // FIXME shoudl be more like this:
-    // pub fn transative_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
+    // pub fn transitive_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
     // FIXME return path as well?
-    pub fn transative_members(&self, doc: &Document) -> BTreeMap<Agent, Access> {
+    pub fn transitive_members(&self, doc: &Document) -> BTreeMap<Agent, Access> {
         struct GroupAccess {
             agent: Agent,
             agent_access: Access,

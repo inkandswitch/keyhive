@@ -1,6 +1,7 @@
 use super::super::agent::Agent;
 use super::operation::delegation::Delegation;
-use super::operation::Operation;
+use super::operation::{self, Operation};
+use crate::principal::auth_state::AuthState;
 use crate::principal::{
     identifier::Identifier, individual::Individual, membered::MemberedId, traits::Verifiable,
 };
@@ -63,8 +64,8 @@ impl GroupState {
             to: parent.into(),
             can: Access::Admin,
 
-            proof: vec![],
-            after_auth: vec![],
+            delegator_proof: None,
+            after_revocations: vec![],
         }
         .into();
 
@@ -72,7 +73,7 @@ impl GroupState {
 
         // FIXME zeroize signing key
 
-        GroupState {
+        Self {
             id: verifier.into(),
             heads: BTreeSet::from_iter([Hash::hash(signed_init.clone())]),
             ops: CaMap::from_iter([signed_init]),
@@ -80,7 +81,7 @@ impl GroupState {
     }
 
     pub fn add_op(&mut self, op: Signed<Operation>) -> Result<Hash<Signed<Operation>>, AddError> {
-        if *op.payload.subject() != MemberedId::GroupId(self.id.into()) {
+        if *op.payload.subject() != MemberedId::GroupId(self.id) {
             panic!("FIXME")
             // return Err(signature::Error::InvalidSubject);
         }
@@ -94,7 +95,7 @@ impl GroupState {
 
         let is_head = op
             .payload
-            .after_auth()
+            .after_revocations()
             .iter()
             .any(|dep| self.heads.remove(dep));
 
@@ -124,8 +125,36 @@ impl GroupState {
     }
 }
 
+impl AuthState for GroupState {
+    fn id(&self) -> Identifier {
+        self.id
+    }
+
+    fn auth_heads(&self) -> &BTreeSet<Hash<Signed<Operation>>> {
+        &self.heads
+    }
+
+    fn auth_heads_mut(&mut self) -> &mut BTreeSet<Hash<Signed<Operation>>> {
+        &mut self.heads
+    }
+
+    fn auth_ops(&self) -> &CaMap<Signed<Operation>> {
+        &self.ops
+    }
+
+    fn auth_ops_mut(&mut self) -> &mut CaMap<Signed<Operation>> {
+        &mut self.ops
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AddError {
+    #[error("{0}")]
+    Ancestor(#[from] operation::AncestorError),
+
+    #[error("Invalid delegation")]
+    InvalidDelegation,
+
     #[error("Invalid subject")]
     InvalidSubject,
 

@@ -19,6 +19,10 @@ pub struct Signed<T> {
 
     /// The signature of the payload, which can be verified by the `verifying_key`.
     pub signature: ed25519_dalek::Signature,
+    // FIXME: Something like this could allow us to prevent arbitrary
+    // construction outside the crate. Or we could just have these fields
+    // be pub(crate) and use getters.
+    // _private: (),
 }
 
 impl<T: Clone> Signed<T>

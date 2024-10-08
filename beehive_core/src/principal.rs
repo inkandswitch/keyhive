@@ -1,5 +1,6 @@
 pub mod active;
 pub mod agent;
+pub mod auth_state;
 pub mod document;
 pub mod group;
 pub mod identifier;

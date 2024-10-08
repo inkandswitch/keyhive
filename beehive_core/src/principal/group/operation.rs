@@ -72,9 +72,9 @@ impl Operation {
         !self.is_delegation()
     }
 
-    pub fn after_auth(&self) -> &[Hash<Signed<Operation>>] {
+    pub fn after_revocations(&self) -> &[Hash<Signed<Operation>>] {
         match self {
-            Operation::Delegation(delegation) => &delegation.after_auth.as_slice(),
+            Operation::Delegation(delegation) => delegation.after_revocations.as_slice(),
             Operation::Revocation(_revocation) => todo!(), // revocation.to_auth_dependencies(),
         }
     }
@@ -90,39 +90,37 @@ impl Operation {
         &'a self,
         ops: &'a CaMap<Signed<Operation>>,
     ) -> Result<(CaMap<Signed<Operation>>, usize), AncestorError> {
-        if self.after_auth().is_empty() {
+        if self.after_revocations().is_empty() {
             return Ok((CaMap::new(), 0));
         }
 
         let mut ancestors = BTreeSet::new();
         let mut head_hashes: Vec<(&Hash<Signed<Operation>>, usize)> =
-            self.after_auth().iter().map(|hash| (hash, 0)).collect();
+            self.after_revocations().iter().map(|hash| (hash, 0)).collect();
 
         let mut touched_root = false;
 
-        while !head_hashes.is_empty() {
-            if let Some((head_hash, longest_known_path)) = head_hashes.pop() {
-                if ops.contains_key(&head_hash) {
-                    continue;
-                }
+        while let Some((head_hash, longest_known_path)) = head_hashes.pop() {
+            if !ops.contains_key(&head_hash) {
+                continue;
+            }
 
-                if let Some(op) = ops.get(&head_hash) {
-                    if op.payload.subject() != self.subject() {
-                        return Err(AncestorError::MismatchedSubject(self.subject().clone()));
-                    }
+            let op = ops
+                .get(&head_hash)
+                .ok_or(AncestorError::DependencyNotAvailable(*head_hash))?;
 
-                    ancestors.insert((op.clone(), longest_known_path + 1));
+            if op.payload.subject() != self.subject() {
+                return Err(AncestorError::MismatchedSubject(self.subject().clone()));
+            }
 
-                    if op.payload.after_auth().is_empty() {
-                        touched_root = true;
-                    }
+            ancestors.insert((op.clone(), longest_known_path + 1));
 
-                    for parent in op.payload.after_auth() {
-                        head_hashes.push((parent, longest_known_path + 1));
-                    }
-                } else {
-                    return Err(AncestorError::DependencyNotAvailable(*head_hash));
-                }
+            if op.payload.after_revocations().is_empty() {
+                touched_root = true;
+            }
+
+            for parent in op.payload.after_revocations() {
+                head_hashes.push((parent, longest_known_path + 1));
             }
         }
 

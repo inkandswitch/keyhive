@@ -3,6 +3,7 @@ use crate::crypto::share_key::ShareKey;
 use crate::crypto::signed::Signed;
 use crate::principal::active::Active;
 use crate::principal::agent::Agent;
+use crate::principal::auth_state::AuthState;
 use crate::principal::document::DocStore;
 use crate::principal::document::Document;
 use crate::principal::group::operation::revocation::Revocation;
@@ -73,11 +74,7 @@ impl Context {
         match from {
             Membered::Group(og_group) => {
                 // let mut owned_group = group.clone();
-                let group = self
-                    .groups
-                    .groups
-                    .get_mut(&og_group.state.id)
-                    .expect("FIXME");
+                let group = self.groups.groups.get_mut(&og_group.id()).expect("FIXME");
 
                 group.delegates.remove(to_revoke);
 
@@ -91,7 +88,7 @@ impl Context {
 
                     group.state.ops.insert(Signed::sign(
                         Revocation {
-                            subject: MemberedId::GroupId(group.state.id.into()),
+                            subject: MemberedId::GroupId(group.id()),
                             revoker: self.active.clone().into(),
                             revoke,
                             proof,
@@ -103,7 +100,7 @@ impl Context {
             }
             Membered::Document(og_doc) => {
                 // let mut doc = d.clone();
-                let doc = self.docs.docs.get_mut(&og_doc.state.id).expect("FIXME");
+                let doc = self.docs.docs.get_mut(&og_doc.id()).expect("FIXME");
                 let revoke = doc.state.delegations_for(to_revoke).pop().expect("FIXME");
                 let proof = doc
                     .state
@@ -112,9 +109,10 @@ impl Context {
                     .expect("FIXME");
 
                 doc.delegates.remove(to_revoke);
-                doc.state.authority_ops.insert(Signed::sign(
+                let doc_id = doc.id();
+                doc.auth_ops_mut().insert(Signed::sign(
                     Revocation {
-                        subject: MemberedId::DocumentId(doc.state.id.into()),
+                        subject: MemberedId::DocumentId(doc_id),
                         revoker: self.active.clone().into(),
                         revoke,
                         proof,
@@ -132,7 +130,7 @@ impl Context {
         let mut seen: BTreeSet<Identifier> = BTreeSet::new();
 
         for doc in self.docs.docs.values() {
-            seen.insert(doc.state.id);
+            seen.insert(doc.id());
 
             if let Some((access, _proof)) = doc.delegates.get(&self.active.clone().into()) {
                 caps.insert(doc.clone(), access.clone());
@@ -150,7 +148,7 @@ impl Context {
         while !explore.is_empty() {
             if let Some((group, _access)) = explore.pop() {
                 for doc in self.docs.docs.values() {
-                    if seen.contains(&doc.state.id) {
+                    if seen.contains(&doc.id()) {
                         continue;
                     }
 

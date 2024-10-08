@@ -94,7 +94,7 @@ impl Verifiable for Membered {
     }
 }
 
-// FIXE pass proof of existence?
+// FIXME pass proof of existence?
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum MemberedId {
     GroupId(Identifier),
