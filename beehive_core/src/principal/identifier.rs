@@ -68,32 +68,3 @@ impl From<ed25519_dalek::VerifyingKey> for Identifier {
         Self { verifying_key }
     }
 }
-// #[derive(Debug, Clone, Hash)]
-// pub struct Identifier<T> {
-//     pub verifying_key: ed25519_dalek::VerifyingKey,
-//     _phantom: std::marker::PhantomData<T>,
-// }
-//
-// impl<T> PartialEq for Identifier<T> {
-//     fn eq(&self, other: &Self) -> bool {
-//         self.verifying_key.as_bytes() == other.verifying_key.as_bytes()
-//     }
-// }
-//
-// impl<T> Eq for Identifier<T> {}
-//
-// impl<T> PartialOrd for Identifier<T> {
-//     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-//         self.verifying_key
-//             .as_bytes()
-//             .partial_cmp(&other.verifying_key.as_bytes())
-//     }
-// }
-//
-// impl<T> Ord for Identifier<T> {
-//     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-//         self.verifying_key
-//             .as_bytes()
-//             .cmp(&other.verifying_key.as_bytes())
-//     }
-// }
