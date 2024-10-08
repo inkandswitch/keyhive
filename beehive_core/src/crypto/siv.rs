@@ -1,6 +1,5 @@
 use crate::principal::document::Document;
 use chacha20poly1305::KeyInit;
-use generic_array::GenericArray;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 

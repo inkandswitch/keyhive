@@ -1,5 +1,4 @@
 use crate::access::Access;
-use crate::crypto::encrypted::Encrypted;
 use crate::crypto::share_key::ShareKey;
 use crate::crypto::signed::Signed;
 use crate::principal::active::Active;

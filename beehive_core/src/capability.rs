@@ -1,5 +1,5 @@
 use crate::access::Access;
-use crate::crypto::{hash::Hash, signed::Signed};
+use crate::crypto::signed::Signed;
 use crate::principal::agent::Agent;
 use crate::principal::group::operation::delegation::Delegation;
 use crate::principal::membered::Membered;
