@@ -8,7 +8,7 @@ pub struct Envelope<T> {
 }
 
 impl<T> Envelope<T> {
-    pub fn causal_keys(&self) -> Vec<CausalKey<T>> {
+    pub fn causal_keys(&self) -> Vec<CausalKey<Envelope<T>>> {
         self.ancestors
             .iter()
             .map(|(hash, key)| CausalKey {
