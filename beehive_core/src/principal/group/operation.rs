@@ -43,7 +43,7 @@ impl From<Operation> for Vec<u8> {
     fn from(op: Operation) -> Self {
         match op {
             Operation::Delegation(delegation) => delegation.into(),
-            Operation::Revocation(_revocation) => todo!(), // revocation.into(),
+            Operation::Revocation(revocation) => revocation.into(), // revocation.into(),
         }
     }
 }
@@ -95,8 +95,11 @@ impl Operation {
         }
 
         let mut ancestors = BTreeSet::new();
-        let mut head_hashes: Vec<(&Hash<Signed<Operation>>, usize)> =
-            self.after_revocations().iter().map(|hash| (hash, 0)).collect();
+        let mut head_hashes: Vec<(&Hash<Signed<Operation>>, usize)> = self
+            .after_revocations()
+            .iter()
+            .map(|hash| (hash, 0))
+            .collect();
 
         let mut touched_root = false;
 

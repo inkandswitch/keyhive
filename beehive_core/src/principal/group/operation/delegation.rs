@@ -1,3 +1,4 @@
+use super::revocation::Revocation;
 // FIXME move opetaion to same level
 use super::Operation;
 use crate::access::Access;
@@ -11,13 +12,11 @@ use std::fmt;
 pub struct Delegation {
     pub subject: MemberedId, // FIXME ref?
     pub can: Access,
-    /// The delegator
-    pub from: Identifier,
+    pub delegator: Identifier,
     /// The operation that added the delegator/from.
     // FIXME: Invariant: these should only be Operation::Delegation
     pub delegator_proof: Option<Hash<Signed<Operation>>>,
-    /// The delegate
-    pub to: Agent, // FIXME an ID, not statelsss.. make &Agent? AgentId?
+    pub delegate: Agent, // FIXME an ID, not statelsss.. make &Agent? AgentId?
 
     /// Multiple branches could have revoked this agent. We need to prove
     /// we're after all of them.
@@ -31,7 +30,7 @@ impl fmt::Display for Delegation {
         write!(
             f,
             "Delegation: {} can {} from {} to {:?}", // FIXME :?
-            self.subject, self.can, self.from, self.to
+            self.subject, self.can, self.delegator, self.delegate
         )
     }
 }
@@ -42,7 +41,7 @@ impl From<Delegation> for Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&delegation.subject.to_bytes());
         // FIXME! bytes.extend_from_slice(&delegation.can.to_bytes());
-        bytes.extend_from_slice(&delegation.from.to_bytes());
+        bytes.extend_from_slice(&delegation.delegator.to_bytes());
         // FIXME!
         // bytes.extend_from_slice(&delegation.proof.iter().fold(Vec::new(), |mut acc, hash| {
         //     acc.extend_from_slice(&hash.to_bytes());

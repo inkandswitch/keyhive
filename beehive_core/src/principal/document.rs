@@ -42,14 +42,14 @@ impl Document {
             |(mut op_acc, mut mem_acc), parent| {
                 let del = Delegation {
                     subject: MemberedId::DocumentId(doc_id),
-                    from: doc_id,
-                    to: (*parent).clone(),
+                    delegator: doc_id,
+                    delegate: (*parent).clone(),
                     can: Access::Admin,
                     delegator_proof: None,
                     after_revocations: vec![],
                 };
 
-                let signed_op = Signed::sign(del.clone().into(), &doc_signer);
+                let signed_op: Signed<Operation> = Signed::sign(del.clone().into(), &doc_signer);
                 let signed_del = Signed::sign(del, &doc_signer);
 
                 mem_acc.insert((*parent).clone(), (Access::Admin, signed_del.clone()));
@@ -78,17 +78,19 @@ impl Document {
     }
 
     pub fn add_member(&mut self, signed_delegation: Signed<Delegation>) {
+        // !@ FIXME: Can we unify this with group add_member logic?
+
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
         // FIXME check that delegation is authorized
         self.delegates.insert(
-            signed_delegation.payload.to.clone(),
+            signed_delegation.payload.delegate.clone(),
             (signed_delegation.payload.can, signed_delegation.clone()),
         );
 
         self.auth_ops_mut()
-            .insert(signed_delegation.map(|delegation| delegation.into()).into());
+            .insert(signed_delegation.map(|delegation| delegation.into()));
     }
 
     pub fn materialize(state: DocumentState) -> Self {
@@ -106,7 +108,7 @@ impl Document {
                 verifying_key,
             } => {
                 acc.insert(
-                    delegation.to.clone(),
+                    delegation.delegate.clone(),
                     (
                         delegation.can,
                         Signed {
@@ -125,7 +127,7 @@ impl Document {
             } =>
             // FIXME allow downgrading instead of straight removal?
             {
-                acc.remove(&revocation.revoke.payload.to);
+                acc.remove(&revocation.revoked_agent());
                 acc
             }
         });
@@ -242,11 +244,11 @@ impl AuthState for DocumentState {
     }
 
     fn auth_ops(&self) -> &CaMap<Signed<Operation>> {
-        &self.group_state.ops
+        self.group_state.auth_ops()
     }
 
     fn auth_ops_mut(&mut self) -> &mut CaMap<Signed<Operation>> {
-        &mut self.group_state.ops
+        self.group_state.auth_ops_mut()
     }
 }
 

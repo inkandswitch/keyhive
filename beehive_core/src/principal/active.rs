@@ -61,8 +61,8 @@ impl Active {
         let unsigned_delegation = Delegation {
             subject: cap.subject.member_id(),
             can: attenuate,
-            to: to.clone(),
-            from: self.id(),
+            delegate: to.clone(),
+            delegator: self.id(),
             delegator_proof: None,
             after_revocations: vec![], // FIXME
         };

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::mpsc::RecvError};
 
 use super::{group::operation::Operation, identifier::Identifier};
 use crate::{

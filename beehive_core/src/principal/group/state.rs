@@ -1,5 +1,6 @@
 use super::super::agent::Agent;
 use super::operation::delegation::Delegation;
+use super::operation::revocation::Revocation;
 use super::operation::{self, Operation};
 use crate::principal::auth_state::AuthState;
 use crate::principal::{
@@ -18,7 +19,7 @@ use std::collections::BTreeSet;
 pub struct GroupState {
     pub id: Identifier,
     pub heads: BTreeSet<Hash<Signed<Operation>>>, // FIXME nonempty
-    pub ops: CaMap<Signed<Operation>>,            // FIXME nonempty
+    pub ops: CaMap<Signed<Operation>>, // FIXME nonempty
 }
 
 impl From<VerifyingKey> for GroupState {
@@ -53,15 +54,16 @@ impl Ord for GroupState {
 
 impl GroupState {
     pub fn new(parent: Individual) -> Self {
-        let mut rng = rand::rngs::OsRng;
-        let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
-        let verifier: VerifyingKey = signing_key.verifying_key();
+        // let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::thread_rng();
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
+        let group_id = signing_key.verifying_key().into();
 
         let init = Delegation {
-            subject: MemberedId::GroupId(verifier.into()),
+            subject: MemberedId::GroupId(group_id),
 
-            from: verifier.into(),
-            to: parent.into(),
+            delegator: group_id,
+            delegate: parent.into(),
             can: Access::Admin,
 
             delegator_proof: None,
@@ -69,14 +71,14 @@ impl GroupState {
         }
         .into();
 
-        let signed_init: Signed<Operation> = Signed::sign(init, &signing_key);
+        let signed_init: Signed<Delegation> = Signed::sign(init, &signing_key);
 
         // FIXME zeroize signing key
 
         Self {
-            id: verifier.into(),
-            heads: BTreeSet::from_iter([Hash::hash(signed_init.clone())]),
-            ops: CaMap::from_iter([signed_init]),
+            id: group_id,
+            heads: BTreeSet::from_iter([Hash::hash(signed_init.clone().map(|delegation| delegation.into()))]),
+            ops: CaMap::from_iter([signed_init.map(|delegation| delegation.into())]),
         }
     }
 
@@ -111,7 +113,7 @@ impl GroupState {
             .iter()
             .filter_map(|(_, op)| {
                 if let Operation::Delegation(delegation) = &op.payload {
-                    if delegation.to == *agent {
+                    if delegation.delegate == *agent {
                         return Some(op.clone().map(|_| delegation.clone()));
                     }
                 }

@@ -2,6 +2,7 @@
 
 use super::delegation::Delegation;
 use crate::crypto::signed::Signed;
+use crate::principal::agent::Agent;
 use crate::principal::individual::Individual;
 use crate::principal::membered::MemberedId;
 use crate::principal::traits::Verifiable;
@@ -16,6 +17,12 @@ pub struct Revocation {
     // FIXME probably will just make this look at the ambient state,
     // but in the meantime this is just so much easier
     pub proof: Signed<Delegation>,
+}
+
+impl Revocation {
+    pub fn revoked_agent(&self) -> &Agent {
+        &self.revoke.payload.delegate
+    }
 }
 
 impl From<Revocation> for Vec<u8> {

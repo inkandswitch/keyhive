@@ -92,8 +92,7 @@ impl Context {
                             revoker: self.active.clone().into(),
                             revoke,
                             proof,
-                        }
-                        .into(),
+                        }.into(),
                         &self.active.signer,
                     ));
                 }
@@ -116,8 +115,7 @@ impl Context {
                         revoker: self.active.clone().into(),
                         revoke,
                         proof,
-                    }
-                    .into(),
+                    }.into(),
                     &self.active.signer,
                 ));
             }
