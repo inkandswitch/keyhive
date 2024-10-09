@@ -1,26 +1,20 @@
-use super::{hash::Hash, symmetric_key::SymmetricKey};
+use super::{causal_key::CausalKey, hash::Hash, symmetric_key::SymmetricKey};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Envelope<T> {
     pub payload: T,
-    pub ancestors: BTreeMap<SymmetricKey>,
+    pub ancestors: BTreeMap<Hash<Envelope<T>>, SymmetricKey>,
 }
 
 impl<T> Envelope<T> {
     pub fn causal_keys(&self) -> Vec<CausalKey<T>> {
         self.ancestors
             .iter()
-            .map(|(key, _)| CausalKey {
-                hash: Hash::hash(self),
-                key: key.clone(),
+            .map(|(hash, key)| CausalKey {
+                hash: *hash,
+                key: *key,
             })
             .collect()
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CausalKey<T> {
-    pub hash: Hash<Envelope<T>>,
-    pub key: SymmetricKey,
 }
