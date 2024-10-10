@@ -1,21 +1,7 @@
-// Where should we handle the message details for propagating changes (updates and removes)
-// to other nodes over the network?
-
-pub trait CGKA<PK, SK> {
-    /// Add key.
-    fn add(pk: PK);
-    /// Contains key.
-    fn contains(pk: PK);
-    /// Remove key.
-    fn remove(pk: PK);
-    /// Rotate key.
-    fn update(old_pk: PK, new_pk: PK, new_sk: SK);
-}
-
 use serde::{Deserialize, Serialize};
 use x25519_dalek;
 
-use crate::crypto::encrypted::Encrypted;
+use crate::{crypto::encrypted::Encrypted, principal::identifier::Identifier};
 type PublicKey = x25519_dalek::PublicKey;
 type SecretKey = x25519_dalek::StaticSecret;
 
@@ -32,7 +18,7 @@ impl CausalTreeKEM {
 }
 
 // TODO: Can we assume causal broadcast?
-impl CGKA<PublicKey, SecretKey> for CausalTreeKEM {
+impl CausalTreeKEM {
     /// Add key.
     fn add(pk: PublicKey) {
         todo!()
@@ -54,6 +40,7 @@ impl CGKA<PublicKey, SecretKey> for CausalTreeKEM {
     }
 }
 
+
 #[derive(Clone, Deserialize, Serialize)]
 struct CTKNode {
     /// Present unless blanked
@@ -64,36 +51,7 @@ struct CTKNode {
     pub right: Option<Box<CTKNode>>,
 }
 
-impl CTKNode {
-    // FIXME
-    pub fn new(pk: PublicKey, sk: Option<Encrypted<SecretKey>>) -> Self {
-        Self {
-            pk: Some(pk),
-            sk,
-            left: None,
-            right: None,
-        }
-    }
 
-    /// Highest non-blank descendents of a node
-    fn resolution(&self) -> Vec<&Box<CTKNode>> {
-        if let Some(pk) = self.pk {
-            // Return just this node
-            todo!()
-        } else {
-            match (&self.left, &self.right) {
-                (Some(l), Some(r)) => {
-                    let mut l_res = l.resolution();
-                    l_res.extend(r.resolution());
-                    l_res
-                }
-                (Some(l), None) => l.resolution(),
-                (None, Some(r)) => r.resolution(),
-                _ => Vec::new(),
-            }
-        }
-    }
-}
 
 // Derive key pair
 fn dkp(x: &[u8]) -> (PublicKey, SecretKey) {
@@ -119,3 +77,56 @@ fn star_pub(pk: PublicKey) -> PublicKey {
 fn star_priv(sk: SecretKey) -> SecretKey {
     todo!()
 }
+
+
+
+// pub enum CTKNode {
+//     Blank {
+//         left: Option<Box<CTKNode>>,
+//         right: Option<Box<CTKNode>>,
+//         leaf_count: usize,
+//     },
+//     Node {
+//         pk: PublicKey,
+//         sk: Encrypted<SecretKey>,
+//         parent: Option<Box<CTKNode>>,
+//         left: Option<Box<CTKNode>>,
+//         right: Option<Box<CTKNode>>,
+//         leaf_count: usize,
+//     },
+//     Leaf {
+//         parent: Option<Box<CTKNode>>,
+//         id: Identifier,
+//         pk: PublicKey,
+//     },
+// }
+
+// impl CTKNode {
+//     // FIXME
+//     pub fn new(pk: PublicKey, sk: Option<Encrypted<SecretKey>>) -> Self {
+//         Self {
+//             pk: Some(pk),
+//             sk,
+//             left: None,
+//             right: None,
+//         }
+//     }
+
+//     /// Highest non-blank descendents of a node
+//     fn resolution(&self) -> Vec<&Box<CTKNode>> {
+//         let left_resolution = resolve_node(&self.left);
+//         let right_resolution = resolve_node(&self.right);
+//         left_resolution.extend(right_resolution);
+//         left_resolution
+//     }
+// }
+
+// fn resolve_node(maybe_node: &Option<Box<CTKNode>>) -> Vec<&Box<CTKNode>> {
+//     let Some(node) = maybe_node else {
+//         return Vec::new()
+//     };
+//     match node {
+//         Blank { .. } => node.resolution(),
+//         _ => vec![node]
+//     }
+// }
