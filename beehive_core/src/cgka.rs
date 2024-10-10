@@ -2,10 +2,14 @@
 // to other nodes over the network?
 
 pub trait CGKA<PK, SK> {
-    /// Rotate key.
-    fn update(old_pk: PK, new_pk: PK, new_sk: SK);
+    /// Add key.
+    fn add(pk: PK);
+    /// Contains key.
+    fn contains(pk: PK);
     /// Remove key.
     fn remove(pk: PK);
+    /// Rotate key.
+    fn update(old_pk: PK, new_pk: PK, new_sk: SK);
 }
 
 use serde::{Deserialize, Serialize};
@@ -29,13 +33,23 @@ impl CausalTreeKEM {
 
 // TODO: Can we assume causal broadcast?
 impl CGKA<PublicKey, SecretKey> for CausalTreeKEM {
-    /// Rotate key.
-    fn update(old_pk: PublicKey, new_pk: PublicKey, new_sk: SecretKey) {
+    /// Add key.
+    fn add(pk: PublicKey) {
+        todo!()
+    }
+
+    /// Contains key.
+    fn contains(pk: PublicKey) {
         todo!()
     }
 
     /// Remove key.
     fn remove(pk: PublicKey) {
+        todo!()
+    }
+
+    /// Rotate key.
+    fn update(old_pk: PublicKey, new_pk: PublicKey, new_sk: SecretKey) {
         todo!()
     }
 }
