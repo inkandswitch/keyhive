@@ -51,7 +51,22 @@ struct CTKNode {
     pub right: Option<Box<CTKNode>>,
 }
 
+impl CTKNode {
+    // FIXME
+    pub fn new(pk: PublicKey, sk: Option<Encrypted<SecretKey>>) -> Self {
+        Self {
+            pk: Some(pk),
+            sk,
+            left: None,
+            right: None,
+        }
+    }
 
+    /// Highest non-blank descendents of a node
+    fn resolution(&self) -> Vec<&Box<CTKNode>> {
+        todo!()
+    }
+}
 
 // Derive key pair
 fn dkp(x: &[u8]) -> (PublicKey, SecretKey) {
@@ -101,32 +116,4 @@ fn star_priv(sk: SecretKey) -> SecretKey {
 //     },
 // }
 
-// impl CTKNode {
-//     // FIXME
-//     pub fn new(pk: PublicKey, sk: Option<Encrypted<SecretKey>>) -> Self {
-//         Self {
-//             pk: Some(pk),
-//             sk,
-//             left: None,
-//             right: None,
-//         }
-//     }
 
-//     /// Highest non-blank descendents of a node
-//     fn resolution(&self) -> Vec<&Box<CTKNode>> {
-//         let left_resolution = resolve_node(&self.left);
-//         let right_resolution = resolve_node(&self.right);
-//         left_resolution.extend(right_resolution);
-//         left_resolution
-//     }
-// }
-
-// fn resolve_node(maybe_node: &Option<Box<CTKNode>>) -> Vec<&Box<CTKNode>> {
-//     let Some(node) = maybe_node else {
-//         return Vec::new()
-//     };
-//     match node {
-//         Blank { .. } => node.resolution(),
-//         _ => vec![node]
-//     }
-// }
