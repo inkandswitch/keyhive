@@ -135,6 +135,6 @@ pub enum AddError {
 
 impl Verifiable for GroupState {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.id.verifying_key
+        self.id.verifying_key()
     }
 }

@@ -147,7 +147,7 @@ impl Group {
 
 impl Verifiable for Group {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.id().verifying_key
+        self.id().verifying_key()
     }
 }
 

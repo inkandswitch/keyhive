@@ -159,7 +159,7 @@ impl Ord for Document {
 
 impl Verifiable for Document {
     fn verifying_key(&self) -> VerifyingKey {
-        self.state.id.verifying_key
+        self.state.id.verifying_key()
     }
 }
 
@@ -188,7 +188,7 @@ impl Ord for DocumentState {
 
 impl Verifiable for DocumentState {
     fn verifying_key(&self) -> VerifyingKey {
-        self.id.verifying_key
+        self.id.verifying_key()
     }
 }
 

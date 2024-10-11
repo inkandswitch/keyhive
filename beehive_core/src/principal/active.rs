@@ -144,7 +144,7 @@ impl From<Active> for Individual {
 
 impl Verifiable for Active {
     fn verifying_key(&self) -> VerifyingKey {
-        self.id().verifying_key
+        self.id().verifying_key()
     }
 }
 

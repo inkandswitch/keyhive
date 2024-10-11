@@ -171,7 +171,7 @@
             "test:host && test:docs && test:wasm";
 
           "test:host" = cmd "Run Cargo tests for host target"
-            "${cargo} test && ${cargo} test --doc";
+            "${cargo} test && ${cargo} test --features=mermaid_docs --doc";
 
           "test:wasm" = cmd "Run wasm-pack tests on all targets"
             "test:wasm:node && test:wasm:chrome";

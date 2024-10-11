@@ -1,3 +1,5 @@
+//! The agents that can delegate to each other.
+
 pub mod active;
 pub mod agent;
 pub mod document;

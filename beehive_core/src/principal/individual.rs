@@ -1,3 +1,5 @@
+//! A single user agent.
+
 pub mod state;
 
 use super::identifier::Identifier;
@@ -10,10 +12,31 @@ use serde::{Deserialize, Serialize};
 use state::PrekeyState;
 use std::collections::BTreeSet;
 
+/// Single agents with no internal membership.
+///
+/// `Individual`s can be thought of as the terminal agents. They represent
+/// keys that may sign ops, be delegated capabilties to [`Document`]s and [`Group`]s.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Individual {
+    /// The public key identifier.
     pub id: Identifier,
+
+    /// [`ShaerKey`] pre-keys.
+    ///
+    /// Prekeys are used to invite this `Individual` to [`Document`] read access trees.
+    /// The core idea is that the invited `Individual` is offline, but needs to be added to
+    /// the encryption tree for a particular [`Document`]. They publish a set of public keys
+    /// in advance. The inviter can then deterministically select one, and use it as the
+    /// initial key for the invitee's BeeKEM entry. The next time they're online, the invitee
+    /// should then remove the prekey from their public set and rotate the BeeKEM key on the [`Document`].
+    ///
+    /// The use of unique prekeys for each new [`Document`] invite isolates each [`Document`] from
+    /// the compromise of one prekey affecting the security of other [`Document`]s. Since we operate
+    /// in a fully concurrent context with causal consistency, we cannot guarantee that a prekey will
+    /// not be reused in multiple [`Document`]s, but we can tune the probability of this happening.
     pub prekeys: BTreeSet<ShareKey>,
+
+    /// The state used to materialize `prekeys`.
     pub prekey_state: PrekeyState,
 }
 
@@ -76,7 +99,7 @@ impl Ord for Individual {
 
 impl Verifiable for Individual {
     fn verifying_key(&self) -> VerifyingKey {
-        self.id.verifying_key
+        self.id.verifying_key()
     }
 }
 
