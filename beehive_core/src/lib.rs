@@ -10,6 +10,7 @@
 #![deny(unreachable_pub)]
 
 pub mod access;
+pub mod cgka;
 pub mod content;
 pub mod context;
 pub mod crypto;
