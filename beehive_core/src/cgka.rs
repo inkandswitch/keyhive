@@ -28,10 +28,10 @@
 //     would replace the sibling on its path with a single public key)?
 // *
 // * Conflicts to consider:
-// * * Concurrent rotations
+// * * Concurrent key rotations
 // * * Concurrent adds
 // * * Concurrent removes
-// * * Concurrent rotations, adds, and removes
+// * * Concurrent key rotations, adds, and removes
 //
 // *
 
