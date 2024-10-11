@@ -27,7 +27,12 @@
 //     conflict public keys at the moment of updating the parent (because the updater
 //     would replace the sibling on its path with a single public key)?
 // *
-// *
+// * Conflicts to consider:
+// * * Concurrent rotations
+// * * Concurrent adds
+// * * Concurrent removes
+// * * Concurrent rotations, adds, and removes
+//
 // *
 
 use std::collections::BTreeMap;
@@ -35,7 +40,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use x25519_dalek;
 
-use crate::{crypto::encrypted::Encrypted, principal::identifier::Identifier};
+use crate::{crypto::{encrypted::Encrypted, hash::Hash}, principal::identifier::Identifier};
 type PublicKey = x25519_dalek::PublicKey;
 type SecretKey = x25519_dalek::StaticSecret;
 
@@ -45,16 +50,18 @@ pub struct LeafIdx(usize);
 pub struct ParentIdx(usize);
 
 #[derive(Clone, Deserialize, Serialize)]
-pub struct CausalTreeKEM {
+pub struct CGKA {
     my_leaf_idx: LeafIdx,
     leaves: Vec<Option<LeafNode>>,
     parents: Vec<Option<ParentNode>>,
     id_to_leaf_idx: BTreeMap<Identifier, LeafIdx>,
     // FIXME: One option is to use the treemath approach from OpenMLS.
     // tree: ...,
+    // /// Ops: Add, Remove, Rotate
+    // ops: ...,
 }
 
-impl CausalTreeKEM {
+impl CGKA {
     pub fn new(pks: Vec<PublicKey>) -> Self {
         todo!()
         // FIXME: Build left-balanced binary tree with pks as leaves.
@@ -63,7 +70,7 @@ impl CausalTreeKEM {
 
 /// Public interface
 // TODO: Can we assume causal broadcast?
-impl CausalTreeKEM {
+impl CGKA {
     /// Get secret for decryption/encryption.
     pub fn get_secret(&self, pk: PublicKey, sk: SecretKey) -> SecretKey {
         todo!()
@@ -100,13 +107,18 @@ impl CausalTreeKEM {
     }
 
     /// Merge
-    pub fn merge(&mut self, tree: &CausalTreeKEM) {
+    // pub fn merge(&mut self, ops: ...) {
+    //     todo!()
+    // }
+
+    /// Hash of the tree
+    pub fn hash(&self) -> Hash<CGKA> {
         todo!()
     }
 }
 
 /// Private methods
-impl CausalTreeKEM {
+impl CGKA {
     // fn is_root(&self, node: TreeIdx) -> bool {
     //     todo!()
     // }
