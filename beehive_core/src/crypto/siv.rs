@@ -2,7 +2,6 @@
 
 use super::symmetric_key::SymmetricKey;
 use crate::principal::document::Document;
-use chacha20poly1305::KeyInit;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 

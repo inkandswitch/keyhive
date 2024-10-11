@@ -40,7 +40,10 @@ impl Active {
         self.signer.verifying_key().into()
     }
 
-    pub fn sign<T: Clone + Into<Vec<u8>>>(&self, payload: T) -> Signed<T> {
+    pub fn sign<T: Clone>(&self, payload: T) -> Signed<T>
+    where
+        Vec<u8>: From<T>,
+    {
         Signed::<T>::sign(payload, &self.signer)
     }
 

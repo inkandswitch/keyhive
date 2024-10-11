@@ -1,25 +1,20 @@
-// #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-// pub struct Admin;
-//
-// #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-// pub struct Append {}
-//
-// #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-// pub struct Read;
-//
-// #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-// pub struct Pull;
-
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-// FIXME to and froms
+/// Access levels for a capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Access {
+    /// The ability to retrieve bytes over the network.
     Pull,
+
+    /// The ability to read (decrypt) the content of a document.
     Read,
+
+    /// The ability to write (append ops to) the content of a document.
     Write,
-    Admin, // FIXME revoker? also: remember that agents MUSY be able to revoke themselevs to do things like key rotation
+
+    /// The ability to revoke any members of a group, not just those that they have causal senority over.
+    Admin,
 }
 
 impl fmt::Display for Access {
@@ -32,21 +27,3 @@ impl fmt::Display for Access {
         }
     }
 }
-
-// FIXME consider
-//
-// pull < read < write  < admin
-//        read < revoke < admin
-//
-// auth graph:    pull, revoke/admin
-// content graph: pull, read, write, admin
-
-// pub enum DocAccess {
-//     Read,
-//     Write,
-// }
-//
-// pub enum AuthAccess {
-//     Delegate, // FIXME remove Delagete, because you should always be able to do this
-//     Revoke,
-// }
