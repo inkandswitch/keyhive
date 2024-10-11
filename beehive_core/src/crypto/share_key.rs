@@ -1,21 +1,19 @@
+//! Newtype around [ECDH] "sharing" public keys.
+//!
+//! [ECDH]: https://wikipedia.org/wiki/Elliptic-curve_Diffie%E2%80%93Hellman
+
 use serde::{Deserialize, Serialize};
 
+/// Newtype around [x25519_dalek::PublicKey].
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShareKey(pub x25519_dalek::PublicKey);
 
 impl ShareKey {
-    pub fn new(key: x25519_dalek::PublicKey) -> Self {
-        Self(key)
-    }
-
+    #[cfg(feature = "test_utils")]
     pub fn generate() -> Self {
         Self(x25519_dalek::PublicKey::from(
             &x25519_dalek::EphemeralSecret::random(),
         ))
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        self.0.as_bytes()
     }
 }
 

@@ -1,11 +1,96 @@
+//! Helpers for working with hashes.
+
 use serde::Deserialize;
 use std::fmt;
 use std::marker::PhantomData;
 
+/// A [`blake3::Hash`] tagged with which type it is a hash of.
+///
+/// This makes it easy to trace hash identifiers through the system.
+///
+/// # Example
+///
+/// ```
+/// # use beehive_core::crypto::hash::Hash;
+/// let string_hash: Hash<String> = Hash::hash("hello world".to_string());
+/// let slice_hash: Hash<&[u8]> = Hash::hash(&[1, 2, 3]);
+/// let bytes_hash: Hash<Vec<u8>> = Hash::hash(vec![42, 99]);
+/// ```
 #[derive(Debug)]
 pub struct Hash<T> {
+    /// The underlying, unparameterized [`blake3::Hash`].
     pub raw: blake3::Hash,
+
+    /// A phantom parameter to retain the type of the preimage.
     pub(crate) _phantom: PhantomData<T>,
+}
+
+impl<T> Hash<T> {
+    /// Hash a value and retain its type as a phantom parameter.
+    pub fn hash(preimage: T) -> Self
+    where
+        T: Into<Vec<u8>>,
+    {
+        Self {
+            raw: blake3::hash(preimage.into().as_slice()),
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Get the hash as a byte slice.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.raw.as_bytes()
+    }
+
+    /// Returns the number of trailing zero _bits_ in the hash.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use beehive_core::crypto::hash::Hash;
+    /// let hash = Hash::hash("hello world".to_string());
+    /// assert_eq!(hash.trailing_zeros(), 6);
+    ///
+    /// let another_hash = Hash::hash("different_!*");
+    /// assert_eq!(another_hash.trailing_zeros(), 4);
+    /// ```
+    pub fn trailing_zeros(&self) -> u8 {
+        let mut count = 0;
+
+        for byte in self.raw.as_bytes().into_iter().rev() {
+            let zeros = byte.count_zeros() as u8;
+            count += zeros;
+
+            if zeros != 8 {
+                break;
+            }
+        }
+
+        count
+    }
+
+    /// Returns the number of trailing zero _bytes_ in the hash.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use beehive_core::crypto::hash::Hash;
+    /// let hash = Hash::hash("hello world".to_string());
+    /// assert_eq!(hash.trailing_zero_bytes(), 0);
+    /// ```
+    pub fn trailing_zero_bytes(&self) -> u8 {
+        let mut count = 0;
+
+        for byte in self.raw.as_bytes().into_iter().rev() {
+            if *byte == 0 {
+                count += 1;
+            } else {
+                break;
+            }
+        }
+
+        count
+    }
 }
 
 impl<T> serde::Serialize for Hash<T> {
@@ -103,58 +188,5 @@ impl<T> From<Hash<T>> for blake3::Hash {
 impl<T> From<Hash<T>> for [u8; 32] {
     fn from(hash: Hash<T>) -> [u8; 32] {
         hash.raw.into()
-    }
-}
-
-impl<T> Hash<T> {
-    pub fn hash(preimage: T) -> Self
-    where
-        T: Into<Vec<u8>>,
-    {
-        Self {
-            raw: blake3::hash(preimage.into().as_slice()),
-            _phantom: PhantomData,
-        }
-    }
-
-    pub fn hash_slice(slice: &[u8]) -> Self {
-        Self {
-            raw: blake3::hash(slice),
-            _phantom: PhantomData,
-        }
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        self.raw.as_bytes()
-    }
-
-    // FIXME make a trait for levels?
-    pub fn trailing_zero_bytes(&self) -> u8 {
-        let mut count = 0;
-
-        for byte in self.raw.as_bytes().into_iter().rev() {
-            if *byte == 0 {
-                count += 1;
-            } else {
-                break;
-            }
-        }
-
-        count
-    }
-
-    pub fn trailing_zeros(&self) -> u8 {
-        let mut count = 0;
-
-        for byte in self.raw.as_bytes().into_iter().rev() {
-            let zeros = byte.count_zeros() as u8;
-            count += zeros;
-
-            if zeros != 8 {
-                break;
-            }
-        }
-
-        count
     }
 }

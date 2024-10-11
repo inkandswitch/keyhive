@@ -8,9 +8,9 @@ use crate::crypto::encrypted::Encrypted;
 use crate::crypto::share_key::ShareKey;
 use crate::crypto::signed::Signed;
 use crate::crypto::siv::Siv;
+use crate::crypto::symmetric_key::SymmetricKey;
 use crate::principal::agent::Agent;
 use crate::principal::group::operation::delegation::Delegation;
-use crate::util::hidden::Hidden;
 use chacha20poly1305::AeadInPlace;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use std::collections::BTreeMap;
@@ -90,21 +90,12 @@ impl Active {
         let our_pk = doc.reader_keys.get(&self.id().into()).expect("FIXME");
         let our_sk = self.share_key_pairs.get(our_pk).expect("FIXME");
 
-        let shared_secret = our_sk.diffie_hellman(&recipient_share_pk.clone().into());
-        let chacha_key: chacha20poly1305::XChaCha20Poly1305 =
-            chacha20poly1305::KeyInit::new_from_slice(shared_secret.as_bytes()).expect("FIXME");
+        let key: SymmetricKey = our_sk
+            .diffie_hellman(&recipient_share_pk.clone().into())
+            .into();
 
-        // FIXME deterministic, misuse resistent
-        let prenonce = rand::random::<[u8; 24]>();
-        let nonce = chacha20poly1305::XNonce::from_slice(&prenonce);
-
-        let siv = Siv::new(*shared_secret.as_bytes(), message, doc);
-
-        // FIXME
-        let bytes: Vec<u8> = chacha_key
-            .encrypt_in_place_detached(&siv.as_xnonce(), &[], message) // FIXME use AEAD
-            .expect("FIXME")
-            .to_vec();
+        let nonce = Siv::new(&key, message, doc);
+        let bytes: Vec<u8> = key.encrypt(nonce, message).expect("FIXME").to_vec();
 
         Encrypted::new(nonce.clone().into(), bytes)
     }
@@ -122,15 +113,15 @@ impl std::fmt::Display for Active {
 
 impl Debug for Active {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let keypairs_hidden_secret_keys: Vec<(&ShareKey, Hidden)> = self
+        let keypairs_hidden_secret_keys: Vec<(&ShareKey, &str)> = self
             .share_key_pairs
             .iter()
-            .map(|(pk, _sk)| (pk, Hidden))
+            .map(|(pk, _sk)| (pk, "<SecretKey>"))
             .collect();
 
         f.debug_struct("Active")
             .field("id", &self.id())
-            .field("signer", &Hidden)
+            .field("signer", &"<Signer>")
             .field("share_key_pairs", &keypairs_hidden_secret_keys)
             .finish()
     }

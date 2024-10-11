@@ -1,4 +1,5 @@
 use ed25519_dalek::Signer;
+use base64::prelude::*;
 use ed25519_dalek::Verifier;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -18,7 +19,7 @@ impl<T: fmt::Display> fmt::Display for Signed<T> {
             f,
             "Signed {{ payload: {}, verifying_key: {}, signature: {} }}",
             self.payload,
-            serde_json::to_string(self.verifying_key.as_bytes()).expect("FIXME"),
+            BASE64_STANDARD.encode(self.verifying_key.as_bytes()),
             self.signature
         )
     }

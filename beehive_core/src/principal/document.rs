@@ -31,7 +31,7 @@ impl std::fmt::Display for Document {
 }
 
 impl Document {
-    pub fn create(parents: Vec<&Agent>) -> Self {
+    pub fn new(parents: Vec<&Agent>) -> Self {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let doc_id = doc_signer.verifying_key().into(); // FIXME zero out after
 
@@ -252,7 +252,7 @@ impl DocStore {
     }
 
     pub fn create_document(&mut self, parents: Vec<&Agent>) -> &Document {
-        let new_doc: Document = Document::create(parents);
+        let new_doc: Document = Document::new(parents);
         let new_doc_id: Identifier = new_doc.verifying_key().into(); // FIXME add helper method
         self.insert(new_doc);
         self.get(&new_doc_id).expect("FIXME")
