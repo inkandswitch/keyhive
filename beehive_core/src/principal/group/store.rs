@@ -26,12 +26,11 @@ impl GroupStore {
     }
 
     pub fn insert(&mut self, group: Group) {
-        self.groups
-            .insert(group.verifying_key().clone().into(), group);
+        self.groups.insert(group.id(), group);
     }
 
-    pub fn create_group(&mut self, parents: Vec<&Agent>) -> &Group {
-        let new_group: Group = Group::create(parents);
+    pub fn generate_group(&mut self, parents: Vec<&Agent>) -> &Group {
+        let new_group: Group = Group::generate(parents);
         let new_group_id: Identifier = new_group.verifying_key().into(); // FIXME add helper method
         self.insert(new_group);
         self.get(&new_group_id).expect("FIXME")
@@ -57,7 +56,7 @@ impl GroupStore {
 
         let mut explore: Vec<GroupAccess> = vec![];
 
-        for (k, (v, _)) in group.delegates.iter() {
+        for (k, (v, _)) in group.members.iter() {
             explore.push(GroupAccess {
                 agent: k.clone(),
                 agent_access: *v,
@@ -88,7 +87,7 @@ impl GroupStore {
                     }
                     _ => {
                         if let Some(group) = self.groups.get(&member.verifying_key().into()) {
-                            for (mem, (pow, _proof)) in group.delegates.clone() {
+                            for (mem, (pow, _proof)) in group.members.clone() {
                                 let current_path_access = access.min(pow).min(parent_access);
 
                                 let best_access =

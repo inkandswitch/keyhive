@@ -24,7 +24,7 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new() -> Self {
+    pub fn generate() -> Self {
         Self {
             active: Active::generate(),
             individuals: Default::default(),
@@ -34,22 +34,18 @@ impl Context {
         }
     }
 
-    pub fn id(&self) -> Identifier {
-        self.active.id()
-    }
-
-    pub fn create_group(&mut self, coparents: Vec<&Agent>) -> &Group {
+    pub fn generate_group(&mut self, coparents: Vec<&Agent>) -> &Group {
         let mut parents = coparents.clone();
         let self_agent = self.active.clone().into();
         parents.push(&self_agent);
-        self.groups.create_group(parents)
+        self.groups.generate_group(parents)
     }
 
-    pub fn create_doc(&mut self, coparents: Vec<&Agent>) -> &Document {
+    pub fn generate_doc(&mut self, coparents: Vec<&Agent>) -> &Document {
         let mut parents = coparents.clone();
         let self_agent = self.active.clone().into();
         parents.push(&self_agent);
-        self.docs.create_document(parents)
+        self.docs.generate_document(parents)
     }
 
     // pub fn encrypt(
@@ -79,7 +75,7 @@ impl Context {
                     .get_mut(&og_group.state.id)
                     .expect("FIXME");
 
-                group.delegates.remove(to_revoke);
+                group.members.remove(to_revoke);
 
                 // FIXME
                 if let Some(revoke) = group.state.delegations_for(to_revoke).pop() {
@@ -111,7 +107,7 @@ impl Context {
                     .pop()
                     .expect("FIXME");
 
-                doc.delegates.remove(to_revoke);
+                doc.members.remove(to_revoke);
                 doc.state.authority_ops.insert(Signed::sign(
                     Revocation {
                         subject: MemberedId::DocumentId(doc.state.id.into()),
@@ -134,7 +130,7 @@ impl Context {
         for doc in self.docs.docs.values() {
             seen.insert(doc.state.id);
 
-            if let Some((access, _proof)) = doc.delegates.get(&self.active.clone().into()) {
+            if let Some((access, _proof)) = doc.members.get(&self.active.clone().into()) {
                 caps.insert(doc.clone(), access.clone());
             }
         }
@@ -142,7 +138,7 @@ impl Context {
         for group in self.groups.groups.values() {
             seen.insert(group.state.id);
 
-            if let Some((access, _proof)) = group.delegates.get(&self.active.clone().into()) {
+            if let Some((access, _proof)) = group.members.get(&self.active.clone().into()) {
                 explore.push((group.clone().into(), access.clone()));
             }
         }
@@ -154,7 +150,7 @@ impl Context {
                         continue;
                     }
 
-                    if let Some((access, _proof)) = doc.delegates.get(&self.active.clone().into()) {
+                    if let Some((access, _proof)) = doc.members.get(&self.active.clone().into()) {
                         caps.insert(doc.clone(), access.clone());
                     }
                 }
@@ -169,7 +165,7 @@ impl Context {
                     }
 
                     if let Some((access, _proof)) =
-                        focus_group.delegates.get(&self.active.clone().into())
+                        focus_group.members.get(&self.active.clone().into())
                     {
                         explore.push((focus_group.clone().into(), access.clone()));
                     }
@@ -190,7 +186,7 @@ impl Context {
 
         let mut explore: Vec<GroupAccess> = vec![];
 
-        for (k, (v, _)) in doc.delegates.iter() {
+        for (k, (v, _)) in doc.members.iter() {
             explore.push(GroupAccess {
                 agent: k.clone(),
                 agent_access: *v,
@@ -269,6 +265,12 @@ impl std::fmt::Debug for Context {
             "Context {{ active: {:?}, individuals: {:?}, groups: {:?}, docs: {:?}, prekeys: {:?} }}",
             self.active, self.individuals, self.groups, self.docs, prekey_ids
         )
+    }
+}
+
+impl Verifiable for Context {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.active.verifying_key()
     }
 }
 

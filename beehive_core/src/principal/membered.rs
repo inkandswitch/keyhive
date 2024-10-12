@@ -28,8 +28,8 @@ impl Membered {
     // FIXME make a trait and apply to children
     pub fn members(&self) -> BTreeMap<Agent, (Access, Signed<Delegation>)> {
         match self {
-            Membered::Group(group) => group.delegates.clone(), // FIXME NEEDS lifetimes, just being slapdash here
-            Membered::Document(document) => document.delegates.clone(),
+            Membered::Group(group) => group.members.clone(), // FIXME NEEDS lifetimes, just being slapdash here
+            Membered::Document(document) => document.members.clone(),
         }
     }
 

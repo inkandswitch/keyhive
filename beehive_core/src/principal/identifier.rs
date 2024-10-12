@@ -11,7 +11,7 @@ use std::fmt;
 /// It is used to identify an agent in the system. Since signing keys are only
 /// available to the one agent and not shared, this identifier is provably unique.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Identifier(ed25519_dalek::VerifyingKey);
+pub struct Identifier(pub ed25519_dalek::VerifyingKey);
 
 impl Identifier {
     #[cfg(feature = "test_utils")]
@@ -21,10 +21,12 @@ impl Identifier {
             .into()
     }
 
+    /// Lower the [`Identifier`] to an owned binary representation.
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
     }
 
+    /// Lower the [`Identifier`] to a borrowed binary representation.
     pub fn as_bytes(&self) -> &[u8; 32] {
         self.0.as_bytes()
     }
@@ -57,5 +59,11 @@ impl Verifiable for Identifier {
 impl From<ed25519_dalek::VerifyingKey> for Identifier {
     fn from(verifying_key: ed25519_dalek::VerifyingKey) -> Self {
         Self(verifying_key)
+    }
+}
+
+impl From<Identifier> for ed25519_dalek::VerifyingKey {
+    fn from(identifier: Identifier) -> Self {
+        identifier.0
     }
 }

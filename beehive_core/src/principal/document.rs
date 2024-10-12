@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 // Materialized
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Document {
-    pub delegates: BTreeMap<Agent, (Access, Signed<Delegation>)>,
+    pub members: BTreeMap<Agent, (Access, Signed<Delegation>)>,
     pub reader_keys: BTreeMap<Individual, ShareKey>, // FIXME May remove if TreeKEM instead of ART
     // NOTE: as expected, separate keys are still safer https://doc.libsodium.org/quickstart#do-i-need-to-add-a-signature-to-encrypted-messages-to-detect-if-they-have-been-tampered-with
     pub state: DocumentState,
@@ -31,11 +31,11 @@ impl std::fmt::Display for Document {
 }
 
 impl Document {
-    pub fn new(parents: Vec<&Agent>) -> Self {
+    pub fn generate(parents: Vec<&Agent>) -> Self {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let doc_id = doc_signer.verifying_key().into(); // FIXME zero out after
+        let doc_id = doc_signer.verifying_key().into();
 
-        let (ops, delegates) = parents.iter().fold(
+        let (ops, members) = parents.iter().fold(
             (CaMap::new(), BTreeMap::new()),
             |(mut op_acc, mut mem_acc), parent| {
                 let del = Delegation {
@@ -58,7 +58,7 @@ impl Document {
         );
 
         Document {
-            delegates,
+            members,
             state: DocumentState {
                 id: doc_id,
                 auth_heads: BTreeSet::from_iter(ops.clone().into_keys()),
@@ -69,16 +69,12 @@ impl Document {
         }
     }
 
-    pub fn id(&self) -> Identifier {
-        self.state.id
-    }
-
     pub fn add_member(&mut self, signed_delegation: Signed<Delegation>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
         // FIXME check that delegation is authorized
-        self.delegates.insert(
+        self.members.insert(
             signed_delegation.payload.to.clone(),
             (signed_delegation.payload.can, signed_delegation.clone()),
         );
@@ -90,7 +86,7 @@ impl Document {
 
     pub fn materialize(state: DocumentState) -> Self {
         // FIXME oof that's a lot of cloning to get the heads
-        let delegates = Operation::topsort(
+        let members = Operation::topsort(
             state.auth_heads.clone().into_iter().collect(),
             &state.authority_ops,
         )
@@ -129,7 +125,7 @@ impl Document {
 
         Document {
             state,
-            delegates,
+            members,
             reader_keys: BTreeMap::new(),
         }
     }
@@ -159,7 +155,7 @@ impl Ord for Document {
 
 impl Verifiable for Document {
     fn verifying_key(&self) -> VerifyingKey {
-        self.state.id.verifying_key()
+        self.state.verifying_key()
     }
 }
 
@@ -188,7 +184,7 @@ impl Ord for DocumentState {
 
 impl Verifiable for DocumentState {
     fn verifying_key(&self) -> VerifyingKey {
-        self.id.verifying_key()
+        self.id.0
     }
 }
 
@@ -251,8 +247,8 @@ impl DocStore {
         self.docs.get(id)
     }
 
-    pub fn create_document(&mut self, parents: Vec<&Agent>) -> &Document {
-        let new_doc: Document = Document::new(parents);
+    pub fn generate_document(&mut self, parents: Vec<&Agent>) -> &Document {
+        let new_doc: Document = Document::generate(parents);
         let new_doc_id: Identifier = new_doc.verifying_key().into(); // FIXME add helper method
         self.insert(new_doc);
         self.get(&new_doc_id).expect("FIXME")
@@ -270,7 +266,7 @@ impl DocStore {
 
         let mut explore: Vec<GroupAccess> = vec![];
 
-        for (k, (v, _)) in doc.delegates.iter() {
+        for (k, (v, _)) in doc.members.iter() {
             explore.push(GroupAccess {
                 agent: k.clone(),
                 agent_access: *v,
@@ -301,7 +297,7 @@ impl DocStore {
                     }
                     _ => {
                         if let Some(group) = self.docs.get(&member.verifying_key().into()) {
-                            for (mem, (pow, _proof)) in group.delegates.clone() {
+                            for (mem, (pow, _proof)) in group.members.clone() {
                                 let current_path_access = access.min(pow).min(parent_access);
 
                                 let best_access =

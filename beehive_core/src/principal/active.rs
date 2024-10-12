@@ -35,11 +35,6 @@ impl Active {
         Self::new(signer)
     }
 
-    // FIXME remove
-    pub fn id(&self) -> Identifier {
-        self.signer.verifying_key().into()
-    }
-
     pub fn sign<T: Clone>(&self, payload: T) -> Signed<T>
     where
         Vec<u8>: From<T>,
@@ -144,7 +139,7 @@ impl From<Active> for Individual {
 
 impl Verifiable for Active {
     fn verifying_key(&self) -> VerifyingKey {
-        self.id().verifying_key()
+        self.signer.verifying_key()
     }
 }
 

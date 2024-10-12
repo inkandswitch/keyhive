@@ -1,7 +1,7 @@
 //! Nonce-misuse resistant initialization vector.
 
 use super::symmetric_key::SymmetricKey;
-use crate::principal::document::Document;
+use crate::principal::{document::Document, traits::Verifiable};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 

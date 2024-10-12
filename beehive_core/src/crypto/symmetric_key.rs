@@ -14,7 +14,7 @@ use x25519_dalek::SharedSecret;
 /// # use beehive_core::crypto::{siv::Siv, symmetric_key::SymmetricKey};
 /// # use beehive_core::principal::document::Document;
 /// let plaintext = b"hello world";
-/// let doc = Document::new(vec![]);
+/// let doc = Document::generate(vec![]);
 ///
 /// let key = SymmetricKey::generate();
 /// let nonce = Siv::new(&key, plaintext, &doc);
