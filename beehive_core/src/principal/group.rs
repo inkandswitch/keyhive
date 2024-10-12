@@ -4,12 +4,11 @@ pub mod operation;
 pub mod state;
 pub mod store;
 
-use super::{agent::Agent, identifier::Identifier, membered::MemberedId, traits::Verifiable};
-use crate::util::content_addressed_map::CaMap;
-use crate::{access::Access, crypto::signed::Signed};
+use super::{agent::Agent, membered::MemberedId, traits::Verifiable};
+use crate::{access::Access, crypto::signed::Signed, util::content_addressed_map::CaMap};
 use base64::prelude::*;
-use operation::Operation;
-use operation::{delegation::Delegation, revocation::Revocation};
+use nonempty::NonEmpty;
+use operation::{delegation::Delegation, revocation::Revocation, Operation};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A collection of agents with no associated content.
@@ -22,13 +21,13 @@ pub struct Group {
     /// The current view of members of a group.
     pub members: BTreeMap<Agent, (Access, Signed<Delegation>)>,
 
-    /// The underlying group state CRDT of the group.
+    /// The `Group`'s underlying (causal) delegation state.
     pub state: state::GroupState,
 }
 
 impl Group {
-    // FIXME "new"... OBVIOUSLY
-    pub fn generate(parents: Vec<&Agent>) -> Group {
+    /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
+    pub fn generate(parents: NonEmpty<&Agent>) -> Group {
         let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let group_id = group_signer.verifying_key().into();
 
@@ -161,9 +160,9 @@ impl Verifiable for Group {
 mod tests {
     use super::*;
 
-    use super::operation::delegation::Delegation;
-    use super::store::GroupStore;
+    use super::{operation::delegation::Delegation, store::GroupStore};
     use crate::principal::{active::Active, individual::Individual, membered::MemberedId};
+    use nonempty::nonempty;
 
     fn setup_user() -> Individual {
         ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
@@ -195,33 +194,61 @@ mod tests {
                         │           │
                         └───────────┘ */
 
-        let group0 = Group::generate(vec![&alice.clone().into()]);
-        let group1 = Group::generate(vec![&alice.clone().into(), &group0.clone().into()]);
-        let group2 = Group::generate(vec![&group0.clone().into(), &bob.clone().into()]);
-        let group3 = Group::generate(vec![&group1.clone().into(), &group2.clone().into()]);
+        let alice_agent = alice.clone().into();
+        let bob_agent = bob.clone().into();
+
+        let group0 = Group::generate(nonempty![&alice_agent]);
+        let group0_agent: Agent = group0.clone().into();
+
+        let group1 = Group::generate(nonempty![&alice_agent, &group0_agent]);
+        let group1_agent = group1.clone().into();
+
+        let group2 = Group::generate(nonempty![&group0_agent, &bob_agent]);
+        let group2_agent = group2.clone().into();
+
+        let group3 = Group::generate(nonempty![&group1_agent, &group2_agent]);
 
         let mut gs = GroupStore::new();
-        // FIXME horrifying clones 😱
-        gs.insert(group0.clone().into());
-        gs.insert(group1.clone().into());
-        gs.insert(group2.clone().into());
-        gs.insert(group3.clone().into());
+
+        gs.insert(group0.clone());
+        gs.insert(group1.clone());
+        gs.insert(group2.clone());
+        gs.insert(group3.clone());
 
         (gs, [group0, group1, group2, group3])
     }
 
     fn setup_cyclic_store(alice: &Individual, bob: &Individual) -> (GroupStore, [Group; 10]) {
-        let group0 = Group::generate(vec![&alice.clone().into()]);
-        let group1 = Group::generate(vec![&bob.clone().into()]);
+        let alice_agent = alice.clone().into();
+        let bob_agent = bob.clone().into();
 
-        let group2 = Group::generate(vec![&group1.clone().into()]);
-        let group3 = Group::generate(vec![&group2.clone().into(), &group2.clone().into()]);
-        let group4 = Group::generate(vec![&group3.clone().into(), &group2.clone().into()]);
-        let group5 = Group::generate(vec![&group4.clone().into(), &group2.clone().into()]);
-        let group6 = Group::generate(vec![&group5.clone().into(), &group2.clone().into()]);
-        let group7 = Group::generate(vec![&group6.clone().into(), &group2.clone().into()]);
-        let group8 = Group::generate(vec![&group7.clone().into(), &group2.clone().into()]);
-        let mut group9 = Group::generate(vec![&group8.clone().into(), &alice.clone().into()]);
+        let group0 = Group::generate(nonempty![&alice_agent]);
+
+        let group1 = Group::generate(nonempty![&bob_agent]);
+        let group1_agent = group1.clone().into();
+
+        let group2 = Group::generate(nonempty![&group1_agent]);
+        let group2_agent = group2.clone().into();
+
+        let group3 = Group::generate(nonempty![&group2_agent, &group2_agent]);
+        let group3_agent = group3.clone().into();
+
+        let group4 = Group::generate(nonempty![&group3_agent, &group2_agent]);
+        let group4_agent = group4.clone().into();
+
+        let group5 = Group::generate(nonempty![&group4_agent, &group2_agent]);
+        let group5_agent = group5.clone().into();
+
+        let group6 = Group::generate(nonempty![&group5_agent, &group2_agent]);
+        let group6_agent = group6.clone().into();
+
+        let group7 = Group::generate(nonempty![&group6_agent, &group2_agent]);
+        let group7_agent = group7.clone().into();
+
+        let group8 = Group::generate(nonempty![&group7_agent, &group2_agent]);
+        let group8_agent = group8.clone().into();
+
+        let mut group9 = Group::generate(nonempty![&group8_agent, &alice_agent]);
 
         let active = Active::generate();
 
@@ -238,17 +265,17 @@ mod tests {
         ));
 
         let mut gs = GroupStore::new();
-        // FIXME horrifying
-        gs.insert(group0.clone().into());
-        gs.insert(group1.clone().into());
-        gs.insert(group2.clone().into());
-        gs.insert(group3.clone().into());
-        gs.insert(group4.clone().into());
-        gs.insert(group5.clone().into());
-        gs.insert(group6.clone().into());
-        gs.insert(group7.clone().into());
-        gs.insert(group8.clone().into());
-        gs.insert(group9.clone().into());
+
+        gs.insert(group0.clone());
+        gs.insert(group1.clone());
+        gs.insert(group2.clone());
+        gs.insert(group3.clone());
+        gs.insert(group4.clone());
+        gs.insert(group5.clone());
+        gs.insert(group6.clone());
+        gs.insert(group7.clone());
+        gs.insert(group8.clone());
+        gs.insert(group9.clone());
 
         (
             gs,
@@ -272,91 +299,91 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn test_transitive_one() {
-    //     let alice = setup_user();
-    //     let bob = setup_user();
+    #[test]
+    fn test_transitive_one() {
+        let alice = setup_user();
+        let bob = setup_user();
 
-    //     let (gs, [_g0, g1, _g2, _g3]) = setup_store(&alice, &bob);
-    //     let g1_mems: BTreeMap<Agent, Access> = gs.transative_members(&g1);
+        let (gs, [_g0, g1, _g2, _g3]) = setup_store(&alice, &bob);
+        let g1_mems: BTreeMap<Agent, Access> = gs.transative_members(&g1);
 
-    //     assert_eq!(
-    //         g1_mems,
-    //         BTreeMap::from_iter([(alice.into(), Access::Admin)])
-    //     );
-    // }
+        assert_eq!(
+            g1_mems,
+            BTreeMap::from_iter([(alice.into(), Access::Admin)])
+        );
+    }
 
-    // #[test]
-    // fn test_transitive_two() {
-    //     let alice = setup_user();
-    //     let bob = setup_user();
+    #[test]
+    fn test_transitive_two() {
+        let alice = setup_user();
+        let bob = setup_user();
 
-    //     let (gs, [_g0, _g1, g2, _g3]) = setup_store(&alice, &bob);
-    //     let g2_mems: BTreeMap<Agent, Access> = gs.transative_members(&g2);
+        let (gs, [_g0, _g1, g2, _g3]) = setup_store(&alice, &bob);
+        let g2_mems: BTreeMap<Agent, Access> = gs.transative_members(&g2);
 
-    //     assert_eq!(
-    //         g2_mems,
-    //         BTreeMap::from_iter([(alice.into(), Access::Admin), (bob.into(), Access::Admin)])
-    //     );
-    // }
+        assert_eq!(
+            g2_mems,
+            BTreeMap::from_iter([(alice.into(), Access::Admin), (bob.into(), Access::Admin)])
+        );
+    }
 
-    // #[test]
-    // fn test_transitive_tree() {
-    //     let alice = setup_user();
-    //     let bob = setup_user();
+    #[test]
+    fn test_transitive_tree() {
+        let alice = setup_user();
+        let bob = setup_user();
 
-    //     let (gs, [_g0, _g1, _g2, g3]) = setup_store(&alice, &bob);
-    //     let g3_mems: BTreeMap<Agent, Access> = gs.transative_members(&g3);
+        let (gs, [_g0, _g1, _g2, g3]) = setup_store(&alice, &bob);
+        let g3_mems: BTreeMap<Agent, Access> = gs.transative_members(&g3);
 
-    //     assert_eq!(
-    //         g3_mems,
-    //         BTreeMap::from_iter([(alice.into(), Access::Admin), (bob.into(), Access::Admin)])
-    //     );
-    // }
+        assert_eq!(
+            g3_mems,
+            BTreeMap::from_iter([(alice.into(), Access::Admin), (bob.into(), Access::Admin)])
+        );
+    }
 
-    // #[test]
-    // fn test_transitive_cycles() {
-    //     let alice = setup_user();
-    //     let bob = setup_user();
+    #[test]
+    fn test_transitive_cycles() {
+        let alice = setup_user();
+        let bob = setup_user();
 
-    //     let (gs, [_, _, _, _, _, _, _, _, _, g9]) = setup_cyclic_store(&alice, &bob);
-    //     let g9_mems: BTreeMap<Agent, Access> = gs.transative_members(&g9);
+        let (gs, [_, _, _, _, _, _, _, _, _, g9]) = setup_cyclic_store(&alice, &bob);
+        let g9_mems: BTreeMap<Agent, Access> = gs.transative_members(&g9);
 
-    //     assert_eq!(
-    //         g9_mems,
-    //         BTreeMap::from_iter([(alice.into(), Access::Admin), (bob.into(), Access::Admin)])
-    //     );
-    // }
+        assert_eq!(
+            g9_mems,
+            BTreeMap::from_iter([(alice.into(), Access::Admin), (bob.into(), Access::Admin)])
+        );
+    }
 
-    // #[test]
-    // fn test_add_member() {
-    //     let alice = setup_user();
-    //     let bob = setup_user();
-    //     let carol = setup_user();
+    #[test]
+    fn test_add_member() {
+        let alice = setup_user();
+        let bob = setup_user();
+        let carol = setup_user();
 
-    //     let (mut gs, [mut g0, _, _, _]) = setup_store(&alice, &bob);
+        let (mut gs, [mut g0, _, _, _]) = setup_store(&alice, &bob);
 
-    //     let active = Active::generate();
+        let active = Active::generate();
 
-    //     g0.add_member(Signed::sign(
-    //         Delegation {
-    //             subject: MemberedId::GroupId(g0.id()),
-    //             from: active.id(),
-    //             to: carol.clone().into(),
-    //             can: Access::Admin,
-    //             proof: vec![],
-    //             after_auth: vec![],
-    //         },
-    //         &active.signer,
-    //     ));
+        g0.add_member(Signed::sign(
+            Delegation {
+                subject: MemberedId::GroupId(g0.id()),
+                from: active.id(),
+                to: carol.clone().into(),
+                can: Access::Admin,
+                proof: vec![],
+                after_auth: vec![],
+            },
+            &active.signer,
+        ));
 
-    //     gs.insert(g0.clone().into());
+        gs.insert(g0.clone().into());
 
-    //     let g0_mems: BTreeMap<Agent, Access> = gs.transative_members(&g0);
+        let g0_mems: BTreeMap<Agent, Access> = gs.transative_members(&g0);
 
-    //     assert_eq!(
-    //         g0_mems,
-    //         BTreeMap::from_iter([(alice.into(), Access::Admin), (carol.into(), Access::Admin)])
-    //     );
-    // }
+        assert_eq!(
+            g0_mems,
+            BTreeMap::from_iter([(alice.into(), Access::Admin), (carol.into(), Access::Admin)])
+        );
+    }
 }

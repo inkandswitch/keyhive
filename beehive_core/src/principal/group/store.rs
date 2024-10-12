@@ -1,9 +1,9 @@
-use crate::access::Access;
-use crate::principal::agent::Agent;
-use crate::principal::group::Group;
-use crate::principal::identifier::Identifier;
-use crate::principal::traits::Verifiable;
+use crate::{
+    access::Access,
+    principal::{agent::Agent, group::Group, identifier::Identifier, traits::Verifiable},
+};
 use base64::prelude::*;
+use nonempty::NonEmpty;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -29,7 +29,7 @@ impl GroupStore {
         self.groups.insert(group.id(), group);
     }
 
-    pub fn generate_group(&mut self, parents: Vec<&Agent>) -> &Group {
+    pub fn generate_group(&mut self, parents: NonEmpty<&Agent>) -> &Group {
         let new_group: Group = Group::generate(parents);
         let new_group_id: Identifier = new_group.verifying_key().into(); // FIXME add helper method
         self.insert(new_group);
@@ -115,10 +115,10 @@ impl GroupStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // use super::*;
 
-    // #[test]
-    // fn test_test() {
-    //     assert_eq!(1, 1);
-    // }
+    #[test]
+    fn test_test() {
+        todo!()
+    }
 }

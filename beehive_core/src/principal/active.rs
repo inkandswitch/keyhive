@@ -1,5 +1,4 @@
 use super::document::Document;
-use super::identifier::Identifier;
 use super::individual::Individual;
 use super::traits::Verifiable;
 use crate::access::Access;
@@ -11,7 +10,6 @@ use crate::crypto::siv::Siv;
 use crate::crypto::symmetric_key::SymmetricKey;
 use crate::principal::agent::Agent;
 use crate::principal::group::operation::delegation::Delegation;
-use chacha20poly1305::AeadInPlace;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use std::collections::BTreeMap;
 use std::fmt::Debug;

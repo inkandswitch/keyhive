@@ -1,16 +1,19 @@
-use crate::crypto::hash::Hash;
-use crate::crypto::signed::Signed;
-use crate::principal::membered::MemberedId;
-use crate::util::content_addressed_map::CaMap;
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
-use thiserror::Error;
-use topological_sort::TopologicalSort;
-
 pub mod delegation;
 pub mod revocation;
 pub mod store;
+
+use crate::{
+    crypto::{hash::Hash, signed::Signed},
+    principal::membered::MemberedId,
+    util::content_addressed_map::CaMap,
+};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
+use thiserror::Error;
+use topological_sort::TopologicalSort;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Operation {
@@ -228,15 +231,10 @@ impl Operation {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::crypto::hash::Hash;
-    use crate::crypto::signed::Signed;
-    use crate::principal::agent::Agent;
-    use crate::principal::membered::Membered;
-    use crate::principal::membered::MemberedId;
+    // use super::*;
 
     #[test]
     fn test_topsort() {
-        // todo!()
+        todo!()
     }
 }

@@ -12,6 +12,7 @@ use crate::principal::identifier::Identifier;
 use crate::principal::individual::Individual;
 use crate::principal::membered::{Membered, MemberedId};
 use crate::principal::traits::Verifiable;
+use nonempty::NonEmpty;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone)]
@@ -35,10 +36,10 @@ impl Context {
     }
 
     pub fn generate_group(&mut self, coparents: Vec<&Agent>) -> &Group {
-        let mut parents = coparents.clone();
-        let self_agent = self.active.clone().into();
-        parents.push(&self_agent);
-        self.groups.generate_group(parents)
+        self.groups.generate_group(NonEmpty {
+            head: &self.active.clone().into(),
+            tail: coparents.clone(),
+        })
     }
 
     pub fn generate_doc(&mut self, coparents: Vec<&Agent>) -> &Document {

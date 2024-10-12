@@ -30,9 +30,11 @@ x25519-dalek = { version = "2.0", features = ["getrandom", "serde", "static_secr
 thiserror = { workspace = true }
 
 # Utilities
-generic-array = "1.1.0"
+generic-array = "1.1"
+nonempty = "0.10.0"
 rand = "0.8.5"
 topological-sort = "0.2.2"
 
 [features]
 mermaid_docs = ["aquamarine"]
+test_utils = []

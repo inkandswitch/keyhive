@@ -1,17 +1,15 @@
-use super::super::agent::Agent;
-use super::operation::delegation::Delegation;
-use super::operation::Operation;
-use crate::principal::{
-    identifier::Identifier, individual::Individual, membered::MemberedId, traits::Verifiable,
-};
-use crate::util::content_addressed_map::CaMap;
+use super::operation::{delegation::Delegation, Operation};
 use crate::{
     access::Access,
     crypto::{hash::Hash, signed::Signed},
+    principal::{
+        agent::Agent, identifier::Identifier, individual::Individual, membered::MemberedId,
+        traits::Verifiable,
+    },
+    util::content_addressed_map::CaMap,
 };
 use ed25519_dalek::VerifyingKey;
-use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::{cmp::Ordering, collections::BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GroupState {
