@@ -66,6 +66,7 @@ impl From<Identifier> for Individual {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct IndividualOp {
     pub verifier: VerifyingKey,
     pub op: ReadKeyOp,
@@ -73,13 +74,13 @@ pub struct IndividualOp {
 }
 
 // FIXME move to each Doc
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ReadKeyOp {
     Add(AddReadKey),
     Remove(VerifyingKey),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AddReadKey {
     pub group: VerifyingKey,
     pub key: x25519_dalek::PublicKey,

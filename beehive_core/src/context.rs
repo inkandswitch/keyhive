@@ -1,52 +1,68 @@
-use crate::access::Access;
-use crate::crypto::share_key::ShareKey;
-use crate::crypto::signed::Signed;
-use crate::principal::active::Active;
-use crate::principal::agent::Agent;
-use crate::principal::document::DocStore;
-use crate::principal::document::Document;
-use crate::principal::group::operation::revocation::Revocation;
-use crate::principal::group::store::GroupStore;
-use crate::principal::group::Group;
-use crate::principal::identifier::Identifier;
-use crate::principal::individual::Individual;
-use crate::principal::membered::{Membered, MemberedId};
-use crate::principal::traits::Verifiable;
+//! The primary API for the library.
+
+use crate::{
+    access::Access,
+    crypto::signed::Signed,
+    principal::{
+        active::Active,
+        agent::Agent,
+        document::{DocStore, Document},
+        group::{operation::revocation::Revocation, store::GroupStore, Group},
+        identifier::Identifier,
+        individual::Individual,
+        membered::{Membered, MemberedId},
+        traits::Verifiable,
+    },
+};
 use nonempty::NonEmpty;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
-pub struct Context {
+pub struct Context<'a, T: std::hash::Hash + Clone> {
+    /// The [`Active`] user agent.
     pub active: Active,
+
+    /// The [`Individual`]s that are known to this agent.
     pub individuals: BTreeSet<Individual>,
-    pub groups: GroupStore,
-    pub docs: DocStore,
-    pub prekeys: BTreeMap<ShareKey, x25519_dalek::StaticSecret>,
+
+    /// The [`Group`]s that are known to this agent.
+    pub groups: GroupStore<'a, T>,
+
+    /// The [`Document`]s that are known to this agent.
+    pub docs: DocStore<'a, T>,
 }
 
-impl Context {
+impl<'a, T: std::hash::Hash + Clone> Context<'a, T> {
     pub fn generate() -> Self {
         Self {
             active: Active::generate(),
             individuals: Default::default(),
-            groups: Default::default(),
-            docs: Default::default(),
-            prekeys: Default::default(),
+            groups: GroupStore::new(),
+            docs: DocStore::new(),
         }
     }
 
-    pub fn generate_group(&mut self, coparents: Vec<&Agent>) -> &Group {
+    pub fn generate_group(&mut self, coparents: Vec<&Agent<'a, T>>) -> &Group<'a, T> {
         self.groups.generate_group(NonEmpty {
             head: &self.active.clone().into(),
             tail: coparents.clone(),
         })
     }
 
-    pub fn generate_doc(&mut self, coparents: Vec<&Agent>) -> &Document {
+    pub fn generate_doc(&mut self, coparents: Vec<&Agent<'a, T>>) -> &Document<'a, T> {
         let mut parents = coparents.clone();
         let self_agent = self.active.clone().into();
         parents.push(&self_agent);
         self.docs.generate_document(parents)
+    }
+
+    pub fn sign<U>(&self, data: U) -> Signed<U>
+    where
+        U: Clone + std::hash::Hash,
+        Vec<u8>: From<U>,
+    {
+        self.active.sign(data)
     }
 
     // pub fn encrypt(
@@ -61,7 +77,10 @@ impl Context {
     //     dcgka_2m_broadcast(key, data, public_keys)
     // }
 
-    pub fn revoke(&mut self, to_revoke: &Agent, from: &mut Membered) {
+    pub fn revoke(&mut self, to_revoke: &Agent<'a, T>, from: &mut Membered<'a, T>)
+    where
+        T: Ord + Clone,
+    {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
@@ -70,11 +89,7 @@ impl Context {
         match from {
             Membered::Group(og_group) => {
                 // let mut owned_group = group.clone();
-                let group = self
-                    .groups
-                    .groups
-                    .get_mut(&og_group.state.id)
-                    .expect("FIXME");
+                let group = self.groups.get_mut(&og_group.state.id).expect("FIXME");
 
                 group.members.remove(to_revoke);
 
@@ -86,16 +101,10 @@ impl Context {
                         .pop()
                         .expect("FIXME");
 
-                    group.state.ops.insert(Signed::sign(
-                        Revocation {
-                            subject: MemberedId::GroupId(group.state.id.into()),
-                            revoker: self.active.clone().into(),
-                            revoke,
-                            proof,
-                        }
-                        .into(),
-                        &self.active.signer,
-                    ));
+                    group
+                        .state
+                        .revocations
+                        .insert(self.sign(Revocation { revoke, proof }));
                 }
             }
             Membered::Document(og_doc) => {
@@ -109,38 +118,35 @@ impl Context {
                     .expect("FIXME");
 
                 doc.members.remove(to_revoke);
-                doc.state.authority_ops.insert(Signed::sign(
-                    Revocation {
-                        subject: MemberedId::DocumentId(doc.state.id.into()),
-                        revoker: self.active.clone().into(),
-                        revoke,
-                        proof,
-                    }
-                    .into(),
+                doc.state.revocations.insert(Signed::sign(
+                    Revocation { revoke, proof },
                     &self.active.signer,
                 ));
             }
         }
     }
 
-    pub fn transitive_docs(&self) -> BTreeMap<Document, Access> {
-        let mut explore: Vec<(Membered, Access)> = vec![];
-        let mut caps: BTreeMap<Document, Access> = BTreeMap::new();
+    pub fn transitive_docs(&self) -> BTreeMap<&'a Document<'a, T>, Access>
+    where
+        T: Ord,
+    {
+        let mut explore: Vec<(Membered<'a, T>, Access)> = vec![];
+        let mut caps: BTreeMap<&Document<'a, T>, Access> = BTreeMap::new();
         let mut seen: BTreeSet<Identifier> = BTreeSet::new();
 
         for doc in self.docs.docs.values() {
             seen.insert(doc.state.id);
 
             if let Some((access, _proof)) = doc.members.get(&self.active.clone().into()) {
-                caps.insert(doc.clone(), access.clone());
+                caps.insert(doc, access.clone());
             }
         }
 
-        for group in self.groups.groups.values() {
+        for group in self.groups.values() {
             seen.insert(group.state.id);
 
-            if let Some((access, _proof)) = group.members.get(&self.active.clone().into()) {
-                explore.push((group.clone().into(), access.clone()));
+            if let Some((access, _proof)) = group.get(&self.active.into()) {
+                explore.push((group.into(), access.clone()));
             }
         }
 
@@ -152,11 +158,11 @@ impl Context {
                     }
 
                     if let Some((access, _proof)) = doc.members.get(&self.active.clone().into()) {
-                        caps.insert(doc.clone(), access.clone());
+                        caps.insert(doc, access.clone());
                     }
                 }
 
-                for (id, focus_group) in self.groups.groups.iter() {
+                for (id, focus_group) in self.groups.iter() {
                     if seen.contains(&focus_group.state.id) {
                         continue;
                     }
@@ -165,10 +171,8 @@ impl Context {
                         continue;
                     }
 
-                    if let Some((access, _proof)) =
-                        focus_group.members.get(&self.active.clone().into())
-                    {
-                        explore.push((focus_group.clone().into(), access.clone()));
+                    if let Some((access, _proof)) = focus_group.get(&self.active.clone().into()) {
+                        explore.push((focus_group.into(), access.clone()));
                     }
                 }
             }
@@ -178,14 +182,17 @@ impl Context {
     }
 
     // FIXME
-    pub fn transitive_members(&self, doc: &Document) -> BTreeMap<Agent, Access> {
-        struct GroupAccess {
-            agent: Agent,
+    pub fn transitive_members(&self, doc: &Document<'a, T>) -> BTreeMap<Agent<'a, T>, Access>
+    where
+        T: Ord,
+    {
+        struct GroupAccess<'b, U: std::hash::Hash + Clone> {
+            agent: Agent<'b, U>,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess> = vec![];
+        let mut explore: Vec<GroupAccess<'a, T>> = vec![];
 
         for (k, (v, _)) in doc.members.iter() {
             explore.push(GroupAccess {
@@ -195,20 +202,16 @@ impl Context {
             });
         }
 
-        let mut merged_store =
-            self.groups
-                .groups
-                .iter()
-                .fold(BTreeMap::new(), |mut acc, (k, v)| {
-                    acc.insert(k.clone(), Membered::Group(v.clone()));
-                    acc
-                });
+        let mut merged_store = self.groups.iter().fold(BTreeMap::new(), |mut acc, (k, v)| {
+            acc.insert(k.clone(), &Membered::Group(v));
+            acc
+        });
 
         for (k, v) in self.docs.docs.iter() {
-            merged_store.insert(k.clone(), Membered::Document(v.clone()));
+            merged_store.insert(k.clone(), &Membered::Document(v));
         }
 
-        let mut caps: BTreeMap<Agent, Access> = BTreeMap::new();
+        let mut caps: BTreeMap<Agent<'a, T>, Access> = BTreeMap::new();
 
         while !explore.is_empty() {
             if let Some(GroupAccess {
@@ -242,7 +245,7 @@ impl Context {
                                     };
 
                                 explore.push(GroupAccess {
-                                    agent: mem,
+                                    agent: mem.clone(),
                                     agent_access: best_access,
                                     parent_access,
                                 });
@@ -257,26 +260,14 @@ impl Context {
     }
 }
 
-impl std::fmt::Debug for Context {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let prekey_ids = self.prekeys.keys().collect::<Vec<&ShareKey>>();
-
-        write!(
-            f,
-            "Context {{ active: {:?}, individuals: {:?}, groups: {:?}, docs: {:?}, prekeys: {:?} }}",
-            self.active, self.individuals, self.groups, self.docs, prekey_ids
-        )
-    }
-}
-
-impl Verifiable for Context {
+impl<'a, T: std::hash::Hash + Clone> Verifiable for Context<'a, T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.active.verifying_key()
     }
 }
 
-impl From<Context> for Agent {
-    fn from(context: Context) -> Self {
+impl<'a, T: std::hash::Hash + Clone> From<Context<'a, T>> for Agent<'a, T> {
+    fn from(context: Context<'a, T>) -> Self {
         context.active.into()
     }
 }

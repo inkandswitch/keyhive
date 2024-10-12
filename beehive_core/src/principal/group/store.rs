@@ -7,49 +7,57 @@ use nonempty::NonEmpty;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct GroupStore {
-    pub groups: BTreeMap<Identifier, Group>,
-}
+pub struct GroupStore<'a, T: std::hash::Hash + Clone>(pub BTreeMap<Identifier, Group<'a, T>>);
 
-impl GroupStore {
+impl<'a, T: std::hash::Hash + Clone> GroupStore<'a, T> {
     pub fn new() -> Self {
-        GroupStore {
-            groups: BTreeMap::new(),
-        }
+        GroupStore(BTreeMap::new())
     }
 
     pub fn pretty_print_direct_pks(&self) -> Vec<String> {
-        self.groups
+        self.0
             .values()
             .map(|pk| BASE64_STANDARD.encode(pk.verifying_key()))
             .collect()
     }
 
-    pub fn insert(&mut self, group: Group) {
-        self.groups.insert(group.id(), group);
+    pub fn insert(&mut self, group: Group<'a, T>) {
+        self.0.insert(group.id(), group);
     }
 
-    pub fn generate_group(&mut self, parents: NonEmpty<&Agent>) -> &Group {
-        let new_group: Group = Group::generate(parents);
+    pub fn generate_group(&mut self, parents: NonEmpty<&Agent<'a, T>>) -> &Group<'a, T> {
+        let new_group: Group<'a, T> = Group::generate(parents);
         let new_group_id: Identifier = new_group.verifying_key().into(); // FIXME add helper method
         self.insert(new_group);
         self.get(&new_group_id).expect("FIXME")
     }
 
-    pub fn get(&self, id: &Identifier) -> Option<&Group> {
-        self.groups.get(id)
+    pub fn get(&self, id: &Identifier) -> Option<&Group<'a, T>> {
+        self.0.get(id)
+    }
+
+    pub fn get_mut(&mut self, id: &Identifier) -> Option<&mut Group<'a, T>> {
+        self.0.get_mut(id)
+    }
+
+    pub fn values(&self) -> Vec<&Group<'a, T>> {
+        self.0.values().collect()
     }
 
     pub fn ids(&self) -> BTreeSet<&Identifier> {
-        self.groups.keys().collect()
+        self.0.keys().collect()
+    }
+
+    pub fn iter(&self) -> std::collections::btree_map::Iter<'a, Identifier, Group<'a, T>> {
+        self.0.iter()
     }
 
     // FIXME shoudl be more like this:
     // pub fn transative_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
     // FIXME return path as well?
-    pub fn transative_members(&self, group: &Group) -> BTreeMap<Agent, Access> {
-        struct GroupAccess {
-            agent: Agent,
+    pub fn transative_members(&self, group: &Group<'a, T>) -> BTreeMap<&Agent<'a, T>, Access> {
+        struct GroupAccess<'b, U: std::hash::Hash + Clone> {
+            agent: Agent<'b, U>,
             agent_access: Access,
             parent_access: Access,
         }
@@ -58,7 +66,7 @@ impl GroupStore {
 
         for (k, (v, _)) in group.members.iter() {
             explore.push(GroupAccess {
-                agent: k.clone(),
+                agent: k,
                 agent_access: *v,
                 parent_access: Access::Admin,
             });

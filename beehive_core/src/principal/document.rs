@@ -1,37 +1,31 @@
-use super::identifier::Identifier;
-use super::individual::Individual;
-use super::membered::MemberedId;
-use super::traits::Verifiable;
-use crate::access::Access;
-use crate::crypto::hash::Hash;
-use crate::crypto::share_key::ShareKey;
-use crate::crypto::signed::Signed;
-use crate::principal::agent::Agent;
-use crate::principal::group::operation::delegation::Delegation;
-use crate::principal::group::operation::Operation;
-use crate::util::content_addressed_map::CaMap;
-use base64::prelude::*;
+use super::{
+    identifier::Identifier, individual::Individual, membered::MemberedId, traits::Verifiable,
+};
+use crate::{
+    access::Access,
+    crypto::{hash::Hash, share_key::ShareKey, signed::Signed},
+    principal::{
+        agent::Agent,
+        group::operation::{delegation::Delegation, revocation::Revocation, Operation},
+    },
+    util::content_addressed_map::CaMap,
+};
 use ed25519_dalek::VerifyingKey;
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+};
 
-// Materialized
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Document {
-    pub members: BTreeMap<Agent, (Access, Signed<Delegation>)>,
-    pub reader_keys: BTreeMap<Individual, ShareKey>, // FIXME May remove if TreeKEM instead of ART
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Document<'a, T: std::hash::Hash + Clone> {
+    pub members: BTreeMap<Agent<'a, T>, (Access, Signed<Delegation<'a, T>>)>,
+    pub reader_keys: BTreeMap<&'a Individual, ShareKey>, // FIXME May remove if TreeKEM instead of ART
     // NOTE: as expected, separate keys are still safer https://doc.libsodium.org/quickstart#do-i-need-to-add-a-signature-to-encrypted-messages-to-detect-if-they-have-been-tampered-with
-    pub state: DocumentState,
+    pub state: DocumentState<'a, T>,
 }
 
-impl std::fmt::Display for Document {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", BASE64_STANDARD.encode(self.state.id.as_bytes()))
-    }
-}
-
-impl Document {
-    pub fn generate(parents: Vec<&Agent>) -> Self {
+impl<'a, T: std::hash::Hash + Clone> Document<'a, T> {
+    pub fn generate(parents: Vec<&Agent<'a, T>>) -> Self {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let doc_id = doc_signer.verifying_key().into();
 
@@ -40,15 +34,14 @@ impl Document {
             |(mut op_acc, mut mem_acc), parent| {
                 let del = Delegation {
                     subject: MemberedId::DocumentId(doc_id),
-                    from: doc_id,
-                    to: (*parent).clone(),
+                    delegate: (*parent).clone(),
                     can: Access::Admin,
                     proof: vec![],
                     after_auth: vec![],
                 };
 
                 let signed_op = Signed::sign(del.clone().into(), &doc_signer);
-                let signed_del = Signed::sign(del, &doc_signer);
+                let signed_del = Signed::sign(&del, &doc_signer);
 
                 mem_acc.insert((*parent).clone(), (Access::Admin, signed_del.clone()));
 
@@ -69,7 +62,7 @@ impl Document {
         }
     }
 
-    pub fn add_member(&mut self, signed_delegation: Signed<Delegation>) {
+    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<'a, T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
@@ -84,7 +77,7 @@ impl Document {
             .insert(signed_delegation.map(|delegation| delegation.into()).into());
     }
 
-    pub fn materialize(state: DocumentState) -> Self {
+    pub fn materialize(state: DocumentState<'a, T>) -> Self {
         // FIXME oof that's a lot of cloning to get the heads
         let members = Operation::topsort(
             state.auth_heads.clone().into_iter().collect(),
@@ -132,34 +125,25 @@ impl Document {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DocumentState {
+pub struct DocumentState<'a, T: std::hash::Hash + Clone> {
     pub id: Identifier,
-    pub auth_heads: BTreeSet<Hash<Signed<Operation>>>,
-    pub authority_ops: CaMap<Signed<Operation>>,
-    pub content_ops: BTreeSet<u8>, // FIXME automerge content
-                                   // FIXME just cache view directly on the object?
-                                   // FIXME also maybe just reference AM doc heads?
+
+    pub delegation_heads: BTreeSet<&'a Signed<Delegation<'a, T>>>,
+    pub delegations: CaMap<Signed<Delegation<'a, T>>>,
+
+    pub revocation_heads: BTreeSet<&'a Signed<Revocation<'a, T>>>,
+    pub revocations: CaMap<Signed<Revocation<'a, T>>>,
+
+    pub content_ops: BTreeSet<T>,
 }
 
-impl PartialOrd for Document {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.state.partial_cmp(&other.state)
-    }
-}
-
-impl Ord for Document {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.state.cmp(&other.state)
-    }
-}
-
-impl Verifiable for Document {
+impl<'a, T: std::hash::Hash + Clone> Verifiable for Document<'a, T> {
     fn verifying_key(&self) -> VerifyingKey {
         self.state.verifying_key()
     }
 }
 
-impl PartialOrd for DocumentState {
+impl<'a, T: Eq + std::hash::Hash + Clone> PartialOrd for DocumentState<'a, T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.id.as_bytes().partial_cmp(&other.id.as_bytes()) {
             Some(Ordering::Equal) => {
@@ -176,19 +160,19 @@ impl PartialOrd for DocumentState {
     }
 }
 
-impl Ord for DocumentState {
+impl<'a, T: Eq + std::hash::Hash + Clone> Ord for DocumentState<'a, T> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.id.as_bytes().cmp(&other.id.as_bytes())
     }
 }
 
-impl Verifiable for DocumentState {
+impl<'a, T: std::hash::Hash + Clone> Verifiable for DocumentState<'a, T> {
     fn verifying_key(&self) -> VerifyingKey {
         self.id.0
     }
 }
 
-impl DocumentState {
+impl<'a, T: std::hash::Hash + Clone> DocumentState<'a, T> {
     pub fn new(parent: Individual) -> Self {
         let mut rng = rand::rngs::OsRng;
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
@@ -218,7 +202,7 @@ impl DocumentState {
         }
     }
 
-    pub fn delegations_for(&self, agent: &Agent) -> Vec<Signed<Delegation>> {
+    pub fn delegations_for(&self, agent: &Agent<'a, T>) -> Vec<&Signed<Delegation<'a, T>>> {
         self.authority_ops
             .iter()
             .filter_map(|(_, op)| {
@@ -234,20 +218,26 @@ impl DocumentState {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
-pub struct DocStore {
-    pub docs: BTreeMap<Identifier, Document>,
+pub struct DocStore<'a, T: std::hash::Hash + Clone> {
+    pub docs: BTreeMap<Identifier, Document<'a, T>>,
 }
 
-impl DocStore {
-    pub fn insert(&mut self, doc: Document) {
+impl<'a, T: std::hash::Hash + Clone> DocStore<'a, T> {
+    pub fn new() -> Self {
+        Self {
+            docs: BTreeMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, doc: Document<'a, T>) {
         self.docs.insert(doc.verifying_key().into(), doc);
     }
 
-    pub fn get(&self, id: &Identifier) -> Option<&Document> {
+    pub fn get(&self, id: &Identifier) -> Option<&Document<'a, T>> {
         self.docs.get(id)
     }
 
-    pub fn generate_document(&mut self, parents: Vec<&Agent>) -> &Document {
+    pub fn generate_document(&mut self, parents: Vec<&Agent<'a, T>>) -> &Document<'a, T> {
         let new_doc: Document = Document::generate(parents);
         let new_doc_id: Identifier = new_doc.verifying_key().into(); // FIXME add helper method
         self.insert(new_doc);
@@ -257,9 +247,9 @@ impl DocStore {
     // FIXME shoudl be more like this:
     // pub fn transative_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
     // FIXME return path as well?
-    pub fn transative_members(&self, doc: &Document) -> BTreeMap<Agent, Access> {
-        struct GroupAccess {
-            agent: Agent,
+    pub fn transative_members(&self, doc: &Document<'a, T>) -> BTreeMap<&Agent<'a, T>, Access> {
+        struct GroupAccess<'b, U: std::hash::Hash + Clone> {
+            agent: &'b Agent<'b, U>,
             agent_access: Access,
             parent_access: Access,
         }

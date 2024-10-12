@@ -30,7 +30,11 @@ use std::io::Read;
 pub struct Siv(pub [u8; 24]);
 
 impl Siv {
-    pub fn new(key: &SymmetricKey, plaintext: &[u8], doc: &Document) -> Self {
+    pub fn new<'a, T: std::hash::Hash + Clone>(
+        key: &SymmetricKey,
+        plaintext: &[u8],
+        doc: &Document<'a, T>,
+    ) -> Self {
         let mut hasher = blake3::Hasher::new();
         hasher.update(b"/automerge/beehive/");
         hasher.update(doc.id().as_bytes());

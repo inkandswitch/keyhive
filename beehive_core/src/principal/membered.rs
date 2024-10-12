@@ -1,23 +1,20 @@
-use super::agent::Agent;
-use super::document::Document;
-use super::group::operation::delegation::Delegation;
-use super::group::operation::revocation::Revocation;
-use super::group::Group;
-use super::identifier::Identifier;
-use super::traits::Verifiable;
-use crate::access::Access;
-use crate::crypto::signed::Signed;
+use super::{
+    agent::Agent, document::Document, group::operation::delegation::Delegation,
+    group::operation::revocation::Revocation, group::Group, identifier::Identifier,
+    traits::Verifiable,
+};
+use crate::{access::Access, crypto::signed::Signed};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
+/// The union of Agents that have updatable membership
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Membered {
-    Group(Group),
-    Document(Document),
+pub enum Membered<'a, T: std::hash::Hash + Clone> {
+    Group(&'a Group<'a, T>),
+    Document(&'a Document<'a, T>),
 }
 
-impl Membered {
+impl<'a, T: std::hash::Hash + Clone> Membered<'a, T> {
     pub fn member_id(&self) -> MemberedId {
         match self {
             Membered::Group(group) => MemberedId::GroupId(group.id().clone()),
@@ -26,23 +23,23 @@ impl Membered {
     }
 
     // FIXME make a trait and apply to children
-    pub fn members(&self) -> BTreeMap<Agent, (Access, Signed<Delegation>)> {
+    pub fn members(&self) -> BTreeMap<&Agent<'a, T>, (Access, &Signed<Delegation<'a, T>>)> {
         match self {
-            Membered::Group(group) => group.members.clone(), // FIXME NEEDS lifetimes, just being slapdash here
-            Membered::Document(document) => document.members.clone(),
+            Membered::Group(group) => group.members,
+            Membered::Document(document) => document.members,
         }
     }
 
-    pub fn add_member(&mut self, delegation: Signed<Delegation>) {
+    pub fn add_member(&mut self, delegation: Signed<Delegation<'a, T>>) {
         match self {
             Membered::Group(group) => {
                 group.add_member(delegation);
             }
-            Membered::Document(_document) => todo!(), // document.add_authorization(agent, access, delegation),
+            Membered::Document(document) => document.add_member(document),
         }
     }
 
-    pub fn revoke_member(&mut self, revocation: Signed<Revocation>) {
+    pub fn revoke_member(&mut self, revocation: Signed<Revocation<'a, T>>) {
         match self {
             Membered::Group(group) => {
                 group.revoke(revocation);
@@ -52,40 +49,40 @@ impl Membered {
     }
 }
 
-impl From<Membered> for Agent {
-    fn from(membered: Membered) -> Self {
+impl<'a, T: std::hash::Hash + Clone> From<Membered<'a, T>> for Agent<'a, T> {
+    fn from(membered: Membered<'a, T>) -> Self {
         match membered {
-            Membered::Group(group) => group.into(),
-            Membered::Document(document) => document.into(),
+            Membered::Group(group) => (*group.clone()).into(),
+            Membered::Document(document) => (*document.clone()).into(),
         }
     }
 }
 
-impl TryFrom<Agent> for Membered {
+impl<'a, T: std::hash::Hash + Clone> TryFrom<&'a Agent<'a, T>> for Membered<'a, T> {
     type Error = &'static str; // FIXME
 
-    fn try_from(agent: Agent) -> Result<Self, Self::Error> {
+    fn try_from(agent: &'a Agent<'a, T>) -> Result<Self, Self::Error> {
         match agent {
-            Agent::Group(group) => Ok(Membered::Group(group)),
-            Agent::Document(document) => Ok(Membered::Document(document)),
+            Agent::Group(group) => Ok(Membered::Group(&group)),
+            Agent::Document(document) => Ok(Membered::Document(&document)),
             _ => Err("Agent is not a membered type"),
         }
     }
 }
 
-impl From<Group> for Membered {
-    fn from(group: Group) -> Self {
+impl<'a, T: std::hash::Hash + Clone> From<&'a Group<'a, T>> for Membered<'a, T> {
+    fn from(group: &'a Group<'a, T>) -> Self {
         Membered::Group(group)
     }
 }
 
-impl From<Document> for Membered {
-    fn from(document: Document) -> Self {
+impl<'a, T: std::hash::Hash + Clone> From<&'a Document<'a, T>> for Membered<'a, T> {
+    fn from(document: &'a Document<'a, T>) -> Self {
         Membered::Document(document)
     }
 }
 
-impl Verifiable for Membered {
+impl<'a, T: std::hash::Hash + Clone> Verifiable for Membered<'a, T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         match self {
             Membered::Group(group) => group.verifying_key(),

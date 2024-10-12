@@ -190,3 +190,9 @@ impl<T> From<Hash<T>> for [u8; 32] {
         hash.raw.into()
     }
 }
+
+impl<T> From<Hash<T>> for Vec<u8> {
+    fn from(hash: Hash<T>) -> Vec<u8> {
+        hash.raw.as_bytes().to_vec()
+    }
+}

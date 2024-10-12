@@ -17,17 +17,17 @@ use std::collections::{BTreeMap, BTreeSet};
 /// and they can be delegated to. This produces transitives lines of authority
 /// through the network of [`Agent`]s.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Group {
+pub struct Group<'a, T: std::hash::Hash + Clone> {
     /// The current view of members of a group.
-    pub members: BTreeMap<Agent, (Access, Signed<Delegation>)>,
+    pub members: BTreeMap<&'a Agent<'a, T>, (Access, &'a Signed<Delegation<'a, T>>)>,
 
     /// The `Group`'s underlying (causal) delegation state.
-    pub state: state::GroupState,
+    pub state: state::GroupState<'a, T>,
 }
 
-impl Group {
+impl<'a, T: std::hash::Hash + Clone> Group<'a, T> {
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
-    pub fn generate(parents: NonEmpty<&Agent>) -> Group {
+    pub fn generate(parents: NonEmpty<&Agent<'a, T>>) -> Group<'a, T> {
         let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let group_id = group_signer.verifying_key().into();
 
@@ -63,7 +63,11 @@ impl Group {
         }
     }
 
-    pub fn add_member(&mut self, signed_delegation: Signed<Delegation>) {
+    pub fn get(&self, agent: &Agent<'a, T>) -> Option<&(Access, &Signed<Delegation<'a, T>>)> {
+        self.members.get(agent)
+    }
+
+    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<'a, T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
@@ -78,7 +82,7 @@ impl Group {
             .insert(signed_delegation.map(|delegation| delegation.into()).into());
     }
 
-    pub fn materialize(state: state::GroupState) -> Self {
+    pub fn materialize(state: state::GroupState<'a, T>) -> Self {
         // FIXME oof that's a lot of cloning to get the heads
         let members = Operation::topsort(state.heads.clone().into_iter().collect(), &state.ops)
             .expect("FIXME")
@@ -117,7 +121,7 @@ impl Group {
         Group { state, members }
     }
 
-    pub fn revoke(&mut self, signed_revocation: Signed<Revocation>) {
+    pub fn revoke(&mut self, signed_revocation: Signed<Revocation<'a, T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
@@ -144,13 +148,13 @@ impl Group {
     // }
 }
 
-impl std::fmt::Display for Group {
+impl<'a, T: std::hash::Hash + Clone> std::fmt::Display for Group<'a, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", BASE64_STANDARD.encode(self.state.id.as_bytes()))
     }
 }
 
-impl Verifiable for Group {
+impl<'a, T: std::hash::Hash + Clone> Verifiable for Group<'a, T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }
@@ -170,7 +174,10 @@ mod tests {
             .into()
     }
 
-    fn setup_store(alice: &Individual, bob: &Individual) -> (GroupStore, [Group; 4]) {
+    fn setup_store<'a, T: std::hash::Hash + Clone>(
+        alice: &Individual,
+        bob: &Individual,
+    ) -> (GroupStore<'a, T>, [Group<'a, T>; 4]) {
         /*              ┌───────────┐        ┌───────────┐
                         │           │        │           │
         ╔══════════════▶│   Alice   │        │    Bob    │
@@ -198,7 +205,7 @@ mod tests {
         let bob_agent = bob.clone().into();
 
         let group0 = Group::generate(nonempty![&alice_agent]);
-        let group0_agent: Agent = group0.clone().into();
+        let group0_agent: Agent<'a, T> = group0.clone().into();
 
         let group1 = Group::generate(nonempty![&alice_agent, &group0_agent]);
         let group1_agent = group1.clone().into();
@@ -218,7 +225,10 @@ mod tests {
         (gs, [group0, group1, group2, group3])
     }
 
-    fn setup_cyclic_store(alice: &Individual, bob: &Individual) -> (GroupStore, [Group; 10]) {
+    fn setup_cyclic_store<'a, T: std::hash::Hash + Clone>(
+        alice: &Individual,
+        bob: &Individual,
+    ) -> (GroupStore<'a, T>, [Group<'a, T>; 10]) {
         let alice_agent = alice.clone().into();
         let bob_agent = bob.clone().into();
 
@@ -291,7 +301,7 @@ mod tests {
         let bob = setup_user();
 
         let (gs, [g0, _g1, _g2, _g3]) = setup_store(&alice, &bob);
-        let g0_mems: BTreeMap<Agent, Access> = gs.transative_members(&g0);
+        let g0_mems: BTreeMap<Agent<'_, _>, Access> = gs.transative_members(&g0);
 
         assert_eq!(
             g0_mems,

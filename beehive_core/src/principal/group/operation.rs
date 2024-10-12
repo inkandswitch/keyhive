@@ -7,6 +7,8 @@ use crate::{
     principal::membered::MemberedId,
     util::content_addressed_map::CaMap,
 };
+use delegation::Delegation;
+use revocation::Revocation;
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
@@ -16,54 +18,12 @@ use thiserror::Error;
 use topological_sort::TopologicalSort;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Operation {
-    Delegation(delegation::Delegation),
-    Revocation(revocation::Revocation),
+pub enum Operation<'a, T: std::hash::Hash + Clone> {
+    Delegation(Delegation<'a, T>),
+    Revocation(Revocation<'a, T>),
 }
 
-impl fmt::Display for Operation {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Operation::Delegation(delegation) => write!(f, "{}", delegation),
-            Operation::Revocation(_revocation) => todo!(), // write!(f, "{}", revocation),
-        }
-    }
-}
-
-impl From<delegation::Delegation> for Operation {
-    fn from(delegation: delegation::Delegation) -> Self {
-        Operation::Delegation(delegation)
-    }
-}
-
-impl From<revocation::Revocation> for Operation {
-    fn from(revocation: revocation::Revocation) -> Self {
-        Operation::Revocation(revocation)
-    }
-}
-
-impl From<Operation> for Vec<u8> {
-    fn from(op: Operation) -> Self {
-        match op {
-            Operation::Delegation(delegation) => delegation.into(),
-            Operation::Revocation(_revocation) => todo!(), // revocation.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Error)]
-pub enum AncestorError {
-    #[error("Operation history is unrooted")]
-    Unrooted,
-
-    #[error("Mismatched subject: {0}")]
-    MismatchedSubject(MemberedId),
-
-    #[error("Dependency not available: {0}")]
-    DependencyNotAvailable(Hash<Signed<Operation>>),
-}
-
-impl Operation {
+impl<'a, T: std::hash::Hash + Clone> Operation<'a, T> {
     pub fn is_delegation(&self) -> bool {
         match self {
             Operation::Delegation(_) => true,
@@ -75,7 +35,7 @@ impl Operation {
         !self.is_delegation()
     }
 
-    pub fn after_auth(&self) -> &[Hash<Signed<Operation>>] {
+    pub fn after_auth(&self) -> &[Hash<Signed<Operation<'a, T>>>] {
         match self {
             Operation::Delegation(delegation) => &delegation.after_auth.as_slice(),
             Operation::Revocation(_revocation) => todo!(), // revocation.to_auth_dependencies(),
@@ -89,10 +49,10 @@ impl Operation {
         }
     }
 
-    pub fn ancestors<'a>(
+    pub fn ancestors(
         &'a self,
-        ops: &'a CaMap<Signed<Operation>>,
-    ) -> Result<(CaMap<Signed<Operation>>, usize), AncestorError> {
+        ops: &'a CaMap<Signed<Operation<'a, T>>>,
+    ) -> Result<(CaMap<Signed<Operation<'a, T>>>, usize), AncestorError<'a, T>> {
         if self.after_auth().is_empty() {
             return Ok((CaMap::new(), 0));
         }
@@ -149,12 +109,16 @@ impl Operation {
     // FIXME verified gdp
 
     pub fn topsort(
-        mut heads: Vec<Hash<Signed<Operation>>>,
-        ops: &CaMap<Signed<Operation>>,
-    ) -> Result<Vec<Signed<Operation>>, AncestorError> {
+        mut heads: Vec<Hash<Signed<Operation<'a, T>>>>,
+        ops: &CaMap<Signed<Operation<'a, T>>>,
+    ) -> Result<Vec<Signed<Operation<'a, T>>>, AncestorError<'a, T>> {
         let mut ops_with_ancestors: BTreeMap<
             Hash<Signed<Operation>>,
-            (&Signed<Operation>, CaMap<Signed<Operation>>, usize),
+            (
+                &Signed<Operation<'a, T>>,
+                CaMap<Signed<Operation<'a, T>>>,
+                usize,
+            ),
         > = BTreeMap::new();
 
         while !heads.is_empty() {
@@ -173,7 +137,8 @@ impl Operation {
         }
 
         let mut seen = BTreeSet::new();
-        let mut adjacencies: TopologicalSort<Signed<Operation>> =
+        // FIXME use pointers?
+        let mut adjacencies: TopologicalSort<Signed<Operation<'a, T>>> =
             topological_sort::TopologicalSort::new();
 
         for (hash, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
@@ -227,6 +192,48 @@ impl Operation {
 
         Ok(adjacencies.into_iter().collect())
     }
+}
+
+impl<'a, T: std::hash::Hash + Clone> fmt::Display for Operation<'a, T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Operation::Delegation(delegation) => write!(f, "{}", delegation),
+            Operation::Revocation(_revocation) => todo!(), // write!(f, "{}", revocation),
+        }
+    }
+}
+
+impl<'a, T: std::hash::Hash + Clone> From<Delegation<'a, T>> for Operation<'a, T> {
+    fn from(delegation: Delegation<'a, T>) -> Self {
+        Operation::Delegation(delegation)
+    }
+}
+
+impl<'a, T: std::hash::Hash + Clone> From<Revocation<'a, T>> for Operation<'a, T> {
+    fn from(revocation: Revocation<'a, T>) -> Self {
+        Operation::Revocation(revocation)
+    }
+}
+
+impl<'a, T: std::hash::Hash + Clone> From<Operation<'a, T>> for Vec<u8> {
+    fn from(op: Operation<'a, T>) -> Self {
+        match op {
+            Operation::Delegation(delegation) => delegation.clone().into(),
+            Operation::Revocation(revocation) => revocation.clone().into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Error)]
+pub enum AncestorError<'a, T: std::hash::Hash + Clone> {
+    #[error("Operation history is unrooted")]
+    Unrooted,
+
+    #[error("Mismatched subject: {0}")]
+    MismatchedSubject(MemberedId),
+
+    #[error("Dependency not available: {0}")]
+    DependencyNotAvailable(Hash<Signed<Operation<'a, T>>>),
 }
 
 #[cfg(test)]

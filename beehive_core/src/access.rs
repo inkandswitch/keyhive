@@ -3,7 +3,11 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+#[cfg(feature = "test_utils")]
+use proptest_derive::Arbitrary;
+
 /// Access levels for a capability.
+#[cfg_attr(feature = "test_utils", derive(Arbitrary))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Access {
     /// The ability to retrieve bytes over the network.

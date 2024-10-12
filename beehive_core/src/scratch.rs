@@ -5,9 +5,9 @@ use crate::crypto::{
 use crate::principal::document::Document;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub fn dcgka_2m_broadcast(
+pub fn dcgka_2m_broadcast<'a, T: std::hash::Hash + Clone>(
     key: &SymmetricKey,
-    doc: &Document,
+    doc: &Document<'a, T>,
     sharer_key: &x25519_dalek::StaticSecret,
     public_keys: BTreeSet<&ShareKey>,
 ) -> BTreeMap<ShareKey, Encrypted<chacha20poly1305::XChaCha20Poly1305>> {

@@ -6,7 +6,7 @@ use ed25519_dalek::Verifier;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 /// A wrapper to add a signature and signer information to an arbitrary payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,11 +21,12 @@ pub struct Signed<T> {
     pub signature: ed25519_dalek::Signature,
 }
 
-impl<T: Clone> Signed<T>
-where
-    Vec<u8>: From<T>,
-{
-    pub fn sign(payload: T, signer: &ed25519_dalek::SigningKey) -> Self {
+impl<T> Signed<T> {
+    pub fn sign(payload: T, signer: &ed25519_dalek::SigningKey) -> Self
+    where
+        T: Clone,
+        Vec<u8>: From<T>,
+    {
         let payload_bytes: Vec<u8> = payload.clone().into();
 
         Signed {
@@ -35,7 +36,11 @@ where
         }
     }
 
-    pub fn verify(&self) -> Result<(), signature::Error> {
+    pub fn verify(&self) -> Result<(), signature::Error>
+    where
+        T: Clone,
+        Vec<u8>: From<T>,
+    {
         self.verifying_key.verify(
             Vec::<u8>::from(self.payload.clone()).as_slice(),
             &self.signature,
@@ -111,13 +116,14 @@ impl<T: Ord> Ord for Signed<T> {
     }
 }
 
-impl<T: Hash> Hash for Signed<T> {
-    fn hash<H>(&self, state: &mut H)
-    where
-        H: Hasher,
-    {
+// FIXME test
+impl<T> std::hash::Hash for Signed<T>
+where
+    T: Hash,
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.payload.hash(state);
-        self.verifying_key.hash(state);
-        self.signature.to_vec().hash(state);
+        self.verifying_key.as_bytes().hash(state);
+        self.signature.to_bytes().hash(state);
     }
 }

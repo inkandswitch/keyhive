@@ -20,7 +20,7 @@ serde_bytes = "0.11.15"
 
 # Crypto
 aead = "0.5.2"
-blake3 = {version = "1.5", features = ["pure"] } # FIXME remove pure
+blake3 = {version = "1.5" }
 chacha20poly1305 = "0.10.1"
 ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
 signature = "2.2"
@@ -35,6 +35,10 @@ nonempty = "0.10.0"
 rand = "0.8.5"
 topological-sort = "0.2.2"
 
+# Testing
+proptest = { version = "1.5", optional = true }
+proptest-derive = { version = "0.5.0", optional = true }
+
 [features]
 mermaid_docs = ["aquamarine"]
-test_utils = []
+test_utils = ["proptest", "proptest-derive"]
