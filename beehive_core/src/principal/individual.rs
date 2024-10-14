@@ -2,10 +2,8 @@
 
 pub mod state;
 
-use super::identifier::Identifier;
-use super::traits::Verifiable;
-use crate::crypto::hash::Hash;
-use crate::crypto::share_key::ShareKey;
+use super::{identifier::Identifier, traits::Verifiable};
+use crate::crypto::{digest::Digest, share_key::ShareKey};
 use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
@@ -16,7 +14,7 @@ use std::collections::BTreeSet;
 ///
 /// `Individual`s can be thought of as the terminal agents. They represent
 /// keys that may sign ops, be delegated capabilties to [`Document`]s and [`Group`]s.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Individual {
     /// The public key identifier.
     pub id: Identifier,
@@ -40,6 +38,7 @@ pub struct Individual {
     pub prekey_state: PrekeyState,
 }
 
+// FIXME required?
 impl std::fmt::Display for Individual {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", BASE64_STANDARD.encode(self.id.to_bytes()))
@@ -66,21 +65,21 @@ impl From<Identifier> for Individual {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndividualOp {
     pub verifier: VerifyingKey,
     pub op: ReadKeyOp,
-    pub pred: BTreeSet<Hash<Individual>>,
+    pub pred: BTreeSet<Digest<Individual>>,
 }
 
 // FIXME move to each Doc
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReadKeyOp {
     Add(AddReadKey),
     Remove(VerifyingKey),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddReadKey {
     pub group: VerifyingKey,
     pub key: x25519_dalek::PublicKey,

@@ -1,24 +1,15 @@
-use crate::crypto::hash::Hash;
+use crate::crypto::digest::Digest;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::marker::PhantomData;
+use std::{collections::BTreeMap, hash::Hash};
 
 /// A content-addressed map.
 ///
 /// Since all operations are referenced by their hash,
 /// a map that indexes by the same cryptographic hash is convenient.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CaMap<T>(BTreeMap<Hash<T>, T>);
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaMap<T: Eq + Serialize>(BTreeMap<Digest<T>, T>);
 
-impl<T: PartialEq + std::hash::Hash> PartialEq for CaMap<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl<T: Eq + std::hash::Hash> Eq for CaMap<T> {}
-
-impl<T: std::hash::Hash> CaMap<T> {
+impl<T: Serialize + Clone + Eq> CaMap<T> {
     /// Create an empty [`CaMap`].
     ///
     /// # Examples
@@ -32,37 +23,25 @@ impl<T: std::hash::Hash> CaMap<T> {
         Self(std::collections::BTreeMap::new())
     }
 
-    pub fn from_iter<I>(iter: I) -> Self
-    where
-        T: Into<Vec<u8>> + Clone,
-        I: IntoIterator<Item = T>,
-    {
+    pub fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         Self(
             iter.into_iter()
-                .map(|preimage| (Hash::hash(preimage.clone()), preimage))
+                .map(|preimage| (Hash::hash(&preimage), preimage))
                 .collect(),
         )
     }
 
-    pub fn insert(&mut self, value: T) -> Hash<T>
-    where
-        T: Clone + Into<Vec<u8>>, // FIXME hash insteaf of vecu8
-    {
-        let bytes: Vec<u8> = value.clone().into();
-        let key: Hash<T> = Hash {
-            raw: blake3::hash(bytes.as_slice()),
-            _phantom: PhantomData,
-        };
-
+    pub fn insert(&mut self, value: T) -> Digest<T> {
+        let key: Digest<T> = Digest::hash(&value);
         self.0.insert(key, value);
         key
     }
 
-    pub fn remove(&mut self, hash: &Hash<T>) -> Option<T> {
+    pub fn remove(&mut self, hash: &Digest<T>) -> Option<T> {
         self.0.remove(hash)
     }
 
-    pub fn get(&self, hash: &Hash<T>) -> Option<&T> {
+    pub fn get(&self, hash: &Digest<T>) -> Option<&T> {
         self.0.get(hash)
     }
 
@@ -74,7 +53,7 @@ impl<T: std::hash::Hash> CaMap<T> {
         self.0.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&Hash<T>, &T)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&Digest<T>, &T)> {
         self.0.iter()
     }
 
@@ -82,22 +61,15 @@ impl<T: std::hash::Hash> CaMap<T> {
         self.0.into_values()
     }
 
-    pub fn into_keys(self) -> impl Iterator<Item = Hash<T>> {
+    pub fn keys(&self) -> std::collections::btree_map::Keys<'_, Digest<T>, T> {
+        self.0.keys()
+    }
+
+    pub fn into_keys(self) -> impl Iterator<Item = Digest<T>> {
         self.0.into_keys()
     }
 
-    pub fn contains_key(&self, hash: &Hash<T>) -> bool {
+    pub fn contains_key(&self, hash: &Digest<T>) -> bool {
         self.0.contains_key(hash)
-    }
-}
-
-impl<T: Clone + std::hash::Hash> std::hash::Hash for CaMap<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0
-            .clone()
-            .into_keys()
-            .collect::<Vec<Hash<T>>>()
-            .sort()
-            .hash(state) // FIXME use BLAKE3
     }
 }

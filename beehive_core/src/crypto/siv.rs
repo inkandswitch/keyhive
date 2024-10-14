@@ -30,7 +30,7 @@ use std::io::Read;
 pub struct Siv(pub [u8; 24]);
 
 impl Siv {
-    pub fn new<'a, T: std::hash::Hash + Clone>(
+    pub fn new<'a, T: Clone + Ord + Serialize>(
         key: &SymmetricKey,
         plaintext: &[u8],
         doc: &Document<'a, T>,

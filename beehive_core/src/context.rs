@@ -15,11 +15,12 @@ use crate::{
     },
 };
 use nonempty::NonEmpty;
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
-pub struct Context<'a, T: std::hash::Hash + Clone> {
+pub struct Context<'a, T: Clone + Ord + Serialize> {
     /// The [`Active`] user agent.
     pub active: Active,
 
@@ -33,7 +34,7 @@ pub struct Context<'a, T: std::hash::Hash + Clone> {
     pub docs: DocStore<'a, T>,
 }
 
-impl<'a, T: std::hash::Hash + Clone> Context<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> Context<'a, T> {
     pub fn generate() -> Self {
         Self {
             active: Active::generate(),
@@ -57,11 +58,7 @@ impl<'a, T: std::hash::Hash + Clone> Context<'a, T> {
         self.docs.generate_document(parents)
     }
 
-    pub fn sign<U>(&self, data: U) -> Signed<U>
-    where
-        U: Clone + std::hash::Hash,
-        Vec<u8>: From<U>,
-    {
+    pub fn sign<U: Clone + Ord + Serialize>(&self, data: U) -> Signed<U> {
         self.active.sign(data)
     }
 
@@ -126,7 +123,7 @@ impl<'a, T: std::hash::Hash + Clone> Context<'a, T> {
         }
     }
 
-    pub fn transitive_docs(&self) -> BTreeMap<&'a Document<'a, T>, Access>
+    pub fn transitive_docs(&'a self) -> BTreeMap<&'a Document<'a, T>, Access>
     where
         T: Ord,
     {
@@ -134,19 +131,21 @@ impl<'a, T: std::hash::Hash + Clone> Context<'a, T> {
         let mut caps: BTreeMap<&Document<'a, T>, Access> = BTreeMap::new();
         let mut seen: BTreeSet<Identifier> = BTreeSet::new();
 
+        let agent = self.active.clone().into();
+
         for doc in self.docs.docs.values() {
             seen.insert(doc.state.id);
 
-            if let Some((access, _proof)) = doc.members.get(&self.active.clone().into()) {
-                caps.insert(doc, access.clone());
+            if let Some(proof) = doc.members.get(&agent) {
+                caps.insert(doc, proof.payload.can);
             }
         }
 
         for group in self.groups.values() {
             seen.insert(group.state.id);
 
-            if let Some((access, _proof)) = group.get(&self.active.into()) {
-                explore.push((group.into(), access.clone()));
+            if let Some(proof) = group.get(&agent) {
+                explore.push((group.into(), proof.payload.can));
             }
         }
 
@@ -157,8 +156,8 @@ impl<'a, T: std::hash::Hash + Clone> Context<'a, T> {
                         continue;
                     }
 
-                    if let Some((access, _proof)) = doc.members.get(&self.active.clone().into()) {
-                        caps.insert(doc, access.clone());
+                    if let Some(proof) = doc.members.get(&agent) {
+                        caps.insert(doc, proof.payload.can);
                     }
                 }
 
@@ -171,8 +170,8 @@ impl<'a, T: std::hash::Hash + Clone> Context<'a, T> {
                         continue;
                     }
 
-                    if let Some((access, _proof)) = focus_group.get(&self.active.clone().into()) {
-                        explore.push((focus_group.into(), access.clone()));
+                    if let Some(proof) = focus_group.get(&self.active.clone().into()) {
+                        explore.push((focus_group.into(), proof.payload.can));
                     }
                 }
             }
@@ -182,36 +181,39 @@ impl<'a, T: std::hash::Hash + Clone> Context<'a, T> {
     }
 
     // FIXME
-    pub fn transitive_members(&self, doc: &Document<'a, T>) -> BTreeMap<Agent<'a, T>, Access>
+    pub fn transitive_members(
+        &'a self,
+        doc: &'a Document<'a, T>,
+    ) -> BTreeMap<&'a Agent<'a, T>, Access>
     where
         T: Ord,
     {
-        struct GroupAccess<'b, U: std::hash::Hash + Clone> {
-            agent: Agent<'b, U>,
+        struct GroupAccess<'b, U: Clone + Ord + Serialize> {
+            agent: &'b Agent<'b, U>,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess<'a, T>> = vec![];
+        let mut explore: Vec<GroupAccess<'_, T>> = vec![];
 
-        for (k, (v, _)) in doc.members.iter() {
+        for (k, delegation) in doc.members.iter() {
             explore.push(GroupAccess {
-                agent: k.clone(),
-                agent_access: *v,
-                parent_access: Access::Admin,
+                agent: *k,
+                agent_access: delegation.payload.can,
+                parent_access: Access::Admin, // FIXME?
             });
         }
 
         let mut merged_store = self.groups.iter().fold(BTreeMap::new(), |mut acc, (k, v)| {
-            acc.insert(k.clone(), &Membered::Group(v));
+            acc.insert(k.clone(), Membered::Group(v));
             acc
         });
 
         for (k, v) in self.docs.docs.iter() {
-            merged_store.insert(k.clone(), &Membered::Document(v));
+            merged_store.insert(k.clone(), Membered::Document(v));
         }
 
-        let mut caps: BTreeMap<Agent<'a, T>, Access> = BTreeMap::new();
+        let mut caps: BTreeMap<&Agent<'_, T>, Access> = BTreeMap::new();
 
         while !explore.is_empty() {
             if let Some(GroupAccess {
@@ -230,12 +232,13 @@ impl<'a, T: std::hash::Hash + Clone> Context<'a, T> {
                             current_path_access
                         };
 
-                        caps.insert(member, best_access);
+                        caps.insert(&member, best_access);
                     }
                     _ => {
                         if let Some(membered) = merged_store.get(&member.verifying_key().into()) {
-                            for (mem, (pow, _proof)) in membered.members().clone() {
-                                let current_path_access = access.min(pow).min(parent_access);
+                            for (mem, proof) in membered.members().clone() {
+                                let current_path_access =
+                                    access.min(proof.payload.can).min(parent_access);
 
                                 let best_access =
                                     if let Some(prev_found_path_access) = caps.get(&mem) {
@@ -245,7 +248,7 @@ impl<'a, T: std::hash::Hash + Clone> Context<'a, T> {
                                     };
 
                                 explore.push(GroupAccess {
-                                    agent: mem.clone(),
+                                    agent: mem,
                                     agent_access: best_access,
                                     parent_access,
                                 });
@@ -260,13 +263,13 @@ impl<'a, T: std::hash::Hash + Clone> Context<'a, T> {
     }
 }
 
-impl<'a, T: std::hash::Hash + Clone> Verifiable for Context<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> Verifiable for Context<'a, T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.active.verifying_key()
     }
 }
 
-impl<'a, T: std::hash::Hash + Clone> From<Context<'a, T>> for Agent<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> From<Context<'a, T>> for Agent<'a, T> {
     fn from(context: Context<'a, T>) -> Self {
         context.active.into()
     }

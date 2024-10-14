@@ -1,14 +1,14 @@
-//! Model a collection of agents with no associated content.
+//! Model a collect.clone(),ion of agents with no associated content.
 
 pub mod operation;
 pub mod state;
 pub mod store;
 
-use super::{agent::Agent, membered::MemberedId, traits::Verifiable};
+use super::{agent::Agent, traits::Verifiable};
 use crate::{access::Access, crypto::signed::Signed, util::content_addressed_map::CaMap};
-use base64::prelude::*;
 use nonempty::NonEmpty;
 use operation::{delegation::Delegation, revocation::Revocation, Operation};
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A collection of agents with no associated content.
@@ -16,37 +16,36 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Groups are stateful agents. It is possible the delegate control over them,
 /// and they can be delegated to. This produces transitives lines of authority
 /// through the network of [`Agent`]s.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Group<'a, T: std::hash::Hash + Clone> {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct Group<'a, T: Clone + Ord + Serialize> {
     /// The current view of members of a group.
-    pub members: BTreeMap<&'a Agent<'a, T>, (Access, &'a Signed<Delegation<'a, T>>)>,
+    pub members: BTreeMap<&'a Agent<'a, T>, &'a Signed<Delegation<'a, T>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
     pub state: state::GroupState<'a, T>,
 }
 
-impl<'a, T: std::hash::Hash + Clone> Group<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> Group<'a, T> {
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
     pub fn generate(parents: NonEmpty<&Agent<'a, T>>) -> Group<'a, T> {
         let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let group_id = group_signer.verifying_key().into();
 
-        let (ops, members) = parents.iter().fold(
+        let (delegations, members) = parents.iter().fold(
             (CaMap::new(), BTreeMap::new()),
             |(mut op_acc, mut mem_acc), parent| {
                 let del = Delegation {
-                    subject: MemberedId::GroupId(group_id),
-                    from: group_id,
-                    to: (*parent).clone(),
+                    delegate: parent,
                     can: Access::Admin,
-                    proof: vec![],
-                    after_auth: vec![],
+                    proof: None,
+                    after_revocations: vec![],
+                    after_content: vec![],
                 };
 
                 let signed_op = Signed::sign(del.clone().into(), &group_signer);
                 let signed_del = Signed::sign(del, &group_signer);
 
-                mem_acc.insert((*parent).clone(), (Access::Admin, signed_del.clone()));
+                mem_acc.insert(*parent, signed_del);
 
                 op_acc.insert(signed_op);
                 (op_acc, mem_acc)
@@ -55,36 +54,61 @@ impl<'a, T: std::hash::Hash + Clone> Group<'a, T> {
 
         Group {
             members,
-            state: crate::principal::group::state::GroupState {
+            state: state::GroupState {
                 id: group_id,
-                heads: BTreeSet::from_iter(ops.clone().into_keys()),
-                ops,
+                delegation_heads: BTreeSet::from_iter(delegations.keys().iter()),
+                delegations,
+
+                revocation_heads: BTreeSet::new(),
+                revocations: CaMap::new(),
             },
         }
     }
 
-    pub fn get(&self, agent: &Agent<'a, T>) -> Option<&(Access, &Signed<Delegation<'a, T>>)> {
-        self.members.get(agent)
+    // FIXME get_capability?
+    pub fn get(&self, agent: &Agent<'a, T>) -> Option<&Signed<Delegation<'a, T>>>
+    where
+        T: Ord,
+    {
+        self.members.get(agent).copied()
     }
 
-    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<'a, T>>) {
+    // FIXME rename
+    pub fn add_member(&'a mut self, signed_delegation: Signed<Delegation<'a, T>>) {
+        let hash = self.state.delegations.insert(signed_delegation);
+        let val_ref = self
+            .state
+            .delegations
+            .get(&hash)
+            .expect("value that we just added to be there");
+
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
         // FIXME check that delegation is authorized
-        self.members.insert(
-            signed_delegation.payload.to.clone(),
-            (signed_delegation.payload.can, signed_delegation.clone()),
-        );
+        // FIXME even better: use dgp (e.g. Valid<Signed<Delegation<'a, T>>)
 
-        self.state
-            .ops
-            .insert(signed_delegation.map(|delegation| delegation.into()).into());
+        self.members.insert(&val_ref.payload.delegate, &val_ref);
     }
 
     pub fn materialize(state: state::GroupState<'a, T>) -> Self {
-        // FIXME oof that's a lot of cloning to get the heads
-        let members = Operation::topsort(state.heads.clone().into_iter().collect(), &state.ops)
+        // FIXME oof that's a lot of cloning
+
+        let ops: BTreeSet<Signed<Operation<T>>> = state
+            .delegations
+            .iter()
+            .map(|(_k, v)| v.clone().map(|d| d.into()))
+            .chain(
+                state
+                    .revocations
+                    .iter()
+                    .map(|(_k, v)| v.clone().map(|r| r.into())),
+            )
+            .collect();
+
+        let heads: BTreeSet<&Signed<Operation<T>>> = todo!();
+
+        let members = Operation::topsort(state.heads.clone().into_iter().collect(), &ops)
             .expect("FIXME")
             .iter()
             .fold(BTreeMap::new(), |mut acc, signed| match signed {
@@ -94,15 +118,12 @@ impl<'a, T: std::hash::Hash + Clone> Group<'a, T> {
                     verifying_key,
                 } => {
                     acc.insert(
-                        delegation.to.clone(),
-                        (
-                            delegation.can,
-                            Signed {
-                                payload: delegation.clone(),
-                                signature: *signature,
-                                verifying_key: *verifying_key,
-                            },
-                        ),
+                        delegation.delegate,
+                        Signed {
+                            payload: delegation.clone(),
+                            signature: *signature,
+                            verifying_key: *verifying_key,
+                        },
                     );
 
                     acc
@@ -110,10 +131,8 @@ impl<'a, T: std::hash::Hash + Clone> Group<'a, T> {
                 Signed {
                     payload: Operation::Revocation(revocation),
                     ..
-                } =>
-                // FIXME allow downgrading instead of straight removal?
-                {
-                    acc.remove(&revocation.revoke.payload.to);
+                } => {
+                    acc.remove(&revocation.revoke.payload.delegate);
                     acc
                 }
             });
@@ -127,7 +146,7 @@ impl<'a, T: std::hash::Hash + Clone> Group<'a, T> {
         // ...etc etc
         // FIXME check that delegation is authorized
         self.members
-            .remove(&signed_revocation.payload.revoke.payload.to);
+            .remove(&signed_revocation.payload.revoke.payload.delegate);
 
         self.state
             .ops
@@ -148,13 +167,7 @@ impl<'a, T: std::hash::Hash + Clone> Group<'a, T> {
     // }
 }
 
-impl<'a, T: std::hash::Hash + Clone> std::fmt::Display for Group<'a, T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", BASE64_STANDARD.encode(self.state.id.as_bytes()))
-    }
-}
-
-impl<'a, T: std::hash::Hash + Clone> Verifiable for Group<'a, T> {
+impl<'a, T: Ord + Serialize + Clone> Verifiable for Group<'a, T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }
@@ -165,7 +178,7 @@ mod tests {
     use super::*;
 
     use super::{operation::delegation::Delegation, store::GroupStore};
-    use crate::principal::{active::Active, individual::Individual, membered::MemberedId};
+    use crate::principal::{active::Active, individual::Individual};
     use nonempty::nonempty;
 
     fn setup_user() -> Individual {
@@ -174,7 +187,7 @@ mod tests {
             .into()
     }
 
-    fn setup_store<'a, T: std::hash::Hash + Clone>(
+    fn setup_store<'a, T: Clone + Ord + Serialize>(
         alice: &Individual,
         bob: &Individual,
     ) -> (GroupStore<'a, T>, [Group<'a, T>; 4]) {
@@ -225,7 +238,7 @@ mod tests {
         (gs, [group0, group1, group2, group3])
     }
 
-    fn setup_cyclic_store<'a, T: std::hash::Hash + Clone>(
+    fn setup_cyclic_store<'a, T: Clone + Ord + Serialize>(
         alice: &Individual,
         bob: &Individual,
     ) -> (GroupStore<'a, T>, [Group<'a, T>; 10]) {
@@ -264,12 +277,11 @@ mod tests {
 
         group9.add_member(Signed::sign(
             Delegation {
-                subject: MemberedId::GroupId(group9.id()),
-                from: group9.id(),
-                to: alice.clone().into(),
+                delegate: &alice.clone().into(),
                 can: Access::Admin,
-                proof: vec![],
-                after_auth: vec![],
+                proof: None,
+                after_revocations: vec![],
+                after_content: vec![],
             },
             &active.signer,
         ));
@@ -298,28 +310,32 @@ mod tests {
     #[test]
     fn test_transitive_self() {
         let alice = setup_user();
+        let alice_agent: Agent<'_, String> = alice.clone().into();
+
         let bob = setup_user();
 
         let (gs, [g0, _g1, _g2, _g3]) = setup_store(&alice, &bob);
-        let g0_mems: BTreeMap<Agent<'_, _>, Access> = gs.transative_members(&g0);
+        let g0_mems: BTreeMap<&Agent<'_, _>, Access> = gs.transative_members(&g0);
 
         assert_eq!(
             g0_mems,
-            BTreeMap::from_iter([(alice.into(), Access::Admin)])
+            BTreeMap::from_iter([(&alice_agent, Access::Admin)])
         );
     }
 
     #[test]
     fn test_transitive_one() {
         let alice = setup_user();
+        let alice_agent: Agent<'_, String> = alice.clone().into();
+
         let bob = setup_user();
 
         let (gs, [_g0, g1, _g2, _g3]) = setup_store(&alice, &bob);
-        let g1_mems: BTreeMap<Agent, Access> = gs.transative_members(&g1);
+        let g1_mems: BTreeMap<&Agent<'_, _>, Access> = gs.transative_members(&g1);
 
         assert_eq!(
             g1_mems,
-            BTreeMap::from_iter([(alice.into(), Access::Admin)])
+            BTreeMap::from_iter([(&alice_agent, Access::Admin)])
         );
     }
 
@@ -329,11 +345,14 @@ mod tests {
         let bob = setup_user();
 
         let (gs, [_g0, _g1, g2, _g3]) = setup_store(&alice, &bob);
-        let g2_mems: BTreeMap<Agent, Access> = gs.transative_members(&g2);
+        let g2_mems: BTreeMap<&Agent<'_, String>, Access> = gs.transative_members(&g2);
 
         assert_eq!(
             g2_mems,
-            BTreeMap::from_iter([(alice.into(), Access::Admin), (bob.into(), Access::Admin)])
+            BTreeMap::from_iter([
+                (&alice.clone().into(), Access::Admin),
+                (&bob.clone().into(), Access::Admin)
+            ])
         );
     }
 
@@ -371,29 +390,31 @@ mod tests {
         let bob = setup_user();
         let carol = setup_user();
 
+        let alice_agent: Agent<'_, _> = alice.into();
+        let carol_agent: Agent<'_, _> = carol.into();
+
         let (mut gs, [mut g0, _, _, _]) = setup_store(&alice, &bob);
 
         let active = Active::generate();
 
         g0.add_member(Signed::sign(
             Delegation {
-                subject: MemberedId::GroupId(g0.id()),
-                from: active.id(),
-                to: carol.clone().into(),
+                delegate: &carol_agent,
                 can: Access::Admin,
-                proof: vec![],
-                after_auth: vec![],
+                proof: None,
+                after_revocations: vec![],
+                after_content: vec![],
             },
             &active.signer,
         ));
 
         gs.insert(g0.clone().into());
 
-        let g0_mems: BTreeMap<Agent, Access> = gs.transative_members(&g0);
+        let g0_mems: BTreeMap<&Agent<'_, _>, Access> = gs.transative_members(&g0);
 
         assert_eq!(
             g0_mems,
-            BTreeMap::from_iter([(alice.into(), Access::Admin), (carol.into(), Access::Admin)])
+            BTreeMap::from_iter([(&alice_agent, Access::Admin), (&carol_agent, Access::Admin)])
         );
     }
 }

@@ -1,11 +1,15 @@
 use crate::crypto::{
-    encrypted::Encrypted, hash::Hash, share_key::ShareKey, signed::Signed, siv::Siv,
+    digest::Digest, encrypted::Encrypted, share_key::ShareKey, signed::Signed, siv::Siv,
     symmetric_key::SymmetricKey,
 };
 use crate::principal::document::Document;
-use std::collections::{BTreeMap, BTreeSet};
+use serde::Serialize;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    hash::Hash,
+};
 
-pub fn dcgka_2m_broadcast<'a, T: std::hash::Hash + Clone>(
+pub fn dcgka_2m_broadcast<'a, T: Hash + Clone + Ord + Serialize>(
     key: &SymmetricKey,
     doc: &Document<'a, T>,
     sharer_key: &x25519_dalek::StaticSecret,
@@ -31,11 +35,13 @@ pub fn dcgka_2m_broadcast<'a, T: std::hash::Hash + Clone>(
     wrapped_key_map
 }
 
+#[derive(Clone, Serialize)]
 pub struct SetReadKeyOp {
     pub set_read_key: x25519_dalek::StaticSecret,
-    pub parents: BTreeSet<Hash<Signed<SetReadKeyOp>>>,
+    pub parents: BTreeSet<Digest<Signed<SetReadKeyOp>>>,
 }
 
+#[derive(Clone, Serialize)]
 pub struct MyReadKeyOps {
     // FIXME use a single signture?
     pub cold_call_ops: BTreeSet<SetReadKeyOp>,

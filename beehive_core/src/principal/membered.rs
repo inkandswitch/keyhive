@@ -3,30 +3,38 @@ use super::{
     group::operation::revocation::Revocation, group::Group, identifier::Identifier,
     traits::Verifiable,
 };
-use crate::{access::Access, crypto::signed::Signed};
+use crate::crypto::signed::Signed;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt};
 
 /// The union of Agents that have updatable membership
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Membered<'a, T: std::hash::Hash + Clone> {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub enum Membered<'a, T: Clone + Ord + Serialize> {
     Group(&'a Group<'a, T>),
     Document(&'a Document<'a, T>),
 }
 
-impl<'a, T: std::hash::Hash + Clone> Membered<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> Membered<'a, T> {
+    // FIXME get_capability?
+    pub fn get(&self, agent: &Agent<T>) -> Option<&Signed<Delegation<T>>> {
+        match self {
+            Membered::Group(group) => group.get(agent),
+            Membered::Document(doc) => doc.get(agent),
+        }
+    }
+
     pub fn member_id(&self) -> MemberedId {
         match self {
-            Membered::Group(group) => MemberedId::GroupId(group.id().clone()),
-            Membered::Document(_document) => todo!(), // MemberedId::DocumentId(document.id.clone()),
+            Membered::Group(group) => MemberedId::GroupId(group.id()),
+            Membered::Document(document) => MemberedId::DocumentId(document.id()),
         }
     }
 
     // FIXME make a trait and apply to children
-    pub fn members(&self) -> BTreeMap<&Agent<'a, T>, (Access, &Signed<Delegation<'a, T>>)> {
+    pub fn members(&self) -> &BTreeMap<&Agent<'a, T>, &Signed<Delegation<'a, T>>> {
         match self {
-            Membered::Group(group) => group.members,
-            Membered::Document(document) => document.members,
+            Membered::Group(group) => &group.members,
+            Membered::Document(document) => &document.members,
         }
     }
 
@@ -35,7 +43,7 @@ impl<'a, T: std::hash::Hash + Clone> Membered<'a, T> {
             Membered::Group(group) => {
                 group.add_member(delegation);
             }
-            Membered::Document(document) => document.add_member(document),
+            Membered::Document(document) => document.add_member(delegation),
         }
     }
 
@@ -49,7 +57,7 @@ impl<'a, T: std::hash::Hash + Clone> Membered<'a, T> {
     }
 }
 
-impl<'a, T: std::hash::Hash + Clone> From<Membered<'a, T>> for Agent<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> From<Membered<'a, T>> for Agent<'a, T> {
     fn from(membered: Membered<'a, T>) -> Self {
         match membered {
             Membered::Group(group) => (*group.clone()).into(),
@@ -58,7 +66,7 @@ impl<'a, T: std::hash::Hash + Clone> From<Membered<'a, T>> for Agent<'a, T> {
     }
 }
 
-impl<'a, T: std::hash::Hash + Clone> TryFrom<&'a Agent<'a, T>> for Membered<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> TryFrom<&'a Agent<'a, T>> for Membered<'a, T> {
     type Error = &'static str; // FIXME
 
     fn try_from(agent: &'a Agent<'a, T>) -> Result<Self, Self::Error> {
@@ -70,19 +78,19 @@ impl<'a, T: std::hash::Hash + Clone> TryFrom<&'a Agent<'a, T>> for Membered<'a, 
     }
 }
 
-impl<'a, T: std::hash::Hash + Clone> From<&'a Group<'a, T>> for Membered<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> From<&'a Group<'a, T>> for Membered<'a, T> {
     fn from(group: &'a Group<'a, T>) -> Self {
         Membered::Group(group)
     }
 }
 
-impl<'a, T: std::hash::Hash + Clone> From<&'a Document<'a, T>> for Membered<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> From<&'a Document<'a, T>> for Membered<'a, T> {
     fn from(document: &'a Document<'a, T>) -> Self {
         Membered::Document(document)
     }
 }
 
-impl<'a, T: std::hash::Hash + Clone> Verifiable for Membered<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> Verifiable for Membered<'a, T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         match self {
             Membered::Group(group) => group.verifying_key(),
@@ -91,7 +99,8 @@ impl<'a, T: std::hash::Hash + Clone> Verifiable for Membered<'a, T> {
     }
 }
 
-// FIXE pass proof of existence?
+// FIXME pass proof of existence?
+// FIXME need at all?
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum MemberedId {
     GroupId(Identifier),

@@ -1,6 +1,6 @@
 //! The (plaintext) container for causal encryption.
 
-use super::{hash::Hash, read_capability::ReadCap, symmetric_key::SymmetricKey};
+use super::{digest::Digest, read_capability::ReadCap, symmetric_key::SymmetricKey};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -74,16 +74,16 @@ use std::collections::BTreeMap;
 ///
 /// [causal encryption]: https://github.com/inkandswitch/beehive/blob/main/design/causal_encryption.md
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct Envelope<T> {
+pub struct Envelope<T: Serialize> {
     /// The plaintext payload.
     pub plaintext: T,
 
     /// Any ancestors that this envelope depends on.
-    pub ancestors: BTreeMap<Hash<T>, SymmetricKey>,
+    pub ancestors: BTreeMap<Digest<T>, SymmetricKey>,
 }
 
-impl<T> Envelope<T> {
-    pub fn ancestor_read_caps(&self) -> Vec<ReadCap<Hash<T>>> {
+impl<T: Serialize> Envelope<T> {
+    pub fn ancestor_read_caps(&self) -> Vec<ReadCap<Digest<T>>> {
         self.ancestors
             .iter()
             .map(|(id, key)| ReadCap { id: *id, key: *key })

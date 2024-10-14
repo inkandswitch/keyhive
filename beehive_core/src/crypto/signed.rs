@@ -1,16 +1,16 @@
 //! Wrap data in signatures.
 
-use base64::prelude::*;
-use ed25519_dalek::Signer;
-use ed25519_dalek::Verifier;
+use crate::{crypto::digest::Digest, principal::identifier::Identifier};
+use ed25519_dalek::{Signer, Verifier};
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
-use std::fmt;
-use std::hash::Hash;
+use std::{
+    cmp::Ordering,
+    hash::{Hash, Hasher},
+};
 
 /// A wrapper to add a signature and signer information to an arbitrary payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Signed<T> {
+pub struct Signed<T: Serialize> {
     /// The data that was signed.
     pub payload: T,
 
@@ -21,13 +21,9 @@ pub struct Signed<T> {
     pub signature: ed25519_dalek::Signature,
 }
 
-impl<T> Signed<T> {
-    pub fn sign(payload: T, signer: &ed25519_dalek::SigningKey) -> Self
-    where
-        T: Clone,
-        Vec<u8>: From<T>,
-    {
-        let payload_bytes: Vec<u8> = payload.clone().into();
+impl<T: Serialize> Signed<T> {
+    pub fn sign(payload: T, signer: &ed25519_dalek::SigningKey) -> Self {
+        let payload_bytes: Vec<u8> = serde_cbor::to_vec(&payload).expect("FIXME");
 
         Signed {
             payload,
@@ -39,15 +35,22 @@ impl<T> Signed<T> {
     pub fn verify(&self) -> Result<(), signature::Error>
     where
         T: Clone,
-        Vec<u8>: From<T>,
     {
         self.verifying_key.verify(
-            Vec::<u8>::from(self.payload.clone()).as_slice(),
+            serde_cbor::to_vec(&self.payload).expect("FIXME").as_slice(),
             &self.signature,
         )
     }
 
-    pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
+    pub fn author(&self) -> Identifier {
+        Identifier(self.verifying_key)
+    }
+
+    pub fn hash(&self) -> Digest<Self> {
+        Digest::hash(self)
+    }
+
+    pub fn map<U: Serialize, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
         Signed {
             payload: f(self.payload),
             verifying_key: self.verifying_key,
@@ -56,31 +59,7 @@ impl<T> Signed<T> {
     }
 }
 
-impl<T: fmt::Display> fmt::Display for Signed<T> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "Signed {{ payload: {}, verifying_key: {}, signature: {} }}",
-            self.payload,
-            BASE64_STANDARD.encode(self.verifying_key.as_bytes()),
-            self.signature
-        )
-    }
-}
-
-impl<T> From<Signed<T>> for Vec<u8>
-where
-    Vec<u8>: From<T>,
-{
-    fn from(signed: Signed<T>) -> Self {
-        let mut buf: Vec<u8> = signed.payload.into();
-        buf.append(&mut signed.verifying_key.to_bytes().to_vec());
-        buf.append(&mut signed.signature.to_vec());
-        buf
-    }
-}
-
-impl<T: PartialOrd> PartialOrd for Signed<T> {
+impl<T: Serialize + PartialOrd> PartialOrd for Signed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self
             .verifying_key
@@ -100,7 +79,7 @@ impl<T: PartialOrd> PartialOrd for Signed<T> {
     }
 }
 
-impl<T: Ord> Ord for Signed<T> {
+impl<T: Serialize + Ord> Ord for Signed<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         match self
             .verifying_key
@@ -117,13 +96,12 @@ impl<T: Ord> Ord for Signed<T> {
 }
 
 // FIXME test
-impl<T> std::hash::Hash for Signed<T>
-where
-    T: Hash,
-{
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.payload.hash(state);
+impl<T: Serialize> Hash for Signed<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.verifying_key.as_bytes().hash(state);
         self.signature.to_bytes().hash(state);
+        serde_cbor::to_vec(&self.payload)
+            .expect("unable to serialize payload for hashing")
+            .hash(state);
     }
 }

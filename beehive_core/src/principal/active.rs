@@ -4,15 +4,17 @@ use super::{document::Document, individual::Individual, traits::Verifiable};
 use crate::{
     access::Access,
     crypto::{
-        encrypted::Encrypted, hash::Hash, share_key::ShareKey, signed::Signed, siv::Siv,
+        digest::Digest, encrypted::Encrypted, share_key::ShareKey, signed::Signed, siv::Siv,
         symmetric_key::SymmetricKey,
     },
     principal::{
         agent::Agent,
         group::operation::{delegation::Delegation, revocation::Revocation},
+        membered::Membered,
     },
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use serde::Serialize;
 use std::{collections::BTreeMap, fmt::Debug};
 
 /// The current user agent (which can sign and encrypt).
@@ -34,6 +36,14 @@ impl Active {
         }
     }
 
+    pub fn as_individual(&self) -> Individual {
+        self.id().into()
+    }
+
+    pub fn as_agent<T: Clone + Ord + Serialize>(&self) -> Agent<T> {
+        self.as_individual().into()
+    }
+
     /// Generate a new active agent with a random key pair.
     pub fn generate() -> Self {
         let signer = SigningKey::generate(&mut rand::thread_rng());
@@ -41,47 +51,64 @@ impl Active {
     }
 
     /// Sign a payload.
-    pub fn sign<U: Clone + std::hash::Hash>(&self, payload: U) -> Signed<U>
-    where
-        Vec<u8>: From<U>, // FIXME swap for serde? also maybe impl signature::signer?
-    {
+    pub fn sign<U: Serialize + Clone>(&self, payload: U) -> Signed<U> {
         Signed::<U>::sign(payload, &self.signer)
     }
 
+    pub fn get_capability<'a, T: Serialize + Clone + Ord + Serialize>(
+        &'a self,
+        subject: &'a Membered<'a, T>,
+        min: Access,
+    ) -> Option<&'a Signed<Delegation<T>>> {
+        subject.get(&self.as_agent()).and_then(|cap| {
+            if cap.payload.can >= min {
+                Some(cap)
+            } else {
+                None
+            }
+        })
+    }
+
     // FIXME put this on Capability?
-    pub fn delegate<'a, T: std::hash::Hash + Clone>(
-        &self,
-        proof: &mut Signed<Delegation<'a, T>>,
+    pub fn make_delegation<'a, T: Clone + Ord + Serialize>(
+        &'a self,
+        subject: &'a Membered<'a, T>,
         attenuate: Access,
-        to: &Agent<'a, T>,
+        delegate: &'a Agent<'a, T>,
         after_revocations: Vec<&'a Signed<Revocation<'a, T>>>,
-        after_content: Vec<(&Document<'a, T>, Hash<T>)>,
+        after_content: Vec<(&'a Document<'a, T>, Digest<T>)>,
     ) -> Result<Signed<Delegation<'a, T>>, DelegationError> {
+        let proof = self.get_capability(&subject, attenuate).expect("FIXME");
+
         if attenuate > proof.payload.can {
             return Err(DelegationError::Escelation);
         }
 
         let delegation = self.sign(Delegation {
             can: attenuate,
-            delegate: to,
+            delegate,
             proof: Some(proof),
             after_revocations,
             after_content,
         });
 
-        proof.subject.add_member(delegation.clone());
+        // FIXME would be nice to IVM here, but lifetimes
 
         Ok(delegation)
     }
 
-    pub fn encrypt_to<'a, T: std::hash::Hash + Clone>(
+    pub fn encrypt_to<'a, T: Clone + Ord + Serialize>(
         &self,
         doc: &Document<'a, T>,
         to: &Individual,
         message: &mut [u8],
     ) -> Encrypted<&[u8]> {
         let recipient_share_pk = doc.reader_keys.get(to).expect("FIXME");
-        let our_pk = doc.reader_keys.get(&self.id().into()).expect("FIXME");
+        let our_pk = doc
+            .reader_keys
+            .get(&Individual::from(self.id()))
+            .expect("FIXME");
+
         let our_sk = self.share_key_pairs.get(our_pk).expect("FIXME");
 
         let key: SymmetricKey = our_sk
@@ -125,7 +152,7 @@ impl Debug for Active {
     }
 }
 
-impl<'a, T: std::hash::Hash + Clone> From<Active> for Agent<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> From<Active> for Agent<'a, T> {
     fn from(active: Active) -> Self {
         Agent::Individual(active.id().into())
     }
@@ -146,20 +173,6 @@ impl Verifiable for Active {
 impl Signer<Signature> for Active {
     fn try_sign(&self, message: &[u8]) -> Result<Signature, signature::Error> {
         self.signer.try_sign(message)
-    }
-}
-
-// FIXME test
-impl std::hash::Hash for Active {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write(self.signer.to_bytes().as_ref());
-
-        for (pk, sk) in self.share_key_pairs.iter() {
-            state.write(pk.as_bytes().as_ref());
-            state.write(sk.as_bytes().as_ref());
-        }
-
-        state.finish();
     }
 }
 

@@ -4,7 +4,7 @@ use crate::util::content_addressed_map::CaMap;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrekeyState {
     pub ops: CaMap<Signed<KeyOp>>,
 }

@@ -3,7 +3,7 @@ use super::{
 };
 use crate::{
     access::Access,
-    crypto::{hash::Hash, share_key::ShareKey, signed::Signed},
+    crypto::{digest::Digest, share_key::ShareKey, signed::Signed},
     principal::{
         agent::Agent,
         group::operation::{delegation::Delegation, revocation::Revocation, Operation},
@@ -11,42 +11,43 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use ed25519_dalek::VerifyingKey;
+use serde::Serialize;
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Document<'a, T: std::hash::Hash + Clone> {
-    pub members: BTreeMap<Agent<'a, T>, (Access, Signed<Delegation<'a, T>>)>,
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct Document<'a, T: Clone + Ord + Serialize> {
+    pub members: BTreeMap<&'a Agent<'a, T>, &'a Signed<Delegation<'a, T>>>,
     pub reader_keys: BTreeMap<&'a Individual, ShareKey>, // FIXME May remove if TreeKEM instead of ART
     // NOTE: as expected, separate keys are still safer https://doc.libsodium.org/quickstart#do-i-need-to-add-a-signature-to-encrypted-messages-to-detect-if-they-have-been-tampered-with
     pub state: DocumentState<'a, T>,
 }
 
-impl<'a, T: std::hash::Hash + Clone> Document<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> Document<'a, T> {
     pub fn generate(parents: Vec<&Agent<'a, T>>) -> Self {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let doc_id = doc_signer.verifying_key().into();
 
-        let (ops, members) = parents.iter().fold(
+        let (delegations, members) = parents.iter().fold(
             (CaMap::new(), BTreeMap::new()),
-            |(mut op_acc, mut mem_acc), parent| {
-                let del = Delegation {
-                    subject: MemberedId::DocumentId(doc_id),
-                    delegate: (*parent).clone(),
-                    can: Access::Admin,
-                    proof: vec![],
-                    after_auth: vec![],
-                };
+            |(mut d_acc, mut mem_acc), parent| {
+                let del = Signed::sign(
+                    Delegation {
+                        delegate: *parent,
+                        can: Access::Admin,
+                        proof: None,
+                        after_revocations: vec![],
+                        after_content: vec![],
+                    },
+                    &doc_signer,
+                );
 
-                let signed_op = Signed::sign(del.clone().into(), &doc_signer);
-                let signed_del = Signed::sign(&del, &doc_signer);
+                mem_acc.insert(*parent, &del);
 
-                mem_acc.insert((*parent).clone(), (Access::Admin, signed_del.clone()));
-
-                op_acc.insert(signed_op);
-                (op_acc, mem_acc)
+                d_acc.insert(del);
+                (d_acc, mem_acc)
             },
         );
 
@@ -54,8 +55,13 @@ impl<'a, T: std::hash::Hash + Clone> Document<'a, T> {
             members,
             state: DocumentState {
                 id: doc_id,
-                auth_heads: BTreeSet::from_iter(ops.clone().into_keys()),
-                authority_ops: ops,
+
+                delegation_heads: delegations.keys().collect(),
+                delegations,
+
+                revocation_heads: BTreeSet::new(),
+                revocations: CaMap::new(),
+
                 content_ops: BTreeSet::new(),
             },
             reader_keys: BTreeMap::new(), // FIXME
@@ -67,21 +73,16 @@ impl<'a, T: std::hash::Hash + Clone> Document<'a, T> {
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
         // FIXME check that delegation is authorized
-        self.members.insert(
-            signed_delegation.payload.to.clone(),
-            (signed_delegation.payload.can, signed_delegation.clone()),
-        );
-
-        self.state
-            .authority_ops
-            .insert(signed_delegation.map(|delegation| delegation.into()).into());
+        let hash = self.state.delegations.insert(signed_delegation);
+        let new_ref = self.state.delegations.get(&hash).unwrap();
+        self.members.insert(&new_ref.payload.delegate, &new_ref);
     }
 
     pub fn materialize(state: DocumentState<'a, T>) -> Self {
         // FIXME oof that's a lot of cloning to get the heads
         let members = Operation::topsort(
-            state.auth_heads.clone().into_iter().collect(),
-            &state.authority_ops,
+            state.delegation_heads.clone().into_iter().collect(),
+            &state.delegations,
         )
         .expect("FIXME")
         .iter()
@@ -124,8 +125,8 @@ impl<'a, T: std::hash::Hash + Clone> Document<'a, T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DocumentState<'a, T: std::hash::Hash + Clone> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DocumentState<'a, T: Clone + Ord + Serialize> {
     pub id: Identifier,
 
     pub delegation_heads: BTreeSet<&'a Signed<Delegation<'a, T>>>,
@@ -137,13 +138,13 @@ pub struct DocumentState<'a, T: std::hash::Hash + Clone> {
     pub content_ops: BTreeSet<T>,
 }
 
-impl<'a, T: std::hash::Hash + Clone> Verifiable for Document<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> Verifiable for Document<'a, T> {
     fn verifying_key(&self) -> VerifyingKey {
         self.state.verifying_key()
     }
 }
 
-impl<'a, T: Eq + std::hash::Hash + Clone> PartialOrd for DocumentState<'a, T> {
+impl<'a, T: Eq + Clone + Ord + Serialize> PartialOrd for DocumentState<'a, T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.id.as_bytes().partial_cmp(&other.id.as_bytes()) {
             Some(Ordering::Equal) => {
@@ -160,44 +161,39 @@ impl<'a, T: Eq + std::hash::Hash + Clone> PartialOrd for DocumentState<'a, T> {
     }
 }
 
-impl<'a, T: Eq + std::hash::Hash + Clone> Ord for DocumentState<'a, T> {
+impl<'a, T: Eq + Clone + Ord + Serialize> Ord for DocumentState<'a, T> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.id.as_bytes().cmp(&other.id.as_bytes())
     }
 }
 
-impl<'a, T: std::hash::Hash + Clone> Verifiable for DocumentState<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> Verifiable for DocumentState<'a, T> {
     fn verifying_key(&self) -> VerifyingKey {
         self.id.0
     }
 }
 
-impl<'a, T: std::hash::Hash + Clone> DocumentState<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> DocumentState<'a, T> {
     pub fn new(parent: Individual) -> Self {
         let mut rng = rand::rngs::OsRng;
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
         let id: Identifier = signing_key.verifying_key().into();
 
         let init = Operation::Delegation(Delegation {
-            subject: MemberedId::DocumentId(id),
-
-            from: id.into(), // FIXME would be nice if this was CBC
-
-            to: parent.into(),
+            delegate: &parent.into(),
             can: Access::Admin,
 
-            proof: vec![],
-            after_auth: vec![],
+            proof: None,
+            after_revocations: vec![],
+            after_content: vec![],
         });
 
         let signed_init = Signed::sign(init, &signing_key);
 
-        // FIXME zeroize signing key
-
         Self {
             id,
-            auth_heads: BTreeSet::from_iter([Hash::hash(signed_init.clone())]),
-            authority_ops: CaMap::from_iter([signed_init]),
+            delegation_heads: BTreeSet::from_iter([Digest::hash(signed_init)]),
+            delegations: CaMap::from_iter([signed_init]),
             content_ops: BTreeSet::new(),
         }
     }
@@ -217,12 +213,12 @@ impl<'a, T: std::hash::Hash + Clone> DocumentState<'a, T> {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
-pub struct DocStore<'a, T: std::hash::Hash + Clone> {
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DocStore<'a, T: Clone + Ord + Serialize> {
     pub docs: BTreeMap<Identifier, Document<'a, T>>,
 }
 
-impl<'a, T: std::hash::Hash + Clone> DocStore<'a, T> {
+impl<'a, T: Ord + Serialize + Clone> DocStore<'a, T> {
     pub fn new() -> Self {
         Self {
             docs: BTreeMap::new(),
@@ -238,7 +234,7 @@ impl<'a, T: std::hash::Hash + Clone> DocStore<'a, T> {
     }
 
     pub fn generate_document(&mut self, parents: Vec<&Agent<'a, T>>) -> &Document<'a, T> {
-        let new_doc: Document = Document::generate(parents);
+        let new_doc: Document<T> = Document::generate(parents);
         let new_doc_id: Identifier = new_doc.verifying_key().into(); // FIXME add helper method
         self.insert(new_doc);
         self.get(&new_doc_id).expect("FIXME")
@@ -248,23 +244,23 @@ impl<'a, T: std::hash::Hash + Clone> DocStore<'a, T> {
     // pub fn transative_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
     // FIXME return path as well?
     pub fn transative_members(&self, doc: &Document<'a, T>) -> BTreeMap<&Agent<'a, T>, Access> {
-        struct GroupAccess<'b, U: std::hash::Hash + Clone> {
+        struct GroupAccess<'b, U: Clone + Ord + Serialize> {
             agent: &'b Agent<'b, U>,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess> = vec![];
+        let mut explore: Vec<GroupAccess<T>> = vec![];
 
         for (k, (v, _)) in doc.members.iter() {
             explore.push(GroupAccess {
-                agent: k.clone(),
+                agent: k,
                 agent_access: *v,
                 parent_access: Access::Admin,
             });
         }
 
-        let mut caps: BTreeMap<Agent, Access> = BTreeMap::new();
+        let mut caps: BTreeMap<&Agent<T>, Access> = BTreeMap::new();
 
         while !explore.is_empty() {
             if let Some(GroupAccess {
@@ -298,7 +294,7 @@ impl<'a, T: std::hash::Hash + Clone> DocStore<'a, T> {
                                     };
 
                                 explore.push(GroupAccess {
-                                    agent: mem,
+                                    agent: &mem,
                                     agent_access: best_access,
                                     parent_access,
                                 });

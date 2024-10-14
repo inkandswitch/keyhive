@@ -4,12 +4,13 @@ use crate::{
 };
 use base64::prelude::*;
 use nonempty::NonEmpty;
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct GroupStore<'a, T: std::hash::Hash + Clone>(pub BTreeMap<Identifier, Group<'a, T>>);
+#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct GroupStore<'a, T: Clone + Ord + Serialize>(pub BTreeMap<Identifier, Group<'a, T>>);
 
-impl<'a, T: std::hash::Hash + Clone> GroupStore<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> GroupStore<'a, T> {
     pub fn new() -> Self {
         GroupStore(BTreeMap::new())
     }
@@ -56,23 +57,23 @@ impl<'a, T: std::hash::Hash + Clone> GroupStore<'a, T> {
     // pub fn transative_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
     // FIXME return path as well?
     pub fn transative_members(&self, group: &Group<'a, T>) -> BTreeMap<&Agent<'a, T>, Access> {
-        struct GroupAccess<'b, U: std::hash::Hash + Clone> {
-            agent: Agent<'b, U>,
+        struct GroupAccess<'b, U: Serialize + Clone + Ord> {
+            agent: &'b Agent<'b, U>,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess> = vec![];
+        let mut explore: Vec<GroupAccess<T>> = vec![];
 
-        for (k, (v, _)) in group.members.iter() {
+        for (k, v) in group.members.iter() {
             explore.push(GroupAccess {
-                agent: k,
+                agent: *k,
                 agent_access: *v,
                 parent_access: Access::Admin,
             });
         }
 
-        let mut caps: BTreeMap<Agent, Access> = BTreeMap::new();
+        let mut caps: BTreeMap<&Agent<T>, Access> = BTreeMap::new();
 
         while !explore.is_empty() {
             if let Some(GroupAccess {

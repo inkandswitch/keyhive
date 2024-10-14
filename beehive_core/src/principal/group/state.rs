@@ -1,49 +1,52 @@
-use super::operation::{delegation::Delegation, revocation::Revocation, Operation};
+use super::operation::{delegation::Delegation, revocation::Revocation};
 use crate::{
     access::Access,
-    crypto::{hash::Hash, signed::Signed},
-    principal::{
-        agent::Agent, identifier::Identifier, individual::Individual, membered::MemberedId,
-        traits::Verifiable,
-    },
+    crypto::{digest::Digest, signed::Signed},
+    principal::{agent::Agent, identifier::Identifier, traits::Verifiable},
     util::content_addressed_map::CaMap,
 };
 use ed25519_dalek::VerifyingKey;
+use serde::Serialize;
 use std::{cmp::Ordering, collections::BTreeSet};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct GroupState<'a, T: std::hash::Hash + Clone> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupState<'a, T: Clone + Ord + Serialize> {
     pub id: Identifier,
 
-    pub delegation_heads: BTreeSet<&'a Signed<Delegation<'a, T>>>, // FIXME nonempty
+    pub delegation_heads: BTreeSet<&'a Signed<Delegation<'a, T>>>,
     pub delegations: CaMap<Signed<Delegation<'a, T>>>,
 
     pub revocation_heads: BTreeSet<&'a Signed<Revocation<'a, T>>>,
     pub revocations: CaMap<Signed<Revocation<'a, T>>>,
 }
 
-impl<'a, T: Eq + std::hash::Hash + Clone> GroupState<'a, T> {
-    pub fn new(parent: Individual) -> Self {
+impl<'a, T: Eq + Clone + Ord + Serialize> GroupState<'a, T> {
+    pub fn new(parent: &'a Agent<'a, T>) -> Self {
         let mut rng = rand::rngs::OsRng;
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
         let verifier: VerifyingKey = signing_key.verifying_key();
 
-        let init = Signed::sign(Delegation {
-            subject: MemberedId::GroupId(verifier.into()),
+        let init = Signed::sign(
+            Delegation {
+                delegate: &parent,
+                can: Access::Admin,
 
-            from: verifier.into(),
-            to: parent.into(),
-            can: Access::Admin,
+                proof: None,
+                after_revocations: vec![],
+                after_content: vec![],
+            },
+            &signing_key,
+        );
 
-            proof: vec![],
-            after_auth: vec![],
-        });
+        let hash = Digest::hash(&init);
+        let delegations = CaMap::from_iter([init]);
+        let head = delegations.get(&hash).unwrap();
 
         GroupState {
             id: verifier.into(),
 
-            heads: BTreeSet::from_iter([&init]),
-            delegations: CaMap::from_iter([init]),
+            delegation_heads: BTreeSet::from_iter([head]),
+            delegations,
 
             revocation_heads: BTreeSet::new(),
             revocations: CaMap::new(),
@@ -51,45 +54,44 @@ impl<'a, T: Eq + std::hash::Hash + Clone> GroupState<'a, T> {
     }
 
     // FIXME split
-    pub fn add_op(
-        &mut self,
-        op: Signed<Operation<'a, T>>,
-    ) -> Result<Hash<Signed<Operation<'a, T>>>, AddError> {
-        if *op.payload.subject() != MemberedId::GroupId(self.id.into()) {
+    pub fn add_delegation(
+        &'a mut self,
+        delegation: Signed<Delegation<'a, T>>,
+    ) -> Result<Digest<Signed<Delegation<'a, T>>>, AddError> {
+        if delegation.subject() != self.id.into() {
             panic!("FIXME")
             // return Err(signature::Error::InvalidSubject);
         }
 
-        if op.verify().is_err() {
+        if delegation.verify().is_err() {
             panic!("FIXME")
             // return Err(signature::Error::InvalidSignature);
         }
 
         // FIXME also check if this op needs to go into the quarantine/buffer
 
-        let is_head = op
-            .payload
-            .after_auth()
-            .iter()
-            .any(|dep| self.heads.remove(dep));
+        let hash = self.delegations.insert(delegation);
+        let newly_owned = self.delegations.get(&hash).unwrap();
 
-        if is_head {
-            self.heads.insert(Hash::hash(op.clone()));
+        if let Some(proof) = newly_owned.payload.proof {
+            if self.delegation_heads.contains(proof) {
+                self.delegation_heads.insert(newly_owned);
+                self.delegation_heads.remove(proof);
+            }
         }
 
-        Ok(self.ops.insert(op))
+        Ok(hash)
     }
 
     pub fn delegations_for(&self, agent: &Agent<'a, T>) -> Vec<&Signed<Delegation<'a, T>>> {
-        self.ops
+        self.delegations
             .iter()
-            .filter_map(|(_, op)| {
-                if let Operation::Delegation(delegation) = &op.payload {
-                    if delegation.to == *agent {
-                        return Some(op.clone().map(|_| delegation.clone()));
-                    }
+            .filter_map(|(_, delegation)| {
+                if delegation.payload.delegate == agent {
+                    Some(delegation)
+                } else {
+                    None
                 }
-                None
             })
             .collect()
     }
@@ -99,17 +101,19 @@ impl<'a, T: Eq + std::hash::Hash + Clone> GroupState<'a, T> {
     }
 }
 
-impl<'a, T: std::hash::Hash + Clone> From<VerifyingKey> for GroupState<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> From<VerifyingKey> for GroupState<'a, T> {
     fn from(verifier: VerifyingKey) -> Self {
         GroupState {
             id: verifier.into(),
-            heads: BTreeSet::new(),
-            ops: CaMap::new(),
+            delegation_heads: BTreeSet::new(),
+            delegations: CaMap::new(),
+            revocation_heads: BTreeSet::new(),
+            revocations: CaMap::new(),
         }
     }
 }
 
-impl<'a, T: Eq + std::hash::Hash + Clone> PartialOrd for GroupState<'a, T> {
+impl<'a, T: Eq + Clone + Ord + Serialize> PartialOrd for GroupState<'a, T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         // FIXME use all fields
         match self.id.to_bytes().partial_cmp(&other.id.to_bytes()) {
@@ -119,17 +123,7 @@ impl<'a, T: Eq + std::hash::Hash + Clone> PartialOrd for GroupState<'a, T> {
     }
 }
 
-impl<'a, T: Eq + std::hash::Hash + Clone> Ord for GroupState<'a, T> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // FIXME use all fields
-        match self.id.to_bytes().cmp(&other.id.to_bytes()) {
-            Ordering::Equal => self.ops.len().cmp(&other.ops.len()),
-            other => other,
-        }
-    }
-}
-
-impl<'a, T: std::hash::Hash + Clone> Verifiable for GroupState<'a, T> {
+impl<'a, T: Clone + Ord + Serialize> Verifiable for GroupState<'a, T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.id.verifying_key()
     }
