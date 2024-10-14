@@ -7,7 +7,7 @@
 //   node and the public key of its sibling.
 // * Fast lookup of leaf by identifier.
 // * All operations start from leaf (?).
-// * Must walk to each child on the copath.
+// * Must walk to each child on the copath. But concurrent merges we may need to go further down
 // * Concurrent adds create conflicting leaf orders. How do we minimize restructuring
 //   of the tree on merge?
 // * * Do concurrent adds require us to go back to the nearest common causal ancestor
@@ -27,13 +27,14 @@
 //     conflict public keys at the moment of updating the parent (because the updater
 //     would replace the sibling on its path with a single public key)?
 // *
-// * Conflicts to consider:
+// * Tree structure conflicts to consider (the auth graph crdt determines who wins in say add/remove conflicts):
 // * * Concurrent key rotations
 // * * Concurrent adds
 // * * Concurrent removes
 // * * Concurrent key rotations, adds, and removes
 //
-// *
+// * Rotations are probably much more common than adds
+// * Adds are more common than removes
 
 use std::collections::BTreeMap;
 
