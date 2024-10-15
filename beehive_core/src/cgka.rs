@@ -50,8 +50,8 @@ impl CGKA {
     }
 
     /// Rotate key.
-    pub fn update(&mut self, id: Identifier, old_pk: PublicKey, new_pk: PublicKey, new_sk: SecretKey) {
-        todo!()
+    pub fn update(&mut self, id: Identifier, new_pk: PublicKey, new_sk: SecretKey) -> Result<(), CGKAError> {
+        self.tree.encrypt_path(id, new_pk, new_sk)
     }
 
     /// Identifier count

@@ -347,7 +347,7 @@ pub(crate) fn test_parent(index: TreeNodeIndex) -> ParentNodeIndex {
     parent(index)
 }
 
-fn sibling(index: TreeNodeIndex) -> TreeNodeIndex {
+pub(crate) fn sibling(index: TreeNodeIndex) -> TreeNodeIndex {
     let p = parent(index);
     match index.u32().cmp(&p.to_tree_index()) {
         Ordering::Less => right(p),
