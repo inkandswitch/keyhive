@@ -40,14 +40,17 @@ use std::collections::BTreeMap;
 
 use chacha20poly1305::{
     aead::{Aead, AeadCore, KeyInit},
-    ChaCha20Poly1305, Nonce, XChaCha20Poly1305
+    ChaCha20Poly1305, Nonce, XChaCha20Poly1305,
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use treemath::{LeafNodeIndex, ParentNodeIndex, TreeNodeIndex, TreeSize};
 use x25519_dalek::{self, x25519, SharedSecret, StaticSecret};
 
-use crate::{crypto::{encrypted::Encrypted, hash::Hash, symmetric_key::SymmetricKey}, principal::identifier::Identifier};
+use crate::{
+    crypto::{encrypted::Encrypted, hash::Hash, symmetric_key::SymmetricKey},
+    principal::identifier::Identifier,
+};
 
 use super::{error::CGKAError, treemath};
 type PublicKey = x25519_dalek::PublicKey;
@@ -66,7 +69,10 @@ pub(crate) struct BeeKEM {
 /// Constructors
 impl BeeKEM {
     /// We assume participants are in causal order.
-    pub(crate) fn new(participants: Vec<(Identifier, PublicKey)>, my_id: Identifier) -> Result<Self, CGKAError> {
+    pub(crate) fn new(
+        participants: Vec<(Identifier, PublicKey)>,
+        my_id: Identifier,
+    ) -> Result<Self, CGKAError> {
         let mut tree = Self {
             my_leaf_idx: None,
             next_leaf_idx: LeafNodeIndex::new(0),
@@ -92,45 +98,62 @@ impl BeeKEM {
                 if let Some(l) = self.get_leaf(l_idx)? {
                     &l.pk
                 } else {
-                    return Err(CGKAError::PublicKeyNotFound)
+                    return Err(CGKAError::PublicKeyNotFound);
                 }
             }
             TreeNodeIndex::Parent(p_idx) => {
                 if let Some(p) = &self.get_parent(p_idx)? {
                     &p.pk
                 } else {
-                    return Err(CGKAError::PublicKeyNotFound)
+                    return Err(CGKAError::PublicKeyNotFound);
                 }
-
             }
         })
     }
 
     pub(crate) fn get_leaf(&self, idx: LeafNodeIndex) -> Result<&Option<LeafNode>, CGKAError> {
-        self.leaves.get(idx.usize()).ok_or(CGKAError::TreeIndexOutOfBounds)
+        self.leaves
+            .get(idx.usize())
+            .ok_or(CGKAError::TreeIndexOutOfBounds)
     }
 
-    pub(crate) fn get_parent(&self, idx: ParentNodeIndex) -> Result<&Option<ParentNode>, CGKAError> {
-        self.parents.get(idx.usize()).ok_or(CGKAError::TreeIndexOutOfBounds)
+    pub(crate) fn get_parent(
+        &self,
+        idx: ParentNodeIndex,
+    ) -> Result<&Option<ParentNode>, CGKAError> {
+        self.parents
+            .get(idx.usize())
+            .ok_or(CGKAError::TreeIndexOutOfBounds)
     }
 
-    pub(crate) fn insert_leaf_at(&mut self, idx: LeafNodeIndex, leaf: LeafNode) -> Result<(), CGKAError> {
-        println!("idxusize: {} >= leaves len {}", idx.usize(), self.leaves.len());
-        if idx.usize() >= self.leaves.len() { return Err(CGKAError::TreeIndexOutOfBounds); }
-        println!("inserting at {:?}", idx);
+    pub(crate) fn insert_leaf_at(
+        &mut self,
+        idx: LeafNodeIndex,
+        leaf: LeafNode,
+    ) -> Result<(), CGKAError> {
+        if idx.usize() >= self.leaves.len() {
+            return Err(CGKAError::TreeIndexOutOfBounds);
+        }
         self.leaves[idx.usize()] = Some(leaf);
         Ok(())
     }
 
-    pub(crate) fn insert_parent_at(&mut self, idx: ParentNodeIndex, parent: ParentNode) -> Result<(), CGKAError> {
-        if idx.usize() >= self.parents.len() { return Err(CGKAError::TreeIndexOutOfBounds); }
+    pub(crate) fn insert_parent_at(
+        &mut self,
+        idx: ParentNodeIndex,
+        parent: ParentNode,
+    ) -> Result<(), CGKAError> {
+        if idx.usize() >= self.parents.len() {
+            return Err(CGKAError::TreeIndexOutOfBounds);
+        }
         self.parents[idx.usize()] = Some(parent);
         Ok(())
     }
 
     pub(crate) fn blank_leaf_and_path(&mut self, idx: LeafNodeIndex) -> Result<(), CGKAError> {
-        println!("blank_leaf {:?}", idx);
-        if idx.usize() >= self.leaves.len() { return Err(CGKAError::TreeIndexOutOfBounds); }
+        if idx.usize() >= self.leaves.len() {
+            return Err(CGKAError::TreeIndexOutOfBounds);
+        }
         self.leaves[idx.usize()] = None;
         self.blank_path(treemath::parent(idx.into()))
     }
@@ -146,7 +169,10 @@ impl BeeKEM {
     }
 
     pub(crate) fn remove_id(&mut self, id: Identifier) -> Result<(), CGKAError> {
-        let l_idx = self.id_to_leaf_idx.get(&id).ok_or(CGKAError::IdentifierNotFound)?;
+        let l_idx = self
+            .id_to_leaf_idx
+            .get(&id)
+            .ok_or(CGKAError::IdentifierNotFound)?;
         self.blank_leaf_and_path(*l_idx)?;
         self.id_to_leaf_idx.remove(&id);
         Ok(())
@@ -156,34 +182,44 @@ impl BeeKEM {
         self.id_to_leaf_idx.len() as u32
     }
 
-    pub(crate) fn encrypt_path(&mut self, id: Identifier, pk: PublicKey, sk: SecretKey) -> Result<(), CGKAError> {
+    pub(crate) fn encrypt_path(
+        &mut self,
+        id: Identifier,
+        pk: PublicKey,
+        sk: SecretKey,
+    ) -> Result<(), CGKAError> {
         todo!()
-    //     let mut child_idx = *self.id_to_leaf_idx.get(&id)
-    //         .ok_or(|e| CGKAError::IdentifierNotFound)?;
-    //     if self.is_blank(child_idx.into())? {
-    //         return Err(CGKAError::IdentifierNotFound);
-    //     }
-    //     self.insert_leaf_at(child_idx, LeafNode { id, pk });
-    //     let mut parent_idx = treemath::parent(child_idx);
-    //     let mut next_secret = sk;
-    //     while !self.is_root(child_idx.into()) {
-    //         let next_secret = self.encrypt_key_for_parent(child.into(), sk)?;
-    //         child_idx = parent_idx;
-    //         parent_idx = treemath::parent(child_idx);
-    //     }
-    //     Ok(())
+        //     let mut child_idx = *self.id_to_leaf_idx.get(&id)
+        //         .ok_or(|e| CGKAError::IdentifierNotFound)?;
+        //     if self.is_blank(child_idx.into())? {
+        //         return Err(CGKAError::IdentifierNotFound);
+        //     }
+        //     self.insert_leaf_at(child_idx, LeafNode { id, pk });
+        //     let mut parent_idx = treemath::parent(child_idx);
+        //     let mut next_secret = sk;
+        //     while !self.is_root(child_idx.into()) {
+        //         let next_secret = self.encrypt_key_for_parent(child.into(), sk)?;
+        //         child_idx = parent_idx;
+        //         parent_idx = treemath::parent(child_idx);
+        //     }
+        //     Ok(())
     }
 
-    fn encrypt_key_for_parent(&mut self, child: TreeNodeIndex, secret: SecretKey) -> Result<(), CGKAError> {
+    fn encrypt_key_for_parent(
+        &mut self,
+        child: TreeNodeIndex,
+        secret: SecretKey,
+    ) -> Result<(), CGKAError> {
         let parent_idx = treemath::parent(child);
         // TODO: Handle blanked parent
         let sibling_idx = treemath::sibling(child);
         if self.is_blank(sibling_idx.into())? {
-            // Look for resolution
+            // TODO: Look for resolution
             todo!()
         }
         let sibling_pk = self.get_public_key(sibling_idx)?;
-        let (new_public_key, new_encrypted_secret) = generate_key_pair_and_encrypt_secret(sibling_pk, secret)?;
+        let (new_public_key, new_encrypted_secret) =
+            generate_key_pair_and_encrypt_secret(sibling_pk, secret)?;
         let mut secret_map = BTreeMap::new();
         secret_map.insert(child, new_encrypted_secret.clone());
         let node = ParentNode {
@@ -203,7 +239,9 @@ impl BeeKEM {
 
     fn blank_path(&mut self, idx: ParentNodeIndex) -> Result<(), CGKAError> {
         self.blank_parent(idx)?;
-        if self.is_root(idx.into()) { return Ok(()); }
+        if self.is_root(idx.into()) {
+            return Ok(());
+        }
         self.blank_path(treemath::parent(idx.into()))
     }
 
@@ -215,8 +253,9 @@ impl BeeKEM {
 
     /// Growing the tree will add a new root and a new subtree, all blank.
     fn maybe_grow_tree(&mut self, new_count: u32) {
-        println!("maybe_grow_tree: size {:?}, new_count: {new_count}, new_size {:?}", self.tree_size, TreeSize::from_leaf_count(new_count));
-        if self.tree_size >= TreeSize::from_leaf_count(new_count) { return; }
+        if self.tree_size >= TreeSize::from_leaf_count(new_count) {
+            return;
+        }
         self.tree_size.inc();
         self.grow_tree_to_size();
     }
@@ -225,11 +264,13 @@ impl BeeKEM {
         // FIXME: Panics if MAX overflow
         self.leaves.reserve(self.tree_size.leaf_count() as usize);
         // FIXME: Does this (effectively) call reserve first under the hood?
-        self.leaves.resize(self.tree_size.leaf_count() as usize, None);
+        self.leaves
+            .resize(self.tree_size.leaf_count() as usize, None);
         // FIXME: Panics if MAX overflow
         self.parents.reserve(self.tree_size.parent_count() as usize);
         // FIXME: Does this (effectively) call reserve first under the hood?
-        self.parents.resize(self.tree_size.parent_count() as usize, None);
+        self.parents
+            .resize(self.tree_size.parent_count() as usize, None);
     }
 
     fn is_root(&self, idx: TreeNodeIndex) -> bool {
@@ -248,7 +289,10 @@ impl BeeKEM {
 }
 
 // TODO: Use beehive crypto capabilities directly instead
-fn generate_key_pair_and_encrypt_secret(public_key: &PublicKey, secret: SecretKey) -> Result<(PublicKey, Encrypted<SecretKey>), CGKAError> {
+fn generate_key_pair_and_encrypt_secret(
+    public_key: &PublicKey,
+    secret: SecretKey,
+) -> Result<(PublicKey, Encrypted<SecretKey>), CGKAError> {
     let shared_key = x25519(secret.to_bytes(), public_key.to_bytes());
     let new_static_secret = StaticSecret::random_from_rng(&mut rand::thread_rng());
     let new_public_key = PublicKey::from(&new_static_secret);
@@ -256,9 +300,10 @@ fn generate_key_pair_and_encrypt_secret(public_key: &PublicKey, secret: SecretKe
     let cipher = XChaCha20Poly1305::new(&shared_key.into());
     let mut nonce = [0u8; 24];
     rand::thread_rng().fill_bytes(&mut nonce);
-    let ciphertext = cipher.encrypt(&nonce.into(), new_static_secret.as_ref())
+    let encrypted_secret_bytes = cipher
+        .encrypt(&nonce.into(), new_static_secret.as_ref())
         .map_err(CGKAError::Encryption)?;
-    let encrypted_secret: Encrypted<SecretKey> = Encrypted::new(nonce.into(), ciphertext);
+    let encrypted_secret: Encrypted<SecretKey> = Encrypted::new(nonce.into(), encrypted_secret_bytes);
     Ok((new_public_key, encrypted_secret))
 }
 
@@ -277,18 +322,22 @@ pub(crate) struct ParentNode {
     /// TreeNodeIndex values).
     // TODO: Use beehive crypto capabilities
     pub sk: BTreeMap<TreeNodeIndex, Encrypted<SecretKey>>,
-    // pub sk: BTreeMap<TreeNodeIndex, Vec<u8>>,
 }
 
 /// Highest non-blank descendents of a node
-fn append_resolution<'a>(tree: &'a BeeKEM, idx: TreeNodeIndex, leaves_acc: &mut Vec<&'a LeafNode>, parents_acc: &mut Vec<&'a ParentNode>) -> Result<(), CGKAError> {
+fn append_resolution<'a>(
+    tree: &'a BeeKEM,
+    idx: TreeNodeIndex,
+    leaves_acc: &mut Vec<&'a LeafNode>,
+    parents_acc: &mut Vec<&'a ParentNode>,
+) -> Result<(), CGKAError> {
     match idx {
         TreeNodeIndex::Leaf(l_idx) => {
             if let Some(leaf_node) = tree.get_leaf(l_idx)? {
                 leaves_acc.push(leaf_node);
             }
             Ok(())
-        },
+        }
         TreeNodeIndex::Parent(p_idx) => {
             if let Some(parent_node) = tree.get_parent(p_idx)? {
                 parents_acc.push(parent_node);
@@ -310,8 +359,9 @@ mod tests {
     use super::*;
 
     fn setup_participant() -> (Identifier, PublicKey) {
-        let id = Identifier::new(ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
-            .verifying_key());
+        let id = Identifier::new(
+            ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()).verifying_key(),
+        );
         let secret = StaticSecret::random_from_rng(&mut rand::thread_rng());
         let pk = PublicKey::from(&secret);
         (id, pk)
@@ -326,7 +376,10 @@ mod tests {
         participants.push(setup_participant());
         let participant_count = participants.len() as u32;
         let tree = BeeKEM::new(participants, me.0)?;
-        assert_eq!(tree.tree_size(), TreeSize::from_leaf_count(participant_count).u32());
+        assert_eq!(
+            tree.tree_size(),
+            TreeSize::from_leaf_count(participant_count).u32()
+        );
         assert_eq!(tree.id_count(), participant_count);
         Ok(())
     }
@@ -339,7 +392,10 @@ mod tests {
         let initial_participant_count = participants.len() as u32;
         let mut tree = BeeKEM::new(participants, me.0)?;
         tree.remove_id(p1.0)?;
-        assert_eq!(tree.tree_size(), TreeSize::from_leaf_count(initial_participant_count).u32());
+        assert_eq!(
+            tree.tree_size(),
+            TreeSize::from_leaf_count(initial_participant_count).u32()
+        );
         assert_eq!(tree.id_count(), initial_participant_count - 1);
         Ok(())
     }

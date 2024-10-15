@@ -2,15 +2,15 @@ pub mod beekem;
 pub mod error;
 pub mod treemath;
 
-use std::collections::BTreeMap;
-
 use beekem::BeeKEM;
 use error::CGKAError;
 use serde::{Deserialize, Serialize};
-use treemath::{LeafNodeIndex, ParentNodeIndex, TreeNodeIndex, TreeSize};
 use x25519_dalek;
 
-use crate::{crypto::{encrypted::Encrypted, hash::Hash}, principal::identifier::Identifier};
+use crate::{
+    crypto::{encrypted::Encrypted, hash::Hash},
+    principal::identifier::Identifier,
+};
 type PublicKey = x25519_dalek::PublicKey;
 type SecretKey = x25519_dalek::StaticSecret;
 
@@ -24,7 +24,10 @@ pub struct CGKA {
 /// Constructors
 impl CGKA {
     /// We assume participants are in causal order.
-    pub fn new(participants: Vec<(Identifier, PublicKey)>, my_id: Identifier) -> Result<Self, CGKAError> {
+    pub fn new(
+        participants: Vec<(Identifier, PublicKey)>,
+        my_id: Identifier,
+    ) -> Result<Self, CGKAError> {
         Ok(Self {
             tree: BeeKEM::new(participants, my_id)?,
         })
@@ -50,7 +53,12 @@ impl CGKA {
     }
 
     /// Rotate key.
-    pub fn update(&mut self, id: Identifier, new_pk: PublicKey, new_sk: SecretKey) -> Result<(), CGKAError> {
+    pub fn update(
+        &mut self,
+        id: Identifier,
+        new_pk: PublicKey,
+        new_sk: SecretKey,
+    ) -> Result<(), CGKAError> {
         self.tree.encrypt_path(id, new_pk, new_sk)
     }
 
@@ -77,8 +85,9 @@ mod tests {
     use super::*;
 
     fn setup_participant() -> (Identifier, PublicKey) {
-        let id = Identifier::new(ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
-            .verifying_key());
+        let id = Identifier::new(
+            ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()).verifying_key(),
+        );
         let secret = StaticSecret::random_from_rng(&mut rand::thread_rng());
         let pk = PublicKey::from(&secret);
         (id, pk)

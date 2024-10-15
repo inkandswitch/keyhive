@@ -26,18 +26,7 @@ pub(crate) const MAX_TREE_SIZE: u32 = 1 << 30;
 pub(crate) const MIN_TREE_SIZE: u32 = 1;
 
 /// LeafNodeIndex references a leaf node in a tree.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LeafNodeIndex(u32);
 
 impl std::fmt::Display for LeafNodeIndex {
