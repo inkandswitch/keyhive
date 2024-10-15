@@ -107,15 +107,3 @@ mod tests {
         Ok(())
     }
 }
-
-//////////////////////////////////
-//////////////////////////////////
-
-// Derive key pair
-fn dkp(x: &[u8]) -> (PublicKey, SecretKey) {
-    todo!()
-}
-
-// Key derivation function
-// Second input is used to prevent collisions (e.g. "path" or "node")
-// fn kdf(&[u8], &[u8]) -> ???
