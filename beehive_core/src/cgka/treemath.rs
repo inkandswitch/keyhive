@@ -209,7 +209,6 @@ impl TreeSize {
     }
 
     /// Creates a new `TreeSize` from a specific leaf count
-    #[cfg(any(feature = "test-utils", test))]
     pub(crate) fn from_leaf_count(leaf_count: u32) -> Self {
         TreeSize::new(leaf_count * 2)
     }
@@ -334,7 +333,7 @@ pub(crate) fn right(index: ParentNodeIndex) -> TreeNodeIndex {
 
 /// Warning: There is no check about the tree size and whether the parent is
 /// beyond the root
-fn parent(x: TreeNodeIndex) -> ParentNodeIndex {
+pub(crate) fn parent(x: TreeNodeIndex) -> ParentNodeIndex {
     let x = x.u32();
     let k = level(x);
     let b = (x >> (k + 1)) & 0x01;

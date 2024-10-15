@@ -36,9 +36,12 @@
 // * Rotations are probably much more common than adds
 // * Adds are more common than removes
 
+pub mod treemath;
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use treemath::{LeafNodeIndex, ParentNodeIndex, TreeNodeIndex, TreeSize};
 use x25519_dalek;
 
 use crate::{crypto::{encrypted::Encrypted, hash::Hash}, principal::identifier::Identifier};
@@ -46,60 +49,138 @@ type PublicKey = x25519_dalek::PublicKey;
 type SecretKey = x25519_dalek::StaticSecret;
 
 #[derive(Clone, Deserialize, Serialize)]
-pub struct LeafIdx(usize);
-#[derive(Clone, Deserialize, Serialize)]
-pub struct ParentIdx(usize);
-
-#[derive(Clone, Deserialize, Serialize)]
 pub struct CGKA {
-    my_leaf_idx: LeafIdx,
+    pub my_leaf_idx: Option<LeafNodeIndex>,
+    next_leaf_idx: LeafNodeIndex,
     leaves: Vec<Option<LeafNode>>,
     parents: Vec<Option<ParentNode>>,
-    id_to_leaf_idx: BTreeMap<Identifier, LeafIdx>,
+    id_to_leaf_idx: BTreeMap<Identifier, LeafNodeIndex>,
+    tree_size: TreeSize,
     // FIXME: One option is to use the treemath approach from OpenMLS.
     // tree: ...,
     // /// Ops: Add, Remove, Rotate
     // ops: ...,
 }
 
+/// Constructors
 impl CGKA {
-    pub fn new(pks: Vec<PublicKey>) -> Self {
-        todo!()
-        // FIXME: Build left-balanced binary tree with pks as leaves.
+    /// We assume participants are in causal order.
+    pub fn new(participants: Vec<(Identifier, PublicKey)>, my_id: Identifier) -> Result<Self, CGKAError> {
+        let mut cgka = Self {
+            my_leaf_idx: None,
+            next_leaf_idx: LeafNodeIndex::new(participants.len() as u32),
+            leaves: Vec::new(),
+            parents: Vec::new(),
+            id_to_leaf_idx: BTreeMap::new(),
+            tree_size: TreeSize::from_leaf_count(participants.len() as u32),
+        };
+        for (idx, (id, pk)) in participants.iter().enumerate() {
+            if *id == my_id {
+                cgka.my_leaf_idx = Some(LeafNodeIndex::new(idx as u32));
+            }
+            cgka.add(*id, *pk)?;
+        }
+        // TODO: Populate my path
+        Ok(cgka)
     }
 }
 
-/// Public interface
-// TODO: Can we assume causal broadcast?
+/// Tree
 impl CGKA {
-    /// Get secret for decryption/encryption.
-    pub fn get_secret(&self, pk: PublicKey, sk: SecretKey) -> SecretKey {
-        todo!()
+    fn get_leaf(&self, idx: LeafNodeIndex) -> Result<&Option<LeafNode>, CGKAError> {
+        self.leaves.get(idx.usize()).ok_or(CGKAError::IndexOutOfBounds)
     }
 
-    /// Add key.
-    pub fn add(&mut self, id: Identifier, pk: PublicKey) {
-        todo!()
+    fn get_parent(&self, idx: ParentNodeIndex) -> Result<&Option<ParentNode>, CGKAError> {
+        self.parents.get(idx.usize()).ok_or(CGKAError::IndexOutOfBounds)
+    }
+
+    fn insert_leaf_at(&mut self, idx: LeafNodeIndex, leaf: LeafNode) -> Result<(), CGKAError> {
+        if idx.usize() >= self.leaves.len() { return Err(CGKAError::IndexOutOfBounds); }
+        self.leaves[idx.usize()] = Some(leaf);
+        Ok(())
+    }
+
+    fn insert_parent_at(&mut self, idx: ParentNodeIndex, parent: ParentNode) -> Result<(), CGKAError> {
+        if idx.usize() >= self.parents.len() { return Err(CGKAError::IndexOutOfBounds); }
+        self.parents[idx.usize()] = Some(parent);
+        Ok(())
+    }
+
+    fn blank_leaf_and_path(&mut self, idx: LeafNodeIndex) -> Result<(), CGKAError> {
+        if idx.usize() >= self.leaves.len() { return Err(CGKAError::IndexOutOfBounds); }
+        self.leaves[idx.usize()] = None;
+        self.blank_path(treemath::parent(idx.into()))
+    }
+
+    fn blank_path(&mut self, idx: ParentNodeIndex) -> Result<(), CGKAError> {
+        self.blank_parent(idx)?;
+        if self.is_root(idx.into()) { return Ok(()); }
+        self.blank_path(treemath::parent(idx.into()))
+    }
+
+    fn blank_parent(&mut self, idx: ParentNodeIndex) -> Result<(), CGKAError> {
+        // FIXME: This write can panic
+        self.parents[idx.usize()] = None;
+        Ok(())
+    }
+
+    fn push_leaf(&mut self, id: Identifier, pk: PublicKey) -> Result<(), CGKAError> {
+        self.maybe_grow_tree(self.leaves.len() as u32 + 1);
+        let l_idx = self.next_leaf_idx;
+        // Increment next leaf idx
+        self.next_leaf_idx = LeafNodeIndex::new(self.next_leaf_idx.u32() + 1);
+        self.id_to_leaf_idx.insert(id, l_idx);
+        self.insert_leaf_at(l_idx, LeafNode { id, pk })?;
+        self.blank_path(treemath::parent(l_idx.into()))
+    }
+
+    /// Growing the tree will add a new root and a new subtree, all blank.
+    fn maybe_grow_tree(&mut self, new_count: u32) {
+        if self.tree_size >= TreeSize::from_leaf_count(new_count) { return; }
+        self.tree_size.inc();
+        // FIXME: Panics if MAX overflow
+        self.leaves.reserve(self.tree_size.leaf_count() as usize);
+        // FIXME: Does this effectively call reserve first under the hood?
+        self.leaves.resize(self.tree_size.leaf_count() as usize, None);
+        // FIXME: Panics if MAX overflow
+        self.parents.reserve(self.tree_size.parent_count() as usize);
+        // FIXME: Does this effectively call reserve first under the hood?
+        self.parents.resize(self.tree_size.parent_count() as usize, None);
+    }
+
+    fn is_root(&self, idx: TreeNodeIndex) -> bool {
+        idx == treemath::root(self.tree_size)
+    }
+
+    /// This is the size of the tree including any blank leaves
+    fn tree_size(&self) -> u32 {
+        self.tree_size.u32()
     }
 
     /// Contains id.
-    pub fn contains_id(&self, id: Identifier) -> bool {
+    fn contains_id(&self, id: Identifier) -> bool {
         self.id_to_leaf_idx.contains_key(&id)
     }
+}
 
-    // /// Contains key.
-    // pub fn contains_key(&self, pk: PublicKey) -> bool {
-    //     self.id_for_pk(pk).is_some()
-    // }
+/// Public CGKA operations
+impl CGKA {
+    /// Get secret for decryption/encryption.
+    pub fn get_secret(&self, sk: SecretKey) -> SecretKey {
+        // Work from my leaf index up
+        todo!()
+    }
 
-    // /// Get Identifier for key.
-    // pub fn id_for_pk(&self, pk: PublicKey) -> Option<Identifier> {
-    //     todo!()
-    // }
+    /// Add participant.
+    pub fn add(&mut self, id: Identifier, pk: PublicKey) -> Result<(), CGKAError> {
+        self.push_leaf(id, pk)
+    }
 
     /// Remove participant.
-    pub fn remove(&mut self, id: Identifier) {
-        todo!()
+    pub fn remove(&mut self, id: Identifier) -> Result<(), CGKAError> {
+        let l_idx = self.id_to_leaf_idx.get(&id).ok_or(CGKAError::IdentifierNotFound)?;
+        self.blank_leaf_and_path(*l_idx)
     }
 
     /// Rotate key.
@@ -118,51 +199,28 @@ impl CGKA {
     }
 }
 
-/// Private methods
-impl CGKA {
-    // fn is_root(&self, node: TreeIdx) -> bool {
-    //     todo!()
-    // }
-}
+// #[derive(Clone, Deserialize, Serialize)]
+// pub enum TreeNode {
+//     Leaf(LeafNode),
+//     Parent(ParentNode),
+// }
 
-#[derive(Clone, Deserialize, Serialize)]
-pub enum TreeNode {
-    Leaf(LeafNode),
-    Parent(ParentNode),
-}
+// impl From<LeafNode> for TreeNode {
+//     fn from(leaf: LeafNode) -> TreeNode {
+//         TreeNode::Leaf(leaf)
+//     }
+// }
 
-impl TreeNode {
-    fn resolution(&self) -> Vec<TreeNode> {
-        match self {
-            TreeNode::Leaf(l) => l.resolution(),
-            TreeNode::Parent(p) => p.resolution(),
-        }
-    }
-}
-
-impl From<LeafNode> for TreeNode {
-    fn from(leaf: LeafNode) -> TreeNode {
-        TreeNode::Leaf(leaf)
-    }
-}
-
-impl From<ParentNode> for TreeNode {
-    fn from(node: ParentNode) -> TreeNode {
-        TreeNode::Parent(node)
-    }
-}
+// impl From<ParentNode> for TreeNode {
+//     fn from(node: ParentNode) -> TreeNode {
+//         TreeNode::Parent(node)
+//     }
+// }
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct LeafNode {
     pub id: Identifier,
     pub pk: PublicKey,
-}
-
-impl LeafNode {
-    /// Highest non-blank descendents of a node
-    fn resolution(&self) -> Vec<TreeNode> {
-        vec![self.clone().into()]
-    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -171,11 +229,36 @@ pub struct ParentNode {
     pub sk: Encrypted<SecretKey>,
 }
 
-impl ParentNode {
-    /// Highest non-blank descendents of a node
-    fn resolution(&self) -> Vec<TreeNode> {
-        todo!()
+/// Highest non-blank descendents of a node
+fn append_resolution<'a>(cgka: &'a CGKA, idx: TreeNodeIndex, leaves_acc: &mut Vec<&'a LeafNode>, parents_acc: &mut Vec<&'a ParentNode>) -> Result<(), CGKAError> {
+    match idx {
+        TreeNodeIndex::Leaf(l_idx) => {
+            if let Some(leaf_node) = cgka.get_leaf(l_idx)? {
+                leaves_acc.push(leaf_node);
+            }
+            Ok(())
+        },
+        TreeNodeIndex::Parent(p_idx) => {
+            if let Some(parent_node) = cgka.get_parent(p_idx)? {
+                parents_acc.push(parent_node);
+                Ok(())
+            } else {
+                let left_idx = treemath::left(p_idx);
+                append_resolution(cgka, left_idx, leaves_acc, parents_acc)?;
+                let right_idx = treemath::right(p_idx);
+                append_resolution(cgka, right_idx, leaves_acc, parents_acc)
+            }
+        }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CGKAError {
+    #[error("Index out of bounds")]
+    IndexOutOfBounds,
+
+    #[error("Identifier not found")]
+    IdentifierNotFound,
 }
 
 //////////////////////////////////
@@ -189,22 +272,3 @@ fn dkp(x: &[u8]) -> (PublicKey, SecretKey) {
 // Key derivation function
 // Second input is used to prevent collisions (e.g. "path" or "node")
 // fn kdf(&[u8], &[u8]) -> ???
-
-/// Requires the following properties:
-///   1: If (x, X) and (y, Y) are valid key pairs, then so is (x, X) * (y, Y) = (x *pub y, X *priv Y).
-///   2: * is associative and commutative (ensuring order of concurrent updates doesn't matter).
-///   3: *pub is cancellative: if x *pub z = y *pub z for some z, then x = y.
-fn star(pk: PublicKey, sk: SecretKey) -> (PublicKey, SecretKey) {
-    (star_pub(pk), star_priv(sk))
-}
-
-fn star_pub(pk: PublicKey) -> PublicKey {
-    todo!()
-}
-
-fn star_priv(sk: SecretKey) -> SecretKey {
-    todo!()
-}
-
-
-
