@@ -290,10 +290,10 @@ impl BeeKEM {
 
 // TODO: Use beehive crypto capabilities directly instead
 fn generate_key_pair_and_encrypt_secret(
-    public_key: &PublicKey,
-    secret: SecretKey,
+    their_public_key: &PublicKey,
+    my_secret: SecretKey,
 ) -> Result<(PublicKey, Encrypted<SecretKey>), CGKAError> {
-    let shared_key = x25519(secret.to_bytes(), public_key.to_bytes());
+    let shared_key = x25519(my_secret.to_bytes(), their_public_key.to_bytes());
     let new_static_secret = StaticSecret::random_from_rng(&mut rand::thread_rng());
     let new_public_key = PublicKey::from(&new_static_secret);
 
