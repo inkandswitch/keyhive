@@ -56,6 +56,7 @@ pub struct CGKA {
     parents: Vec<Option<ParentNode>>,
     id_to_leaf_idx: BTreeMap<Identifier, LeafNodeIndex>,
     tree_size: TreeSize,
+    participant_count: u32,
     // FIXME: One option is to use the treemath approach from OpenMLS.
     // tree: ...,
     // /// Ops: Add, Remove, Rotate
@@ -68,12 +69,14 @@ impl CGKA {
     pub fn new(participants: Vec<(Identifier, PublicKey)>, my_id: Identifier) -> Result<Self, CGKAError> {
         let mut cgka = Self {
             my_leaf_idx: None,
-            next_leaf_idx: LeafNodeIndex::new(participants.len() as u32),
+            next_leaf_idx: LeafNodeIndex::new(0),
             leaves: Vec::new(),
             parents: Vec::new(),
             id_to_leaf_idx: BTreeMap::new(),
             tree_size: TreeSize::from_leaf_count(participants.len() as u32),
+            participant_count: 0,
         };
+        cgka.grow_tree_to_size();
         for (idx, (id, pk)) in participants.iter().enumerate() {
             if *id == my_id {
                 cgka.my_leaf_idx = Some(LeafNodeIndex::new(idx as u32));
@@ -96,7 +99,9 @@ impl CGKA {
     }
 
     fn insert_leaf_at(&mut self, idx: LeafNodeIndex, leaf: LeafNode) -> Result<(), CGKAError> {
+        println!("idxusize: {} >= leaves len {}", idx.usize(), self.leaves.len());
         if idx.usize() >= self.leaves.len() { return Err(CGKAError::IndexOutOfBounds); }
+        println!("inserting at {:?}", idx);
         self.leaves[idx.usize()] = Some(leaf);
         Ok(())
     }
@@ -107,8 +112,16 @@ impl CGKA {
         Ok(())
     }
 
+    fn is_blank_leaf(&self, idx: LeafNodeIndex) -> Result<bool, CGKAError> {
+        Ok(self.get_leaf(idx)?.is_none())
+    }
+
     fn blank_leaf_and_path(&mut self, idx: LeafNodeIndex) -> Result<(), CGKAError> {
+        println!("blank_leaf {:?}", idx);
         if idx.usize() >= self.leaves.len() { return Err(CGKAError::IndexOutOfBounds); }
+        if !self.is_blank_leaf(idx)? {
+            self.participant_count -= 1;
+        }
         self.leaves[idx.usize()] = None;
         self.blank_path(treemath::parent(idx.into()))
     }
@@ -126,19 +139,25 @@ impl CGKA {
     }
 
     fn push_leaf(&mut self, id: Identifier, pk: PublicKey) -> Result<(), CGKAError> {
-        self.maybe_grow_tree(self.leaves.len() as u32 + 1);
+        self.maybe_grow_tree(self.next_leaf_idx.u32());
         let l_idx = self.next_leaf_idx;
         // Increment next leaf idx
         self.next_leaf_idx = LeafNodeIndex::new(self.next_leaf_idx.u32() + 1);
         self.id_to_leaf_idx.insert(id, l_idx);
         self.insert_leaf_at(l_idx, LeafNode { id, pk })?;
+        self.participant_count += 1;
         self.blank_path(treemath::parent(l_idx.into()))
     }
 
     /// Growing the tree will add a new root and a new subtree, all blank.
     fn maybe_grow_tree(&mut self, new_count: u32) {
+        println!("maybe_grow_tree: size {:?}, new_count: {new_count}, new_size {:?}", self.tree_size, TreeSize::from_leaf_count(new_count));
         if self.tree_size >= TreeSize::from_leaf_count(new_count) { return; }
         self.tree_size.inc();
+        self.grow_tree_to_size();
+    }
+
+    fn grow_tree_to_size(&mut self) {
         // FIXME: Panics if MAX overflow
         self.leaves.reserve(self.tree_size.leaf_count() as usize);
         // FIXME: Does this effectively call reserve first under the hood?
@@ -259,6 +278,46 @@ pub enum CGKAError {
 
     #[error("Identifier not found")]
     IdentifierNotFound,
+}
+
+#[cfg(test)]
+mod tests {
+    use x25519_dalek::StaticSecret;
+
+    use super::*;
+
+    fn setup_participant() -> (Identifier, PublicKey) {
+        let id = Identifier::new(ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
+            .verifying_key());
+        let secret = StaticSecret::random_from_rng(&mut rand::thread_rng());
+        let pk = PublicKey::from(&secret);
+        (id, pk)
+    }
+
+    #[test]
+    fn test_simple_add() -> Result<(), CGKAError> {
+        let me = setup_participant();
+        let mut participants = vec![me];
+        participants.push(setup_participant());
+        let participant_count = participants.len() as u32;
+        let cgka = CGKA::new(participants, me.0)?;
+        assert_eq!(cgka.tree_size, TreeSize::from_leaf_count(participant_count));
+        assert_eq!(cgka.participant_count, participant_count);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simple_add_and_remove() -> Result<(), CGKAError> {
+        let me = setup_participant();
+        let p1 = setup_participant();
+        let mut participants = vec![me, p1];
+        let participant_count = participants.len() as u32;
+        let mut cgka = CGKA::new(participants, me.0)?;
+        cgka.remove(p1.0)?;
+        assert_eq!(cgka.tree_size, TreeSize::from_leaf_count(participant_count));
+        assert_eq!(cgka.participant_count, participant_count - 1);
+        Ok(())
+    }
 }
 
 //////////////////////////////////
