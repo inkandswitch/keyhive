@@ -1,15 +1,15 @@
 use crate::crypto::digest::Digest;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, hash::Hash};
+use std::collections::BTreeMap;
 
 /// A content-addressed map.
 ///
 /// Since all operations are referenced by their hash,
 /// a map that indexes by the same cryptographic hash is convenient.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CaMap<T: Eq + Serialize>(BTreeMap<Digest<T>, T>);
+pub struct CaMap<T: Serialize>(BTreeMap<Digest<T>, T>);
 
-impl<T: Serialize + Clone + Eq> CaMap<T> {
+impl<T: Serialize> CaMap<T> {
     /// Create an empty [`CaMap`].
     ///
     /// # Examples
@@ -26,7 +26,7 @@ impl<T: Serialize + Clone + Eq> CaMap<T> {
     pub fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         Self(
             iter.into_iter()
-                .map(|preimage| (Hash::hash(&preimage), preimage))
+                .map(|preimage| (Digest::hash(&preimage), preimage))
                 .collect(),
         )
     }
@@ -53,7 +53,10 @@ impl<T: Serialize + Clone + Eq> CaMap<T> {
         self.0.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&Digest<T>, &T)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&Digest<T>, &T)>
+    where
+        T: Ord,
+    {
         self.0.iter()
     }
 

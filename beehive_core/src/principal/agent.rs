@@ -1,51 +1,76 @@
 use super::{
     document::Document, group::Group, identifier::Identifier, individual::Individual,
-    traits::Verifiable,
+    verifiable::Verifiable,
 };
 use ed25519_dalek::VerifyingKey;
 use serde::Serialize;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub enum Agent<'a, T: Clone + Ord + Serialize> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum Agent<T: Serialize> {
     Individual(Individual),
-    Group(Group<'a, T>),
-    Document(Document<'a, T>),
+    Group(Group<T>),
+    Document(Document<T>),
 }
 
-impl<'a, T: Clone + Ord + Serialize> Agent<'a, T> {
-    pub fn id(&self) -> Identifier {
+impl<T: Serialize> Agent<T> {
+    pub fn id(&self) -> AgentId {
         match self {
-            Agent::Individual(i) => i.id,
-            Agent::Group(g) => g.id(),
-            Agent::Document(d) => d.id(),
+            Agent::Individual(i) => AgentId::IndividualId(i.id),
+            Agent::Group(g) => AgentId::GroupId(*g.id()),
+            Agent::Document(d) => AgentId::DocumentId(*d.id()),
         }
     }
 }
 
-impl<'a, T: Clone + Ord + Serialize> From<Individual> for Agent<'a, T> {
+impl<T: Serialize> From<Individual> for Agent<T> {
     fn from(s: Individual) -> Self {
         Agent::Individual(s)
     }
 }
 
-impl<'a, T: Clone + Ord + Serialize> From<Group<'a, T>> for Agent<'a, T> {
-    fn from(g: Group<'a, T>) -> Self {
+impl<T: Serialize> From<Group<T>> for Agent<T> {
+    fn from(g: Group<T>) -> Self {
         Agent::Group(g)
     }
 }
 
-impl<'a, T: Clone + Ord + Serialize> From<Document<'a, T>> for Agent<'a, T> {
-    fn from(d: Document<'a, T>) -> Self {
+impl<T: Serialize> From<Document<T>> for Agent<T> {
+    fn from(d: Document<T>) -> Self {
         Agent::Document(d)
     }
 }
 
-impl<'a, T: Clone + Ord + Serialize> Verifiable for Agent<'a, T> {
+impl<T: Serialize> Verifiable for Agent<T> {
     fn verifying_key(&self) -> VerifyingKey {
         match self {
             Agent::Individual(i) => i.verifying_key(),
             Agent::Group(g) => g.verifying_key(),
             Agent::Document(d) => d.verifying_key(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub enum AgentId {
+    IndividualId(Identifier),
+    GroupId(Identifier),
+    DocumentId(Identifier),
+}
+
+impl AgentId {
+    pub fn as_bytes(&self) -> [u8; 32] {
+        match self {
+            AgentId::IndividualId(i) => i.to_bytes(),
+            AgentId::GroupId(i) => i.to_bytes(),
+            AgentId::DocumentId(i) => i.to_bytes(),
+        }
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        match self {
+            AgentId::IndividualId(i) => i.as_bytes(),
+            AgentId::GroupId(i) => i.as_bytes(),
+            AgentId::DocumentId(i) => i.as_bytes(),
         }
     }
 }

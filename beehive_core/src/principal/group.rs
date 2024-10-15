@@ -4,11 +4,15 @@ pub mod operation;
 pub mod state;
 pub mod store;
 
-use super::{agent::Agent, traits::Verifiable};
-use crate::{access::Access, crypto::signed::Signed, util::content_addressed_map::CaMap};
+use super::{agent::Agent, identifier::Identifier, verifiable::Verifiable};
+use crate::{
+    access::Access,
+    crypto::{digest::Digest, signed::Signed},
+    util::content_addressed_map::CaMap,
+};
 use nonempty::NonEmpty;
 use operation::{delegation::Delegation, revocation::Revocation, Operation};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A collection of agents with no associated content.
@@ -16,18 +20,21 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Groups are stateful agents. It is possible the delegate control over them,
 /// and they can be delegated to. This produces transitives lines of authority
 /// through the network of [`Agent`]s.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub struct Group<'a, T: Clone + Ord + Serialize> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Group<T: Serialize> {
     /// The current view of members of a group.
-    pub members: BTreeMap<&'a Agent<'a, T>, &'a Signed<Delegation<'a, T>>>,
+    pub members: BTreeMap<Identifier, Digest<Signed<Delegation<T>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
-    pub state: state::GroupState<'a, T>,
+    pub state: state::GroupState<T>,
 }
 
-impl<'a, T: Clone + Ord + Serialize> Group<'a, T> {
+impl<T: Serialize> Group<T> {
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
-    pub fn generate(parents: NonEmpty<&Agent<'a, T>>) -> Group<'a, T> {
+    pub fn generate(parents: NonEmpty<&Agent<T>>) -> Group<T>
+    where
+        T: Clone,
+    {
         let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let group_id = group_signer.verifying_key().into();
 
@@ -65,8 +72,12 @@ impl<'a, T: Clone + Ord + Serialize> Group<'a, T> {
         }
     }
 
+    pub fn id(&self) -> &Identifier {
+        &self.state.id
+    }
+
     // FIXME get_capability?
-    pub fn get(&self, agent: &Agent<'a, T>) -> Option<&Signed<Delegation<'a, T>>>
+    pub fn get(&self, agent: &Agent<T>) -> Option<&Signed<Delegation<T>>>
     where
         T: Ord,
     {
@@ -74,7 +85,7 @@ impl<'a, T: Clone + Ord + Serialize> Group<'a, T> {
     }
 
     // FIXME rename
-    pub fn add_member(&'a mut self, signed_delegation: Signed<Delegation<'a, T>>) {
+    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<T>>) {
         let hash = self.state.delegations.insert(signed_delegation);
         let val_ref = self
             .state
@@ -91,24 +102,27 @@ impl<'a, T: Clone + Ord + Serialize> Group<'a, T> {
         self.members.insert(&val_ref.payload.delegate, &val_ref);
     }
 
-    pub fn materialize(state: state::GroupState<'a, T>) -> Self {
+    pub fn materialize(state: state::GroupState<T>) -> Self
+    where
+        T: Clone + Ord,
+    {
         // FIXME oof that's a lot of cloning
 
-        let ops: BTreeSet<Signed<Operation<T>>> = state
+        let ops: Vec<Signed<Operation<T>>> = state
             .delegations
             .iter()
-            .map(|(_k, v)| v.clone().map(|d| d.into()))
+            .map(|(_k, v)| v.map(|d| (&d).into()))
             .chain(
                 state
                     .revocations
                     .iter()
-                    .map(|(_k, v)| v.clone().map(|r| r.into())),
+                    .map(|(_k, v)| v.map(|r| (&r).into())),
             )
             .collect();
 
-        let heads: BTreeSet<&Signed<Operation<T>>> = todo!();
+        let heads: Vec<&Signed<Operation<T>>> = todo!();
 
-        let members = Operation::topsort(state.heads.clone().into_iter().collect(), &ops)
+        let members = Operation::topsort(&heads, &ops)
             .expect("FIXME")
             .iter()
             .fold(BTreeMap::new(), |mut acc, signed| match signed {
@@ -140,7 +154,7 @@ impl<'a, T: Clone + Ord + Serialize> Group<'a, T> {
         Group { state, members }
     }
 
-    pub fn revoke(&mut self, signed_revocation: Signed<Revocation<'a, T>>) {
+    pub fn revoke(&mut self, signed_revocation: Signed<Revocation<T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
@@ -167,7 +181,7 @@ impl<'a, T: Clone + Ord + Serialize> Group<'a, T> {
     // }
 }
 
-impl<'a, T: Ord + Serialize + Clone> Verifiable for Group<'a, T> {
+impl<T: Serialize> Verifiable for Group<T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }

@@ -4,7 +4,7 @@ pub mod store;
 
 use crate::{
     crypto::{digest::Digest, signed::Signed},
-    principal::membered::MemberedId,
+    principal::{document::Document, identifier::Identifier, membered::MemberedId},
     util::content_addressed_map::CaMap,
 };
 use delegation::Delegation;
@@ -18,13 +18,13 @@ use std::{
 use thiserror::Error;
 use topological_sort::TopologicalSort;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub enum Operation<'a, T: Clone + Ord + Serialize> {
-    Delegation(Delegation<'a, T>),
-    Revocation(Revocation<'a, T>),
+#[derive(Debug, Clone, Hash, Serialize)]
+pub enum Operation<T: Serialize> {
+    Delegation(Delegation<T>),
+    Revocation(Revocation<T>),
 }
 
-impl<'a, T: Clone + Ord + Serialize> Operation<'a, T> {
+impl<T: Serialize> Operation<T> {
     pub fn is_delegation(&self) -> bool {
         match self {
             Operation::Delegation(_) => true,
@@ -36,24 +36,30 @@ impl<'a, T: Clone + Ord + Serialize> Operation<'a, T> {
         !self.is_delegation()
     }
 
-    pub fn after_auth(&self) -> &[Digest<Signed<Operation<'a, T>>>] {
+    pub fn after(
+        &self,
+    ) -> (
+        &[&Signed<Delegation<T>>],
+        &[&Signed<Revocation<T>>],
+        &[(&Document<T>, Digest<T>)],
+    ) {
         match self {
-            Operation::Delegation(delegation) => &delegation.after_auth.as_slice(),
-            Operation::Revocation(_revocation) => todo!(), // revocation.to_auth_dependencies(),
+            Operation::Delegation(delegation) => delegation.after(),
+            Operation::Revocation(revocation) => revocation.after(),
         }
     }
 
-    pub fn subject(&self) -> &MemberedId {
-        match self {
-            Operation::Delegation(delegation) => &delegation.subject,
-            Operation::Revocation(revocation) => &revocation.subject,
-        }
-    }
+    // pub fn subject(&self) -> Option<Identifier> {
+    //     match self {
+    //         Operation::Delegation(delegation) => delegation.subject(),
+    //         Operation::Revocation(revocation) => revocation.subject(),
+    //     }
+    // }
 
     pub fn ancestors(
-        &'a self,
-        ops: &'a CaMap<Signed<Operation<'a, T>>>,
-    ) -> Result<(CaMap<Signed<Operation<'a, T>>>, usize), AncestorError<'a, T>> {
+        &self,
+        ops: &CaMap<Signed<Operation<T>>>,
+    ) -> Result<(CaMap<Signed<Operation<T>>>, usize), AncestorError<T>> {
         if self.after_auth().is_empty() {
             return Ok((CaMap::new(), 0));
         }
@@ -110,16 +116,12 @@ impl<'a, T: Clone + Ord + Serialize> Operation<'a, T> {
     // FIXME verified gdp
 
     pub fn topsort(
-        mut heads: Vec<Digest<Signed<Operation<'a, T>>>>,
-        ops: &'a CaMap<Signed<Operation<'a, T>>>,
-    ) -> Result<Vec<Signed<Operation<'a, T>>>, AncestorError<'a, T>> {
+        mut heads: Vec<Digest<Signed<Operation<T>>>>,
+        ops: &CaMap<Signed<Operation<T>>>,
+    ) -> Result<Vec<Signed<Operation<T>>>, AncestorError<T>> {
         let mut ops_with_ancestors: BTreeMap<
-            Digest<Signed<Operation<'a, T>>>,
-            (
-                &Signed<Operation<'a, T>>,
-                CaMap<Signed<Operation<'a, T>>>,
-                usize,
-            ),
+            Digest<Signed<Operation<T>>>,
+            (&Signed<Operation<T>>, CaMap<Signed<Operation<T>>>, usize),
         > = BTreeMap::new();
 
         while !heads.is_empty() {
@@ -139,7 +141,7 @@ impl<'a, T: Clone + Ord + Serialize> Operation<'a, T> {
 
         let mut seen = BTreeSet::new();
         // FIXME use pointers?
-        let mut adjacencies: TopologicalSort<Signed<Operation<'a, T>>> =
+        let mut adjacencies: TopologicalSort<Signed<Operation<T>>> =
             topological_sort::TopologicalSort::new();
 
         for (hash, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
@@ -195,28 +197,57 @@ impl<'a, T: Clone + Ord + Serialize> Operation<'a, T> {
     }
 }
 
-impl<'a, T: Clone + Ord + Serialize> From<Delegation<'a, T>> for Operation<'a, T> {
-    fn from(delegation: Delegation<'a, T>) -> Self {
+impl<T: Serialize> PartialEq for Operation<T> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Operation::Delegation(lhs), Operation::Delegation(rhs)) => lhs == rhs,
+            (Operation::Revocation(lhs), Operation::Revocation(rhs)) => lhs == rhs,
+            _ => false,
+        }
+    }
+}
+
+impl<T: Serialize> Eq for Operation<T> {}
+
+impl<T: Serialize> PartialOrd for Operation<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (Operation::Delegation(lhs), Operation::Delegation(rhs)) => lhs.partial_cmp(rhs),
+            (Operation::Revocation(lhs), Operation::Revocation(rhs)) => lhs.partial_cmp(rhs),
+            (Operation::Delegation(_), Operation::Revocation(_)) => Some(Ordering::Less),
+            (Operation::Revocation(_), Operation::Delegation(_)) => Some(Ordering::Greater),
+        }
+    }
+}
+
+impl<T: Serialize> Ord for Operation<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
+impl<T: Serialize> From<Delegation<T>> for Operation<T> {
+    fn from(delegation: Delegation<T>) -> Self {
         Operation::Delegation(delegation)
     }
 }
 
-impl<'a, T: Clone + Ord + Serialize> From<Revocation<'a, T>> for Operation<'a, T> {
-    fn from(revocation: Revocation<'a, T>) -> Self {
+impl<T: Serialize> From<Revocation<T>> for Operation<T> {
+    fn from(revocation: Revocation<T>) -> Self {
         Operation::Revocation(revocation)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Error)]
-pub enum AncestorError<'a, T: Clone + Ord + Serialize> {
+pub enum AncestorError<T: Serialize> {
     #[error("Operation history is unrooted")]
     Unrooted,
 
     #[error("Mismatched subject: {0}")]
-    MismatchedSubject(MemberedId),
+    MismatchedSubject(MemberedId<T>),
 
     #[error("Dependency not available: {0}")]
-    DependencyNotAvailable(Digest<Signed<Operation<'a, T>>>),
+    DependencyNotAvailable(Digest<Signed<Operation<T>>>),
 }
 
 #[cfg(test)]

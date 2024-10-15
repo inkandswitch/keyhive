@@ -1,16 +1,15 @@
 //! The universally unique identifier of an [`Agent`](crate::principal::agentAgent).
 
-use super::traits::Verifiable;
+use super::verifiable::Verifiable;
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
 /// A unique identifier for an [`Agent`](crate::principal::agentAgent).
 ///
 /// This is a newtype for a [`VerifyingKey`](ed25519_dalek::VerifyingKey).
 /// It is used to identify an agent in the system. Since signing keys are only
 /// available to the one agent and not shared, this identifier is provably unique.
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Copy, Serialize, Deserialize)]
 pub struct Identifier(pub ed25519_dalek::VerifyingKey);
 
 impl Identifier {
@@ -32,11 +31,31 @@ impl Identifier {
     }
 }
 
-impl fmt::Display for Identifier {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Clone for Identifier {
+    fn clone(&self) -> Self {
+        Self(self.0)
+    }
+}
+
+impl std::hash::Hash for Identifier {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.as_bytes().hash(state)
+    }
+}
+
+impl std::fmt::Display for Identifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", BASE64_STANDARD.encode(&self.to_bytes()))
     }
 }
+
+impl PartialEq for Identifier {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl Eq for Identifier {}
 
 impl PartialOrd for Identifier {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {

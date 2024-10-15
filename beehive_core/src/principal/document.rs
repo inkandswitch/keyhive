@@ -1,6 +1,4 @@
-use super::{
-    identifier::Identifier, individual::Individual, membered::MemberedId, traits::Verifiable,
-};
+use super::{identifier::Identifier, verifiable::Verifiable};
 use crate::{
     access::Access,
     crypto::{digest::Digest, share_key::ShareKey, signed::Signed},
@@ -11,22 +9,23 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use ed25519_dalek::VerifyingKey;
-use serde::Serialize;
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, BTreeSet},
-};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub struct Document<'a, T: Clone + Ord + Serialize> {
-    pub members: BTreeMap<&'a Agent<'a, T>, &'a Signed<Delegation<'a, T>>>,
-    pub reader_keys: BTreeMap<&'a Individual, ShareKey>, // FIXME May remove if TreeKEM instead of ART
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Document<T: Serialize> {
+    pub members: BTreeMap<Identifier, Digest<Signed<Delegation<T>>>>,
+    pub reader_keys: BTreeMap<Identifier, ShareKey>, // FIXME May remove when BeeKEM, also FIXME Individual ID
     // NOTE: as expected, separate keys are still safer https://doc.libsodium.org/quickstart#do-i-need-to-add-a-signature-to-encrypted-messages-to-detect-if-they-have-been-tampered-with
-    pub state: DocumentState<'a, T>,
+    pub state: DocumentState<T>,
 }
 
-impl<'a, T: Clone + Ord + Serialize> Document<'a, T> {
-    pub fn generate(parents: Vec<&Agent<'a, T>>) -> Self {
+impl<T: Serialize> Document<T> {
+    pub fn id(&self) -> &Identifier {
+        &self.state.id
+    }
+
+    pub fn generate(parents: Vec<&Agent<T>>) -> Self {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let doc_id = doc_signer.verifying_key().into();
 
@@ -68,7 +67,7 @@ impl<'a, T: Clone + Ord + Serialize> Document<'a, T> {
         }
     }
 
-    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<'a, T>>) {
+    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
@@ -78,7 +77,7 @@ impl<'a, T: Clone + Ord + Serialize> Document<'a, T> {
         self.members.insert(&new_ref.payload.delegate, &new_ref);
     }
 
-    pub fn materialize(state: DocumentState<'a, T>) -> Self {
+    pub fn materialize(state: DocumentState<T>) -> Self {
         // FIXME oof that's a lot of cloning to get the heads
         let members = Operation::topsort(
             state.delegation_heads.clone().into_iter().collect(),
@@ -93,7 +92,7 @@ impl<'a, T: Clone + Ord + Serialize> Document<'a, T> {
                 verifying_key,
             } => {
                 acc.insert(
-                    delegation.to.clone(),
+                    delegation.delegate.clone(),
                     (
                         delegation.can,
                         Signed {
@@ -112,7 +111,7 @@ impl<'a, T: Clone + Ord + Serialize> Document<'a, T> {
             } =>
             // FIXME allow downgrading instead of straight removal?
             {
-                acc.remove(&revocation.revoke.payload.to);
+                acc.remove(&revocation.revoke.payload.delegate);
                 acc
             }
         });
@@ -125,115 +124,94 @@ impl<'a, T: Clone + Ord + Serialize> Document<'a, T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct DocumentState<'a, T: Clone + Ord + Serialize> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentState<T: Serialize> {
     pub id: Identifier,
 
-    pub delegation_heads: BTreeSet<&'a Signed<Delegation<'a, T>>>,
-    pub delegations: CaMap<Signed<Delegation<'a, T>>>,
+    pub delegation_heads: BTreeSet<Digest<Signed<Delegation<T>>>>,
+    pub delegations: CaMap<Signed<Delegation<T>>>,
 
-    pub revocation_heads: BTreeSet<&'a Signed<Revocation<'a, T>>>,
-    pub revocations: CaMap<Signed<Revocation<'a, T>>>,
+    pub revocation_heads: BTreeSet<Digest<Revocation<T>>>,
+    pub revocations: CaMap<Signed<Revocation<T>>>,
 
     pub content_ops: BTreeSet<T>,
 }
 
-impl<'a, T: Clone + Ord + Serialize> Verifiable for Document<'a, T> {
+impl<T: Serialize> Verifiable for Document<T> {
     fn verifying_key(&self) -> VerifyingKey {
         self.state.verifying_key()
     }
 }
 
-impl<'a, T: Eq + Clone + Ord + Serialize> PartialOrd for DocumentState<'a, T> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.id.as_bytes().partial_cmp(&other.id.as_bytes()) {
-            Some(Ordering::Equal) => {
-                if self.authority_ops == other.authority_ops
-                    && self.content_ops == other.content_ops
-                {
-                    Some(Ordering::Equal)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-}
-
-impl<'a, T: Eq + Clone + Ord + Serialize> Ord for DocumentState<'a, T> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.id.as_bytes().cmp(&other.id.as_bytes())
-    }
-}
-
-impl<'a, T: Clone + Ord + Serialize> Verifiable for DocumentState<'a, T> {
+impl<T: Serialize> Verifiable for DocumentState<T> {
     fn verifying_key(&self) -> VerifyingKey {
         self.id.0
     }
 }
 
-impl<'a, T: Clone + Ord + Serialize> DocumentState<'a, T> {
-    pub fn new(parent: Individual) -> Self {
+impl<T: Serialize> DocumentState<T> {
+    pub fn new(parent: &Agent<T>) -> Self {
         let mut rng = rand::rngs::OsRng;
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
         let id: Identifier = signing_key.verifying_key().into();
 
-        let init = Operation::Delegation(Delegation {
-            delegate: &parent.into(),
-            can: Access::Admin,
+        let init = Signed::sign(
+            Delegation {
+                delegate: &parent,
+                can: Access::Admin,
 
-            proof: None,
-            after_revocations: vec![],
-            after_content: vec![],
-        });
-
-        let signed_init = Signed::sign(init, &signing_key);
+                proof: None,
+                after_revocations: vec![],
+                after_content: vec![],
+            },
+            &signing_key,
+        );
 
         Self {
             id,
-            delegation_heads: BTreeSet::from_iter([Digest::hash(signed_init)]),
-            delegations: CaMap::from_iter([signed_init]),
+
+            delegation_heads: BTreeSet::from_iter([Digest::hash(&init)]),
+            delegations: CaMap::from_iter([init]),
+
+            revocation_heads: BTreeSet::new(),
+            revocations: CaMap::new(),
+
             content_ops: BTreeSet::new(),
         }
     }
 
-    pub fn delegations_for(&self, agent: &Agent<'a, T>) -> Vec<&Signed<Delegation<'a, T>>> {
-        self.authority_ops
+    pub fn delegations_for(&self, agent: &Agent<T>) -> Vec<&Signed<Delegation<T>>> {
+        self.delegations // FIXME account for revocations
             .iter()
-            .filter_map(|(_, op)| {
-                if let Operation::Delegation(delegation) = &op.payload {
-                    if delegation.to == *agent {
-                        return Some(op.clone().map(|_| delegation.clone()));
-                    }
-                }
-                None
-            })
+            .filter(|(_, delegation)| delegation.payload.delegate == agent)
             .collect()
     }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct DocStore<'a, T: Clone + Ord + Serialize> {
-    pub docs: BTreeMap<Identifier, Document<'a, T>>,
+pub struct DocStore<T: Serialize> {
+    pub docs: BTreeMap<Identifier, Document<T>>, // FIXME DocID
 }
 
-impl<'a, T: Ord + Serialize + Clone> DocStore<'a, T> {
+impl<T: Serialize> DocStore<T> {
     pub fn new() -> Self {
         Self {
             docs: BTreeMap::new(),
         }
     }
 
-    pub fn insert(&mut self, doc: Document<'a, T>) {
+    pub fn insert(&mut self, doc: Document<T>)
+    where
+        T: Eq,
+    {
         self.docs.insert(doc.verifying_key().into(), doc);
     }
 
-    pub fn get(&self, id: &Identifier) -> Option<&Document<'a, T>> {
+    pub fn get(&self, id: &Identifier) -> Option<&Document<T>> {
         self.docs.get(id)
     }
 
-    pub fn generate_document(&mut self, parents: Vec<&Agent<'a, T>>) -> &Document<'a, T> {
+    pub fn generate_document(&mut self, parents: Vec<&Agent<T>>) -> &Document<T> {
         let new_doc: Document<T> = Document::generate(parents);
         let new_doc_id: Identifier = new_doc.verifying_key().into(); // FIXME add helper method
         self.insert(new_doc);
@@ -243,19 +221,19 @@ impl<'a, T: Ord + Serialize + Clone> DocStore<'a, T> {
     // FIXME shoudl be more like this:
     // pub fn transative_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
     // FIXME return path as well?
-    pub fn transative_members(&self, doc: &Document<'a, T>) -> BTreeMap<&Agent<'a, T>, Access> {
-        struct GroupAccess<'b, U: Clone + Ord + Serialize> {
-            agent: &'b Agent<'b, U>,
+    pub fn transative_members(&self, doc: &Document<T>) -> BTreeMap<Identifier, Access> {
+        struct GroupAccess {
+            agent: Identifier,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess<T>> = vec![];
+        let mut explore: Vec<GroupAccess> = vec![];
 
-        for (k, (v, _)) in doc.members.iter() {
+        for (k, delegation) in doc.members.iter() {
             explore.push(GroupAccess {
-                agent: k,
-                agent_access: *v,
+                agent: *k,
+                agent_access: delegation.payload.can, // FIXME need to lookup
                 parent_access: Access::Admin,
             });
         }

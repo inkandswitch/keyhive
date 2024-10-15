@@ -1,6 +1,6 @@
 //! Wrap data in signatures.
 
-use crate::{crypto::digest::Digest, principal::identifier::Identifier};
+use crate::crypto::digest::Digest;
 use ed25519_dalek::{Signer, Verifier};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -32,18 +32,11 @@ impl<T: Serialize> Signed<T> {
         }
     }
 
-    pub fn verify(&self) -> Result<(), signature::Error>
-    where
-        T: Clone,
-    {
+    pub fn verify(&self) -> Result<(), signature::Error> {
         self.verifying_key.verify(
             serde_cbor::to_vec(&self.payload).expect("FIXME").as_slice(),
             &self.signature,
         )
-    }
-
-    pub fn author(&self) -> Identifier {
-        Identifier(self.verifying_key)
     }
 
     pub fn hash(&self) -> Digest<Self> {
@@ -59,7 +52,7 @@ impl<T: Serialize> Signed<T> {
     }
 }
 
-impl<T: Serialize + PartialOrd> PartialOrd for Signed<T> {
+impl<'a, T: Serialize + PartialOrd> PartialOrd for Signed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self
             .verifying_key

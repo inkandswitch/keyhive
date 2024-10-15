@@ -2,33 +2,33 @@ use super::operation::{delegation::Delegation, revocation::Revocation};
 use crate::{
     access::Access,
     crypto::{digest::Digest, signed::Signed},
-    principal::{agent::Agent, identifier::Identifier, traits::Verifiable},
+    principal::{agent::Agent, identifier::Identifier, verifiable::Verifiable},
     util::content_addressed_map::CaMap,
 };
 use ed25519_dalek::VerifyingKey;
-use serde::Serialize;
-use std::{cmp::Ordering, collections::BTreeSet};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GroupState<'a, T: Clone + Ord + Serialize> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupState<T: Serialize> {
     pub id: Identifier,
 
-    pub delegation_heads: BTreeSet<&'a Signed<Delegation<'a, T>>>,
-    pub delegations: CaMap<Signed<Delegation<'a, T>>>,
+    pub delegation_heads: BTreeSet<Digest<Signed<Delegation<T>>>>,
+    pub delegations: CaMap<Signed<Delegation<T>>>,
 
-    pub revocation_heads: BTreeSet<&'a Signed<Revocation<'a, T>>>,
-    pub revocations: CaMap<Signed<Revocation<'a, T>>>,
+    pub revocation_heads: BTreeSet<Digest<Signed<Revocation<T>>>>,
+    pub revocations: CaMap<Signed<Revocation<T>>>,
 }
 
-impl<'a, T: Eq + Clone + Ord + Serialize> GroupState<'a, T> {
-    pub fn new(parent: &'a Agent<'a, T>) -> Self {
+impl<T: Serialize> GroupState<T> {
+    pub fn new(parent: &Agent<T>) -> Self {
         let mut rng = rand::rngs::OsRng;
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
         let verifier: VerifyingKey = signing_key.verifying_key();
 
         let init = Signed::sign(
             Delegation {
-                delegate: &parent,
+                delegate: parent,
                 can: Access::Admin,
 
                 proof: None,
@@ -38,15 +38,11 @@ impl<'a, T: Eq + Clone + Ord + Serialize> GroupState<'a, T> {
             &signing_key,
         );
 
-        let hash = Digest::hash(&init);
-        let delegations = CaMap::from_iter([init]);
-        let head = delegations.get(&hash).unwrap();
-
         GroupState {
             id: verifier.into(),
 
-            delegation_heads: BTreeSet::from_iter([head]),
-            delegations,
+            delegation_heads: BTreeSet::from_iter([Digest::hash(&init)]),
+            delegations: CaMap::from_iter([init]),
 
             revocation_heads: BTreeSet::new(),
             revocations: CaMap::new(),
@@ -55,9 +51,9 @@ impl<'a, T: Eq + Clone + Ord + Serialize> GroupState<'a, T> {
 
     // FIXME split
     pub fn add_delegation(
-        &'a mut self,
-        delegation: Signed<Delegation<'a, T>>,
-    ) -> Result<Digest<Signed<Delegation<'a, T>>>, AddError> {
+        &mut self,
+        delegation: Signed<Delegation<T>>,
+    ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
         if delegation.subject() != self.id.into() {
             panic!("FIXME")
             // return Err(signature::Error::InvalidSubject);
@@ -83,7 +79,10 @@ impl<'a, T: Eq + Clone + Ord + Serialize> GroupState<'a, T> {
         Ok(hash)
     }
 
-    pub fn delegations_for(&self, agent: &Agent<'a, T>) -> Vec<&Signed<Delegation<'a, T>>> {
+    pub fn delegations_for(&self, agent: &Agent<T>) -> Vec<&Signed<Delegation<T>>>
+    where
+        T: Ord,
+    {
         self.delegations
             .iter()
             .filter_map(|(_, delegation)| {
@@ -101,7 +100,7 @@ impl<'a, T: Eq + Clone + Ord + Serialize> GroupState<'a, T> {
     }
 }
 
-impl<'a, T: Clone + Ord + Serialize> From<VerifyingKey> for GroupState<'a, T> {
+impl<T: Serialize> From<VerifyingKey> for GroupState<T> {
     fn from(verifier: VerifyingKey) -> Self {
         GroupState {
             id: verifier.into(),
@@ -113,17 +112,7 @@ impl<'a, T: Clone + Ord + Serialize> From<VerifyingKey> for GroupState<'a, T> {
     }
 }
 
-impl<'a, T: Eq + Clone + Ord + Serialize> PartialOrd for GroupState<'a, T> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        // FIXME use all fields
-        match self.id.to_bytes().partial_cmp(&other.id.to_bytes()) {
-            Some(Ordering::Equal) => self.ops.len().partial_cmp(&other.ops.len()),
-            other => other,
-        }
-    }
-}
-
-impl<'a, T: Clone + Ord + Serialize> Verifiable for GroupState<'a, T> {
+impl<T: Serialize> Verifiable for GroupState<T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.id.verifying_key()
     }

@@ -2,7 +2,7 @@
 
 pub mod state;
 
-use super::{identifier::Identifier, traits::Verifiable};
+use super::{identifier::Identifier, verifiable::Verifiable};
 use crate::crypto::{digest::Digest, share_key::ShareKey};
 use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
@@ -49,16 +49,6 @@ impl From<VerifyingKey> for Individual {
     fn from(verifier: VerifyingKey) -> Self {
         Individual {
             id: verifier.into(),
-            prekeys: BTreeSet::new(),
-            prekey_state: PrekeyState::new(),
-        }
-    }
-}
-
-impl From<Identifier> for Individual {
-    fn from(id: Identifier) -> Self {
-        Individual {
-            id,
             prekeys: BTreeSet::new(),
             prekey_state: PrekeyState::new(),
         }

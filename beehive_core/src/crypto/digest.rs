@@ -41,7 +41,7 @@ impl<T: Serialize> Digest<T> {
     }
 
     /// Get the hash as a byte slice.
-    pub fn as_bytes(&self) -> &[u8] {
+    pub fn as_slice(&self) -> &[u8] {
         self.raw.as_bytes()
     }
 

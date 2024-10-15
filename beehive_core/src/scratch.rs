@@ -4,12 +4,9 @@ use crate::crypto::{
 };
 use crate::principal::document::Document;
 use serde::Serialize;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    hash::Hash,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
-pub fn dcgka_2m_broadcast<'a, T: Hash + Clone + Ord + Serialize>(
+pub fn dcgka_2m_broadcast<'a, T: Serialize>(
     key: &SymmetricKey,
     doc: &Document<'a, T>,
     sharer_key: &x25519_dalek::StaticSecret,

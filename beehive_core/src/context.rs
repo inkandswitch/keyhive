@@ -2,7 +2,7 @@
 
 use crate::{
     access::Access,
-    crypto::signed::Signed,
+    crypto::{digest::Digest, signed::Signed},
     principal::{
         active::Active,
         agent::Agent,
@@ -11,7 +11,7 @@ use crate::{
         identifier::Identifier,
         individual::Individual,
         membered::{Membered, MemberedId},
-        traits::Verifiable,
+        verifiable::Verifiable,
     },
 };
 use nonempty::NonEmpty;
@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
-pub struct Context<'a, T: Clone + Ord + Serialize> {
+pub struct Context<T: Serialize> {
     /// The [`Active`] user agent.
     pub active: Active,
 
@@ -28,13 +28,13 @@ pub struct Context<'a, T: Clone + Ord + Serialize> {
     pub individuals: BTreeSet<Individual>,
 
     /// The [`Group`]s that are known to this agent.
-    pub groups: GroupStore<'a, T>,
+    pub groups: GroupStore<T>,
 
     /// The [`Document`]s that are known to this agent.
-    pub docs: DocStore<'a, T>,
+    pub docs: DocStore<T>,
 }
 
-impl<'a, T: Clone + Ord + Serialize> Context<'a, T> {
+impl<T: Serialize> Context<T> {
     pub fn generate() -> Self {
         Self {
             active: Active::generate(),
@@ -44,21 +44,27 @@ impl<'a, T: Clone + Ord + Serialize> Context<'a, T> {
         }
     }
 
-    pub fn generate_group(&mut self, coparents: Vec<&Agent<'a, T>>) -> &Group<'a, T> {
+    pub fn generate_group(&mut self, coparents: Vec<&Agent<T>>) -> &Group<T>
+    where
+        T: Ord + Clone,
+    {
         self.groups.generate_group(NonEmpty {
             head: &self.active.clone().into(),
             tail: coparents.clone(),
         })
     }
 
-    pub fn generate_doc(&mut self, coparents: Vec<&Agent<'a, T>>) -> &Document<'a, T> {
+    pub fn generate_doc(&mut self, coparents: Vec<&Agent<T>>) -> &Document<T>
+    where
+        T: Ord + Clone,
+    {
         let mut parents = coparents.clone();
         let self_agent = self.active.clone().into();
         parents.push(&self_agent);
         self.docs.generate_document(parents)
     }
 
-    pub fn sign<U: Clone + Ord + Serialize>(&self, data: U) -> Signed<U> {
+    pub fn sign<U: Serialize>(&self, data: U) -> Signed<U> {
         self.active.sign(data)
     }
 
@@ -74,8 +80,12 @@ impl<'a, T: Clone + Ord + Serialize> Context<'a, T> {
     //     dcgka_2m_broadcast(key, data, public_keys)
     // }
 
-    pub fn revoke(&mut self, to_revoke: &Agent<'a, T>, from: &mut Membered<'a, T>)
-    where
+    pub fn revoke(
+        &mut self,
+        to_revoke: &Agent<T>,
+        from: &mut Membered<T>,
+        after_content: Vec<(&Document<T>, Digest<T>)>,
+    ) where
         T: Ord + Clone,
     {
         // FIXME check subject, signature, find dependencies or quarantine
@@ -88,7 +98,7 @@ impl<'a, T: Clone + Ord + Serialize> Context<'a, T> {
                 // let mut owned_group = group.clone();
                 let group = self.groups.get_mut(&og_group.state.id).expect("FIXME");
 
-                group.members.remove(to_revoke);
+                group.members.remove(to_revoke.into());
 
                 // FIXME
                 if let Some(revoke) = group.state.delegations_for(to_revoke).pop() {
@@ -98,10 +108,11 @@ impl<'a, T: Clone + Ord + Serialize> Context<'a, T> {
                         .pop()
                         .expect("FIXME");
 
-                    group
-                        .state
-                        .revocations
-                        .insert(self.sign(Revocation { revoke, proof }));
+                    group.state.revocations.insert(self.sign(Revocation {
+                        revoke,
+                        proof,
+                        after_content,
+                    }));
                 }
             }
             Membered::Document(og_doc) => {
@@ -116,19 +127,23 @@ impl<'a, T: Clone + Ord + Serialize> Context<'a, T> {
 
                 doc.members.remove(to_revoke);
                 doc.state.revocations.insert(Signed::sign(
-                    Revocation { revoke, proof },
+                    Revocation {
+                        revoke,
+                        proof,
+                        after_content,
+                    },
                     &self.active.signer,
                 ));
             }
         }
     }
 
-    pub fn transitive_docs(&'a self) -> BTreeMap<&'a Document<'a, T>, Access>
+    pub fn transitive_docs(&self) -> BTreeMap<&Document<T>, Access>
     where
         T: Ord,
     {
-        let mut explore: Vec<(Membered<'a, T>, Access)> = vec![];
-        let mut caps: BTreeMap<&Document<'a, T>, Access> = BTreeMap::new();
+        let mut explore: Vec<(Membered<T>, Access)> = vec![];
+        let mut caps: BTreeMap<&Document<T>, Access> = BTreeMap::new();
         let mut seen: BTreeSet<Identifier> = BTreeSet::new();
 
         let agent = self.active.clone().into();
@@ -181,20 +196,17 @@ impl<'a, T: Clone + Ord + Serialize> Context<'a, T> {
     }
 
     // FIXME
-    pub fn transitive_members(
-        &'a self,
-        doc: &'a Document<'a, T>,
-    ) -> BTreeMap<&'a Agent<'a, T>, Access>
+    pub fn transitive_members(&self, doc: &Document<T>) -> BTreeMap<&Agent<T>, Access>
     where
         T: Ord,
     {
-        struct GroupAccess<'b, U: Clone + Ord + Serialize> {
-            agent: &'b Agent<'b, U>,
+        struct GroupAccess<U: Serialize> {
+            agent: &Agent<U>,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess<'_, T>> = vec![];
+        let mut explore: Vec<GroupAccess<T>> = vec![];
 
         for (k, delegation) in doc.members.iter() {
             explore.push(GroupAccess {
@@ -263,14 +275,14 @@ impl<'a, T: Clone + Ord + Serialize> Context<'a, T> {
     }
 }
 
-impl<'a, T: Clone + Ord + Serialize> Verifiable for Context<'a, T> {
+impl<T: Serialize> Verifiable for Context<T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.active.verifying_key()
     }
 }
 
-impl<'a, T: Clone + Ord + Serialize> From<Context<'a, T>> for Agent<'a, T> {
-    fn from(context: Context<'a, T>) -> Self {
+impl<T: Serialize> From<Context<T>> for Agent<T> {
+    fn from(context: Context<T>) -> Self {
         context.active.into()
     }
 }

@@ -1,6 +1,6 @@
 //! The current user agent (which can sign and encrypt).
 
-use super::{document::Document, individual::Individual, traits::Verifiable};
+use super::{document::Document, individual::Individual, verifiable::Verifiable};
 use crate::{
     access::Access,
     crypto::{
@@ -10,6 +10,7 @@ use crate::{
     principal::{
         agent::Agent,
         group::operation::{delegation::Delegation, revocation::Revocation},
+        identifier::Identifier,
         membered::Membered,
     },
 };
@@ -26,6 +27,8 @@ pub struct Active {
     /// The encryption "sharing" key pairs that the active agent has.
     /// This includes the secret keys for ECDH.
     pub share_key_pairs: BTreeMap<ShareKey, x25519_dalek::StaticSecret>,
+
+    pub individual: Individual,
 }
 
 impl Active {
@@ -36,12 +39,8 @@ impl Active {
         }
     }
 
-    pub fn as_individual(&self) -> Individual {
-        self.id().into()
-    }
-
-    pub fn as_agent<T: Clone + Ord + Serialize>(&self) -> Agent<T> {
-        self.as_individual().into()
+    pub fn id(&self) -> Identifier {
+        self.signer.verifying_key().into()
     }
 
     /// Generate a new active agent with a random key pair.
@@ -51,11 +50,11 @@ impl Active {
     }
 
     /// Sign a payload.
-    pub fn sign<U: Serialize + Clone>(&self, payload: U) -> Signed<U> {
+    pub fn sign<U: Serialize>(&self, payload: U) -> Signed<U> {
         Signed::<U>::sign(payload, &self.signer)
     }
 
-    pub fn get_capability<'a, T: Serialize + Clone + Ord + Serialize>(
+    pub fn get_capability<'a, T: Serialize>(
         &'a self,
         subject: &'a Membered<'a, T>,
         min: Access,
@@ -70,14 +69,14 @@ impl Active {
     }
 
     // FIXME put this on Capability?
-    pub fn make_delegation<'a, T: Clone + Ord + Serialize>(
-        &'a self,
-        subject: &'a Membered<'a, T>,
+    pub fn make_delegation<T: Serialize>(
+        &self,
+        subject: &Membered<T>,
         attenuate: Access,
-        delegate: &'a Agent<'a, T>,
-        after_revocations: Vec<&'a Signed<Revocation<'a, T>>>,
-        after_content: Vec<(&'a Document<'a, T>, Digest<T>)>,
-    ) -> Result<Signed<Delegation<'a, T>>, DelegationError> {
+        delegate: &Agent<T>,
+        after_revocations: Vec<&Signed<Revocation<T>>>,
+        after_content: Vec<(&Document<T>, Digest<T>)>,
+    ) -> Result<Signed<Delegation<T>>, DelegationError> {
         let proof = self.get_capability(&subject, attenuate).expect("FIXME");
 
         if attenuate > proof.payload.can {

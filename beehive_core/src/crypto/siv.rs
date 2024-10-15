@@ -1,7 +1,7 @@
 //! Nonce-misuse resistant initialization vector.
 
 use super::symmetric_key::SymmetricKey;
-use crate::principal::{document::Document, traits::Verifiable};
+use crate::principal::document::Document;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 
@@ -30,7 +30,7 @@ use std::io::Read;
 pub struct Siv(pub [u8; 24]);
 
 impl Siv {
-    pub fn new<'a, T: Clone + Ord + Serialize>(
+    pub fn new<'a, T: Serialize>(
         key: &SymmetricKey,
         plaintext: &[u8],
         doc: &Document<'a, T>,
