@@ -2,6 +2,7 @@ use super::{
     agent::{Agent, AgentId},
     document::Document,
     group::{
+        id::GroupId,
         operation::{delegation::Delegation, revocation::Revocation},
         Group,
     },
@@ -10,7 +11,7 @@ use super::{
 };
 use crate::{content::reference::ContentRef, crypto::signed::Signed};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fmt};
+use std::{collections::HashMap, fmt};
 
 /// The union of Agents that have updatable membership
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -20,11 +21,10 @@ pub enum Membered<'a, T: ContentRef> {
 }
 
 impl<'a, T: ContentRef> Membered<'a, T> {
-    // FIXME get_capability?
-    pub fn get(&self, agent: &Agent<'a, T>) -> Option<&Signed<Delegation<'a, T>>> {
+    pub fn get_capability(&self, agent_id: &AgentId) -> Option<&'a Box<Signed<Delegation<'a, T>>>> {
         match self {
-            Membered::Group(group) => group.get(&agent.id()),
-            Membered::Document(doc) => doc.get(&agent.id()),
+            Membered::Group(group) => group.get_capability(agent_id),
+            Membered::Document(doc) => doc.get_capabilty(agent_id),
         }
     }
 
@@ -36,14 +36,14 @@ impl<'a, T: ContentRef> Membered<'a, T> {
     }
 
     // FIXME make a trait and apply to children
-    pub fn members(&self) -> &BTreeMap<&'a Agent<'a, T>, &'a Box<Signed<Delegation<'a, T>>>> {
+    pub fn members(&self) -> &HashMap<AgentId, &'a Box<Signed<Delegation<'a, T>>>> {
         match self {
             Membered::Group(group) => &group.members,
             Membered::Document(document) => &document.members,
         }
     }
 
-    pub fn add_member(&mut self, delegation: Signed<Delegation<'a, T>>) {
+    pub fn add_member(&'a mut self, delegation: Signed<Delegation<'a, T>>) {
         match self {
             Membered::Group(group) => {
                 group.add_member(delegation);
@@ -52,7 +52,7 @@ impl<'a, T: ContentRef> Membered<'a, T> {
         }
     }
 
-    pub fn revoke_member(&mut self, revocation: Signed<Revocation<'a, T>>) {
+    pub fn revoke_member(&'a mut self, revocation: Signed<Revocation<'a, T>>) {
         match self {
             Membered::Group(group) => {
                 group.revoke(revocation);

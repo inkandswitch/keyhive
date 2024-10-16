@@ -5,12 +5,11 @@ use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
     principal::{agent::Agent, document::Document, identifier::Identifier},
-    util::content_addressed_map::CaMap,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, hash::Hash};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct Delegation<'a, T: ContentRef> {
     pub can: Access,
 
@@ -24,11 +23,11 @@ pub struct Delegation<'a, T: ContentRef> {
 impl<'a, T: ContentRef> Delegation<'a, T> {
     // FIXME make trait?
     pub fn after(
-        &self,
+        &'a self,
     ) -> (
         Vec<&'a Signed<Delegation<'a, T>>>,
         Vec<&'a Signed<Revocation<'a, T>>>,
-        &BTreeMap<&'a Document<'a, T>, Vec<T>>,
+        &'a BTreeMap<&'a Document<'a, T>, Vec<T>>,
     ) {
         let (dlgs, revs) = self.after_auth();
         (dlgs, revs, &self.after_content)
@@ -62,7 +61,7 @@ impl<'a, T: ContentRef> Signed<Delegation<'a, T>> {
     }
 }
 
-// FIXME test
+// FIXME test FIXME just and compare?
 impl<'a, T: ContentRef> PartialOrd for Delegation<'a, T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match self.can.partial_cmp(&other.can) {
@@ -129,7 +128,7 @@ impl<'a, T: ContentRef> From<Delegation<'a, T>> for StaticDelegation<T> {
             after_revocations: delegation
                 .after_revocations
                 .iter()
-                .map(|revocation| Digest::hash(&revocation.map(|r| r.into())))
+                .map(|revocation| Digest::hash(revocation.map(|r| r.into())))
                 .collect(),
             after_content: BTreeMap::from_iter(
                 delegation

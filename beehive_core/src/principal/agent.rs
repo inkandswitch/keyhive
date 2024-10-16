@@ -10,7 +10,7 @@ use crate::content::reference::ContentRef;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub enum Agent<'a, T: ContentRef> {
     Active(Active),
     Individual(Individual),
@@ -126,6 +126,7 @@ impl From<DocumentId> for AgentId {
 impl From<AgentId> for Identifier {
     fn from(id: AgentId) -> Self {
         match id {
+            AgentId::ActiveId(i) => i,
             AgentId::IndividualId(i) => i,
             AgentId::GroupId(i) => i,
             AgentId::DocumentId(i) => i,

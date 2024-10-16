@@ -18,17 +18,17 @@ use crate::{
 };
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, HashSet};
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GroupState<'a, T: ContentRef> {
     pub id: GroupId,
 
-    pub delegation_heads: BTreeSet<&'a Box<Signed<Delegation<'a, T>>>>,
+    pub delegation_heads: HashSet<&'a Box<Signed<Delegation<'a, T>>>>,
     pub delegations: CaMap<Box<Signed<Delegation<'a, T>>>>,
     pub delegation_quarantine: CaMap<Signed<StaticDelegation<T>>>,
 
-    pub revocation_heads: BTreeSet<&'a Box<Signed<Revocation<'a, T>>>>,
+    pub revocation_heads: HashSet<&'a Box<Signed<Revocation<'a, T>>>>,
     pub revocations: CaMap<Box<Signed<Revocation<'a, T>>>>,
     pub revocation_quarantine: CaMap<Signed<StaticRevocation<T>>>,
 }
@@ -54,11 +54,13 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
         GroupState {
             id: verifier.into(),
 
-            delegation_heads: BTreeSet::from_iter([&init]), // FIXME consider just using CaMap since it doens't need Ord
+            delegation_heads: HashSet::from_iter([&init]), // FIXME consider just using CaMap since it doens't need Ord
             delegations: CaMap::from_iter([init]),
+            delegation_quarantine: CaMap::new(),
 
-            revocation_heads: BTreeSet::new(),
+            revocation_heads: HashSet::new(),
             revocations: CaMap::new(),
+            revocation_quarantine: CaMap::new(),
         }
     }
 
@@ -83,14 +85,14 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
 
         // FIXME retrun &ref
         let hash = self.delegations.insert(boxed);
-        let newly_owned = self
-            .delegations
-            .get(&hash)
-            .expect("Value that was just inserted to be available");
+        // let newly_owned = self
+        //     .delegations
+        //     .get(&hash)
+        //     .expect("Value that was just inserted to be available");
 
         if let Some(proof) = newly_owned.payload.proof {
-            if self.delegation_heads.contains(proof) {
-                self.delegation_heads.insert(newly_owned);
+            if self.delegation_heads.contains(&proof) {
+                self.delegation_heads.insert(&boxed);
                 self.delegation_heads.remove(proof);
             }
         }
@@ -116,14 +118,38 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
     }
 }
 
+impl<'a, T: ContentRef> std::hash::Hash for GroupState<'a, T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+
+        for dh in self.delegation_heads.iter() {
+            dh.hash(state);
+        }
+
+        self.delegations.hash(state);
+        self.delegation_quarantine.hash(state);
+
+        for rh in self.revocation_heads.iter() {
+            rh.hash(state);
+        }
+
+        self.revocations.hash(state);
+        self.revocation_quarantine.hash(state);
+    }
+}
+
 impl<'a, T: ContentRef> From<VerifyingKey> for GroupState<'a, T> {
     fn from(verifier: VerifyingKey) -> Self {
         GroupState {
-            id: verifier.into(),
-            delegation_heads: BTreeSet::new(),
+            id: GroupId(verifier.into()),
+
+            delegation_heads: HashSet::new(),
             delegations: CaMap::new(),
-            revocation_heads: BTreeSet::new(),
+            delegation_quarantine: CaMap::new(),
+
+            revocation_heads: HashSet::new(),
             revocations: CaMap::new(),
+            revocation_quarantine: CaMap::new(),
         }
     }
 }

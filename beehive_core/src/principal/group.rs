@@ -17,17 +17,17 @@ use id::GroupId;
 use nonempty::NonEmpty;
 use operation::{delegation::Delegation, revocation::Revocation, Operation};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A collection of agents with no associated content.
 ///
 /// Groups are stateful agents. It is possible the delegate control over them,
 /// and they can be delegated to. This produces transitives lines of authority
 /// through the network of [`Agent`]s.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Group<'a, T: ContentRef> {
     /// The current view of members of a group.
-    pub members: BTreeMap<AgentId, &'a Box<Signed<Delegation<'a, T>>>>, // FIXME make not publicly editable
+    pub members: HashMap<AgentId, &'a Box<Signed<Delegation<'a, T>>>>, // FIXME make not publicly editable!
 
     /// The `Group`'s underlying (causal) delegation state.
     pub state: state::GroupState<'a, T>,
@@ -40,7 +40,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
         let group_id = GroupId(group_signer.verifying_key().into());
 
         let (delegations, members) = parents.iter().fold(
-            (CaMap::new(), BTreeMap::new()),
+            (CaMap::new(), HashMap::new()),
             |(mut op_acc, mut mem_acc), parent| {
                 let del = Delegation {
                     delegate: parent,
@@ -64,11 +64,14 @@ impl<'a, T: ContentRef> Group<'a, T> {
             members,
             state: state::GroupState {
                 id: group_id,
-                delegation_heads: BTreeSet::from_iter(delegations.keys().iter()),
-                delegations,
 
-                revocation_heads: BTreeSet::new(),
+                delegation_heads: HashSet::from_iter(delegations.keys().iter()),
+                delegations,
+                delegation_quarantine: CaMap::new(),
+
+                revocation_heads: HashSet::new(),
                 revocations: CaMap::new(),
+                revocation_quarantine: CaMap::new(),
             },
         }
     }
@@ -81,13 +84,15 @@ impl<'a, T: ContentRef> Group<'a, T> {
         self.id().into()
     }
 
-    // FIXME get_capability?
-    pub fn get(&self, agent: &AgentId) -> Option<&Box<Signed<Delegation<T>>>> {
-        self.members.get(agent).copied()
+    pub fn get_capability(
+        &self,
+        member_id: &AgentId,
+    ) -> Option<&'a Box<Signed<Delegation<'a, T>>>> {
+        self.members.get(member_id).copied()
     }
 
     // FIXME rename
-    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<'a, T>>) {
+    pub fn add_member(&'a mut self, signed_delegation: Signed<Delegation<'a, T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
@@ -96,9 +101,14 @@ impl<'a, T: ContentRef> Group<'a, T> {
 
         let boxed = Box::new(signed_delegation);
         let id = boxed.payload.delegate.id();
-        self.state.delegations.insert(boxed);
-        self.members.insert(id, &boxed);
-        // let new_ref = self.state.delegations.get(&hash).expect("value that was just added to be there");
+        let hash = self.state.delegations.insert(boxed);
+        let new_ref: &'a Box<Signed<Delegation<'a, T>>> = self
+            .state
+            .delegations
+            .get(&hash)
+            .expect("value that was just added to be there");
+
+        self.members.insert(id, new_ref);
     }
 
     pub fn materialize(state: state::GroupState<T>) -> Self {
@@ -145,7 +155,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
         Group { state, members }
     }
 
-    pub fn revoke(&mut self, signed_revocation: Signed<Revocation<T>>) {
+    pub fn revoke(&'a mut self, signed_revocation: Signed<Revocation<'a, T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
@@ -154,8 +164,14 @@ impl<'a, T: ContentRef> Group<'a, T> {
             .remove(&signed_revocation.payload.revoke.payload.delegate.id());
 
         let boxed = Box::new(signed_revocation);
-        self.state.revocations.insert(boxed);
-        self.state.revocation_heads.insert(&signed_revocation);
+        let hash = self.state.revocations.insert(boxed);
+        let new_ref = self
+            .state
+            .revocations
+            .get(&hash)
+            .expect("value that was just added to be there");
+
+        self.state.revocation_heads.insert(new_ref);
     }
 
     // pub fn add_member(&mut self, delegation: Signed<Delegation>) {
@@ -175,6 +191,15 @@ impl<'a, T: ContentRef> Group<'a, T> {
 impl<'a, T: ContentRef> Verifiable for Group<'a, T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
+    }
+}
+
+impl<'a, T: ContentRef> std::hash::Hash for Group<'a, T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for m in self.members.iter() {
+            m.hash(state);
+        }
+        self.state.hash(state);
     }
 }
 

@@ -9,7 +9,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct Revocation<'a, T: ContentRef> {
     pub revoke: &'a Signed<Delegation<'a, T>>,
 
@@ -26,11 +26,11 @@ impl<'a, T: ContentRef> Revocation<'a, T> {
     }
 
     pub fn after(
-        &self,
+        &'a self,
     ) -> (
         Vec<&'a Signed<Delegation<'a, T>>>,
         Vec<&'a Signed<Revocation<'a, T>>>,
-        &BTreeMap<&'a Document<'a, T>, Vec<&'a T>>,
+        &'a BTreeMap<&'a Document<'a, T>, Vec<&'a T>>,
     ) {
         let (dlgs, revs) = self.after_auth();
         (dlgs, revs, &self.after_content)

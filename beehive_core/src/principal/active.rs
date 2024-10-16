@@ -78,13 +78,13 @@ impl Active {
     }
 
     // FIXME put this on Capability?
-    pub fn make_delegation<T: ContentRef>(
-        &self,
-        subject: &Membered<T>,
+    pub fn make_delegation<'a, T: ContentRef>(
+        &'a self,
+        subject: &'a Membered<T>,
         attenuate: Access,
-        delegate: &Agent<T>,
-        after_revocations: Vec<&Signed<Revocation<T>>>,
-        after_content: BTreeMap<&Document<T>, Vec<T>>,
+        delegate: &'a Agent<T>,
+        after_revocations: Vec<&'a Signed<Revocation<T>>>,
+        after_content: BTreeMap<&'a Document<T>, Vec<T>>,
     ) -> Result<Signed<Delegation<T>>, DelegationError> {
         let proof = self.get_capability(&subject, attenuate).expect("FIXME");
 
@@ -111,13 +111,13 @@ impl Active {
         to: &Individual,
         message: &mut [u8],
     ) -> Encrypted<&[u8]> {
-        let recipient_share_pk = doc.reader_keys.get(to).expect("FIXME");
+        let recipient_share_pk = doc.reader_keys.get(&to.id).expect("FIXME");
         let our_pk = doc.reader_keys.get(&self.id()).expect("FIXME");
 
-        let our_sk = self.share_key_pairs.get(our_pk).expect("FIXME");
+        let our_sk = self.share_key_pairs.get(&our_pk.1).expect("FIXME");
 
         let key: SymmetricKey = our_sk
-            .diffie_hellman(&recipient_share_pk.clone().into())
+            .diffie_hellman(&recipient_share_pk.1.payload.delegate)
             .into();
 
         let nonce = Siv::new(&key, message, doc);
@@ -154,6 +154,16 @@ impl Debug for Active {
             .field("signer", &"<Signer>")
             .field("share_key_pairs", &keypairs_hidden_secret_keys)
             .finish()
+    }
+}
+
+impl std::hash::Hash for Active {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id().hash(state);
+        self.signer.to_bytes().hash(state);
+        for pk in self.share_key_pairs.keys() {
+            pk.hash(state);
+        }
     }
 }
 

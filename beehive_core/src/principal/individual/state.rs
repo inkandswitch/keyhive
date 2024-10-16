@@ -2,9 +2,9 @@ use crate::crypto::share_key::ShareKey;
 use crate::crypto::signed::Signed;
 use crate::util::content_addressed_map::CaMap;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PrekeyState {
     pub ops: CaMap<Signed<KeyOp>>,
 }
@@ -14,8 +14,8 @@ impl PrekeyState {
         Self { ops: CaMap::new() }
     }
 
-    pub fn materialize(&self) -> BTreeSet<ShareKey> {
-        let mut keys = BTreeSet::new();
+    pub fn materialize(&self) -> HashSet<ShareKey> {
+        let mut keys = HashSet::new();
         let mut to_drop = vec![];
 
         for Signed { payload, .. } in self.ops.clone().into_values() {

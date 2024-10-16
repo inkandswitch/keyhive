@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 ///
 /// Since all operations are referenced by their hash,
 /// a map that indexes by the same cryptographic hash is convenient.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CaMap<T: Serialize>(BTreeMap<Digest<T>, T>);
 
 impl<T: Serialize> CaMap<T> {

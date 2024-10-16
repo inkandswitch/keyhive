@@ -17,7 +17,7 @@ use crate::{
 };
 use nonempty::NonEmpty;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, HashSet};
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
@@ -74,7 +74,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
     // pub fn encrypt(
     //     &self,
     //     data: Vec<u8>,
-    //     public_keys: BTreeSet<&ShareKey>,
+    //     public_keys: HashSet<&ShareKey>,
     // ) -> (
     //     Encrypted<Vec<u8>>,
     //     Encrypted<chacha20poly1305::XChaChaPoly1305>,
@@ -142,7 +142,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
     pub fn transitive_docs(&self) -> BTreeMap<&Document<T>, Access> {
         let mut explore: Vec<(Membered<T>, Access)> = vec![];
         let mut caps: BTreeMap<&Document<T>, Access> = BTreeMap::new();
-        let mut seen: BTreeSet<AgentId> = BTreeSet::new();
+        let mut seen: HashSet<AgentId> = HashSet::new();
 
         let agent_id = self.active.agent_id();
 

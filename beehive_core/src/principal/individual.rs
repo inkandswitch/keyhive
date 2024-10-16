@@ -8,7 +8,7 @@ use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 
 /// Single agents with no internal membership.
 ///
@@ -32,10 +32,20 @@ pub struct Individual {
     /// the compromise of one prekey affecting the security of other [`Document`]s. Since we operate
     /// in a fully concurrent context with causal consistency, we cannot guarantee that a prekey will
     /// not be reused in multiple [`Document`]s, but we can tune the probability of this happening.
-    pub prekeys: BTreeSet<ShareKey>,
+    pub prekeys: HashSet<ShareKey>,
 
     /// The state used to materialize `prekeys`.
     pub prekey_state: PrekeyState,
+}
+
+impl std::hash::Hash for Individual {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.prekey_state.hash(state);
+        for pk in self.prekeys.iter() {
+            pk.hash(state);
+        }
+    }
 }
 
 // FIXME required?
@@ -49,7 +59,7 @@ impl From<VerifyingKey> for Individual {
     fn from(verifier: VerifyingKey) -> Self {
         Individual {
             id: verifier.into(),
-            prekeys: BTreeSet::new(),
+            prekeys: HashSet::new(),
             prekey_state: PrekeyState::new(),
         }
     }
@@ -59,7 +69,7 @@ impl From<VerifyingKey> for Individual {
 pub struct IndividualOp {
     pub verifier: VerifyingKey,
     pub op: ReadKeyOp,
-    pub pred: BTreeSet<Digest<Individual>>,
+    pub pred: HashSet<Digest<Individual>>,
 }
 
 // FIXME move to each Doc

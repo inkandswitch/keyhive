@@ -2,14 +2,19 @@ use super::id::GroupId;
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    principal::{agent::Agent, group::Group, identifier::Identifier, verifiable::Verifiable},
+    principal::{
+        agent::{Agent, AgentId},
+        group::Group,
+        identifier::Identifier,
+        verifiable::Verifiable,
+    },
 };
 use base64::prelude::*;
 use nonempty::NonEmpty;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Hash, Eq, Serialize)]
 pub struct GroupStore<'a, T: ContentRef>(pub BTreeMap<GroupId, Group<'a, T>>);
 
 impl<'a, T: ContentRef> GroupStore<'a, T> {
@@ -56,24 +61,27 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
     // FIXME shoudl be more like this:
     // pub fn transative_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
     // FIXME return path as well?
-    pub fn transative_members(&self, group: &Group<'a, T>) -> BTreeMap<Identifier, Access> {
-        struct GroupAccess {
-            agent: AgentId,
+    pub fn transative_members(
+        &self,
+        group: &Group<'a, T>,
+    ) -> BTreeMap<AgentId, (&'a Agent<'a, T>, Access)> {
+        struct GroupAccess<'b, U: ContentRef> {
+            agent: &'b Agent<'b, U>,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess> = vec![];
+        let mut explore: Vec<GroupAccess<'a, T>> = vec![];
 
-        for (k, v) in group.members.iter() {
+        for dlg in group.members.values() {
             explore.push(GroupAccess {
-                agent: *k,
-                agent_access: *v,
+                agent: dlg.payload.delegate,
+                agent_access: dlg.payload.can,
                 parent_access: Access::Admin,
             });
         }
 
-        let mut caps: BTreeMap<Identifier, Access> = BTreeMap::new();
+        let mut caps: BTreeMap<AgentId, (&'a Agent<'a, T>, Access)> = BTreeMap::new();
 
         while let Some(GroupAccess {
             agent: member,
@@ -85,29 +93,30 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                 Agent::Individual(_) => {
                     let current_path_access = access.min(parent_access);
 
-                    let best_access = if let Some(prev_found_path_access) = caps.get(&member) {
-                        (*prev_found_path_access).max(current_path_access)
-                    } else {
-                        current_path_access
-                    };
+                    let best_access =
+                        if let Some((_, prev_found_path_access)) = caps.get(&member.id()) {
+                            (*prev_found_path_access).max(current_path_access)
+                        } else {
+                            current_path_access
+                        };
 
-                    caps.insert(member, best_access);
+                    caps.insert(member.id(), (member, best_access));
                 }
                 _ => {
-                    if let Some(group) = self.0.get(&GroupId(member.into())) {
-                        for (agent, proof) in group.members {
+                    if let Some(group) = self.0.get(&GroupId(member.id().into())) {
+                        for (agent_id, proof) in group.members.iter() {
                             let current_path_access =
                                 access.min(proof.payload.can).min(parent_access);
 
                             let best_access =
-                                if let Some(prev_found_path_access) = caps.get(&agent.into()) {
+                                if let Some((_, prev_found_path_access)) = caps.get(agent_id) {
                                     (*prev_found_path_access).max(current_path_access)
                                 } else {
                                     current_path_access
                                 };
 
                             explore.push(GroupAccess {
-                                agent: agent.into(),
+                                agent: proof.payload.delegate,
                                 agent_access: best_access,
                                 parent_access,
                             });

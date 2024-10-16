@@ -4,13 +4,13 @@ use crate::crypto::{
 };
 use crate::principal::document::Document;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, HashSet};
 
 pub fn dcgka_2m_broadcast<'a, T: Serialize>(
     key: &SymmetricKey,
     doc: &Document<'a, T>,
     sharer_key: &x25519_dalek::StaticSecret,
-    public_keys: BTreeSet<&ShareKey>,
+    public_keys: HashSet<&ShareKey>,
 ) -> BTreeMap<ShareKey, Encrypted<chacha20poly1305::XChaCha20Poly1305>> {
     let mut wrapped_key_map = BTreeMap::new();
 
@@ -35,14 +35,14 @@ pub fn dcgka_2m_broadcast<'a, T: Serialize>(
 #[derive(Clone, Serialize)]
 pub struct SetReadKeyOp {
     pub set_read_key: x25519_dalek::StaticSecret,
-    pub parents: BTreeSet<Digest<Signed<SetReadKeyOp>>>,
+    pub parents: HashSet<Digest<Signed<SetReadKeyOp>>>,
 }
 
 #[derive(Clone, Serialize)]
 pub struct MyReadKeyOps {
     // FIXME use a single signture?
-    pub cold_call_ops: BTreeSet<SetReadKeyOp>,
-    pub for_group_ops: BTreeMap<ed25519_dalek::VerifyingKey, BTreeSet<SetReadKeyOp>>,
+    pub cold_call_ops: HashSet<SetReadKeyOp>,
+    pub for_group_ops: BTreeMap<ed25519_dalek::VerifyingKey, HashSet<SetReadKeyOp>>,
 }
 
 pub struct MyReadKeyState {
@@ -51,7 +51,7 @@ pub struct MyReadKeyState {
 }
 
 pub struct Art {
-    pub members: BTreeSet<ed25519_dalek::VerifyingKey>,
+    pub members: HashSet<ed25519_dalek::VerifyingKey>,
     pub materialized_tree: ArtNode,
 }
 
