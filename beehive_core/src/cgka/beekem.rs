@@ -249,7 +249,7 @@ impl BeeKEM {
         let parent_idx = treemath::parent(child_idx);
         // TODO: Handle blanked parent
         let sibling_idx = treemath::sibling(child_idx);
-        let decrypt_key = if self.is_blank(sibling_idx.into())? {
+        let decrypt_key_static = if self.is_blank(sibling_idx.into())? {
             // TODO: Look for resolution
 
             // If there's no resolution...
@@ -261,6 +261,7 @@ impl BeeKEM {
             let sibling_pk = self.get_public_key(sibling_idx)?;
             generate_shared_key(sibling_pk, child_secret)
         };
+        let decrypt_key = SymmetricKey::from(decrypt_key_static.into());
         let parent = self
             .get_parent(parent_idx)?
             .as_ref()
@@ -270,7 +271,8 @@ impl BeeKEM {
             .get(&child_idx)
             // FIXME: Pick a better error
             .ok_or(CGKAError::IdentifierNotFound)?;
-        decrypt_secret(encrypted, decrypt_key)
+        decrypt_key.decrypt(encrypted.nonce, &encrypted.ciphertext)
+        // decrypt_secret(encrypted, decrypt_key)
     }
 
     fn encrypt_key_for_parent(
