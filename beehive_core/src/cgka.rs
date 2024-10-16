@@ -31,10 +31,10 @@ impl CGKA {
         })
     }
 
-    pub fn with_new_owner_id(&self, my_id: Identifier) -> Self {
+    pub fn with_new_owner_id(&self, my_id: Identifier) -> Result<Self, CGKAError> {
         let mut cgka = self.clone();
-        cgka.tree.with_new_owner_id(my_id);
-        cgka
+        cgka.tree.with_new_owner_id(my_id)?;
+        Ok(cgka)
     }
 }
 
@@ -171,7 +171,7 @@ mod tests {
         let msg = "This is a message.";
         let encrypted = encrypt_msg(msg, secret)?;
         println!("3");
-        let cgka2 = cgka.with_new_owner_id(p1.0);
+        let cgka2 = cgka.with_new_owner_id(p1.0)?;
         let secret2 = cgka2.secret(p1_sk);
         assert_eq!(msg, &decrypt_msg(encrypted, secret2)?);
         Ok(())
