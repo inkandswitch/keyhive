@@ -90,3 +90,9 @@ impl From<Identifier> for ed25519_dalek::VerifyingKey {
         identifier.0
     }
 }
+
+impl From<ed25519_dalek::SigningKey> for Identifier {
+    fn from(sk: ed25519_dalek::SigningKey) -> Self {
+        sk.verifying_key().into()
+    }
+}

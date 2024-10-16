@@ -34,7 +34,7 @@ impl<'a, T: ContentRef> Delegation<'a, T> {
     }
 
     pub fn after_auth(
-        &self,
+        &'a self,
     ) -> (
         Vec<&'a Signed<Delegation<'a, T>>>,
         Vec<&'a Signed<Revocation<'a, T>>>,

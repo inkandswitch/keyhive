@@ -34,35 +34,34 @@ impl<'a, T: ContentRef> Document<'a, T> {
         self.id().into()
     }
 
-    pub fn generate(parents: Vec<&Agent<T>>) -> Self {
+    pub fn generate(parents: Vec<&'a Agent<T>>) -> Self {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let doc_id = DocumentId(doc_signer.verifying_key().into());
 
-        let (delegations, members, heads) = parents.iter().fold(
-            (CaMap::new(), HashMap::new(), HashSet::new()),
-            |(mut d_acc, mut mem_acc, mut head_acc), parent| {
-                let dlg = Box::new(Signed::sign(
-                    Delegation {
-                        delegate: *parent,
-                        can: Access::Admin,
-                        proof: None,
-                        after_revocations: vec![],
-                        after_content: BTreeMap::new(),
-                    },
-                    &doc_signer,
-                ));
+        let mut delegations = CaMap::new();
+        let mut members = HashMap::new();
+        let mut heads = HashSet::new();
 
-                let hash = d_acc.insert(dlg);
-                let new_ref = d_acc
-                    .get(&hash)
-                    .expect("value that was just inserted is missing");
+        for parent in parents.iter() {
+            let dlg = Box::new(Signed::sign(
+                Delegation {
+                    delegate: *parent,
+                    can: Access::Admin,
+                    proof: None,
+                    after_revocations: vec![],
+                    after_content: BTreeMap::new(),
+                },
+                &doc_signer,
+            ));
 
-                mem_acc.insert(parent.id(), new_ref);
-                head_acc.insert(&new_ref);
+            let hash = delegations.insert(dlg);
+            let new_ref = delegations
+                .get(&hash)
+                .expect("value that was just inserted is missing");
 
-                (d_acc, mem_acc, head_acc)
-            },
-        );
+            members.insert(parent.id(), new_ref);
+            heads.insert(new_ref);
+        }
 
         Document {
             members,
@@ -259,7 +258,7 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
         }
     }
 
-    pub fn insert(&'a mut self, doc: Document<'a, T>) {
+    pub fn insert(&mut self, doc: Document<'a, T>) {
         self.docs.insert(doc.id(), doc);
     }
 

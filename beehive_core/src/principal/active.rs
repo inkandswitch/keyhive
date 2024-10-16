@@ -5,7 +5,7 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::{
-        digest::Digest, encrypted::Encrypted, share_key::ShareKey, signed::Signed, siv::Siv,
+        encrypted::Encrypted, share_key::ShareKey, signed::Signed, siv::Siv,
         symmetric_key::SymmetricKey,
     },
     principal::{
@@ -35,8 +35,9 @@ pub struct Active {
 impl Active {
     pub fn new(signer: SigningKey) -> Self {
         Self {
-            signer,
+            individual: Individual::new(signer.verifying_key().into()),
             share_key_pairs: BTreeMap::new(), // FIXME
+            signer,
         }
     }
 

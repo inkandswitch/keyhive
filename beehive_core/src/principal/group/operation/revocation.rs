@@ -4,7 +4,7 @@ use super::delegation::{Delegation, StaticDelegation};
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
-    principal::{agent::AgentId, document::Document, identifier::Identifier},
+    principal::{document::Document, identifier::Identifier},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -79,6 +79,8 @@ impl<'a, T: ContentRef> PartialOrd for Revocation<'a, T> {
                                     }
                                     other => other,
                                 }
+                            } else {
+                                acc
                             }
                         },
                     ),

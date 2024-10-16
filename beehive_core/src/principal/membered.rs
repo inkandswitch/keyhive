@@ -2,7 +2,6 @@ use super::{
     agent::{Agent, AgentId},
     document::Document,
     group::{
-        id::GroupId,
         operation::{delegation::Delegation, revocation::Revocation},
         Group,
     },

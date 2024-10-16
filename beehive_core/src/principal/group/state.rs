@@ -8,16 +8,12 @@ use super::{
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed},
-    principal::{
-        agent::{Agent, AgentId},
-        identifier::Identifier,
-        verifiable::Verifiable,
-    },
+    crypto::signed::Signed,
+    principal::{agent::Agent, verifiable::Verifiable},
     util::content_addressed_map::CaMap,
 };
 use ed25519_dalek::VerifyingKey;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -85,10 +81,10 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
 
         // FIXME retrun &ref
         let hash = self.delegations.insert(boxed);
-        // let newly_owned = self
-        //     .delegations
-        //     .get(&hash)
-        //     .expect("Value that was just inserted to be available");
+        let newly_owned = self
+            .delegations
+            .get(&hash)
+            .expect("Value that was just inserted to be available");
 
         if let Some(proof) = newly_owned.payload.proof {
             if self.delegation_heads.contains(&proof) {

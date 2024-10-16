@@ -16,7 +16,7 @@ use crate::{
 use id::GroupId;
 use nonempty::NonEmpty;
 use operation::{delegation::Delegation, revocation::Revocation, Operation};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A collection of agents with no associated content.

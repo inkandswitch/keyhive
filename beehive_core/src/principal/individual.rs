@@ -38,6 +38,16 @@ pub struct Individual {
     pub prekey_state: PrekeyState,
 }
 
+impl Individual {
+    pub fn new(id: Identifier) -> Self {
+        Self {
+            id,
+            prekeys: todo!(),
+            prekey_state: todo!(),
+        }
+    }
+}
+
 impl std::hash::Hash for Individual {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);

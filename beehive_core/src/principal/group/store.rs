@@ -5,7 +5,6 @@ use crate::{
     principal::{
         agent::{Agent, AgentId},
         group::Group,
-        identifier::Identifier,
         verifiable::Verifiable,
     },
 };
@@ -54,7 +53,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
         self.0.values().collect()
     }
 
-    pub fn iter(&self) -> std::collections::btree_map::Iter<Identifier, Group<'a, T>> {
+    pub fn iter(&self) -> std::collections::btree_map::Iter<GroupId, Group<'a, T>> {
         self.0.iter()
     }
 

@@ -73,8 +73,8 @@ impl<'a, T: ContentRef> Operation<'a, T> {
         }
 
         let mut ancestors = HashSet::new();
-        let mut head_hashes: Vec<(&Digest<Signed<Operation<'a, T>>>, usize)> =
-            self.after_auth().iter().map(|hash| (hash, 0)).collect();
+        let mut head_hashes: Vec<(&Signed<Operation<'a, T>>, usize)> =
+            self.after_auth().iter().map(|op| (*op, 0)).collect();
 
         let mut touched_root = false;
 
@@ -84,7 +84,7 @@ impl<'a, T: ContentRef> Operation<'a, T> {
             }
 
             if op.subject() != self.subject() {
-                return Err(AncestorError::MismatchedSubject(self.subject().clone()));
+                return Err(AncestorError::MismatchedSubject(op.subject()));
             }
 
             ancestors.insert((op.clone(), longest_known_path + 1));
