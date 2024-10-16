@@ -53,12 +53,12 @@ use crate::{
 };
 
 use super::{error::CGKAError, treemath};
-type PublicKey = x25519_dalek::PublicKey;
-type SecretKey = x25519_dalek::StaticSecret;
+pub type PublicKey = x25519_dalek::PublicKey;
+pub type SecretKey = x25519_dalek::StaticSecret;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct BeeKEM {
-    my_leaf_idx: Option<LeafNodeIndex>,
+    owner_leaf_idx: Option<LeafNodeIndex>,
     next_leaf_idx: LeafNodeIndex,
     leaves: Vec<Option<LeafNode>>,
     parents: Vec<Option<ParentNode>>,
@@ -74,7 +74,7 @@ impl BeeKEM {
         my_id: Identifier,
     ) -> Result<Self, CGKAError> {
         let mut tree = Self {
-            my_leaf_idx: None,
+            owner_leaf_idx: None,
             next_leaf_idx: LeafNodeIndex::new(0),
             leaves: Vec::new(),
             parents: Vec::new(),
@@ -84,12 +84,21 @@ impl BeeKEM {
         tree.grow_tree_to_size();
         for (idx, (id, pk)) in participants.iter().enumerate() {
             if *id == my_id {
-                tree.my_leaf_idx = Some(LeafNodeIndex::new(idx as u32));
+                tree.owner_leaf_idx = Some(LeafNodeIndex::new(idx as u32));
             }
             tree.push_leaf(*id, *pk)?;
         }
+        if tree.owner_leaf_idx.is_none() {
+            return Err(CGKAError::OwnerIdentifierNotFound)
+        }
         // TODO: Populate my path
         Ok(tree)
+    }
+
+    pub(crate) fn with_new_owner_id(&mut self, id: Identifier) -> Result<(), CGKAError> {
+        let leaf_idx = *self.id_to_leaf_idx.get(&id).ok_or(CGKAError::IdentifierNotFound)?;
+        self.owner_leaf_idx = Some(leaf_idx);
+        Ok(())
     }
 
     pub(crate) fn get_public_key(&self, idx: TreeNodeIndex) -> Result<&PublicKey, CGKAError> {
@@ -188,46 +197,60 @@ impl BeeKEM {
         pk: PublicKey,
         sk: SecretKey,
     ) -> Result<(), CGKAError> {
-        todo!()
-        //     let mut child_idx = *self.id_to_leaf_idx.get(&id)
-        //         .ok_or(|e| CGKAError::IdentifierNotFound)?;
-        //     if self.is_blank(child_idx.into())? {
-        //         return Err(CGKAError::IdentifierNotFound);
-        //     }
-        //     self.insert_leaf_at(child_idx, LeafNode { id, pk });
-        //     let mut parent_idx = treemath::parent(child_idx);
-        //     let mut next_secret = sk;
-        //     while !self.is_root(child_idx.into()) {
-        //         let next_secret = self.encrypt_key_for_parent(child.into(), sk)?;
-        //         child_idx = parent_idx;
-        //         parent_idx = treemath::parent(child_idx);
-        //     }
-        //     Ok(())
+        let leaf_idx = *self.id_to_leaf_idx.get(&id)
+            .ok_or(CGKAError::IdentifierNotFound)?;
+        if self.is_blank(leaf_idx.into())? {
+            return Err(CGKAError::IdentifierNotFound);
+        }
+        self.insert_leaf_at(leaf_idx, LeafNode { id, pk })?;
+        let mut child_idx: TreeNodeIndex = leaf_idx.into();
+        let mut parent_idx = treemath::parent(child_idx);
+        let mut next_secret = sk.clone();
+        while !self.is_root(child_idx) {
+            let next_secret = self.encrypt_key_for_parent(child_idx, next_secret.clone())?;
+            child_idx = parent_idx.into();
+            parent_idx = treemath::parent(child_idx);
+        }
+        Ok(())
     }
 
     fn encrypt_key_for_parent(
         &mut self,
-        child: TreeNodeIndex,
+        child_idx: TreeNodeIndex,
         secret: SecretKey,
     ) -> Result<(), CGKAError> {
-        let parent_idx = treemath::parent(child);
+        let parent_idx = treemath::parent(child_idx);
         // TODO: Handle blanked parent
-        let sibling_idx = treemath::sibling(child);
-        if self.is_blank(sibling_idx.into())? {
-            // TODO: Look for resolution
-            todo!()
-        }
-        let sibling_pk = self.get_public_key(sibling_idx)?;
-        let (new_public_key, new_encrypted_secret) =
-            generate_key_pair_and_encrypt_secret(sibling_pk, secret)?;
+        let (new_public_key, new_encrypted_secret) = self.generate_new_key_pair_for_parent(child_idx, parent_idx, secret)?;
         let mut secret_map = BTreeMap::new();
-        secret_map.insert(child, new_encrypted_secret.clone());
+        secret_map.insert(child_idx, new_encrypted_secret.clone());
+        // TODO: Sibling as well
+        // secret_map.insert(child, new_encrypted_secret.clone());
         let node = ParentNode {
             pk: new_public_key,
             sk: secret_map,
         };
         self.insert_parent_at(parent_idx, node)?;
         Ok(())
+    }
+
+    fn generate_new_key_pair_for_parent(&self, child_idx: TreeNodeIndex, parent_idx: ParentNodeIndex, secret: SecretKey) -> Result<(PublicKey, Encrypted<SecretKey>), CGKAError> {
+        let sibling_idx = treemath::sibling(child_idx);
+        let encryption_key = if self.is_blank(sibling_idx.into())? {
+            // TODO: Look for resolution
+
+            // If there's no resolution...
+            // Normally you use a DH shared key to encrypt/decrypt the next node up,
+            // but if there's a blank sibling subtree, then you use your secret key
+            // directly instead.
+            secret
+        } else {
+            let sibling_pk = self.get_public_key(sibling_idx)?;
+            generate_shared_key(sibling_pk, secret)
+        };
+        let (new_pk, new_sk) = generate_new_key_pair();
+        let encrypted_sk = encrypt_secret(new_sk, encryption_key)?;
+        Ok((new_pk, encrypted_sk))
     }
 
     fn is_blank(&self, idx: TreeNodeIndex) -> Result<bool, CGKAError> {
@@ -261,14 +284,8 @@ impl BeeKEM {
     }
 
     fn grow_tree_to_size(&mut self) {
-        // FIXME: Panics if MAX overflow
-        self.leaves.reserve(self.tree_size.leaf_count() as usize);
-        // FIXME: Does this (effectively) call reserve first under the hood?
         self.leaves
             .resize(self.tree_size.leaf_count() as usize, None);
-        // FIXME: Panics if MAX overflow
-        self.parents.reserve(self.tree_size.parent_count() as usize);
-        // FIXME: Does this (effectively) call reserve first under the hood?
         self.parents
             .resize(self.tree_size.parent_count() as usize, None);
     }
@@ -288,24 +305,50 @@ impl BeeKEM {
     }
 }
 
-// TODO: Use beehive crypto capabilities directly instead
-fn generate_key_pair_and_encrypt_secret(
+//////////////////////////////////////////////////////////////////
+// FIXME: Replace this section with using beehive crypto capabilities
+// directly
+//////////////////////////////////////////////////////////////////
+fn generate_new_key_pair() -> (PublicKey, SecretKey) {
+    let sk = StaticSecret::random_from_rng(&mut rand::thread_rng());
+    let pk = PublicKey::from(&sk);
+    (pk, sk)
+}
+
+// TODO: Use a struct to make return type clearer
+fn generate_shared_key(
     their_public_key: &PublicKey,
     my_secret: SecretKey,
-) -> Result<(PublicKey, Encrypted<SecretKey>), CGKAError> {
-    let shared_key = x25519(my_secret.to_bytes(), their_public_key.to_bytes());
-    let new_static_secret = StaticSecret::random_from_rng(&mut rand::thread_rng());
-    let new_public_key = PublicKey::from(&new_static_secret);
+) -> SecretKey {
+    x25519(my_secret.to_bytes(), their_public_key.to_bytes()).into()
+}
 
-    let cipher = XChaCha20Poly1305::new(&shared_key.into());
+// TODO: Use beehive crypto capabilities directly instead
+fn encrypt_secret(secret: SecretKey, encrypt_key: SecretKey) -> Result<Encrypted<SecretKey>, CGKAError> {
+    let cipher = XChaCha20Poly1305::new(&encrypt_key.to_bytes().into());
     let mut nonce = [0u8; 24];
     rand::thread_rng().fill_bytes(&mut nonce);
     let encrypted_secret_bytes = cipher
-        .encrypt(&nonce.into(), new_static_secret.as_ref())
+        .encrypt(&nonce.into(), secret.as_ref())
         .map_err(CGKAError::Encryption)?;
     let encrypted_secret: Encrypted<SecretKey> = Encrypted::new(nonce.into(), encrypted_secret_bytes);
-    Ok((new_public_key, encrypted_secret))
+    Ok(encrypted_secret)
 }
+
+// TODO: Use beehive crypto capabilities directly instead
+fn decrypt_secret(
+    encrypted: Encrypted<SecretKey>,
+    decrypt_key: SecretKey,
+) -> Result<SecretKey, CGKAError> {
+    let cipher = XChaCha20Poly1305::new(&decrypt_key.to_bytes().into());
+    let decrypted_bytes: [u8; 32] = cipher
+        .decrypt(&encrypted.nonce.into(), encrypted.ciphertext.as_ref())
+        .map_err(CGKAError::Encryption)?
+        .try_into()
+        .map_err(|e| CGKAError::Conversion)?;
+    Ok(StaticSecret::from(decrypted_bytes))
+}
+//////////////////////////////////////////////////////////////////
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct LeafNode {
