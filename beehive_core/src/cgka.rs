@@ -181,6 +181,7 @@ mod tests {
         println!("0b");
         let (p1_pk, p1_sk) = key_pair();
         cgka.update(p1.0, p1_pk, p1_sk.clone())?;
+        println!("CGKA Tree Size {}", cgka.tree.tree_size());
         println!("1");
         let secret = cgka.secret(me_sk)?;
         println!("2");
