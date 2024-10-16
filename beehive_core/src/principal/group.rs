@@ -1,15 +1,19 @@
 //! Model a collect.clone(),ion of agents with no associated content.
 
+pub mod id;
 pub mod operation;
 pub mod state;
 pub mod store;
 
-use super::{agent::Agent, identifier::Identifier, verifiable::Verifiable};
+use super::{
+    agent::{Agent, AgentId},
+    verifiable::Verifiable,
+};
 use crate::{
-    access::Access,
-    crypto::{digest::Digest, signed::Signed},
+    access::Access, content::reference::ContentRef, crypto::signed::Signed,
     util::content_addressed_map::CaMap,
 };
+use id::GroupId;
 use nonempty::NonEmpty;
 use operation::{delegation::Delegation, revocation::Revocation, Operation};
 use serde::{Deserialize, Serialize};
@@ -20,23 +24,20 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Groups are stateful agents. It is possible the delegate control over them,
 /// and they can be delegated to. This produces transitives lines of authority
 /// through the network of [`Agent`]s.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Group<T: Serialize> {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct Group<'a, T: ContentRef> {
     /// The current view of members of a group.
-    pub members: BTreeMap<Identifier, Digest<Signed<Delegation<T>>>>,
+    pub members: BTreeMap<AgentId, &'a Box<Signed<Delegation<'a, T>>>>, // FIXME make not publicly editable
 
     /// The `Group`'s underlying (causal) delegation state.
-    pub state: state::GroupState<T>,
+    pub state: state::GroupState<'a, T>,
 }
 
-impl<T: Serialize> Group<T> {
+impl<'a, T: ContentRef> Group<'a, T> {
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
-    pub fn generate(parents: NonEmpty<&Agent<T>>) -> Group<T>
-    where
-        T: Clone,
-    {
+    pub fn generate(parents: NonEmpty<&'a Agent<T>>) -> Group<'a, T> {
         let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let group_id = group_signer.verifying_key().into();
+        let group_id = GroupId(group_signer.verifying_key().into());
 
         let (delegations, members) = parents.iter().fold(
             (CaMap::new(), BTreeMap::new()),
@@ -46,13 +47,13 @@ impl<T: Serialize> Group<T> {
                     can: Access::Admin,
                     proof: None,
                     after_revocations: vec![],
-                    after_content: vec![],
+                    after_content: BTreeMap::new(),
                 };
 
-                let signed_op = Signed::sign(del.clone().into(), &group_signer);
-                let signed_del = Signed::sign(del, &group_signer);
+                let signed_op = Box::new(Signed::sign(del.clone().into(), &group_signer));
+                let signed_del = Box::new(Signed::sign(del, &group_signer));
 
-                mem_acc.insert(*parent, signed_del);
+                mem_acc.insert((*parent).id(), &signed_del);
 
                 op_acc.insert(signed_op);
                 (op_acc, mem_acc)
@@ -72,52 +73,42 @@ impl<T: Serialize> Group<T> {
         }
     }
 
-    pub fn id(&self) -> &Identifier {
-        &self.state.id
+    pub fn id(&self) -> GroupId {
+        self.state.id
+    }
+
+    pub fn agent_id(&self) -> AgentId {
+        self.id().into()
     }
 
     // FIXME get_capability?
-    pub fn get(&self, agent: &Agent<T>) -> Option<&Signed<Delegation<T>>>
-    where
-        T: Ord,
-    {
+    pub fn get(&self, agent: &AgentId) -> Option<&Box<Signed<Delegation<T>>>> {
         self.members.get(agent).copied()
     }
 
     // FIXME rename
-    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<T>>) {
-        let hash = self.state.delegations.insert(signed_delegation);
-        let val_ref = self
-            .state
-            .delegations
-            .get(&hash)
-            .expect("value that we just added to be there");
-
+    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<'a, T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
         // FIXME check that delegation is authorized
         // FIXME even better: use dgp (e.g. Valid<Signed<Delegation<'a, T>>)
 
-        self.members.insert(&val_ref.payload.delegate, &val_ref);
+        let boxed = Box::new(signed_delegation);
+        let id = boxed.payload.delegate.id();
+        self.state.delegations.insert(boxed);
+        self.members.insert(id, &boxed);
+        // let new_ref = self.state.delegations.get(&hash).expect("value that was just added to be there");
     }
 
-    pub fn materialize(state: state::GroupState<T>) -> Self
-    where
-        T: Clone + Ord,
-    {
+    pub fn materialize(state: state::GroupState<T>) -> Self {
         // FIXME oof that's a lot of cloning
 
         let ops: Vec<Signed<Operation<T>>> = state
             .delegations
             .iter()
-            .map(|(_k, v)| v.map(|d| (&d).into()))
-            .chain(
-                state
-                    .revocations
-                    .iter()
-                    .map(|(_k, v)| v.map(|r| (&r).into())),
-            )
+            .map(|(_k, v)| v.map(|d| d.into()))
+            .chain(state.revocations.iter().map(|(_k, v)| v.map(|r| r.into())))
             .collect();
 
         let heads: Vec<&Signed<Operation<T>>> = todo!();
@@ -135,8 +126,8 @@ impl<T: Serialize> Group<T> {
                         delegation.delegate,
                         Signed {
                             payload: delegation.clone(),
-                            signature: *signature,
-                            verifying_key: *verifying_key,
+                            signature,
+                            verifying_key,
                         },
                     );
 
@@ -160,11 +151,11 @@ impl<T: Serialize> Group<T> {
         // ...etc etc
         // FIXME check that delegation is authorized
         self.members
-            .remove(&signed_revocation.payload.revoke.payload.delegate);
+            .remove(&signed_revocation.payload.revoke.payload.delegate.id());
 
-        self.state
-            .ops
-            .insert(signed_revocation.map(|revocation| revocation.into()).into());
+        let boxed = Box::new(signed_revocation);
+        self.state.revocations.insert(boxed);
+        self.state.revocation_heads.insert(&signed_revocation);
     }
 
     // pub fn add_member(&mut self, delegation: Signed<Delegation>) {
@@ -181,7 +172,7 @@ impl<T: Serialize> Group<T> {
     // }
 }
 
-impl<T: Serialize> Verifiable for Group<T> {
+impl<'a, T: ContentRef> Verifiable for Group<'a, T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }
@@ -201,7 +192,7 @@ mod tests {
             .into()
     }
 
-    fn setup_store<'a, T: Clone + Ord + Serialize>(
+    fn setup_store<'a, T: ContentRef>(
         alice: &Individual,
         bob: &Individual,
     ) -> (GroupStore<'a, T>, [Group<'a, T>; 4]) {

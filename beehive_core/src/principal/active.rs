@@ -3,12 +3,13 @@
 use super::{document::Document, individual::Individual, verifiable::Verifiable};
 use crate::{
     access::Access,
+    content::reference::ContentRef,
     crypto::{
         digest::Digest, encrypted::Encrypted, share_key::ShareKey, signed::Signed, siv::Siv,
         symmetric_key::SymmetricKey,
     },
     principal::{
-        agent::Agent,
+        agent::{Agent, AgentId},
         group::operation::{delegation::Delegation, revocation::Revocation},
         identifier::Identifier,
         membered::Membered,
@@ -19,14 +20,14 @@ use serde::Serialize;
 use std::{collections::BTreeMap, fmt::Debug};
 
 /// The current user agent (which can sign and encrypt).
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct Active {
     /// The signing key of the active agent.
     pub signer: SigningKey,
 
     /// The encryption "sharing" key pairs that the active agent has.
     /// This includes the secret keys for ECDH.
-    pub share_key_pairs: BTreeMap<ShareKey, x25519_dalek::StaticSecret>,
+    pub share_key_pairs: BTreeMap<ShareKey, x25519_dalek::StaticSecret>, // FIXME generalize to use e.g. KMS
 
     pub individual: Individual,
 }
@@ -43,6 +44,14 @@ impl Active {
         self.signer.verifying_key().into()
     }
 
+    pub fn agent_id(&self) -> AgentId {
+        AgentId::IndividualId(self.id())
+    }
+
+    pub fn as_agent<'a, T: ContentRef>(&'a self) -> Agent<'a, T> {
+        Agent::Individual(self.individual)
+    }
+
     /// Generate a new active agent with a random key pair.
     pub fn generate() -> Self {
         let signer = SigningKey::generate(&mut rand::thread_rng());
@@ -54,7 +63,7 @@ impl Active {
         Signed::<U>::sign(payload, &self.signer)
     }
 
-    pub fn get_capability<'a, T: Serialize>(
+    pub fn get_capability<'a, T: ContentRef>(
         &'a self,
         subject: &'a Membered<'a, T>,
         min: Access,
@@ -69,13 +78,13 @@ impl Active {
     }
 
     // FIXME put this on Capability?
-    pub fn make_delegation<T: Serialize>(
+    pub fn make_delegation<T: ContentRef>(
         &self,
         subject: &Membered<T>,
         attenuate: Access,
         delegate: &Agent<T>,
         after_revocations: Vec<&Signed<Revocation<T>>>,
-        after_content: Vec<(&Document<T>, Digest<T>)>,
+        after_content: BTreeMap<&Document<T>, Vec<T>>,
     ) -> Result<Signed<Delegation<T>>, DelegationError> {
         let proof = self.get_capability(&subject, attenuate).expect("FIXME");
 
@@ -96,17 +105,14 @@ impl Active {
         Ok(delegation)
     }
 
-    pub fn encrypt_to<'a, T: Clone + Ord + Serialize>(
+    pub fn encrypt_to<'a, T: ContentRef>(
         &self,
         doc: &Document<'a, T>,
         to: &Individual,
         message: &mut [u8],
     ) -> Encrypted<&[u8]> {
         let recipient_share_pk = doc.reader_keys.get(to).expect("FIXME");
-        let our_pk = doc
-            .reader_keys
-            .get(&Individual::from(self.id()))
-            .expect("FIXME");
+        let our_pk = doc.reader_keys.get(&self.id()).expect("FIXME");
 
         let our_sk = self.share_key_pairs.get(our_pk).expect("FIXME");
 
@@ -151,12 +157,6 @@ impl Debug for Active {
     }
 }
 
-impl<'a, T: Clone + Ord + Serialize> From<Active> for Agent<'a, T> {
-    fn from(active: Active) -> Self {
-        Agent::Individual(active.id().into())
-    }
-}
-
 impl From<Active> for Individual {
     fn from(active: Active) -> Self {
         active.id().into()
@@ -172,6 +172,56 @@ impl Verifiable for Active {
 impl Signer<Signature> for Active {
     fn try_sign(&self, message: &[u8]) -> Result<Signature, signature::Error> {
         self.signer.try_sign(message)
+    }
+}
+
+// FIXME test
+impl PartialEq for Active {
+    fn eq(&self, other: &Self) -> bool {
+        self.id() == other.id()
+            && self.signer.to_bytes() == other.signer.to_bytes()
+            && self
+                .share_key_pairs
+                .iter()
+                .zip(other.share_key_pairs.iter())
+                .all(|((pk1, sk1), (pk2, sk2))| pk1 == pk2 && sk1.to_bytes() == sk2.to_bytes())
+    }
+}
+
+impl Eq for Active {}
+
+// FIXME test
+impl PartialOrd for Active {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match self.id().partial_cmp(&other.id()) {
+            Some(std::cmp::Ordering::Equal) => {
+                match self.signer.to_bytes().partial_cmp(&other.signer.to_bytes()) {
+                    Some(std::cmp::Ordering::Equal) => self
+                        .share_key_pairs
+                        .iter()
+                        .zip(other.share_key_pairs.iter())
+                        .map(|((pk1, sk1), (pk2, sk2))| {
+                            pk1.partial_cmp(pk2).and_then(|pk_cmp| {
+                                sk1.to_bytes()
+                                    .partial_cmp(&sk2.to_bytes())
+                                    .and_then(|sk_cmp| pk_cmp.partial_cmp(&sk_cmp))
+                            })
+                        })
+                        .find(|cmp| *cmp != Some(std::cmp::Ordering::Equal))
+                        .unwrap_or(Some(std::cmp::Ordering::Equal)),
+                    cmp => cmp,
+                }
+            }
+            cmp => cmp,
+        }
+    }
+}
+
+// FIXME
+impl Ord for Active {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other)
+            .expect("Nothnig should prevent Active from being orderable")
     }
 }
 

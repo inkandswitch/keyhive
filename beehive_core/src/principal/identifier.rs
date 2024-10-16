@@ -29,6 +29,10 @@ impl Identifier {
     pub fn as_bytes(&self) -> &[u8; 32] {
         self.0.as_bytes()
     }
+
+    pub fn as_slice(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
 }
 
 impl Clone for Identifier {

@@ -1,5 +1,7 @@
+use super::id::GroupId;
 use crate::{
     access::Access,
+    content::reference::ContentRef,
     principal::{agent::Agent, group::Group, identifier::Identifier, verifiable::Verifiable},
 };
 use base64::prelude::*;
@@ -7,10 +9,10 @@ use nonempty::NonEmpty;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
-pub struct GroupStore<T: Serialize>(pub BTreeMap<Identifier, Group<T>>);
+#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Serialize)]
+pub struct GroupStore<'a, T: ContentRef>(pub BTreeMap<GroupId, Group<'a, T>>);
 
-impl<T: Serialize> GroupStore<T> {
+impl<'a, T: ContentRef> GroupStore<'a, T> {
     pub fn new() -> Self {
         GroupStore(BTreeMap::new())
     }
@@ -22,58 +24,41 @@ impl<T: Serialize> GroupStore<T> {
             .collect()
     }
 
-    pub fn insert(&mut self, group: Group<T>)
-    where
-        T: Eq,
-    {
+    pub fn insert(&mut self, group: Group<'a, T>) {
         self.0.insert(group.id(), group);
     }
 
-    pub fn generate_group(&mut self, parents: NonEmpty<&Agent<T>>) -> &Group<T>
-    where
-        T: Eq,
-    {
-        let new_group: Group<T> = Group::generate(parents);
-        let new_group_id: Identifier = new_group.verifying_key().into(); // FIXME add helper method
+    pub fn generate_group(&mut self, parents: NonEmpty<&'a Agent<'a, T>>) -> &Group<'a, T> {
+        let new_group: Group<'a, T> = Group::generate(parents);
+        let new_group_id: GroupId = new_group.id();
         self.insert(new_group);
-        self.get(&new_group_id).expect("FIXME")
+        self.get(&new_group_id).expect(
+            "Group should be inserted in store because it was just placed there a moment ago",
+        )
     }
 
-    pub fn get(&self, id: &Identifier) -> Option<&Group<T>>
-    where
-        T: Eq,
-    {
+    pub fn get(&self, id: &GroupId) -> Option<&Group<'a, T>> {
         self.0.get(id)
     }
 
-    pub fn get_mut(&mut self, id: &Identifier) -> Option<&mut Group<T>>
-    where
-        T: Eq,
-    {
+    pub fn get_mut(&mut self, id: &GroupId) -> Option<&mut Group<'a, T>> {
         self.0.get_mut(id)
     }
 
-    pub fn values(&self) -> Vec<&Group<T>> {
+    pub fn values(&self) -> Vec<&Group<'a, T>> {
         self.0.values().collect()
     }
 
-    pub fn ids(&self) -> BTreeSet<&Identifier>
-    where
-        T: Eq,
-    {
-        self.0.keys().collect()
-    }
-
-    pub fn iter(&self) -> std::collections::btree_map::Iter<Identifier, Group<T>> {
+    pub fn iter(&self) -> std::collections::btree_map::Iter<Identifier, Group<'a, T>> {
         self.0.iter()
     }
 
     // FIXME shoudl be more like this:
     // pub fn transative_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
     // FIXME return path as well?
-    pub fn transative_members(&self, group: &Group<T>) -> BTreeMap<Identifier, Access> {
+    pub fn transative_members(&self, group: &Group<'a, T>) -> BTreeMap<Identifier, Access> {
         struct GroupAccess {
-            agent: Identifier,
+            agent: AgentId,
             agent_access: Access,
             parent_access: Access,
         }
@@ -109,18 +94,20 @@ impl<T: Serialize> GroupStore<T> {
                     caps.insert(member, best_access);
                 }
                 _ => {
-                    if let Some(group) = self.0.get(&member.verifying_key().into()) {
-                        for (mem, (pow, _proof)) in group.members.clone() {
-                            let current_path_access = access.min(pow).min(parent_access);
+                    if let Some(group) = self.0.get(&GroupId(member.into())) {
+                        for (agent, proof) in group.members {
+                            let current_path_access =
+                                access.min(proof.payload.can).min(parent_access);
 
-                            let best_access = if let Some(prev_found_path_access) = caps.get(&mem) {
-                                (*prev_found_path_access).max(current_path_access)
-                            } else {
-                                current_path_access
-                            };
+                            let best_access =
+                                if let Some(prev_found_path_access) = caps.get(&agent.into()) {
+                                    (*prev_found_path_access).max(current_path_access)
+                                } else {
+                                    current_path_access
+                                };
 
                             explore.push(GroupAccess {
-                                agent: mem,
+                                agent: agent.into(),
                                 agent_access: best_access,
                                 parent_access,
                             });

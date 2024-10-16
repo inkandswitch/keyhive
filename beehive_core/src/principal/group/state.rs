@@ -1,47 +1,60 @@
-use super::operation::{delegation::Delegation, revocation::Revocation};
+use super::{
+    id::GroupId,
+    operation::{
+        delegation::{Delegation, StaticDelegation},
+        revocation::{Revocation, StaticRevocation},
+    },
+};
 use crate::{
     access::Access,
+    content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
-    principal::{agent::Agent, identifier::Identifier, verifiable::Verifiable},
+    principal::{
+        agent::{Agent, AgentId},
+        identifier::Identifier,
+        verifiable::Verifiable,
+    },
     util::content_addressed_map::CaMap,
 };
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GroupState<T: Serialize> {
-    pub id: Identifier,
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct GroupState<'a, T: ContentRef> {
+    pub id: GroupId,
 
-    pub delegation_heads: BTreeSet<Digest<Signed<Delegation<T>>>>,
-    pub delegations: CaMap<Signed<Delegation<T>>>,
+    pub delegation_heads: BTreeSet<&'a Box<Signed<Delegation<'a, T>>>>,
+    pub delegations: CaMap<Box<Signed<Delegation<'a, T>>>>,
+    pub delegation_quarantine: CaMap<Signed<StaticDelegation<T>>>,
 
-    pub revocation_heads: BTreeSet<Digest<Signed<Revocation<T>>>>,
-    pub revocations: CaMap<Signed<Revocation<T>>>,
+    pub revocation_heads: BTreeSet<&'a Box<Signed<Revocation<'a, T>>>>,
+    pub revocations: CaMap<Box<Signed<Revocation<'a, T>>>>,
+    pub revocation_quarantine: CaMap<Signed<StaticRevocation<T>>>,
 }
 
-impl<T: Serialize> GroupState<T> {
-    pub fn new(parent: &Agent<T>) -> Self {
-        let mut rng = rand::rngs::OsRng;
+impl<'a, T: ContentRef> GroupState<'a, T> {
+    pub fn new(parent: &Agent<'a, T>) -> Self {
+        let mut rng = rand::random();
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
         let verifier: VerifyingKey = signing_key.verifying_key();
 
-        let init = Signed::sign(
+        let init = Box::new(Signed::sign(
             Delegation {
                 delegate: parent,
                 can: Access::Admin,
 
                 proof: None,
                 after_revocations: vec![],
-                after_content: vec![],
+                after_content: BTreeMap::new(),
             },
             &signing_key,
-        );
+        ));
 
         GroupState {
             id: verifier.into(),
 
-            delegation_heads: BTreeSet::from_iter([Digest::hash(&init)]),
+            delegation_heads: BTreeSet::from_iter([&init]), // FIXME consider just using CaMap since it doens't need Ord
             delegations: CaMap::from_iter([init]),
 
             revocation_heads: BTreeSet::new(),
@@ -52,8 +65,8 @@ impl<T: Serialize> GroupState<T> {
     // FIXME split
     pub fn add_delegation(
         &mut self,
-        delegation: Signed<Delegation<T>>,
-    ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
+        delegation: Signed<Delegation<'a, T>>,
+    ) -> Result<&'a Signed<Delegation<'a, T>>, AddError> {
         if delegation.subject() != self.id.into() {
             panic!("FIXME")
             // return Err(signature::Error::InvalidSubject);
@@ -66,8 +79,14 @@ impl<T: Serialize> GroupState<T> {
 
         // FIXME also check if this op needs to go into the quarantine/buffer
 
-        let hash = self.delegations.insert(delegation);
-        let newly_owned = self.delegations.get(&hash).unwrap();
+        let boxed = Box::new(delegation);
+
+        // FIXME retrun &ref
+        let hash = self.delegations.insert(boxed);
+        let newly_owned = self
+            .delegations
+            .get(&hash)
+            .expect("Value that was just inserted to be available");
 
         if let Some(proof) = newly_owned.payload.proof {
             if self.delegation_heads.contains(proof) {
@@ -79,10 +98,7 @@ impl<T: Serialize> GroupState<T> {
         Ok(hash)
     }
 
-    pub fn delegations_for(&self, agent: &Agent<T>) -> Vec<&Signed<Delegation<T>>>
-    where
-        T: Ord,
-    {
+    pub fn delegations_for(&self, agent: &Agent<'a, T>) -> Vec<&Signed<Delegation<'a, T>>> {
         self.delegations
             .iter()
             .filter_map(|(_, delegation)| {
@@ -100,7 +116,7 @@ impl<T: Serialize> GroupState<T> {
     }
 }
 
-impl<T: Serialize> From<VerifyingKey> for GroupState<T> {
+impl<'a, T: ContentRef> From<VerifyingKey> for GroupState<'a, T> {
     fn from(verifier: VerifyingKey) -> Self {
         GroupState {
             id: verifier.into(),
@@ -112,9 +128,9 @@ impl<T: Serialize> From<VerifyingKey> for GroupState<T> {
     }
 }
 
-impl<T: Serialize> Verifiable for GroupState<T> {
+impl<'a, T: ContentRef> Verifiable for GroupState<'a, T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.id.verifying_key()
+        self.id.0.verifying_key()
     }
 }
 

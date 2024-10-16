@@ -1,44 +1,49 @@
 use super::{
-    agent::Agent, document::Document, group::operation::delegation::Delegation,
-    group::operation::revocation::Revocation, group::Group, identifier::Identifier,
+    agent::{Agent, AgentId},
+    document::Document,
+    group::{
+        operation::{delegation::Delegation, revocation::Revocation},
+        Group,
+    },
+    identifier::Identifier,
     verifiable::Verifiable,
 };
-use crate::crypto::signed::Signed;
+use crate::{content::reference::ContentRef, crypto::signed::Signed};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt};
 
 /// The union of Agents that have updatable membership
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub enum Membered<T: Serialize> {
-    Group(Group<T>),
-    Document(Document<T>),
+pub enum Membered<'a, T: ContentRef> {
+    Group(Group<'a, T>),
+    Document(Document<'a, T>),
 }
 
-impl<T: Serialize> Membered<T> {
+impl<'a, T: ContentRef> Membered<'a, T> {
     // FIXME get_capability?
-    pub fn get(&self, agent: &Agent<T>) -> Option<&Signed<Delegation<T>>> {
+    pub fn get(&self, agent: &Agent<'a, T>) -> Option<&Signed<Delegation<'a, T>>> {
         match self {
-            Membered::Group(group) => group.get(agent),
-            Membered::Document(doc) => doc.get(agent),
+            Membered::Group(group) => group.get(&agent.id()),
+            Membered::Document(doc) => doc.get(&agent.id()),
         }
     }
 
-    pub fn member_id(&self) -> MemberedId<T> {
+    pub fn member_id(&self) -> MemberedId {
         match self {
-            Membered::Group(group) => MemberedId::GroupId(group.id().clone()),
-            Membered::Document(document) => MemberedId::DocumentId(document.id().clone()),
+            Membered::Group(group) => MemberedId::GroupId(group.id().into()),
+            Membered::Document(document) => MemberedId::DocumentId(document.id().into()),
         }
     }
 
     // FIXME make a trait and apply to children
-    pub fn members(&self) -> &BTreeMap<&Agent<T>, &Signed<Delegation<T>>> {
+    pub fn members(&self) -> &BTreeMap<&'a Agent<'a, T>, &'a Box<Signed<Delegation<'a, T>>>> {
         match self {
-            Membered::Group(group) => group.members,
-            Membered::Document(document) => document.members,
+            Membered::Group(group) => &group.members,
+            Membered::Document(document) => &document.members,
         }
     }
 
-    pub fn add_member(&mut self, delegation: Signed<Delegation<T>>) {
+    pub fn add_member(&mut self, delegation: Signed<Delegation<'a, T>>) {
         match self {
             Membered::Group(group) => {
                 group.add_member(delegation);
@@ -47,7 +52,7 @@ impl<T: Serialize> Membered<T> {
         }
     }
 
-    pub fn revoke_member(&mut self, revocation: Signed<Revocation<T>>) {
+    pub fn revoke_member(&mut self, revocation: Signed<Revocation<'a, T>>) {
         match self {
             Membered::Group(group) => {
                 group.revoke(revocation);
@@ -57,8 +62,8 @@ impl<T: Serialize> Membered<T> {
     }
 }
 
-impl<T: Serialize> From<Membered<T>> for Agent<T> {
-    fn from(membered: Membered<T>) -> Self {
+impl<'a, T: ContentRef> From<Membered<'a, T>> for Agent<'a, T> {
+    fn from(membered: Membered<'a, T>) -> Self {
         match membered {
             Membered::Group(group) => group.into(),
             Membered::Document(document) => document.into(),
@@ -66,10 +71,10 @@ impl<T: Serialize> From<Membered<T>> for Agent<T> {
     }
 }
 
-impl<T: Serialize> TryFrom<Agent<T>> for Membered<T> {
+impl<'a, T: ContentRef> TryFrom<Agent<'a, T>> for Membered<'a, T> {
     type Error = &'static str; // FIXME
 
-    fn try_from(agent: Agent<T>) -> Result<Self, Self::Error> {
+    fn try_from(agent: Agent<'a, T>) -> Result<Self, Self::Error> {
         match agent {
             Agent::Group(group) => Ok(Membered::Group(group)),
             Agent::Document(document) => Ok(Membered::Document(document)),
@@ -78,19 +83,19 @@ impl<T: Serialize> TryFrom<Agent<T>> for Membered<T> {
     }
 }
 
-impl<T: Serialize> From<Group<T>> for Membered<T> {
-    fn from(group: Group<T>) -> Self {
+impl<'a, T: ContentRef> From<Group<'a, T>> for Membered<'a, T> {
+    fn from(group: Group<'a, T>) -> Self {
         Membered::Group(group)
     }
 }
 
-impl<T: Serialize> From<Document<T>> for Membered<T> {
-    fn from(document: Document<T>) -> Self {
+impl<'a, T: ContentRef> From<Document<'a, T>> for Membered<'a, T> {
+    fn from(document: Document<'a, T>) -> Self {
         Membered::Document(document)
     }
 }
 
-impl<T: Serialize> Verifiable for Membered<T> {
+impl<'a, T: ContentRef> Verifiable for Membered<'a, T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         match self {
             Membered::Group(group) => group.verifying_key(),
@@ -101,13 +106,13 @@ impl<T: Serialize> Verifiable for Membered<T> {
 
 // FIXME pass proof of existence?
 // FIXME need at all?
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd , Ord Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum MemberedId {
     GroupId(Identifier),
     DocumentId(Identifier),
 }
 
-impl<T: Serialize> MemberedId<T> {
+impl MemberedId {
     pub fn to_bytes(&self) -> [u8; 32] {
         match self {
             MemberedId::GroupId(group_id) => group_id.to_bytes(),
@@ -116,7 +121,7 @@ impl<T: Serialize> MemberedId<T> {
     }
 }
 
-impl<T: Serialize> fmt::Display for MemberedId<T> {
+impl fmt::Display for MemberedId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             MemberedId::GroupId(group_id) => write!(f, "{}", group_id),
@@ -125,7 +130,7 @@ impl<T: Serialize> fmt::Display for MemberedId<T> {
     }
 }
 
-impl<T: Serialize> Verifiable for MemberedId<T> {
+impl Verifiable for MemberedId {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         match self {
             MemberedId::GroupId(group_id) => group_id.verifying_key(),
@@ -134,11 +139,11 @@ impl<T: Serialize> Verifiable for MemberedId<T> {
     }
 }
 
-// impl<T: Serialize> From<MemberedId<T>> for Identifier<Membered<T>> {
-//     fn from(membered_id: MemberedId<T>) -> Self {
-//         match membered_id {
-//             MemberedId::GroupId(group_id) => Identifier { key: group_id,
-//             MemberedId::DocumentId(document_id) => document_id,
-//         }
-//     }
-// }
+impl From<MemberedId> for Identifier {
+    fn from(membered_id: MemberedId) -> Self {
+        match membered_id {
+            MemberedId::GroupId(group_id) => group_id,
+            MemberedId::DocumentId(document_id) => document_id,
+        }
+    }
+}

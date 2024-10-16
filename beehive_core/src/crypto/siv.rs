@@ -1,7 +1,7 @@
 //! Nonce-misuse resistant initialization vector.
 
 use super::symmetric_key::SymmetricKey;
-use crate::principal::document::Document;
+use crate::{content::reference::ContentRef, principal::document::Document};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 
@@ -30,14 +30,14 @@ use std::io::Read;
 pub struct Siv(pub [u8; 24]);
 
 impl Siv {
-    pub fn new<'a, T: Serialize>(
+    pub fn new<'a, T: ContentRef>(
         key: &SymmetricKey,
         plaintext: &[u8],
         doc: &Document<'a, T>,
     ) -> Self {
         let mut hasher = blake3::Hasher::new();
         hasher.update(b"/automerge/beehive/");
-        hasher.update(doc.id().as_bytes());
+        hasher.update(doc.id().as_slice());
         hasher.update(key.as_slice());
         hasher.update(plaintext);
 

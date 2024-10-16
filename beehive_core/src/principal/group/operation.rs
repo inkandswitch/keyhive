@@ -3,6 +3,7 @@ pub mod revocation;
 pub mod store;
 
 use crate::{
+    content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
     principal::{document::Document, identifier::Identifier, membered::MemberedId},
     util::content_addressed_map::CaMap,
@@ -18,13 +19,13 @@ use std::{
 use thiserror::Error;
 use topological_sort::TopologicalSort;
 
-#[derive(Debug, Clone, Hash, Serialize)]
-pub enum Operation<T: Serialize> {
-    Delegation(Delegation<T>),
-    Revocation(Revocation<T>),
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum Operation<'a, T: ContentRef> {
+    Delegation(Delegation<'a, T>),
+    Revocation(Revocation<'a, T>),
 }
 
-impl<T: Serialize> Operation<T> {
+impl<'a, T: ContentRef> Operation<'a, T> {
     pub fn is_delegation(&self) -> bool {
         match self {
             Operation::Delegation(_) => true,
@@ -39,9 +40,9 @@ impl<T: Serialize> Operation<T> {
     pub fn after(
         &self,
     ) -> (
-        &[&Signed<Delegation<T>>],
-        &[&Signed<Revocation<T>>],
-        &[(&Document<T>, Digest<T>)],
+        Vec<&'a Box<Signed<Delegation<'a, T>>>>,
+        Vec<&'a Box<Signed<Revocation<'a, T>>>>,
+        &BTreeMap<&'a Document<'a, T>, Vec<&'a T>>,
     ) {
         match self {
             Operation::Delegation(delegation) => delegation.after(),
@@ -49,17 +50,24 @@ impl<T: Serialize> Operation<T> {
         }
     }
 
-    // pub fn subject(&self) -> Option<Identifier> {
-    //     match self {
-    //         Operation::Delegation(delegation) => delegation.subject(),
-    //         Operation::Revocation(revocation) => revocation.subject(),
-    //     }
-    // }
+    pub fn after_auth(&self) -> Vec<&'a Signed<Operation<'a, T>>> {
+        let (_dlgs, _revs) = match self {
+            Operation::Delegation(delegation) => delegation.after_auth(),
+            Operation::Revocation(revocation) => revocation.after_auth(),
+        };
+
+        todo!()
+
+        // dlgs.into_iter()
+        //     .map(|dlg| dlg.into())
+        //     .chain(revs.into_iter().map(|rev| &rev.clone().into()))
+        //     .collect()
+    }
 
     pub fn ancestors(
         &self,
-        ops: &CaMap<Signed<Operation<T>>>,
-    ) -> Result<(CaMap<Signed<Operation<T>>>, usize), AncestorError<T>> {
+        ops: &CaMap<Signed<Operation<'a, T>>>,
+    ) -> Result<(CaMap<Signed<Operation<'a, T>>>, usize), AncestorError<'a, T>> {
         if self.after_auth().is_empty() {
             return Ok((CaMap::new(), 0));
         }
@@ -77,7 +85,7 @@ impl<T: Serialize> Operation<T> {
                 }
 
                 if let Some(op) = ops.get(&head_hash) {
-                    if op.payload.subject() != self.subject() {
+                    if op.subject() != self.subject() {
                         return Err(AncestorError::MismatchedSubject(self.subject().clone()));
                     }
 
@@ -113,141 +121,149 @@ impl<T: Serialize> Operation<T> {
         ))
     }
 
-    // FIXME verified gdp
+    // pub fn topsort(
+    //     mut heads: Vec<&'a Signed<Operation<'a, T>>>,
+    //     ops: &CaMap<Signed<Operation<'a, T>>>,
+    // ) -> Result<Vec<Signed<Operation<'a, T>>>, AncestorError<'a, T>> {
+    //     let mut ops_with_ancestors: BTreeMap<
+    //         Digest<Signed<Operation<'a, T>>>,
+    //         (
+    //             &Signed<Operation<'a, T>>,
+    //             CaMap<Signed<Operation<'a, T>>>,
+    //             usize,
+    //         ),
+    //     > = BTreeMap::new();
 
-    pub fn topsort(
-        mut heads: Vec<Digest<Signed<Operation<T>>>>,
-        ops: &CaMap<Signed<Operation<T>>>,
-    ) -> Result<Vec<Signed<Operation<T>>>, AncestorError<T>> {
-        let mut ops_with_ancestors: BTreeMap<
-            Digest<Signed<Operation<T>>>,
-            (&Signed<Operation<T>>, CaMap<Signed<Operation<T>>>, usize),
-        > = BTreeMap::new();
+    //     while let Some(op) = heads.pop() {
+    //         if ops_with_ancestors.contains_key(&hash) {
+    //             continue;
+    //         }
 
-        while !heads.is_empty() {
-            if let Some(hash) = heads.pop() {
-                if ops_with_ancestors.contains_key(&hash) {
-                    continue;
-                }
+    //         if let Some(op) = ops.get(&hash) {
+    //             let ancestors = op.payload.ancestors(ops)?;
+    //             ops_with_ancestors.insert(hash.clone(), (op, ancestors.0, ancestors.1));
+    //         } else {
+    //             return Err(AncestorError::DependencyNotAvailable(hash));
+    //         }
+    //     }
 
-                if let Some(op) = ops.get(&hash) {
-                    let ancestors = op.payload.ancestors(ops)?;
-                    ops_with_ancestors.insert(hash.clone(), (op, ancestors.0, ancestors.1));
-                } else {
-                    return Err(AncestorError::DependencyNotAvailable(hash));
-                }
-            }
-        }
+    //     let mut seen = BTreeSet::new();
+    //     // FIXME use pointers?
+    //     let mut adjacencies: TopologicalSort<Signed<Operation<'a, T>>> =
+    //         topological_sort::TopologicalSort::new();
 
-        let mut seen = BTreeSet::new();
-        // FIXME use pointers?
-        let mut adjacencies: TopologicalSort<Signed<Operation<T>>> =
-            topological_sort::TopologicalSort::new();
+    //     for (hash, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
+    //         seen.insert(hash);
 
-        for (hash, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
-            seen.insert(hash);
+    //         for (other_hash, other_op) in op_ancestors.iter() {
+    //             if let Some((_, other_ancestors, other_longest_path)) =
+    //                 ops_with_ancestors.get(other_hash)
+    //             {
+    //                 let ancestor_set: BTreeSet<Signed<Operation<'a, T>>> =
+    //                     op_ancestors.clone().into_values().collect();
 
-            for (other_hash, other_op) in op_ancestors.iter() {
-                if let Some((_, other_ancestors, other_longest_path)) =
-                    ops_with_ancestors.get(other_hash)
-                {
-                    let ancestor_set: BTreeSet<Signed<Operation<T>>> =
-                        op_ancestors.clone().into_values().collect();
+    //                 let other_ancestor_set: BTreeSet<Signed<Operation<'a, T>>> =
+    //                     other_ancestors.clone().into_values().collect();
 
-                    let other_ancestor_set: BTreeSet<Signed<Operation<T>>> =
-                        other_ancestors.clone().into_values().collect();
+    //                 if ancestor_set.is_subset(&other_ancestor_set) {
+    //                     adjacencies.add_dependency(other_op.clone(), (*op).clone());
+    //                 }
 
-                    if ancestor_set.is_subset(&other_ancestor_set) {
-                        adjacencies.add_dependency(other_op.clone(), (*op).clone());
-                    }
+    //                 if ancestor_set.is_superset(&other_ancestor_set) {
+    //                     adjacencies.add_dependency((*op).clone(), other_op.clone());
+    //                 }
 
-                    if ancestor_set.is_superset(&other_ancestor_set) {
-                        adjacencies.add_dependency((*op).clone(), other_op.clone());
-                    }
+    //                 // Concurrent, so check revocations
+    //                 if op.payload.is_revocation() {
+    //                     match longest_path.cmp(&other_longest_path) {
+    //                         Ordering::Less => {
+    //                             adjacencies.add_dependency((*op).clone(), other_op.clone())
+    //                         }
+    //                         Ordering::Greater => {
+    //                             adjacencies.add_dependency(other_op.clone(), (*op).clone())
+    //                         }
+    //                         Ordering::Equal => match other_hash.cmp(hash) {
+    //                             Ordering::Less => {
+    //                                 adjacencies.add_dependency((*op).clone(), other_op.clone())
+    //                             }
+    //                             Ordering::Greater => {
+    //                                 adjacencies.add_dependency(other_op.clone(), (*op).clone())
+    //                             }
+    //                             Ordering::Equal => {
+    //                                 todo!("why are you comparing with yourself? LOL")
+    //                             }
+    //                         },
+    //                     }
+    //                 }
+    //             } else {
+    //                 return Err(AncestorError::DependencyNotAvailable(other_hash.clone()));
+    //             }
+    //         }
+    //     }
 
-                    // Concurrent, so check revocations
-                    if op.payload.is_revocation() {
-                        match longest_path.cmp(&other_longest_path) {
-                            Ordering::Less => {
-                                adjacencies.add_dependency((*op).clone(), other_op.clone())
-                            }
-                            Ordering::Greater => {
-                                adjacencies.add_dependency(other_op.clone(), (*op).clone())
-                            }
-                            Ordering::Equal => match other_hash.cmp(hash) {
-                                Ordering::Less => {
-                                    adjacencies.add_dependency((*op).clone(), other_op.clone())
-                                }
-                                Ordering::Greater => {
-                                    adjacencies.add_dependency(other_op.clone(), (*op).clone())
-                                }
-                                Ordering::Equal => {
-                                    todo!("why are you comparing with yourself? LOL")
-                                }
-                            },
-                        }
-                    }
-                } else {
-                    return Err(AncestorError::DependencyNotAvailable(other_hash.clone()));
-                }
-            }
-        }
-
-        Ok(adjacencies.into_iter().collect())
-    }
+    //     Ok(adjacencies.into_iter().collect())
+    // }
 }
 
-impl<T: Serialize> PartialEq for Operation<T> {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Operation::Delegation(lhs), Operation::Delegation(rhs)) => lhs == rhs,
-            (Operation::Revocation(lhs), Operation::Revocation(rhs)) => lhs == rhs,
-            _ => false,
-        }
-    }
-}
-
-impl<T: Serialize> Eq for Operation<T> {}
-
-impl<T: Serialize> PartialOrd for Operation<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self, other) {
-            (Operation::Delegation(lhs), Operation::Delegation(rhs)) => lhs.partial_cmp(rhs),
-            (Operation::Revocation(lhs), Operation::Revocation(rhs)) => lhs.partial_cmp(rhs),
-            (Operation::Delegation(_), Operation::Revocation(_)) => Some(Ordering::Less),
-            (Operation::Revocation(_), Operation::Delegation(_)) => Some(Ordering::Greater),
-        }
-    }
-}
-
-impl<T: Serialize> Ord for Operation<T> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap()
-    }
-}
-
-impl<T: Serialize> From<Delegation<T>> for Operation<T> {
-    fn from(delegation: Delegation<T>) -> Self {
+impl<'a, T: ContentRef> From<Delegation<'a, T>> for Operation<'a, T> {
+    fn from(delegation: Delegation<'a, T>) -> Self {
         Operation::Delegation(delegation)
     }
 }
 
-impl<T: Serialize> From<Revocation<T>> for Operation<T> {
-    fn from(revocation: Revocation<T>) -> Self {
+impl<'a, T: ContentRef> From<Revocation<'a, T>> for Operation<'a, T> {
+    fn from(revocation: Revocation<'a, T>) -> Self {
         Operation::Revocation(revocation)
     }
 }
 
+impl<'a, T: ContentRef> PartialOrd for Operation<'a, T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (Operation::Delegation(_), Operation::Revocation(_)) => Some(Ordering::Less),
+            (Operation::Revocation(_), Operation::Delegation(_)) => Some(Ordering::Greater),
+            (Operation::Delegation(d1), Operation::Delegation(d2)) => (*d1).partial_cmp(d2),
+            (Operation::Revocation(r1), Operation::Revocation(r2)) => {
+                PartialOrd::partial_cmp(r1, r2)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Error)]
-pub enum AncestorError<T: Serialize> {
+pub enum AncestorError<'a, T: ContentRef> {
     #[error("Operation history is unrooted")]
     Unrooted,
 
     #[error("Mismatched subject: {0}")]
-    MismatchedSubject(MemberedId<T>),
+    MismatchedSubject(MemberedId),
 
     #[error("Dependency not available: {0}")]
-    DependencyNotAvailable(Digest<Signed<Operation<T>>>),
+    DependencyNotAvailable(Digest<Signed<Operation<'a, T>>>),
+}
+impl<'a, T: ContentRef> Signed<Operation<'a, T>> {
+    pub fn subject(&self) -> Identifier {
+        let Self {
+            payload,
+            verifying_key,
+            signature,
+        } = self;
+
+        match payload {
+            Operation::Delegation(delegation) => Signed {
+                payload: delegation.clone(),
+                verifying_key: *verifying_key,
+                signature: *signature,
+            }
+            .subject(),
+            Operation::Revocation(revocation) => Signed {
+                payload: revocation.clone(),
+                verifying_key: *verifying_key,
+                signature: *signature,
+            }
+            .subject(),
+        }
+    }
 }
 
 #[cfg(test)]

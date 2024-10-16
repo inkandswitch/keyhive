@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 ///
 /// Since all operations are referenced by their hash,
 /// a map that indexes by the same cryptographic hash is convenient.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct CaMap<T: Serialize>(BTreeMap<Digest<T>, T>);
 
 impl<T: Serialize> CaMap<T> {
@@ -53,10 +53,7 @@ impl<T: Serialize> CaMap<T> {
         self.0.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&Digest<T>, &T)>
-    where
-        T: Ord,
-    {
+    pub fn iter(&self) -> impl Iterator<Item = (&Digest<T>, &T)> {
         self.0.iter()
     }
 
@@ -70,6 +67,11 @@ impl<T: Serialize> CaMap<T> {
 
     pub fn into_keys(self) -> impl Iterator<Item = Digest<T>> {
         self.0.into_keys()
+    }
+
+    pub fn contains_value(&self, value: &T) -> bool {
+        let hash = Digest::hash(value);
+        self.contains_key(&hash)
     }
 
     pub fn contains_key(&self, hash: &Digest<T>) -> bool {
