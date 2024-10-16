@@ -52,7 +52,7 @@ use crate::{
     principal::identifier::Identifier,
 };
 
-use super::{error::CGKAError, treemath};
+use super::{error::CGKAError, treemath, CGKA};
 pub type PublicKey = x25519_dalek::PublicKey;
 pub type SecretKey = x25519_dalek::StaticSecret;
 
@@ -89,14 +89,17 @@ impl BeeKEM {
             tree.push_leaf(*id, *pk)?;
         }
         if tree.owner_leaf_idx.is_none() {
-            return Err(CGKAError::OwnerIdentifierNotFound)
+            return Err(CGKAError::OwnerIdentifierNotFound);
         }
         // TODO: Populate my path
         Ok(tree)
     }
 
     pub(crate) fn with_new_owner_id(&mut self, id: Identifier) -> Result<(), CGKAError> {
-        let leaf_idx = *self.id_to_leaf_idx.get(&id).ok_or(CGKAError::IdentifierNotFound)?;
+        let leaf_idx = *self
+            .id_to_leaf_idx
+            .get(&id)
+            .ok_or(CGKAError::IdentifierNotFound)?;
         self.owner_leaf_idx = Some(leaf_idx);
         Ok(())
     }
@@ -191,13 +194,37 @@ impl BeeKEM {
         self.id_to_leaf_idx.len() as u32
     }
 
+    pub(crate) fn decrypt_tree_secret(
+        &self,
+        // Corresponding to owner's leaf public key
+        sk: SecretKey,
+    ) -> Result<SecretKey, CGKAError> {
+        let leaf_idx = self
+            .owner_leaf_idx
+            .ok_or(CGKAError::OwnerIdentifierNotFound)?;
+        if self.is_blank(leaf_idx.into())? {
+            return Err(CGKAError::OwnerIdentifierNotFound);
+        }
+        let mut child_idx: TreeNodeIndex = leaf_idx.into();
+        let mut parent_idx = treemath::parent(child_idx);
+        let mut next_secret = sk.clone();
+        while !self.is_root(child_idx) {
+            let next_secret = self.decrypt_parent_key(child_idx, next_secret.clone())?;
+            child_idx = parent_idx.into();
+            parent_idx = treemath::parent(child_idx);
+        }
+        Ok(next_secret)
+    }
+
     pub(crate) fn encrypt_path(
         &mut self,
         id: Identifier,
         pk: PublicKey,
         sk: SecretKey,
     ) -> Result<(), CGKAError> {
-        let leaf_idx = *self.id_to_leaf_idx.get(&id)
+        let leaf_idx = *self
+            .id_to_leaf_idx
+            .get(&id)
             .ok_or(CGKAError::IdentifierNotFound)?;
         if self.is_blank(leaf_idx.into())? {
             return Err(CGKAError::IdentifierNotFound);
@@ -214,43 +241,80 @@ impl BeeKEM {
         Ok(())
     }
 
-    fn encrypt_key_for_parent(
-        &mut self,
+    fn decrypt_parent_key(
+        &self,
         child_idx: TreeNodeIndex,
-        secret: SecretKey,
-    ) -> Result<(), CGKAError> {
+        child_secret: SecretKey,
+    ) -> Result<SecretKey, CGKAError> {
         let parent_idx = treemath::parent(child_idx);
         // TODO: Handle blanked parent
-        let (new_public_key, new_encrypted_secret) = self.generate_new_key_pair_for_parent(child_idx, parent_idx, secret)?;
-        let mut secret_map = BTreeMap::new();
-        secret_map.insert(child_idx, new_encrypted_secret.clone());
-        // TODO: Sibling as well
-        // secret_map.insert(child, new_encrypted_secret.clone());
-        let node = ParentNode {
-            pk: new_public_key,
-            sk: secret_map,
-        };
-        self.insert_parent_at(parent_idx, node)?;
-        Ok(())
-    }
-
-    fn generate_new_key_pair_for_parent(&self, child_idx: TreeNodeIndex, parent_idx: ParentNodeIndex, secret: SecretKey) -> Result<(PublicKey, Encrypted<SecretKey>), CGKAError> {
         let sibling_idx = treemath::sibling(child_idx);
-        let encryption_key = if self.is_blank(sibling_idx.into())? {
+        let decrypt_key = if self.is_blank(sibling_idx.into())? {
             // TODO: Look for resolution
 
             // If there's no resolution...
             // Normally you use a DH shared key to encrypt/decrypt the next node up,
             // but if there's a blank sibling subtree, then you use your secret key
             // directly instead.
-            secret
+            child_secret
         } else {
             let sibling_pk = self.get_public_key(sibling_idx)?;
-            generate_shared_key(sibling_pk, secret)
+            generate_shared_key(sibling_pk, child_secret)
         };
+        let parent = self
+            .get_parent(parent_idx)?
+            .as_ref()
+            .ok_or(CGKAError::TreeIndexOutOfBounds)?;
+        let encrypted = parent
+            .sk
+            .get(&child_idx)
+            // FIXME: Pick a better error
+            .ok_or(CGKAError::IdentifierNotFound)?;
+        decrypt_secret(encrypted, decrypt_key)
+    }
+
+    fn encrypt_key_for_parent(
+        &mut self,
+        child_idx: TreeNodeIndex,
+        child_secret: SecretKey,
+    ) -> Result<(), CGKAError> {
+        let parent_idx = treemath::parent(child_idx);
+        // TODO: Handle blanked parent
+        let (new_public_key, new_secret_map) =
+            self.generate_and_encrypt_new_key_pair_for_parent(child_idx, child_secret)?;
+        let node = ParentNode {
+            pk: new_public_key,
+            sk: new_secret_map,
+        };
+        self.insert_parent_at(parent_idx, node)?;
+        Ok(())
+    }
+
+    fn generate_and_encrypt_new_key_pair_for_parent(
+        &self,
+        child_idx: TreeNodeIndex,
+        child_secret: SecretKey,
+    ) -> Result<(PublicKey, BTreeMap<TreeNodeIndex, Encrypted<SecretKey>>), CGKAError> {
+        let sibling_idx = treemath::sibling(child_idx);
+        let mut secret_map = BTreeMap::new();
         let (new_pk, new_sk) = generate_new_key_pair();
-        let encrypted_sk = encrypt_secret(new_sk, encryption_key)?;
-        Ok((new_pk, encrypted_sk))
+        if self.is_blank(sibling_idx.into())? {
+            // TODO: Look for resolution
+
+            // If there's no resolution...
+            // Normally you use a DH shared key to encrypt/decrypt the next node up,
+            // but if there's a blank sibling subtree, then you use your secret key
+            // directly instead.
+            let encrypted_sk = encrypt_secret(new_sk, child_secret)?;
+            secret_map.insert(child_idx, encrypted_sk);
+        } else {
+            let sibling_pk = self.get_public_key(sibling_idx)?;
+            let shared_key = generate_shared_key(sibling_pk, child_secret);
+            let encrypted_sk = encrypt_secret(new_sk, shared_key)?;
+            secret_map.insert(child_idx, encrypted_sk.clone());
+            secret_map.insert(sibling_idx, encrypted_sk);
+        };
+        Ok((new_pk, secret_map))
     }
 
     fn is_blank(&self, idx: TreeNodeIndex) -> Result<bool, CGKAError> {
@@ -316,36 +380,37 @@ fn generate_new_key_pair() -> (PublicKey, SecretKey) {
 }
 
 // TODO: Use a struct to make return type clearer
-fn generate_shared_key(
-    their_public_key: &PublicKey,
-    my_secret: SecretKey,
-) -> SecretKey {
+fn generate_shared_key(their_public_key: &PublicKey, my_secret: SecretKey) -> SecretKey {
     x25519(my_secret.to_bytes(), their_public_key.to_bytes()).into()
 }
 
-// TODO: Use beehive crypto capabilities directly instead
-fn encrypt_secret(secret: SecretKey, encrypt_key: SecretKey) -> Result<Encrypted<SecretKey>, CGKAError> {
+fn encrypt_secret(
+    secret: SecretKey,
+    encrypt_key: SecretKey,
+) -> Result<Encrypted<SecretKey>, CGKAError> {
+    println!("encrypt_secret");
     let cipher = XChaCha20Poly1305::new(&encrypt_key.to_bytes().into());
     let mut nonce = [0u8; 24];
     rand::thread_rng().fill_bytes(&mut nonce);
     let encrypted_secret_bytes = cipher
         .encrypt(&nonce.into(), secret.as_ref())
         .map_err(CGKAError::Encryption)?;
-    let encrypted_secret: Encrypted<SecretKey> = Encrypted::new(nonce.into(), encrypted_secret_bytes);
+    let encrypted_secret: Encrypted<SecretKey> =
+        Encrypted::new(nonce.into(), encrypted_secret_bytes);
     Ok(encrypted_secret)
 }
 
-// TODO: Use beehive crypto capabilities directly instead
 fn decrypt_secret(
-    encrypted: Encrypted<SecretKey>,
+    encrypted: &Encrypted<SecretKey>,
     decrypt_key: SecretKey,
 ) -> Result<SecretKey, CGKAError> {
+    println!("decrypt_secret");
     let cipher = XChaCha20Poly1305::new(&decrypt_key.to_bytes().into());
     let decrypted_bytes: [u8; 32] = cipher
         .decrypt(&encrypted.nonce.into(), encrypted.ciphertext.as_ref())
-        .map_err(CGKAError::Encryption)?
+        .map_err(|e| CGKAError::Decryption(e.to_string()))?
         .try_into()
-        .map_err(|e| CGKAError::Conversion)?;
+        .map_err(|_e| CGKAError::Conversion)?;
     Ok(StaticSecret::from(decrypted_bytes))
 }
 //////////////////////////////////////////////////////////////////

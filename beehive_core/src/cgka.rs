@@ -41,9 +41,9 @@ impl CGKA {
 /// Public CGKA operations
 impl CGKA {
     /// Get secret for decryption/encryption.
-    pub fn secret(&self, sk: SecretKey) -> SecretKey {
+    pub fn secret(&self, sk: SecretKey) -> Result<SecretKey, CGKAError> {
         // Work from my leaf index up
-        todo!()
+        self.tree.decrypt_tree_secret(sk)
     }
 
     /// Add participant.
@@ -111,20 +111,22 @@ mod tests {
     }
 
     fn encrypt_msg(msg: &str, secret: SecretKey) -> Result<Encrypted<String>, CGKAError> {
+        println!("encrypt_msg");
         let cipher = XChaCha20Poly1305::new(&secret.to_bytes().into());
         let mut nonce = [0u8; 24];
         rand::thread_rng().fill_bytes(&mut nonce);
         let encrypted_secret_bytes = cipher
-            .encrypt(&nonce.into(), secret.as_ref())
+            .encrypt(&nonce.into(), msg.as_ref())
             .map_err(CGKAError::Encryption)?;
-        Ok(Encrypted::new(nonce.into(), msg.into()))
+        Ok(Encrypted::new(nonce.into(), encrypted_secret_bytes.into()))
     }
 
     fn decrypt_msg(encrypted: Encrypted<String>, secret: SecretKey) -> Result<String, CGKAError> {
+        println!("decrypt_msg");
         let cipher = XChaCha20Poly1305::new(&secret.to_bytes().into());
         let decrypted_bytes = cipher
             .decrypt(&encrypted.nonce.into(), encrypted.ciphertext.as_ref())
-            .map_err(CGKAError::Encryption)?;
+            .map_err(|e| CGKAError::Decryption(e.to_string()))?;
         Ok(str::from_utf8(&decrypted_bytes)
             .map_err(|e| CGKAError::Decryption(e.to_string()))?
             .to_string())
@@ -154,6 +156,20 @@ mod tests {
     }
 
     #[test]
+    fn test_single_identifier_encrypt_and_decrypt() -> Result<(), CGKAError> {
+        let me = setup_participant();
+        let mut cgka = CGKA::new(vec![me], me.0)?;
+        let (me_pk, me_sk) = key_pair();
+        cgka.update(me.0, me_pk, me_sk.clone())?;
+        let secret = cgka.secret(me_sk.clone())?;
+        let msg = "This is a message.";
+        let encrypted = encrypt_msg(msg, secret)?;
+        let secret2 = cgka.secret(me_sk)?;
+        assert_eq!(msg, &decrypt_msg(encrypted, secret2)?);
+        Ok(())
+    }
+
+    #[test]
     fn test_simple_encrypt_and_decrypt() -> Result<(), CGKAError> {
         let me = setup_participant();
         let p1 = setup_participant();
@@ -166,13 +182,13 @@ mod tests {
         let (p1_pk, p1_sk) = key_pair();
         cgka.update(p1.0, p1_pk, p1_sk.clone())?;
         println!("1");
-        let secret = cgka.secret(me_sk);
+        let secret = cgka.secret(me_sk)?;
         println!("2");
         let msg = "This is a message.";
         let encrypted = encrypt_msg(msg, secret)?;
         println!("3");
         let cgka2 = cgka.with_new_owner_id(p1.0)?;
-        let secret2 = cgka2.secret(p1_sk);
+        let secret2 = cgka2.secret(p1_sk)?;
         assert_eq!(msg, &decrypt_msg(encrypted, secret2)?);
         Ok(())
     }
