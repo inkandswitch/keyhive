@@ -247,7 +247,6 @@ impl BeeKEM {
         child_secret: SecretKey,
     ) -> Result<SecretKey, CGKAError> {
         let parent_idx = treemath::parent(child_idx);
-        println!("Decrypting {:?}", parent_idx);
         // TODO: Handle blanked parent
         let sibling_idx = treemath::sibling(child_idx);
         let decrypt_key = if self.is_blank(sibling_idx.into())? {
@@ -266,8 +265,6 @@ impl BeeKEM {
             .get_parent(parent_idx)?
             .as_ref()
             .ok_or(CGKAError::TreeIndexOutOfBounds)?;
-        println!("Parent key map: ");
-        print_key_map(&parent.sk);
         let encrypted = parent
             .sk
             .get(&child_idx)
@@ -275,7 +272,6 @@ impl BeeKEM {
             .ok_or(CGKAError::IdentifierNotFound)?;
 
         decrypt_secret(encrypted, decrypt_key)
-        // decrypt_secret(encrypted, decrypt_key)
     }
 
     fn encrypt_key_for_parent(
@@ -284,7 +280,6 @@ impl BeeKEM {
         child_secret: SecretKey,
     ) -> Result<SecretKey, CGKAError> {
         let parent_idx = treemath::parent(child_idx);
-        println!("Encrypting {:?}", parent_idx);
         // TODO: Handle blanked parent
         let (new_public_key, new_secret, new_secret_map) =
             self.generate_and_encrypt_new_key_pair_for_parent(child_idx, child_secret)?;
@@ -404,12 +399,10 @@ fn encrypt_secret(
     secret: SecretKey,
     encrypt_key: SecretKey,
 ) -> Result<Encrypted<SecretKey>, CGKAError> {
-    println!("encrypt_secret");
     // let cipher = XChaCha20Poly1305::new(&encrypt_key.to_bytes().into());
     let mut nonce = [0u8; 24];
     rand::thread_rng().fill_bytes(&mut nonce);
     let symmetric_key = SymmetricKey::from(encrypt_key.to_bytes());
-    println!("Encrypting with key {:?}", symmetric_key.0);
     let encrypted_secret_bytes = symmetric_key.encrypt(nonce.into(), secret.as_bytes())
         .map_err(CGKAError::Encryption)?;
     // let encrypted_secret_bytes = cipher
@@ -424,9 +417,7 @@ fn decrypt_secret(
     encrypted: &Encrypted<SecretKey>,
     decrypt_key: SecretKey,
 ) -> Result<SecretKey, CGKAError> {
-    println!("decrypt_secret");
     let symmetric_key = SymmetricKey::from(decrypt_key.to_bytes());
-    println!("Decrypting with key {:?}", symmetric_key.0);
     let decrypted_bytes: [u8; 32] = symmetric_key.decrypt(encrypted.nonce, &encrypted.ciphertext)
         .map_err(|e| CGKAError::Decryption(e.to_string()))?
         .try_into()

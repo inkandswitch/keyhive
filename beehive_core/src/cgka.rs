@@ -111,7 +111,6 @@ mod tests {
     }
 
     fn encrypt_msg(msg: &str, secret: SecretKey) -> Result<Encrypted<String>, CGKAError> {
-        println!("encrypt_msg");
         let cipher = XChaCha20Poly1305::new(&secret.to_bytes().into());
         let mut nonce = [0u8; 24];
         rand::thread_rng().fill_bytes(&mut nonce);
@@ -122,7 +121,6 @@ mod tests {
     }
 
     fn decrypt_msg(encrypted: Encrypted<String>, secret: SecretKey) -> Result<String, CGKAError> {
-        println!("decrypt_msg");
         let cipher = XChaCha20Poly1305::new(&secret.to_bytes().into());
         let decrypted_bytes = cipher
             .decrypt(&encrypted.nonce.into(), encrypted.ciphertext.as_ref())
@@ -175,19 +173,13 @@ mod tests {
         let p1 = setup_participant();
         let participants = vec![me, p1];
         let mut cgka = CGKA::new(participants, me.0)?;
-        println!("0");
         let (me_pk, me_sk) = key_pair();
         cgka.update(me.0, me_pk, me_sk.clone())?;
-        println!("0b");
         let (p1_pk, p1_sk) = key_pair();
         cgka.update(p1.0, p1_pk, p1_sk.clone())?;
-        println!("CGKA Tree Size {}", cgka.tree.tree_size());
-        println!("1");
         let secret = cgka.secret(me_sk)?;
-        println!("2");
         let msg = "This is a message.";
         let encrypted = encrypt_msg(msg, secret)?;
-        println!("3");
         let cgka2 = cgka.with_new_owner_id(p1.0)?;
         let secret2 = cgka2.secret(p1_sk)?;
         assert_eq!(msg, &decrypt_msg(encrypted, secret2)?);
