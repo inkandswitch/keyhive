@@ -190,12 +190,24 @@ mod tests {
         Ok(())
     }
 
-    fn n_participants_encrypt_and_decrypt(n: u32) -> Result<(), CGKAError> {
+    fn update_every_path(
+        cgka: &CGKA,
+        participants: &Vec<Participant>,
+    ) -> Result<(), CGKAError> {
+        let mut cgka = cgka.clone();
+        for p in participants {
+            cgka = cgka.with_new_owner_id(p.id)?;
+            cgka.update(p.id, p.pk, p.sk.clone())?;
+        }
+        Ok(())
+    }
+
+    fn each_encrypts_and_all_decrypt(cgka: &CGKA, participants: &Vec<Participant>) -> Result<(), CGKAError> {
         let mut msg = String::from("This is a message!");
-        let participants = setup_participants(n);
-        let mut cgka = setup_cgka(&participants, 0);
         let mut count = 0;
-        for p in participants.clone() {
+        let mut cgka = cgka.clone();
+        let n = participants.len();
+        for p in participants {
             println!("\n\n- n: {n}, idx: {count}");
             println!("My sk: {:?}", p.sk.to_bytes());
             count += 1;
@@ -204,7 +216,7 @@ mod tests {
             println!("-- update");
             cgka.update(p.id, p.pk, p.sk.clone())?;
             println!("-- secret (my initial sk is {:?})", p.sk.to_bytes());
-            let secret = cgka.secret(p.sk)?;
+            let secret = cgka.secret(p.sk.clone())?;
             msg += &n.to_string();
             println!("-- > encrypt_msg");
             let encrypted = encrypt_msg(&msg, secret)?;
@@ -212,6 +224,12 @@ mod tests {
             all_decrypt_msg(&participants, &cgka, &msg, &encrypted)?;
         }
         Ok(())
+    }
+
+    fn n_participants_encrypt_and_decrypt(n: u32) -> Result<(), CGKAError> {
+        let participants = setup_participants(n);
+        let cgka = setup_cgka(&participants, 0);
+        each_encrypts_and_all_decrypt(&cgka, &participants)
     }
 
     #[test]
@@ -269,33 +287,102 @@ mod tests {
     }
 
     #[test]
+    fn test_remove_every_other_leaf() -> Result<(), CGKAError> {
+        let participants = setup_participants(8);
+        let mut cgka = setup_cgka(&participants, 0);
+        update_every_path(&cgka, &participants)?;
+        let owner_sk = participants[0].sk.clone();
+        let mut new_participants = Vec::new();
+        for (idx, p) in participants.iter().enumerate() {
+            if idx % 2 == 0 {
+                new_participants.push(p.clone());
+            } else {
+                cgka.remove(p.id, owner_sk.clone())?;
+            }
+        }
+        each_encrypts_and_all_decrypt(&cgka, &new_participants)
+    }
+
+    #[test]
+    fn test_grow_tree() -> Result<(), CGKAError> {
+        let mut participants = setup_participants(8);
+        let mut cgka = setup_cgka(&participants, 0);
+        update_every_path(&cgka, &participants)?;
+        let new_p = setup_participant();
+        participants.push(new_p.clone());
+        cgka.add(new_p.id, new_p.pk, participants[0].sk.clone())?;
+        cgka.with_new_owner_id(new_p.id)?.update(new_p.id, new_p.pk, new_p.sk.clone())?;
+        each_encrypts_and_all_decrypt(&cgka, &participants)
+    }
+
+    #[test]
+    fn test_remove_from_right() -> Result<(), CGKAError> {
+        let mut participants = setup_participants(8);
+        let mut cgka = setup_cgka(&participants, 0);
+        update_every_path(&cgka, &participants)?;
+        let owner_sk = participants[0].sk.clone();
+        for _ in 0..4 {
+            let p = participants.pop().unwrap();
+            cgka.remove(p.id, owner_sk.clone())?;
+        }
+        each_encrypts_and_all_decrypt(&cgka, &participants)
+    }
+
+    #[test]
+    fn test_remove_from_left() -> Result<(), CGKAError> {
+        let participants = setup_participants(8);
+        let mut cgka = setup_cgka(&participants, 0);
+        update_every_path(&cgka, &participants)?;
+        let new_owner = participants[4].clone();
+        cgka = cgka.with_new_owner_id(new_owner.id)?;
+        let mut new_participants = Vec::new();
+        for (idx, p) in participants.iter().enumerate() {
+            if idx < 4 {
+                cgka.remove(p.id, new_owner.sk.clone())?;
+            } else {
+                new_participants.push(p.clone());
+            }
+        }
+        each_encrypts_and_all_decrypt(&cgka, &new_participants)
+    }
+
+    #[test]
     fn test_1_to_16_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
-        for n in 1..16 {
+        for n in 1..17 {
             println!("{n}");
             n_participants_encrypt_and_decrypt(n)?;
         }
         Ok(())
     }
 
-    #[test]
-    fn test_1_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
-        n_participants_encrypt_and_decrypt(1)
-    }
+    // #[test]
+    // fn test_17_to_32_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
+    //     for n in 17..33 {
+    //         println!("{n}");
+    //         n_participants_encrypt_and_decrypt(n)?;
+    //     }
+    //     Ok(())
+    // }
 
-    #[test]
-    fn test_2_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
-        n_participants_encrypt_and_decrypt(2)
-    }
+    // #[test]
+    // fn test_1_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
+    //     n_participants_encrypt_and_decrypt(1)
+    // }
 
-    #[test]
-    fn test_3_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
-        n_participants_encrypt_and_decrypt(3)
-    }
+    // #[test]
+    // fn test_2_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
+    //     n_participants_encrypt_and_decrypt(2)
+    // }
 
-    #[test]
-    fn test_4_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
-        n_participants_encrypt_and_decrypt(4)
-    }
+    // #[test]
+    // fn test_3_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
+    //     n_participants_encrypt_and_decrypt(3)
+    // }
+
+    // #[test]
+    // fn test_4_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
+    //     n_participants_encrypt_and_decrypt(4)
+    // }
 
     // #[test]
     // fn test_5_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
@@ -312,20 +399,20 @@ mod tests {
     //     n_participants_encrypt_and_decrypt(7)
     // }
 
-    #[test]
-    fn test_8_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
-        n_participants_encrypt_and_decrypt(8)
-    }
+    // #[test]
+    // fn test_8_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
+    //     n_participants_encrypt_and_decrypt(8)
+    // }
 
     // #[test]
     // fn test_9_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
     //     n_participants_encrypt_and_decrypt(9)
     // }
 
-    #[test]
-    fn test_16_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
-        n_participants_encrypt_and_decrypt(16)
-    }
+    // #[test]
+    // fn test_16_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
+    //     n_participants_encrypt_and_decrypt(16)
+    // }
 
     // #[test]
     // fn test_200_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {

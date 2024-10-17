@@ -103,8 +103,6 @@ impl BeeKEM {
             return Err(CGKAError::OwnerIdentifierNotFound);
         }
         tree.encrypt_owner_path(owner_sk)?;
-        // tree.encrypt_path(owner_id, owner_pk, owner_sk)?;
-        // TODO: Populate my path
         Ok(tree)
     }
 
@@ -249,20 +247,11 @@ impl BeeKEM {
         let mut parent_idx = treemath::parent(child_idx);
         let mut next_secret = owner_sk.clone();
         while !self.is_root(child_idx) {
-            // TODO: Remove
-            if self.is_blank(parent_idx.into())? {
-                println!("--- while is_blank loop {:?}", child_idx);
-            }
             while self.is_blank(parent_idx.into())? {// && !self.is_root(child_idx) {
                 child_idx = parent_idx.into();
                 parent_idx = treemath::parent(child_idx);
-                println!("--- Skipped to {:?}", child_idx);
             }
-            // TODO: This shouldn't be possible if there is a root key
-            // if self.is_root(child_idx) {
-            //     println!("Child is root. This should be impossible.");
-            //     break;
-            // }
+            debug_assert!(!self.is_root(child_idx));
             println!("Preparing to decrypt_parent_key for {:?}", parent_idx);
             next_secret =
                 self.decrypt_parent_key(last_non_blank_child_idx, child_idx, next_secret.clone())?;
