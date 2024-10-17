@@ -11,8 +11,6 @@ use crate::principal::identifier::Identifier;
 #[derive(Clone, Deserialize, Serialize)]
 pub struct CGKA {
     tree: BeeKEM,
-    // /// Ops: Add, Remove, Rotate
-    // ops: ...,
 }
 
 /// Constructors
@@ -21,11 +19,10 @@ impl CGKA {
     pub fn new(
         participants: Vec<(Identifier, PublicKey)>,
         owner_id: Identifier,
-        owner_pk: PublicKey,
         owner_sk: SecretKey,
     ) -> Result<Self, CGKAError> {
         Ok(Self {
-            tree: BeeKEM::new(participants, owner_id, owner_pk, owner_sk)?,
+            tree: BeeKEM::new(participants, owner_id, owner_sk)?,
         })
     }
 
@@ -61,7 +58,7 @@ impl CGKA {
         self.tree.encrypt_owner_path(owner_sk)
     }
 
-    /// Rotate key.
+    /// Update key pair for this Identifier.
     // TODO: Should this only work for the owner path?
     pub fn update(
         &mut self,
@@ -72,9 +69,9 @@ impl CGKA {
         self.tree.encrypt_path(id, new_pk, new_sk)
     }
 
-    /// Identifier count
-    pub fn id_count(&self) -> u32 {
-        self.tree.id_count()
+    /// The current group size
+    pub fn group_size(&self) -> u32 {
+        self.tree.member_count()
     }
 
     // /// Merge
@@ -91,8 +88,8 @@ impl CGKA {
 #[cfg(test)]
 mod tests {
     use chacha20poly1305::{
-        aead::{Aead, AeadCore, KeyInit},
-        ChaCha20Poly1305, Nonce, XChaCha20Poly1305,
+        aead::{Aead, KeyInit},
+        XChaCha20Poly1305,
     };
     use rand::RngCore;
     use std::str;
@@ -132,7 +129,6 @@ mod tests {
         CGKA::new(
             participants.into_iter().map(|p| (p.id, p.pk)).collect(),
             owner.id,
-            owner.pk,
             owner.sk.clone(),
         )
         .expect("CGKA construction failed")
@@ -239,7 +235,7 @@ mod tests {
         let mut cgka = setup_cgka(&participants, 0);
         let new_p = setup_participant();
         cgka.add(new_p.id, new_p.pk, owner_sk.clone())?;
-        assert_eq!(cgka.tree.id_count(), initial_participant_count as u32 + 1);
+        assert_eq!(cgka.tree.member_count(), initial_participant_count as u32 + 1);
         Ok(())
     }
 
@@ -250,7 +246,7 @@ mod tests {
         let initial_participant_count = participants.len();
         let mut cgka = setup_cgka(&participants, 0);
         cgka.remove(participants[1].id, owner_sk.clone())?;
-        assert_eq!(cgka.id_count(), initial_participant_count as u32 - 1);
+        assert_eq!(cgka.group_size(), initial_participant_count as u32 - 1);
         Ok(())
     }
 

@@ -1,31 +1,30 @@
-// * Leaf nodes represent participants. Each participant has a fixed Identifier as well
+// * Leaf nodes represent members. Each member has a fixed Identifier as well
 //   as a public key that is rotated over time.
 // * Each non-leaf node stores one or more public keys and a secret used
-//   to decrypt the parent.
+//   for deriving a shared key for decrypting the parent.
 // * Secrets are randomly generated.
-// * A node is encrypted via Diffie Hellman using the private key of one child
-//   node and the public key of its sibling.
-// * Fast lookup of leaf by identifier.
-// * All operations start from leaf (?).
-// * Must walk to each child on the copath. But concurrent merges we may need to go further down
+// * In the simple case, a node is encrypted via Diffie Hellman using the private key of
+//   one child node and the public key of its sibling. If the sibling subtree is blank,
+//   the child will use its own secret key to encrypt directly. If the sibling is blank
+//   but has non-blank descendents, the child node will do Diffie Hellman with each of
+//   those descendents to encrypt the parent secret (storing these in a map).
+// * All operations start from a leaf.
 // * Concurrent adds create conflicting leaf orders. How do we minimize restructuring
 //   of the tree on merge?
-// * * Do concurrent adds require us to go back to the nearest common causal ancestor
-//     and then apply the adds fresh?
-// * * The resulting tree would have to have blanks on the paths of all other moved
-//     nodes since I can't update their paths. This means that on a merge, you must
-//     update your own path (if any changes invalidated it, i.e. there are blanks).
+// * * Current proposal: keep the longest of the two conflicting sets of adds and append
+//   the non-redundant adds from the shorter set to the right in lexicographic Identifier
+//   order.
 // * Remove blanks the path of the removed node.
 // * Blanks are skipped when determining effective children of a parent by taking
 //   the resolution.
 // * There should always be at least one leaf node.
 // *
 // * Brooke's innovation: for conflicting node updates off your path, you keep
-//   all conflicting public key at those nodes when merging. At the node on your path
+//   all conflicting public keys at those nodes when merging. At the node on your path
 //   with a multi-key child, you perform a nested Diffie Hellman.
-// * * Is it an invariant that there will only be at most one sibling with multiple
-//     conflict public keys at the moment of updating the parent (because the updater
-//     would replace the sibling on its path with a single public key)?
+// * * There will be at most one sibling with multiple conflict public keys at the
+//     moment of updating the parent (because the updater would replace the other sibling
+//     on its path with a single public key)?
 // *
 // * Tree structure conflicts to consider (the auth graph crdt determines who wins in say add/remove conflicts):
 // * * Concurrent key rotations
@@ -35,15 +34,17 @@
 //
 // * Rotations are probably much more common than adds
 // * Adds are more common than removes
-//
+// * We hypothesize that earlier members (who tend to be further left in the leaves
+//   vector) will be less likely to be removed. Removals on the left are more expensive
+//   to "garbage collect" since filling in those blanks (i.e. implicit tombstones)
+//   requires moving more leaves to the left.
 //
 // Is it an invariant that the root will always have a secret? To guarantee this
 // we need to
-// * initialize with a root key on tree construction
-// * recalculate the key when removing another leaf
-// * recalculate key when doing any operation that blanks up to the root
-// Should these invariants be managed at the CGKA level?
-//
+// * initialize a root key on tree construction
+// * recalculate the root key when removing another leaf
+// * recalculate the root key when doing any operation that blanks up to the root
+// Should these invariants be managed at the CGKA or BeeKEM tree level?
 
 use std::collections::BTreeMap;
 
@@ -71,13 +72,12 @@ pub(crate) struct BeeKEM {
     id_to_leaf_idx: BTreeMap<Identifier, LeafNodeIndex>,
 }
 
-/// Constructors
 impl BeeKEM {
-    /// We assume participants are in causal order.
+    /// We can assume members are in causal order (a property guaranteed by
+    /// Beehive as a whole).
     pub(crate) fn new(
-        participants: Vec<(Identifier, PublicKey)>,
+        members: Vec<(Identifier, PublicKey)>,
         owner_id: Identifier,
-        owner_pk: PublicKey,
         owner_sk: SecretKey,
     ) -> Result<Self, CGKAError> {
         let mut tree = Self {
@@ -85,11 +85,11 @@ impl BeeKEM {
             next_leaf_idx: LeafNodeIndex::new(0),
             leaves: Vec::new(),
             parents: Vec::new(),
-            tree_size: TreeSize::from_leaf_count(participants.len() as u32),
+            tree_size: TreeSize::from_leaf_count(members.len() as u32),
             id_to_leaf_idx: BTreeMap::new(),
         };
         tree.grow_tree_to_size();
-        for (idx, (id, pk)) in participants.iter().enumerate() {
+        for (idx, (id, pk)) in members.iter().enumerate() {
             if *id == owner_id {
                 tree.owner_leaf_idx = Some(LeafNodeIndex::new(idx as u32));
             }
@@ -114,18 +114,18 @@ impl BeeKEM {
     pub(crate) fn get_public_key(&self, idx: TreeNodeIndex) -> Result<&PublicKey, CGKAError> {
         Ok(match idx {
             TreeNodeIndex::Leaf(l_idx) => {
-                if let Some(l) = self.get_leaf(l_idx)? {
-                    &l.pk
-                } else {
-                    return Err(CGKAError::PublicKeyNotFound);
-                }
+                &self
+                    .get_leaf(l_idx)?
+                    .as_ref()
+                    .ok_or(CGKAError::PublicKeyNotFound)?
+                    .pk
             }
             TreeNodeIndex::Parent(p_idx) => {
-                if let Some(p) = &self.get_parent(p_idx)? {
-                    &p.pk
-                } else {
-                    return Err(CGKAError::PublicKeyNotFound);
-                }
+                &self
+                    .get_parent(p_idx)?
+                    .as_ref()
+                    .ok_or(CGKAError::PublicKeyNotFound)?
+                    .pk
             }
         })
     }
@@ -136,18 +136,18 @@ impl BeeKEM {
             .ok_or(CGKAError::TreeIndexOutOfBounds)
     }
 
-    fn get_owner_leaf(&self) -> Result<&LeafNode, CGKAError> {
-        let idx = self
-            .owner_leaf_idx
-            .ok_or(CGKAError::OwnerIdentifierNotFound)?;
-        let leaf = self
-            .leaves
-            .get(idx.usize())
+    fn get_leaf_index_for_id(&self, id: Identifier) -> Result<&LeafNodeIndex, CGKAError> {
+        self
+            .id_to_leaf_idx
+            .get(&id)
+            .ok_or(CGKAError::IdentifierNotFound)
+    }
+
+    fn get_id_for_leaf(&self, idx: LeafNodeIndex) -> Result<Identifier, CGKAError> {
+        Ok(self.get_leaf(idx)?
             .as_ref()
-            .ok_or(CGKAError::TreeIndexOutOfBounds)?
-            .as_ref()
-            .ok_or(CGKAError::OwnerIdentifierNotFound)?;
-        Ok(leaf)
+            .ok_or(CGKAError::IdentifierNotFound)?
+            .id)
     }
 
     pub(crate) fn get_parent(
@@ -157,6 +157,15 @@ impl BeeKEM {
         self.parents
             .get(idx.usize())
             .ok_or(CGKAError::TreeIndexOutOfBounds)
+    }
+
+    fn get_owner_leaf(&self) -> Result<&LeafNode, CGKAError> {
+        let idx = self
+            .owner_leaf_idx
+            .ok_or(CGKAError::OwnerIdentifierNotFound)?;
+        self.get_leaf(idx)?
+            .as_ref()
+            .ok_or(CGKAError::PublicKeyNotFound)
     }
 
     pub(crate) fn insert_leaf_at(
@@ -202,26 +211,24 @@ impl BeeKEM {
     }
 
     pub(crate) fn remove_id(&mut self, id: Identifier) -> Result<(), CGKAError> {
-        let l_idx = self
-            .id_to_leaf_idx
-            .get(&id)
-            .ok_or(CGKAError::IdentifierNotFound)?;
+        let l_idx = self.get_leaf_index_for_id(id)?;
         self.blank_leaf_and_path(*l_idx)?;
         self.id_to_leaf_idx.remove(&id);
         Ok(())
     }
 
-    pub(crate) fn id_count(&self) -> u32 {
+    pub(crate) fn member_count(&self) -> u32 {
         self.id_to_leaf_idx.len() as u32
     }
 
-    /// Starting from the owner's leaf, move up the tree toward the root (i.e. the leaf's
-    /// path). As you look at each parent node along the way, if the node is not blank,
-    /// look up your child idx in the parent's secret key map. Derive a Diffie Hellman
-    /// shared key using the public key stored there and use that shared key to decrypt
-    /// the secret key stored there.
-    /// If the parent is blank, hold on to the child node's public and secret keys and
-    /// move to the next parent.
+    /// Starting from the owner's leaf, move up the tree toward the root (i.e. along the
+    /// leaf's path). As you look at each parent node along the way, if the node is not
+    /// blank, look up your child idx in the parent's secret key map. Derive a Diffie Hellman
+    /// shared key using the public key stored in the secret map and use that shared key to
+    /// decrypt the secret key stored there.
+    ///
+    /// If the parent is blank, hold on to the last non-blank child node's index and secret
+    /// key and move to the next parent.
     pub(crate) fn decrypt_tree_secret(
         &mut self,
         owner_sk: SecretKey,
@@ -240,45 +247,43 @@ impl BeeKEM {
         }
         let mut child_idx: TreeNodeIndex = leaf_idx.into();
         let mut last_non_blank_child_idx: TreeNodeIndex = child_idx;
+        let mut child_sk = owner_sk.clone();
         let mut parent_idx = treemath::parent(child_idx);
-        let mut next_secret = owner_sk.clone();
         while !self.is_root(child_idx) {
+            // Find the next non-blank parent
             while self.is_blank(parent_idx.into())? {
-                // && !self.is_root(child_idx) {
                 child_idx = parent_idx.into();
                 parent_idx = treemath::parent(child_idx);
             }
             debug_assert!(!self.is_root(child_idx));
-            next_secret =
-                self.decrypt_parent_key(last_non_blank_child_idx, child_idx, next_secret.clone())?;
+            child_sk =
+                self.decrypt_parent_key(last_non_blank_child_idx, child_idx, child_sk.clone())?;
             child_idx = parent_idx.into();
             last_non_blank_child_idx = child_idx;
             parent_idx = treemath::parent(child_idx);
         }
-        Ok(next_secret)
+        Ok(child_sk)
     }
 
-    /// Starting from the owner's leaf, move up the tree toward the root (i.e. the leaf's
-    /// path). As you look at each parent node along the way, you need to populate it
-    /// with a public key and a map from sibling subtree public keys to a newly generated
+    /// Starting from the owner's leaf, move up the tree toward the root (i.e. along the
+    /// leaf's path). As you look at each parent node along the way, you need to populate
+    /// it with a public key and a map from sibling subtree public keys to a newly generated
     /// secret key encrypted pairwise with each node in the sibling resolution (in the
     /// ideal case, this will just be the sibling node itself, but if the sibling is
     /// blank it can be many nodes).
+    ///
     /// If the sibling node's resolution is empty, then you will generate the new key
     /// pair but encrypt the secret with your last secret (instead of using Diffie Hellman
-    /// with a sibling). The secret key map for that parent will then only have an entry for
-    /// you.
+    /// with a sibling). The secret key map for that parent will then only have an entry
+    /// for you.
     pub(crate) fn encrypt_path(
         &mut self,
         id: Identifier,
         pk: PublicKey,
         sk: SecretKey,
     ) -> Result<(), CGKAError> {
-        let leaf_idx = *self
-            .id_to_leaf_idx
-            .get(&id)
-            .ok_or(CGKAError::IdentifierNotFound)?;
-        if self.is_blank(leaf_idx.into())? {
+        let leaf_idx = *self.get_leaf_index_for_id(id)?;
+        if self.get_id_for_leaf(leaf_idx)? != id {
             return Err(CGKAError::IdentifierNotFound);
         }
         self.insert_leaf_at(leaf_idx, LeafNode { id, pk })?;
@@ -360,12 +365,8 @@ impl BeeKEM {
     ) -> Result<(), CGKAError> {
         debug_assert!(!self.is_root(child_idx));
         let parent_idx = treemath::parent(child_idx);
-        let new_secret_map = self.encrypt_new_secret_for_parent(
-            child_idx,
-            child_pk,
-            child_sk,
-            new_parent_sk,
-        )?;
+        let new_secret_map =
+            self.encrypt_new_secret_for_parent(child_idx, child_pk, child_sk, new_parent_sk)?;
         let node = ParentNode {
             pk: new_parent_pk,
             sk: new_secret_map,
