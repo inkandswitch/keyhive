@@ -118,29 +118,31 @@ impl<'a, T: ContentRef> Group<'a, T> {
 
         let raw_ops = state
             .delegations
-            .iter()
-            .map(|(_k, v)| v.map(|d| d.into()))
-            .chain(state.revocations.iter().map(|(_k, v)| v.map(|r| r.into())));
+            .values()
+            .map(|d| Operation::Delegation(*d))
+            .chain(
+                state
+                    .revocations
+                    .values()
+                    .map(|r| Operation::Revocation(*r)),
+            );
 
-        let mut ops: CaMap<Signed<Operation<'a, T>>> = CaMap::from_iter(raw_ops);
+        let mut ops: CaMap<Operation<'a, T>> = CaMap::from_iter(raw_ops);
 
-        let heads = state
+        let d_heads = state
             .delegation_heads
             .iter()
-            .map(|d_hash| {
-                let op_hash: Digest<Signed<Operation<'a, T>>> = d_hash.coerce();
-                state.delegations.get(&op_hash).unwrap()
-            })
+            .map(|d_hash| state.delegations.get(&d_hash.coerce()).unwrap())
             .collect();
 
         let members = Operation::topsort(heads, &ops).expect("FIXME").iter().fold(
             HashMap::new(),
-            |mut acc, signed| match signed {
-                Signed {
-                    payload: Operation::Delegation(delegation),
+            |mut acc, op| match op {
+                Operation::Delegation(Signed {
+                    payload: delegation,
                     signature,
                     verifying_key,
-                } => {
+                }) => {
                     acc.insert(
                         delegation.delegate.id(),
                         // FIXME use existing hash
@@ -153,10 +155,10 @@ impl<'a, T: ContentRef> Group<'a, T> {
 
                     acc
                 }
-                Signed {
-                    payload: Operation::Revocation(revocation),
+                Operation::Revocation(Signed {
+                    payload: revocation,
                     ..
-                } => {
+                }) => {
                     acc.remove(&revocation.revoke.payload.delegate.id());
                     acc
                 }

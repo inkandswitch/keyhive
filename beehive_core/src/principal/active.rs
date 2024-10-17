@@ -33,10 +33,10 @@ pub struct Active {
 }
 
 impl Active {
-    pub fn new(signer: SigningKey) -> Self {
+    pub fn generate(signer: SigningKey) -> Self {
         Self {
-            individual: Individual::new(signer.verifying_key().into()),
-            share_key_pairs: BTreeMap::new(), // FIXME
+            individual: Individual::generate(&signer),
+            share_key_pairs: BTreeMap::new(),
             signer,
         }
     }
@@ -49,16 +49,6 @@ impl Active {
         AgentId::IndividualId(self.id())
     }
 
-    pub fn as_agent<'a, T: ContentRef>(&'a self) -> Agent<'a, T> {
-        Agent::Individual(self.individual)
-    }
-
-    /// Generate a new active agent with a random key pair.
-    pub fn generate() -> Self {
-        let signer = SigningKey::generate(&mut rand::thread_rng());
-        Self::new(signer)
-    }
-
     /// Sign a payload.
     pub fn sign<U: Serialize>(&self, payload: U) -> Signed<U> {
         Signed::<U>::sign(payload, &self.signer)
@@ -69,7 +59,7 @@ impl Active {
         subject: &'a Membered<'a, T>,
         min: Access,
     ) -> Option<&'a Signed<Delegation<T>>> {
-        subject.get(&self.as_agent()).and_then(|cap| {
+        subject.get_capability(&self.agent_id()).and_then(|cap| {
             if cap.payload.can >= min {
                 Some(cap)
             } else {
@@ -94,8 +84,8 @@ impl Active {
         }
 
         let delegation = self.sign(Delegation {
-            can: attenuate,
             delegate,
+            can: attenuate,
             proof: Some(proof),
             after_revocations,
             after_content,

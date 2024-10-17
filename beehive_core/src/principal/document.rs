@@ -43,9 +43,21 @@ impl<'a, T: ContentRef> Document<'a, T> {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let doc_id = DocumentId(doc_signer.verifying_key().into());
 
-        let mut delegations = CaMap::new();
-        let mut members = HashMap::new();
-        let mut delegation_heads = HashSet::new();
+        let mut doc = Document {
+            members: HashMap::new(),
+            state: DocumentState {
+                id: doc_id,
+
+                delegation_heads: HashSet::new(),
+                delegations: CaMap::new(),
+
+                revocation_heads: HashSet::new(),
+                revocations: CaMap::new(),
+
+                content_refs: HashSet::new(),
+            },
+            reader_keys: HashMap::new(), // FIXME
+        };
 
         for parent in parents.iter() {
             let dlg = Signed::sign(
@@ -59,27 +71,13 @@ impl<'a, T: ContentRef> Document<'a, T> {
                 &doc_signer,
             );
 
-            let hash = delegations.insert(dlg);
+            let hash = doc.state.delegations.insert(dlg);
+            doc.state.delegation_heads.insert(hash);
 
-            members.insert(parent.id(), hash);
-            delegation_heads.insert(hash);
+            doc.members.insert(parent.id(), hash);
         }
 
-        Document {
-            members,
-            state: DocumentState {
-                id: doc_id,
-
-                delegation_heads,
-                delegations,
-
-                revocation_heads: HashSet::new(),
-                revocations: CaMap::new(),
-
-                content_refs: HashSet::new(),
-            },
-            reader_keys: HashMap::new(), // FIXME
-        }
+        doc
     }
 
     pub fn get_members(&'a self) -> HashMap<AgentId, &'a Signed<Delegation<'a, T>>> {
@@ -109,11 +107,11 @@ impl<'a, T: ContentRef> Document<'a, T> {
         .expect("FIXME")
         .iter()
         .fold(HashMap::new(), |mut acc, signed| match signed {
-            Signed {
-                payload: Operation::Delegation(delegation),
+            Operation::Delegation(Signed {
+                payload: delegation,
                 signature,
                 verifying_key,
-            } => {
+            }) => {
                 acc.insert(
                     delegation.delegate.id(),
                     // FIXME use existig hash
@@ -126,10 +124,10 @@ impl<'a, T: ContentRef> Document<'a, T> {
 
                 acc
             }
-            Signed {
-                payload: Operation::Revocation(revocation),
+            Operation::Revocation(Signed {
+                payload: revocation,
                 ..
-            } =>
+            }) =>
             // FIXME allow downgrading instead of straight removal?
             {
                 acc.remove(&revocation.revoke.payload.delegate.id());
@@ -320,7 +318,7 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
         }) = explore.pop()
         {
             match member {
-                Agent::Individual(_) => {
+                Agent::Active(_) | Agent::Individual(_) => {
                     let current_path_access = access.min(parent_access);
 
                     let best_access =
@@ -332,8 +330,11 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
 
                     caps.insert(member.id(), (member, best_access));
                 }
-                _ => {
-                    if let Some(group) = self.docs.get(&member.verifying_key().into()) {
+                Agent::Group(_) => {
+                    todo!()
+                }
+                Agent::Document(_) => {
+                    if let Some(group) = self.docs.get(&member.into()) {
                         for (mem, proof_hash) in group.members.iter() {
                             let proof = group.state.delegations.get(proof_hash).unwrap();
 

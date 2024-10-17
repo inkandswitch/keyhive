@@ -39,11 +39,12 @@ pub struct Individual {
 }
 
 impl Individual {
-    pub fn new(id: Identifier) -> Self {
+    pub fn generate(signer: &ed25519_dalek::SigningKey) -> Self {
+        let state = PrekeyState::generate(signer, 8);
         Self {
-            id,
-            prekeys: todo!(),
-            prekey_state: todo!(),
+            id: signer.verifying_key().into(),
+            prekeys: state.materialize(),
+            prekey_state: state,
         }
     }
 }

@@ -11,16 +11,23 @@ use std::{collections::BTreeMap, hash::Hash};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct Delegation<'a, T: ContentRef> {
+    pub delegate: &'a Agent<'a, T>,
     pub can: Access,
 
     pub proof: Option<&'a Signed<Delegation<'a, T>>>,
-    pub delegate: &'a Agent<'a, T>,
-
     pub after_revocations: Vec<&'a Signed<Revocation<'a, T>>>,
     pub after_content: BTreeMap<&'a Document<'a, T>, Vec<T>>,
 }
 
 impl<'a, T: ContentRef> Delegation<'a, T> {
+    pub fn subject(&self, issuer: Identifier) -> Identifier {
+        if let Some(proof) = self.proof {
+            proof.subject()
+        } else {
+            issuer
+        }
+    }
+
     // FIXME make trait?
     pub fn after(
         &'a self,
@@ -123,12 +130,12 @@ impl<'a, T: ContentRef> From<Delegation<'a, T>> for StaticDelegation<T> {
     fn from(delegation: Delegation<'a, T>) -> Self {
         Self {
             can: delegation.can,
-            proof: delegation.proof.map(|p| Digest::hash(&p.map(|d| d.into()))),
+            proof: delegation.proof.map(|p| Digest::hash(&p).coerce()),
             delegate: delegation.delegate.id().into(),
             after_revocations: delegation
                 .after_revocations
                 .iter()
-                .map(|revocation| Digest::hash(&revocation.map(|r| r.into())))
+                .map(|revocation| Digest::hash(*revocation).coerce()) // FIXME remove coerce, add specific fincton for op <-> del
                 .collect(),
             after_content: BTreeMap::from_iter(
                 delegation
