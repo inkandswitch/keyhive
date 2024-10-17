@@ -21,7 +21,7 @@ pub enum Agent<'a, T: ContentRef> {
 impl<'a, T: ContentRef> Agent<'a, T> {
     pub fn id(&self) -> AgentId {
         match self {
-            Agent::Active(a) => a.id(),
+            Agent::Active(a) => AgentId::ActiveId(a.id()),
             Agent::Individual(i) => AgentId::IndividualId(i.id),
             Agent::Group(g) => g.agent_id(),
             Agent::Document(d) => d.agent_id(),

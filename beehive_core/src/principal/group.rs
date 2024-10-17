@@ -10,7 +10,9 @@ use super::{
     verifiable::Verifiable,
 };
 use crate::{
-    access::Access, content::reference::ContentRef, crypto::signed::Signed,
+    access::Access,
+    content::reference::ContentRef,
+    crypto::{digest::Digest, signed::Signed},
     util::content_addressed_map::CaMap,
 };
 use id::GroupId;
@@ -27,7 +29,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Group<'a, T: ContentRef> {
     /// The current view of members of a group.
-    pub members: HashMap<AgentId, &'a Box<Signed<Delegation<'a, T>>>>, // FIXME make not publicly editable!
+    pub members: HashMap<AgentId, Digest<Signed<Delegation<'a, T>>>>, // FIXME make not publicly editable!
 
     /// The `Group`'s underlying (causal) delegation state.
     pub state: state::GroupState<'a, T>,
@@ -39,33 +41,33 @@ impl<'a, T: ContentRef> Group<'a, T> {
         let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let group_id = GroupId(group_signer.verifying_key().into());
 
-        let (delegations, members) = parents.iter().fold(
-            (CaMap::new(), HashMap::new()),
-            |(mut op_acc, mut mem_acc), parent| {
-                let del = Delegation {
+        let mut delegations = CaMap::new();
+        let mut delegation_heads = HashSet::new();
+        let mut members = HashMap::new();
+
+        for parent in parents.iter() {
+            let dlg = Signed::sign(
+                Delegation {
                     delegate: parent,
                     can: Access::Admin,
                     proof: None,
                     after_revocations: vec![],
                     after_content: BTreeMap::new(),
-                };
+                },
+                &group_signer,
+            );
 
-                let signed_op = Box::new(Signed::sign(del.clone().into(), &group_signer));
-                let signed_del = Box::new(Signed::sign(del, &group_signer));
-
-                mem_acc.insert((*parent).id(), &signed_del);
-
-                op_acc.insert(signed_op);
-                (op_acc, mem_acc)
-            },
-        );
+            let hash = delegations.insert(dlg);
+            delegation_heads.insert(hash);
+            members.insert((*parent).id(), hash);
+        }
 
         Group {
             members,
             state: state::GroupState {
                 id: group_id,
 
-                delegation_heads: HashSet::from_iter(delegations.keys().iter()),
+                delegation_heads,
                 delegations,
                 delegation_quarantine: CaMap::new(),
 
@@ -77,18 +79,24 @@ impl<'a, T: ContentRef> Group<'a, T> {
     }
 
     pub fn id(&self) -> GroupId {
-        self.state.id
+        *self.state.id()
     }
 
     pub fn agent_id(&self) -> AgentId {
         self.id().into()
     }
 
-    pub fn get_capability(
-        &self,
-        member_id: &AgentId,
-    ) -> Option<&'a Box<Signed<Delegation<'a, T>>>> {
-        self.members.get(member_id).copied()
+    pub fn get_capability(&'a self, member_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
+        self.members
+            .get(member_id)
+            .map(move |hash| self.state.delegations.get(hash).unwrap())
+    }
+
+    pub fn get_members(&'a self) -> HashMap<AgentId, &'a Signed<Delegation<'a, T>>> {
+        self.members
+            .iter()
+            .map(|(k, v)| (*k, self.state.delegations.get(v).unwrap()))
+            .collect()
     }
 
     // FIXME rename
@@ -99,46 +107,48 @@ impl<'a, T: ContentRef> Group<'a, T> {
         // FIXME check that delegation is authorized
         // FIXME even better: use dgp (e.g. Valid<Signed<Delegation<'a, T>>)
 
-        let boxed = Box::new(signed_delegation);
-        let id = boxed.payload.delegate.id();
-        let hash = self.state.delegations.insert(boxed);
-        let new_ref: &'a Box<Signed<Delegation<'a, T>>> = self
-            .state
-            .delegations
-            .get(&hash)
-            .expect("value that was just added to be there");
+        let id = signed_delegation.payload.delegate.id();
+        let hash = self.state.delegations.insert(signed_delegation);
 
-        self.members.insert(id, new_ref);
+        self.members.insert(id, hash);
     }
 
-    pub fn materialize(state: state::GroupState<T>) -> Self {
+    pub fn materialize(state: state::GroupState<'a, T>) -> Self {
         // FIXME oof that's a lot of cloning
 
-        let ops: Vec<Signed<Operation<T>>> = state
+        let raw_ops = state
             .delegations
             .iter()
             .map(|(_k, v)| v.map(|d| d.into()))
-            .chain(state.revocations.iter().map(|(_k, v)| v.map(|r| r.into())))
+            .chain(state.revocations.iter().map(|(_k, v)| v.map(|r| r.into())));
+
+        let mut ops: CaMap<Signed<Operation<'a, T>>> = CaMap::from_iter(raw_ops);
+
+        let heads = state
+            .delegation_heads
+            .iter()
+            .map(|d_hash| {
+                let op_hash: Digest<Signed<Operation<'a, T>>> = d_hash.coerce();
+                state.delegations.get(&op_hash).unwrap()
+            })
             .collect();
 
-        let heads: Vec<&Signed<Operation<T>>> = todo!();
-
-        let members = Operation::topsort(&heads, &ops)
-            .expect("FIXME")
-            .iter()
-            .fold(BTreeMap::new(), |mut acc, signed| match signed {
+        let members = Operation::topsort(heads, &ops).expect("FIXME").iter().fold(
+            HashMap::new(),
+            |mut acc, signed| match signed {
                 Signed {
                     payload: Operation::Delegation(delegation),
                     signature,
                     verifying_key,
                 } => {
                     acc.insert(
-                        delegation.delegate,
-                        Signed {
+                        delegation.delegate.id(),
+                        // FIXME use existing hash
+                        Digest::hash(&Signed {
                             payload: delegation.clone(),
-                            signature,
-                            verifying_key,
-                        },
+                            signature: *signature,
+                            verifying_key: *verifying_key,
+                        }),
                     );
 
                     acc
@@ -147,10 +157,11 @@ impl<'a, T: ContentRef> Group<'a, T> {
                     payload: Operation::Revocation(revocation),
                     ..
                 } => {
-                    acc.remove(&revocation.revoke.payload.delegate);
+                    acc.remove(&revocation.revoke.payload.delegate.id());
                     acc
                 }
-            });
+            },
+        );
 
         Group { state, members }
     }
@@ -163,15 +174,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
         self.members
             .remove(&signed_revocation.payload.revoke.payload.delegate.id());
 
-        let boxed = Box::new(signed_revocation);
-        let hash = self.state.revocations.insert(boxed);
-        let new_ref = self
-            .state
-            .revocations
-            .get(&hash)
-            .expect("value that was just added to be there");
-
-        self.state.revocation_heads.insert(new_ref);
+        self.state.add_revocation(signed_revocation);
     }
 
     // pub fn add_member(&mut self, delegation: Signed<Delegation>) {

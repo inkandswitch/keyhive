@@ -42,7 +42,7 @@ impl<'a, T: ContentRef> Operation<'a, T> {
     ) -> (
         Vec<&'a Signed<Delegation<'a, T>>>,
         Vec<&'a Signed<Revocation<'a, T>>>,
-        &'a BTreeMap<&'a Document<'a, T>, Vec<&'a T>>,
+        &'a BTreeMap<&'a Document<'a, T>, Vec<T>>,
     ) {
         match self {
             Operation::Delegation(delegation) => delegation.after(),
@@ -115,88 +115,89 @@ impl<'a, T: ContentRef> Operation<'a, T> {
         ))
     }
 
-    // pub fn topsort(
-    //     mut heads: Vec<&'a Signed<Operation<'a, T>>>,
-    //     ops: &CaMap<Signed<Operation<'a, T>>>,
-    // ) -> Result<Vec<Signed<Operation<'a, T>>>, AncestorError<'a, T>> {
-    //     let mut ops_with_ancestors: BTreeMap<
-    //         Digest<Signed<Operation<'a, T>>>,
-    //         (
-    //             &Signed<Operation<'a, T>>,
-    //             CaMap<Signed<Operation<'a, T>>>,
-    //             usize,
-    //         ),
-    //     > = BTreeMap::new();
+    pub fn topsort(
+        mut heads: Vec<&'a Signed<Operation<'a, T>>>,
+        ops: &CaMap<Signed<Operation<'a, T>>>,
+    ) -> Result<Vec<Signed<Operation<'a, T>>>, AncestorError<'a, T>> {
+        let mut ops_with_ancestors: BTreeMap<
+            Digest<Signed<Operation<'a, T>>>,
+            (
+                &Signed<Operation<'a, T>>,
+                CaMap<Signed<Operation<'a, T>>>,
+                usize,
+            ),
+        > = BTreeMap::new();
 
-    //     while let Some(op) = heads.pop() {
-    //         if ops_with_ancestors.contains_key(&hash) {
-    //             continue;
-    //         }
+        while let Some(op) = heads.pop() {
+            let hash = Digest::hash(op);
+            if ops_with_ancestors.contains_key(&hash) {
+                continue;
+            }
 
-    //         if let Some(op) = ops.get(&hash) {
-    //             let ancestors = op.payload.ancestors(ops)?;
-    //             ops_with_ancestors.insert(hash.clone(), (op, ancestors.0, ancestors.1));
-    //         } else {
-    //             return Err(AncestorError::DependencyNotAvailable(hash));
-    //         }
-    //     }
+            if let Some(op) = ops.get(&hash) {
+                let ancestors = op.payload.ancestors(ops)?;
+                ops_with_ancestors.insert(hash.clone(), (op, ancestors.0, ancestors.1));
+            } else {
+                return Err(AncestorError::DependencyNotAvailable(hash));
+            }
+        }
 
-    //     let mut seen = HashSet::new();
-    //     // FIXME use pointers?
-    //     let mut adjacencies: TopologicalSort<Signed<Operation<'a, T>>> =
-    //         topological_sort::TopologicalSort::new();
+        let mut seen = HashSet::new();
+        // FIXME use pointers?
+        let mut adjacencies: TopologicalSort<Signed<Operation<'a, T>>> =
+            topological_sort::TopologicalSort::new();
 
-    //     for (hash, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
-    //         seen.insert(hash);
+        for (hash, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
+            seen.insert(hash);
 
-    //         for (other_hash, other_op) in op_ancestors.iter() {
-    //             if let Some((_, other_ancestors, other_longest_path)) =
-    //                 ops_with_ancestors.get(other_hash)
-    //             {
-    //                 let ancestor_set: HashSet<Signed<Operation<'a, T>>> =
-    //                     op_ancestors.clone().into_values().collect();
+            for (other_hash, other_op) in op_ancestors.iter() {
+                if let Some((_, other_ancestors, other_longest_path)) =
+                    ops_with_ancestors.get(other_hash)
+                {
+                    let ancestor_set: HashSet<Signed<Operation<'a, T>>> =
+                        op_ancestors.clone().into_values().collect();
 
-    //                 let other_ancestor_set: HashSet<Signed<Operation<'a, T>>> =
-    //                     other_ancestors.clone().into_values().collect();
+                    let other_ancestor_set: HashSet<Signed<Operation<'a, T>>> =
+                        other_ancestors.clone().into_values().collect();
 
-    //                 if ancestor_set.is_subset(&other_ancestor_set) {
-    //                     adjacencies.add_dependency(other_op.clone(), (*op).clone());
-    //                 }
+                    if ancestor_set.is_subset(&other_ancestor_set) {
+                        adjacencies.add_dependency(other_op.clone(), (*op).clone());
+                    }
 
-    //                 if ancestor_set.is_superset(&other_ancestor_set) {
-    //                     adjacencies.add_dependency((*op).clone(), other_op.clone());
-    //                 }
+                    if ancestor_set.is_superset(&other_ancestor_set) {
+                        adjacencies.add_dependency((*op).clone(), other_op.clone());
+                    }
 
-    //                 // Concurrent, so check revocations
-    //                 if op.payload.is_revocation() {
-    //                     match longest_path.cmp(&other_longest_path) {
-    //                         Ordering::Less => {
-    //                             adjacencies.add_dependency((*op).clone(), other_op.clone())
-    //                         }
-    //                         Ordering::Greater => {
-    //                             adjacencies.add_dependency(other_op.clone(), (*op).clone())
-    //                         }
-    //                         Ordering::Equal => match other_hash.cmp(hash) {
-    //                             Ordering::Less => {
-    //                                 adjacencies.add_dependency((*op).clone(), other_op.clone())
-    //                             }
-    //                             Ordering::Greater => {
-    //                                 adjacencies.add_dependency(other_op.clone(), (*op).clone())
-    //                             }
-    //                             Ordering::Equal => {
-    //                                 todo!("why are you comparing with yourself? LOL")
-    //                             }
-    //                         },
-    //                     }
-    //                 }
-    //             } else {
-    //                 return Err(AncestorError::DependencyNotAvailable(other_hash.clone()));
-    //             }
-    //         }
-    //     }
+                    // Concurrent, so check revocations
+                    if op.payload.is_revocation() {
+                        match longest_path.cmp(&other_longest_path) {
+                            Ordering::Less => {
+                                adjacencies.add_dependency((*op).clone(), other_op.clone())
+                            }
+                            Ordering::Greater => {
+                                adjacencies.add_dependency(other_op.clone(), (*op).clone())
+                            }
+                            Ordering::Equal => match other_hash.cmp(hash) {
+                                Ordering::Less => {
+                                    adjacencies.add_dependency((*op).clone(), other_op.clone())
+                                }
+                                Ordering::Greater => {
+                                    adjacencies.add_dependency(other_op.clone(), (*op).clone())
+                                }
+                                Ordering::Equal => {
+                                    todo!("why are you comparing with yourself? LOL")
+                                }
+                            },
+                        }
+                    }
+                } else {
+                    return Err(AncestorError::DependencyNotAvailable(other_hash.clone()));
+                }
+            }
+        }
 
-    //     Ok(adjacencies.into_iter().collect())
-    // }
+        Ok(adjacencies.into_iter().collect())
+    }
 }
 
 impl<'a, T: ContentRef> From<Delegation<'a, T>> for Operation<'a, T> {
@@ -217,7 +218,7 @@ pub enum AncestorError<'a, T: ContentRef> {
     Unrooted,
 
     #[error("Mismatched subject: {0}")]
-    MismatchedSubject(MemberedId),
+    MismatchedSubject(Identifier),
 
     #[error("Dependency not available: {0}")]
     DependencyNotAvailable(Digest<Signed<Operation<'a, T>>>),

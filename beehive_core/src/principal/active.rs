@@ -117,9 +117,7 @@ impl Active {
 
         let our_sk = self.share_key_pairs.get(&our_pk.1).expect("FIXME");
 
-        let key: SymmetricKey = our_sk
-            .diffie_hellman(&recipient_share_pk.1.payload.delegate)
-            .into();
+        let key: SymmetricKey = our_sk.diffie_hellman(&recipient_share_pk.1.into()).into();
 
         let nonce = Siv::new(&key, message, doc);
         let bytes: Vec<u8> = key.encrypt(nonce, message).expect("FIXME").to_vec();
@@ -168,11 +166,11 @@ impl std::hash::Hash for Active {
     }
 }
 
-impl From<Active> for Individual {
-    fn from(active: Active) -> Self {
-        active.id().into()
-    }
-}
+// impl From<Active> for Individual {
+//     fn from(active: Active) -> Self {
+//         active.id().into()
+//     }
+// }
 
 impl Verifiable for Active {
     fn verifying_key(&self) -> VerifyingKey {

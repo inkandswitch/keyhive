@@ -2,7 +2,7 @@ use super::{identifier::Identifier, verifiable::Verifiable};
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::{share_key::ShareKey, signed::Signed},
+    crypto::{digest::Digest, share_key::ShareKey, signed::Signed},
     principal::{
         agent::{Agent, AgentId},
         group::operation::{delegation::Delegation, revocation::Revocation, Operation},
@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Document<'a, T: ContentRef> {
-    pub members: HashMap<AgentId, &'a Box<Signed<Delegation<'a, T>>>>,
+    pub members: HashMap<AgentId, Digest<Signed<Delegation<'a, T>>>>,
     pub reader_keys: HashMap<Identifier, (&'a Individual, ShareKey)>, // FIXME May remove when BeeKEM, also FIXME Individual ID
     pub state: DocumentState<'a, T>,
 }
@@ -26,8 +26,13 @@ impl<'a, T: ContentRef> Document<'a, T> {
         self.state.id
     }
 
-    pub fn get_capabilty(&self, member_id: &AgentId) -> Option<&'a Box<Signed<Delegation<'a, T>>>> {
-        self.members.get(member_id).map(|found| *found)
+    pub fn get_capabilty(&'a self, member_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
+        self.members.get(member_id).map(move |hash| {
+            self.state
+                .delegations
+                .get(hash)
+                .expect("member that was just found is missing")
+        })
     }
 
     pub fn agent_id(&self) -> AgentId {
@@ -40,10 +45,10 @@ impl<'a, T: ContentRef> Document<'a, T> {
 
         let mut delegations = CaMap::new();
         let mut members = HashMap::new();
-        let mut heads = HashSet::new();
+        let mut delegation_heads = HashSet::new();
 
         for parent in parents.iter() {
-            let dlg = Box::new(Signed::sign(
+            let dlg = Signed::sign(
                 Delegation {
                     delegate: *parent,
                     can: Access::Admin,
@@ -52,15 +57,12 @@ impl<'a, T: ContentRef> Document<'a, T> {
                     after_content: BTreeMap::new(),
                 },
                 &doc_signer,
-            ));
+            );
 
             let hash = delegations.insert(dlg);
-            let new_ref = delegations
-                .get(&hash)
-                .expect("value that was just inserted is missing");
 
-            members.insert(parent.id(), new_ref);
-            heads.insert(new_ref);
+            members.insert(parent.id(), hash);
+            delegation_heads.insert(hash);
         }
 
         Document {
@@ -68,7 +70,7 @@ impl<'a, T: ContentRef> Document<'a, T> {
             state: DocumentState {
                 id: doc_id,
 
-                delegation_heads: heads,
+                delegation_heads,
                 delegations,
 
                 revocation_heads: HashSet::new(),
@@ -80,47 +82,46 @@ impl<'a, T: ContentRef> Document<'a, T> {
         }
     }
 
+    pub fn get_members(&'a self) -> HashMap<AgentId, &'a Signed<Delegation<'a, T>>> {
+        self.members
+            .iter()
+            .map(|(k, v)| (*k, self.state.delegations.get(v).unwrap()))
+            .collect()
+    }
+
     pub fn add_member(&'a mut self, signed_delegation: Signed<Delegation<'a, T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
         // FIXME check that delegation is authorized
         let id = signed_delegation.payload.delegate.id();
-        let boxed = Box::new(signed_delegation);
-        let hash = self.state.delegations.insert(boxed);
-        let new_ref = self
-            .state
-            .delegations
-            .get(&hash)
-            .expect("value that was just inserted is missing");
+        let hash = self.state.delegations.insert(signed_delegation);
 
-        self.members.insert(id, new_ref);
+        self.members.insert(id, hash);
     }
 
     pub fn materialize(state: DocumentState<T>) -> Self {
         // FIXME oof that's a lot of cloning to get the heads
         let members = Operation::topsort(
-            state.delegation_heads.clone().into_iter().collect(),
+            state.delegation_heads.into_iter().collect(),
             &state.delegations,
         )
         .expect("FIXME")
         .iter()
-        .fold(BTreeMap::new(), |mut acc, signed| match signed {
+        .fold(HashMap::new(), |mut acc, signed| match signed {
             Signed {
                 payload: Operation::Delegation(delegation),
                 signature,
                 verifying_key,
             } => {
                 acc.insert(
-                    delegation.delegate.clone(),
-                    (
-                        delegation.can,
-                        Signed {
-                            payload: delegation.clone(),
-                            signature,
-                            verifying_key,
-                        },
-                    ),
+                    delegation.delegate.id(),
+                    // FIXME use existig hash
+                    Digest::hash(&Signed {
+                        payload: delegation.clone(),
+                        signature: *signature,
+                        verifying_key: *verifying_key,
+                    }),
                 );
 
                 acc
@@ -131,7 +132,7 @@ impl<'a, T: ContentRef> Document<'a, T> {
             } =>
             // FIXME allow downgrading instead of straight removal?
             {
-                acc.remove(&revocation.revoke.payload.delegate);
+                acc.remove(&revocation.revoke.payload.delegate.id());
                 acc
             }
         });
@@ -163,11 +164,11 @@ impl<'a, T: ContentRef> std::hash::Hash for Document<'a, T> {
 pub struct DocumentState<'a, T: ContentRef> {
     pub id: DocumentId,
 
-    pub delegation_heads: HashSet<&'a Box<Signed<Delegation<'a, T>>>>,
-    pub delegations: CaMap<Box<Signed<Delegation<'a, T>>>>,
+    pub delegation_heads: HashSet<Digest<Signed<Delegation<'a, T>>>>,
+    pub delegations: CaMap<Signed<Delegation<'a, T>>>,
 
-    pub revocation_heads: HashSet<&'a Box<Revocation<'a, T>>>,
-    pub revocations: CaMap<Box<Signed<Revocation<'a, T>>>>,
+    pub revocation_heads: HashSet<Digest<Revocation<'a, T>>>,
+    pub revocations: CaMap<Signed<Revocation<'a, T>>>,
 
     pub content_refs: HashSet<T>,
 }
@@ -213,7 +214,7 @@ impl<'a, T: ContentRef> DocumentState<'a, T> {
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
         let id = DocumentId(signing_key.verifying_key().into());
 
-        let init = Box::new(Signed::sign(
+        let init = Signed::sign(
             Delegation {
                 delegate: &parent,
                 can: Access::Admin,
@@ -223,25 +224,37 @@ impl<'a, T: ContentRef> DocumentState<'a, T> {
                 after_content: BTreeMap::new(),
             },
             &signing_key,
-        ));
+        );
+
+        let mut delegations = CaMap::new();
+        let hash = delegations.insert(init);
 
         Self {
             id,
 
-            delegation_heads: HashSet::from_iter([&init]),
-            delegations: CaMap::from_iter([init]),
+            delegation_heads: HashSet::from_iter([hash]),
+            delegations,
 
             revocation_heads: HashSet::new(),
             revocations: CaMap::new(),
 
-            content_ops: HashSet::new(),
+            content_refs: HashSet::new(),
         }
     }
 
-    pub fn delegations_for(&self, agent: &Agent<T>) -> Vec<&Signed<Delegation<T>>> {
+    pub fn delegations_for(
+        &'a self,
+        agent: &'a Agent<'a, T>,
+    ) -> Vec<&'a Signed<Delegation<'a, T>>> {
         self.delegations // FIXME account for revocations
             .iter()
-            .filter(|(_, delegation)| delegation.payload.delegate == agent)
+            .filter_map(|(_, delegation)| {
+                if delegation.payload.delegate == agent {
+                    Some(delegation)
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 }
@@ -289,7 +302,8 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
 
         let mut explore: Vec<GroupAccess<'a, T>> = vec![];
 
-        for (k, delegation) in doc.members.iter() {
+        for (k, hash) in doc.members.iter() {
+            let delegation = doc.state.delegations.get(hash).unwrap();
             explore.push(GroupAccess {
                 agent: delegation.payload.delegate,
                 agent_access: delegation.payload.can, // FIXME need to lookup
@@ -320,7 +334,9 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
                 }
                 _ => {
                     if let Some(group) = self.docs.get(&member.verifying_key().into()) {
-                        for (mem, proof) in group.members.iter() {
+                        for (mem, proof_hash) in group.members.iter() {
+                            let proof = group.state.delegations.get(proof_hash).unwrap();
+
                             let current_path_access =
                                 access.min(proof.payload.can).min(parent_access);
 

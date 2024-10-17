@@ -17,7 +17,7 @@ pub struct Revocation<'a, T: ContentRef> {
     // but in the meantime this is just so much easier
     pub proof: &'a Signed<Delegation<'a, T>>,
 
-    pub after_content: BTreeMap<&'a Document<'a, T>, Vec<&'a T>>,
+    pub after_content: BTreeMap<&'a Document<'a, T>, Vec<T>>,
 }
 
 impl<'a, T: ContentRef> Revocation<'a, T> {
@@ -30,7 +30,7 @@ impl<'a, T: ContentRef> Revocation<'a, T> {
     ) -> (
         Vec<&'a Signed<Delegation<'a, T>>>,
         Vec<&'a Signed<Revocation<'a, T>>>,
-        &'a BTreeMap<&'a Document<'a, T>, Vec<&'a T>>,
+        &'a BTreeMap<&'a Document<'a, T>, Vec<T>>,
     ) {
         let (dlgs, revs) = self.after_auth();
         (dlgs, revs, &self.after_content)
@@ -111,13 +111,13 @@ pub struct StaticRevocation<T: ContentRef> {
 impl<'a, T: ContentRef> From<Revocation<'a, T>> for StaticRevocation<T> {
     fn from(revocation: Revocation<'a, T>) -> Self {
         Self {
-            revoke: Digest::hash(&revocation.revoke.map(|r| r.into())),
-            proof: Digest::hash(&revocation.proof.map(|p| p.into())),
+            revoke: Digest::hash(&revocation.revoke).coerce(),
+            proof: Digest::hash(&revocation.proof).coerce(),
             after_content: BTreeMap::from_iter(
                 revocation
                     .after_content
                     .iter()
-                    .map(|(doc, content)| (doc.id().into(), content)),
+                    .map(|(doc, content)| (Identifier::from(doc.id()), content.clone())),
             ),
         }
     }

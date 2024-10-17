@@ -20,7 +20,7 @@ pub enum Membered<'a, T: ContentRef> {
 }
 
 impl<'a, T: ContentRef> Membered<'a, T> {
-    pub fn get_capability(&self, agent_id: &AgentId) -> Option<&'a Box<Signed<Delegation<'a, T>>>> {
+    pub fn get_capability(&'a self, agent_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
         match self {
             Membered::Group(group) => group.get_capability(agent_id),
             Membered::Document(doc) => doc.get_capabilty(agent_id),
@@ -35,10 +35,10 @@ impl<'a, T: ContentRef> Membered<'a, T> {
     }
 
     // FIXME make a trait and apply to children
-    pub fn members(&self) -> &HashMap<AgentId, &'a Box<Signed<Delegation<'a, T>>>> {
+    pub fn members(&'a self) -> HashMap<AgentId, &'a Signed<Delegation<'a, T>>> {
         match self {
-            Membered::Group(group) => &group.members,
-            Membered::Document(document) => &document.members,
+            Membered::Group(group) => group.get_members(),
+            Membered::Document(document) => document.get_members(),
         }
     }
 

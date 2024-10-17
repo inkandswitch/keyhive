@@ -128,7 +128,7 @@ impl<'a, T: ContentRef> From<Delegation<'a, T>> for StaticDelegation<T> {
             after_revocations: delegation
                 .after_revocations
                 .iter()
-                .map(|revocation| Digest::hash(revocation.map(|r| r.into())))
+                .map(|revocation| Digest::hash(&revocation.map(|r| r.into())))
                 .collect(),
             after_content: BTreeMap::from_iter(
                 delegation

@@ -57,16 +57,19 @@ impl<T: Serialize> CaMap<T> {
         self.0.iter()
     }
 
-    pub fn into_values(self) -> impl Iterator<Item = T> {
-        self.0.into_values()
-    }
-
     pub fn keys(&self) -> std::collections::btree_map::Keys<'_, Digest<T>, T> {
         self.0.keys()
+    }
+    pub fn values(&self) -> std::collections::btree_map::Values<'_, Digest<T>, T> {
+        self.0.values()
     }
 
     pub fn into_keys(self) -> impl Iterator<Item = Digest<T>> {
         self.0.into_keys()
+    }
+
+    pub fn into_values(self) -> impl Iterator<Item = T> {
+        self.0.into_values()
     }
 
     pub fn contains_value(&self, value: &T) -> bool {

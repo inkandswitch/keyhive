@@ -72,7 +72,9 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
 
         let mut explore: Vec<GroupAccess<'a, T>> = vec![];
 
-        for dlg in group.members.values() {
+        for hash in group.members.values() {
+            let dlg = group.state.delegations.get(hash).unwrap();
+
             explore.push(GroupAccess {
                 agent: dlg.payload.delegate,
                 agent_access: dlg.payload.can,
@@ -103,7 +105,9 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                 }
                 _ => {
                     if let Some(group) = self.0.get(&GroupId(member.id().into())) {
-                        for (agent_id, proof) in group.members.iter() {
+                        for (agent_id, proof_hash) in group.members.iter() {
+                            let proof = group.state.delegations.get(proof_hash).unwrap();
+
                             let current_path_access =
                                 access.min(proof.payload.can).min(parent_access);
 

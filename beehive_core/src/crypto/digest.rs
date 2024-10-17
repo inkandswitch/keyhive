@@ -94,6 +94,13 @@ impl<T: Serialize> Digest<T> {
 
         count
     }
+
+    pub(crate) fn coerce<U: Serialize>(&self) -> Digest<U> {
+        Digest {
+            raw: self.raw,
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<T: Serialize> Serialize for Digest<T> {
