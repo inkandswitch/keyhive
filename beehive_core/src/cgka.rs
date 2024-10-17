@@ -198,20 +198,28 @@ mod tests {
         let mut count = 0;
         let mut cgka = cgka.clone();
         let n = participants.len();
-        for p in participants {
-            println!("\n\n- n: {n}, idx: {count}");
+        let mut participants = participants.clone();
+        for idx in 0..participants.len() {
+            let p = &mut participants[idx];
+            println!("========================================\n\n");
+            println!("========================================");
+            println!("- n: {n}, idx: {count}");
+            println!("========================================");
             println!("My sk: {:?}", p.sk.to_bytes());
             count += 1;
-            println!("-- with_new_owner");
+            println!("\n-- with_new_owner");
             cgka = cgka.with_new_owner_id(p.id)?;
-            println!("-- update");
-            cgka.update(p.id, p.pk, p.sk.clone())?;
-            println!("-- secret (my initial sk is {:?})", p.sk.to_bytes());
-            let secret = cgka.secret(p.sk.clone())?;
+            println!("\n-- update");
+            let (new_pk, new_sk) = key_pair();
+            p.pk = new_pk;
+            p.sk = new_sk.clone();
+            cgka.update(p.id, new_pk, new_sk.clone())?;
+            println!("\n-- get secret");
+            let secret = cgka.secret(new_sk.clone())?;
             msg += &n.to_string();
-            println!("-- > encrypt_msg");
+            println!("\n-- > encrypt_msg");
             let encrypted = encrypt_msg(&msg, secret)?;
-            println!("- {n} -");
+            println!("\n- {n} now all_decrypt_msg -");
             all_decrypt_msg(&participants, &cgka, &msg, &encrypted)?;
         }
         Ok(())
