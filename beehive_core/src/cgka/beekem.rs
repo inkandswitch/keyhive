@@ -349,6 +349,8 @@ impl BeeKEM {
             // directly instead.
             child_sk
         } else {
+            // Using the public key found in the parent's map entry, generate a
+            // Diffie Hellman shared key for our decrypt key.
             generate_shared_key(pk, child_sk)
         };
 
