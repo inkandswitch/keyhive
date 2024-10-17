@@ -284,20 +284,20 @@ impl BeeKEM {
         self.insert_leaf_at(leaf_idx, LeafNode { id, pk })?;
         let mut child_idx: TreeNodeIndex = leaf_idx.into();
         let mut child_pk = pk;
-        let mut child_secret = sk.clone();
+        let mut child_sk = sk.clone();
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
             let (new_parent_pk, new_parent_sk) = generate_new_key_pair();
             self.encrypt_key_for_parent(
                 child_idx,
                 child_pk,
-                child_secret.clone(),
+                child_sk.clone(),
                 new_parent_pk,
                 new_parent_sk.clone(),
             )?;
             child_idx = parent_idx.into();
             child_pk = new_parent_pk;
-            child_secret = new_parent_sk;
+            child_sk = new_parent_sk;
             parent_idx = treemath::parent(child_idx);
         }
         Ok(())
@@ -320,7 +320,7 @@ impl BeeKEM {
         &self,
         non_blank_child_idx: TreeNodeIndex,
         child_idx: TreeNodeIndex,
-        child_secret: SecretKey,
+        child_sk: SecretKey,
     ) -> Result<SecretKey, CGKAError> {
         debug_assert!(!self.is_root(child_idx));
         let parent_idx = treemath::parent(child_idx);
@@ -342,9 +342,9 @@ impl BeeKEM {
             // Normally you use a DH shared key to encrypt/decrypt the next node up,
             // but if there's a blank sibling subtree, then you use your secret key
             // directly instead.
-            child_secret
+            child_sk
         } else {
-            generate_shared_key(pk, child_secret)
+            generate_shared_key(pk, child_sk)
         };
 
         decrypt_secret(encrypted, decrypt_key)
@@ -354,7 +354,7 @@ impl BeeKEM {
         &mut self,
         child_idx: TreeNodeIndex,
         child_pk: PublicKey,
-        child_secret: SecretKey,
+        child_sk: SecretKey,
         new_parent_pk: PublicKey,
         new_parent_sk: SecretKey,
     ) -> Result<(), CGKAError> {
@@ -363,7 +363,7 @@ impl BeeKEM {
         let new_secret_map = self.encrypt_new_secret_for_parent(
             child_idx,
             child_pk,
-            child_secret,
+            child_sk,
             new_parent_sk,
         )?;
         let node = ParentNode {
@@ -378,7 +378,7 @@ impl BeeKEM {
         &self,
         child_idx: TreeNodeIndex,
         child_pk: PublicKey,
-        child_secret: SecretKey,
+        child_sk: SecretKey,
         new_parent_sk: SecretKey,
     ) -> Result<BTreeMap<TreeNodeIndex, (PublicKey, Encrypted<SecretKey>)>, CGKAError> {
         debug_assert!(!self.is_root(child_idx));
@@ -390,7 +390,7 @@ impl BeeKEM {
             // Normally you use a DH shared key to encrypt/decrypt the next node up,
             // but if there's a blank sibling subtree, then you use your secret key
             // directly instead.
-            let encrypted_sk = encrypt_secret(new_parent_sk.clone(), child_secret.clone())?;
+            let encrypted_sk = encrypt_secret(new_parent_sk.clone(), child_sk.clone())?;
             secret_map.insert(child_idx, (child_pk, encrypted_sk));
         } else {
             // Encrypt the secret for every node in the sibling resolution, using
@@ -398,7 +398,7 @@ impl BeeKEM {
             let mut first = true;
             for idx in sibling_resolution {
                 let sibling_pk = self.get_public_key(idx)?;
-                let shared_key = generate_shared_key(sibling_pk, child_secret.clone());
+                let shared_key = generate_shared_key(sibling_pk, child_sk.clone());
                 let encrypted_sk = encrypt_secret(new_parent_sk.clone(), shared_key.clone())?;
                 if first {
                     secret_map.insert(child_idx, (*sibling_pk, encrypted_sk.clone()));
