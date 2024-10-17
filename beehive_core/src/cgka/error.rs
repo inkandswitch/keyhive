@@ -13,6 +13,9 @@ pub enum CGKAError {
     #[error("Identifier not found")]
     IdentifierNotFound,
 
+    #[error("No root key")]
+    NoRootKey,
+
     #[error("Owner Identifier not found")]
     OwnerIdentifierNotFound,
 
