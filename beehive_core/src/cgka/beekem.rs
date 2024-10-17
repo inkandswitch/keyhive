@@ -360,11 +360,10 @@ impl BeeKEM {
     ) -> Result<(), CGKAError> {
         debug_assert!(!self.is_root(child_idx));
         let parent_idx = treemath::parent(child_idx);
-        let new_secret_map = self.generate_and_encrypt_new_key_pair_for_parent(
+        let new_secret_map = self.encrypt_new_secret_for_parent(
             child_idx,
             child_pk,
             child_secret,
-            new_parent_pk,
             new_parent_sk,
         )?;
         let node = ParentNode {
@@ -375,12 +374,11 @@ impl BeeKEM {
         Ok(())
     }
 
-    fn generate_and_encrypt_new_key_pair_for_parent(
+    fn encrypt_new_secret_for_parent(
         &self,
         child_idx: TreeNodeIndex,
         child_pk: PublicKey,
         child_secret: SecretKey,
-        new_parent_pk: PublicKey,
         new_parent_sk: SecretKey,
     ) -> Result<BTreeMap<TreeNodeIndex, (PublicKey, Encrypted<SecretKey>)>, CGKAError> {
         debug_assert!(!self.is_root(child_idx));
