@@ -304,10 +304,11 @@ impl BeeKEM {
         let mut child_secret = sk.clone();
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
-            child_secret =
-                self.encrypt_key_for_parent(child_idx, child_pk, child_secret.clone())?;
+            let (new_parent_pk, new_parent_sk) = generate_new_key_pair();
+            self.encrypt_key_for_parent(child_idx, child_pk, child_secret.clone(), new_parent_pk, new_parent_sk.clone())?;
             child_idx = parent_idx.into();
-            child_pk = *self.get_public_key(child_idx)?;
+            child_pk = new_parent_pk;
+            child_secret = new_parent_sk;
             parent_idx = treemath::parent(child_idx);
         }
         Ok(())
@@ -373,21 +374,23 @@ impl BeeKEM {
         child_idx: TreeNodeIndex,
         child_pk: PublicKey,
         child_secret: SecretKey,
-    ) -> Result<SecretKey, CGKAError> {
+        new_parent_pk: PublicKey,
+        new_parent_sk: SecretKey,
+    ) -> Result<(), CGKAError> {
         debug_assert!(!self.is_root(child_idx));
         let parent_idx = treemath::parent(child_idx);
         println!("Preparing to encrypt {:?}", parent_idx);
-        let (new_public_key, new_secret, new_secret_map) =
-            self.generate_and_encrypt_new_key_pair_for_parent(child_idx, child_pk, child_secret)?;
+        let new_secret_map =
+            self.generate_and_encrypt_new_key_pair_for_parent(child_idx, child_pk, child_secret, new_parent_pk, new_parent_sk)?;
         // println!("My pk: {:?}", child_pk);
         // print_key_map(&new_secret_map);
         let node = ParentNode {
-            pk: new_public_key,
+            pk: new_parent_pk,
             sk: new_secret_map,
         };
         println!("Inserting parent at {:?}", parent_idx);
         self.insert_parent_at(parent_idx, node)?;
-        Ok(new_secret)
+        Ok(())
     }
 
     fn generate_and_encrypt_new_key_pair_for_parent(
@@ -395,25 +398,22 @@ impl BeeKEM {
         child_idx: TreeNodeIndex,
         child_pk: PublicKey,
         child_secret: SecretKey,
+        new_parent_pk: PublicKey,
+        new_parent_sk: SecretKey,
     ) -> Result<
-        (
-            PublicKey,
-            SecretKey,
-            BTreeMap<TreeNodeIndex, (PublicKey, Encrypted<SecretKey>)>,
-        ),
+        BTreeMap<TreeNodeIndex, (PublicKey, Encrypted<SecretKey>)>,
         CGKAError,
     > {
         debug_assert!(!self.is_root(child_idx));
         let sibling_idx = treemath::sibling(child_idx);
         let mut secret_map = BTreeMap::new();
-        let (new_pk, new_sk) = generate_new_key_pair();
         let mut sibling_resolution = Vec::new();
         self.append_resolution(sibling_idx, &mut sibling_resolution)?;
         if sibling_resolution.is_empty() {
             // Normally you use a DH shared key to encrypt/decrypt the next node up,
             // but if there's a blank sibling subtree, then you use your secret key
             // directly instead.
-            let encrypted_sk = encrypt_secret(new_sk.clone(), child_secret.clone())?;
+            let encrypted_sk = encrypt_secret(new_parent_sk.clone(), child_secret.clone())?;
             secret_map.insert(child_idx, (child_pk, encrypted_sk));
         } else {
             // Encrypt the secret for every node in the sibling resolution, using
@@ -422,7 +422,7 @@ impl BeeKEM {
             for idx in sibling_resolution {
                 let sibling_pk = self.get_public_key(idx)?;
                 let shared_key = generate_shared_key(sibling_pk, child_secret.clone());
-                let encrypted_sk = encrypt_secret(new_sk.clone(), shared_key.clone())?;
+                let encrypted_sk = encrypt_secret(new_parent_sk.clone(), shared_key.clone())?;
                 if first {
                     secret_map.insert(child_idx, (*sibling_pk, encrypted_sk.clone()));
                     first = false;
@@ -430,7 +430,7 @@ impl BeeKEM {
                 secret_map.insert(idx, (child_pk, encrypted_sk));
             }
         }
-        Ok((new_pk, new_sk, secret_map))
+        Ok(secret_map)
     }
 
     fn is_blank(&self, idx: TreeNodeIndex) -> Result<bool, CGKAError> {
