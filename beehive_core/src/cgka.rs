@@ -5,12 +5,8 @@ pub mod treemath;
 use beekem::{BeeKEM, PublicKey, SecretKey};
 use error::CGKAError;
 use serde::{Deserialize, Serialize};
-use x25519_dalek;
 
-use crate::{
-    crypto::{encrypted::Encrypted, hash::Hash},
-    principal::identifier::Identifier,
-};
+use crate::principal::identifier::Identifier;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct CGKA {
@@ -81,15 +77,15 @@ impl CGKA {
         self.tree.id_count()
     }
 
-    /// Merge
+    // /// Merge
     // pub fn merge(&mut self, ops: ...) {
     //     todo!()
     // }
 
-    /// Hash of the tree
-    pub fn hash(&self) -> Hash<CGKA> {
-        todo!()
-    }
+    // /// Hash of the tree
+    // pub fn hash(&self) -> Hash<CGKA> {
+    //     todo!()
+    // }
 }
 
 #[cfg(test)]
@@ -102,6 +98,8 @@ mod tests {
     use std::str;
 
     use x25519_dalek::StaticSecret;
+
+    use crate::crypto::encrypted::Encrypted;
 
     use super::*;
 
@@ -147,7 +145,6 @@ mod tests {
     }
 
     fn encrypt_msg(msg: &str, secret: SecretKey) -> Result<Encrypted<String>, CGKAError> {
-        println!("**********Encrypting with {:?}", secret.to_bytes());
         let cipher = XChaCha20Poly1305::new(&secret.to_bytes().into());
         let mut nonce = [0u8; 24];
         rand::thread_rng().fill_bytes(&mut nonce);
@@ -158,8 +155,6 @@ mod tests {
     }
 
     fn decrypt_msg(encrypted: Encrypted<String>, secret: SecretKey) -> Result<String, CGKAError> {
-        println!("decrypt_msg");
-        println!("**********Decrypting with {:?}", secret.to_bytes());
         let cipher = XChaCha20Poly1305::new(&secret.to_bytes().into());
         let decrypted_bytes = cipher
             .decrypt(&encrypted.nonce.into(), encrypted.ciphertext.as_ref())
@@ -175,25 +170,18 @@ mod tests {
         msg: &str,
         encrypted: &Encrypted<String>,
     ) -> Result<(), CGKAError> {
-        println!("-- all_decrypt");
         let mut cgka = cgka.clone();
         let mut count = 0;
         for p in participants {
-            println!("---! next decrypt, idx: {count}");
             count += 1;
             cgka = cgka.with_new_owner_id(p.id)?;
-            println!("---! now for a secret");
             let secret = cgka.secret(p.sk.clone())?;
-            println!("---! next decryptDONE --");
             assert_eq!(msg, decrypt_msg(encrypted.clone(), secret)?)
         }
         Ok(())
     }
 
-    fn update_every_path(
-        cgka: &CGKA,
-        participants: &Vec<Participant>,
-    ) -> Result<(), CGKAError> {
+    fn update_every_path(cgka: &CGKA, participants: &Vec<Participant>) -> Result<(), CGKAError> {
         let mut cgka = cgka.clone();
         for p in participants {
             cgka = cgka.with_new_owner_id(p.id)?;
@@ -202,7 +190,10 @@ mod tests {
         Ok(())
     }
 
-    fn each_encrypts_and_all_decrypt(cgka: &CGKA, participants: &Vec<Participant>) -> Result<(), CGKAError> {
+    fn each_encrypts_and_all_decrypt(
+        cgka: &CGKA,
+        participants: &Vec<Participant>,
+    ) -> Result<(), CGKAError> {
         let mut msg = String::from("This is a message!");
         let mut count = 0;
         let mut cgka = cgka.clone();
@@ -311,7 +302,8 @@ mod tests {
         let new_p = setup_participant();
         participants.push(new_p.clone());
         cgka.add(new_p.id, new_p.pk, participants[0].sk.clone())?;
-        cgka.with_new_owner_id(new_p.id)?.update(new_p.id, new_p.pk, new_p.sk.clone())?;
+        cgka.with_new_owner_id(new_p.id)?
+            .update(new_p.id, new_p.pk, new_p.sk.clone())?;
         each_encrypts_and_all_decrypt(&cgka, &participants)
     }
 
@@ -349,7 +341,6 @@ mod tests {
     #[test]
     fn test_1_to_16_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
         for n in 1..17 {
-            println!("{n}");
             n_participants_encrypt_and_decrypt(n)?;
         }
         Ok(())
