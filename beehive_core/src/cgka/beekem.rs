@@ -253,16 +253,16 @@ impl BeeKEM {
             if self.is_blank(parent_idx.into())? {
                 println!("--- while is_blank loop {:?}", child_idx);
             }
-            while self.is_blank(parent_idx.into())? && !self.is_root(child_idx) {
+            while self.is_blank(parent_idx.into())? {// && !self.is_root(child_idx) {
                 child_idx = parent_idx.into();
                 parent_idx = treemath::parent(child_idx);
                 println!("--- Skipped to {:?}", child_idx);
             }
             // TODO: This shouldn't be possible if there is a root key
-            if self.is_root(child_idx) {
-                println!("Child is root. This should be impossible.");
-                break;
-            }
+            // if self.is_root(child_idx) {
+            //     println!("Child is root. This should be impossible.");
+            //     break;
+            // }
             println!("Preparing to decrypt_parent_key for {:?}", parent_idx);
             next_secret =
                 self.decrypt_parent_key(last_non_blank_child_idx, child_idx, next_secret.clone())?;
