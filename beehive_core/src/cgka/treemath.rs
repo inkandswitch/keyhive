@@ -18,7 +18,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use std::{cmp::Ordering, ops::{Add, AddAssign, Sub, SubAssign}};
+use std::{
+    cmp::Ordering,
+    ops::{Add, AddAssign, Sub, SubAssign},
+};
 
 use serde::{Deserialize, Serialize};
 

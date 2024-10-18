@@ -137,23 +137,20 @@ impl BeeKEM {
     }
 
     fn leaf_index_for_id(&self, id: Identifier) -> Result<&LeafNodeIndex, CGKAError> {
-        self
-            .id_to_leaf_idx
+        self.id_to_leaf_idx
             .get(&id)
             .ok_or(CGKAError::IdentifierNotFound)
     }
 
     fn id_for_leaf(&self, idx: LeafNodeIndex) -> Result<Identifier, CGKAError> {
-        Ok(self.leaf(idx)?
+        Ok(self
+            .leaf(idx)?
             .as_ref()
             .ok_or(CGKAError::IdentifierNotFound)?
             .id)
     }
 
-    pub(crate) fn parent(
-        &self,
-        idx: ParentNodeIndex,
-    ) -> Result<&Option<ParentNode>, CGKAError> {
+    pub(crate) fn parent(&self, idx: ParentNodeIndex) -> Result<&Option<ParentNode>, CGKAError> {
         self.parents
             .get(idx.usize())
             .ok_or(CGKAError::TreeIndexOutOfBounds)
@@ -163,9 +160,7 @@ impl BeeKEM {
         let idx = self
             .owner_leaf_idx
             .ok_or(CGKAError::OwnerIdentifierNotFound)?;
-        self.leaf(idx)?
-            .as_ref()
-            .ok_or(CGKAError::PublicKeyNotFound)
+        self.leaf(idx)?.as_ref().ok_or(CGKAError::PublicKeyNotFound)
     }
 
     pub(crate) fn insert_leaf_at(
@@ -265,8 +260,12 @@ impl BeeKEM {
                 parent_idx = treemath::parent(child_idx).into();
             }
             debug_assert!(!self.is_root(child_idx));
-            child_sk =
-                self.decrypt_parent_key(last_non_blank_child_idx, child_idx, child_pk, child_sk.clone())?;
+            child_sk = self.decrypt_parent_key(
+                last_non_blank_child_idx,
+                child_idx,
+                child_pk,
+                child_sk.clone(),
+            )?;
             child_pk = *self.public_key(parent_idx)?;
             child_idx = parent_idx;
             last_non_blank_child_idx = child_idx;
@@ -399,7 +398,13 @@ impl BeeKEM {
         child_pk: PublicKey,
         child_sk: SecretKey,
         new_parent_sk: SecretKey,
-    ) -> Result<(Option<PublicKey>, BTreeMap<TreeNodeIndex, Encrypted<SecretKey>>), CGKAError> {
+    ) -> Result<
+        (
+            Option<PublicKey>,
+            BTreeMap<TreeNodeIndex, Encrypted<SecretKey>>,
+        ),
+        CGKAError,
+    > {
         debug_assert!(!self.is_root(child_idx));
         let sibling_idx = treemath::sibling(child_idx);
         let mut secret_map = BTreeMap::new();

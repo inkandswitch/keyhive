@@ -238,7 +238,10 @@ mod tests {
         let mut cgka = setup_cgka(&participants, 0);
         let new_p = setup_participant();
         cgka.add(new_p.id, new_p.pk, owner_sk.clone())?;
-        assert_eq!(cgka.tree.member_count(), initial_participant_count as u32 + 1);
+        assert_eq!(
+            cgka.tree.member_count(),
+            initial_participant_count as u32 + 1
+        );
         Ok(())
     }
 
