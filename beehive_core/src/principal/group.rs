@@ -33,6 +33,7 @@ pub struct Group<'a, T: ContentRef> {
 
     /// The `Group`'s underlying (causal) delegation state.
     pub state: state::GroupState<'a, T>,
+    pub op_heads: Vec<(Digest<Operation<'a, T>>, Operation<'a, T>)>,
 }
 
 impl<'a, T: ContentRef> Group<'a, T> {
@@ -64,6 +65,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
 
         Group {
             members,
+            op_heads: vec![], // FIXME
             state: state::GroupState {
                 id: group_id,
 
@@ -113,31 +115,25 @@ impl<'a, T: ContentRef> Group<'a, T> {
         self.members.insert(id, hash);
     }
 
-    pub fn materialize(state: state::GroupState<'a, T>) -> Self {
-        // FIXME oof that's a lot of cloning
-
-        let raw_ops = state
-            .delegations
-            .values()
-            .map(|d| Operation::Delegation(*d))
-            .chain(
-                state
-                    .revocations
-                    .values()
-                    .map(|r| Operation::Revocation(*r)),
-            );
-
-        let mut ops: CaMap<Operation<'a, T>> = CaMap::from_iter(raw_ops);
-
-        let d_heads = state
+    pub fn materialize(&'a mut self) {
+        self.op_heads = self
+            .state
             .delegation_heads
             .iter()
-            .map(|d_hash| state.delegations.get(&d_hash.coerce()).unwrap())
+            .map(|d_hash| {
+                let d = self.state.delegations.get(d_hash).unwrap();
+                (d_hash.coerce(), Operation::Delegation(d))
+            })
+            .chain(self.state.revocation_heads.iter().map(|r_hash| {
+                let r = self.state.revocations.get(r_hash).unwrap();
+                (r_hash.coerce(), Operation::Revocation(r))
+            }))
             .collect();
 
-        let members = Operation::topsort(heads, &ops).expect("FIXME").iter().fold(
-            HashMap::new(),
-            |mut acc, op| match op {
+        self.members = Operation::topsort(&self.op_heads)
+            .expect("FIXME")
+            .iter()
+            .fold(HashMap::new(), |mut acc, op| match op {
                 Operation::Delegation(Signed {
                     payload: delegation,
                     signature,
@@ -162,10 +158,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
                     acc.remove(&revocation.revoke.payload.delegate.id());
                     acc
                 }
-            },
-        );
-
-        Group { state, members }
+            });
     }
 
     pub fn revoke(&'a mut self, signed_revocation: Signed<Revocation<'a, T>>) {

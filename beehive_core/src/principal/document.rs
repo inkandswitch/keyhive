@@ -19,6 +19,7 @@ pub struct Document<'a, T: ContentRef> {
     pub members: HashMap<AgentId, Digest<Signed<Delegation<'a, T>>>>,
     pub reader_keys: HashMap<Identifier, (&'a Individual, ShareKey)>, // FIXME May remove when BeeKEM, also FIXME Individual ID
     pub state: DocumentState<'a, T>,
+    pub op_heads: Vec<(Digest<Operation<'a, T>>, Operation<'a, T>)>,
 }
 
 impl<'a, T: ContentRef> Document<'a, T> {
@@ -45,6 +46,7 @@ impl<'a, T: ContentRef> Document<'a, T> {
 
         let mut doc = Document {
             members: HashMap::new(),
+            op_heads: vec![], // FIXME
             state: DocumentState {
                 id: doc_id,
 
@@ -98,48 +100,55 @@ impl<'a, T: ContentRef> Document<'a, T> {
         self.members.insert(id, hash);
     }
 
-    pub fn materialize(state: DocumentState<T>) -> Self {
+    pub fn materialize(&'a mut self) {
+        // pub fn materialize(&mut self state: DocumentState<'a, T>) -> Self {
         // FIXME oof that's a lot of cloning to get the heads
-        let members = Operation::topsort(
-            state.delegation_heads.into_iter().collect(),
-            &state.delegations,
-        )
-        .expect("FIXME")
-        .iter()
-        .fold(HashMap::new(), |mut acc, signed| match signed {
-            Operation::Delegation(Signed {
-                payload: delegation,
-                signature,
-                verifying_key,
-            }) => {
-                acc.insert(
-                    delegation.delegate.id(),
-                    // FIXME use existig hash
-                    Digest::hash(&Signed {
-                        payload: delegation.clone(),
-                        signature: *signature,
-                        verifying_key: *verifying_key,
-                    }),
-                );
+        self.op_heads = self
+            .state
+            .delegations
+            .iter()
+            .map(|(h, d)| (h.coerce(), Operation::Delegation(d)))
+            .chain(
+                self.state
+                    .revocations
+                    .iter()
+                    .map(|(h, r)| (h.coerce(), Operation::Revocation(r))),
+            )
+            .collect();
 
-                acc
-            }
-            Operation::Revocation(Signed {
-                payload: revocation,
-                ..
-            }) =>
-            // FIXME allow downgrading instead of straight removal?
-            {
-                acc.remove(&revocation.revoke.payload.delegate.id());
-                acc
-            }
-        });
+        let members = Operation::topsort(&self.op_heads)
+            .expect("FIXME")
+            .iter()
+            .fold(HashMap::new(), |mut acc, signed| match signed {
+                Operation::Delegation(Signed {
+                    payload: delegation,
+                    signature,
+                    verifying_key,
+                }) => {
+                    acc.insert(
+                        delegation.delegate.id(),
+                        // FIXME use existig hash
+                        Digest::hash(&Signed {
+                            payload: delegation.clone(),
+                            signature: *signature,
+                            verifying_key: *verifying_key,
+                        }),
+                    );
 
-        Document {
-            state,
-            members,
-            reader_keys: HashMap::new(),
-        }
+                    acc
+                }
+                Operation::Revocation(Signed {
+                    payload: revocation,
+                    ..
+                }) =>
+                // FIXME allow downgrading instead of straight removal?
+                {
+                    acc.remove(&revocation.revoke.payload.delegate.id());
+                    acc
+                }
+            });
+
+        self.members = members;
     }
 }
 
@@ -300,7 +309,7 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
 
         let mut explore: Vec<GroupAccess<'a, T>> = vec![];
 
-        for (k, hash) in doc.members.iter() {
+        for hash in doc.members.values() {
             let delegation = doc.state.delegations.get(hash).unwrap();
             explore.push(GroupAccess {
                 agent: delegation.payload.delegate,
@@ -330,30 +339,44 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
 
                     caps.insert(member.id(), (member, best_access));
                 }
-                Agent::Group(_) => {
-                    todo!()
+                Agent::Group(group) => {
+                    for (mem, proof_hash) in group.members.iter() {
+                        let proof = group.state.delegations.get(proof_hash).unwrap();
+
+                        let current_path_access = access.min(proof.payload.can).min(parent_access);
+
+                        let best_access = if let Some((_, prev_found_path_access)) = caps.get(&mem)
+                        {
+                            (*prev_found_path_access).max(current_path_access)
+                        } else {
+                            current_path_access
+                        };
+
+                        explore.push(GroupAccess {
+                            agent: &proof.payload.delegate,
+                            agent_access: best_access,
+                            parent_access,
+                        });
+                    }
                 }
-                Agent::Document(_) => {
-                    if let Some(group) = self.docs.get(&member.into()) {
-                        for (mem, proof_hash) in group.members.iter() {
-                            let proof = group.state.delegations.get(proof_hash).unwrap();
+                Agent::Document(doc) => {
+                    for (mem, proof_hash) in doc.members.iter() {
+                        let proof = doc.state.delegations.get(proof_hash).unwrap();
 
-                            let current_path_access =
-                                access.min(proof.payload.can).min(parent_access);
+                        let current_path_access = access.min(proof.payload.can).min(parent_access);
 
-                            let best_access =
-                                if let Some((_, prev_found_path_access)) = caps.get(&mem) {
-                                    (*prev_found_path_access).max(current_path_access)
-                                } else {
-                                    current_path_access
-                                };
+                        let best_access = if let Some((_, prev_found_path_access)) = caps.get(&mem)
+                        {
+                            (*prev_found_path_access).max(current_path_access)
+                        } else {
+                            current_path_access
+                        };
 
-                            explore.push(GroupAccess {
-                                agent: &proof.payload.delegate,
-                                agent_access: best_access,
-                                parent_access,
-                            });
-                        }
+                        explore.push(GroupAccess {
+                            agent: &proof.payload.delegate,
+                            agent_access: best_access,
+                            parent_access,
+                        });
                     }
                 }
             }
