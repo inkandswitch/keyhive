@@ -196,6 +196,7 @@ impl BeeKEM {
         if idx.usize() >= self.leaves.len() {
             return Err(CGKAError::TreeIndexOutOfBounds);
         }
+
         self.leaves[idx.usize()] = None;
         self.blank_path(treemath::parent(idx.into()))
     }
@@ -211,6 +212,9 @@ impl BeeKEM {
     }
 
     pub(crate) fn remove_id(&mut self, id: Identifier) -> Result<(), CGKAError> {
+        if self.member_count() == 1 {
+            return Err(CGKAError::RemoveLastMember);
+        }
         let l_idx = self.get_leaf_index_for_id(id)?;
         self.blank_leaf_and_path(*l_idx)?;
         self.id_to_leaf_idx.remove(&id);
@@ -464,23 +468,22 @@ impl BeeKEM {
     ) -> Result<(), CGKAError> {
         match idx {
             TreeNodeIndex::Leaf(l_idx) => {
-                if let Some(_) = self.get_leaf(l_idx)? {
+                if self.get_leaf(l_idx)?.is_some() {
                     acc.push(l_idx.into());
                 }
-                Ok(())
             }
             TreeNodeIndex::Parent(p_idx) => {
-                if let Some(_) = self.get_parent(p_idx)? {
+                if self.get_parent(p_idx)?.is_some() {
                     acc.push(p_idx.into());
-                    Ok(())
                 } else {
                     let left_idx = treemath::left(p_idx);
                     self.append_resolution(left_idx, acc)?;
                     let right_idx = treemath::right(p_idx);
-                    self.append_resolution(right_idx, acc)
+                    self.append_resolution(right_idx, acc)?;
                 }
             }
         }
+        Ok(())
     }
 }
 

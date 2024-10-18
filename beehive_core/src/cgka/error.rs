@@ -22,6 +22,9 @@ pub enum CGKAError {
     #[error("PublicKey not found")]
     PublicKeyNotFound,
 
+    #[error("Tried to remove last member from group")]
+    RemoveLastMember,
+
     #[error("Tree index out of bounds")]
     TreeIndexOutOfBounds,
 }

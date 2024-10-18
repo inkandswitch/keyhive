@@ -54,6 +54,9 @@ impl CGKA {
 
     /// Remove participant.
     pub fn remove(&mut self, id: Identifier, owner_sk: SecretKey) -> Result<(), CGKAError> {
+        if self.group_size() == 1 {
+            return Err(CGKAError::RemoveLastMember);
+        }
         self.tree.remove_id(id)?;
         self.tree.encrypt_owner_path(owner_sk)
     }
