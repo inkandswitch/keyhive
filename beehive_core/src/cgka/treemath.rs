@@ -18,7 +18,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, ops::{Add, AddAssign, Sub, SubAssign}};
 
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +51,16 @@ impl LeafNodeIndex {
         self.u32() as usize
     }
 
+    /// Return a LeafNodeIndex x places to the right
+    pub(crate) fn inc(&self, x: u32) -> LeafNodeIndex {
+        LeafNodeIndex::new(self.0 + x)
+    }
+
+    /// Return a LeafNodeIndex x places to the left
+    pub(crate) fn dec(&self, x: u32) -> LeafNodeIndex {
+        LeafNodeIndex::new(self.0 - x)
+    }
+
     /// Return the index as a TreeNodeIndex value.
     fn to_tree_index(self) -> u32 {
         self.0 * 2
@@ -60,6 +70,34 @@ impl LeafNodeIndex {
     fn from_tree_index(node_index: u32) -> Self {
         debug_assert!(node_index % 2 == 0);
         LeafNodeIndex(node_index / 2)
+    }
+}
+
+impl Add<u32> for LeafNodeIndex {
+    type Output = Self;
+
+    fn add(self, rhs: u32) -> Self::Output {
+        LeafNodeIndex::new(self.0 + rhs)
+    }
+}
+
+impl AddAssign<u32> for LeafNodeIndex {
+    fn add_assign(&mut self, rhs: u32) {
+        self.0 = self.0 + rhs;
+    }
+}
+
+impl Sub<u32> for LeafNodeIndex {
+    type Output = Self;
+
+    fn sub(self, rhs: u32) -> Self::Output {
+        LeafNodeIndex::new(self.0 - rhs)
+    }
+}
+
+impl SubAssign<u32> for LeafNodeIndex {
+    fn sub_assign(&mut self, rhs: u32) {
+        self.0 = self.0 - rhs;
     }
 }
 
@@ -82,6 +120,16 @@ impl ParentNodeIndex {
         self.0 as usize
     }
 
+    /// Return a ParentNodeIndex x places to the right
+    pub(crate) fn inc(&self, x: u32) -> ParentNodeIndex {
+        ParentNodeIndex::new(self.0 + x)
+    }
+
+    /// Return a ParentNodeIndex x places to the left
+    pub(crate) fn dec(&self, x: u32) -> ParentNodeIndex {
+        ParentNodeIndex::new(self.0 - x)
+    }
+
     /// Return the index as a TreeNodeIndex value.
     fn to_tree_index(self) -> u32 {
         self.0 * 2 + 1
@@ -92,6 +140,34 @@ impl ParentNodeIndex {
         debug_assert!(node_index > 0);
         debug_assert!(node_index % 2 == 1);
         ParentNodeIndex((node_index - 1) / 2)
+    }
+}
+
+impl Add<u32> for ParentNodeIndex {
+    type Output = Self;
+
+    fn add(self, rhs: u32) -> Self::Output {
+        ParentNodeIndex::new(self.0 + rhs)
+    }
+}
+
+impl AddAssign<u32> for ParentNodeIndex {
+    fn add_assign(&mut self, rhs: u32) {
+        self.0 = self.0 + rhs;
+    }
+}
+
+impl Sub<u32> for ParentNodeIndex {
+    type Output = Self;
+
+    fn sub(self, rhs: u32) -> Self::Output {
+        ParentNodeIndex::new(self.0 - rhs)
+    }
+}
+
+impl SubAssign<u32> for ParentNodeIndex {
+    fn sub_assign(&mut self, rhs: u32) {
+        self.0 = self.0 - rhs;
     }
 }
 

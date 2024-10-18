@@ -205,7 +205,7 @@ impl BeeKEM {
         self.maybe_grow_tree(self.next_leaf_idx.u32());
         let l_idx = self.next_leaf_idx;
         // Increment next leaf idx
-        self.next_leaf_idx = LeafNodeIndex::new(self.next_leaf_idx.u32() + 1);
+        self.next_leaf_idx += 1;
         self.id_to_leaf_idx.insert(id, l_idx);
         self.insert_leaf_at(l_idx, LeafNode { id, pk })?;
         self.blank_path(treemath::parent(l_idx.into()))
@@ -218,6 +218,10 @@ impl BeeKEM {
         let l_idx = self.get_leaf_index_for_id(id)?;
         self.blank_leaf_and_path(*l_idx)?;
         self.id_to_leaf_idx.remove(&id);
+        // "Collect" any contiguous tombstones at the end of the leaves Vec
+        while self.get_leaf(self.next_leaf_idx - 1)?.is_none() {
+            self.next_leaf_idx -= 1;
+        }
         Ok(())
     }
 
