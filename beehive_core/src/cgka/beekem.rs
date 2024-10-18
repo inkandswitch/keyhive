@@ -111,18 +111,18 @@ impl BeeKEM {
         Ok(())
     }
 
-    pub(crate) fn get_public_key(&self, idx: TreeNodeIndex) -> Result<&PublicKey, CGKAError> {
+    pub(crate) fn public_key(&self, idx: TreeNodeIndex) -> Result<&PublicKey, CGKAError> {
         Ok(match idx {
             TreeNodeIndex::Leaf(l_idx) => {
                 &self
-                    .get_leaf(l_idx)?
+                    .leaf(l_idx)?
                     .as_ref()
                     .ok_or(CGKAError::PublicKeyNotFound)?
                     .pk
             }
             TreeNodeIndex::Parent(p_idx) => {
                 &self
-                    .get_parent(p_idx)?
+                    .parent(p_idx)?
                     .as_ref()
                     .ok_or(CGKAError::PublicKeyNotFound)?
                     .pk
@@ -130,27 +130,27 @@ impl BeeKEM {
         })
     }
 
-    pub(crate) fn get_leaf(&self, idx: LeafNodeIndex) -> Result<&Option<LeafNode>, CGKAError> {
+    pub(crate) fn leaf(&self, idx: LeafNodeIndex) -> Result<&Option<LeafNode>, CGKAError> {
         self.leaves
             .get(idx.usize())
             .ok_or(CGKAError::TreeIndexOutOfBounds)
     }
 
-    fn get_leaf_index_for_id(&self, id: Identifier) -> Result<&LeafNodeIndex, CGKAError> {
+    fn leaf_index_for_id(&self, id: Identifier) -> Result<&LeafNodeIndex, CGKAError> {
         self
             .id_to_leaf_idx
             .get(&id)
             .ok_or(CGKAError::IdentifierNotFound)
     }
 
-    fn get_id_for_leaf(&self, idx: LeafNodeIndex) -> Result<Identifier, CGKAError> {
-        Ok(self.get_leaf(idx)?
+    fn id_for_leaf(&self, idx: LeafNodeIndex) -> Result<Identifier, CGKAError> {
+        Ok(self.leaf(idx)?
             .as_ref()
             .ok_or(CGKAError::IdentifierNotFound)?
             .id)
     }
 
-    pub(crate) fn get_parent(
+    pub(crate) fn parent(
         &self,
         idx: ParentNodeIndex,
     ) -> Result<&Option<ParentNode>, CGKAError> {
@@ -159,11 +159,11 @@ impl BeeKEM {
             .ok_or(CGKAError::TreeIndexOutOfBounds)
     }
 
-    fn get_owner_leaf(&self) -> Result<&LeafNode, CGKAError> {
+    fn owner_leaf(&self) -> Result<&LeafNode, CGKAError> {
         let idx = self
             .owner_leaf_idx
             .ok_or(CGKAError::OwnerIdentifierNotFound)?;
-        self.get_leaf(idx)?
+        self.leaf(idx)?
             .as_ref()
             .ok_or(CGKAError::PublicKeyNotFound)
     }
@@ -215,11 +215,11 @@ impl BeeKEM {
         if self.member_count() == 1 {
             return Err(CGKAError::RemoveLastMember);
         }
-        let l_idx = self.get_leaf_index_for_id(id)?;
+        let l_idx = self.leaf_index_for_id(id)?;
         self.blank_leaf_and_path(*l_idx)?;
         self.id_to_leaf_idx.remove(&id);
         // "Collect" any contiguous tombstones at the end of the leaves Vec
-        while self.get_leaf(self.next_leaf_idx - 1)?.is_none() {
+        while self.leaf(self.next_leaf_idx - 1)?.is_none() {
             self.next_leaf_idx -= 1;
         }
         Ok(())
@@ -241,7 +241,7 @@ impl BeeKEM {
         &mut self,
         owner_sk: SecretKey,
     ) -> Result<SecretKey, CGKAError> {
-        let leaf = self.get_owner_leaf()?;
+        let leaf = self.owner_leaf()?;
         // TODO: Should we enforce an invariant that there will always be a root key?
         if self.no_root_key()? {
             self.encrypt_path(leaf.id, leaf.pk, owner_sk.clone())?;
@@ -267,7 +267,7 @@ impl BeeKEM {
             debug_assert!(!self.is_root(child_idx));
             child_sk =
                 self.decrypt_parent_key(last_non_blank_child_idx, child_idx, child_pk, child_sk.clone())?;
-            child_pk = *self.get_public_key(parent_idx)?;
+            child_pk = *self.public_key(parent_idx)?;
             child_idx = parent_idx;
             last_non_blank_child_idx = child_idx;
             parent_idx = treemath::parent(child_idx).into();
@@ -292,8 +292,8 @@ impl BeeKEM {
         pk: PublicKey,
         sk: SecretKey,
     ) -> Result<(), CGKAError> {
-        let leaf_idx = *self.get_leaf_index_for_id(id)?;
-        if self.get_id_for_leaf(leaf_idx)? != id {
+        let leaf_idx = *self.leaf_index_for_id(id)?;
+        if self.id_for_leaf(leaf_idx)? != id {
             return Err(CGKAError::IdentifierNotFound);
         }
         self.insert_leaf_at(leaf_idx, LeafNode { id, pk })?;
@@ -319,7 +319,7 @@ impl BeeKEM {
     }
 
     pub(crate) fn encrypt_owner_path(&mut self, owner_sk: SecretKey) -> Result<(), CGKAError> {
-        let owner_leaf = self.get_owner_leaf()?;
+        let owner_leaf = self.owner_leaf()?;
         self.encrypt_path(owner_leaf.id, owner_leaf.pk, owner_sk)
     }
 
@@ -328,7 +328,7 @@ impl BeeKEM {
         let TreeNodeIndex::Parent(p_idx) = root_idx else {
             return Err(CGKAError::TreeIndexOutOfBounds);
         };
-        Ok(self.get_parent(p_idx)?.is_none())
+        Ok(self.parent(p_idx)?.is_none())
     }
 
     fn decrypt_parent_key(
@@ -342,7 +342,7 @@ impl BeeKEM {
         let parent_idx = treemath::parent(child_idx);
         debug_assert!(!self.is_blank(parent_idx.into())?);
         let parent = self
-            .get_parent(parent_idx)?
+            .parent(parent_idx)?
             .as_ref()
             .ok_or(CGKAError::TreeIndexOutOfBounds)?;
         let encrypted = parent
@@ -417,7 +417,7 @@ impl BeeKEM {
             // a new DH shared secret to do the encryption for each node.
             let mut paired_pk = None;
             for idx in sibling_resolution {
-                let sibling_pk = self.get_public_key(idx)?;
+                let sibling_pk = self.public_key(idx)?;
                 let shared_key = generate_shared_key(sibling_pk, child_sk.clone());
                 let encrypted_sk = encrypt_secret(new_parent_sk.clone(), shared_key.clone())?;
                 if paired_pk.is_none() {
@@ -433,8 +433,8 @@ impl BeeKEM {
 
     fn is_blank(&self, idx: TreeNodeIndex) -> Result<bool, CGKAError> {
         Ok(match idx {
-            TreeNodeIndex::Leaf(l_idx) => self.get_leaf(l_idx)?.is_none(),
-            TreeNodeIndex::Parent(p_idx) => self.get_parent(p_idx)?.is_none(),
+            TreeNodeIndex::Leaf(l_idx) => self.leaf(l_idx)?.is_none(),
+            TreeNodeIndex::Parent(p_idx) => self.parent(p_idx)?.is_none(),
         })
     }
 
@@ -482,12 +482,12 @@ impl BeeKEM {
     ) -> Result<(), CGKAError> {
         match idx {
             TreeNodeIndex::Leaf(l_idx) => {
-                if self.get_leaf(l_idx)?.is_some() {
+                if self.leaf(l_idx)?.is_some() {
                     acc.push(l_idx.into());
                 }
             }
             TreeNodeIndex::Parent(p_idx) => {
-                if self.get_parent(p_idx)?.is_some() {
+                if self.parent(p_idx)?.is_some() {
                     acc.push(p_idx.into());
                 } else {
                     let left_idx = treemath::left(p_idx);
