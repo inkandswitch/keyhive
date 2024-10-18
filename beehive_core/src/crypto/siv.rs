@@ -26,7 +26,7 @@ use std::io::Read;
 ///
 /// [Invisible Salamanders]: https://eprint.iacr.org/2019/016.pdf
 /// [chacha20-docs]: https://docs.rs/chacha20poly1305/0.10.1/chacha20poly1305/trait.AeadCore.html#method.generate_nonce
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Siv(pub [u8; 24]);
 
 impl Siv {
@@ -71,7 +71,7 @@ impl From<[u8; 24]> for Siv {
 
 impl From<Siv> for chacha20poly1305::XNonce {
     fn from(siv: Siv) -> Self {
-        Self::from_slice(&siv.0).clone()
+        *Self::from_slice(&siv.0)
     }
 }
 

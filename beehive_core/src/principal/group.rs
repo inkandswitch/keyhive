@@ -1,4 +1,4 @@
-//! Model a collect.clone(),ion of agents with no associated content.
+//! Model a collection of agents with no associated content.
 
 pub mod id;
 pub mod operation;
@@ -29,11 +29,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Group<'a, T: ContentRef> {
     /// The current view of members of a group.
-    pub members: HashMap<AgentId, Digest<Signed<Delegation<'a, T>>>>, // FIXME make not publicly editable!
+    members: HashMap<AgentId, Digest<Signed<Delegation<'a, T>>>>, // FIXME make not publicly editable!
 
     /// The `Group`'s underlying (causal) delegation state.
-    pub state: state::GroupState<'a, T>,
-    pub op_heads: Vec<(Digest<Operation<'a, T>>, Operation<'a, T>)>,
+    state: state::GroupState<'a, T>,
+    op_heads: Vec<(Digest<Operation<'a, T>>, Operation<'a, T>)>,
 }
 
 impl<'a, T: ContentRef> Group<'a, T> {
@@ -101,6 +101,13 @@ impl<'a, T: ContentRef> Group<'a, T> {
             .collect()
     }
 
+    pub fn get_member_refs(&'a self) -> HashMap<AgentId, &'a Signed<Delegation<'a, T>>> {
+        self.members
+            .iter()
+            .map(|(k, v)| (*k, self.state.delegations.get(v).unwrap()))
+            .collect()
+    }
+
     // FIXME rename
     pub fn add_member(&'a mut self, signed_delegation: Signed<Delegation<'a, T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
@@ -130,35 +137,17 @@ impl<'a, T: ContentRef> Group<'a, T> {
             }))
             .collect();
 
-        self.members = Operation::topsort(&self.op_heads)
-            .expect("FIXME")
-            .iter()
-            .fold(HashMap::new(), |mut acc, op| match op {
-                Operation::Delegation(Signed {
-                    payload: delegation,
-                    signature,
-                    verifying_key,
-                }) => {
-                    acc.insert(
-                        delegation.delegate.id(),
-                        // FIXME use existing hash
-                        Digest::hash(&Signed {
-                            payload: delegation.clone(),
-                            signature: *signature,
-                            verifying_key: *verifying_key,
-                        }),
-                    );
-
-                    acc
+        for (digest, op) in Operation::topsort(&self.op_heads).expect("FIXME").iter() {
+            match op {
+                Operation::Delegation(d) => {
+                    self.members
+                        .insert(d.payload.delegate.id(), digest.coerce());
                 }
-                Operation::Revocation(Signed {
-                    payload: revocation,
-                    ..
-                }) => {
-                    acc.remove(&revocation.revoke.payload.delegate.id());
-                    acc
+                Operation::Revocation(r) => {
+                    self.members.remove(&r.payload.revoke.payload.delegate.id());
                 }
-            });
+            }
+        }
     }
 
     pub fn revoke(&'a mut self, signed_revocation: Signed<Revocation<'a, T>>) {

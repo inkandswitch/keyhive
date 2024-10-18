@@ -127,8 +127,7 @@ impl<'a, T: ContentRef> Operation<'a, T> {
 
     pub fn topsort(
         heads: &'a [(Digest<Operation<'a, T>>, Operation<'a, T>)],
-        // FIXME Result<Vec<(Digest, &'a Operation<'a, T>)>, AncestorError>
-    ) -> Result<Vec<&'a Operation<'a, T>>, AncestorError> {
+    ) -> Result<Vec<(Digest<Operation<'a, T>>, &'a Operation<'a, T>)>, AncestorError> {
         let mut ops_with_ancestors: HashMap<
             Digest<Operation<'a, T>>,
             (&'a Operation<'a, T>, CaMap<&Operation<'a, T>>, usize),
@@ -144,7 +143,7 @@ impl<'a, T: ContentRef> Operation<'a, T> {
         }
 
         let mut seen = HashSet::new();
-        let mut adjacencies: TopologicalSort<&'a Operation<'a, T>> =
+        let mut adjacencies: TopologicalSort<(Digest<Operation<'a, T>>, &'a Operation<'a, T>)> =
             topological_sort::TopologicalSort::new();
 
         for (hash, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
@@ -154,27 +153,42 @@ impl<'a, T: ContentRef> Operation<'a, T> {
                 let (_, other_ancestors, other_longest_path) = ops_with_ancestors
                     .get(&other_hash.coerce())
                     .expect("values that we just put there to be there");
+
                 let ancestor_set: HashSet<&&'a Operation<'a, T>> = op_ancestors.values().collect();
 
                 let other_ancestor_set: HashSet<&&'a Operation<'a, T>> =
                     other_ancestors.values().collect();
 
                 if ancestor_set.is_subset(&other_ancestor_set) {
-                    adjacencies.add_dependency(*other_op, *op);
+                    adjacencies.add_dependency(
+                        ((*other_hash).coerce(), *other_op),
+                        ((*hash).coerce(), *op),
+                    );
                 }
 
                 if ancestor_set.is_superset(&other_ancestor_set) {
-                    adjacencies.add_dependency(*op, *other_op);
+                    adjacencies.add_dependency(
+                        ((*hash).coerce(), *op),
+                        ((*other_hash).coerce(), *other_op),
+                    );
                 }
 
                 // Concurrent, so check revocations
                 if op.is_revocation() {
                     match longest_path.cmp(&other_longest_path) {
-                        Ordering::Less => adjacencies.add_dependency(*op, *other_op),
-                        Ordering::Greater => adjacencies.add_dependency(*other_op, *op),
+                        Ordering::Less => adjacencies
+                            .add_dependency(((*hash).coerce(), *op), ((*other_hash).coerce(), *op)),
+                        Ordering::Greater => adjacencies
+                            .add_dependency(((*other_hash).coerce(), *op), ((*hash).coerce(), *op)),
                         Ordering::Equal => match other_hash.cmp(&hash.coerce()) {
-                            Ordering::Less => adjacencies.add_dependency(*op, *other_op),
-                            Ordering::Greater => adjacencies.add_dependency(*other_op, *op),
+                            Ordering::Less => adjacencies.add_dependency(
+                                ((*hash).coerce(), *op),
+                                ((*other_hash).coerce(), *op),
+                            ),
+                            Ordering::Greater => adjacencies.add_dependency(
+                                ((*other_hash).coerce(), *op),
+                                ((*hash).coerce(), *op),
+                            ),
                             Ordering::Equal => {}
                         },
                     }

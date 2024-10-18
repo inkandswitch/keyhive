@@ -112,7 +112,7 @@ impl Active {
         let nonce = Siv::new(&key, message, doc);
         let bytes: Vec<u8> = key.encrypt(nonce, message).expect("FIXME").to_vec();
 
-        Encrypted::new(nonce.clone().into(), bytes)
+        Encrypted::new(nonce.into(), bytes)
     }
 }
 

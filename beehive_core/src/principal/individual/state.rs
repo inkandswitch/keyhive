@@ -40,14 +40,14 @@ impl PrekeyState {
         let mut keys = HashSet::new();
         let mut to_drop = vec![];
 
-        for Signed { payload, .. } in self.ops.clone().into_values() {
+        for Signed { payload, .. } in self.ops.values() {
             match payload {
                 KeyOp::Add(AddKeyOp { share_key, .. }) => {
-                    keys.insert(share_key);
+                    keys.insert(*share_key);
                 }
                 KeyOp::Update(ShareKeyOp { old, new }) => {
                     to_drop.push(old);
-                    keys.insert(new);
+                    keys.insert(*new);
                 }
             }
         }

@@ -21,86 +21,90 @@ pub struct GroupState<'a, T: ContentRef> {
     pub(super) id: GroupId,
 
     pub(super) delegation_heads: HashSet<Digest<Signed<Delegation<'a, T>>>>,
-    pub delegations: CaMap<Signed<Delegation<'a, T>>>,
+    pub(super) delegations: CaMap<Signed<Delegation<'a, T>>>,
     pub delegation_quarantine: CaMap<Signed<StaticDelegation<T>>>,
 
     pub(super) revocation_heads: HashSet<Digest<Signed<Revocation<'a, T>>>>,
-    pub revocations: CaMap<Signed<Revocation<'a, T>>>,
+    pub(super) revocations: CaMap<Signed<Revocation<'a, T>>>,
     pub revocation_quarantine: CaMap<Signed<StaticRevocation<T>>>,
 }
 
 impl<'a, T: ContentRef> GroupState<'a, T> {
-    pub fn new(parent: &'a Agent<'a, T>) -> Self {
+    pub fn new(parents: Vec<&'a Agent<'a, T>>) -> Self {
         let mut rng = rand::rngs::OsRng;
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
         let verifier: VerifyingKey = signing_key.verifying_key();
 
-        let init = Signed::sign(
-            Delegation {
-                delegate: parent,
-                can: Access::Admin,
-
-                proof: None,
-                after_revocations: vec![],
-                after_content: BTreeMap::new(),
-            },
-            &signing_key,
-        );
-
-        let mut delegations = CaMap::new();
-        let hash = delegations.insert(init);
-
-        GroupState {
+        let mut group = GroupState {
             id: GroupId(verifier.into()),
 
-            delegation_heads: HashSet::from_iter([hash]),
-            delegations,
+            delegation_heads: HashSet::new(),
+            delegations: CaMap::new(),
             delegation_quarantine: CaMap::new(),
 
             revocation_heads: HashSet::new(),
             revocations: CaMap::new(),
             revocation_quarantine: CaMap::new(),
+        };
+
+        for parent in parents.iter() {
+            let dlg = Signed::sign(
+                Delegation {
+                    delegate: *parent,
+                    can: Access::Admin,
+
+                    proof: None,
+                    after_revocations: vec![],
+                    after_content: BTreeMap::new(),
+                },
+                &signing_key,
+            );
+
+            let hash = group.delegations.insert(dlg);
+            group.delegation_heads.insert(hash);
         }
+
+        group
     }
 
     pub fn id(&self) -> &GroupId {
         &self.id
     }
 
-    pub fn delegation_heads(&'a self) -> Vec<&'a Signed<Delegation<'a, T>>> {
-        let mut refs = vec![];
-
-        for head in self.delegation_heads.iter() {
-            let dlg = self
-                .delegations
-                .get(head)
-                .expect("corresponding head was missing");
-
-            refs.push(dlg);
-        }
-
-        refs
+    pub fn delegation_heads(&self) -> &HashSet<Digest<Signed<Delegation<'a, T>>>> {
+        &self.delegation_heads
     }
 
-    pub fn revocation_heads(&'a self) -> Vec<&'a Signed<Revocation<'a, T>>> {
-        let mut refs = vec![];
+    pub fn delegation_head_refs(&'a self) -> Vec<&'a Signed<Delegation<'a, T>>> {
+        self.delegation_heads
+            .iter()
+            .map(|digest| self.delegations.get(digest).unwrap())
+            .collect()
+    }
 
-        for head in self.revocation_heads.iter() {
-            let rev = self
-                .revocations
-                .get(head)
-                .expect("corresponding head was missing");
+    pub fn revocation_heads(&self) -> &HashSet<Digest<Signed<Revocation<'a, T>>>> {
+        &self.revocation_heads
+    }
 
-            refs.push(rev);
-        }
+    pub fn revocation_head_refs(&'a self) -> Vec<&'a Signed<Delegation<'a, T>>> {
+        self.delegation_heads
+            .iter()
+            .map(|digest| self.delegations.get(digest).unwrap())
+            .collect()
+    }
 
-        refs
+    pub fn delegations(&self) -> &CaMap<Signed<Delegation<'a, T>>> {
+        &self.delegations
+    }
+
+    pub fn revocations(&self) -> &CaMap<Signed<Revocation<'a, T>>> {
+        &self.revocations
     }
 
     pub fn add_delegation(
-        &mut self,
+        &'a mut self,
         delegation: Signed<Delegation<'a, T>>,
-    ) -> Result<(), AddError> {
+    ) -> Result<Digest<Signed<Delegation<'a, T>>>, AddError> {
         if delegation.subject() != self.id.into() {
             panic!("FIXME")
             // return Err(signature::Error::InvalidSubject);
@@ -113,18 +117,19 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
 
         // FIXME also check if this op needs to go into the quarantine/buffer
 
-        // FIXME retrun &ref
-        let opt_proof = delegation.payload.proof;
         let hash = self.delegations.insert(delegation);
+        let dlg_ref = self.delegations.get(&hash).unwrap();
 
-        if let Some(proof) = opt_proof {
-            if self.delegation_heads.contains(&Digest::hash(proof)) {
+        if let Some(proof) = dlg_ref.payload.proof {
+            let proof_hash = Digest::hash(proof);
+
+            if self.delegation_heads.contains(&proof_hash) {
                 self.delegation_heads.insert(hash);
-                self.delegation_heads.remove(&Digest::hash(proof));
+                self.delegation_heads.remove(&proof_hash);
             }
         }
 
-        Ok(())
+        Ok(hash)
     }
 
     pub fn add_revocation(

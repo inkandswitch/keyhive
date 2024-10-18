@@ -116,39 +116,17 @@ impl<'a, T: ContentRef> Document<'a, T> {
             )
             .collect();
 
-        let members = Operation::topsort(&self.op_heads)
-            .expect("FIXME")
-            .iter()
-            .fold(HashMap::new(), |mut acc, signed| match signed {
-                Operation::Delegation(Signed {
-                    payload: delegation,
-                    signature,
-                    verifying_key,
-                }) => {
-                    acc.insert(
-                        delegation.delegate.id(),
-                        // FIXME use existig hash
-                        Digest::hash(&Signed {
-                            payload: delegation.clone(),
-                            signature: *signature,
-                            verifying_key: *verifying_key,
-                        }),
-                    );
-
-                    acc
+        for (digest, op) in Operation::topsort(&self.op_heads).expect("FIXME").iter() {
+            match op {
+                Operation::Delegation(d) => {
+                    self.members
+                        .insert(d.payload.delegate.id(), digest.coerce());
                 }
-                Operation::Revocation(Signed {
-                    payload: revocation,
-                    ..
-                }) =>
-                // FIXME allow downgrading instead of straight removal?
-                {
-                    acc.remove(&revocation.revoke.payload.delegate.id());
-                    acc
+                Operation::Revocation(r) => {
+                    self.members.remove(&r.payload.revoke.payload.delegate.id());
                 }
-            });
-
-        self.members = members;
+            };
+        }
     }
 }
 
@@ -340,9 +318,7 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
                     caps.insert(member.id(), (member, best_access));
                 }
                 Agent::Group(group) => {
-                    for (mem, proof_hash) in group.members.iter() {
-                        let proof = group.state.delegations.get(proof_hash).unwrap();
-
+                    for (mem, proof) in group.get_member_refs().iter() {
                         let current_path_access = access.min(proof.payload.can).min(parent_access);
 
                         let best_access = if let Some((_, prev_found_path_access)) = caps.get(&mem)
