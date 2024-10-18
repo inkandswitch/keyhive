@@ -511,13 +511,14 @@ pub(crate) struct LeafNode {
 pub(crate) struct ParentNode {
     // TODO: Handle multiple public keys for BeeKEM conflict resolution
     pub pk: PublicKey,
-    /// This is kept as a map in order to handle blanks, where we must encrypt the same
-    /// secret key for multiple distinct public keys (corresponding to distinct
-    /// TreeNodeIndex values).
-    /// Map from node idx to the public key that was its diffie hellman partner
-    /// and the secret key encrypted that way.
+    /// This is a map in order to handle the case of blank siblings, when we must encrypt
+    /// the same secret key separately for each public key in the sibling resolution.
     pub sk: BTreeMap<TreeNodeIndex, Encrypted<SecretKey>>,
+    /// The PublicKey of the child that encrypted this parent.
     pub encrypter_pk: PublicKey,
+    /// If this is None, the sibling subtree was blank when encrypting this parent.
+    /// Otherwise, it is the first PublicKey in the sibling resolution, which the
+    /// encrypter used for its own Diffie Hellman shared secret.
     pub encrypter_paired_pk: Option<PublicKey>,
 }
 
