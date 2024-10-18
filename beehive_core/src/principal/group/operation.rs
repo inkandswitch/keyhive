@@ -19,7 +19,7 @@ use std::{
 use thiserror::Error;
 use topological_sort::TopologicalSort;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, Serialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Hash, Serialize)]
 pub enum Operation<'a, T: ContentRef> {
     Delegation(&'a Signed<Delegation<'a, T>>),
     Revocation(&'a Signed<Revocation<'a, T>>),
@@ -44,6 +44,14 @@ impl<'a, T: ContentRef> Operation<'a, T> {
         !self.is_delegation()
     }
 
+    pub fn after_auth(&'a self) -> Vec<Operation<'a, T>> {
+        let (dlgs, revs, _) = self.after();
+        dlgs.into_iter()
+            .map(|d| d.into())
+            .chain(revs.into_iter().map(|r| r.into()))
+            .collect()
+    }
+
     pub fn after(
         &'a self,
     ) -> (
@@ -52,69 +60,68 @@ impl<'a, T: ContentRef> Operation<'a, T> {
         &'a BTreeMap<&'a Document<'a, T>, Vec<T>>,
     ) {
         match self {
-            Operation::Delegation(delegation) => delegation.payload.after(),
-            Operation::Revocation(revocation) => revocation.payload.after(),
+            Operation::Delegation(delegation) => {
+                let (dlgs, revs, content) = delegation.payload.after();
+                (dlgs, revs.to_vec(), content)
+            }
+            Operation::Revocation(revocation) => {
+                let (dlg, revs, content) = revocation.payload.after();
+                (dlg.to_vec(), revs, content)
+            }
         }
     }
 
-    pub fn after_auth(&self) -> Vec<&'a Operation<'a, T>> {
-        let (_dlgs, _revs) = match self {
-            Operation::Delegation(delegation) => delegation.payload.after_auth(),
-            Operation::Revocation(revocation) => revocation.payload.after_auth(),
-        };
-
-        todo!()
-
-        // dlgs.into_iter()
-        //     .map(|dlg| dlg.into())
-        //     .chain(revs.into_iter().map(|rev| &rev.clone().into()))
-        //     .collect()
+    pub fn after_content(&self) -> &'a BTreeMap<&'a Document<'a, T>, Vec<T>> {
+        match self {
+            Operation::Delegation(delegation) => &delegation.payload.after_content,
+            Operation::Revocation(revocation) => &revocation.payload.after_content,
+        }
     }
 
-    pub fn ancestors(&self) -> Result<(CaMap<&'a Operation<'a, T>>, usize), AncestorError> {
-        if self.after_auth().is_empty() {
+    pub fn is_root(&self) -> bool {
+        match self {
+            Operation::Delegation(delegation) => delegation.payload.is_root(),
+            Operation::Revocation(_) => false,
+        }
+    }
+
+    pub fn ancestors(&'a self) -> Result<(CaMap<Operation<'a, T>>, usize), AncestorError> {
+        if self.is_root() {
             return Ok((CaMap::new(), 0));
         }
 
-        let mut ancestors = HashSet::new();
-        let mut heads: Vec<(&Operation<'a, T>, usize)> =
-            self.after_auth().iter().map(|op| (*op, 0)).collect();
+        let mut ancestors = HashMap::new();
+        let mut heads = vec![];
 
-        // let mut touched_root = false;
+        let after_auth = &self.after_auth();
+        for op in after_auth.iter() {
+            heads.push((op, 0));
+        }
 
         while let Some(head) = heads.pop() {
             let (op, longest_known_path) = head;
 
-            if ancestors.contains(&head) {
-                continue;
-            }
+            match ancestors.get(&op) {
+                None => continue,
+                Some(&count) if count > longest_known_path + 1 => continue,
+                _ => {
+                    if op.subject() != self.subject() {
+                        return Err(AncestorError::MismatchedSubject(op.subject()));
+                    }
 
-            if op.subject() != self.subject() {
-                return Err(AncestorError::MismatchedSubject(op.subject()));
-            }
+                    for parent_op in after_auth.iter() {
+                        heads.push((parent_op, longest_known_path + 1));
+                    }
 
-            ancestors.insert((op, longest_known_path + 1));
-
-            let after_auth = op.after_auth();
-
-            // if after_auth.is_empty() {
-            //     touched_root = true;
-            // }
-
-            for parent in after_auth {
-                heads.push((parent, longest_known_path + 1));
-            }
+                    ancestors.insert(op, longest_known_path + 1)
+                }
+            };
         }
-
-        // FIXME not possible anymore?
-        // if !touched_root {
-        //     return Err(AncestorError::Unrooted);
-        // }
 
         Ok(ancestors.into_iter().fold(
             (CaMap::new(), 0),
             |(mut acc_set, acc_count), (op, count)| {
-                acc_set.insert(op);
+                acc_set.insert(op.clone());
 
                 if count > acc_count {
                     (acc_set, count)
@@ -127,23 +134,18 @@ impl<'a, T: ContentRef> Operation<'a, T> {
 
     pub fn topsort(
         heads: &'a [(Digest<Operation<'a, T>>, Operation<'a, T>)],
-    ) -> Result<Vec<(Digest<Operation<'a, T>>, &'a Operation<'a, T>)>, AncestorError> {
-        let mut ops_with_ancestors: HashMap<
+    ) -> Result<Vec<(Digest<Operation<'a, T>>, Operation<'a, T>)>, AncestorError> {
+        let ops_with_ancestors: HashMap<
             Digest<Operation<'a, T>>,
-            (&'a Operation<'a, T>, CaMap<&Operation<'a, T>>, usize),
-        > = HashMap::new();
-
-        for (digest, op) in heads.iter() {
-            if ops_with_ancestors.contains_key(&digest) {
-                continue;
-            }
-
-            let ancestors = op.ancestors()?;
-            ops_with_ancestors.insert(*digest, (op, ancestors.0, ancestors.1));
-        }
+            (&'a Operation<'a, T>, CaMap<Operation<'a, T>>, usize),
+        > = HashMap::from_iter(
+            heads
+                .iter()
+                .map(|(digest, op)| (*digest, (op, CaMap::new(), 0))),
+        );
 
         let mut seen = HashSet::new();
-        let mut adjacencies: TopologicalSort<(Digest<Operation<'a, T>>, &'a Operation<'a, T>)> =
+        let mut adjacencies: TopologicalSort<(Digest<Operation<'a, T>>, &Operation<'a, T>)> =
             topological_sort::TopologicalSort::new();
 
         for (hash, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
@@ -154,49 +156,48 @@ impl<'a, T: ContentRef> Operation<'a, T> {
                     .get(&other_hash.coerce())
                     .expect("values that we just put there to be there");
 
-                let ancestor_set: HashSet<&&'a Operation<'a, T>> = op_ancestors.values().collect();
+                let ancestor_set: HashSet<&Operation<'a, T>> = op_ancestors.values().collect();
 
-                let other_ancestor_set: HashSet<&&'a Operation<'a, T>> =
+                let other_ancestor_set: HashSet<&Operation<'a, T>> =
                     other_ancestors.values().collect();
 
                 if ancestor_set.is_subset(&other_ancestor_set) {
-                    adjacencies.add_dependency(
-                        ((*other_hash).coerce(), *other_op),
-                        ((*hash).coerce(), *op),
-                    );
+                    adjacencies.add_dependency((*other_hash, other_op), (*hash, *op));
                 }
 
                 if ancestor_set.is_superset(&other_ancestor_set) {
-                    adjacencies.add_dependency(
-                        ((*hash).coerce(), *op),
-                        ((*other_hash).coerce(), *other_op),
-                    );
+                    adjacencies.add_dependency((*hash, *op), (*other_hash, other_op));
                 }
 
                 // Concurrent, so check revocations
                 if op.is_revocation() {
                     match longest_path.cmp(&other_longest_path) {
-                        Ordering::Less => adjacencies
-                            .add_dependency(((*hash).coerce(), *op), ((*other_hash).coerce(), *op)),
-                        Ordering::Greater => adjacencies
-                            .add_dependency(((*other_hash).coerce(), *op), ((*hash).coerce(), *op)),
-                        Ordering::Equal => match other_hash.cmp(&hash.coerce()) {
-                            Ordering::Less => adjacencies.add_dependency(
-                                ((*hash).coerce(), *op),
-                                ((*other_hash).coerce(), *op),
-                            ),
-                            Ordering::Greater => adjacencies.add_dependency(
-                                ((*other_hash).coerce(), *op),
-                                ((*hash).coerce(), *op),
-                            ),
-                            Ordering::Equal => {}
-                        },
+                        Ordering::Less => {
+                            adjacencies.add_dependency((*hash, *op), (*other_hash, other_op))
+                        }
+                        Ordering::Greater => {
+                            adjacencies.add_dependency((*other_hash, other_op), (*hash, *op))
+                        }
+                        Ordering::Equal => {
+                            match other_hash.cmp(&hash.coerce()) {
+                                Ordering::Less => adjacencies
+                                    .add_dependency((*hash, *op), (*other_hash, other_op)),
+                                Ordering::Greater => adjacencies
+                                    .add_dependency((*other_hash, other_op), (*hash, *op)),
+                                Ordering::Equal => {}
+                            }
+                        }
                     }
                 }
             }
         }
 
-        Ok(adjacencies.into_iter().collect())
+        let mut acc = vec![];
+        for (digest, op) in adjacencies.into_iter() {
+            acc.push((digest, op.clone()));
+        }
+
+        Ok(acc)
     }
 }
 

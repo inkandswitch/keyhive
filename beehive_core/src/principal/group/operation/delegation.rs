@@ -28,7 +28,6 @@ impl<'a, T: ContentRef> Delegation<'a, T> {
         }
     }
 
-    // FIXME make trait?
     pub fn after(
         &'a self,
     ) -> (
@@ -37,22 +36,24 @@ impl<'a, T: ContentRef> Delegation<'a, T> {
         &'a BTreeMap<&'a Document<'a, T>, Vec<T>>,
     ) {
         let (dlgs, revs) = self.after_auth();
-        (dlgs, revs, &self.after_content)
+        (
+            dlgs.map(|d| vec![d]).unwrap_or(vec![]),
+            revs.to_vec(),
+            &self.after_content,
+        )
     }
 
     pub fn after_auth(
         &'a self,
     ) -> (
-        Vec<&'a Signed<Delegation<'a, T>>>,
-        Vec<&'a Signed<Revocation<'a, T>>>,
+        Option<&'a Signed<Delegation<'a, T>>>,
+        &[&'a Signed<Revocation<'a, T>>],
     ) {
-        let dlgs = if let Some(proof) = self.proof {
-            vec![proof]
-        } else {
-            vec![]
-        };
+        (self.proof, &self.after_revocations)
+    }
 
-        (dlgs, self.after_revocations.clone())
+    pub fn is_root(&self) -> bool {
+        self.proof.is_none()
     }
 }
 
@@ -109,11 +110,11 @@ impl<'a, T: ContentRef> PartialOrd for Delegation<'a, T> {
     }
 }
 
-impl<'a, T: ContentRef + Ord> Ord for Delegation<'a, T> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        StaticDelegation::from(self.clone()).cmp(&StaticDelegation::from(other.clone()))
-    }
-}
+// impl<'a, T: ContentRef + Ord> Ord for Delegation<'a, T> {
+//     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+//         self.partial_cmp(other).unwrap()
+//     }
+// }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct StaticDelegation<T: ContentRef> {
@@ -140,8 +141,8 @@ impl<'a, T: ContentRef> From<Delegation<'a, T>> for StaticDelegation<T> {
             after_content: BTreeMap::from_iter(
                 delegation
                     .after_content
-                    .iter()
-                    .map(|(document, content)| (document.id().into(), content.clone())),
+                    .into_iter()
+                    .map(|(document, content)| (document.id().into(), content)),
             ),
         }
     }

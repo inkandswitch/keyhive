@@ -53,8 +53,8 @@ impl<'a, T: ContentRef> Context<'a, T> {
     }
 
     pub fn generate_doc(&'a mut self, coparents: Vec<&'a Agent<'a, T>>) -> &Document<'a, T> {
-        let mut parents = coparents.clone();
-        let self_agent = self.active.clone().into();
+        let mut parents = coparents;
+        let self_agent = self.active.into();
         parents.push(&self_agent);
         self.docs.generate_document(parents)
     }
@@ -96,7 +96,6 @@ impl<'a, T: ContentRef> Context<'a, T> {
         //
         match from {
             Membered::Group(og_group) => {
-                // let mut owned_group = group.clone();
                 let group = self.groups.get_mut(&og_group.state.id).expect("FIXME");
 
                 group.members.remove(&to_revoke.id());
@@ -105,7 +104,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
                 if let Some(revoke) = group.state.delegations_for(to_revoke).pop() {
                     let proof = group
                         .state
-                        .delegations_for(&self.active.clone().into())
+                        .delegations_for(&self.active.into())
                         .pop()
                         .expect("FIXME");
 
@@ -243,7 +242,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
                 }
                 _ => {
                     if let Some(membered) = merged_store.get(&member.verifying_key().into()) {
-                        for (mem, proof) in membered.members().clone() {
+                        for (mem, proof) in membered.members() {
                             let current_path_access =
                                 access.min(proof.payload.can).min(parent_access);
 

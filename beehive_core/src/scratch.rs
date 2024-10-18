@@ -16,7 +16,7 @@ pub fn dcgka_2m_broadcast<'a, T: Serialize>(
 
     for pk in public_keys {
         let shared_secret: x25519_dalek::SharedSecret = sharer_key.diffie_hellman(&pk.0);
-        let shared_key = SymmetricKey::from(shared_secret.as_bytes().clone());
+        let shared_key = SymmetricKey::from(shared_secret.as_bytes());
 
         let nonce = Siv::new(&shared_key, &key.0, doc);
 

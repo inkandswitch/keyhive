@@ -32,17 +32,7 @@ impl<'a, T: ContentRef> Revocation<'a, T> {
         Vec<&'a Signed<Revocation<'a, T>>>,
         &'a BTreeMap<&'a Document<'a, T>, Vec<T>>,
     ) {
-        let (dlgs, revs) = self.after_auth();
-        (dlgs, revs, &self.after_content)
-    }
-
-    pub fn after_auth(
-        &self,
-    ) -> (
-        Vec<&'a Signed<Delegation<'a, T>>>,
-        Vec<&'a Signed<Revocation<'a, T>>>,
-    ) {
-        (vec![self.revoke], vec![])
+        (vec![self.revoke], vec![], &self.after_content)
     }
 }
 
@@ -116,8 +106,8 @@ impl<'a, T: ContentRef> From<Revocation<'a, T>> for StaticRevocation<T> {
             after_content: BTreeMap::from_iter(
                 revocation
                     .after_content
-                    .iter()
-                    .map(|(doc, content)| (Identifier::from(doc.id()), content.clone())),
+                    .into_iter()
+                    .map(|(doc, content)| (Identifier::from(doc.id()), content)),
             ),
         }
     }
