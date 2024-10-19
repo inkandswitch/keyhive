@@ -3,7 +3,7 @@ use super::{
     document::{Document, DocumentId},
     group::{id::GroupId, Group},
     identifier::Identifier,
-    individual::Individual,
+    individual::{id::IndividualId, Individual},
     verifiable::Verifiable,
 };
 use crate::content::reference::ContentRef;
@@ -21,8 +21,8 @@ pub enum Agent<'a, T: ContentRef> {
 impl<'a, T: ContentRef> Agent<'a, T> {
     pub fn id(&self) -> AgentId {
         match self {
-            Agent::Active(a) => AgentId::ActiveId(a.id()),
-            Agent::Individual(i) => AgentId::IndividualId(i.id),
+            Agent::Active(a) => a.agent_id(),
+            Agent::Individual(i) => i.agent_id(),
             Agent::Group(g) => g.agent_id(),
             Agent::Document(d) => d.agent_id(),
         }
@@ -66,10 +66,10 @@ impl<'a, T: ContentRef> Verifiable for Agent<'a, T> {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum AgentId {
-    ActiveId(Identifier),
-    IndividualId(Identifier),
-    GroupId(Identifier),
-    DocumentId(Identifier),
+    ActiveId(IndividualId),
+    IndividualId(IndividualId),
+    GroupId(GroupId),
+    DocumentId(DocumentId),
 }
 
 impl AgentId {
@@ -104,32 +104,31 @@ impl<'a, T: ContentRef> From<&Agent<'a, T>> for AgentId {
     }
 }
 
-// FIXME add IndividualID
-impl From<Identifier> for AgentId {
-    fn from(id: Identifier) -> Self {
+impl From<IndividualId> for AgentId {
+    fn from(id: IndividualId) -> Self {
         AgentId::IndividualId(id)
     }
 }
 
 impl From<GroupId> for AgentId {
     fn from(id: GroupId) -> Self {
-        AgentId::GroupId(id.0)
+        AgentId::GroupId(id)
     }
 }
 
 impl From<DocumentId> for AgentId {
     fn from(id: DocumentId) -> Self {
-        AgentId::DocumentId(id.0)
+        AgentId::DocumentId(id)
     }
 }
 
 impl From<AgentId> for Identifier {
     fn from(id: AgentId) -> Self {
         match id {
-            AgentId::ActiveId(i) => i,
-            AgentId::IndividualId(i) => i,
-            AgentId::GroupId(i) => i,
-            AgentId::DocumentId(i) => i,
+            AgentId::ActiveId(i) => i.into(),
+            AgentId::IndividualId(i) => i.into(),
+            AgentId::GroupId(i) => i.into(),
+            AgentId::DocumentId(i) => i.into(),
         }
     }
 }

@@ -1,4 +1,4 @@
-use super::{identifier::Identifier, verifiable::Verifiable};
+use super::{identifier::Identifier, individual::id::IndividualId, verifiable::Verifiable};
 use crate::{
     access::Access,
     content::reference::ContentRef,
@@ -7,17 +7,21 @@ use crate::{
         agent::{Agent, AgentId},
         group::operation::{delegation::Delegation, revocation::Revocation, Operation},
         individual::Individual,
+        membered::MemberedId,
     },
     util::content_addressed_map::CaMap,
 };
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    fmt::{Display, Formatter},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Document<'a, T: ContentRef> {
     pub members: HashMap<AgentId, Digest<Signed<Delegation<'a, T>>>>,
-    pub reader_keys: HashMap<Identifier, (&'a Individual, ShareKey)>, // FIXME May remove when BeeKEM, also FIXME Individual ID
+    pub reader_keys: HashMap<IndividualId, (&'a Individual, ShareKey)>, // FIXME May remove when BeeKEM, also FIXME Individual ID
     pub state: DocumentState<'a, T>,
     pub op_heads: Vec<(Digest<Operation<'a, T>>, Operation<'a, T>)>,
 }
@@ -366,6 +370,10 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
 pub struct DocumentId(pub Identifier);
 
 impl DocumentId {
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.0.to_bytes()
+    }
+
     pub fn as_bytes(&self) -> &[u8; 32] {
         self.0.as_bytes()
     }
@@ -381,8 +389,20 @@ impl From<DocumentId> for Identifier {
     }
 }
 
+impl From<DocumentId> for MemberedId {
+    fn from(id: DocumentId) -> MemberedId {
+        MemberedId::DocumentId(id.into())
+    }
+}
+
 impl Verifiable for DocumentId {
     fn verifying_key(&self) -> VerifyingKey {
         self.0.into()
+    }
+}
+
+impl Display for DocumentId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }

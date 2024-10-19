@@ -106,7 +106,7 @@ impl<'a, T: ContentRef> Operation<'a, T> {
                 Some(&count) if count > longest_known_path + 1 => continue,
                 _ => {
                     if op.subject() != self.subject() {
-                        return Err(AncestorError::MismatchedSubject(op.subject()));
+                        return Err(AncestorError::MismatchedSubject(op.subject().into()));
                     }
 
                     for parent_op in after_auth.iter() {

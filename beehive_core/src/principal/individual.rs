@@ -1,11 +1,13 @@
 //! A single user agent.
 
+pub mod id;
 pub mod state;
 
-use super::{identifier::Identifier, verifiable::Verifiable};
+use super::{agent::AgentId, verifiable::Verifiable};
 use crate::crypto::{digest::Digest, share_key::ShareKey};
 use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
+use id::IndividualId;
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
 use std::collections::HashSet;
@@ -17,7 +19,7 @@ use std::collections::HashSet;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Individual {
     /// The public key identifier.
-    pub id: Identifier,
+    pub id: IndividualId,
 
     /// [`ShaerKey`] pre-keys.
     ///
@@ -42,10 +44,18 @@ impl Individual {
     pub fn generate(signer: &ed25519_dalek::SigningKey) -> Self {
         let state = PrekeyState::generate(signer, 8);
         Self {
-            id: signer.verifying_key().into(),
+            id: IndividualId(signer.verifying_key().into()),
             prekeys: state.materialize(),
             prekey_state: state,
         }
+    }
+
+    pub fn id(&self) -> IndividualId {
+        self.id
+    }
+
+    pub fn agent_id(&self) -> AgentId {
+        AgentId::IndividualId(self.id)
     }
 }
 
@@ -62,7 +72,7 @@ impl std::hash::Hash for Individual {
 // FIXME required?
 impl std::fmt::Display for Individual {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", BASE64_STANDARD.encode(self.id.to_bytes()))
+        BASE64_STANDARD.encode(self.id.to_bytes()).fmt(f)
     }
 }
 

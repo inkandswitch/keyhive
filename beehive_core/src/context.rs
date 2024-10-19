@@ -9,9 +9,8 @@ use crate::{
         agent::{Agent, AgentId},
         document::{DocStore, Document},
         group::{operation::revocation::Revocation, store::GroupStore, Group},
-        identifier::Identifier,
-        individual::Individual,
-        membered::{Membered, MemberedId},
+        individual::{id::IndividualId, Individual},
+        membered::Membered,
         verifiable::Verifiable,
     },
 };
@@ -26,7 +25,7 @@ pub struct Context<'a, T: ContentRef> {
     pub active: Active,
 
     /// The [`Individual`]s that are known to this agent.
-    pub individuals: BTreeMap<Identifier, Individual>, // FIXME ID
+    pub individuals: BTreeMap<IndividualId, Individual>,
 
     /// The [`Group`]s that are known to this agent.
     pub groups: GroupStore<'a, T>,
@@ -36,9 +35,9 @@ pub struct Context<'a, T: ContentRef> {
 }
 
 impl<'a, T: ContentRef> Context<'a, T> {
-    pub fn generate() -> Self {
+    pub fn generate(signing_key: ed25519_dalek::SigningKey) -> Self {
         Self {
-            active: Active::generate(),
+            active: Active::generate(signing_key),
             individuals: Default::default(),
             groups: GroupStore::new(),
             docs: DocStore::new(),
@@ -59,7 +58,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
         self.docs.generate_document(parents)
     }
 
-    pub fn id(&self) -> Identifier {
+    pub fn id(&self) -> IndividualId {
         self.active.id()
     }
 
@@ -179,7 +178,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
                         continue;
                     }
 
-                    if group.member_id() == MemberedId::GroupId(*id) {
+                    if group.member_id() == *id.into() {
                         continue;
                     }
 

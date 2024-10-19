@@ -11,7 +11,7 @@
 
 pub mod access;
 pub mod content;
-// pub mod context;
+pub mod context;
 pub mod crypto;
 pub mod principal;
 pub mod util;

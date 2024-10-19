@@ -1,6 +1,10 @@
 //! The current user agent (which can sign and encrypt).
 
-use super::{document::Document, individual::Individual, verifiable::Verifiable};
+use super::{
+    document::Document,
+    individual::{id::IndividualId, Individual},
+    verifiable::Verifiable,
+};
 use crate::{
     access::Access,
     content::reference::ContentRef,
@@ -11,7 +15,6 @@ use crate::{
     principal::{
         agent::{Agent, AgentId},
         group::operation::{delegation::Delegation, revocation::Revocation},
-        identifier::Identifier,
         membered::Membered,
     },
 };
@@ -41,12 +44,12 @@ impl Active {
         }
     }
 
-    pub fn id(&self) -> Identifier {
-        self.signer.verifying_key().into()
+    pub fn id(&self) -> IndividualId {
+        self.individual.id()
     }
 
     pub fn agent_id(&self) -> AgentId {
-        AgentId::IndividualId(self.id())
+        AgentId::IndividualId(self.id().into())
     }
 
     /// Sign a payload.
@@ -102,7 +105,7 @@ impl Active {
         to: &Individual,
         message: &mut [u8],
     ) -> Encrypted<&[u8]> {
-        let recipient_share_pk = doc.reader_keys.get(&to.id).expect("FIXME");
+        let recipient_share_pk = doc.reader_keys.get(&to.id()).expect("FIXME");
         let our_pk = doc.reader_keys.get(&self.id()).expect("FIXME");
 
         let our_sk = self.share_key_pairs.get(&our_pk.1).expect("FIXME");
@@ -126,7 +129,7 @@ pub enum DelegationError {
 
 impl std::fmt::Display for Active {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.id())
+        std::fmt::Display::fmt(&self.id(), f)
     }
 }
 
@@ -155,12 +158,6 @@ impl std::hash::Hash for Active {
         }
     }
 }
-
-// impl From<Active> for Individual {
-//     fn from(active: Active) -> Self {
-//         active.id().into()
-//     }
-// }
 
 impl Verifiable for Active {
     fn verifying_key(&self) -> VerifyingKey {
@@ -216,7 +213,7 @@ impl PartialOrd for Active {
     }
 }
 
-// FIXME
+// FIXME test
 impl Ord for Active {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.partial_cmp(other)

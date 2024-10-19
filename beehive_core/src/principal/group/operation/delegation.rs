@@ -4,7 +4,11 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
-    principal::{agent::Agent, document::Document, identifier::Identifier},
+    principal::{
+        agent::{Agent, AgentId},
+        document::Document,
+        identifier::Identifier,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, hash::Hash};
@@ -20,11 +24,11 @@ pub struct Delegation<'a, T: ContentRef> {
 }
 
 impl<'a, T: ContentRef> Delegation<'a, T> {
-    pub fn subject(&self, issuer: Identifier) -> Identifier {
+    pub fn subject(&self, issuer: AgentId) -> Identifier {
         if let Some(proof) = self.proof {
             proof.subject()
         } else {
-            issuer
+            issuer.into()
         }
     }
 

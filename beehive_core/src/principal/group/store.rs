@@ -57,9 +57,6 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
         self.0.iter()
     }
 
-    // FIXME shoudl be more like this:
-    // pub fn transative_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
-    // FIXME return path as well?
     pub fn transative_members(
         &self,
         group: &Group<'a, T>,
