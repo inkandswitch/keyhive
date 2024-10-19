@@ -99,6 +99,14 @@ impl<'a, T: ContentRef> Context<'a, T> {
 
                 group.members.remove(&to_revoke.id());
 
+                while let Some(revoke) = group.get_capability(member_id) {
+                    group.state.revocations.insert(self.sign(Revocation {
+                        revoke,
+                        proof,
+                        after_content,
+                    }));
+                }
+
                 // FIXME
                 if let Some(revoke) = group.state.delegations_for(to_revoke).pop() {
                     let proof = group
@@ -106,12 +114,6 @@ impl<'a, T: ContentRef> Context<'a, T> {
                         .delegations_for(&self.active.into())
                         .pop()
                         .expect("FIXME");
-
-                    group.state.revocations.insert(self.sign(Revocation {
-                        revoke,
-                        proof,
-                        after_content,
-                    }));
                 }
             }
             Membered::Document(og_doc) => {

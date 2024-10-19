@@ -20,7 +20,7 @@ use std::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Document<'a, T: ContentRef> {
-    pub members: HashMap<AgentId, Digest<Signed<Delegation<'a, T>>>>,
+    pub members: HashMap<AgentId, Vec<Digest<Signed<Delegation<'a, T>>>>>,
     pub reader_keys: HashMap<IndividualId, (&'a Individual, ShareKey)>, // FIXME May remove when BeeKEM, also FIXME Individual ID
     pub state: DocumentState<'a, T>,
     pub op_heads: Vec<(Digest<Operation<'a, T>>, Operation<'a, T>)>,
@@ -31,17 +31,33 @@ impl<'a, T: ContentRef> Document<'a, T> {
         self.state.id
     }
 
-    pub fn get_capabilty(&'a self, member_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
-        self.members.get(member_id).map(move |hash| {
-            self.state
-                .delegations
-                .get(hash)
-                .expect("member that was just found is missing")
-        })
-    }
-
     pub fn agent_id(&self) -> AgentId {
         self.id().into()
+    }
+
+    pub fn get_capabilty(&'a self, member_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
+        self.members.get(member_id).map(move |hashes| {
+            hashes
+                .iter()
+                .map(|h| self.state.delegations.get(h).unwrap())
+                .into_iter()
+                .max_by(|d1, d2| d1.payload.can.cmp(&d2.payload.can))
+        })?
+    }
+
+    pub fn get_members(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
+        self.members
+            .iter()
+            .map(|(id, hashes)| {
+                (
+                    *id,
+                    hashes
+                        .iter()
+                        .map(|h| self.state.delegations.get(h).unwrap())
+                        .collect(),
+                )
+            })
+            .collect()
     }
 
     pub fn generate(parents: Vec<&'a Agent<T>>) -> Self {
@@ -80,17 +96,10 @@ impl<'a, T: ContentRef> Document<'a, T> {
             let hash = doc.state.delegations.insert(dlg);
             doc.state.delegation_heads.insert(hash);
 
-            doc.members.insert(parent.id(), hash);
+            doc.members.insert(parent.id(), vec![hash]);
         }
 
         doc
-    }
-
-    pub fn get_members(&'a self) -> HashMap<AgentId, &'a Signed<Delegation<'a, T>>> {
-        self.members
-            .iter()
-            .map(|(k, v)| (*k, self.state.delegations.get(v).unwrap()))
-            .collect()
     }
 
     pub fn add_member(&'a mut self, signed_delegation: Signed<Delegation<'a, T>>) {
@@ -101,7 +110,14 @@ impl<'a, T: ContentRef> Document<'a, T> {
         let id = signed_delegation.payload.delegate.id();
         let hash = self.state.delegations.insert(signed_delegation);
 
-        self.members.insert(id, hash);
+        match self.members.get_mut(&id) {
+            Some(caps) => {
+                caps.push(hash);
+            }
+            None => {
+                self.members.insert(id, vec![]);
+            }
+        }
     }
 
     pub fn materialize(&'a mut self) {
@@ -124,7 +140,7 @@ impl<'a, T: ContentRef> Document<'a, T> {
             match op {
                 Operation::Delegation(d) => {
                     self.members
-                        .insert(d.payload.delegate.id(), digest.coerce());
+                        .insert(d.payload.delegate.id(), vec![digest.coerce()]);
                 }
                 Operation::Revocation(r) => {
                     self.members.remove(&r.payload.revoke.payload.delegate.id());
@@ -291,13 +307,15 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
 
         let mut explore: Vec<GroupAccess<'a, T>> = vec![];
 
-        for hash in doc.members.values() {
-            let delegation = doc.state.delegations.get(hash).unwrap();
-            explore.push(GroupAccess {
-                agent: delegation.payload.delegate,
-                agent_access: delegation.payload.can, // FIXME need to lookup
-                parent_access: Access::Admin,
-            });
+        for hashes in doc.members.values() {
+            for hash in hashes {
+                let delegation = doc.state.delegations.get(hash).unwrap();
+                explore.push(GroupAccess {
+                    agent: delegation.payload.delegate,
+                    agent_access: delegation.payload.can, // FIXME need to lookup
+                    parent_access: Access::Admin,
+                });
+            }
         }
 
         let mut caps: BTreeMap<AgentId, (&Agent<T>, Access)> = BTreeMap::new();
@@ -322,41 +340,46 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
                     caps.insert(member.id(), (member, best_access));
                 }
                 Agent::Group(group) => {
-                    for (mem, proof) in group.get_member_refs().iter() {
-                        let current_path_access = access.min(proof.payload.can).min(parent_access);
+                    for (mem, proofs) in group.get_members().iter() {
+                        for proof in proofs.iter() {
+                            let current_path_access =
+                                access.min(proof.payload.can).min(parent_access);
 
-                        let best_access = if let Some((_, prev_found_path_access)) = caps.get(&mem)
-                        {
-                            (*prev_found_path_access).max(current_path_access)
-                        } else {
-                            current_path_access
-                        };
+                            let best_access =
+                                if let Some((_, prev_found_path_access)) = caps.get(&mem) {
+                                    (*prev_found_path_access).max(current_path_access)
+                                } else {
+                                    current_path_access
+                                };
 
-                        explore.push(GroupAccess {
-                            agent: &proof.payload.delegate,
-                            agent_access: best_access,
-                            parent_access,
-                        });
+                            explore.push(GroupAccess {
+                                agent: &proof.payload.delegate,
+                                agent_access: best_access,
+                                parent_access,
+                            });
+                        }
                     }
                 }
                 Agent::Document(doc) => {
-                    for (mem, proof_hash) in doc.members.iter() {
-                        let proof = doc.state.delegations.get(proof_hash).unwrap();
+                    for (mem, proof_hashes) in doc.members.iter() {
+                        for proof_hash in proof_hashes.iter() {
+                            let proof = doc.state.delegations.get(proof_hash).unwrap();
+                            let current_path_access =
+                                access.min(proof.payload.can).min(parent_access);
 
-                        let current_path_access = access.min(proof.payload.can).min(parent_access);
+                            let best_access =
+                                if let Some((_, prev_found_path_access)) = caps.get(&mem) {
+                                    (*prev_found_path_access).max(current_path_access)
+                                } else {
+                                    current_path_access
+                                };
 
-                        let best_access = if let Some((_, prev_found_path_access)) = caps.get(&mem)
-                        {
-                            (*prev_found_path_access).max(current_path_access)
-                        } else {
-                            current_path_access
-                        };
-
-                        explore.push(GroupAccess {
-                            agent: &proof.payload.delegate,
-                            agent_access: best_access,
-                            parent_access,
-                        });
+                            explore.push(GroupAccess {
+                                agent: &proof.payload.delegate,
+                                agent_access: best_access,
+                                parent_access,
+                            });
+                        }
                     }
                 }
             }

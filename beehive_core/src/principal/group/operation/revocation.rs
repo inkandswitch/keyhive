@@ -12,11 +12,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct Revocation<'a, T: ContentRef> {
     pub revoke: &'a Signed<Delegation<'a, T>>,
-
-    // FIXME probably will just make this look at the ambient state,
-    // but in the meantime this is just so much easier
-    pub proof: &'a Signed<Delegation<'a, T>>,
-
+    pub proof: Option<&'a Signed<Delegation<'a, T>>>,
     pub after_content: BTreeMap<&'a Document<'a, T>, Vec<T>>,
 }
 
@@ -45,7 +41,7 @@ impl<'a, T: ContentRef> Signed<Revocation<'a, T>> {
 impl<'a, T: ContentRef> PartialOrd for Revocation<'a, T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match self.revoke.partial_cmp(other.revoke) {
-            Some(std::cmp::Ordering::Equal) => match self.proof.partial_cmp(other.proof) {
+            Some(std::cmp::Ordering::Equal) => match self.proof.partial_cmp(&other.proof) {
                 Some(std::cmp::Ordering::Equal) => self
                     .after_content
                     .iter()

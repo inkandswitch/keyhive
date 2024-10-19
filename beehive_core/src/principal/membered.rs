@@ -36,7 +36,7 @@ impl<'a, T: ContentRef> Membered<'a, T> {
     }
 
     // FIXME make a trait and apply to children
-    pub fn members(&'a self) -> HashMap<AgentId, &'a Signed<Delegation<'a, T>>> {
+    pub fn members(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
         match self {
             Membered::Group(group) => group.get_members(),
             Membered::Document(document) => document.get_members(),

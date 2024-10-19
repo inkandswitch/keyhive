@@ -59,7 +59,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
 
     pub fn transative_members(
         &self,
-        group: &Group<'a, T>,
+        group: &'a Group<'a, T>,
     ) -> BTreeMap<AgentId, (&'a Agent<'a, T>, Access)> {
         struct GroupAccess<'b, U: ContentRef> {
             agent: &'b Agent<'b, U>,
@@ -69,8 +69,8 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
 
         let mut explore: Vec<GroupAccess<'a, T>> = vec![];
 
-        for hash in group.members.values() {
-            let dlg = group.state.delegations.get(hash).unwrap();
+        for member in group.members.keys() {
+            let dlg = group.get_capability(member).unwrap();
 
             explore.push(GroupAccess {
                 agent: dlg.payload.delegate,
@@ -88,7 +88,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
         }) = explore.pop()
         {
             match member {
-                Agent::Individual(_) => {
+                Agent::Active(_) | Agent::Individual(_) => {
                     let current_path_access = access.min(parent_access);
 
                     let best_access =
@@ -100,23 +100,43 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
 
                     caps.insert(member.id(), (member, best_access));
                 }
-                _ => {
-                    if let Some(group) = self.0.get(&GroupId(member.id().into())) {
-                        for (agent_id, proof_hash) in group.members.iter() {
-                            let proof = group.state.delegations.get(proof_hash).unwrap();
-
+                Agent::Group(group) => {
+                    for (mem, proofs) in group.get_members().iter() {
+                        for proof in proofs.iter() {
                             let current_path_access =
                                 access.min(proof.payload.can).min(parent_access);
 
                             let best_access =
-                                if let Some((_, prev_found_path_access)) = caps.get(agent_id) {
+                                if let Some((_, prev_found_path_access)) = caps.get(&mem) {
                                     (*prev_found_path_access).max(current_path_access)
                                 } else {
                                     current_path_access
                                 };
 
                             explore.push(GroupAccess {
-                                agent: proof.payload.delegate,
+                                agent: &proof.payload.delegate,
+                                agent_access: best_access,
+                                parent_access,
+                            });
+                        }
+                    }
+                }
+                Agent::Document(doc) => {
+                    for (mem, proof_hashes) in doc.members.iter() {
+                        for proof_hash in proof_hashes.iter() {
+                            let proof = doc.state.delegations.get(proof_hash).unwrap();
+                            let current_path_access =
+                                access.min(proof.payload.can).min(parent_access);
+
+                            let best_access =
+                                if let Some((_, prev_found_path_access)) = caps.get(&mem) {
+                                    (*prev_found_path_access).max(current_path_access)
+                                } else {
+                                    current_path_access
+                                };
+
+                            explore.push(GroupAccess {
+                                agent: &proof.payload.delegate,
                                 agent_access: best_access,
                                 parent_access,
                             });

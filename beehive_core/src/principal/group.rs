@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Group<'a, T: ContentRef> {
     /// The current view of members of a group.
-    members: HashMap<AgentId, Digest<Signed<Delegation<'a, T>>>>, // FIXME make not publicly editable!
+    members: HashMap<AgentId, Vec<Digest<Signed<Delegation<'a, T>>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
     state: state::GroupState<'a, T>,
@@ -60,7 +60,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
 
             let hash = delegations.insert(dlg);
             delegation_heads.insert(hash);
-            members.insert((*parent).id(), hash);
+            members.insert((*parent).id(), vec![hash]);
         }
 
         Group {
@@ -89,22 +89,27 @@ impl<'a, T: ContentRef> Group<'a, T> {
     }
 
     pub fn get_capability(&'a self, member_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
-        self.members
-            .get(member_id)
-            .map(move |hash| self.state.delegations.get(hash).unwrap())
+        self.members.get(member_id).map(move |hashes| {
+            hashes
+                .iter()
+                .map(|h| self.state.delegations.get(h).unwrap())
+                .into_iter()
+                .max_by(|d1, d2| d1.payload.can.cmp(&d2.payload.can))
+        })?
     }
 
-    pub fn get_members(&'a self) -> HashMap<AgentId, &'a Signed<Delegation<'a, T>>> {
+    pub fn get_members(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
         self.members
             .iter()
-            .map(|(k, v)| (*k, self.state.delegations.get(v).unwrap()))
-            .collect()
-    }
-
-    pub fn get_member_refs(&'a self) -> HashMap<AgentId, &'a Signed<Delegation<'a, T>>> {
-        self.members
-            .iter()
-            .map(|(k, v)| (*k, self.state.delegations.get(v).unwrap()))
+            .map(|(id, hashes)| {
+                (
+                    *id,
+                    hashes
+                        .iter()
+                        .map(|h| self.state.delegations.get(h).unwrap())
+                        .collect(),
+                )
+            })
             .collect()
     }
 
@@ -119,7 +124,37 @@ impl<'a, T: ContentRef> Group<'a, T> {
         let id = signed_delegation.payload.delegate.id();
         let hash = self.state.delegations.insert(signed_delegation);
 
-        self.members.insert(id, hash);
+        match self.members.get_mut(&id) {
+            Some(caps) => {
+                caps.push(hash);
+            }
+            None => {
+                self.members.insert(id, vec![]);
+            }
+        }
+    }
+
+    pub fn revoke_member(
+        &'a mut self,
+        member_id: &AgentId,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) {
+        let revocations = &mut self.state.revocations;
+
+        while let Some(revoke_hashes) = self.members.get(member_id) {
+            for hash in revoke_hashes.iter() {
+                let revocation = Signed::sign(
+                    Revocation {
+                        revoke: self.state.delegations.get(hash).unwrap(),
+                        proof: None,
+                        after_content: BTreeMap::new(),
+                    },
+                    &signing_key,
+                );
+
+                revocations.insert(revocation);
+            }
+        }
     }
 
     pub fn materialize(&'a mut self) {
@@ -141,7 +176,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
             match op {
                 Operation::Delegation(d) => {
                     self.members
-                        .insert(d.payload.delegate.id(), digest.coerce());
+                        .insert(d.payload.delegate.id(), vec![digest.coerce()]);
                 }
                 Operation::Revocation(r) => {
                     self.members.remove(&r.payload.revoke.payload.delegate.id());
