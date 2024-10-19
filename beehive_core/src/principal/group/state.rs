@@ -9,7 +9,7 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
-    principal::{agent::Agent, verifiable::Verifiable},
+    principal::{agent::Agent, identifier::Identifier, verifiable::Verifiable},
     util::content_addressed_map::CaMap,
 };
 use ed25519_dalek::VerifyingKey;
@@ -18,14 +18,14 @@ use std::collections::{BTreeMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GroupState<'a, T: ContentRef> {
-    pub(super) id: GroupId,
+    pub(crate) id: GroupId,
 
-    pub(super) delegation_heads: HashSet<Digest<Signed<Delegation<'a, T>>>>,
-    pub(super) delegations: CaMap<Signed<Delegation<'a, T>>>,
+    pub(crate) delegation_heads: HashSet<Digest<Signed<Delegation<'a, T>>>>,
+    pub(crate) delegations: CaMap<Signed<Delegation<'a, T>>>,
     pub delegation_quarantine: CaMap<Signed<StaticDelegation<T>>>,
 
-    pub(super) revocation_heads: HashSet<Digest<Signed<Revocation<'a, T>>>>,
-    pub(super) revocations: CaMap<Signed<Revocation<'a, T>>>,
+    pub(crate) revocation_heads: HashSet<Digest<Signed<Revocation<'a, T>>>>,
+    pub(crate) revocations: CaMap<Signed<Revocation<'a, T>>>,
     pub revocation_quarantine: CaMap<Signed<StaticRevocation<T>>>,
 }
 
@@ -67,8 +67,12 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
         group
     }
 
-    pub fn id(&self) -> &GroupId {
-        &self.id
+    pub fn id(&self) -> Identifier {
+        self.id.into()
+    }
+
+    pub fn group_id(&self) -> GroupId {
+        self.id
     }
 
     pub fn delegation_heads(&self) -> &HashSet<Digest<Signed<Delegation<'a, T>>>> {

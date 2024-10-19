@@ -7,6 +7,7 @@ pub mod store;
 
 use super::{
     agent::{Agent, AgentId},
+    identifier::Identifier,
     verifiable::Verifiable,
 };
 use crate::{
@@ -29,11 +30,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Group<'a, T: ContentRef> {
     /// The current view of members of a group.
-    members: HashMap<AgentId, Vec<Digest<Signed<Delegation<'a, T>>>>>,
+    pub(crate) members: HashMap<AgentId, Vec<Digest<Signed<Delegation<'a, T>>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
-    state: state::GroupState<'a, T>,
-    op_heads: Vec<(Digest<Operation<'a, T>>, Operation<'a, T>)>,
+    pub(crate) state: state::GroupState<'a, T>,
 }
 
 impl<'a, T: ContentRef> Group<'a, T> {
@@ -65,7 +65,6 @@ impl<'a, T: ContentRef> Group<'a, T> {
 
         Group {
             members,
-            op_heads: vec![], // FIXME
             state: state::GroupState {
                 id: group_id,
 
@@ -80,12 +79,24 @@ impl<'a, T: ContentRef> Group<'a, T> {
         }
     }
 
+    pub fn id(&self) -> Identifier {
+        self.group_id().into()
+    }
+
     pub fn group_id(&self) -> GroupId {
-        *self.state.id()
+        self.state.group_id()
     }
 
     pub fn agent_id(&self) -> AgentId {
         self.group_id().into()
+    }
+
+    pub fn members(&self) -> &HashMap<AgentId, Vec<Digest<Signed<Delegation<'a, T>>>>> {
+        &self.members
+    }
+
+    pub fn delegations(&self) -> &CaMap<Signed<Delegation<'a, T>>> {
+        &self.state.delegations
     }
 
     pub fn get_capability(&'a self, member_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
@@ -158,7 +169,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
     }
 
     pub fn materialize(&'a mut self) {
-        self.op_heads = self
+        let op_heads: Vec<(Digest<Operation<'a, T>>, Operation<'a, T>)> = self
             .state
             .delegation_heads
             .iter()
@@ -172,7 +183,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
             }))
             .collect();
 
-        for (digest, op) in Operation::topsort(&self.op_heads).expect("FIXME").iter() {
+        for (digest, op) in Operation::topsort(&op_heads).expect("FIXME").iter() {
             match op {
                 Operation::Delegation(d) => {
                     self.members

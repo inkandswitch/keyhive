@@ -68,7 +68,7 @@ impl<'a, T: ContentRef> Verifiable for Agent<'a, T> {
             Agent::Active(a) => a.verifying_key(),
             Agent::Individual(i) => i.verifying_key(),
             Agent::Group(g) => g.verifying_key(),
-            Agent::Document(d) => d.verifying_key(),
+            Agent::Document(d) => d.group.verifying_key(),
         }
     }
 }

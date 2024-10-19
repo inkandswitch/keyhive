@@ -122,9 +122,9 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                     }
                 }
                 Agent::Document(doc) => {
-                    for (mem, proof_hashes) in doc.members.iter() {
+                    for (mem, proof_hashes) in doc.group.members.iter() {
                         for proof_hash in proof_hashes.iter() {
-                            let proof = doc.state.delegations.get(proof_hash).unwrap();
+                            let proof = doc.group.state.delegations.get(proof_hash).unwrap();
                             let current_path_access =
                                 access.min(proof.payload().can).min(parent_access);
 
