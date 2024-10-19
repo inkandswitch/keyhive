@@ -61,11 +61,11 @@ impl<'a, T: ContentRef> Operation<'a, T> {
     ) {
         match self {
             Operation::Delegation(delegation) => {
-                let (dlgs, revs, content) = delegation.payload.after();
+                let (dlgs, revs, content) = delegation.payload().after();
                 (dlgs, revs.to_vec(), content)
             }
             Operation::Revocation(revocation) => {
-                let (dlg, revs, content) = revocation.payload.after();
+                let (dlg, revs, content) = revocation.payload().after();
                 (dlg.to_vec(), revs, content)
             }
         }
@@ -73,14 +73,14 @@ impl<'a, T: ContentRef> Operation<'a, T> {
 
     pub fn after_content(&self) -> &'a BTreeMap<&'a Document<'a, T>, Vec<T>> {
         match self {
-            Operation::Delegation(delegation) => &delegation.payload.after_content,
-            Operation::Revocation(revocation) => &revocation.payload.after_content,
+            Operation::Delegation(delegation) => &delegation.payload().after_content,
+            Operation::Revocation(revocation) => &revocation.payload().after_content,
         }
     }
 
     pub fn is_root(&self) -> bool {
         match self {
-            Operation::Delegation(delegation) => delegation.payload.is_root(),
+            Operation::Delegation(delegation) => delegation.payload().is_root(),
             Operation::Revocation(_) => false,
         }
     }

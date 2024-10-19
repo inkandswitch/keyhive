@@ -17,8 +17,14 @@ pub struct Revocation<'a, T: ContentRef> {
 }
 
 impl<'a, T: ContentRef> Revocation<'a, T> {
+    // FIXME MemberedId
     pub fn subject(&self) -> Identifier {
         self.revoke.subject()
+    }
+
+    // FIXME AgentId
+    pub fn revoked_id(&self) -> Identifier {
+        self.revoke.payload().delegate.id()
     }
 
     pub fn after(
@@ -34,7 +40,7 @@ impl<'a, T: ContentRef> Revocation<'a, T> {
 
 impl<'a, T: ContentRef> Signed<Revocation<'a, T>> {
     pub fn subject(&self) -> Identifier {
-        self.payload.subject()
+        self.payload().subject()
     }
 }
 
@@ -50,7 +56,7 @@ impl<'a, T: ContentRef> PartialOrd for Revocation<'a, T> {
                         Some(std::cmp::Ordering::Equal),
                         |acc, ((doc1, content1), (doc2, content2))| {
                             if let Some(std::cmp::Ordering::Equal) = acc {
-                                match doc1.id().partial_cmp(&doc2.id()) {
+                                match doc1.doc_id().partial_cmp(&doc2.doc_id()) {
                                     Some(std::cmp::Ordering::Equal) => {
                                         content1.iter().zip(content2.iter()).fold(
                                             Some(std::cmp::Ordering::Equal),
@@ -103,7 +109,7 @@ impl<'a, T: ContentRef> From<Revocation<'a, T>> for StaticRevocation<T> {
                 revocation
                     .after_content
                     .into_iter()
-                    .map(|(doc, content)| (Identifier::from(doc.id()), content)),
+                    .map(|(doc, content)| (Identifier::from(doc.doc_id()), content)),
             ),
         }
     }

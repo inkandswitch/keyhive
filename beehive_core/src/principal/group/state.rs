@@ -30,13 +30,13 @@ pub struct GroupState<'a, T: ContentRef> {
 }
 
 impl<'a, T: ContentRef> GroupState<'a, T> {
-    pub fn new(parents: Vec<&'a Agent<'a, T>>) -> Self {
-        let mut rng = rand::rngs::OsRng;
+    pub fn generate(parents: Vec<&'a Agent<'a, T>>) -> Self {
+        let mut rng = rand::thread_rng();
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
-        let verifier: VerifyingKey = signing_key.verifying_key();
+        let group_id = signing_key.verifying_key().into();
 
         let mut group = GroupState {
-            id: GroupId(verifier.into()),
+            id: GroupId(group_id),
 
             delegation_heads: HashSet::new(),
             delegations: CaMap::new(),
@@ -115,12 +115,10 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
             // return Err(signature::Error::InvalidSignature);
         }
 
-        // FIXME also check if this op needs to go into the quarantine/buffer
-
         let hash = self.delegations.insert(delegation);
         let dlg_ref = self.delegations.get(&hash).unwrap();
 
-        if let Some(proof) = dlg_ref.payload.proof {
+        if let Some(proof) = dlg_ref.payload().proof {
             let proof_hash = Digest::hash(proof);
 
             if self.delegation_heads.contains(&proof_hash) {
@@ -158,7 +156,7 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
         self.delegations
             .iter()
             .filter_map(|(_, delegation)| {
-                if delegation.payload.delegate == agent {
+                if delegation.payload().delegate == agent {
                     Some(delegation)
                 } else {
                     None

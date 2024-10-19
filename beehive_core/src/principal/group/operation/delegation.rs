@@ -65,11 +65,11 @@ impl<'a, T: ContentRef> Signed<Delegation<'a, T>> {
     pub fn subject(&self) -> Identifier {
         let mut head = self;
 
-        while let Some(parent) = head.payload.proof {
+        while let Some(parent) = head.payload().proof {
             head = parent;
         }
 
-        head.verifying_key.into()
+        head.id()
     }
 }
 
@@ -78,7 +78,11 @@ impl<'a, T: ContentRef> PartialOrd for Delegation<'a, T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match self.can.partial_cmp(&other.can) {
             Some(std::cmp::Ordering::Equal) => {
-                match self.delegate.id().partial_cmp(&other.delegate.id()) {
+                match self
+                    .delegate
+                    .agent_id()
+                    .partial_cmp(&other.delegate.agent_id())
+                {
                     Some(std::cmp::Ordering::Equal) => {
                         let self_after = self.after();
                         let other_after = other.after();
@@ -136,7 +140,7 @@ impl<'a, T: ContentRef> From<Delegation<'a, T>> for StaticDelegation<T> {
         Self {
             can: delegation.can,
             proof: delegation.proof.map(|p| Digest::hash(&p).coerce()),
-            delegate: delegation.delegate.id().into(),
+            delegate: delegation.delegate.id(),
             after_revocations: delegation
                 .after_revocations
                 .iter()
@@ -146,7 +150,7 @@ impl<'a, T: ContentRef> From<Delegation<'a, T>> for StaticDelegation<T> {
                 delegation
                     .after_content
                     .into_iter()
-                    .map(|(document, content)| (document.id().into(), content)),
+                    .map(|(document, content)| (document.doc_id().into(), content)),
             ),
         }
     }

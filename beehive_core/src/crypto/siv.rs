@@ -37,7 +37,7 @@ impl Siv {
     ) -> Self {
         let mut hasher = blake3::Hasher::new();
         hasher.update(b"/automerge/beehive/");
-        hasher.update(doc.id().as_slice());
+        hasher.update(doc.doc_id().as_slice());
         hasher.update(key.as_slice());
         hasher.update(plaintext);
 

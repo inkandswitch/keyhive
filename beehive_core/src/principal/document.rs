@@ -27,12 +27,12 @@ pub struct Document<'a, T: ContentRef> {
 }
 
 impl<'a, T: ContentRef> Document<'a, T> {
-    pub fn id(&self) -> DocumentId {
+    pub fn doc_id(&self) -> DocumentId {
         self.state.id
     }
 
     pub fn agent_id(&self) -> AgentId {
-        self.id().into()
+        self.doc_id().into()
     }
 
     pub fn get_capabilty(&'a self, member_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
@@ -41,7 +41,7 @@ impl<'a, T: ContentRef> Document<'a, T> {
                 .iter()
                 .map(|h| self.state.delegations.get(h).unwrap())
                 .into_iter()
-                .max_by(|d1, d2| d1.payload.can.cmp(&d2.payload.can))
+                .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
         })?
     }
 
@@ -96,7 +96,7 @@ impl<'a, T: ContentRef> Document<'a, T> {
             let hash = doc.state.delegations.insert(dlg);
             doc.state.delegation_heads.insert(hash);
 
-            doc.members.insert(parent.id(), vec![hash]);
+            doc.members.insert(parent.agent_id(), vec![hash]);
         }
 
         doc
@@ -107,7 +107,7 @@ impl<'a, T: ContentRef> Document<'a, T> {
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
         // FIXME check that delegation is authorized
-        let id = signed_delegation.payload.delegate.id();
+        let id = signed_delegation.payload().delegate.agent_id();
         let hash = self.state.delegations.insert(signed_delegation);
 
         match self.members.get_mut(&id) {
@@ -140,10 +140,11 @@ impl<'a, T: ContentRef> Document<'a, T> {
             match op {
                 Operation::Delegation(d) => {
                     self.members
-                        .insert(d.payload.delegate.id(), vec![digest.coerce()]);
+                        .insert(d.payload().delegate.agent_id(), vec![digest.coerce()]);
                 }
                 Operation::Revocation(r) => {
-                    self.members.remove(&r.payload.revoke.payload.delegate.id());
+                    self.members
+                        .remove(&r.payload().revoke.payload().delegate.agent_id());
                 }
             };
         }
@@ -215,7 +216,7 @@ impl<'a, T: ContentRef> Verifiable for DocumentState<'a, T> {
 
 impl<'a, T: ContentRef> DocumentState<'a, T> {
     pub fn new(parent: &'a Agent<'a, T>) -> Self {
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::thread_rng();
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
         let id = DocumentId(signing_key.verifying_key().into());
 
@@ -254,7 +255,7 @@ impl<'a, T: ContentRef> DocumentState<'a, T> {
         self.delegations // FIXME account for revocations
             .iter()
             .filter_map(|(_, delegation)| {
-                if delegation.payload.delegate == agent {
+                if delegation.payload().delegate == agent {
                     Some(delegation)
                 } else {
                     None
@@ -277,7 +278,7 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
     }
 
     pub fn insert(&mut self, doc: Document<'a, T>) {
-        self.docs.insert(doc.id(), doc);
+        self.docs.insert(doc.doc_id(), doc);
     }
 
     pub fn get(&'a self, id: &DocumentId) -> Option<&'a Document<'a, T>> {
@@ -286,16 +287,16 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
 
     pub fn generate_document(&'a mut self, parents: Vec<&'a Agent<'a, T>>) -> &'a Document<'a, T> {
         let new_doc = Document::generate(parents);
-        let new_doc_id: DocumentId = new_doc.id();
+        let new_doc_id: DocumentId = new_doc.doc_id();
         self.insert(new_doc);
         self.get(&new_doc_id)
             .expect("document that was just added is missing")
     }
 
     // FIXME shoudl be more like this:
-    // pub fn transative_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
+    // pub fn transitive_members(&self, group: &Group) -> BTreeMap<&Agent, Access> {
     // FIXME return path as well?
-    pub fn transative_members(
+    pub fn transitive_members(
         &'a self,
         doc: &'a Document<'a, T>,
     ) -> BTreeMap<AgentId, (&'a Agent<'a, T>, Access)> {
@@ -311,8 +312,8 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
             for hash in hashes {
                 let delegation = doc.state.delegations.get(hash).unwrap();
                 explore.push(GroupAccess {
-                    agent: delegation.payload.delegate,
-                    agent_access: delegation.payload.can, // FIXME need to lookup
+                    agent: delegation.payload().delegate,
+                    agent_access: delegation.payload().can, // FIXME need to lookup
                     parent_access: Access::Admin,
                 });
             }
@@ -331,19 +332,19 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
                     let current_path_access = access.min(parent_access);
 
                     let best_access =
-                        if let Some((_, prev_found_path_access)) = caps.get(&member.id()) {
+                        if let Some((_, prev_found_path_access)) = caps.get(&member.agent_id()) {
                             (*prev_found_path_access).max(current_path_access)
                         } else {
                             current_path_access
                         };
 
-                    caps.insert(member.id(), (member, best_access));
+                    caps.insert(member.agent_id(), (member, best_access));
                 }
                 Agent::Group(group) => {
                     for (mem, proofs) in group.get_members().iter() {
                         for proof in proofs.iter() {
                             let current_path_access =
-                                access.min(proof.payload.can).min(parent_access);
+                                access.min(proof.payload().can).min(parent_access);
 
                             let best_access =
                                 if let Some((_, prev_found_path_access)) = caps.get(&mem) {
@@ -353,7 +354,7 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
                                 };
 
                             explore.push(GroupAccess {
-                                agent: &proof.payload.delegate,
+                                agent: &proof.payload().delegate,
                                 agent_access: best_access,
                                 parent_access,
                             });
@@ -365,7 +366,7 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
                         for proof_hash in proof_hashes.iter() {
                             let proof = doc.state.delegations.get(proof_hash).unwrap();
                             let current_path_access =
-                                access.min(proof.payload.can).min(parent_access);
+                                access.min(proof.payload().can).min(parent_access);
 
                             let best_access =
                                 if let Some((_, prev_found_path_access)) = caps.get(&mem) {
@@ -375,7 +376,7 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
                                 };
 
                             explore.push(GroupAccess {
-                                agent: &proof.payload.delegate,
+                                agent: &proof.payload().delegate,
                                 agent_access: best_access,
                                 parent_access,
                             });

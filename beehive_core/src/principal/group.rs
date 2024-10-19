@@ -60,7 +60,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
 
             let hash = delegations.insert(dlg);
             delegation_heads.insert(hash);
-            members.insert((*parent).id(), vec![hash]);
+            members.insert((*parent).agent_id(), vec![hash]);
         }
 
         Group {
@@ -80,12 +80,12 @@ impl<'a, T: ContentRef> Group<'a, T> {
         }
     }
 
-    pub fn id(&self) -> GroupId {
+    pub fn group_id(&self) -> GroupId {
         *self.state.id()
     }
 
     pub fn agent_id(&self) -> AgentId {
-        self.id().into()
+        self.group_id().into()
     }
 
     pub fn get_capability(&'a self, member_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
@@ -94,7 +94,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
                 .iter()
                 .map(|h| self.state.delegations.get(h).unwrap())
                 .into_iter()
-                .max_by(|d1, d2| d1.payload.can.cmp(&d2.payload.can))
+                .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
         })?
     }
 
@@ -121,7 +121,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
         // FIXME check that delegation is authorized
         // FIXME even better: use dgp (e.g. Valid<Signed<Delegation<'a, T>>)
 
-        let id = signed_delegation.payload.delegate.id();
+        let id = signed_delegation.payload().delegate.agent_id();
         let hash = self.state.delegations.insert(signed_delegation);
 
         match self.members.get_mut(&id) {
@@ -176,10 +176,11 @@ impl<'a, T: ContentRef> Group<'a, T> {
             match op {
                 Operation::Delegation(d) => {
                     self.members
-                        .insert(d.payload.delegate.id(), vec![digest.coerce()]);
+                        .insert(d.payload().delegate.agent_id(), vec![digest.coerce()]);
                 }
                 Operation::Revocation(r) => {
-                    self.members.remove(&r.payload.revoke.payload.delegate.id());
+                    self.members
+                        .remove(&r.payload().revoke.payload().delegate.agent_id());
                 }
             }
         }
@@ -190,8 +191,14 @@ impl<'a, T: ContentRef> Group<'a, T> {
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
         // FIXME check that delegation is authorized
-        self.members
-            .remove(&signed_revocation.payload.revoke.payload.delegate.id());
+        self.members.remove(
+            &signed_revocation
+                .payload()
+                .revoke
+                .payload()
+                .delegate
+                .agent_id(),
+        );
 
         self.state.add_revocation(signed_revocation);
     }
@@ -367,7 +374,7 @@ mod tests {
         let bob = setup_user();
 
         let (gs, [g0, _g1, _g2, _g3]) = setup_store(&alice, &bob);
-        let g0_mems: BTreeMap<&Agent<'_, _>, Access> = gs.transative_members(&g0);
+        let g0_mems: BTreeMap<&Agent<'_, _>, Access> = gs.transitive_members(&g0);
 
         assert_eq!(
             g0_mems,
@@ -383,7 +390,7 @@ mod tests {
         let bob = setup_user();
 
         let (gs, [_g0, g1, _g2, _g3]) = setup_store(&alice, &bob);
-        let g1_mems: BTreeMap<&Agent<'_, _>, Access> = gs.transative_members(&g1);
+        let g1_mems: BTreeMap<&Agent<'_, _>, Access> = gs.transitive_members(&g1);
 
         assert_eq!(
             g1_mems,
@@ -397,7 +404,7 @@ mod tests {
         let bob = setup_user();
 
         let (gs, [_g0, _g1, g2, _g3]) = setup_store(&alice, &bob);
-        let g2_mems: BTreeMap<&Agent<'_, String>, Access> = gs.transative_members(&g2);
+        let g2_mems: BTreeMap<&Agent<'_, String>, Access> = gs.transitive_members(&g2);
 
         assert_eq!(
             g2_mems,
@@ -414,7 +421,7 @@ mod tests {
         let bob = setup_user();
 
         let (gs, [_g0, _g1, _g2, g3]) = setup_store(&alice, &bob);
-        let g3_mems: BTreeMap<Agent, Access> = gs.transative_members(&g3);
+        let g3_mems: BTreeMap<Agent, Access> = gs.transitive_members(&g3);
 
         assert_eq!(
             g3_mems,
@@ -428,7 +435,7 @@ mod tests {
         let bob = setup_user();
 
         let (gs, [_, _, _, _, _, _, _, _, _, g9]) = setup_cyclic_store(&alice, &bob);
-        let g9_mems: BTreeMap<Agent, Access> = gs.transative_members(&g9);
+        let g9_mems: BTreeMap<Agent, Access> = gs.transitive_members(&g9);
 
         assert_eq!(
             g9_mems,
@@ -462,7 +469,7 @@ mod tests {
 
         gs.insert(g0.clone().into());
 
-        let g0_mems: BTreeMap<&Agent<'_, _>, Access> = gs.transative_members(&g0);
+        let g0_mems: BTreeMap<&Agent<'_, _>, Access> = gs.transitive_members(&g0);
 
         assert_eq!(
             g0_mems,

@@ -29,12 +29,12 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
     }
 
     pub fn insert(&mut self, group: Group<'a, T>) {
-        self.0.insert(group.id(), group);
+        self.0.insert(group.group_id(), group);
     }
 
     pub fn generate_group(&mut self, parents: NonEmpty<&'a Agent<'a, T>>) -> &Group<'a, T> {
         let new_group: Group<'a, T> = Group::generate(parents);
-        let new_group_id: GroupId = new_group.id();
+        let new_group_id: GroupId = new_group.group_id();
         self.insert(new_group);
         self.get(&new_group_id).expect(
             "Group should be inserted in store because it was just placed there a moment ago",
@@ -57,7 +57,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
         self.0.iter()
     }
 
-    pub fn transative_members(
+    pub fn transitive_members(
         &self,
         group: &'a Group<'a, T>,
     ) -> BTreeMap<AgentId, (&'a Agent<'a, T>, Access)> {
@@ -73,8 +73,8 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
             let dlg = group.get_capability(member).unwrap();
 
             explore.push(GroupAccess {
-                agent: dlg.payload.delegate,
-                agent_access: dlg.payload.can,
+                agent: dlg.payload().delegate,
+                agent_access: dlg.payload().can,
                 parent_access: Access::Admin,
             });
         }
@@ -92,19 +92,19 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                     let current_path_access = access.min(parent_access);
 
                     let best_access =
-                        if let Some((_, prev_found_path_access)) = caps.get(&member.id()) {
+                        if let Some((_, prev_found_path_access)) = caps.get(&member.agent_id()) {
                             (*prev_found_path_access).max(current_path_access)
                         } else {
                             current_path_access
                         };
 
-                    caps.insert(member.id(), (member, best_access));
+                    caps.insert(member.agent_id(), (member, best_access));
                 }
                 Agent::Group(group) => {
                     for (mem, proofs) in group.get_members().iter() {
                         for proof in proofs.iter() {
                             let current_path_access =
-                                access.min(proof.payload.can).min(parent_access);
+                                access.min(proof.payload().can).min(parent_access);
 
                             let best_access =
                                 if let Some((_, prev_found_path_access)) = caps.get(&mem) {
@@ -114,7 +114,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                                 };
 
                             explore.push(GroupAccess {
-                                agent: &proof.payload.delegate,
+                                agent: &proof.payload().delegate,
                                 agent_access: best_access,
                                 parent_access,
                             });
@@ -126,7 +126,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                         for proof_hash in proof_hashes.iter() {
                             let proof = doc.state.delegations.get(proof_hash).unwrap();
                             let current_path_access =
-                                access.min(proof.payload.can).min(parent_access);
+                                access.min(proof.payload().can).min(parent_access);
 
                             let best_access =
                                 if let Some((_, prev_found_path_access)) = caps.get(&mem) {
@@ -136,7 +136,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                                 };
 
                             explore.push(GroupAccess {
-                                agent: &proof.payload.delegate,
+                                agent: &proof.payload().delegate,
                                 agent_access: best_access,
                                 parent_access,
                             });

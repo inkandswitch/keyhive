@@ -19,7 +19,16 @@ pub enum Agent<'a, T: ContentRef> {
 }
 
 impl<'a, T: ContentRef> Agent<'a, T> {
-    pub fn id(&self) -> AgentId {
+    pub fn id(&self) -> Identifier {
+        match self {
+            Agent::Active(a) => a.id().into(),
+            Agent::Individual(i) => i.id().into(),
+            Agent::Group(g) => g.group_id().into(),
+            Agent::Document(d) => d.doc_id().into(),
+        }
+    }
+
+    pub fn agent_id(&self) -> AgentId {
         match self {
             Agent::Active(a) => a.agent_id(),
             Agent::Individual(i) => i.agent_id(),
@@ -94,13 +103,13 @@ impl AgentId {
 
 impl<'a, T: ContentRef> From<Agent<'a, T>> for AgentId {
     fn from(a: Agent<'a, T>) -> Self {
-        a.id()
+        a.agent_id()
     }
 }
 
 impl<'a, T: ContentRef> From<&Agent<'a, T>> for AgentId {
     fn from(a: &Agent<'a, T>) -> Self {
-        a.id()
+        a.agent_id()
     }
 }
 

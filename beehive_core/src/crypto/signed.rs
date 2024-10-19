@@ -1,6 +1,6 @@
 //! Wrap data in signatures.
 
-use crate::crypto::digest::Digest;
+use crate::{crypto::digest::Digest, principal::identifier::Identifier};
 use ed25519_dalek::{Signer, Verifier};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -12,13 +12,13 @@ use std::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signed<T: Serialize> {
     /// The data that was signed.
-    pub payload: T,
+    payload: T,
 
     /// The verifying key of the signer (for verifying the signature).
-    pub verifying_key: ed25519_dalek::VerifyingKey,
+    verifying_key: ed25519_dalek::VerifyingKey,
 
     /// The signature of the payload, which can be verified by the `verifying_key`.
-    pub signature: ed25519_dalek::Signature,
+    signature: ed25519_dalek::Signature,
 }
 
 impl<T: Serialize> Signed<T> {
@@ -30,6 +30,22 @@ impl<T: Serialize> Signed<T> {
             verifying_key: signer.verifying_key(),
             signature: signer.sign(payload_bytes.as_slice()),
         }
+    }
+
+    pub fn payload(&self) -> &T {
+        &self.payload
+    }
+
+    pub fn verifying_key(&self) -> &ed25519_dalek::VerifyingKey {
+        &self.verifying_key
+    }
+
+    pub fn id(&self) -> Identifier {
+        self.verifying_key.into()
+    }
+
+    pub fn signature(&self) -> &ed25519_dalek::Signature {
+        &self.signature
     }
 
     pub fn verify(&self) -> Result<(), signature::Error> {

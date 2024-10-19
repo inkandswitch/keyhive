@@ -63,7 +63,7 @@ impl Active {
         min: Access,
     ) -> Option<&'a Signed<Delegation<T>>> {
         subject.get_capability(&self.agent_id()).and_then(|cap| {
-            if cap.payload.can >= min {
+            if cap.payload().can >= min {
                 Some(cap)
             } else {
                 None
@@ -82,7 +82,7 @@ impl Active {
     ) -> Result<Signed<Delegation<T>>, DelegationError> {
         let proof = self.get_capability(&subject, attenuate).expect("FIXME");
 
-        if attenuate > proof.payload.can {
+        if attenuate > proof.payload().can {
             return Err(DelegationError::Escelation);
         }
 

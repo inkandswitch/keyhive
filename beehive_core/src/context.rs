@@ -106,15 +106,6 @@ impl<'a, T: ContentRef> Context<'a, T> {
                         after_content,
                     }));
                 }
-
-                // FIXME
-                if let Some(revoke) = group.state.delegations_for(to_revoke).pop() {
-                    let proof = group
-                        .state
-                        .delegations_for(&self.active.into())
-                        .pop()
-                        .expect("FIXME");
-                }
             }
             Membered::Document(og_doc) => {
                 // let mut doc = d.clone();
@@ -158,35 +149,32 @@ impl<'a, T: ContentRef> Context<'a, T> {
             seen.insert(group.agent_id());
 
             if let Some(proof) = group.get(&agent_id) {
-                explore.push(((*group).into(), proof.payload.can));
+                explore.push(((*group).into(), proof.payload().can));
             }
         }
 
-        while !explore.is_empty() {
-            if let Some((group, _access)) = explore.pop() {
-                for doc in self.docs.docs.values() {
-                    if seen.contains(&doc.agent_id()) {
-                        continue;
-                    }
-
-                    if let Some(proof) = doc.members.get(&agent_id) {
-                        // FIXME more than one Access? Highest access?
-                        caps.insert(doc, proof.payload.can);
-                    }
+        while let Some((group, _access)) = explore.pop() {
+            for doc in self.docs.docs.values() {
+                if seen.contains(&doc.agent_id()) {
+                    continue;
                 }
 
-                for (id, focus_group) in self.groups.iter() {
-                    if seen.contains(&focus_group.agent_id()) {
-                        continue;
-                    }
+                if let Some(proof) = doc.members.get(&agent_id) {
+                    caps.insert(doc, proof.payload().can);
+                }
+            }
 
-                    if group.member_id() == *id.into() {
-                        continue;
-                    }
+            for (id, focus_group) in self.groups.iter() {
+                if seen.contains(&focus_group.agent_id()) {
+                    continue;
+                }
 
-                    if let Some(proof) = focus_group.get(&agent_id) {
-                        explore.push((focus_group.into(), proof.payload.can));
-                    }
+                if group.member_id() == *id.into() {
+                    continue;
+                }
+
+                if let Some(proof) = focus_group.get(&agent_id) {
+                    explore.push((focus_group.into(), proof.payload.can));
                 }
             }
         }

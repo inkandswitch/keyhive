@@ -30,8 +30,8 @@ impl<'a, T: ContentRef> Membered<'a, T> {
 
     pub fn member_id(&self) -> MemberedId {
         match self {
-            Membered::Group(group) => MemberedId::GroupId(group.id().into()),
-            Membered::Document(document) => MemberedId::DocumentId(document.id().into()),
+            Membered::Group(group) => MemberedId::GroupId(group.group_id().into()),
+            Membered::Document(document) => MemberedId::DocumentId(document.doc_id().into()),
         }
     }
 
@@ -104,8 +104,6 @@ impl<'a, T: ContentRef> Verifiable for Membered<'a, T> {
     }
 }
 
-// FIXME pass proof of existence?
-// FIXME need at all?
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum MemberedId {
     GroupId(GroupId),
