@@ -42,36 +42,19 @@ impl<'a, T: ContentRef> Document<'a, T> {
         &self.group.members()
     }
 
+    pub fn get_member_refs(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
+        self.group.get_member_refs()
+    }
+
     pub fn delegations(&self) -> &CaMap<Signed<Delegation<'a, T>>> {
         &self.group.delegations()
     }
 
     pub fn get_capabilty(&'a self, member_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
-        self.members().get(member_id).map(move |hashes| {
-            hashes
-                .iter()
-                .map(|h| self.delegations().get(h).unwrap())
-                .into_iter()
-                .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
-        })?
+        self.group.get_capability(member_id)
     }
 
-    pub fn get_members(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
-        self.members()
-            .iter()
-            .map(|(id, hashes)| {
-                (
-                    *id,
-                    hashes
-                        .iter()
-                        .map(|h| self.delegations().get(h).unwrap())
-                        .collect(),
-                )
-            })
-            .collect()
-    }
-
-    pub fn generate(parents: NonEmpty<&'a Agent<T>>) -> Self {
+    pub fn generate(parents: NonEmpty<&'a Agent<'a, T>>) -> Self {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
 
         let mut doc = Document {
@@ -218,7 +201,7 @@ impl<'a, T: ContentRef> DocStore<'a, T> {
                     caps.insert(member.agent_id(), (member, best_access));
                 }
                 Agent::Group(group) => {
-                    for (mem, proofs) in group.get_members().iter() {
+                    for (mem, proofs) in group.get_member_refs().iter() {
                         for proof in proofs.iter() {
                             let current_path_access =
                                 access.min(proof.payload().can).min(parent_access);

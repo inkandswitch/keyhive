@@ -95,21 +95,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
         &self.members
     }
 
-    pub fn delegations(&self) -> &CaMap<Signed<Delegation<'a, T>>> {
-        &self.state.delegations
-    }
-
-    pub fn get_capability(&'a self, member_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
-        self.members.get(member_id).map(move |hashes| {
-            hashes
-                .iter()
-                .map(|h| self.state.delegations.get(h).unwrap())
-                .into_iter()
-                .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
-        })?
-    }
-
-    pub fn get_members(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
+    pub fn get_member_refs(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
         self.members
             .iter()
             .map(|(id, hashes)| {
@@ -122,6 +108,20 @@ impl<'a, T: ContentRef> Group<'a, T> {
                 )
             })
             .collect()
+    }
+
+    pub fn delegations(&self) -> &CaMap<Signed<Delegation<'a, T>>> {
+        &self.state.delegations
+    }
+
+    pub fn get_capability(&'a self, member_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
+        self.members.get(member_id).map(move |hashes| {
+            hashes
+                .iter()
+                .map(|h| self.state.delegations.get(h).unwrap())
+                .into_iter()
+                .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
+        })?
     }
 
     // FIXME rename

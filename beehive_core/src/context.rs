@@ -52,9 +52,10 @@ impl<'a, T: ContentRef> Context<'a, T> {
     }
 
     pub fn generate_doc(&'a mut self, coparents: Vec<&'a Agent<'a, T>>) -> &Document<'a, T> {
-        let mut parents = coparents;
-        let self_agent = self.active.into();
-        parents.push(&self_agent);
+        let parents = NonEmpty {
+            head: self.active.into(),
+            tail: coparents,
+        };
         self.docs.generate_document(parents)
     }
 
@@ -83,23 +84,23 @@ impl<'a, T: ContentRef> Context<'a, T> {
     // }
 
     pub fn revoke(
-        &mut self,
-        to_revoke: &Agent<T>,
-        from: &mut Membered<T>,
-        after_content: BTreeMap<&Document<T>, Vec<&T>>,
+        &'a mut self,
+        to_revoke: &'a Agent<'a, T>,
+        resource: &'a mut Membered<T>,
+        after_content: BTreeMap<&'a Document<'a, T>, Vec<T>>,
     ) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
         // FIXME check that delegation is authorized
         //
-        match from {
+        match resource {
             Membered::Group(og_group) => {
                 let group = self.groups.get_mut(&og_group.state.id).expect("FIXME");
 
-                group.members.remove(&to_revoke.id());
+                group.members.remove(&to_revoke.agent_id());
 
-                while let Some(revoke) = group.get_capability(member_id) {
+                while let Some(proof) = group.get_capability(&resource.agent_id()) {
                     group.state.revocations.insert(self.sign(Revocation {
                         revoke,
                         proof,
@@ -140,8 +141,10 @@ impl<'a, T: ContentRef> Context<'a, T> {
         for doc in self.docs.docs.values() {
             seen.insert(doc.agent_id());
 
-            if let Some(proof) = doc.members.get(&agent_id) {
-                caps.insert(doc, proof.payload.can);
+            if let Some(proofs) = doc.members().get(&agent_id) {
+                for proof in proofs {
+                    caps.insert(doc, proof.payload().can);
+                }
             }
         }
 

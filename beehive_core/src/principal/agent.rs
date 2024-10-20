@@ -9,6 +9,7 @@ use super::{
 use crate::content::reference::ContentRef;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub enum Agent<'a, T: ContentRef> {

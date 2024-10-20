@@ -9,7 +9,10 @@ use super::{
     identifier::Identifier,
     verifiable::Verifiable,
 };
-use crate::{content::reference::ContentRef, crypto::signed::Signed};
+use crate::{
+    content::reference::ContentRef,
+    crypto::{digest::Digest, signed::Signed},
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt};
 
@@ -28,7 +31,14 @@ impl<'a, T: ContentRef> Membered<'a, T> {
         }
     }
 
-    pub fn member_id(&self) -> MemberedId {
+    pub fn agent_id(&self) -> AgentId {
+        match self {
+            Membered::Group(group) => group.agent_id(),
+            Membered::Document(document) => document.agent_id(),
+        }
+    }
+
+    pub fn membered_id(&self) -> MemberedId {
         match self {
             Membered::Group(group) => MemberedId::GroupId(group.group_id().into()),
             Membered::Document(document) => MemberedId::DocumentId(document.doc_id().into()),
@@ -36,10 +46,17 @@ impl<'a, T: ContentRef> Membered<'a, T> {
     }
 
     // FIXME make a trait and apply to children
-    pub fn members(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
+    pub fn members(&self) -> &HashMap<AgentId, Vec<Digest<Signed<Delegation<'a, T>>>>> {
         match self {
-            Membered::Group(group) => group.get_members(),
-            Membered::Document(document) => document.get_members(),
+            Membered::Group(group) => group.members(),
+            Membered::Document(document) => document.members(),
+        }
+    }
+
+    pub fn get_member_refs(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
+        match self {
+            Membered::Group(group) => group.get_member_refs(),
+            Membered::Document(document) => document.get_member_refs(),
         }
     }
 
