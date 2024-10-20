@@ -13,13 +13,16 @@ use serde::{Deserialize, Serialize};
 /// Immutable union over all agent types.
 ///
 /// This type is very lightweight to clone, since it only contains immutable references to the actual agents.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum Agent<'a, T: ContentRef> {
     Active(&'a Active),
+
     Individual(&'a Individual),
     Group(&'a Group<'a, T>),
     Document(&'a Document<'a, T>),
 }
+
+impl<'a, T: ContentRef> Copy for Agent<'a, T> {}
 
 impl<'a, T: ContentRef> Agent<'a, T> {
     pub fn id(&self) -> Identifier {

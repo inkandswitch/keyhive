@@ -22,11 +22,13 @@ use std::{
 use thiserror::Error;
 use topological_sort::TopologicalSort;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, Serialize)]
 pub enum Operation<'a, T: ContentRef> {
     Delegation(&'a Signed<Delegation<'a, T>>),
     Revocation(&'a Signed<Revocation<'a, T>>),
 }
+
+impl<'a, T> Copy for Operation<'a, T> where T: ContentRef {}
 
 impl<'a, T: ContentRef> Operation<'a, T> {
     pub fn subject(&'a self) -> Identifier {
@@ -124,7 +126,7 @@ impl<'a, T: ContentRef> Operation<'a, T> {
         Ok(ancestors.into_iter().fold(
             (CaMap::new(), 0),
             |(mut acc_set, acc_count), (op, count)| {
-                acc_set.insert(op.clone());
+                acc_set.insert(*op);
 
                 if count > acc_count {
                     (acc_set, count)
@@ -197,7 +199,7 @@ impl<'a, T: ContentRef> Operation<'a, T> {
 
         let mut acc = vec![];
         for (digest, op) in adjacencies.into_iter() {
-            acc.push((digest, op.clone()));
+            acc.push((digest, *op));
         }
 
         Ok(acc)

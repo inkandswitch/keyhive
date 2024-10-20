@@ -71,7 +71,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
             let dlg = group.get_capability(member).unwrap();
 
             explore.push(GroupAccess {
-                agent: dlg.payload().delegate.clone(),
+                agent: dlg.payload().delegate,
                 agent_access: dlg.payload().can,
                 parent_access: Access::Admin,
             });
@@ -112,7 +112,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                                 };
 
                             explore.push(GroupAccess {
-                                agent: proof.payload().delegate.clone(),
+                                agent: proof.payload().delegate,
                                 agent_access: best_access,
                                 parent_access,
                             });
@@ -134,7 +134,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                                 };
 
                             explore.push(GroupAccess {
-                                agent: proof.payload().delegate.clone(),
+                                agent: proof.payload().delegate,
                                 agent_access: best_access,
                                 parent_access,
                             });

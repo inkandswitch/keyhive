@@ -50,7 +50,7 @@ impl<'a, T: ContentRef> DocumentStore<'a, T> {
             for hash in hashes {
                 let delegation = doc.group.state.delegations.get(hash).unwrap();
                 explore.push(GroupAccess {
-                    agent: delegation.payload().delegate.clone(),
+                    agent: delegation.payload().delegate,
                     agent_access: delegation.payload().can, // FIXME need to lookup
                     parent_access: Access::Admin,
                 });
@@ -92,7 +92,7 @@ impl<'a, T: ContentRef> DocumentStore<'a, T> {
                                 };
 
                             explore.push(GroupAccess {
-                                agent: proof.payload().delegate.clone(),
+                                agent: proof.payload().delegate,
                                 agent_access: best_access,
                                 parent_access,
                             });
@@ -114,7 +114,7 @@ impl<'a, T: ContentRef> DocumentStore<'a, T> {
                                 };
 
                             explore.push(GroupAccess {
-                                agent: proof.payload().delegate.clone(),
+                                agent: proof.payload().delegate,
                                 agent_access: best_access,
                                 parent_access,
                             });

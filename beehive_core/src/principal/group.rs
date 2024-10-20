@@ -50,7 +50,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
         for parent in parents.iter() {
             let dlg = Signed::sign(
                 Delegation {
-                    delegate: parent.clone(),
+                    delegate: *parent,
                     can: Access::Admin,
                     proof: None,
                     after_revocations: vec![],
@@ -165,7 +165,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
                             .map(|d| {
                                 (
                                     d.doc_id(),
-                                    (*d, d.content_heads.iter().map(|x| (*x).clone()).collect()),
+                                    (*d, d.content_heads.iter().map(|c| (*c).clone()).collect()),
                                 )
                             })
                             .collect(),

@@ -71,7 +71,7 @@ impl<'a, T: ContentRef> Document<'a, T> {
         for parent in parents.iter() {
             let dlg = Signed::sign(
                 Delegation {
-                    delegate: parent.clone(),
+                    delegate: *parent,
                     can: Access::Admin,
                     proof: None,
                     after_revocations: vec![],

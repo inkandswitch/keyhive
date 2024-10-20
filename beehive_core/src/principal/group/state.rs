@@ -50,7 +50,7 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
         for parent in parents.iter() {
             let dlg = Signed::sign(
                 Delegation {
-                    delegate: parent.clone(),
+                    delegate: *parent,
                     can: Access::Admin,
 
                     proof: None,
