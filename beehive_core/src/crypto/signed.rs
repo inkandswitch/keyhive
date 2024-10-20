@@ -1,6 +1,6 @@
 //! Wrap data in signatures.
 
-use crate::{crypto::digest::Digest, principal::identifier::Identifier};
+use crate::principal::identifier::Identifier;
 use ed25519_dalek::{Signer, Verifier};
 use serde::{Deserialize, Serialize};
 use std::{

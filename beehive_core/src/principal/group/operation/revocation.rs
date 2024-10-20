@@ -6,7 +6,7 @@ use crate::{
     crypto::{digest::Digest, signed::Signed},
     principal::{
         agent::AgentId,
-        document::{Document, DocumentId},
+        document::{id::DocumentId, Document},
         identifier::Identifier,
     },
 };

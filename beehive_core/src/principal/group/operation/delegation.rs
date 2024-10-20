@@ -1,4 +1,3 @@
-// FIXME move opetaion to same level
 use super::revocation::{Revocation, StaticRevocation};
 use crate::{
     access::Access,
@@ -6,15 +5,12 @@ use crate::{
     crypto::{digest::Digest, signed::Signed},
     principal::{
         agent::{Agent, AgentId},
-        document::{Document, DocumentId},
+        document::{id::DocumentId, Document},
         identifier::Identifier,
     },
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, HashMap},
-    hash::Hash,
-};
+use std::{collections::BTreeMap, hash::Hash};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Delegation<'a, T: ContentRef> {

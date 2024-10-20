@@ -7,8 +7,8 @@ use crate::{
     principal::{
         active::Active,
         agent::{Agent, AgentId},
-        document::{DocStore, Document},
-        group::{operation::revocation::Revocation, store::GroupStore, Group},
+        document::{id::DocumentId, store::DocumentStore, Document},
+        group::{store::GroupStore, Group},
         individual::{id::IndividualId, Individual},
         membered::Membered,
         verifiable::Verifiable,
@@ -16,10 +16,7 @@ use crate::{
 };
 use nonempty::NonEmpty;
 use serde::Serialize;
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, HashSet},
-};
+use std::collections::{BTreeMap, HashSet};
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
@@ -34,7 +31,7 @@ pub struct Context<'a, T: ContentRef> {
     pub groups: GroupStore<'a, T>,
 
     /// The [`Document`]s that are known to this agent.
-    pub docs: DocStore<'a, T>,
+    pub docs: DocumentStore<'a, T>,
 }
 
 impl<'a, T: ContentRef> Context<'a, T> {
@@ -43,7 +40,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
             active: Active::generate(signing_key),
             individuals: Default::default(),
             groups: GroupStore::new(),
-            docs: DocStore::new(),
+            docs: DocumentStore::new(),
         }
     }
 
@@ -86,40 +83,19 @@ impl<'a, T: ContentRef> Context<'a, T> {
     //     dcgka_2m_broadcast(key, data, public_keys)
     // }
 
-    pub fn revoke(
+    pub fn revoke_member(
         &'a mut self,
-        to_revoke: &'a Agent<'a, T>,
-        resource: &'a mut Membered<T>,
-        after_content: BTreeMap<&'a Document<'a, T>, Vec<T>>,
+        to_revoke: &AgentId,
+        resource: &'a mut Membered<'a, T>,
+        relevant_docs: &[&'a Document<'a, T>],
     ) {
-        // FIXME check subject, signature, find dependencies or quarantine
-        // ...look at the quarantine and see if any of them depend on this one
-        // ...etc etc
-        // FIXME check that delegation is authorized
-        //
-        match resource {
-            Membered::Group(group) => {
-                group.revoke_member(to_revoke, &self.active, after_content);
-            }
-            Membered::Document(doc) => {
-                for proof in doc.get_member_refs().get(&to_revoke.agent_id()).iter() {
-                    doc.members.remove(&to_revoke.id().into());
-                    doc.state.revocations.insert(Box::new(Signed::sign(
-                        Revocation {
-                            revoke,
-                            proof,
-                            after_content,
-                        },
-                        &self.active.signer,
-                    )));
-                }
-            }
-        }
+        // FIXME check which docs are reachable from this group and include them automatically
+        resource.revoke_member(to_revoke, &self.active.signer, relevant_docs);
     }
 
-    pub fn transitive_docs(&self) -> BTreeMap<&Document<T>, Access> {
+    pub fn accessible_docs(&'a self) -> BTreeMap<DocumentId, (&'a Document<'a, T>, Access)> {
         let mut explore: Vec<(Membered<T>, Access)> = vec![];
-        let mut caps: BTreeMap<&Document<T>, Access> = BTreeMap::new();
+        let mut caps: BTreeMap<DocumentId, (&'a Document<'a, T>, Access)> = BTreeMap::new();
         let mut seen: HashSet<AgentId> = HashSet::new();
 
         let agent_id = self.active.agent_id();
@@ -171,77 +147,14 @@ impl<'a, T: ContentRef> Context<'a, T> {
         caps
     }
 
-    // FIXME
-    pub fn transitive_members(&self, doc: &Document<T>) -> BTreeMap<&Agent<T>, Access> {
-        struct GroupAccess<'a, U: ContentRef> {
-            agent: &'a Agent<'a, U>,
-            agent_access: Access,
-            parent_access: Access,
+    pub fn transitive_members(
+        &'a self,
+        membered: &'a Membered<'a, T>,
+    ) -> BTreeMap<AgentId, (&'a Agent<'a, T>, Access)> {
+        match membered {
+            Membered::Group(group) => self.groups.transitive_members(group),
+            Membered::Document(doc) => self.docs.transitive_members(doc),
         }
-
-        let mut explore: Vec<GroupAccess<'a, T>> = vec![];
-
-        for (k, delegation) in doc.members.iter() {
-            explore.push(GroupAccess {
-                agent: *k,
-                agent_access: delegation.payload.can,
-                parent_access: Access::Admin, // FIXME?
-            });
-        }
-
-        let mut merged_store = self.groups.iter().fold(BTreeMap::new(), |mut acc, (k, v)| {
-            acc.insert(k.into(), (*v).into());
-            acc
-        });
-
-        for (k, v) in self.docs.docs.iter() {
-            merged_store.insert(k.into(), (*v).into());
-        }
-
-        let mut caps: BTreeMap<&Agent<'_, T>, Access> = BTreeMap::new();
-
-        while let Some(GroupAccess {
-            agent: member,
-            agent_access: access,
-            parent_access,
-        }) = explore.pop()
-        {
-            match member {
-                Agent::Individual(_) => {
-                    let current_path_access = access.min(parent_access);
-
-                    let best_access = if let Some(prev_found_path_access) = caps.get(&member) {
-                        (*prev_found_path_access).max(current_path_access)
-                    } else {
-                        current_path_access
-                    };
-
-                    caps.insert(&member, best_access);
-                }
-                _ => {
-                    if let Some(membered) = merged_store.get(&member.verifying_key().into()) {
-                        for (mem, proof) in membered.members() {
-                            let current_path_access =
-                                access.min(proof.payload.can).min(parent_access);
-
-                            let best_access = if let Some(prev_found_path_access) = caps.get(&mem) {
-                                (*prev_found_path_access).max(current_path_access)
-                            } else {
-                                current_path_access
-                            };
-
-                            explore.push(GroupAccess {
-                                agent: mem,
-                                agent_access: best_access,
-                                parent_access,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        caps
     }
 }
 

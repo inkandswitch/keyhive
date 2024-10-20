@@ -1,7 +1,7 @@
 //! The current user agent (which can sign and encrypt).
 
 use super::{
-    document::{Document, DocumentId},
+    document::{id::DocumentId, Document},
     individual::{id::IndividualId, Individual},
     verifiable::Verifiable,
 };

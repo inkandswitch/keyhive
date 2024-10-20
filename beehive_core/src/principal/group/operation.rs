@@ -6,7 +6,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
     principal::{
-        document::{Document, DocumentId},
+        document::{id::DocumentId, Document},
         identifier::Identifier,
     },
     util::content_addressed_map::CaMap,

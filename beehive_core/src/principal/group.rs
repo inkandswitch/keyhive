@@ -20,7 +20,7 @@ use crate::{
 use id::GroupId;
 use nonempty::NonEmpty;
 use operation::{delegation::Delegation, revocation::Revocation, Operation};
-use serde::{ser::SerializeTupleVariant, Serialize};
+use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A collection of agents with no associated content.

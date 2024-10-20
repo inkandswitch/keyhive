@@ -1,11 +1,7 @@
 use super::{
     agent::{Agent, AgentId},
-    document::{Document, DocumentId},
-    group::{
-        id::GroupId,
-        operation::{delegation::Delegation, revocation::Revocation},
-        Group,
-    },
+    document::{id::DocumentId, Document},
+    group::{id::GroupId, operation::delegation::Delegation, Group},
     identifier::Identifier,
     verifiable::Verifiable,
 };
@@ -14,10 +10,7 @@ use crate::{
     crypto::{digest::Digest, signed::Signed},
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, HashMap},
-    fmt,
-};
+use std::{collections::HashMap, fmt};
 
 /// The union of Agents that have updatable membership
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
