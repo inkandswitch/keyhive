@@ -1,5 +1,5 @@
 use super::{
-    agent::{Agent, AgentId},
+    agent::AgentId,
     document::{id::DocumentId, Document},
     group::{id::GroupId, operation::delegation::Delegation, Group},
     identifier::Identifier,
@@ -13,10 +13,10 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt};
 
 /// The union of Agents that have updatable membership
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum Membered<'a, T: ContentRef> {
-    Group(Group<'a, T>),
-    Document(Document<'a, T>),
+    Group(&'a mut Group<'a, T>),
+    Document(&'a mut Document<'a, T>),
 }
 
 impl<'a, T: ContentRef> Membered<'a, T> {
@@ -41,7 +41,6 @@ impl<'a, T: ContentRef> Membered<'a, T> {
         }
     }
 
-    // FIXME make a trait and apply to children
     pub fn members(&self) -> &HashMap<AgentId, Vec<Digest<Signed<Delegation<'a, T>>>>> {
         match self {
             Membered::Group(group) => group.members(),
@@ -82,35 +81,35 @@ impl<'a, T: ContentRef> Membered<'a, T> {
     }
 }
 
-impl<'a, T: ContentRef> From<Membered<'a, T>> for Agent<'a, T> {
-    fn from(membered: Membered<'a, T>) -> Self {
-        match membered {
-            Membered::Group(group) => group.into(),
-            Membered::Document(document) => document.into(),
-        }
-    }
-}
+// impl<'a, T: ContentRef> From<Membered<'a, T>> for Agent<'a, T> {
+//     fn from(membered: Membered<'a, T>) -> Self {
+//         match membered {
+//             Membered::Group(group) => group.into(),
+//             Membered::Document(document) => document.into(),
+//         }
+//     }
+// }
 
-impl<'a, T: ContentRef> TryFrom<Agent<'a, T>> for Membered<'a, T> {
-    type Error = &'static str; // FIXME
+// impl<'a, T: ContentRef> TryFrom<Agent<'a, T>> for Membered<'a, T> {
+//     type Error = &'static str; // FIXME
+//
+//     fn try_from(agent: Agent<'a, T>) -> Result<Self, Self::Error> {
+//         match agent {
+//             Agent::Group(group) => Ok(Membered::Group(group)),
+//             Agent::Document(document) => Ok(Membered::Document(document)),
+//             _ => Err("Agent is not a membered type"),
+//         }
+//     }
+// }
 
-    fn try_from(agent: Agent<'a, T>) -> Result<Self, Self::Error> {
-        match agent {
-            Agent::Group(group) => Ok(Membered::Group(group)),
-            Agent::Document(document) => Ok(Membered::Document(document)),
-            _ => Err("Agent is not a membered type"),
-        }
-    }
-}
-
-impl<'a, T: ContentRef> From<Group<'a, T>> for Membered<'a, T> {
-    fn from(group: Group<'a, T>) -> Self {
+impl<'a, T: ContentRef> From<&'a mut Group<'a, T>> for Membered<'a, T> {
+    fn from(group: &'a mut Group<'a, T>) -> Self {
         Membered::Group(group)
     }
 }
 
-impl<'a, T: ContentRef> From<Document<'a, T>> for Membered<'a, T> {
-    fn from(document: Document<'a, T>) -> Self {
+impl<'a, T: ContentRef> From<&'a mut Document<'a, T>> for Membered<'a, T> {
+    fn from(document: &'a mut Document<'a, T>) -> Self {
         Membered::Document(document)
     }
 }

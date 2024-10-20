@@ -14,7 +14,7 @@ use std::{collections::BTreeMap, hash::Hash};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Delegation<'a, T: ContentRef> {
-    pub delegate: &'a Agent<'a, T>,
+    pub delegate: Agent<'a, T>,
     pub can: Access,
 
     pub proof: Option<&'a Signed<Delegation<'a, T>>>,

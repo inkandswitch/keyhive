@@ -8,7 +8,8 @@ use crate::{
         active::Active,
         agent::{Agent, AgentId},
         document::{id::DocumentId, store::DocumentStore, Document},
-        group::{id::GroupId, store::GroupStore},
+        group::{id::GroupId, store::GroupStore, Group},
+        identifier::Identifier,
         individual::{id::IndividualId, Individual},
         membered::Membered,
         verifiable::Verifiable,
@@ -44,16 +45,17 @@ impl<'a, T: ContentRef> Context<'a, T> {
         }
     }
 
-    pub fn generate_group(&'a mut self, coparents: Vec<&'a Agent<'a, T>>) -> GroupId {
+    pub fn generate_group(&'a mut self, coparents: Vec<Agent<'a, T>>) -> GroupId {
+        let head = Agent::Active(&self.active);
         self.groups.generate_group(NonEmpty {
-            head: self.active.into(),
+            head,
             tail: coparents,
         })
     }
 
-    pub fn generate_doc(&'a mut self, coparents: Vec<&'a Agent<'a, T>>) -> DocumentId {
+    pub fn generate_doc(&'a mut self, coparents: Vec<Agent<'a, T>>) -> DocumentId {
         let parents = NonEmpty {
-            head: self.active.into(),
+            head: (&self.active).into(),
             tail: coparents,
         };
         self.docs.generate_document(parents)
@@ -94,7 +96,21 @@ impl<'a, T: ContentRef> Context<'a, T> {
     }
 
     pub fn accessible_docs(&'a self) -> BTreeMap<DocumentId, (&'a Document<'a, T>, Access)> {
-        let mut explore: Vec<(Membered<'a, T>, Access)> = vec![];
+        enum Focus<'b, U: ContentRef> {
+            Group(&'b Group<'b, U>),
+            Document(&'b Document<'b, U>),
+        }
+
+        impl<'b, U: ContentRef> Focus<'b, U> {
+            fn id(&self) -> Identifier {
+                match self {
+                    Focus::Group(group) => group.id(),
+                    Focus::Document(doc) => doc.id(),
+                }
+            }
+        }
+
+        let mut explore: Vec<(Focus<'a, T>, Access)> = vec![];
         let mut caps: BTreeMap<DocumentId, (&'a Document<'a, T>, Access)> = BTreeMap::new();
         let mut seen: HashSet<AgentId> = HashSet::new();
 
@@ -117,7 +133,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
 
             if let Some(proofs) = group.get_member_refs().get(&agent_id) {
                 for proof in proofs {
-                    explore.push(((*group).into(), proof.payload().can));
+                    explore.push((Focus::Group(group), proof.payload().can));
                 }
             }
         }
@@ -142,13 +158,13 @@ impl<'a, T: ContentRef> Context<'a, T> {
                     continue;
                 }
 
-                if group.membered_id() == (*group_id).into() {
+                if group.id() == (*group_id).into() {
                     continue;
                 }
 
                 if let Some(proofs) = focus_group.get_member_refs().get(&agent_id) {
                     for proof in proofs {
-                        explore.push(((*focus_group).into(), proof.payload().can));
+                        explore.push((Focus::Group(focus_group), proof.payload().can));
                     }
                 }
             }
@@ -160,7 +176,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
     pub fn transitive_members(
         &'a self,
         membered: &'a Membered<'a, T>,
-    ) -> BTreeMap<AgentId, (&'a Agent<'a, T>, Access)> {
+    ) -> BTreeMap<AgentId, (Agent<'a, T>, Access)> {
         match membered {
             Membered::Group(group) => self.groups.transitive_members(group),
             Membered::Document(doc) => self.docs.transitive_members(doc),
@@ -174,8 +190,8 @@ impl<'a, T: ContentRef> Verifiable for Context<'a, T> {
     }
 }
 
-impl<'a, T: ContentRef> From<Context<'a, T>> for Agent<'a, T> {
-    fn from(context: Context<T>) -> Self {
-        context.active.into()
+impl<'a, T: ContentRef> From<&'a Context<'a, T>> for Agent<'a, T> {
+    fn from(context: &'a Context<T>) -> Self {
+        (&context.active).into()
     }
 }

@@ -10,12 +10,15 @@ use crate::content::reference::ContentRef;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+/// Immutable union over all agent types.
+///
+/// This type is very lightweight to clone, since it only contains immutable references to the actual agents.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize)]
 pub enum Agent<'a, T: ContentRef> {
-    Active(Active),
-    Individual(Individual),
-    Group(Group<'a, T>),
-    Document(Document<'a, T>),
+    Active(&'a Active),
+    Individual(&'a Individual),
+    Group(&'a Group<'a, T>),
+    Document(&'a Document<'a, T>),
 }
 
 impl<'a, T: ContentRef> Agent<'a, T> {
@@ -38,26 +41,26 @@ impl<'a, T: ContentRef> Agent<'a, T> {
     }
 }
 
-impl<'a, T: ContentRef> From<Active> for Agent<'a, T> {
-    fn from(a: Active) -> Self {
+impl<'a, T: ContentRef> From<&'a Active> for Agent<'a, T> {
+    fn from(a: &'a Active) -> Self {
         Agent::Active(a)
     }
 }
 
-impl<'a, T: ContentRef> From<Individual> for Agent<'a, T> {
-    fn from(i: Individual) -> Self {
+impl<'a, T: ContentRef> From<&'a Individual> for Agent<'a, T> {
+    fn from(i: &'a Individual) -> Self {
         Agent::Individual(i)
     }
 }
 
-impl<'a, T: ContentRef> From<Group<'a, T>> for Agent<'a, T> {
-    fn from(g: Group<'a, T>) -> Self {
+impl<'a, T: ContentRef> From<&'a Group<'a, T>> for Agent<'a, T> {
+    fn from(g: &'a Group<'a, T>) -> Self {
         Agent::Group(g)
     }
 }
 
-impl<'a, T: ContentRef> From<Document<'a, T>> for Agent<'a, T> {
-    fn from(d: Document<'a, T>) -> Self {
+impl<'a, T: ContentRef> From<&'a Document<'a, T>> for Agent<'a, T> {
+    fn from(d: &'a Document<'a, T>) -> Self {
         Agent::Document(d)
     }
 }

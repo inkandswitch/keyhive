@@ -9,6 +9,7 @@ use crate::{
     principal::{
         agent::{Agent, AgentId},
         group::{operation::delegation::Delegation, Group},
+        identifier::Identifier,
         individual::Individual,
     },
     util::content_addressed_map::CaMap,
@@ -29,6 +30,10 @@ pub struct Document<'a, T: ContentRef> {
 }
 
 impl<'a, T: ContentRef> Document<'a, T> {
+    pub fn id(&self) -> Identifier {
+        self.group.id()
+    }
+
     pub fn doc_id(&self) -> DocumentId {
         DocumentId(self.group.id())
     }
@@ -53,7 +58,7 @@ impl<'a, T: ContentRef> Document<'a, T> {
         self.group.get_capability(member_id)
     }
 
-    pub fn generate(parents: NonEmpty<&'a Agent<'a, T>>) -> Self {
+    pub fn generate(parents: NonEmpty<Agent<'a, T>>) -> Self {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
 
         let mut doc = Document {
@@ -66,7 +71,7 @@ impl<'a, T: ContentRef> Document<'a, T> {
         for parent in parents.iter() {
             let dlg = Signed::sign(
                 Delegation {
-                    delegate: *parent,
+                    delegate: parent.clone(),
                     can: Access::Admin,
                     proof: None,
                     after_revocations: vec![],

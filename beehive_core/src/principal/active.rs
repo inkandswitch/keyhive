@@ -74,9 +74,9 @@ impl Active {
     // FIXME replace with delegate_to
     pub fn make_delegation<'a, T: ContentRef>(
         &'a self,
-        subject: &'a Membered<T>,
+        subject: &'a Membered<'a, T>,
         attenuate: Access,
-        delegate: &'a Agent<T>,
+        delegate: Agent<'a, T>,
         after_revocations: Vec<&'a Signed<Revocation<T>>>,
         after_content: BTreeMap<DocumentId, (&'a Document<T>, Vec<T>)>,
     ) -> Result<Signed<Delegation<T>>, DelegationError> {

@@ -30,7 +30,7 @@ pub struct GroupState<'a, T: ContentRef> {
 }
 
 impl<'a, T: ContentRef> GroupState<'a, T> {
-    pub fn generate(parents: Vec<&'a Agent<'a, T>>) -> Self {
+    pub fn generate(parents: Vec<Agent<'a, T>>) -> Self {
         let mut rng = rand::thread_rng();
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
         let group_id = signing_key.verifying_key().into();
@@ -50,7 +50,7 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
         for parent in parents.iter() {
             let dlg = Signed::sign(
                 Delegation {
-                    delegate: *parent,
+                    delegate: parent.clone(),
                     can: Access::Admin,
 
                     proof: None,
@@ -156,7 +156,7 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
         Ok(())
     }
 
-    pub fn delegations_for(&self, agent: &Agent<'a, T>) -> Vec<&Signed<Delegation<'a, T>>> {
+    pub fn delegations_for(&self, agent: Agent<'a, T>) -> Vec<&Signed<Delegation<'a, T>>> {
         self.delegations
             .iter()
             .filter_map(|(_, delegation)| {

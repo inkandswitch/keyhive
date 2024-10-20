@@ -39,7 +39,7 @@ pub struct Group<'a, T: ContentRef> {
 
 impl<'a, T: ContentRef> Group<'a, T> {
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
-    pub fn generate(parents: NonEmpty<&'a Agent<T>>) -> Group<'a, T> {
+    pub fn generate(parents: NonEmpty<Agent<'a, T>>) -> Group<'a, T> {
         let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let group_id = GroupId(group_signer.verifying_key().into());
 
@@ -50,7 +50,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
         for parent in parents.iter() {
             let dlg = Signed::sign(
                 Delegation {
-                    delegate: parent,
+                    delegate: parent.clone(),
                     can: Access::Admin,
                     proof: None,
                     after_revocations: vec![],

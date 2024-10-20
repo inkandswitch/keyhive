@@ -32,7 +32,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
         self.0.insert(group.group_id(), group);
     }
 
-    pub fn generate_group(&mut self, parents: NonEmpty<&'a Agent<'a, T>>) -> GroupId {
+    pub fn generate_group(&mut self, parents: NonEmpty<Agent<'a, T>>) -> GroupId {
         let new_group: Group<'a, T> = Group::generate(parents);
         let new_group_id: GroupId = new_group.group_id();
         self.insert(new_group);
@@ -58,9 +58,9 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
     pub fn transitive_members(
         &self,
         group: &'a Group<'a, T>,
-    ) -> BTreeMap<AgentId, (&'a Agent<'a, T>, Access)> {
+    ) -> BTreeMap<AgentId, (Agent<'a, T>, Access)> {
         struct GroupAccess<'b, U: ContentRef> {
-            agent: &'b Agent<'b, U>,
+            agent: Agent<'b, U>,
             agent_access: Access,
             parent_access: Access,
         }
@@ -71,13 +71,13 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
             let dlg = group.get_capability(member).unwrap();
 
             explore.push(GroupAccess {
-                agent: dlg.payload().delegate,
+                agent: dlg.payload().delegate.clone(),
                 agent_access: dlg.payload().can,
                 parent_access: Access::Admin,
             });
         }
 
-        let mut caps: BTreeMap<AgentId, (&'a Agent<'a, T>, Access)> = BTreeMap::new();
+        let mut caps: BTreeMap<AgentId, (Agent<'a, T>, Access)> = BTreeMap::new();
 
         while let Some(GroupAccess {
             agent: member,
@@ -112,7 +112,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                                 };
 
                             explore.push(GroupAccess {
-                                agent: &proof.payload().delegate,
+                                agent: proof.payload().delegate.clone(),
                                 agent_access: best_access,
                                 parent_access,
                             });
@@ -134,7 +134,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                                 };
 
                             explore.push(GroupAccess {
-                                agent: &proof.payload().delegate,
+                                agent: proof.payload().delegate.clone(),
                                 agent_access: best_access,
                                 parent_access,
                             });
