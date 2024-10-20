@@ -32,13 +32,11 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
         self.0.insert(group.group_id(), group);
     }
 
-    pub fn generate_group(&mut self, parents: NonEmpty<&'a Agent<'a, T>>) -> &Group<'a, T> {
+    pub fn generate_group(&mut self, parents: NonEmpty<&'a Agent<'a, T>>) -> GroupId {
         let new_group: Group<'a, T> = Group::generate(parents);
         let new_group_id: GroupId = new_group.group_id();
         self.insert(new_group);
-        self.get(&new_group_id).expect(
-            "Group should be inserted in store because it was just placed there a moment ago",
-        )
+        new_group_id
     }
 
     pub fn get(&self, id: &GroupId) -> Option<&Group<'a, T>> {

@@ -27,15 +27,11 @@ impl<'a, T: ContentRef> DocumentStore<'a, T> {
         self.docs.get(id)
     }
 
-    pub fn generate_document(
-        &'a mut self,
-        parents: NonEmpty<&'a Agent<'a, T>>,
-    ) -> &'a Document<'a, T> {
+    pub fn generate_document(&'a mut self, parents: NonEmpty<&'a Agent<'a, T>>) -> DocumentId {
         let new_doc = Document::generate(parents);
         let new_doc_id: DocumentId = new_doc.doc_id();
         self.insert(new_doc);
-        self.get(&new_doc_id)
-            .expect("document that was just added is missing")
+        new_doc_id
     }
 
     pub fn transitive_members(

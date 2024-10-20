@@ -8,7 +8,7 @@ use crate::{
         active::Active,
         agent::{Agent, AgentId},
         document::{id::DocumentId, store::DocumentStore, Document},
-        group::{store::GroupStore, Group},
+        group::{id::GroupId, store::GroupStore},
         individual::{id::IndividualId, Individual},
         membered::Membered,
         verifiable::Verifiable,
@@ -44,14 +44,14 @@ impl<'a, T: ContentRef> Context<'a, T> {
         }
     }
 
-    pub fn generate_group(&'a mut self, coparents: Vec<&'a Agent<'a, T>>) -> &Group<'a, T> {
+    pub fn generate_group(&'a mut self, coparents: Vec<&'a Agent<'a, T>>) -> GroupId {
         self.groups.generate_group(NonEmpty {
             head: self.active.into(),
             tail: coparents,
         })
     }
 
-    pub fn generate_doc(&'a mut self, coparents: Vec<&'a Agent<'a, T>>) -> &Document<'a, T> {
+    pub fn generate_doc(&'a mut self, coparents: Vec<&'a Agent<'a, T>>) -> DocumentId {
         let parents = NonEmpty {
             head: self.active.into(),
             tail: coparents,
@@ -94,7 +94,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
     }
 
     pub fn accessible_docs(&'a self) -> BTreeMap<DocumentId, (&'a Document<'a, T>, Access)> {
-        let mut explore: Vec<(Membered<T>, Access)> = vec![];
+        let mut explore: Vec<(Membered<'a, T>, Access)> = vec![];
         let mut caps: BTreeMap<DocumentId, (&'a Document<'a, T>, Access)> = BTreeMap::new();
         let mut seen: HashSet<AgentId> = HashSet::new();
 
@@ -103,9 +103,11 @@ impl<'a, T: ContentRef> Context<'a, T> {
         for doc in self.docs.docs.values() {
             seen.insert(doc.agent_id());
 
-            if let Some(proofs) = doc.members().get(&agent_id) {
+            let doc_id = doc.doc_id();
+
+            if let Some(proofs) = doc.get_member_refs().get(&agent_id) {
                 for proof in proofs {
-                    caps.insert(doc, proof.payload().can);
+                    caps.insert(doc_id, (doc, proof.payload().can));
                 }
             }
         }
@@ -113,8 +115,10 @@ impl<'a, T: ContentRef> Context<'a, T> {
         for group in self.groups.values() {
             seen.insert(group.agent_id());
 
-            if let Some(proof) = group.get(&agent_id) {
-                explore.push(((*group).into(), proof.payload().can));
+            if let Some(proofs) = group.get_member_refs().get(&agent_id) {
+                for proof in proofs {
+                    explore.push(((*group).into(), proof.payload().can));
+                }
             }
         }
 
@@ -124,22 +128,28 @@ impl<'a, T: ContentRef> Context<'a, T> {
                     continue;
                 }
 
-                if let Some(proof) = doc.members.get(&agent_id) {
-                    caps.insert(doc, proof.payload().can);
+                let doc_id = doc.doc_id();
+
+                if let Some(proofs) = doc.get_member_refs().get(&agent_id) {
+                    for proof in proofs {
+                        caps.insert(doc_id, (doc, proof.payload().can));
+                    }
                 }
             }
 
-            for (id, focus_group) in self.groups.iter() {
+            for (group_id, focus_group) in self.groups.iter() {
                 if seen.contains(&focus_group.agent_id()) {
                     continue;
                 }
 
-                if group.member_id() == *id.into() {
+                if group.membered_id() == (*group_id).into() {
                     continue;
                 }
 
-                if let Some(proof) = focus_group.get(&agent_id) {
-                    explore.push((focus_group.into(), proof.payload.can));
+                if let Some(proofs) = focus_group.get_member_refs().get(&agent_id) {
+                    for proof in proofs {
+                        explore.push(((*focus_group).into(), proof.payload().can));
+                    }
                 }
             }
         }
