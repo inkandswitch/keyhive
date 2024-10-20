@@ -6,21 +6,24 @@ use crate::{
     crypto::{digest::Digest, signed::Signed},
     principal::{
         agent::{Agent, AgentId},
-        document::Document,
+        document::{Document, DocumentId},
         identifier::Identifier,
     },
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, hash::Hash};
+use std::{
+    collections::{BTreeMap, HashMap},
+    hash::Hash,
+};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Delegation<'a, T: ContentRef> {
     pub delegate: &'a Agent<'a, T>,
     pub can: Access,
 
     pub proof: Option<&'a Signed<Delegation<'a, T>>>,
     pub after_revocations: Vec<&'a Signed<Revocation<'a, T>>>,
-    pub after_content: BTreeMap<&'a Document<'a, T>, Vec<T>>,
+    pub after_content: BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)>,
 }
 
 impl<'a, T: ContentRef> Delegation<'a, T> {
@@ -37,7 +40,7 @@ impl<'a, T: ContentRef> Delegation<'a, T> {
     ) -> (
         Vec<&'a Signed<Delegation<'a, T>>>,
         Vec<&'a Signed<Revocation<'a, T>>>,
-        &'a BTreeMap<&'a Document<'a, T>, Vec<T>>,
+        &'a BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)>,
     ) {
         let (dlgs, revs) = self.after_auth();
         (
@@ -118,12 +121,6 @@ impl<'a, T: ContentRef> PartialOrd for Delegation<'a, T> {
     }
 }
 
-// impl<'a, T: ContentRef + Ord> Ord for Delegation<'a, T> {
-//     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-//         self.partial_cmp(other).unwrap()
-//     }
-// }
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct StaticDelegation<T: ContentRef> {
     pub can: Access,
@@ -132,7 +129,7 @@ pub struct StaticDelegation<T: ContentRef> {
     pub delegate: Identifier,
 
     pub after_revocations: Vec<Digest<Signed<StaticRevocation<T>>>>,
-    pub after_content: BTreeMap<Identifier, Vec<T>>,
+    pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
 impl<'a, T: ContentRef> From<Delegation<'a, T>> for StaticDelegation<T> {
@@ -146,12 +143,11 @@ impl<'a, T: ContentRef> From<Delegation<'a, T>> for StaticDelegation<T> {
                 .iter()
                 .map(|revocation| Digest::hash(*revocation).coerce()) // FIXME remove coerce, add specific fincton for op <-> del
                 .collect(),
-            after_content: BTreeMap::from_iter(
-                delegation
-                    .after_content
-                    .into_iter()
-                    .map(|(document, content)| (document.doc_id().into(), content)),
-            ),
+            after_content: delegation
+                .after_content
+                .into_iter()
+                .map(|(doc_id, (_, content))| (doc_id, content))
+                .collect(),
         }
     }
 }

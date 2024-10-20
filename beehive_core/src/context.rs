@@ -16,7 +16,10 @@ use crate::{
 };
 use nonempty::NonEmpty;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashSet},
+};
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
@@ -95,38 +98,21 @@ impl<'a, T: ContentRef> Context<'a, T> {
         // FIXME check that delegation is authorized
         //
         match resource {
-            Membered::Group(og_group) => {
-                let group = self.groups.get_mut(&og_group.state.id).expect("FIXME");
-
-                group.members.remove(&to_revoke.agent_id());
-
-                while let Some(proof) = group.get_capability(&resource.agent_id()) {
-                    group.state.revocations.insert(self.sign(Revocation {
-                        revoke,
-                        proof,
-                        after_content,
-                    }));
-                }
+            Membered::Group(group) => {
+                group.revoke_member(to_revoke, &self.active, after_content);
             }
-            Membered::Document(og_doc) => {
-                // let mut doc = d.clone();
-                let doc = self.docs.docs.get_mut(&og_doc.id()).expect("FIXME");
-                let revoke = doc.state.delegations_for(to_revoke).pop().expect("FIXME");
-                let proof = doc
-                    .state
-                    .delegations_for(self.active.as_agent())
-                    .pop()
-                    .expect("FIXME");
-
-                doc.members.remove(&to_revoke.id().into());
-                doc.state.revocations.insert(Box::new(Signed::sign(
-                    Revocation {
-                        revoke,
-                        proof,
-                        after_content,
-                    },
-                    &self.active.signer,
-                )));
+            Membered::Document(doc) => {
+                for proof in doc.get_member_refs().get(&to_revoke.agent_id()).iter() {
+                    doc.members.remove(&to_revoke.id().into());
+                    doc.state.revocations.insert(Box::new(Signed::sign(
+                        Revocation {
+                            revoke,
+                            proof,
+                            after_content,
+                        },
+                        &self.active.signer,
+                    )));
+                }
             }
         }
     }

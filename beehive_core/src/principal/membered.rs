@@ -14,7 +14,10 @@ use crate::{
     crypto::{digest::Digest, signed::Signed},
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt,
+};
 
 /// The union of Agents that have updatable membership
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -69,12 +72,19 @@ impl<'a, T: ContentRef> Membered<'a, T> {
         }
     }
 
-    pub fn revoke_member(&'a mut self, revocation: Signed<Revocation<'a, T>>) {
+    pub fn revoke_member(
+        &'a mut self,
+        member_id: &AgentId,
+        signing_key: &ed25519_dalek::SigningKey,
+        relevant_docs: &[&'a Document<'a, T>],
+    ) {
         match self {
             Membered::Group(group) => {
-                group.revoke(revocation);
+                group.revoke_member(member_id, signing_key, relevant_docs);
             }
-            Membered::Document(_document) => todo!(), // document.revoke_authorization(agent),
+            Membered::Document(document) => {
+                document.revoke_member(member_id, signing_key, relevant_docs);
+            }
         }
     }
 }

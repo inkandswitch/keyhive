@@ -1,7 +1,7 @@
 //! The current user agent (which can sign and encrypt).
 
 use super::{
-    document::Document,
+    document::{Document, DocumentId},
     individual::{id::IndividualId, Individual},
     verifiable::Verifiable,
 };
@@ -71,14 +71,14 @@ impl Active {
         })
     }
 
-    // FIXME put this on Capability?
+    // FIXME replace with delegate_to
     pub fn make_delegation<'a, T: ContentRef>(
         &'a self,
         subject: &'a Membered<T>,
         attenuate: Access,
         delegate: &'a Agent<T>,
         after_revocations: Vec<&'a Signed<Revocation<T>>>,
-        after_content: BTreeMap<&'a Document<T>, Vec<T>>,
+        after_content: BTreeMap<DocumentId, (&'a Document<T>, Vec<T>)>,
     ) -> Result<Signed<Delegation<T>>, DelegationError> {
         let proof = self.get_capability(&subject, attenuate).expect("FIXME");
 
@@ -94,7 +94,7 @@ impl Active {
             after_content,
         });
 
-        // FIXME would be nice to IVM here, but lifetimes
+        // FIXME IVM
 
         Ok(delegation)
     }

@@ -55,10 +55,6 @@ impl<T: Serialize> Signed<T> {
         )
     }
 
-    pub fn hash(&self) -> Digest<Self> {
-        Digest::hash(self)
-    }
-
     pub fn map<U: Serialize, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
         Signed {
             payload: f(self.payload),

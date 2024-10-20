@@ -7,6 +7,7 @@ pub mod store;
 
 use super::{
     agent::{Agent, AgentId},
+    document::Document,
     identifier::Identifier,
     verifiable::Verifiable,
 };
@@ -19,7 +20,7 @@ use crate::{
 use id::GroupId;
 use nonempty::NonEmpty;
 use operation::{delegation::Delegation, revocation::Revocation, Operation};
-use serde::Serialize;
+use serde::{ser::SerializeTupleVariant, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A collection of agents with no associated content.
@@ -149,6 +150,7 @@ impl<'a, T: ContentRef> Group<'a, T> {
         &'a mut self,
         member_id: &AgentId,
         signing_key: &ed25519_dalek::SigningKey,
+        relevant_docs: &[&'a Document<'a, T>],
     ) {
         let revocations = &mut self.state.revocations;
 
@@ -157,8 +159,16 @@ impl<'a, T: ContentRef> Group<'a, T> {
                 let revocation = Signed::sign(
                     Revocation {
                         revoke: self.state.delegations.get(hash).unwrap(),
-                        proof: None,
-                        after_content: BTreeMap::new(),
+                        proof: None, // FIXME
+                        after_content: relevant_docs
+                            .iter()
+                            .map(|d| {
+                                (
+                                    d.doc_id(),
+                                    (*d, d.content_heads.iter().map(|x| (*x).clone()).collect()),
+                                )
+                            })
+                            .collect(),
                     },
                     &signing_key,
                 );
@@ -166,6 +176,10 @@ impl<'a, T: ContentRef> Group<'a, T> {
                 revocations.insert(revocation);
             }
         }
+
+        // FIXME check that you can actually do this with tiebreaking, seniroity etc etc
+
+        self.members.remove(member_id);
     }
 
     pub fn materialize(&'a mut self) {

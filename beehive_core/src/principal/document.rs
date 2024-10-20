@@ -26,6 +26,8 @@ use std::{
 pub struct Document<'a, T: ContentRef> {
     pub(crate) group: Group<'a, T>,
     pub(crate) reader_keys: HashMap<IndividualId, (&'a Individual, ShareKey)>, // FIXME May remove when BeeKEM, also FIXME Individual ID
+
+    pub(crate) content_heads: HashSet<&'a T>,
     pub(crate) content_state: HashSet<T>,
 }
 
@@ -59,8 +61,9 @@ impl<'a, T: ContentRef> Document<'a, T> {
 
         let mut doc = Document {
             group: Group::generate(parents.clone()),
-            content_state: HashSet::new(),
             reader_keys: HashMap::new(), // FIXME
+            content_state: HashSet::new(),
+            content_heads: HashSet::new(),
         };
 
         for parent in parents.iter() {
@@ -100,6 +103,16 @@ impl<'a, T: ContentRef> Document<'a, T> {
                 self.group.members.insert(id, vec![]);
             }
         }
+    }
+
+    pub fn revoke_member(
+        &'a mut self,
+        member_id: &AgentId,
+        signing_key: &ed25519_dalek::SigningKey,
+        relevant_docs: &[&'a Document<'a, T>],
+    ) {
+        self.group
+            .revoke_member(member_id, signing_key, relevant_docs);
     }
 
     pub fn materialize(&'a mut self) {

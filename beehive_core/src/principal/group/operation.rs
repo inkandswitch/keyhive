@@ -5,7 +5,10 @@ pub mod store;
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
-    principal::{document::Document, identifier::Identifier},
+    principal::{
+        document::{Document, DocumentId},
+        identifier::Identifier,
+    },
     util::content_addressed_map::CaMap,
 };
 use delegation::Delegation;
@@ -57,7 +60,7 @@ impl<'a, T: ContentRef> Operation<'a, T> {
     ) -> (
         Vec<&'a Signed<Delegation<'a, T>>>,
         Vec<&'a Signed<Revocation<'a, T>>>,
-        &'a BTreeMap<&'a Document<'a, T>, Vec<T>>,
+        &'a BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)>,
     ) {
         match self {
             Operation::Delegation(delegation) => {
@@ -71,7 +74,7 @@ impl<'a, T: ContentRef> Operation<'a, T> {
         }
     }
 
-    pub fn after_content(&self) -> &'a BTreeMap<&'a Document<'a, T>, Vec<T>> {
+    pub fn after_content(&self) -> &'a BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)> {
         match self {
             Operation::Delegation(delegation) => &delegation.payload().after_content,
             Operation::Revocation(revocation) => &revocation.payload().after_content,
