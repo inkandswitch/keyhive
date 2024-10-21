@@ -13,6 +13,9 @@ pub enum CGKAError {
     #[error("Identifier not found")]
     IdentifierNotFound,
 
+    #[error("Invalid path length")]
+    InvalidPathLength,
+
     #[error("No root key")]
     NoRootKey,
 

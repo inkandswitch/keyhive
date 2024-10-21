@@ -1,8 +1,12 @@
 use crate::principal::identifier::Identifier;
 
-use super::beekem::PublicKey;
+use super::beekem::{ParentNode, PublicKey};
 
-pub type TreePath = Vec<(u32, PublicKey)>;
+pub struct TreePath {
+    pub leaf_idx: u32,
+    pub leaf_pk: PublicKey,
+    pub path: Vec<(u32, Option<ParentNode>)>,
+}
 
 pub enum CGKAMessage {
     Add { id: Identifier, pk: PublicKey, leaf_index: u32, owner_path: TreePath },

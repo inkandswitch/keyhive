@@ -277,7 +277,11 @@ impl BeeKEM {
         sk: SecretKey,
     ) -> Result<TreePath, CGKAError> {
         let leaf_idx = *self.leaf_index_for_id(id)?;
-        let mut new_path = vec![(leaf_idx.u32(), pk)];
+        let mut new_path = TreePath {
+            leaf_idx: leaf_idx.u32(),
+            leaf_pk: pk,
+            path: Vec::new(),
+        };
         if self.id_for_leaf(leaf_idx)? != id {
             return Err(CGKAError::IdentifierNotFound);
         }
@@ -298,8 +302,8 @@ impl BeeKEM {
             child_idx = parent_idx.into();
             child_pk = new_parent_pk;
             child_sk = new_parent_sk;
+            new_path.path.push((parent_idx.u32(), self.parent(parent_idx)?.clone()));
             parent_idx = treemath::parent(child_idx);
-            new_path.push((child_idx.u32(), child_pk));
         }
         Ok(new_path)
     }
@@ -310,6 +314,35 @@ impl BeeKEM {
             return Err(CGKAError::TreeIndexOutOfBounds);
         };
         Ok(self.parent(p_idx)?.is_none())
+    }
+
+    /// Overwrite all public keys on this path
+    pub(crate) fn apply_path(
+        &mut self,
+        id: Identifier,
+        path: TreePath,
+    ) -> Result<(), CGKAError> {
+        let leaf_idx = *self.leaf_index_for_id(id)?;
+        // TODO: Should we verify that the path is the same as the direct path
+        // from the leaf?
+        if path.path.len() != self.path_length_for(leaf_idx) {
+            return Err(CGKAError::InvalidPathLength);
+        }
+        if self.id_for_leaf(leaf_idx)? != id || leaf_idx.u32() != path.leaf_idx {
+            return Err(CGKAError::IdentifierNotFound);
+        }
+        self.insert_leaf_at(leaf_idx, LeafNode { id, pk: path.leaf_pk })?;
+
+        for (idx, p_node) in path.path {
+            let p_idx = ParentNodeIndex::new(idx);
+            if let Some(node) = p_node {
+                self.insert_parent_at(p_idx, node.clone())?;
+            } else {
+                self.blank_parent(p_idx)?;
+            }
+        }
+
+        Ok(())
     }
 
     fn decrypt_parent_key(
@@ -459,6 +492,10 @@ impl BeeKEM {
 
     fn is_root(&self, idx: TreeNodeIndex) -> bool {
         idx == treemath::root(self.tree_size)
+    }
+
+    fn path_length_for(&self, idx: LeafNodeIndex) -> usize {
+        treemath::direct_path(idx, self.tree_size).len()
     }
 
     /// Highest non-blank descendents of a node

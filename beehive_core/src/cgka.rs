@@ -396,29 +396,30 @@ mod tests {
     }
 
 
-    // #[test]
-    // fn test_fork_update_and_merge() -> Result<(), CGKAError> {
-    //     let participants = setup_participants(8);
-    //     let p1 = participants[1].clone();
-    //     let p5 = participants[5].clone();
-    //     let initial_cgka = setup_cgka(&participants, 0);
-    //     update_every_path(&initial_cgka, &participants)?;
-    //     let mut p1_cgka = initial_cgka.with_new_owner_id(p1.id)?;
-    //     let mut p5_cgka = initial_cgka.with_new_owner_id(p5.id)?;
-    //     assert_eq!(p1_cgka.tree.hash(), p5_cgka.tree.hash());
+    #[test]
+    fn test_fork_update_and_merge() -> Result<(), CGKAError> {
+        let participants = setup_participants(8);
+        let p5 = participants[5].clone();
+        let p7 = participants[1].clone();
+        let initial_cgka = setup_cgka(&participants, 0);
+        update_every_path(&initial_cgka, &participants)?;
+        let mut p5_cgka = initial_cgka.with_new_owner_id(p5.id)?;
+        let mut p7_cgka = initial_cgka.with_new_owner_id(p7.id)?;
+        assert_eq!(p5_cgka.tree.hash(), p7_cgka.tree.hash());
 
-    //     let (p1_pk, p1_sk) = key_pair();
-    //     let p1_msg = p1_cgka.update(p1.id, p1_pk, p1_sk)?.expect("Should have message");
-    //     let (p5_pk, p5_sk) = key_pair();
-    //     let p5_msg = p5_cgka.update(p5.id, p5_pk, p5_sk)?.expect("Should have message");
+        let (p5_pk, p5_sk) = key_pair();
+        let p5_msg = p5_cgka.update(p5.id, p5_pk, p5_sk)?.expect("Should have message");
+        let (p7_pk, p7_sk) = key_pair();
+        let p7_msg = p7_cgka.update(p7.id, p7_pk, p7_sk)?.expect("Should have message");
+        assert_ne!(p5_cgka.tree.hash(), p7_cgka.tree.hash());
 
-    //     p1_cgka.merge(p5_msg)?;
-    //     p5_cgka.merge(p1_msg)?;
+        p5_cgka.merge(p7_msg)?;
+        p7_cgka.merge(p5_msg)?;
 
-    //     // TODO: Better to try to encrypt and decrypt using these.
-    //     assert_eq!(p1_cgka.tree.hash(), p5_cgka.tree.hash());
-    //     Ok(())
-    // }
+        // TODO: Better to try to encrypt and decrypt using these.
+        assert_eq!(p5_cgka.tree.hash(), p7_cgka.tree.hash());
+        Ok(())
+    }
 
     // #[test]
     // fn test_17_to_32_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {
