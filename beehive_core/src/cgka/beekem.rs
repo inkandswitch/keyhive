@@ -46,7 +46,7 @@
 // * recalculate the root key when doing any operation that blanks up to the root
 // Should these invariants be managed at the CGKA or BeeKEM tree level?
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt::{self, Debug, Formatter}};
 
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -54,17 +54,16 @@ use treemath::{LeafNodeIndex, ParentNodeIndex, TreeNodeIndex, TreeSize};
 use x25519_dalek::{self, x25519, StaticSecret};
 
 use crate::{
-    crypto::{encrypted::Encrypted, symmetric_key::SymmetricKey},
+    crypto::{encrypted::Encrypted, hash::Hash, symmetric_key::SymmetricKey},
     principal::identifier::Identifier,
 };
 
-use super::{error::CGKAError, treemath};
+use super::{error::CGKAError, message::TreePath, treemath};
 pub type PublicKey = x25519_dalek::PublicKey;
 pub type SecretKey = x25519_dalek::StaticSecret;
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct BeeKEM {
-    owner_leaf_idx: Option<LeafNodeIndex>,
     next_leaf_idx: LeafNodeIndex,
     leaves: Vec<Option<LeafNode>>,
     parents: Vec<Option<ParentNode>>,
@@ -77,11 +76,8 @@ impl BeeKEM {
     /// Beehive as a whole).
     pub(crate) fn new(
         members: Vec<(Identifier, PublicKey)>,
-        owner_id: Identifier,
-        owner_sk: SecretKey,
     ) -> Result<Self, CGKAError> {
         let mut tree = Self {
-            owner_leaf_idx: None,
             next_leaf_idx: LeafNodeIndex::new(0),
             leaves: Vec::new(),
             parents: Vec::new(),
@@ -90,25 +86,14 @@ impl BeeKEM {
         };
         tree.grow_tree_to_size();
         for (idx, (id, pk)) in members.iter().enumerate() {
-            if *id == owner_id {
-                tree.owner_leaf_idx = Some(LeafNodeIndex::new(idx as u32));
-            }
             tree.push_leaf(*id, *pk)?;
         }
-        if tree.owner_leaf_idx.is_none() {
-            return Err(CGKAError::OwnerIdentifierNotFound);
-        }
-        tree.encrypt_owner_path(owner_sk)?;
         Ok(tree)
     }
 
-    pub(crate) fn set_owner_id(&mut self, id: Identifier) -> Result<(), CGKAError> {
-        let leaf_idx = *self
-            .id_to_leaf_idx
-            .get(&id)
-            .ok_or(CGKAError::IdentifierNotFound)?;
-        self.owner_leaf_idx = Some(leaf_idx);
-        Ok(())
+    /// Hash of the tree
+    pub fn hash(&self) -> Hash<BeeKEM> {
+        Hash::hash(self.clone())
     }
 
     pub(crate) fn public_key(&self, idx: TreeNodeIndex) -> Result<&PublicKey, CGKAError> {
@@ -128,6 +113,11 @@ impl BeeKEM {
                     .pk
             }
         })
+    }
+
+    pub(crate) fn public_key_for_id(&self, id: Identifier) -> Result<&PublicKey, CGKAError> {
+        let idx = self.leaf_index_for_id(id)?;
+        self.public_key((*idx).into())
     }
 
     pub(crate) fn leaf(&self, idx: LeafNodeIndex) -> Result<&Option<LeafNode>, CGKAError> {
@@ -154,13 +144,6 @@ impl BeeKEM {
         self.parents
             .get(idx.usize())
             .ok_or(CGKAError::TreeIndexOutOfBounds)
-    }
-
-    fn owner_leaf(&self) -> Result<&LeafNode, CGKAError> {
-        let idx = self
-            .owner_leaf_idx
-            .ok_or(CGKAError::OwnerIdentifierNotFound)?;
-        self.leaf(idx)?.as_ref().ok_or(CGKAError::PublicKeyNotFound)
     }
 
     pub(crate) fn insert_leaf_at(
@@ -196,28 +179,30 @@ impl BeeKEM {
         self.blank_path(treemath::parent(idx.into()))
     }
 
-    pub(crate) fn push_leaf(&mut self, id: Identifier, pk: PublicKey) -> Result<(), CGKAError> {
+    pub(crate) fn push_leaf(&mut self, id: Identifier, pk: PublicKey) -> Result<u32, CGKAError> {
         self.maybe_grow_tree(self.next_leaf_idx.u32());
         let l_idx = self.next_leaf_idx;
         // Increment next leaf idx
         self.next_leaf_idx += 1;
         self.id_to_leaf_idx.insert(id, l_idx);
         self.insert_leaf_at(l_idx, LeafNode { id, pk })?;
-        self.blank_path(treemath::parent(l_idx.into()))
+        self.blank_path(treemath::parent(l_idx.into()));
+        Ok(l_idx.u32())
     }
 
-    pub(crate) fn remove_id(&mut self, id: Identifier) -> Result<(), CGKAError> {
+    pub(crate) fn remove_id(&mut self, id: Identifier) -> Result<u32, CGKAError> {
         if self.member_count() == 1 {
             return Err(CGKAError::RemoveLastMember);
         }
         let l_idx = self.leaf_index_for_id(id)?;
+        let l_idx_u32 = l_idx.u32();
         self.blank_leaf_and_path(*l_idx)?;
         self.id_to_leaf_idx.remove(&id);
         // "Collect" any contiguous tombstones at the end of the leaves Vec
         while self.leaf(self.next_leaf_idx - 1)?.is_none() {
             self.next_leaf_idx -= 1;
         }
-        Ok(())
+        Ok(l_idx_u32)
     }
 
     pub(crate) fn member_count(&self) -> u32 {
@@ -234,17 +219,17 @@ impl BeeKEM {
     /// key and move to the next parent.
     pub(crate) fn decrypt_tree_secret(
         &mut self,
+        owner_id: Identifier,
         owner_sk: SecretKey,
     ) -> Result<SecretKey, CGKAError> {
-        let leaf = self.owner_leaf()?;
+        let leaf_idx = *self.leaf_index_for_id(owner_id)?;
+        let leaf = self.leaf(leaf_idx)?.as_ref()
+            .ok_or(CGKAError::OwnerIdentifierNotFound)?;
         // TODO: Should we enforce an invariant that there will always be a root key?
         if self.no_root_key()? {
             self.encrypt_path(leaf.id, leaf.pk, owner_sk.clone())?;
             return Err(CGKAError::NoRootKey);
         }
-        let leaf_idx = self
-            .owner_leaf_idx
-            .ok_or(CGKAError::OwnerIdentifierNotFound)?;
         if self.is_blank(leaf_idx.into())? {
             return Err(CGKAError::OwnerIdentifierNotFound);
         }
@@ -290,8 +275,9 @@ impl BeeKEM {
         id: Identifier,
         pk: PublicKey,
         sk: SecretKey,
-    ) -> Result<(), CGKAError> {
+    ) -> Result<TreePath, CGKAError> {
         let leaf_idx = *self.leaf_index_for_id(id)?;
+        let mut new_path = vec![(leaf_idx.u32(), pk)];
         if self.id_for_leaf(leaf_idx)? != id {
             return Err(CGKAError::IdentifierNotFound);
         }
@@ -313,13 +299,9 @@ impl BeeKEM {
             child_pk = new_parent_pk;
             child_sk = new_parent_sk;
             parent_idx = treemath::parent(child_idx);
+            new_path.push((child_idx.u32(), child_pk));
         }
-        Ok(())
-    }
-
-    pub(crate) fn encrypt_owner_path(&mut self, owner_sk: SecretKey) -> Result<(), CGKAError> {
-        let owner_leaf = self.owner_leaf()?;
-        self.encrypt_path(owner_leaf.id, owner_leaf.pk, owner_sk)
+        Ok(new_path)
     }
 
     pub(crate) fn no_root_key(&self) -> Result<bool, CGKAError> {
@@ -506,10 +488,27 @@ impl BeeKEM {
     }
 }
 
+// TODO: This is currently just a stopgap for tree hashing. How do we actually want
+// to derive the tree hash?
+impl From<BeeKEM> for Vec<u8> {
+    fn from(tree: BeeKEM) -> Self {
+        bincode::serialize(&tree).expect("Serialization failed")
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct LeafNode {
     pub id: Identifier,
     pub pk: PublicKey,
+}
+
+impl Debug for LeafNode {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    f.debug_struct("LeafNode")
+      .field("id", &self.id)
+      .field("pk", &self.pk.to_bytes())
+      .finish()
+  }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -526,6 +525,17 @@ pub(crate) struct ParentNode {
     /// encrypter used for its own Diffie Hellman shared secret.
     pub encrypter_paired_pk: Option<PublicKey>,
 }
+
+impl Debug for ParentNode {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    f.debug_struct("ParentNode")
+      .field("pk", &self.pk.to_bytes())
+      .field("encrypter_pk", &self.encrypter_pk.to_bytes())
+      .field("encrypter_paired_pk", &self.encrypter_paired_pk.map(|pk| pk.to_bytes()))
+      .finish()
+  }
+}
+
 
 //////////////////////////////////////////////////////////////////
 // FIXME: Replace this section with using beehive crypto capabilities

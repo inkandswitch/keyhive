@@ -1,15 +1,20 @@
 pub mod beekem;
 pub mod error;
+pub mod message;
 pub mod treemath;
 
 use beekem::{BeeKEM, PublicKey, SecretKey};
+use bincode;
 use error::CGKAError;
+use message::CGKAMessage;
 use serde::{Deserialize, Serialize};
 
-use crate::principal::identifier::Identifier;
+use crate::{crypto::hash::Hash, principal::identifier::Identifier};
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CGKA {
+    owner_id: Identifier,
+    owner_pk: PublicKey,
     tree: BeeKEM,
 }
 
@@ -19,16 +24,25 @@ impl CGKA {
     pub fn new(
         participants: Vec<(Identifier, PublicKey)>,
         owner_id: Identifier,
+        owner_pk: PublicKey,
         owner_sk: SecretKey,
     ) -> Result<Self, CGKAError> {
+        if !participants.iter().any(|(id, pk)| *id == owner_id && *pk == owner_pk) {
+            return Err(CGKAError::OwnerIdentifierNotFound);
+        }
+        let mut tree = BeeKEM::new(participants)?;
+        tree.encrypt_path(owner_id, owner_pk, owner_sk)?;
         Ok(Self {
-            tree: BeeKEM::new(participants, owner_id, owner_sk)?,
+            owner_id,
+            owner_pk,
+            tree,
         })
     }
 
     pub fn with_new_owner_id(&self, my_id: Identifier) -> Result<Self, CGKAError> {
         let mut cgka = self.clone();
-        cgka.tree.set_owner_id(my_id)?;
+        cgka.owner_id = my_id;
+        cgka.owner_pk = *cgka.tree.public_key_for_id(my_id)?;
         Ok(cgka)
     }
 }
@@ -38,7 +52,7 @@ impl CGKA {
     /// Get secret for decryption/encryption.
     pub fn secret(&mut self, owner_sk: SecretKey) -> Result<SecretKey, CGKAError> {
         // Work from my leaf index up
-        self.tree.decrypt_tree_secret(owner_sk)
+        self.tree.decrypt_tree_secret(self.owner_id, owner_sk)
     }
 
     /// Add participant.
@@ -47,18 +61,24 @@ impl CGKA {
         id: Identifier,
         pk: PublicKey,
         owner_sk: SecretKey,
-    ) -> Result<(), CGKAError> {
-        self.tree.push_leaf(id, pk)?;
-        self.tree.encrypt_owner_path(owner_sk)
+    ) -> Result<Option<CGKAMessage>, CGKAError> {
+        let leaf_index = self.tree.push_leaf(id, pk)?;
+        let owner_path = self.tree.encrypt_path(self.owner_id, self.owner_pk, owner_sk)?;
+        // TODO: When should this be None? For example, if we've already applied this
+        // add.
+        Ok(Some(CGKAMessage::Add{ id, pk, leaf_index, owner_path }))
     }
 
     /// Remove participant.
-    pub fn remove(&mut self, id: Identifier, owner_sk: SecretKey) -> Result<(), CGKAError> {
+    pub fn remove(&mut self, id: Identifier, owner_sk: SecretKey) -> Result<Option<CGKAMessage>, CGKAError> {
         if self.group_size() == 1 {
             return Err(CGKAError::RemoveLastMember);
         }
-        self.tree.remove_id(id)?;
-        self.tree.encrypt_owner_path(owner_sk)
+        let leaf_index = self.tree.remove_id(id)?;
+        let owner_path = self.tree.encrypt_path(self.owner_id, self.owner_pk, owner_sk)?;
+        // TODO: When should this be None? For example, if we've already applied this
+        // remove.
+        Ok(Some(CGKAMessage::Remove { id, leaf_index, owner_path }))
     }
 
     /// Update key pair for this Identifier.
@@ -68,8 +88,12 @@ impl CGKA {
         id: Identifier,
         new_pk: PublicKey,
         new_sk: SecretKey,
-    ) -> Result<(), CGKAError> {
-        self.tree.encrypt_path(id, new_pk, new_sk)
+    ) -> Result<Option<CGKAMessage>, CGKAError> {
+        let new_path = self.tree.encrypt_path(id, new_pk, new_sk)?;
+        if id == self.owner_id {
+            self.owner_pk = new_pk;
+        }
+        Ok(Some(CGKAMessage::Update { id, new_path }))
     }
 
     /// The current group size
@@ -77,14 +101,28 @@ impl CGKA {
         self.tree.member_count()
     }
 
-    // /// Merge
-    // pub fn merge(&mut self, ops: ...) {
-    //     todo!()
-    // }
+    /// Merge
+    pub fn merge(&mut self, msg: CGKAMessage) -> Result<Option<CGKAMessage>, CGKAError> {
+        match msg {
+            CGKAMessage::Add { id, pk, leaf_index, owner_path } => {
+                todo!()
+            },
+            CGKAMessage::Merge => {
+                todo!()
+            },
+            CGKAMessage::Remove { id, leaf_index, owner_path } => {
+                todo!()
+            },
+            CGKAMessage::Update { id, new_path } => {
+                // FIXME
+                Ok(None)
+            }
+        }
+    }
 
     // /// Hash of the tree
     // pub fn hash(&self) -> Hash<CGKA> {
-    //     todo!()
+    //     Hash::hash(self.clone())
     // }
 }
 
@@ -132,6 +170,7 @@ mod tests {
         CGKA::new(
             participants.into_iter().map(|p| (p.id, p.pk)).collect(),
             owner.id,
+            owner.pk,
             owner.sk.clone(),
         )
         .expect("CGKA construction failed")
@@ -355,6 +394,31 @@ mod tests {
         }
         Ok(())
     }
+
+
+    // #[test]
+    // fn test_fork_update_and_merge() -> Result<(), CGKAError> {
+    //     let participants = setup_participants(8);
+    //     let p1 = participants[1].clone();
+    //     let p5 = participants[5].clone();
+    //     let initial_cgka = setup_cgka(&participants, 0);
+    //     update_every_path(&initial_cgka, &participants)?;
+    //     let mut p1_cgka = initial_cgka.with_new_owner_id(p1.id)?;
+    //     let mut p5_cgka = initial_cgka.with_new_owner_id(p5.id)?;
+    //     assert_eq!(p1_cgka.tree.hash(), p5_cgka.tree.hash());
+
+    //     let (p1_pk, p1_sk) = key_pair();
+    //     let p1_msg = p1_cgka.update(p1.id, p1_pk, p1_sk)?.expect("Should have message");
+    //     let (p5_pk, p5_sk) = key_pair();
+    //     let p5_msg = p5_cgka.update(p5.id, p5_pk, p5_sk)?.expect("Should have message");
+
+    //     p1_cgka.merge(p5_msg)?;
+    //     p5_cgka.merge(p1_msg)?;
+
+    //     // TODO: Better to try to encrypt and decrypt using these.
+    //     assert_eq!(p1_cgka.tree.hash(), p5_cgka.tree.hash());
+    //     Ok(())
+    // }
 
     // #[test]
     // fn test_17_to_32_participants_encrypt_and_decrypt() -> Result<(), CGKAError> {

@@ -25,6 +25,9 @@ pub enum CGKAError {
     #[error("Tried to remove last member from group")]
     RemoveLastMember,
 
+    #[error("Serialization failed: {0}")]
+    Serialize(String),
+
     #[error("Tree index out of bounds")]
     TreeIndexOutOfBounds,
 }
