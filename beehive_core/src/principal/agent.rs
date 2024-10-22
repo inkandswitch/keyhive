@@ -9,27 +9,25 @@ use super::{
 use crate::content::reference::ContentRef;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
+use std::{cell::RefCell, rc::Rc};
 
 /// Immutable union over all agent types.
 ///
 /// This type is very lightweight to clone, since it only contains immutable references to the actual agents.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub enum Agent<'a, T: ContentRef> {
-    Active(&'a Active),
-
-    Individual(&'a Individual),
-    Group(&'a Group<'a, T>),
-    Document(&'a Document<'a, T>),
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Agent<T: ContentRef> {
+    Active(Rc<Active>),
+    Individual(Rc<Individual>),
+    Group(Rc<RefCell<Group<T>>>),
+    Document(Rc<Document<T>>),
 }
 
-impl<'a, T: ContentRef> Copy for Agent<'a, T> {}
-
-impl<'a, T: ContentRef> Agent<'a, T> {
+impl<T: ContentRef> Agent<T> {
     pub fn id(&self) -> Identifier {
         match self {
             Agent::Active(a) => a.id().into(),
             Agent::Individual(i) => i.id().into(),
-            Agent::Group(g) => g.group_id().into(),
+            Agent::Group(g) => (*g).borrow().group_id().into(),
             Agent::Document(d) => d.doc_id().into(),
         }
     }
@@ -38,42 +36,42 @@ impl<'a, T: ContentRef> Agent<'a, T> {
         match self {
             Agent::Active(a) => a.agent_id(),
             Agent::Individual(i) => i.agent_id(),
-            Agent::Group(g) => g.agent_id(),
+            Agent::Group(g) => (*g).borrow().agent_id(),
             Agent::Document(d) => d.agent_id(),
         }
     }
 }
 
-impl<'a, T: ContentRef> From<&'a Active> for Agent<'a, T> {
-    fn from(a: &'a Active) -> Self {
+impl<T: ContentRef> From<Rc<Active>> for Agent<T> {
+    fn from(a: Rc<Active>) -> Self {
         Agent::Active(a)
     }
 }
 
-impl<'a, T: ContentRef> From<&'a Individual> for Agent<'a, T> {
-    fn from(i: &'a Individual) -> Self {
+impl<T: ContentRef> From<Rc<Individual>> for Agent<T> {
+    fn from(i: Rc<Individual>) -> Self {
         Agent::Individual(i)
     }
 }
 
-impl<'a, T: ContentRef> From<&'a Group<'a, T>> for Agent<'a, T> {
-    fn from(g: &'a Group<'a, T>) -> Self {
+impl<T: ContentRef> From<Rc<RefCell<Group<T>>>> for Agent<T> {
+    fn from(g: Rc<RefCell<Group<T>>>) -> Self {
         Agent::Group(g)
     }
 }
 
-impl<'a, T: ContentRef> From<&'a Document<'a, T>> for Agent<'a, T> {
-    fn from(d: &'a Document<'a, T>) -> Self {
+impl<T: ContentRef> From<Rc<Document<T>>> for Agent<T> {
+    fn from(d: Rc<Document<T>>) -> Self {
         Agent::Document(d)
     }
 }
 
-impl<'a, T: ContentRef> Verifiable for Agent<'a, T> {
+impl<T: ContentRef> Verifiable for Agent<T> {
     fn verifying_key(&self) -> VerifyingKey {
         match self {
             Agent::Active(a) => a.verifying_key(),
             Agent::Individual(i) => i.verifying_key(),
-            Agent::Group(g) => g.verifying_key(),
+            Agent::Group(g) => (*g).borrow().verifying_key(),
             Agent::Document(d) => d.group.verifying_key(),
         }
     }
@@ -107,14 +105,14 @@ impl AgentId {
     }
 }
 
-impl<'a, T: ContentRef> From<Agent<'a, T>> for AgentId {
-    fn from(a: Agent<'a, T>) -> Self {
+impl<T: ContentRef> From<Agent<T>> for AgentId {
+    fn from(a: Agent<T>) -> Self {
         a.agent_id()
     }
 }
 
-impl<'a, T: ContentRef> From<&Agent<'a, T>> for AgentId {
-    fn from(a: &Agent<'a, T>) -> Self {
+impl<T: ContentRef> From<&Agent<T>> for AgentId {
+    fn from(a: &Agent<T>) -> Self {
         a.agent_id()
     }
 }

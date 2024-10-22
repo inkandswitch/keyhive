@@ -10,14 +10,14 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt, rc::Rc};
 
 /// The union of Agents that have updatable membership
-#[derive(Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum Membered<'a, T: ContentRef> {
-    Group(&'a mut Group<'a, T>),
-    Document(&'a mut Document<'a, T>),
+    Group(&'a mut Group<T>),
+    Document(&'a mut Document<T>),
 }
 
 impl<'a, T: ContentRef> Membered<'a, T> {
-    pub fn get_capability(&'a self, agent_id: &AgentId) -> Option<&Rc<Signed<Delegation<'a, T>>>> {
+    pub fn get_capability(&self, agent_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
         match self {
             Membered::Group(group) => group.get_capability(agent_id),
             Membered::Document(doc) => doc.get_capabilty(agent_id),
@@ -38,14 +38,14 @@ impl<'a, T: ContentRef> Membered<'a, T> {
         }
     }
 
-    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<'a, T>>>>> {
+    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
         match self {
             Membered::Group(group) => group.members(),
             Membered::Document(document) => document.members(),
         }
     }
 
-    pub fn add_member(&'a mut self, delegation: Signed<Delegation<'a, T>>) {
+    pub fn add_member(&mut self, delegation: Signed<Delegation<T>>) {
         match self {
             Membered::Group(group) => {
                 group.add_member(delegation);
@@ -55,10 +55,10 @@ impl<'a, T: ContentRef> Membered<'a, T> {
     }
 
     pub fn revoke_member(
-        &'a mut self,
+        &mut self,
         member_id: &AgentId,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&'a Document<'a, T>],
+        relevant_docs: &[&Rc<Document<T>>],
     ) {
         match self {
             Membered::Group(group) => {
@@ -92,14 +92,14 @@ impl<'a, T: ContentRef> Membered<'a, T> {
 //     }
 // }
 
-impl<'a, T: ContentRef> From<&'a mut Group<'a, T>> for Membered<'a, T> {
-    fn from(group: &'a mut Group<'a, T>) -> Self {
+impl<'a, T: ContentRef> From<&'a mut Group<T>> for Membered<'a, T> {
+    fn from(group: &'a mut Group<T>) -> Self {
         Membered::Group(group)
     }
 }
 
-impl<'a, T: ContentRef> From<&'a mut Document<'a, T>> for Membered<'a, T> {
-    fn from(document: &'a mut Document<'a, T>) -> Self {
+impl<'a, T: ContentRef> From<&'a mut Document<T>> for Membered<'a, T> {
+    fn from(document: &'a mut Document<T>) -> Self {
         Membered::Document(document)
     }
 }

@@ -23,13 +23,13 @@ use std::{
 use thiserror::Error;
 use topological_sort::TopologicalSort;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
-pub enum Operation<'a, T: ContentRef> {
-    Delegation(Rc<Signed<Delegation<'a, T>>>),
-    Revocation(Rc<Signed<Revocation<'a, T>>>),
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Operation<T: ContentRef> {
+    Delegation(Rc<Signed<Delegation<T>>>),
+    Revocation(Rc<Signed<Revocation<T>>>),
 }
 
-impl<'a, T: ContentRef + Serialize> Serialize for Operation<'a, T> {
+impl<T: ContentRef + Serialize> Serialize for Operation<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
             Operation::Delegation(delegation) => delegation.serialize(serializer),
@@ -38,8 +38,8 @@ impl<'a, T: ContentRef + Serialize> Serialize for Operation<'a, T> {
     }
 }
 
-impl<'a, T: ContentRef> Operation<'a, T> {
-    pub fn subject(&'a self) -> Identifier {
+impl<T: ContentRef> Operation<T> {
+    pub fn subject(&self) -> Identifier {
         match self {
             Operation::Delegation(delegation) => delegation.subject(),
             Operation::Revocation(revocation) => revocation.subject(),
@@ -57,7 +57,7 @@ impl<'a, T: ContentRef> Operation<'a, T> {
         !self.is_delegation()
     }
 
-    pub fn after_auth(&'a self) -> Vec<Operation<'a, T>> {
+    pub fn after_auth(&self) -> Vec<Operation<T>> {
         let (dlgs, revs, _) = self.after();
         dlgs.into_iter()
             .map(|d| d.into())
@@ -66,11 +66,11 @@ impl<'a, T: ContentRef> Operation<'a, T> {
     }
 
     pub fn after(
-        &'a self,
+        &self,
     ) -> (
-        Vec<Rc<Signed<Delegation<'a, T>>>>,
-        Vec<Rc<Signed<Revocation<'a, T>>>>,
-        &'a BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)>,
+        Vec<Rc<Signed<Delegation<T>>>>,
+        Vec<Rc<Signed<Revocation<T>>>>,
+        &BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)>,
     ) {
         match self {
             Operation::Delegation(delegation) => {
@@ -84,7 +84,7 @@ impl<'a, T: ContentRef> Operation<'a, T> {
         }
     }
 
-    pub fn after_content(&'a self) -> &'a BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)> {
+    pub fn after_content(&self) -> &BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)> {
         match self {
             Operation::Delegation(delegation) => &delegation.payload().after_content,
             Operation::Revocation(revocation) => &revocation.payload().after_content,
@@ -98,7 +98,7 @@ impl<'a, T: ContentRef> Operation<'a, T> {
         }
     }
 
-    pub fn ancestors(&'a self) -> Result<(CaMap<Operation<'a, T>>, usize), AncestorError> {
+    pub fn ancestors(&self) -> Result<(CaMap<Operation<T>>, usize), AncestorError> {
         if self.is_root() {
             return Ok((CaMap::new(), 0));
         }
@@ -106,8 +106,9 @@ impl<'a, T: ContentRef> Operation<'a, T> {
         let mut ancestors = HashMap::new();
         let mut heads = vec![];
 
-        let after_auth = &self.after_auth();
-        for op in after_auth.iter() {
+        let after_auth = self.after_auth();
+        let a = after_auth.clone();
+        for op in a.into_iter() {
             heads.push((op, 0));
         }
 
@@ -118,12 +119,13 @@ impl<'a, T: ContentRef> Operation<'a, T> {
                 None => continue,
                 Some(&count) if count > longest_known_path + 1 => continue,
                 _ => {
-                    if op.subject() != self.subject() {
-                        return Err(AncestorError::MismatchedSubject(op.subject().into()));
-                    }
+                    // FIXME
+                    // if op.subject() != self.subject() {
+                    //     return Err(AncestorError::MismatchedSubject(op.subject().into()));
+                    // }
 
                     for parent_op in after_auth.iter() {
-                        heads.push((parent_op, longest_known_path + 1));
+                        heads.push((parent_op.clone(), longest_known_path + 1));
                     }
 
                     ancestors.insert(op, longest_known_path + 1)
@@ -146,12 +148,12 @@ impl<'a, T: ContentRef> Operation<'a, T> {
     }
 
     pub fn topsort(
-        delegation_heads: &'a HashSet<Rc<Signed<Delegation<'a, T>>>>,
-        revocation_heads: &'a HashSet<Rc<Signed<Revocation<'a, T>>>>,
-    ) -> Result<Vec<(Digest<Operation<'a, T>>, Operation<'a, T>)>, AncestorError> {
+        delegation_heads: &HashSet<Rc<Signed<Delegation<T>>>>,
+        revocation_heads: &HashSet<Rc<Signed<Revocation<T>>>>,
+    ) -> Result<Vec<(Digest<Operation<T>>, Operation<T>)>, AncestorError> {
         let ops_with_ancestors: HashMap<
-            Digest<Operation<'a, T>>,
-            (Operation<'a, T>, CaMap<Operation<'a, T>>, usize),
+            Digest<Operation<T>>,
+            (Operation<T>, CaMap<Operation<T>>, usize),
         > = delegation_heads
             .iter()
             // FIXME use CaMap to keep hashes around
@@ -170,7 +172,7 @@ impl<'a, T: ContentRef> Operation<'a, T> {
             .collect();
 
         let mut seen = HashSet::new();
-        let mut adjacencies: TopologicalSort<(Digest<Operation<'a, T>>, &Operation<'a, T>)> =
+        let mut adjacencies: TopologicalSort<(Digest<Operation<T>>, &Operation<T>)> =
             topological_sort::TopologicalSort::new();
 
         for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
@@ -181,10 +183,10 @@ impl<'a, T: ContentRef> Operation<'a, T> {
                     .get(&other_digest.coerce())
                     .expect("values that we just put there to be there");
 
-                let ancestor_set: HashSet<&Operation<'a, T>> =
+                let ancestor_set: HashSet<&Operation<T>> =
                     op_ancestors.values().map(|op| op.as_ref()).collect();
 
-                let other_ancestor_set: HashSet<&Operation<'a, T>> =
+                let other_ancestor_set: HashSet<&Operation<T>> =
                     other_ancestors.values().map(|op| op.as_ref()).collect();
 
                 if ancestor_set.is_subset(&other_ancestor_set) {
@@ -227,14 +229,14 @@ impl<'a, T: ContentRef> Operation<'a, T> {
     }
 }
 
-impl<'a, T: ContentRef> From<Rc<Signed<Delegation<'a, T>>>> for Operation<'a, T> {
-    fn from(delegation: Rc<Signed<Delegation<'a, T>>>) -> Self {
+impl<T: ContentRef> From<Rc<Signed<Delegation<T>>>> for Operation<T> {
+    fn from(delegation: Rc<Signed<Delegation<T>>>) -> Self {
         Operation::Delegation(delegation)
     }
 }
 
-impl<'a, T: ContentRef> From<Rc<Signed<Revocation<'a, T>>>> for Operation<'a, T> {
-    fn from(revocation: Rc<Signed<Revocation<'a, T>>>) -> Self {
+impl<T: ContentRef> From<Rc<Signed<Revocation<T>>>> for Operation<T> {
+    fn from(revocation: Rc<Signed<Revocation<T>>>) -> Self {
         Operation::Revocation(revocation)
     }
 }
@@ -246,7 +248,7 @@ pub enum AncestorError {
     #[error("Mismatched subject: {0}")]
     MismatchedSubject(Identifier),
     // #[error("Dependency not available: {0}")]
-    // DependencyNotAvailable(Digest<Operation<'a, T>>),
+    // DependencyNotAvailable(Digest<Operation<T>>),
 }
 
 #[cfg(test)]

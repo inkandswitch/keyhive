@@ -20,20 +20,20 @@ use std::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GroupState<'a, T: ContentRef> {
+pub struct GroupState<T: ContentRef> {
     pub(crate) id: GroupId,
 
-    pub(crate) delegation_heads: HashSet<Rc<Signed<Delegation<'a, T>>>>,
-    pub(crate) delegations: CaMap<Signed<Delegation<'a, T>>>,
+    pub(crate) delegation_heads: HashSet<Rc<Signed<Delegation<T>>>>,
+    pub(crate) delegations: CaMap<Signed<Delegation<T>>>,
     pub delegation_quarantine: CaMap<Signed<StaticDelegation<T>>>,
 
-    pub(crate) revocation_heads: HashSet<Rc<Signed<Revocation<'a, T>>>>,
-    pub(crate) revocations: CaMap<Signed<Revocation<'a, T>>>,
+    pub(crate) revocation_heads: HashSet<Rc<Signed<Revocation<T>>>>,
+    pub(crate) revocations: CaMap<Signed<Revocation<T>>>,
     pub revocation_quarantine: CaMap<Signed<StaticRevocation<T>>>,
 }
 
-impl<'a, T: ContentRef> GroupState<'a, T> {
-    pub fn generate(parents: Vec<Agent<'a, T>>) -> Self {
+impl<T: ContentRef> GroupState<T> {
+    pub fn generate(parents: Vec<Agent<T>>) -> Self {
         let mut rng = rand::thread_rng();
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
         let group_id = signing_key.verifying_key().into();
@@ -53,7 +53,7 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
         for parent in parents.iter() {
             let dlg = Signed::sign(
                 Delegation {
-                    delegate: *parent,
+                    delegate: parent.clone(),
                     can: Access::Admin,
 
                     proof: None,
@@ -80,26 +80,26 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
         self.id
     }
 
-    pub fn delegation_heads(&self) -> &HashSet<Rc<Signed<Delegation<'a, T>>>> {
+    pub fn delegation_heads(&self) -> &HashSet<Rc<Signed<Delegation<T>>>> {
         &self.delegation_heads
     }
 
-    pub fn revocation_heads(&self) -> &HashSet<Rc<Signed<Revocation<'a, T>>>> {
+    pub fn revocation_heads(&self) -> &HashSet<Rc<Signed<Revocation<T>>>> {
         &self.revocation_heads
     }
 
-    pub fn delegations(&self) -> &CaMap<Signed<Delegation<'a, T>>> {
+    pub fn delegations(&self) -> &CaMap<Signed<Delegation<T>>> {
         &self.delegations
     }
 
-    pub fn revocations(&self) -> &CaMap<Signed<Revocation<'a, T>>> {
+    pub fn revocations(&self) -> &CaMap<Signed<Revocation<T>>> {
         &self.revocations
     }
 
     pub fn add_delegation(
-        &'a mut self,
-        delegation: Signed<Delegation<'a, T>>,
-    ) -> Result<Digest<Signed<Delegation<'a, T>>>, AddError> {
+        &mut self,
+        delegation: Signed<Delegation<T>>,
+    ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
         if delegation.subject() != self.id.into() {
             panic!("FIXME")
             // return Err(signature::Error::InvalidSubject);
@@ -122,10 +122,7 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
         Ok(hash)
     }
 
-    pub fn add_revocation(
-        &mut self,
-        revocation: Signed<Revocation<'a, T>>,
-    ) -> Result<(), AddError> {
+    pub fn add_revocation(&mut self, revocation: Signed<Revocation<T>>) -> Result<(), AddError> {
         if revocation.subject() != self.id.into() {
             panic!("FIXME")
             // return Err(signature::Error::InvalidSubject);
@@ -144,7 +141,7 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
         Ok(())
     }
 
-    pub fn delegations_for(&self, agent: Agent<'a, T>) -> Vec<&Rc<Signed<Delegation<'a, T>>>> {
+    pub fn delegations_for(&self, agent: Agent<T>) -> Vec<&Rc<Signed<Delegation<T>>>> {
         self.delegations
             .iter()
             .filter_map(|(_, delegation)| {
@@ -162,7 +159,7 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
     }
 }
 
-impl<'a, T: ContentRef> std::hash::Hash for GroupState<'a, T> {
+impl<T: ContentRef> std::hash::Hash for GroupState<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
 
@@ -182,7 +179,7 @@ impl<'a, T: ContentRef> std::hash::Hash for GroupState<'a, T> {
     }
 }
 
-impl<'a, T: ContentRef> From<VerifyingKey> for GroupState<'a, T> {
+impl<T: ContentRef> From<VerifyingKey> for GroupState<T> {
     fn from(verifier: VerifyingKey) -> Self {
         GroupState {
             id: GroupId(verifier.into()),
@@ -198,7 +195,7 @@ impl<'a, T: ContentRef> From<VerifyingKey> for GroupState<'a, T> {
     }
 }
 
-impl<'a, T: ContentRef> Verifiable for GroupState<'a, T> {
+impl<T: ContentRef> Verifiable for GroupState<T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.id.0.verifying_key()
     }
@@ -214,7 +211,7 @@ pub enum AddError {
 }
 
 // FIXME test
-impl<'a, T: ContentRef> Serialize for GroupState<'a, T> {
+impl<T: ContentRef> Serialize for GroupState<T> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut state = serializer.serialize_struct("GroupState", 6)?;
 

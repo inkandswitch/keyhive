@@ -23,16 +23,16 @@ use std::{
     rc::Rc,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Document<'a, T: ContentRef> {
-    pub(crate) group: Group<'a, T>,
-    pub(crate) reader_keys: HashMap<IndividualId, (&'a Individual, ShareKey)>, // FIXME May remove when BeeKEM, also FIXME Individual ID
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Document<T: ContentRef> {
+    pub(crate) group: Group<T>,
+    pub(crate) reader_keys: HashMap<IndividualId, (Rc<Individual>, ShareKey)>, // FIXME May remove when BeeKEM, also FIXME Individual ID
 
-    pub(crate) content_heads: HashSet<&'a T>,
+    pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
 }
 
-impl<'a, T: ContentRef> Document<'a, T> {
+impl<T: ContentRef> Document<T> {
     pub fn id(&self) -> Identifier {
         self.group.id()
     }
@@ -45,19 +45,19 @@ impl<'a, T: ContentRef> Document<'a, T> {
         self.doc_id().into()
     }
 
-    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<'a, T>>>>> {
+    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
         &self.group.members()
     }
 
-    pub fn delegations(&self) -> &CaMap<Signed<Delegation<'a, T>>> {
+    pub fn delegations(&self) -> &CaMap<Signed<Delegation<T>>> {
         &self.group.delegations()
     }
 
-    pub fn get_capabilty(&'a self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<'a, T>>>> {
+    pub fn get_capabilty(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
         self.group.get_capability(member_id)
     }
 
-    pub fn generate(parents: NonEmpty<Agent<'a, T>>) -> Self {
+    pub fn generate(parents: NonEmpty<Agent<T>>) -> Self {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
 
         let mut doc = Document {
@@ -70,7 +70,7 @@ impl<'a, T: ContentRef> Document<'a, T> {
         for parent in parents.iter() {
             let dlg = Signed::sign(
                 Delegation {
-                    delegate: *parent,
+                    delegate: parent.clone(),
                     can: Access::Admin,
                     proof: None,
                     after_revocations: vec![],
@@ -88,7 +88,7 @@ impl<'a, T: ContentRef> Document<'a, T> {
         doc
     }
 
-    pub fn add_member(&'a mut self, signed_delegation: Signed<Delegation<'a, T>>) {
+    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
@@ -107,22 +107,22 @@ impl<'a, T: ContentRef> Document<'a, T> {
     }
 
     pub fn revoke_member(
-        &'a mut self,
+        &mut self,
         member_id: &AgentId,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&'a Document<'a, T>],
+        relevant_docs: &[&Rc<Document<T>>],
     ) {
         self.group
             .revoke_member(member_id, signing_key, relevant_docs);
     }
 
-    pub fn materialize(&'a mut self) {
+    pub fn materialize(&mut self) {
         self.group.materialize();
     }
 }
 
 // FIXME test
-impl<'a, T: ContentRef> std::hash::Hash for Document<'a, T> {
+impl<T: ContentRef> std::hash::Hash for Document<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.group.hash(state);
 
@@ -136,7 +136,7 @@ impl<'a, T: ContentRef> std::hash::Hash for Document<'a, T> {
     }
 }
 
-impl<'a, T: ContentRef> Verifiable for Document<'a, T> {
+impl<T: ContentRef> Verifiable for Document<T> {
     fn verifying_key(&self) -> VerifyingKey {
         self.group.verifying_key()
     }

@@ -11,12 +11,12 @@ use crate::{
 use base64::prelude::*;
 use nonempty::NonEmpty;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
-#[derive(Debug, Default, Clone, PartialEq, Hash, Eq, Serialize)]
-pub struct GroupStore<'a, T: ContentRef>(BTreeMap<GroupId, Group<'a, T>>);
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct GroupStore<T: ContentRef>(BTreeMap<GroupId, Rc<RefCell<Group<T>>>>);
 
-impl<'a, T: ContentRef> GroupStore<'a, T> {
+impl<T: ContentRef> GroupStore<T> {
     pub fn new() -> Self {
         GroupStore(BTreeMap::new())
     }
@@ -24,73 +24,54 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
     pub fn pretty_print_direct_pks(&self) -> Vec<String> {
         self.0
             .values()
-            .map(|pk| BASE64_STANDARD.encode(pk.verifying_key()))
+            .map(|pk| BASE64_STANDARD.encode(pk.borrow().verifying_key()))
             .collect()
     }
 
-    pub fn insert(&mut self, group: Group<'a, T>) {
-        self.0.insert(group.group_id(), group);
+    pub fn insert(&mut self, group: Rc<RefCell<Group<T>>>) {
+        let id = group.borrow().group_id();
+        self.0.insert(id, group);
     }
 
-    pub fn generate_group(&mut self, parents: NonEmpty<Agent<'a, T>>) -> GroupId {
-        let new_group: Group<'a, T> = Group::generate(parents);
-        let new_group_id: GroupId = new_group.group_id();
-        self.insert(new_group);
-        new_group_id
+    pub fn generate_group(&mut self, parents: NonEmpty<Agent<T>>) -> Rc<RefCell<Group<T>>> {
+        let new_group: Group<T> = Group::generate(parents);
+        let rc = Rc::new(RefCell::new(new_group));
+        self.insert(rc.clone());
+        rc
     }
 
-    pub fn generate_group_ref(&'a mut self, parents: NonEmpty<Agent<'a, T>>) -> &'a Group<'a, T> {
-        let id = self.generate_group(parents);
-        self.get(&id).unwrap()
+    pub fn get(&self, id: &GroupId) -> Option<Rc<RefCell<Group<T>>>> {
+        self.0.get(id).cloned()
     }
 
-    pub fn generate_group_mut_ref(
-        &'a mut self,
-        parents: NonEmpty<Agent<'a, T>>,
-    ) -> &'a mut Group<'a, T> {
-        let id = self.generate_group(parents);
-        self.get_mut(&id).unwrap()
+    pub fn values(&self) -> Vec<Rc<RefCell<Group<T>>>> {
+        self.0.values().cloned().collect()
     }
 
-    pub fn get(&self, id: &GroupId) -> Option<&Group<'a, T>> {
-        self.0.get(id)
-    }
-
-    pub fn get_mut(&mut self, id: &GroupId) -> Option<&mut Group<'a, T>> {
-        self.0.get_mut(id)
-    }
-
-    pub fn values(&self) -> Vec<&Group<'a, T>> {
-        self.0.values().collect()
-    }
-
-    pub fn iter(&self) -> std::collections::btree_map::Iter<GroupId, Group<'a, T>> {
+    pub fn iter(&self) -> std::collections::btree_map::Iter<GroupId, Rc<RefCell<Group<T>>>> {
         self.0.iter()
     }
 
-    pub fn transitive_members(
-        &self,
-        group: &'a Group<'a, T>,
-    ) -> BTreeMap<AgentId, (Agent<'a, T>, Access)> {
-        struct GroupAccess<'b, U: ContentRef> {
-            agent: Agent<'b, U>,
+    pub fn transitive_members(&self, group: &Group<T>) -> BTreeMap<AgentId, (Agent<T>, Access)> {
+        struct GroupAccess<U: ContentRef> {
+            agent: Agent<U>,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess<'a, T>> = vec![];
+        let mut explore: Vec<GroupAccess<T>> = vec![];
 
         for member in group.members.keys() {
             let dlg = group.get_capability(member).unwrap();
 
             explore.push(GroupAccess {
-                agent: dlg.payload().delegate,
+                agent: dlg.payload().delegate.clone(),
                 agent_access: dlg.payload().can,
                 parent_access: Access::Admin,
             });
         }
 
-        let mut caps: BTreeMap<AgentId, (Agent<'a, T>, Access)> = BTreeMap::new();
+        let mut caps: BTreeMap<AgentId, (Agent<T>, Access)> = BTreeMap::new();
 
         while let Some(GroupAccess {
             agent: member,
@@ -112,7 +93,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                     caps.insert(member.agent_id(), (member, best_access));
                 }
                 Agent::Group(group) => {
-                    for (mem, proofs) in group.members().iter() {
+                    for (mem, proofs) in group.borrow().members().iter() {
                         for proof in proofs.iter() {
                             let current_path_access =
                                 access.min(proof.payload().can).min(parent_access);
@@ -125,7 +106,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                                 };
 
                             explore.push(GroupAccess {
-                                agent: proof.payload().delegate,
+                                agent: proof.payload().delegate.clone(),
                                 agent_access: best_access,
                                 parent_access,
                             });
@@ -146,7 +127,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                                 };
 
                             explore.push(GroupAccess {
-                                agent: proof.payload().delegate,
+                                agent: proof.payload().delegate.clone(),
                                 agent_access: best_access,
                                 parent_access,
                             });

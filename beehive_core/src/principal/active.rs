@@ -73,12 +73,12 @@ impl Active {
 
     // FIXME replace with delegate_to
     pub fn make_delegation<'a, T: ContentRef>(
-        &'a self,
-        subject: &'a Membered<'a, T>,
+        &self,
+        subject: &Membered<'a, T>,
         attenuate: Access,
-        delegate: Agent<'a, T>,
-        after_revocations: Vec<Rc<Signed<Revocation<'a, T>>>>,
-        after_content: BTreeMap<DocumentId, (&'a Document<T>, Vec<T>)>,
+        delegate: Agent<T>,
+        after_revocations: Vec<Rc<Signed<Revocation<T>>>>,
+        after_content: BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)>,
     ) -> Result<Signed<Delegation<T>>, DelegationError> {
         let proof = self.get_capability(&subject, attenuate).expect("FIXME");
 
@@ -87,7 +87,7 @@ impl Active {
         }
 
         let delegation = self.sign(Delegation {
-            delegate,
+            delegate: delegate.clone(),
             can: attenuate,
             proof: Some(proof.clone()),
             after_revocations,
@@ -101,7 +101,7 @@ impl Active {
 
     pub fn encrypt_to<'a, T: ContentRef>(
         &self,
-        doc: &Document<'a, T>,
+        doc: &Document<T>,
         to: &Individual,
         message: &mut [u8],
     ) -> Encrypted<&[u8]> {
