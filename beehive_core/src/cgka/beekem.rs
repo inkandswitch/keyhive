@@ -58,7 +58,7 @@ use crate::{
     principal::identifier::Identifier,
 };
 
-use super::{error::CGKAError, message::TreePath, treemath};
+use super::{change::{CGKAChange, TreePath}, error::CGKAError, treemath};
 pub type PublicKey = x25519_dalek::PublicKey;
 pub type SecretKey = x25519_dalek::StaticSecret;
 
@@ -186,7 +186,7 @@ impl BeeKEM {
         self.next_leaf_idx += 1;
         self.id_to_leaf_idx.insert(id, l_idx);
         self.insert_leaf_at(l_idx, LeafNode { id, pk })?;
-        self.blank_path(treemath::parent(l_idx.into()));
+        self.blank_path(treemath::parent(l_idx.into()))?;
         Ok(l_idx.u32())
     }
 
@@ -270,16 +270,24 @@ impl BeeKEM {
     /// pair but encrypt the secret with your last secret (instead of using Diffie Hellman
     /// with a sibling). The secret key map for that parent will then only have an entry
     /// for you.
+    ///
+    /// TODO: Currently returns (new path, old path) but we should use better types
+    /// to clarify intention
     pub(crate) fn encrypt_path(
         &mut self,
         id: Identifier,
         pk: PublicKey,
         sk: SecretKey,
-    ) -> Result<TreePath, CGKAError> {
+    ) -> Result<(TreePath, TreePath), CGKAError> {
         let leaf_idx = *self.leaf_index_for_id(id)?;
         let mut new_path = TreePath {
             leaf_idx: leaf_idx.u32(),
             leaf_pk: pk,
+            path: Vec::new(),
+        };
+        let mut undo_path = TreePath {
+            leaf_idx: leaf_idx.u32(),
+            leaf_pk: *self.public_key_for_id(id)?,
             path: Vec::new(),
         };
         if self.id_for_leaf(leaf_idx)? != id {
@@ -291,6 +299,7 @@ impl BeeKEM {
         let mut child_sk = sk.clone();
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
+            undo_path.path.push((parent_idx.u32(), self.parent(parent_idx)?.clone()));
             let (new_parent_pk, new_parent_sk) = generate_new_key_pair();
             self.encrypt_key_for_parent(
                 child_idx,
@@ -305,7 +314,7 @@ impl BeeKEM {
             new_path.path.push((parent_idx.u32(), self.parent(parent_idx)?.clone()));
             parent_idx = treemath::parent(child_idx);
         }
-        Ok(new_path)
+        Ok((new_path, undo_path))
     }
 
     pub(crate) fn no_root_key(&self) -> Result<bool, CGKAError> {
@@ -549,7 +558,7 @@ impl Debug for LeafNode {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct ParentNode {
+pub struct ParentNode {
     // TODO: Handle multiple public keys for BeeKEM conflict resolution
     pub pk: PublicKey,
     /// This is a map in order to handle the case of blank siblings, when we must encrypt

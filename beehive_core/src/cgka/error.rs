@@ -13,6 +13,9 @@ pub enum CGKAError {
     #[error("Identifier not found")]
     IdentifierNotFound,
 
+    #[error("Invalid operation")]
+    InvalidOperation,
+
     #[error("Invalid path length")]
     InvalidPathLength,
 
