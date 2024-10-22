@@ -92,11 +92,15 @@ impl<'a, T: ContentRef> Group<'a, T> {
         self.group_id().into()
     }
 
+    pub fn as_agent(&'a self) -> Agent<'a, T> {
+        self.into()
+    }
+
     pub fn members(&self) -> &HashMap<AgentId, Vec<Digest<Signed<Delegation<'a, T>>>>> {
         &self.members
     }
 
-    pub fn get_member_refs(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
+    pub fn member_refs(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
         self.members
             .iter()
             .map(|(id, hashes)| {
@@ -131,7 +135,6 @@ impl<'a, T: ContentRef> Group<'a, T> {
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
         // FIXME check that delegation is authorized
-        // FIXME even better: use dgp (e.g. Valid<Signed<Delegation<'a, T>>)
 
         let id = signed_delegation.payload().delegate.agent_id();
         let hash = self.state.delegations.insert(signed_delegation);
@@ -271,10 +274,11 @@ mod tests {
             .into()
     }
 
-    fn setup_store<'a, T: ContentRef>(
-        alice: &Individual,
-        bob: &Individual,
-    ) -> (GroupStore<'a, T>, [Group<'a, T>; 4]) {
+    fn setup_groups<'a, T: ContentRef>(
+        store: &'a mut Box<GroupStore<'a, T>>,
+        alice: &'a Individual,
+        bob: &'a Individual,
+    ) -> [GroupId; 4] {
         /*              ┌───────────┐        ┌───────────┐
                         │           │        │           │
         ╔══════════════▶│   Alice   │        │    Bob    │
@@ -298,74 +302,69 @@ mod tests {
                         │           │
                         └───────────┘ */
 
-        let alice_agent = alice.clone().into();
-        let bob_agent = bob.clone().into();
+        let alice_agent = alice.into();
+        let bob_agent = bob.into();
 
-        let group0 = Group::generate(nonempty![&alice_agent]);
-        let group0_agent: Agent<'a, T> = group0.clone().into();
+        let g0 = store.generate_group(nonempty![alice_agent]);
+        let g1 = store.generate_group(nonempty![alice_agent]);
+        let g2 = store.generate_group(nonempty![bob_agent]);
+        let g3 = store.generate_group(nonempty![bob_agent]);
 
-        let group1 = Group::generate(nonempty![&alice_agent, &group0_agent]);
-        let group1_agent = group1.clone().into();
-
-        let group2 = Group::generate(nonempty![&group0_agent, &bob_agent]);
-        let group2_agent = group2.clone().into();
-
-        let group3 = Group::generate(nonempty![&group1_agent, &group2_agent]);
-
-        let mut gs = GroupStore::new();
-
-        gs.insert(group0.clone());
-        gs.insert(group1.clone());
-        gs.insert(group2.clone());
-        gs.insert(group3.clone());
-
-        (gs, [group0, group1, group2, group3])
+        [g0, g1, g2, g3]
     }
 
-    fn setup_cyclic_store<'a, T: Clone + Ord + Serialize>(
-        alice: &Individual,
-        bob: &Individual,
+    fn setup_store<'a, T: ContentRef>(gs: [&'a mut Group<'a, T>; 4]) -> [&'a mut Group<'a, T>; 4] {
+        let [g0, g1, g2, g3] = gs;
+        g1.add_member(todo!());
+        g2.add_member(todo!());
+        g3.add_member(todo!());
+    }
+
+    fn setup_cyclic_store<'a, T: ContentRef>(
+        alice: &'a Individual,
+        bob: &'a Individual,
     ) -> (GroupStore<'a, T>, [Group<'a, T>; 10]) {
-        let alice_agent = alice.clone().into();
-        let bob_agent = bob.clone().into();
+        let alice_agent: Agent<'a, T> = alice.into();
+        let bob_agent: Agent<'a, T> = bob.into();
 
-        let group0 = Group::generate(nonempty![&alice_agent]);
+        let group0 = Group::generate(nonempty![alice_agent]);
 
-        let group1 = Group::generate(nonempty![&bob_agent]);
-        let group1_agent = group1.clone().into();
+        let group1 = Group::generate(nonempty![bob_agent]);
+        let group1_agent = group1.as_agent();
 
-        let group2 = Group::generate(nonempty![&group1_agent]);
-        let group2_agent = group2.clone().into();
+        let group2 = Group::generate(nonempty![group1_agent]);
+        let group2_agent = group2.as_agent();
 
-        let group3 = Group::generate(nonempty![&group2_agent, &group2_agent]);
-        let group3_agent = group3.clone().into();
+        let group3 = Group::generate(nonempty![group2_agent, group2_agent]);
+        let group3_agent = group3.as_agent();
 
-        let group4 = Group::generate(nonempty![&group3_agent, &group2_agent]);
-        let group4_agent = group4.clone().into();
+        let group4 = Group::generate(nonempty![group3_agent, group2_agent]);
+        let group4_agent = group4.as_agent();
 
-        let group5 = Group::generate(nonempty![&group4_agent, &group2_agent]);
-        let group5_agent = group5.clone().into();
+        let group5 = Group::generate(nonempty![group4_agent, group2_agent]);
+        let group5_agent = group5.as_agent();
 
-        let group6 = Group::generate(nonempty![&group5_agent, &group2_agent]);
-        let group6_agent = group6.clone().into();
+        let group6 = Group::generate(nonempty![group5_agent, group2_agent]);
+        let group6_agent = group6.as_agent();
 
-        let group7 = Group::generate(nonempty![&group6_agent, &group2_agent]);
-        let group7_agent = group7.clone().into();
+        let group7 = Group::generate(nonempty![group6_agent, group2_agent]);
+        let group7_agent = group7.as_agent();
 
-        let group8 = Group::generate(nonempty![&group7_agent, &group2_agent]);
-        let group8_agent = group8.clone().into();
+        let group8 = Group::generate(nonempty![group7_agent, group2_agent]);
+        let group8_agent = group8.as_agent();
 
-        let mut group9 = Group::generate(nonempty![&group8_agent, &alice_agent]);
+        let mut group9 = Group::generate(nonempty![group8_agent, alice_agent]);
 
-        let active = Active::generate();
+        let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+        let active = Active::generate(signer);
 
         group9.add_member(Signed::sign(
             Delegation {
-                delegate: &alice.clone().into(),
+                delegate: alice.into(),
                 can: Access::Admin,
                 proof: None,
                 after_revocations: vec![],
-                after_content: vec![],
+                after_content: BTreeMap::new(),
             },
             &active.signer,
         ));

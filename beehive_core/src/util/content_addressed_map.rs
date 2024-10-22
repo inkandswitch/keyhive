@@ -23,20 +23,33 @@ impl<T: Serialize> CaMap<T> {
         Self(std::collections::BTreeMap::new())
     }
 
-    pub fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+    /// Build a [`CaMap`] from a type that can be converted [`IntoIterator`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use beehive_core::util::content_addressed_map::CaMap;
+    /// let observed: CaMap<u8> = CaMap::from_iter([1, 2, 3]);
+    /// assert_eq!(observed.len(), 3)
+    /// assert_eq!(observed.get(Digest::hash(2)), 2)
+    /// ```
+    pub fn from_iter<I: IntoIterator<Item = T>>(iterable: I) -> Self {
         Self(
-            iter.into_iter()
+            iterable
+                .into_iter()
                 .map(|preimage| (Digest::hash(&preimage), preimage))
                 .collect(),
         )
     }
 
+    /// Add a new value to the map, and return the associated [`Digest`].
     pub fn insert(&mut self, value: T) -> Digest<T> {
         let key: Digest<T> = Digest::hash(&value);
         self.0.insert(key, value);
         key
     }
 
+    /// Remove an element from the map by its [`Digest`].
     pub fn remove(&mut self, hash: &Digest<T>) -> Option<T> {
         self.0.remove(hash)
     }

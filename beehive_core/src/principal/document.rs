@@ -46,8 +46,8 @@ impl<'a, T: ContentRef> Document<'a, T> {
         &self.group.members()
     }
 
-    pub fn get_member_refs(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
-        self.group.get_member_refs()
+    pub fn member_refs(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
+        self.group.member_refs()
     }
 
     pub fn delegations(&self) -> &CaMap<Signed<Delegation<'a, T>>> {

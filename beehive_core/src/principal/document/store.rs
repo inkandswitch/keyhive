@@ -79,7 +79,7 @@ impl<'a, T: ContentRef> DocumentStore<'a, T> {
                     caps.insert(member.agent_id(), (member, best_access));
                 }
                 Agent::Group(group) => {
-                    for (mem, proofs) in group.get_member_refs().iter() {
+                    for (mem, proofs) in group.member_refs().iter() {
                         for proof in proofs.iter() {
                             let current_path_access =
                                 access.min(proof.payload().can).min(parent_access);

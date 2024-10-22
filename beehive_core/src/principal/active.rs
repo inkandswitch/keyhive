@@ -227,7 +227,8 @@ mod tests {
 
     #[test]
     fn test_sign() {
-        let active = Active::generate();
+        let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+        let active = Active::generate(signer);
         let message = "hello world".as_bytes();
         let signed = active.sign(message);
 

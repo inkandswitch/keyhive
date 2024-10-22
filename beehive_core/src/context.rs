@@ -121,7 +121,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
 
             let doc_id = doc.doc_id();
 
-            if let Some(proofs) = doc.get_member_refs().get(&agent_id) {
+            if let Some(proofs) = doc.member_refs().get(&agent_id) {
                 for proof in proofs {
                     caps.insert(doc_id, (doc, proof.payload().can));
                 }
@@ -131,7 +131,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
         for group in self.groups.values() {
             seen.insert(group.agent_id());
 
-            if let Some(proofs) = group.get_member_refs().get(&agent_id) {
+            if let Some(proofs) = group.member_refs().get(&agent_id) {
                 for proof in proofs {
                     explore.push((Focus::Group(group), proof.payload().can));
                 }
@@ -146,7 +146,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
 
                 let doc_id = doc.doc_id();
 
-                if let Some(proofs) = doc.get_member_refs().get(&agent_id) {
+                if let Some(proofs) = doc.member_refs().get(&agent_id) {
                     for proof in proofs {
                         caps.insert(doc_id, (doc, proof.payload().can));
                     }
@@ -162,7 +162,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
                     continue;
                 }
 
-                if let Some(proofs) = focus_group.get_member_refs().get(&agent_id) {
+                if let Some(proofs) = focus_group.member_refs().get(&agent_id) {
                     for proof in proofs {
                         explore.push((Focus::Group(focus_group), proof.payload().can));
                     }

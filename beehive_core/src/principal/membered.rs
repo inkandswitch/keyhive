@@ -48,10 +48,10 @@ impl<'a, T: ContentRef> Membered<'a, T> {
         }
     }
 
-    pub fn get_member_refs(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
+    pub fn member_refs(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
         match self {
-            Membered::Group(group) => group.get_member_refs(),
-            Membered::Document(document) => document.get_member_refs(),
+            Membered::Group(group) => group.member_refs(),
+            Membered::Document(document) => document.member_refs(),
         }
     }
 

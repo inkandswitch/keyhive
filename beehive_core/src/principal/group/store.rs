@@ -14,7 +14,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default, Clone, PartialEq, Hash, Eq, Serialize)]
-pub struct GroupStore<'a, T: ContentRef>(pub BTreeMap<GroupId, Group<'a, T>>);
+pub struct GroupStore<'a, T: ContentRef>(BTreeMap<GroupId, Group<'a, T>>);
 
 impl<'a, T: ContentRef> GroupStore<'a, T> {
     pub fn new() -> Self {
@@ -37,6 +37,19 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
         let new_group_id: GroupId = new_group.group_id();
         self.insert(new_group);
         new_group_id
+    }
+
+    pub fn generate_group_ref(&'a mut self, parents: NonEmpty<Agent<'a, T>>) -> &'a Group<'a, T> {
+        let id = self.generate_group(parents);
+        self.get(&id).unwrap()
+    }
+
+    pub fn generate_group_mut_ref(
+        &'a mut self,
+        parents: NonEmpty<Agent<'a, T>>,
+    ) -> &'a mut Group<'a, T> {
+        let id = self.generate_group(parents);
+        self.get_mut(&id).unwrap()
     }
 
     pub fn get(&self, id: &GroupId) -> Option<&Group<'a, T>> {
@@ -99,7 +112,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                     caps.insert(member.agent_id(), (member, best_access));
                 }
                 Agent::Group(group) => {
-                    for (mem, proofs) in group.get_member_refs().iter() {
+                    for (mem, proofs) in group.member_refs().iter() {
                         for proof in proofs.iter() {
                             let current_path_access =
                                 access.min(proof.payload().can).min(parent_access);
