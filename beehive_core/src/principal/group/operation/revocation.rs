@@ -13,7 +13,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, rc::Rc};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Revocation<'a, T: ContentRef> {
     pub(crate) revoke: Rc<Signed<Delegation<'a, T>>>,
     pub(crate) proof: Option<Rc<Signed<Delegation<'a, T>>>>,
@@ -104,6 +104,13 @@ impl<'a, T: ContentRef> std::hash::Hash for Revocation<'a, T> {
         for (doc_id, (_, cs)) in vec.iter() {
             (doc_id, cs).hash(state);
         }
+    }
+}
+
+impl<'a, T: ContentRef> Serialize for Revocation<'a, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // FIXME could be a heavy clone since this is used to hash
+        StaticRevocation::from(self.clone()).serialize(serializer)
     }
 }
 

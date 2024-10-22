@@ -12,15 +12,13 @@ use super::{
     verifiable::Verifiable,
 };
 use crate::{
-    access::Access,
-    content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed},
+    access::Access, content::reference::ContentRef, crypto::signed::Signed,
     util::content_addressed_map::CaMap,
 };
 use id::GroupId;
 use nonempty::NonEmpty;
 use operation::{delegation::Delegation, revocation::Revocation, Operation};
-use serde::Serialize;
+use serde::{ser::SerializeStruct, Serialize, Serializer};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
@@ -31,7 +29,7 @@ use std::{
 /// Groups are stateful agents. It is possible the delegate control over them,
 /// and they can be delegated to. This produces transitives lines of authority
 /// through the network of [`Agent`]s.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Group<'a, T: ContentRef> {
     /// The current view of members of a group.
     pub(crate) members: HashMap<AgentId, Vec<Rc<Signed<Delegation<'a, T>>>>>,
@@ -172,21 +170,11 @@ impl<'a, T: ContentRef> Group<'a, T> {
     }
 
     pub fn materialize(&'a mut self) {
-        let op_heads: Vec<(Digest<Operation<'a, T>>, Operation<'a, T>)> = self
-            .state
-            .delegation_heads
-            .iter()
-            // FIXME use CaMap to keep hashes around
-            .map(|dlg| (Digest::hash(dlg.as_ref()).coerce(), dlg.clone().into()))
-            .chain(
-                self.state
-                    .revocation_heads
-                    .iter()
-                    .map(|rev| (Digest::hash(rev.as_ref()).coerce(), rev.clone().into())),
-            )
-            .collect();
-
-        for (_, op) in Operation::topsort(&op_heads).expect("FIXME").iter() {
+        for (_, op) in
+            Operation::topsort(&self.state.delegation_heads, &self.state.revocation_heads)
+                .expect("FIXME")
+                .iter()
+        {
             match op {
                 Operation::Delegation(d) => {
                     if let Some(mut_dlgs) = self.members.get_mut(&d.payload().delegate.agent_id()) {
@@ -252,6 +240,21 @@ impl<'a, T: ContentRef> std::hash::Hash for Group<'a, T> {
             m.hash(state);
         }
         self.state.hash(state);
+    }
+}
+
+impl<'a, T: ContentRef> Serialize for Group<'a, T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let members = self
+            .members
+            .iter()
+            .map(|(k, v)| (k, v.len()))
+            .collect::<HashMap<_, _>>();
+
+        let mut state = serializer.serialize_struct("Group", 2)?;
+        state.serialize_field("members", &members)?;
+        state.serialize_field("state", &self.state)?;
+        state.end()
     }
 }
 

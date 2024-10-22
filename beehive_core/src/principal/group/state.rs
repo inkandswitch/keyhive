@@ -13,13 +13,13 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use ed25519_dalek::VerifyingKey;
-use serde::Serialize;
+use serde::{ser::SerializeStruct, Serialize, Serializer};
 use std::{
     collections::{BTreeMap, HashSet},
     rc::Rc,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupState<'a, T: ContentRef> {
     pub(crate) id: GroupId,
 
@@ -211,4 +211,35 @@ pub enum AddError {
 
     #[error("Invalid signature")]
     InvalidSignature(#[from] signature::Error),
+}
+
+// FIXME test
+impl<'a, T: ContentRef> Serialize for GroupState<'a, T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("GroupState", 6)?;
+
+        state.serialize_field("id", &self.id)?;
+        state.serialize_field(
+            "delegation_heads",
+            &self
+                .delegation_heads
+                .iter()
+                .map(|d| d.as_ref())
+                .collect::<Vec<_>>(),
+        )?;
+        state.serialize_field("delegations", &self.delegations)?;
+        state.serialize_field("delegation_quarantine", &self.delegation_quarantine)?;
+        state.serialize_field(
+            "revocation_heads",
+            &self
+                .revocation_heads
+                .iter()
+                .map(|r| r.as_ref())
+                .collect::<Vec<_>>(),
+        )?;
+        state.serialize_field("revocations", &self.revocations)?;
+        state.serialize_field("revocation_quarantine", &self.revocation_quarantine)?;
+
+        state.end()
+    }
 }

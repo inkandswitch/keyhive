@@ -146,18 +146,28 @@ impl<'a, T: ContentRef> Operation<'a, T> {
     }
 
     pub fn topsort(
-        heads: &[(Digest<Operation<'a, T>>, Operation<'a, T>)],
+        delegation_heads: &'a HashSet<Rc<Signed<Delegation<'a, T>>>>,
+        revocation_heads: &'a HashSet<Rc<Signed<Revocation<'a, T>>>>,
     ) -> Result<Vec<(Digest<Operation<'a, T>>, Operation<'a, T>)>, AncestorError> {
-        let ops_with_ancestors: Rc<
-            HashMap<
-                Digest<Operation<'a, T>>,
-                (&'a Operation<'a, T>, CaMap<Operation<'a, T>>, usize),
-            >,
-        > = HashMap::from_iter(
-            heads
-                .iter()
-                .map(|(digest, op)| (*digest, (op, CaMap::new(), 0))),
-        );
+        let ops_with_ancestors: HashMap<
+            Digest<Operation<'a, T>>,
+            (Operation<'a, T>, CaMap<Operation<'a, T>>, usize),
+        > = delegation_heads
+            .iter()
+            // FIXME use CaMap to keep hashes around
+            .map(|dlg| {
+                (
+                    Digest::hash(dlg.as_ref()).coerce(),
+                    (dlg.clone().into(), CaMap::new(), 0),
+                )
+            })
+            .chain(revocation_heads.iter().map(|rev| {
+                (
+                    Digest::hash(rev.as_ref()).coerce(),
+                    (rev.clone().into(), CaMap::new(), 0),
+                )
+            }))
+            .collect();
 
         let mut seen = HashSet::new();
         let mut adjacencies: TopologicalSort<(Digest<Operation<'a, T>>, &Operation<'a, T>)> =
@@ -178,25 +188,31 @@ impl<'a, T: ContentRef> Operation<'a, T> {
                     other_ancestors.values().map(|op| op.as_ref()).collect();
 
                 if ancestor_set.is_subset(&other_ancestor_set) {
-                    adjacencies.add_dependency((*other_digest, other_op.as_ref()), (*digest, *op));
+                    adjacencies
+                        .add_dependency((*other_digest, (*other_op).as_ref()), (*digest, op));
                 }
 
                 if ancestor_set.is_superset(&other_ancestor_set) {
-                    adjacencies.add_dependency((*digest, *op), (*other_digest, other_op.as_ref()));
+                    adjacencies
+                        .add_dependency((*digest, op), (*other_digest, (*other_op).as_ref()));
                 }
 
-                // Concurrent, so check revocations
+                // Causally concurrent ops, so check revocations
                 if op.is_revocation() {
                     match longest_path.cmp(&other_longest_path) {
                         Ordering::Less => adjacencies
-                            .add_dependency((*digest, *op), (*other_digest, other_op.as_ref())),
+                            .add_dependency((*digest, op), (*other_digest, (*other_op).as_ref())),
                         Ordering::Greater => adjacencies
-                            .add_dependency((*other_digest, other_op.as_ref()), (*digest, *op)),
+                            .add_dependency((*other_digest, (*other_op).as_ref()), (*digest, op)),
                         Ordering::Equal => match other_digest.cmp(&digest.coerce()) {
-                            Ordering::Less => adjacencies
-                                .add_dependency((*digest, *op), (*other_digest, other_op.as_ref())),
-                            Ordering::Greater => adjacencies
-                                .add_dependency((*other_digest, other_op.as_ref()), (*digest, *op)),
+                            Ordering::Less => adjacencies.add_dependency(
+                                (*digest, op),
+                                (*other_digest, (*other_op).as_ref()),
+                            ),
+                            Ordering::Greater => adjacencies.add_dependency(
+                                (*other_digest, (*other_op).as_ref()),
+                                (*digest, op),
+                            ),
                             Ordering::Equal => {}
                         },
                     }
@@ -204,12 +220,10 @@ impl<'a, T: ContentRef> Operation<'a, T> {
             }
         }
 
-        let mut acc = vec![];
-        for (digest, op) in adjacencies.into_iter() {
-            acc.push((digest, op.clone()));
-        }
-
-        Ok(acc)
+        Ok(adjacencies
+            .into_iter()
+            .map(|(k, v)| (k, v.clone()))
+            .collect())
     }
 }
 

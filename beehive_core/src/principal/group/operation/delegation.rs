@@ -12,7 +12,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, hash::Hash, rc::Rc};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Delegation<'a, T: ContentRef> {
     pub(crate) delegate: Agent<'a, T>,
     pub(crate) can: Access,
@@ -114,6 +114,14 @@ impl<'a, T: ContentRef> PartialOrd for Delegation<'a, T> {
             }
             other => other,
         }
+    }
+}
+
+impl<'a, T: ContentRef> Serialize for Delegation<'a, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // FIXME could be a heavy clone since this is used to hash
+        // FIXME ...ooooor use the hash of teh static delehation as an ID... probably this actually
+        StaticDelegation::from(self.clone()).serialize(serializer)
     }
 }
 
