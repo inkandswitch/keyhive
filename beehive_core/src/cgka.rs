@@ -428,8 +428,8 @@ mod tests {
         let p7_change = p7_cgka.update(p7.id, p7_pk, p7_sk)?.expect("Should have message");
         assert_ne!(p5_cgka.tree.hash(), p7_cgka.tree.hash());
 
-        p5_cgka.merge(p7_change.op)?;
-        p7_cgka.merge(p5_change.op)?;
+        p5_cgka.merge(p7_change)?;
+        p7_cgka.merge(p5_change)?;
 
         // TODO: Better to try to encrypt and decrypt using these.
         assert_eq!(p5_cgka.tree.hash(), p7_cgka.tree.hash());
