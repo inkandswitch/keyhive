@@ -20,7 +20,7 @@ use crate::{
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::Serialize;
-use std::{collections::BTreeMap, fmt::Debug};
+use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
 
 /// The current user agent (which can sign and encrypt).
 #[derive(Clone, Serialize)]
@@ -61,7 +61,7 @@ impl Active {
         &'a self,
         subject: &'a Membered<'a, T>,
         min: Access,
-    ) -> Option<&'a Signed<Delegation<T>>> {
+    ) -> Option<&'a Rc<Signed<Delegation<T>>>> {
         subject.get_capability(&self.agent_id()).and_then(|cap| {
             if cap.payload().can >= min {
                 Some(cap)
@@ -77,7 +77,7 @@ impl Active {
         subject: &'a Membered<'a, T>,
         attenuate: Access,
         delegate: Agent<'a, T>,
-        after_revocations: Vec<&'a Signed<Revocation<T>>>,
+        after_revocations: Vec<Rc<Signed<Revocation<'a, T>>>>,
         after_content: BTreeMap<DocumentId, (&'a Document<T>, Vec<T>)>,
     ) -> Result<Signed<Delegation<T>>, DelegationError> {
         let proof = self.get_capability(&subject, attenuate).expect("FIXME");
@@ -89,7 +89,7 @@ impl Active {
         let delegation = self.sign(Delegation {
             delegate,
             can: attenuate,
-            proof: Some(proof),
+            proof: Some(proof.clone()),
             after_revocations,
             after_content,
         });

@@ -18,17 +18,25 @@ use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
     hash::Hash,
+    rc::Rc,
 };
 use thiserror::Error;
 use topological_sort::TopologicalSort;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Operation<'a, T: ContentRef> {
-    Delegation(&'a Signed<Delegation<'a, T>>),
-    Revocation(&'a Signed<Revocation<'a, T>>),
+    Delegation(Rc<Signed<Delegation<'a, T>>>),
+    Revocation(Rc<Signed<Revocation<'a, T>>>),
 }
 
-impl<'a, T> Copy for Operation<'a, T> where T: ContentRef {}
+impl<'a, T: ContentRef + Serialize> Serialize for Operation<'a, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Operation::Delegation(delegation) => delegation.serialize(serializer),
+            Operation::Revocation(revocation) => revocation.serialize(serializer),
+        }
+    }
+}
 
 impl<'a, T: ContentRef> Operation<'a, T> {
     pub fn subject(&'a self) -> Identifier {
@@ -60,23 +68,23 @@ impl<'a, T: ContentRef> Operation<'a, T> {
     pub fn after(
         &'a self,
     ) -> (
-        Vec<&'a Signed<Delegation<'a, T>>>,
-        Vec<&'a Signed<Revocation<'a, T>>>,
+        Vec<Rc<Signed<Delegation<'a, T>>>>,
+        Vec<Rc<Signed<Revocation<'a, T>>>>,
         &'a BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)>,
     ) {
         match self {
             Operation::Delegation(delegation) => {
                 let (dlgs, revs, content) = delegation.payload().after();
-                (dlgs, revs.to_vec(), content)
+                (dlgs, revs, content)
             }
             Operation::Revocation(revocation) => {
                 let (dlg, revs, content) = revocation.payload().after();
-                (dlg.to_vec(), revs, content)
+                (dlg, revs, content)
             }
         }
     }
 
-    pub fn after_content(&self) -> &'a BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)> {
+    pub fn after_content(&'a self) -> &'a BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)> {
         match self {
             Operation::Delegation(delegation) => &delegation.payload().after_content,
             Operation::Revocation(revocation) => &revocation.payload().after_content,
@@ -126,7 +134,7 @@ impl<'a, T: ContentRef> Operation<'a, T> {
         Ok(ancestors.into_iter().fold(
             (CaMap::new(), 0),
             |(mut acc_set, acc_count), (op, count)| {
-                acc_set.insert(*op);
+                acc_set.insert(Rc::new(op.clone())); // FIXME move RCs out of CaMap
 
                 if count > acc_count {
                     (acc_set, count)
@@ -138,11 +146,13 @@ impl<'a, T: ContentRef> Operation<'a, T> {
     }
 
     pub fn topsort(
-        heads: &'a [(Digest<Operation<'a, T>>, Operation<'a, T>)],
+        heads: &[(Digest<Operation<'a, T>>, Operation<'a, T>)],
     ) -> Result<Vec<(Digest<Operation<'a, T>>, Operation<'a, T>)>, AncestorError> {
-        let ops_with_ancestors: HashMap<
-            Digest<Operation<'a, T>>,
-            (&'a Operation<'a, T>, CaMap<Operation<'a, T>>, usize),
+        let ops_with_ancestors: Rc<
+            HashMap<
+                Digest<Operation<'a, T>>,
+                (&'a Operation<'a, T>, CaMap<Operation<'a, T>>, usize),
+            >,
         > = HashMap::from_iter(
             heads
                 .iter()
@@ -153,45 +163,42 @@ impl<'a, T: ContentRef> Operation<'a, T> {
         let mut adjacencies: TopologicalSort<(Digest<Operation<'a, T>>, &Operation<'a, T>)> =
             topological_sort::TopologicalSort::new();
 
-        for (hash, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
-            seen.insert(hash);
+        for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
+            seen.insert(digest);
 
-            for (other_hash, other_op) in op_ancestors.iter() {
+            for (other_digest, other_op) in op_ancestors.iter() {
                 let (_, other_ancestors, other_longest_path) = ops_with_ancestors
-                    .get(&other_hash.coerce())
+                    .get(&other_digest.coerce())
                     .expect("values that we just put there to be there");
 
-                let ancestor_set: HashSet<&Operation<'a, T>> = op_ancestors.values().collect();
+                let ancestor_set: HashSet<&Operation<'a, T>> =
+                    op_ancestors.values().map(|op| op.as_ref()).collect();
 
                 let other_ancestor_set: HashSet<&Operation<'a, T>> =
-                    other_ancestors.values().collect();
+                    other_ancestors.values().map(|op| op.as_ref()).collect();
 
                 if ancestor_set.is_subset(&other_ancestor_set) {
-                    adjacencies.add_dependency((*other_hash, other_op), (*hash, *op));
+                    adjacencies.add_dependency((*other_digest, other_op.as_ref()), (*digest, *op));
                 }
 
                 if ancestor_set.is_superset(&other_ancestor_set) {
-                    adjacencies.add_dependency((*hash, *op), (*other_hash, other_op));
+                    adjacencies.add_dependency((*digest, *op), (*other_digest, other_op.as_ref()));
                 }
 
                 // Concurrent, so check revocations
                 if op.is_revocation() {
                     match longest_path.cmp(&other_longest_path) {
-                        Ordering::Less => {
-                            adjacencies.add_dependency((*hash, *op), (*other_hash, other_op))
-                        }
-                        Ordering::Greater => {
-                            adjacencies.add_dependency((*other_hash, other_op), (*hash, *op))
-                        }
-                        Ordering::Equal => {
-                            match other_hash.cmp(&hash.coerce()) {
-                                Ordering::Less => adjacencies
-                                    .add_dependency((*hash, *op), (*other_hash, other_op)),
-                                Ordering::Greater => adjacencies
-                                    .add_dependency((*other_hash, other_op), (*hash, *op)),
-                                Ordering::Equal => {}
-                            }
-                        }
+                        Ordering::Less => adjacencies
+                            .add_dependency((*digest, *op), (*other_digest, other_op.as_ref())),
+                        Ordering::Greater => adjacencies
+                            .add_dependency((*other_digest, other_op.as_ref()), (*digest, *op)),
+                        Ordering::Equal => match other_digest.cmp(&digest.coerce()) {
+                            Ordering::Less => adjacencies
+                                .add_dependency((*digest, *op), (*other_digest, other_op.as_ref())),
+                            Ordering::Greater => adjacencies
+                                .add_dependency((*other_digest, other_op.as_ref()), (*digest, *op)),
+                            Ordering::Equal => {}
+                        },
                     }
                 }
             }
@@ -199,21 +206,21 @@ impl<'a, T: ContentRef> Operation<'a, T> {
 
         let mut acc = vec![];
         for (digest, op) in adjacencies.into_iter() {
-            acc.push((digest, *op));
+            acc.push((digest, op.clone()));
         }
 
         Ok(acc)
     }
 }
 
-impl<'a, T: ContentRef> From<&'a Signed<Delegation<'a, T>>> for Operation<'a, T> {
-    fn from(delegation: &'a Signed<Delegation<'a, T>>) -> Self {
+impl<'a, T: ContentRef> From<Rc<Signed<Delegation<'a, T>>>> for Operation<'a, T> {
+    fn from(delegation: Rc<Signed<Delegation<'a, T>>>) -> Self {
         Operation::Delegation(delegation)
     }
 }
 
-impl<'a, T: ContentRef> From<&'a Signed<Revocation<'a, T>>> for Operation<'a, T> {
-    fn from(revocation: &'a Signed<Revocation<'a, T>>) -> Self {
+impl<'a, T: ContentRef> From<Rc<Signed<Revocation<'a, T>>>> for Operation<'a, T> {
+    fn from(revocation: Rc<Signed<Revocation<'a, T>>>) -> Self {
         Operation::Revocation(revocation)
     }
 }

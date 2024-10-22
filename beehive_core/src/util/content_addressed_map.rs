@@ -1,13 +1,13 @@
 use crate::crypto::digest::Digest;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, rc::Rc};
 
 /// A content-addressed map.
 ///
 /// Since all operations are referenced by their hash,
 /// a map that indexes by the same cryptographic hash is convenient.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct CaMap<T: Serialize>(BTreeMap<Digest<T>, T>);
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CaMap<T: Serialize>(BTreeMap<Digest<T>, Rc<T>>);
 
 impl<T: Serialize> CaMap<T> {
     /// Create an empty [`CaMap`].
@@ -37,24 +37,29 @@ impl<T: Serialize> CaMap<T> {
         Self(
             iterable
                 .into_iter()
-                .map(|preimage| (Digest::hash(&preimage), preimage))
+                .map(|preimage| (Digest::hash(&preimage), Rc::new(preimage)))
                 .collect(),
         )
     }
 
     /// Add a new value to the map, and return the associated [`Digest`].
-    pub fn insert(&mut self, value: T) -> Digest<T> {
+    pub fn insert(&mut self, value: Rc<T>) -> Digest<T> {
         let key: Digest<T> = Digest::hash(&value);
         self.0.insert(key, value);
         key
     }
 
     /// Remove an element from the map by its [`Digest`].
-    pub fn remove(&mut self, hash: &Digest<T>) -> Option<T> {
+    pub fn remove_by_hash(&mut self, hash: &Digest<T>) -> Option<Rc<T>> {
         self.0.remove(hash)
     }
 
-    pub fn get(&self, hash: &Digest<T>) -> Option<&T> {
+    pub fn remove_by_value(&mut self, value: &T) -> Option<Rc<T>> {
+        let hash = Digest::hash(value);
+        self.remove_by_hash(&hash)
+    }
+
+    pub fn get(&self, hash: &Digest<T>) -> Option<&Rc<T>> {
         self.0.get(hash)
     }
 
@@ -66,14 +71,14 @@ impl<T: Serialize> CaMap<T> {
         self.0.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&Digest<T>, &T)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&Digest<T>, &Rc<T>)> {
         self.0.iter()
     }
 
-    pub fn keys(&self) -> std::collections::btree_map::Keys<'_, Digest<T>, T> {
+    pub fn keys(&self) -> std::collections::btree_map::Keys<'_, Digest<T>, Rc<T>> {
         self.0.keys()
     }
-    pub fn values(&self) -> std::collections::btree_map::Values<'_, Digest<T>, T> {
+    pub fn values(&self) -> std::collections::btree_map::Values<'_, Digest<T>, Rc<T>> {
         self.0.values()
     }
 
@@ -81,7 +86,7 @@ impl<T: Serialize> CaMap<T> {
         self.0.into_keys()
     }
 
-    pub fn into_values(self) -> impl Iterator<Item = T> {
+    pub fn into_values(self) -> impl Iterator<Item = Rc<T>> {
         self.0.into_values()
     }
 
@@ -92,5 +97,21 @@ impl<T: Serialize> CaMap<T> {
 
     pub fn contains_key(&self, hash: &Digest<T>) -> bool {
         self.0.contains_key(hash)
+    }
+}
+
+impl<T: Serialize> Serialize for CaMap<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let tree: BTreeMap<&Digest<T>, &T> = self.0.iter().map(|(k, v)| (k, v.as_ref())).collect();
+        tree.serialize(serializer)
+    }
+}
+
+impl<'de, T: Serialize + Deserialize<'de>> Deserialize<'de> for CaMap<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let tree = BTreeMap::<Digest<T>, T>::deserialize(deserializer)?;
+        let rcs: BTreeMap<Digest<T>, Rc<T>> =
+            tree.into_iter().map(|(k, v)| (k, Rc::new(v))).collect();
+        Ok(Self(rcs))
     }
 }

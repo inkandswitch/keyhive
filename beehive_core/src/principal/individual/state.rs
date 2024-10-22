@@ -29,7 +29,7 @@ impl PrekeyState {
             let share_key = secret_key.share_key();
 
             let op = Signed::sign(KeyOp::Add(AddKeyOp { share_key }), &signing_key);
-            ops.insert(op);
+            ops.insert(op.into());
             keypairs.insert(share_key, secret_key);
         }
 

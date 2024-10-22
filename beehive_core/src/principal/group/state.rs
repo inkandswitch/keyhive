@@ -14,17 +14,20 @@ use crate::{
 };
 use ed25519_dalek::VerifyingKey;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    rc::Rc,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GroupState<'a, T: ContentRef> {
     pub(crate) id: GroupId,
 
-    pub(crate) delegation_heads: HashSet<Digest<Signed<Delegation<'a, T>>>>,
+    pub(crate) delegation_heads: HashSet<Rc<Signed<Delegation<'a, T>>>>,
     pub(crate) delegations: CaMap<Signed<Delegation<'a, T>>>,
     pub delegation_quarantine: CaMap<Signed<StaticDelegation<T>>>,
 
-    pub(crate) revocation_heads: HashSet<Digest<Signed<Revocation<'a, T>>>>,
+    pub(crate) revocation_heads: HashSet<Rc<Signed<Revocation<'a, T>>>>,
     pub(crate) revocations: CaMap<Signed<Revocation<'a, T>>>,
     pub revocation_quarantine: CaMap<Signed<StaticRevocation<T>>>,
 }
@@ -60,8 +63,10 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
                 &signing_key,
             );
 
-            let hash = group.delegations.insert(dlg);
-            group.delegation_heads.insert(hash);
+            let rc = Rc::new(dlg);
+
+            group.delegations.insert(rc.clone());
+            group.delegation_heads.insert(rc);
         }
 
         group
@@ -75,26 +80,12 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
         self.id
     }
 
-    pub fn delegation_heads(&self) -> &HashSet<Digest<Signed<Delegation<'a, T>>>> {
+    pub fn delegation_heads(&self) -> &HashSet<Rc<Signed<Delegation<'a, T>>>> {
         &self.delegation_heads
     }
 
-    pub fn delegation_head_refs(&'a self) -> Vec<&'a Signed<Delegation<'a, T>>> {
-        self.delegation_heads
-            .iter()
-            .map(|digest| self.delegations.get(digest).unwrap())
-            .collect()
-    }
-
-    pub fn revocation_heads(&self) -> &HashSet<Digest<Signed<Revocation<'a, T>>>> {
+    pub fn revocation_heads(&self) -> &HashSet<Rc<Signed<Revocation<'a, T>>>> {
         &self.revocation_heads
-    }
-
-    pub fn revocation_head_refs(&'a self) -> Vec<&'a Signed<Delegation<'a, T>>> {
-        self.delegation_heads
-            .iter()
-            .map(|digest| self.delegations.get(digest).unwrap())
-            .collect()
     }
 
     pub fn delegations(&self) -> &CaMap<Signed<Delegation<'a, T>>> {
@@ -119,15 +110,12 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
             // return Err(signature::Error::InvalidSignature);
         }
 
-        let hash = self.delegations.insert(delegation);
-        let dlg_ref = self.delegations.get(&hash).unwrap();
+        let rc = Rc::new(delegation);
+        let hash = self.delegations.insert(rc.clone());
 
-        if let Some(proof) = dlg_ref.payload().proof {
-            let proof_hash = Digest::hash(proof);
-
-            if self.delegation_heads.contains(&proof_hash) {
-                self.delegation_heads.insert(hash);
-                self.delegation_heads.remove(&proof_hash);
+        if let Some(proof) = &rc.payload().proof {
+            if self.delegations.remove_by_value(&proof).is_some() {
+                self.delegation_heads.insert(rc);
             }
         }
 
@@ -151,12 +139,12 @@ impl<'a, T: ContentRef> GroupState<'a, T> {
         // FIXME also check if this op needs to go into the quarantine/buffer
 
         // FIXME retrun &ref
-        self.revocations.insert(revocation);
+        self.revocations.insert(Rc::new(revocation));
 
         Ok(())
     }
 
-    pub fn delegations_for(&self, agent: Agent<'a, T>) -> Vec<&Signed<Delegation<'a, T>>> {
+    pub fn delegations_for(&self, agent: Agent<'a, T>) -> Vec<&Rc<Signed<Delegation<'a, T>>>> {
         self.delegations
             .iter()
             .filter_map(|(_, delegation)| {

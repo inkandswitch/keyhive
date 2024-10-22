@@ -95,6 +95,7 @@ impl<T: Serialize> Digest<T> {
         count
     }
 
+    // FIXME remove and replace with specific coercions e.g Digest<statsic<T> -> Digest<T>
     pub(crate) fn coerce<U: Serialize>(&self) -> Digest<U> {
         Digest {
             raw: self.raw,

@@ -21,7 +21,10 @@ use id::GroupId;
 use nonempty::NonEmpty;
 use operation::{delegation::Delegation, revocation::Revocation, Operation};
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    rc::Rc,
+};
 
 /// A collection of agents with no associated content.
 ///
@@ -31,7 +34,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Group<'a, T: ContentRef> {
     /// The current view of members of a group.
-    pub(crate) members: HashMap<AgentId, Vec<Digest<Signed<Delegation<'a, T>>>>>,
+    pub(crate) members: HashMap<AgentId, Vec<Rc<Signed<Delegation<'a, T>>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
     pub(crate) state: state::GroupState<'a, T>,
@@ -59,9 +62,10 @@ impl<'a, T: ContentRef> Group<'a, T> {
                 &group_signer,
             );
 
-            let hash = delegations.insert(dlg);
-            delegation_heads.insert(hash);
-            members.insert((*parent).agent_id(), vec![hash]);
+            let rc = Rc::new(dlg);
+            delegations.insert(rc.clone());
+            delegation_heads.insert(rc.clone());
+            members.insert((*parent).agent_id(), vec![rc]);
         }
 
         Group {
@@ -96,37 +100,20 @@ impl<'a, T: ContentRef> Group<'a, T> {
         self.into()
     }
 
-    pub fn members(&self) -> &HashMap<AgentId, Vec<Digest<Signed<Delegation<'a, T>>>>> {
+    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<'a, T>>>>> {
         &self.members
-    }
-
-    pub fn member_refs(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
-        self.members
-            .iter()
-            .map(|(id, hashes)| {
-                (
-                    *id,
-                    hashes
-                        .iter()
-                        .map(|h| self.state.delegations.get(h).unwrap())
-                        .collect(),
-                )
-            })
-            .collect()
     }
 
     pub fn delegations(&self) -> &CaMap<Signed<Delegation<'a, T>>> {
         &self.state.delegations
     }
 
-    pub fn get_capability(&'a self, member_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
-        self.members.get(member_id).map(move |hashes| {
-            hashes
+    pub fn get_capability(&'a self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<'a, T>>>> {
+        self.members.get(member_id).and_then(|delegations| {
+            delegations
                 .iter()
-                .map(|h| self.state.delegations.get(h).unwrap())
-                .into_iter()
                 .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
-        })?
+        })
     }
 
     // FIXME rename
@@ -137,14 +124,15 @@ impl<'a, T: ContentRef> Group<'a, T> {
         // FIXME check that delegation is authorized
 
         let id = signed_delegation.payload().delegate.agent_id();
-        let hash = self.state.delegations.insert(signed_delegation);
+        let rc = Rc::new(signed_delegation);
+        self.state.delegations.insert(rc.clone());
 
         match self.members.get_mut(&id) {
             Some(caps) => {
-                caps.push(hash);
+                caps.push(rc);
             }
             None => {
-                self.members.insert(id, vec![]);
+                self.members.insert(id, vec![rc]);
             }
         }
     }
@@ -157,11 +145,11 @@ impl<'a, T: ContentRef> Group<'a, T> {
     ) {
         let revocations = &mut self.state.revocations;
 
-        while let Some(revoke_hashes) = self.members.get(member_id) {
-            for hash in revoke_hashes.iter() {
+        if let Some(revoke_dlgs) = self.members.remove(member_id) {
+            for dlg in revoke_dlgs.iter() {
                 let revocation = Signed::sign(
                     Revocation {
-                        revoke: self.state.delegations.get(hash).unwrap(),
+                        revoke: dlg.clone(),
                         proof: None, // FIXME
                         after_content: relevant_docs
                             .iter()
@@ -176,13 +164,11 @@ impl<'a, T: ContentRef> Group<'a, T> {
                     &signing_key,
                 );
 
-                revocations.insert(revocation);
+                revocations.insert(Rc::new(revocation));
             }
         }
 
         // FIXME check that you can actually do this with tiebreaking, seniroity etc etc
-
-        self.members.remove(member_id);
     }
 
     pub fn materialize(&'a mut self) {
@@ -190,25 +176,34 @@ impl<'a, T: ContentRef> Group<'a, T> {
             .state
             .delegation_heads
             .iter()
-            .map(|d_hash| {
-                let d = self.state.delegations.get(d_hash).unwrap();
-                (d_hash.coerce(), Operation::Delegation(d))
-            })
-            .chain(self.state.revocation_heads.iter().map(|r_hash| {
-                let r = self.state.revocations.get(r_hash).unwrap();
-                (r_hash.coerce(), Operation::Revocation(r))
-            }))
+            // FIXME use CaMap to keep hashes around
+            .map(|dlg| (Digest::hash(dlg.as_ref()).coerce(), dlg.clone().into()))
+            .chain(
+                self.state
+                    .revocation_heads
+                    .iter()
+                    .map(|rev| (Digest::hash(rev.as_ref()).coerce(), rev.clone().into())),
+            )
             .collect();
 
-        for (digest, op) in Operation::topsort(&op_heads).expect("FIXME").iter() {
+        for (_, op) in Operation::topsort(&op_heads).expect("FIXME").iter() {
             match op {
                 Operation::Delegation(d) => {
-                    self.members
-                        .insert(d.payload().delegate.agent_id(), vec![digest.coerce()]);
+                    if let Some(mut_dlgs) = self.members.get_mut(&d.payload().delegate.agent_id()) {
+                        mut_dlgs.push(d.clone());
+                    } else {
+                        self.members
+                            .insert(d.payload().delegate.agent_id(), vec![d.clone()]);
+                    }
                 }
                 Operation::Revocation(r) => {
-                    self.members
-                        .remove(&r.payload().revoke.payload().delegate.agent_id());
+                    if let Some(mut_dlgs) = self
+                        .members
+                        .get_mut(&r.payload().revoke.payload().delegate.agent_id())
+                    {
+                        // FIXME maintain this as a CaMap for easier removals, too
+                        mut_dlgs.retain(|d| *d != r.payload().revoke);
+                    }
                 }
             }
         }
@@ -306,7 +301,8 @@ mod tests {
         let bob_agent = bob.into();
 
         let g0 = store.generate_group(nonempty![alice_agent]);
-        let g1 = store.generate_group(nonempty![alice_agent]);
+        let g0_ref = store.get(&g0).unwrap();
+        let g1 = store.generate_group(nonempty![alice_agent, g0_ref.as_agent()]);
         let g2 = store.generate_group(nonempty![bob_agent]);
         let g3 = store.generate_group(nonempty![bob_agent]);
 

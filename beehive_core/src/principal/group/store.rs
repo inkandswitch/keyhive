@@ -112,7 +112,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                     caps.insert(member.agent_id(), (member, best_access));
                 }
                 Agent::Group(group) => {
-                    for (mem, proofs) in group.member_refs().iter() {
+                    for (mem, proofs) in group.members().iter() {
                         for proof in proofs.iter() {
                             let current_path_access =
                                 access.min(proof.payload().can).min(parent_access);
@@ -134,8 +134,7 @@ impl<'a, T: ContentRef> GroupStore<'a, T> {
                 }
                 Agent::Document(doc) => {
                     for (mem, proof_hashes) in doc.group.members.iter() {
-                        for proof_hash in proof_hashes.iter() {
-                            let proof = doc.group.state.delegations.get(proof_hash).unwrap();
+                        for proof in proof_hashes.iter() {
                             let current_path_access =
                                 access.min(proof.payload().can).min(parent_access);
 

@@ -5,12 +5,9 @@ use super::{
     identifier::Identifier,
     verifiable::Verifiable,
 };
-use crate::{
-    content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed},
-};
+use crate::{content::reference::ContentRef, crypto::signed::Signed};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, rc::Rc};
 
 /// The union of Agents that have updatable membership
 #[derive(Debug, PartialEq, Eq, Hash, Serialize)]
@@ -20,7 +17,7 @@ pub enum Membered<'a, T: ContentRef> {
 }
 
 impl<'a, T: ContentRef> Membered<'a, T> {
-    pub fn get_capability(&'a self, agent_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
+    pub fn get_capability(&'a self, agent_id: &AgentId) -> Option<&Rc<Signed<Delegation<'a, T>>>> {
         match self {
             Membered::Group(group) => group.get_capability(agent_id),
             Membered::Document(doc) => doc.get_capabilty(agent_id),
@@ -41,17 +38,10 @@ impl<'a, T: ContentRef> Membered<'a, T> {
         }
     }
 
-    pub fn members(&self) -> &HashMap<AgentId, Vec<Digest<Signed<Delegation<'a, T>>>>> {
+    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<'a, T>>>>> {
         match self {
             Membered::Group(group) => group.members(),
             Membered::Document(document) => document.members(),
-        }
-    }
-
-    pub fn member_refs(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
-        match self {
-            Membered::Group(group) => group.member_refs(),
-            Membered::Document(document) => document.member_refs(),
         }
     }
 

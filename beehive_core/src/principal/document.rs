@@ -5,7 +5,7 @@ use super::{individual::id::IndividualId, verifiable::Verifiable};
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::{digest::Digest, share_key::ShareKey, signed::Signed},
+    crypto::{share_key::ShareKey, signed::Signed},
     principal::{
         agent::{Agent, AgentId},
         group::{operation::delegation::Delegation, Group},
@@ -18,7 +18,10 @@ use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
 use nonempty::NonEmpty;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    rc::Rc,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Document<'a, T: ContentRef> {
@@ -42,19 +45,15 @@ impl<'a, T: ContentRef> Document<'a, T> {
         self.doc_id().into()
     }
 
-    pub fn members(&self) -> &HashMap<AgentId, Vec<Digest<Signed<Delegation<'a, T>>>>> {
+    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<'a, T>>>>> {
         &self.group.members()
-    }
-
-    pub fn member_refs(&'a self) -> HashMap<AgentId, Vec<&'a Signed<Delegation<'a, T>>>> {
-        self.group.member_refs()
     }
 
     pub fn delegations(&self) -> &CaMap<Signed<Delegation<'a, T>>> {
         &self.group.delegations()
     }
 
-    pub fn get_capabilty(&'a self, member_id: &AgentId) -> Option<&'a Signed<Delegation<'a, T>>> {
+    pub fn get_capabilty(&'a self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<'a, T>>>> {
         self.group.get_capability(member_id)
     }
 
@@ -80,10 +79,10 @@ impl<'a, T: ContentRef> Document<'a, T> {
                 &doc_signer,
             );
 
-            let hash = doc.group.state.delegations.insert(dlg);
-            doc.group.state.delegation_heads.insert(hash);
-
-            doc.group.members.insert(parent.agent_id(), vec![hash]);
+            let rc = Rc::new(dlg);
+            doc.group.state.delegations.insert(rc.clone());
+            doc.group.state.delegation_heads.insert(rc.clone());
+            doc.group.members.insert(parent.agent_id(), vec![rc]);
         }
 
         doc
@@ -95,14 +94,14 @@ impl<'a, T: ContentRef> Document<'a, T> {
         // ...etc etc
         // FIXME check that delegation is authorized
         let id = signed_delegation.payload().delegate.agent_id();
-        let hash = self.group.state.delegations.insert(signed_delegation);
+        let rc = Rc::new(signed_delegation);
 
         match self.group.members.get_mut(&id) {
             Some(caps) => {
-                caps.push(hash);
+                caps.push(rc);
             }
             None => {
-                self.group.members.insert(id, vec![]);
+                self.group.members.insert(id, vec![rc]);
             }
         }
     }

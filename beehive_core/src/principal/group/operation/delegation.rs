@@ -10,21 +10,21 @@ use crate::{
     },
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, hash::Hash};
+use std::{collections::BTreeMap, hash::Hash, rc::Rc};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Delegation<'a, T: ContentRef> {
-    pub delegate: Agent<'a, T>,
-    pub can: Access,
+    pub(crate) delegate: Agent<'a, T>,
+    pub(crate) can: Access,
 
-    pub proof: Option<&'a Signed<Delegation<'a, T>>>,
-    pub after_revocations: Vec<&'a Signed<Revocation<'a, T>>>,
-    pub after_content: BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)>,
+    pub(crate) proof: Option<Rc<Signed<Delegation<'a, T>>>>,
+    pub(crate) after_revocations: Vec<Rc<Signed<Revocation<'a, T>>>>,
+    pub(crate) after_content: BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)>,
 }
 
 impl<'a, T: ContentRef> Delegation<'a, T> {
     pub fn subject(&self, issuer: AgentId) -> Identifier {
-        if let Some(proof) = self.proof {
+        if let Some(proof) = &self.proof {
             proof.subject()
         } else {
             issuer.into()
@@ -34,8 +34,8 @@ impl<'a, T: ContentRef> Delegation<'a, T> {
     pub fn after(
         &'a self,
     ) -> (
-        Vec<&'a Signed<Delegation<'a, T>>>,
-        Vec<&'a Signed<Revocation<'a, T>>>,
+        Vec<Rc<Signed<Delegation<'a, T>>>>,
+        Vec<Rc<Signed<Revocation<'a, T>>>>,
         &'a BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)>,
     ) {
         let (dlgs, revs) = self.after_auth();
@@ -49,10 +49,10 @@ impl<'a, T: ContentRef> Delegation<'a, T> {
     pub fn after_auth(
         &'a self,
     ) -> (
-        Option<&'a Signed<Delegation<'a, T>>>,
-        &[&'a Signed<Revocation<'a, T>>],
+        Option<Rc<Signed<Delegation<'a, T>>>>,
+        &[Rc<Signed<Revocation<'a, T>>>],
     ) {
-        (self.proof, &self.after_revocations)
+        (self.proof.clone(), &self.after_revocations)
     }
 
     pub fn is_root(&self) -> bool {
@@ -64,8 +64,8 @@ impl<'a, T: ContentRef> Signed<Delegation<'a, T>> {
     pub fn subject(&self) -> Identifier {
         let mut head = self;
 
-        while let Some(parent) = head.payload().proof {
-            head = parent;
+        while let Some(parent) = &head.payload().proof {
+            head = &parent;
         }
 
         head.id()
@@ -132,12 +132,12 @@ impl<'a, T: ContentRef> From<Delegation<'a, T>> for StaticDelegation<T> {
     fn from(delegation: Delegation<'a, T>) -> Self {
         Self {
             can: delegation.can,
-            proof: delegation.proof.map(|p| Digest::hash(&p).coerce()),
+            proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).coerce()),
             delegate: delegation.delegate.id(),
             after_revocations: delegation
                 .after_revocations
                 .iter()
-                .map(|revocation| Digest::hash(*revocation).coerce()) // FIXME remove coerce, add specific fincton for op <-> del
+                .map(|revocation| Digest::hash(revocation.as_ref()).coerce()) // FIXME remove coerce, add specific fincton for op <-> del
                 .collect(),
             after_content: delegation
                 .after_content

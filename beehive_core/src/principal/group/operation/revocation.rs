@@ -11,13 +11,13 @@ use crate::{
     },
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, rc::Rc};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Revocation<'a, T: ContentRef> {
-    pub revoke: &'a Signed<Delegation<'a, T>>,
-    pub proof: Option<&'a Signed<Delegation<'a, T>>>,
-    pub after_content: BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)>,
+    pub(crate) revoke: Rc<Signed<Delegation<'a, T>>>,
+    pub(crate) proof: Option<Rc<Signed<Delegation<'a, T>>>>,
+    pub(crate) after_content: BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)>,
 }
 
 impl<'a, T: ContentRef> Revocation<'a, T> {
@@ -33,11 +33,11 @@ impl<'a, T: ContentRef> Revocation<'a, T> {
     pub fn after(
         &'a self,
     ) -> (
-        Vec<&'a Signed<Delegation<'a, T>>>,
-        Vec<&'a Signed<Revocation<'a, T>>>,
+        Vec<Rc<Signed<Delegation<'a, T>>>>,
+        Vec<Rc<Signed<Revocation<'a, T>>>>,
         &'a BTreeMap<DocumentId, (&'a Document<'a, T>, Vec<T>)>,
     ) {
-        (vec![self.revoke], vec![], &self.after_content)
+        (vec![self.revoke.clone()], vec![], &self.after_content)
     }
 }
 
@@ -50,7 +50,7 @@ impl<'a, T: ContentRef> Signed<Revocation<'a, T>> {
 // FIXME test
 impl<'a, T: ContentRef> PartialOrd for Revocation<'a, T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match self.revoke.partial_cmp(other.revoke) {
+        match self.revoke.partial_cmp(&other.revoke) {
             Some(std::cmp::Ordering::Equal) => match self.proof.partial_cmp(&other.proof) {
                 Some(std::cmp::Ordering::Equal) => self
                     .after_content
@@ -113,7 +113,7 @@ pub struct StaticRevocation<T: ContentRef> {
 
     // FIXME probably will just make this look at the ambient state,
     // but in the meantime this is just so much easier
-    pub proof: Digest<Signed<StaticDelegation<T>>>,
+    pub proof: Option<Digest<Signed<StaticDelegation<T>>>>,
 
     pub after_content: BTreeMap<Identifier, Vec<T>>,
 }
@@ -121,8 +121,8 @@ pub struct StaticRevocation<T: ContentRef> {
 impl<'a, T: ContentRef> From<Revocation<'a, T>> for StaticRevocation<T> {
     fn from(revocation: Revocation<'a, T>) -> Self {
         Self {
-            revoke: Digest::hash(&revocation.revoke).coerce(),
-            proof: Digest::hash(&revocation.proof).coerce(),
+            revoke: Digest::hash(revocation.revoke.as_ref()).coerce(),
+            proof: revocation.proof.map(|p| Digest::hash(p.as_ref()).coerce()),
             after_content: BTreeMap::from_iter(
                 revocation
                     .after_content

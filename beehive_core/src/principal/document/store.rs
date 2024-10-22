@@ -46,9 +46,8 @@ impl<'a, T: ContentRef> DocumentStore<'a, T> {
 
         let mut explore: Vec<GroupAccess<'a, T>> = vec![];
 
-        for hashes in doc.group.members.values() {
-            for hash in hashes {
-                let delegation = doc.group.state.delegations.get(hash).unwrap();
+        for dlgs in doc.group.members.values() {
+            for delegation in dlgs {
                 explore.push(GroupAccess {
                     agent: delegation.payload().delegate,
                     agent_access: delegation.payload().can, // FIXME need to lookup
@@ -79,7 +78,7 @@ impl<'a, T: ContentRef> DocumentStore<'a, T> {
                     caps.insert(member.agent_id(), (member, best_access));
                 }
                 Agent::Group(group) => {
-                    for (mem, proofs) in group.member_refs().iter() {
+                    for (mem, proofs) in group.members().iter() {
                         for proof in proofs.iter() {
                             let current_path_access =
                                 access.min(proof.payload().can).min(parent_access);
@@ -101,8 +100,7 @@ impl<'a, T: ContentRef> DocumentStore<'a, T> {
                 }
                 Agent::Document(doc) => {
                     for (mem, proof_hashes) in doc.group.members.iter() {
-                        for proof_hash in proof_hashes.iter() {
-                            let proof = doc.group.state.delegations.get(proof_hash).unwrap();
+                        for proof in proof_hashes.iter() {
                             let current_path_access =
                                 access.min(proof.payload().can).min(parent_access);
 
