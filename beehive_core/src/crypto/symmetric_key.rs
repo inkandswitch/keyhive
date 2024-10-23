@@ -11,10 +11,16 @@ use x25519_dalek::SharedSecret;
 /// # Example
 ///
 /// ```
-/// # use beehive_core::crypto::{siv::Siv, symmetric_key::SymmetricKey};
-/// # use beehive_core::principal::document::Document;
+/// # use beehive_core::{
+/// #     crypto::{siv::Siv, symmetric_key::SymmetricKey},
+/// #     principal::{agent::Agent, document::Document, individual::Individual},
+/// # };
+/// # use std::rc::Rc;
+/// # use nonempty::nonempty;
 /// let plaintext = b"hello world";
-/// let doc = Document::generate(vec![]);
+/// let user = Individual::generate(&mut ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+/// let user_agent: Agent<String> = Rc::new(user).into();
+/// let doc = Document::generate(nonempty![user_agent]);
 ///
 /// let key = SymmetricKey::generate();
 /// let nonce = Siv::new(&key, plaintext, &doc);

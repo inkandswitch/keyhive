@@ -144,9 +144,12 @@ impl<T: ContentRef> Group<T> {
         let proof = if self.verifying_key() == signing_key.verifying_key() {
             None
         } else {
-            let p = self.get_capability(&agent.agent_id()).expect("FIXME");
+            let p = self
+                .get_capability(&agent.agent_id())
+                .expect("FIXME error handling for user not found on group");
+
             if can > p.payload().can {
-                panic!("FIXME");
+                panic!("FIXME escelation");
             }
             Some(p.clone())
         };
@@ -496,37 +499,71 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn test_add_member() {
-    //     let alice = setup_user();
-    //     let bob = setup_user();
-    //     let carol = setup_user();
+    #[test]
+    fn test_add_member() {
+        let alice = Rc::new(setup_user());
+        let alice_agent: Agent<_> = alice.clone().into();
 
-    //     let alice_agent: Agent<_> = alice.into();
-    //     let carol_agent: Agent<_> = carol.into();
+        let bob = Rc::new(setup_user());
+        let bob_agent: Agent<_> = bob.clone().into();
 
-    //     let (mut gs, [mut g0, _, _, _]) = setup_store(&alice, &bob);
+        let carol = Rc::new(setup_user());
+        let carol_agent: Agent<_> = carol.clone().into();
 
-    //     let active = Active::generate();
+        let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+        let active = Rc::new(Active::generate(signer));
 
-    //     g0.add_member(Signed::sign(
-    //         Delegation {
-    //             delegate: &carol_agent,
-    //             can: Access::Admin,
-    //             proof: None,
-    //             after_revocations: vec![],
-    //             after_content: vec![],
-    //         },
-    //         &active.signer,
-    //     ));
+        let mut gs: GroupStore<String> = GroupStore::new();
 
-    //     gs.insert(g0.clone().into());
+        let g0 = gs.generate_group(nonempty![active.clone().into()]);
+        let g1 = gs.generate_group(nonempty![alice_agent, bob_agent.clone(), g0.clone().into()]);
+        let g2 = gs.generate_group(nonempty![carol_agent, g1.clone().into()]);
 
-    //     let g0_mems: BTreeMap<&Agent<_>, Access> = gs.transitive_members(&g0);
+        g0.borrow_mut().add_member(
+            carol.clone().into(),
+            Access::Write,
+            &active.signer,
+            &[],
+            &[],
+        );
 
-    //     assert_eq!(
-    //         g0_mems,
-    //         BTreeMap::from_iter([(&alice_agent, Access::Admin), (&carol_agent, Access::Admin)])
-    //     );
-    // }
+        gs.insert(g0.clone().into());
+        let g0_mems = gs.transitive_members(&g0.borrow());
+
+        assert_eq!(g0_mems.len(), 2);
+
+        assert_eq!(
+            g0_mems.get(&active.agent_id()),
+            Some(&(active.clone().into(), Access::Admin))
+        );
+
+        assert_eq!(
+            g0_mems.get(&carol.agent_id()),
+            Some(&(carol.clone().into(), Access::Write))
+        );
+
+        let g2_mems = gs.transitive_members(&g2.borrow());
+
+        assert_eq!(g2_mems.len(), 4);
+
+        assert_eq!(
+            g2_mems.get(&active.agent_id()),
+            Some(&(active.into(), Access::Admin))
+        );
+
+        assert_eq!(
+            g2_mems.get(&alice.agent_id()),
+            Some(&(alice.into(), Access::Admin))
+        );
+
+        assert_eq!(
+            g2_mems.get(&bob.agent_id()),
+            Some(&(bob.into(), Access::Admin))
+        );
+
+        assert_eq!(
+            g2_mems.get(&carol.agent_id()),
+            Some(&(carol.into(), Access::Admin))
+        );
+    }
 }

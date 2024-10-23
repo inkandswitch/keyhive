@@ -139,13 +139,3 @@ impl<T: ContentRef> GroupStore<T> {
         caps
     }
 }
-
-#[cfg(test)]
-mod tests {
-    // use super::*;
-
-    #[test]
-    fn test_test() {
-        todo!()
-    }
-}

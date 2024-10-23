@@ -16,10 +16,10 @@ use std::{
 /// # Example
 ///
 /// ```
-/// # use beehive_core::crypto::hash::Digest;
-/// let string_hash: Digest<String> = Digest::hash("hello world".to_string());
-/// let slice_hash: Digest<&[u8]> = Digest::hash(&[1, 2, 3]);
-/// let bytes_hash: Digest<Vec<u8>> = Digest::hash(vec![42, 99]);
+/// # use beehive_core::crypto::digest::Digest;
+/// let string_hash: Digest<String> = Digest::hash(&"hello world".to_string());
+/// let array_hash: Digest<[u8; 3]> = Digest::hash(&[1, 2, 3]);
+/// let bytes_hash: Digest<Vec<u8>> = Digest::hash(&vec![42, 99]);
 /// ```
 #[derive(Debug)]
 pub struct Digest<T: Serialize> {
@@ -50,12 +50,12 @@ impl<T: Serialize> Digest<T> {
     /// # Example
     ///
     /// ```
-    /// # use beehive_core::crypto::hash::Digest;
-    /// let hash = Digest::hash("hello world".to_string());
-    /// assert_eq!(hash.trailing_zeros(), 6);
+    /// # use beehive_core::crypto::digest::Digest;
+    /// let hash = Digest::hash(&"hello world!".to_string());
+    /// assert_eq!(hash.trailing_zeros(), 4);
     ///
-    /// let another_hash = Digest::hash("different_!*");
-    /// assert_eq!(another_hash.trailing_zeros(), 4);
+    /// let another_hash = Digest::hash(&"different!*".to_string());
+    /// assert_eq!(another_hash.trailing_zeros(), 2);
     /// ```
     pub fn trailing_zeros(&self) -> u8 {
         let mut count = 0;
@@ -77,8 +77,8 @@ impl<T: Serialize> Digest<T> {
     /// # Example
     ///
     /// ```
-    /// # use beehive_core::crypto::hash::Digest;
-    /// let hash = Digest::hash("hello world".to_string());
+    /// # use beehive_core::crypto::digest::Digest;
+    /// let hash = Digest::hash(&"hello world");
     /// assert_eq!(hash.trailing_zero_bytes(), 0);
     /// ```
     pub fn trailing_zero_bytes(&self) -> u8 {
