@@ -374,9 +374,6 @@ impl BeeKEM {
             // FIXME: Pick a better error
             .ok_or(CGKAError::IdentifierNotFound)?;
 
-        let sibling_idx = treemath::sibling(child_idx);
-        let mut sibling_resolution = Vec::new();
-        self.append_resolution(sibling_idx, &mut sibling_resolution)?;
         let decrypt_key = if child_pk == parent.encrypter_pk {
             if let Some(paired_pk) = parent.encrypter_paired_pk {
                 generate_shared_key(&paired_pk, child_sk)
