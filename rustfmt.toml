@@ -1,0 +1,5 @@
+unstable_features = true
+edition = "2021"
+
+imports_granularity = "Crate"
+format_generated_files = false

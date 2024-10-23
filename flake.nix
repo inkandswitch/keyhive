@@ -37,7 +37,7 @@
           inherit system overlays;
         };
 
-        rustVersion = "1.79.0";
+        rustVersion = "1.80.1";
 
         rust-toolchain = pkgs.rust-bin.stable.${rustVersion}.default.override {
           extensions = [
@@ -160,10 +160,10 @@
             "${cargo} watch --clear --exec 'clippy -- -W clippy::pedantic'";
 
           "watch:test:host" = cmd "Run all host tests on save"
-            "${cargo} watch --clear --exec 'test --features=mermaid_docs,test_utils'";
+            "${cargo} watch --clear --features=mermaid_docs,test_utils --exec 'test && test --doc'";
 
           "watch:test:wasm" = cmd "Run all Wasm tests on save"
-            "${cargo} watch --clear --exec 'test --target=wasm32-unknown-unknown'";
+            "${cargo} watch --clear --exec 'test --target=wasm32-unknown-unknown && test --doc --target=wasm32-unknown-unknown'";
         };
 
         test = {
@@ -171,7 +171,7 @@
             "test:host && test:docs && test:wasm";
 
           "test:host" = cmd "Run Cargo tests for host target"
-            "${cargo} test --features=mermaid_docs,test_utils";
+            "${cargo} test && ${cargo} test --features=mermaid_docs,test_utils --doc";
 
           "test:wasm" = cmd "Run wasm-pack tests on all targets"
             "test:wasm:node && test:wasm:chrome";
@@ -211,12 +211,12 @@
             [
               direnv
               rust-toolchain
-              self.packages.${system}.irust
               (pkgs.hiPrio pkgs.rust-bin.nightly.latest.rustfmt)
 
               pkgs.wasm-pack
               chromedriver
               protobuf
+              unstable.irust
               unstable.nodejs_20
               unstable.nodePackages.pnpm
 
@@ -241,20 +241,6 @@
         };
 
         formatter = pkgs.alejandra;
-
-        packages.irust = pkgs.rustPlatform.buildRustPackage rec {
-          pname = "irust";
-          version = "1.71.19";
-          src = pkgs.fetchFromGitHub {
-            owner = "sigmaSd";
-            repo = "IRust";
-            rev = "irust@${version}";
-            sha256 = "sha256-R3EAovCI5xDCQ5R69nMeE6v0cGVcY00O3kV8qHf0akc=";
-          };
-
-          doCheck = false;
-          cargoSha256 = "sha256-2aVCNz/Lw7364B5dgGaloVPcQHm2E+b/BOxF6Qlc8Hs=";
-        };
       }
     );
 }

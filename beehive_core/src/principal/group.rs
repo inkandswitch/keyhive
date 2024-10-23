@@ -1,0 +1,569 @@
+//! Model a collection of agents with no associated content.
+
+pub mod id;
+pub mod operation;
+pub mod state;
+pub mod store;
+
+use super::{
+    agent::{Agent, AgentId},
+    document::Document,
+    identifier::Identifier,
+    individual::Individual,
+    verifiable::Verifiable,
+};
+use crate::{
+    access::Access, content::reference::ContentRef, crypto::signed::Signed,
+    util::content_addressed_map::CaMap,
+};
+use id::GroupId;
+use nonempty::NonEmpty;
+use operation::{delegation::Delegation, revocation::Revocation, Operation};
+use serde::{ser::SerializeStruct, Serialize, Serializer};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    rc::Rc,
+};
+
+/// A collection of agents with no associated content.
+///
+/// Groups are stateful agents. It is possible the delegate control over them,
+/// and they can be delegated to. This produces transitives lines of authority
+/// through the network of [`Agent`]s.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Group<T: ContentRef> {
+    /// The current view of members of a group.
+    pub(crate) members: HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>>,
+
+    /// The `Group`'s underlying (causal) delegation state.
+    pub(crate) state: state::GroupState<T>,
+}
+
+impl<T: ContentRef> Group<T> {
+    /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
+    pub fn generate(parents: NonEmpty<Agent<T>>) -> Group<T> {
+        let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+        let group_id = GroupId(group_signer.verifying_key().into());
+
+        let mut delegations = CaMap::new();
+        let mut delegation_heads = HashSet::new();
+        let mut members = HashMap::new();
+
+        for parent in parents.iter() {
+            let dlg = Signed::sign(
+                Delegation {
+                    delegate: parent.clone(),
+                    can: Access::Admin,
+                    proof: None,
+                    after_revocations: vec![],
+                    after_content: BTreeMap::new(),
+                },
+                &group_signer,
+            );
+
+            let rc = Rc::new(dlg);
+            delegations.insert(rc.clone());
+            delegation_heads.insert(rc.clone());
+            members.insert((*parent).agent_id(), vec![rc]);
+        }
+
+        Group {
+            members,
+            state: state::GroupState {
+                id: group_id,
+
+                delegation_heads,
+                delegations,
+                delegation_quarantine: CaMap::new(),
+
+                revocation_heads: HashSet::new(),
+                revocations: CaMap::new(),
+                revocation_quarantine: CaMap::new(),
+            },
+        }
+    }
+
+    pub fn id(&self) -> Identifier {
+        self.group_id().into()
+    }
+
+    pub fn group_id(&self) -> GroupId {
+        self.state.group_id()
+    }
+
+    pub fn agent_id(&self) -> AgentId {
+        self.group_id().into()
+    }
+
+    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
+        &self.members
+    }
+
+    pub fn delegations(&self) -> &CaMap<Signed<Delegation<T>>> {
+        &self.state.delegations
+    }
+
+    pub fn get_capability(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
+        self.members.get(member_id).and_then(|delegations| {
+            delegations
+                .iter()
+                .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
+        })
+    }
+
+    pub fn add_delegation(&mut self, signed_delegation: Signed<Delegation<T>>) {
+        // FIXME check subject, signature, find dependencies or quarantine
+        // ...look at the quarantine and see if any of them depend on this one
+        // ...etc etc
+        // FIXME check that delegation is authorized
+
+        let id = signed_delegation.payload().delegate.agent_id();
+        let rc = Rc::new(signed_delegation);
+        self.state.delegations.insert(rc.clone());
+
+        match self.members.get_mut(&id) {
+            Some(caps) => {
+                caps.push(rc);
+            }
+            None => {
+                self.members.insert(id, vec![rc]);
+            }
+        }
+    }
+
+    pub fn add_member(
+        &mut self,
+        member_to_add: Agent<T>,
+        can: Access,
+        signing_key: &ed25519_dalek::SigningKey,
+        after_revocations: &[&Rc<Signed<Revocation<T>>>],
+        relevant_docs: &[&Rc<Document<T>>],
+    ) {
+        let indie: Individual = signing_key.verifying_key().into();
+        let agent: Agent<T> = Rc::new(indie).into();
+        let proof = if self.verifying_key() == signing_key.verifying_key() {
+            None
+        } else {
+            let p = self
+                .get_capability(&agent.agent_id())
+                .expect("FIXME error handling for user not found on group");
+
+            if can > p.payload().can {
+                panic!("FIXME escelation");
+            }
+            Some(p.clone())
+        };
+
+        let delegation = Signed::sign(
+            Delegation {
+                delegate: member_to_add,
+                can,
+                proof,
+                after_revocations: after_revocations.into_iter().cloned().cloned().collect(),
+                after_content: relevant_docs
+                    .iter()
+                    .map(|d| {
+                        (
+                            d.doc_id(),
+                            (
+                                (*d).clone(),
+                                d.content_heads.iter().map(|c| (*c).clone()).collect(),
+                            ),
+                        )
+                    })
+                    .collect(),
+            },
+            &signing_key,
+        );
+
+        self.add_delegation(delegation);
+    }
+
+    pub fn revoke_member(
+        &mut self,
+        member_to_remove: &AgentId,
+        signing_key: &ed25519_dalek::SigningKey,
+        relevant_docs: &[&Rc<Document<T>>],
+    ) {
+        let revocations = &mut self.state.revocations;
+
+        if let Some(revoke_dlgs) = self.members.remove(member_to_remove) {
+            for dlg in revoke_dlgs.iter() {
+                let revocation = Signed::sign(
+                    Revocation {
+                        revoke: dlg.clone(),
+                        proof: None, // FIXME
+                        after_content: relevant_docs
+                            .iter()
+                            .map(|d| {
+                                (
+                                    d.doc_id(),
+                                    (
+                                        (*d).clone(),
+                                        d.content_heads.iter().map(|c| (*c).clone()).collect(),
+                                    ),
+                                )
+                            })
+                            .collect(),
+                    },
+                    &signing_key,
+                );
+
+                revocations.insert(Rc::new(revocation));
+            }
+        }
+
+        // FIXME check that you can actually do this with tiebreaking, seniroity etc etc
+    }
+
+    pub fn materialize(&mut self) {
+        for (_, op) in
+            Operation::topsort(&self.state.delegation_heads, &self.state.revocation_heads)
+                .expect("FIXME")
+                .iter()
+        {
+            match op {
+                Operation::Delegation(d) => {
+                    if let Some(mut_dlgs) = self.members.get_mut(&d.payload().delegate.agent_id()) {
+                        mut_dlgs.push(d.clone());
+                    } else {
+                        self.members
+                            .insert(d.payload().delegate.agent_id(), vec![d.clone()]);
+                    }
+                }
+                Operation::Revocation(r) => {
+                    if let Some(mut_dlgs) = self
+                        .members
+                        .get_mut(&r.payload().revoke.payload().delegate.agent_id())
+                    {
+                        // FIXME maintain this as a CaMap for easier removals, too
+                        mut_dlgs.retain(|d| *d != r.payload().revoke);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn add_revocation(
+        &mut self,
+        signed_revocation: Signed<Revocation<T>>,
+    ) -> Result<(), state::AddError> {
+        // FIXME check subject, signature, find dependencies or quarantine
+        // ...look at the quarantine and see if any of them depend on this one
+        // ...etc etc
+        // FIXME check that delegation is authorized
+        self.members.remove(
+            &signed_revocation
+                .payload()
+                .revoke
+                .payload()
+                .delegate
+                .agent_id(),
+        );
+
+        self.state.add_revocation(signed_revocation)
+    }
+
+    // pub fn add_member(&mut self, delegation: Signed<Delegation>) {
+    //     FIXME check subject, signature, find dependencies or quarantine
+    //     ...look at the quarantine and see if any of them depend on this one
+    //     ...etc etc
+    //     self.state.delegations.insert(delegation.into());
+    //     todo!() // rebuild, later do IVM
+    // }
+
+    // pub fn revoke(&mut self, revocation: Signed<Revocation>) {
+    //     self.state.revocations.insert(revocation.into());
+    //     todo!() // rebuild, later do IVM
+    // }
+}
+
+impl<T: ContentRef> Verifiable for Group<T> {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.state.verifying_key()
+    }
+}
+
+impl<T: ContentRef> std::hash::Hash for Group<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for m in self.members.iter() {
+            m.hash(state);
+        }
+        self.state.hash(state);
+    }
+}
+
+impl<T: ContentRef> Serialize for Group<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let members = self
+            .members
+            .iter()
+            .map(|(k, v)| (k, v.len()))
+            .collect::<HashMap<_, _>>();
+
+        let mut state = serializer.serialize_struct("Group", 2)?;
+        state.serialize_field("members", &members)?;
+        state.serialize_field("state", &self.state)?;
+        state.end()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use super::{operation::delegation::Delegation, store::GroupStore};
+    use crate::principal::{active::Active, individual::Individual};
+    use nonempty::nonempty;
+    use std::cell::RefCell;
+
+    fn setup_user() -> Individual {
+        ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
+            .verifying_key()
+            .into()
+    }
+
+    fn setup_groups<T: ContentRef>(
+        store: &mut GroupStore<T>,
+        alice: Rc<Individual>,
+        bob: Rc<Individual>,
+    ) -> [Rc<RefCell<Group<T>>>; 4] {
+        /*              ┌───────────┐        ┌───────────┐
+                        │           │        │           │
+        ╔══════════════▶│   Alice   │        │    Bob    │
+        ║               │           │        │           │
+        ║               └─────▲─────┘        └───────────┘
+        ║                     │                    ▲
+        ║                     │                    ║
+        ║               ┌───────────┐              ║
+        ║               │           │              ║
+        ║        ┌─────▶│  Group 0  │◀─────┐       ║
+        ║        │      │           │      │       ║
+        ║        │      └───────────┘      │       ║
+        ║  ┌───────────┐             ┌───────────┐ ║
+        ║  │           │             │           │ ║
+        ╚══│  Group 1  │             │  Group 2  │═╝
+           │           │             │           │
+           └─────▲─────┘             └─────▲─────┘
+                 │      ┌───────────┐      │
+                 │      │           │      │
+                 └──────│  Group 3  │──────┘
+                        │           │
+                        └───────────┘ */
+
+        let alice_agent: Agent<T> = alice.into();
+        let bob_agent = bob.into();
+
+        let g0 = store.generate_group(nonempty![alice_agent.clone()]);
+        let g1 = store.generate_group(nonempty![alice_agent, g0.clone().into()]);
+        let g2 = store.generate_group(nonempty![bob_agent, g1.clone().into()]);
+        let g3 = store.generate_group(nonempty![g1.clone().into(), g2.clone().into()]);
+
+        [g0, g1, g2, g3]
+    }
+
+    fn setup_cyclic_groups<T: ContentRef>(
+        gs: &mut GroupStore<T>,
+        alice: Rc<Individual>,
+        bob: Rc<Individual>,
+    ) -> [Rc<RefCell<Group<T>>>; 10] {
+        let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+        let active = Active::generate(signer);
+
+        let group0 = gs.generate_group(nonempty![alice.into()]);
+        let group1 = gs.generate_group(nonempty![bob.into()]);
+        let group2 = gs.generate_group(nonempty![group1.clone().into()]);
+        let group3 = gs.generate_group(nonempty![group2.clone().into()]);
+        let group4 = gs.generate_group(nonempty![group3.clone().into()]);
+        let group5 = gs.generate_group(nonempty![group4.clone().into()]);
+        let group6 = gs.generate_group(nonempty![group5.clone().into()]);
+        let group7 = gs.generate_group(nonempty![group6.clone().into()]);
+        let group8 = gs.generate_group(nonempty![group7.clone().into()]);
+        let group9 = gs.generate_group(nonempty![group8.clone().into()]);
+
+        group0.borrow_mut().add_delegation(Signed::sign(
+            Delegation {
+                delegate: group9.clone().into(),
+                can: Access::Admin,
+                proof: None,
+                after_revocations: vec![],
+                after_content: BTreeMap::new(),
+            },
+            &active.signer,
+        ));
+
+        [
+            group0, group1, group2, group3, group4, group5, group6, group7, group8, group9,
+        ]
+    }
+
+    #[test]
+    fn test_transitive_self() {
+        let alice = Rc::new(setup_user());
+        let alice_id = alice.agent_id();
+
+        let bob = Rc::new(setup_user());
+
+        let mut gs: GroupStore<String> = GroupStore::new();
+        let [g0, ..] = setup_groups(&mut gs, alice.clone(), bob);
+
+        let g0_mems = gs.transitive_members(&g0.clone().as_ref().clone().into_inner());
+
+        assert_eq!(
+            g0_mems,
+            BTreeMap::from_iter([(alice_id, (alice.into(), Access::Admin))])
+        );
+    }
+
+    #[test]
+    fn test_transitive_one() {
+        let alice = Rc::new(setup_user());
+        let alice_id = alice.agent_id();
+
+        let bob = Rc::new(setup_user());
+
+        let mut gs: GroupStore<String> = GroupStore::new();
+
+        let [_g0, g1, _g2, _g3] = setup_groups(&mut gs, alice.clone(), bob);
+        let g1_mems = gs.transitive_members(&g1.borrow());
+
+        assert_eq!(
+            g1_mems,
+            BTreeMap::from_iter([(alice_id, (alice.clone().into(), Access::Admin))])
+        );
+    }
+
+    #[test]
+    fn test_transitive_two() {
+        let alice = Rc::new(setup_user());
+        let alice_id = alice.agent_id();
+
+        let bob = Rc::new(setup_user());
+        let bob_id = bob.agent_id();
+
+        let mut gs: GroupStore<String> = GroupStore::new();
+
+        let [_g0, _g1, g2, _g3] = setup_groups(&mut gs, alice.clone(), bob.clone());
+        let g1_mems = gs.transitive_members(&g2.borrow());
+
+        assert_eq!(
+            g1_mems,
+            BTreeMap::from_iter([
+                (alice_id, (alice.into(), Access::Admin)),
+                (bob_id, (bob.into(), Access::Admin))
+            ])
+        );
+    }
+
+    #[test]
+    fn test_transitive_three() {
+        let alice = Rc::new(setup_user());
+        let alice_id = alice.agent_id();
+
+        let bob = Rc::new(setup_user());
+        let bob_id = bob.agent_id();
+
+        let mut gs: GroupStore<String> = GroupStore::new();
+
+        let [_g0, _g1, _g2, g3] = setup_groups(&mut gs, alice.clone(), bob.clone());
+        let g1_mems = gs.transitive_members(&g3.borrow());
+
+        assert_eq!(
+            g1_mems,
+            BTreeMap::from_iter([
+                (alice_id, (alice.into(), Access::Admin)),
+                (bob_id, (bob.into(), Access::Admin))
+            ])
+        );
+    }
+
+    #[test]
+    fn test_transitive_cycles() {
+        let alice = Rc::new(setup_user());
+        let alice_id = alice.agent_id();
+
+        let bob = Rc::new(setup_user());
+        let bob_id = bob.agent_id();
+
+        let mut gs: GroupStore<String> = GroupStore::new();
+
+        let [g0, ..] = setup_cyclic_groups(&mut gs, alice.clone(), bob.clone());
+        let g1_mems = gs.transitive_members(&g0.borrow());
+
+        assert_eq!(
+            g1_mems,
+            BTreeMap::from_iter([
+                (alice_id, (alice.into(), Access::Admin)),
+                (bob_id, (bob.into(), Access::Admin))
+            ])
+        );
+    }
+
+    #[test]
+    fn test_add_member() {
+        let alice = Rc::new(setup_user());
+        let alice_agent: Agent<_> = alice.clone().into();
+
+        let bob = Rc::new(setup_user());
+        let bob_agent: Agent<_> = bob.clone().into();
+
+        let carol = Rc::new(setup_user());
+        let carol_agent: Agent<_> = carol.clone().into();
+
+        let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+        let active = Rc::new(Active::generate(signer));
+
+        let mut gs: GroupStore<String> = GroupStore::new();
+
+        let g0 = gs.generate_group(nonempty![active.clone().into()]);
+        let g1 = gs.generate_group(nonempty![alice_agent, bob_agent.clone(), g0.clone().into()]);
+        let g2 = gs.generate_group(nonempty![carol_agent, g1.clone().into()]);
+
+        g0.borrow_mut().add_member(
+            carol.clone().into(),
+            Access::Write,
+            &active.signer,
+            &[],
+            &[],
+        );
+
+        gs.insert(g0.clone().into());
+        let g0_mems = gs.transitive_members(&g0.borrow());
+
+        assert_eq!(g0_mems.len(), 2);
+
+        assert_eq!(
+            g0_mems.get(&active.agent_id()),
+            Some(&(active.clone().into(), Access::Admin))
+        );
+
+        assert_eq!(
+            g0_mems.get(&carol.agent_id()),
+            Some(&(carol.clone().into(), Access::Write))
+        );
+
+        let g2_mems = gs.transitive_members(&g2.borrow());
+
+        assert_eq!(g2_mems.len(), 4);
+
+        assert_eq!(
+            g2_mems.get(&active.agent_id()),
+            Some(&(active.into(), Access::Admin))
+        );
+
+        assert_eq!(
+            g2_mems.get(&alice.agent_id()),
+            Some(&(alice.into(), Access::Admin))
+        );
+
+        assert_eq!(
+            g2_mems.get(&bob.agent_id()),
+            Some(&(bob.into(), Access::Admin))
+        );
+
+        assert_eq!(
+            g2_mems.get(&carol.agent_id()),
+            Some(&(carol.into(), Access::Admin))
+        );
+    }
+}
