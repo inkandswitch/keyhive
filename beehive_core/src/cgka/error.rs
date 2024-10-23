@@ -36,4 +36,7 @@ pub enum CGKAError {
 
     #[error("Tree index out of bounds")]
     TreeIndexOutOfBounds,
+
+    #[error("Unexpected key conflict")]
+    UnexpectedKeyConflict,
 }

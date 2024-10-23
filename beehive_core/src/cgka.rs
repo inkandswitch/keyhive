@@ -1,7 +1,7 @@
 pub mod beekem;
 pub mod error;
 pub mod change;
-pub mod multikey_encrypted_secret_store;
+pub mod secret_store;
 pub mod treemath;
 
 use beekem::{BeeKEM, PublicKey, SecretKey};
@@ -43,7 +43,7 @@ impl CGKA {
     pub fn with_new_owner_id(&self, my_id: Identifier) -> Result<Self, CGKAError> {
         let mut cgka = self.clone();
         cgka.owner_id = my_id;
-        cgka.owner_pk = *cgka.tree.public_key_for_id(my_id)?;
+        cgka.owner_pk = *cgka.tree.multikey_for_id(my_id)?;
         Ok(cgka)
     }
 }

@@ -54,13 +54,14 @@ use treemath::{LeafNodeIndex, ParentNodeIndex, TreeNodeIndex, TreeSize};
 use x25519_dalek::{self, x25519, StaticSecret};
 
 use crate::{
-    crypto::{encrypted::Encrypted, hash::Hash, symmetric_key::SymmetricKey},
+    crypto::{encrypted::{Encrypted, NestedEncrypted}, hash::Hash, siv::Siv, symmetric_key::SymmetricKey},
     principal::identifier::Identifier,
 };
 
-use super::{change::{CGKAChange, TreePath}, error::CGKAError, treemath};
+use super::{change::{CGKAChange, TreePath}, error::CGKAError, secret_store::{KeyWithEncryptingPair, Multikey, SecretStore}, treemath};
 pub type PublicKey = x25519_dalek::PublicKey;
 pub type SecretKey = x25519_dalek::StaticSecret;
+pub type SecretKeyMap = BTreeMap<Vec<u8>, SecretKey>;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct BeeKEM {
@@ -85,8 +86,8 @@ impl BeeKEM {
             id_to_leaf_idx: BTreeMap::new(),
         };
         tree.grow_tree_to_size();
-        for (idx, (id, pk)) in members.iter().enumerate() {
-            tree.push_leaf(*id, *pk)?;
+        for (id, pk) in members {
+            tree.push_leaf(id, pk)?;
         }
         Ok(tree)
     }
@@ -96,7 +97,7 @@ impl BeeKEM {
         Hash::hash(self.clone())
     }
 
-    pub(crate) fn public_key(&self, idx: TreeNodeIndex) -> Result<&PublicKey, CGKAError> {
+    pub(crate) fn multikey_for_index(&self, idx: TreeNodeIndex) -> Result<&Multikey, CGKAError> {
         Ok(match idx {
             TreeNodeIndex::Leaf(l_idx) => {
                 &self
@@ -115,9 +116,9 @@ impl BeeKEM {
         })
     }
 
-    pub(crate) fn public_key_for_id(&self, id: Identifier) -> Result<&PublicKey, CGKAError> {
+    pub(crate) fn multikey_for_id(&self, id: Identifier) -> Result<&Multikey, CGKAError> {
         let idx = self.leaf_index_for_id(id)?;
-        self.public_key((*idx).into())
+        self.multikey_for_index((*idx).into())
     }
 
     pub(crate) fn leaf(&self, idx: LeafNodeIndex) -> Result<&Option<LeafNode>, CGKAError> {
@@ -149,11 +150,15 @@ impl BeeKEM {
     pub(crate) fn insert_leaf_at(
         &mut self,
         idx: LeafNodeIndex,
-        leaf: LeafNode,
+        id: Identifier,
+        pk: PublicKey,
     ) -> Result<(), CGKAError> {
         if idx.usize() >= self.leaves.len() {
             return Err(CGKAError::TreeIndexOutOfBounds);
         }
+        let kep =  KeyWithEncryptingPair { key: pk, encrypter_pair_pk: pk };
+        let multikey = Multikey { keys: vec![kep] };
+        let leaf = LeafNode { id, pk: multikey };
         self.leaves[idx.usize()] = Some(leaf);
         Ok(())
     }
@@ -185,7 +190,7 @@ impl BeeKEM {
         // Increment next leaf idx
         self.next_leaf_idx += 1;
         self.id_to_leaf_idx.insert(id, l_idx);
-        self.insert_leaf_at(l_idx, LeafNode { id, pk })?;
+        self.insert_leaf_at(l_idx, id, pk)?;
         self.blank_path(treemath::parent(l_idx.into()))?;
         Ok(l_idx.u32())
     }
@@ -220,14 +225,12 @@ impl BeeKEM {
     pub(crate) fn decrypt_tree_secret(
         &mut self,
         owner_id: Identifier,
-        owner_sk: SecretKey,
+        owner_sks: &mut SecretKeyMap,
     ) -> Result<SecretKey, CGKAError> {
         let leaf_idx = *self.leaf_index_for_id(owner_id)?;
         let leaf = self.leaf(leaf_idx)?.as_ref()
             .ok_or(CGKAError::OwnerIdentifierNotFound)?;
-        // TODO: Should we enforce an invariant that there will always be a root key?
-        if self.no_root_key()? {
-            self.encrypt_path(leaf.id, leaf.pk, owner_sk.clone())?;
+        if !self.has_root_key()? {
             return Err(CGKAError::NoRootKey);
         }
         if self.is_blank(leaf_idx.into())? {
@@ -235,8 +238,9 @@ impl BeeKEM {
         }
         let mut child_idx: TreeNodeIndex = leaf_idx.into();
         let mut last_non_blank_child_idx: TreeNodeIndex = child_idx;
-        let mut child_sk = owner_sk.clone();
-        let mut child_pk = leaf.pk;
+        // let mut child_sk = owner_sks;
+        let mut child_sk = None;
+        let mut child_pk = &leaf.pk;
         let mut parent_idx: TreeNodeIndex = treemath::parent(child_idx).into();
         while !self.is_root(child_idx) {
             // Find the next non-blank parent
@@ -249,14 +253,14 @@ impl BeeKEM {
                 last_non_blank_child_idx,
                 child_idx,
                 child_pk,
-                child_sk.clone(),
+                owner_sks,
             )?;
-            child_pk = *self.public_key(parent_idx)?;
+            child_pk = self.multikey_for_index(parent_idx)?;
             child_idx = parent_idx;
             last_non_blank_child_idx = child_idx;
             parent_idx = treemath::parent(child_idx).into();
         }
-        Ok(child_sk)
+        child_sk.ok_or(CGKAError::NoRootKey)
     }
 
     /// Starting from the owner's leaf, move up the tree toward the root (i.e. along the
@@ -287,13 +291,13 @@ impl BeeKEM {
         };
         let mut undo_path = TreePath {
             leaf_idx: leaf_idx.u32(),
-            leaf_pk: *self.public_key_for_id(id)?,
+            leaf_pk: self.multikey_for_id(id)?.first_public_key(),
             path: Vec::new(),
         };
         if self.id_for_leaf(leaf_idx)? != id {
             return Err(CGKAError::IdentifierNotFound);
         }
-        self.insert_leaf_at(leaf_idx, LeafNode { id, pk })?;
+        self.insert_leaf_at(leaf_idx, id, pk)?;
         let mut child_idx: TreeNodeIndex = leaf_idx.into();
         let mut child_pk = pk;
         let mut child_sk = sk.clone();
@@ -317,12 +321,17 @@ impl BeeKEM {
         Ok((new_path, undo_path))
     }
 
-    pub(crate) fn no_root_key(&self) -> Result<bool, CGKAError> {
-        let root_idx = treemath::root(self.tree_size);
+    pub(crate) fn has_root_key(&self) -> Result<bool, CGKAError> {
+        let root_idx: TreeNodeIndex = treemath::root(self.tree_size);
         let TreeNodeIndex::Parent(p_idx) = root_idx else {
             return Err(CGKAError::TreeIndexOutOfBounds);
         };
-        Ok(self.parent(p_idx)?.is_none())
+        Ok(if let Some(r) = self.parent(p_idx)? {
+            // A root with a public key conflict does not have a decryption secret
+            !r.has_conflict()
+        } else {
+            false
+        })
     }
 
     /// Overwrite all public keys on this path
@@ -340,7 +349,7 @@ impl BeeKEM {
         if self.id_for_leaf(leaf_idx)? != id || leaf_idx.u32() != path.leaf_idx {
             return Err(CGKAError::IdentifierNotFound);
         }
-        self.insert_leaf_at(leaf_idx, LeafNode { id, pk: path.leaf_pk })?;
+        self.insert_leaf_at(leaf_idx, id, path.leaf_pk)?;
 
         for (idx, p_node) in path.path {
             let p_idx = ParentNodeIndex::new(idx);
@@ -358,9 +367,9 @@ impl BeeKEM {
         &self,
         non_blank_child_idx: TreeNodeIndex,
         child_idx: TreeNodeIndex,
-        child_pk: PublicKey,
-        child_sk: SecretKey,
-    ) -> Result<SecretKey, CGKAError> {
+        child_pk: &Multikey,
+        child_sks: &mut BTreeMap<Vec<u8>, SecretKey>,
+    ) -> Result<Option<SecretKey>, CGKAError> {
         debug_assert!(!self.is_root(child_idx));
         let parent_idx = treemath::parent(child_idx);
         debug_assert!(!self.is_blank(parent_idx.into())?);
@@ -368,27 +377,38 @@ impl BeeKEM {
             .parent(parent_idx)?
             .as_ref()
             .ok_or(CGKAError::TreeIndexOutOfBounds)?;
-        let encrypted = parent
-            .sk
-            .get(&non_blank_child_idx)
-            // FIXME: Pick a better error
-            .ok_or(CGKAError::IdentifierNotFound)?;
 
-        let decrypt_key = if child_pk == parent.encrypter_pk {
-            if let Some(paired_pk) = parent.encrypter_paired_pk {
-                generate_shared_key(&paired_pk, child_sk)
-            } else {
-                // Normally you use a DH shared key to encrypt/decrypt the next node up,
-                // but if there's a blank sibling subtree, then you use your secret key
-                // directly instead.
-                child_sk
-            }
+        let maybe_secret = if let Some(parent_pk) = parent.single_pk() {
+            let secret = parent.decrypt_secret(non_blank_child_idx, child_pk, &mut child_sks)?;
+            child_sks.insert(parent_pk.to_bytes().into(), secret.clone());
+            Some(secret)
         } else {
-            let paired_pk = parent.encrypter_pk;
-            generate_shared_key(&paired_pk, child_sk)
+            // If we haven't decrypted all secrets for a conflict node, we need to do
+            // that before continuing.
+            parent.decrypt_undecrypted_secrets(non_blank_child_idx, child_pk, &mut child_sks)?;
+            None
         };
+        Ok(maybe_secret)
 
-        decrypt_secret(encrypted, decrypt_key)
+        // let encrypted = parent
+        //     .secret_store
+        //     .get_encrypted_secret(&non_blank_child_idx)?;
+
+        // let decrypt_key = if child_pk == parent.encrypter_pk {
+        //     if let Some(paired_pk) = parent.encrypter_paired_pk() {
+        //         generate_shared_key(&paired_pk, child_sk)
+        //     } else {
+        //         // Normally you use a DH shared key to encrypt/decrypt the next node up,
+        //         // but if there's a blank sibling subtree, then you use your secret key
+        //         // directly instead.
+        //         child_sk
+        //     }
+        // } else {
+        //     let paired_pk = parent.encrypter_pk;
+        //     generate_shared_key(&paired_pk, child_sk)
+        // };
+
+        // decrypt_secret(encrypted, decrypt_key)
     }
 
     fn encrypt_key_for_parent(
@@ -403,11 +423,15 @@ impl BeeKEM {
         let parent_idx = treemath::parent(child_idx);
         let (encrypter_paired_pk, new_secret_map) =
             self.encrypt_new_secret_for_parent(child_idx, child_pk, child_sk, new_parent_sk)?;
-        let node = ParentNode {
-            pk: new_parent_pk,
+        let secret_store = SecretStore {
             sk: new_secret_map,
             encrypter_pk: child_pk,
             encrypter_paired_pk,
+        };
+        let node = ParentNode {
+            // TODO: Handle multi key cases? Or will this always be a single key at this point?
+            pk: vec![new_parent_pk],
+            secret_store,
         };
         self.insert_parent_at(parent_idx, node)?;
         Ok(())
@@ -421,8 +445,8 @@ impl BeeKEM {
         new_parent_sk: SecretKey,
     ) -> Result<
         (
-            Option<PublicKey>,
-            BTreeMap<TreeNodeIndex, Encrypted<SecretKey>>,
+            Option<Multikey>,
+            BTreeMap<TreeNodeIndex, NestedEncrypted<SecretKey>>,
         ),
         CGKAError,
     > {
@@ -435,7 +459,7 @@ impl BeeKEM {
             // Normally you use a DH shared key to encrypt/decrypt the next node up,
             // but if there's a blank sibling subtree, then you use your secret key
             // directly instead.
-            let encrypted_sk = encrypt_secret(new_parent_sk.clone(), child_sk.clone())?;
+            let encrypted_sk = encrypt_nested_secret(new_parent_sk.clone(), vec![child_sk.clone()])?;
             secret_map.insert(child_idx, encrypted_sk);
             None
         } else {
@@ -443,9 +467,9 @@ impl BeeKEM {
             // a new DH shared secret to do the encryption for each node.
             let mut paired_pk = None;
             for idx in sibling_resolution {
-                let sibling_pk = self.public_key(idx)?;
+                let sibling_pk = self.multikey_for_index(idx)?;
                 let shared_key = generate_shared_key(sibling_pk, child_sk.clone());
-                let encrypted_sk = encrypt_secret(new_parent_sk.clone(), shared_key.clone())?;
+                let encrypted_sk = encrypt_nested_secret(new_parent_sk.clone(), shared_key.clone())?;
                 if paired_pk.is_none() {
                     secret_map.insert(child_idx, encrypted_sk.clone());
                     paired_pk = Some(*sibling_pk);
@@ -454,7 +478,8 @@ impl BeeKEM {
             }
             paired_pk
         };
-        Ok((encrypter_paired_pk, secret_map))
+        /// TODO: Handle the encrypter_paired_pk list correctly
+        Ok((vec![encrypter_paired_pk], secret_map))
     }
 
     fn is_blank(&self, idx: TreeNodeIndex) -> Result<bool, CGKAError> {
@@ -542,39 +567,62 @@ impl From<BeeKEM> for Vec<u8> {
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct LeafNode {
     pub id: Identifier,
-    pub pk: PublicKey,
+    pub pk: Multikey,
 }
 
 impl Debug for LeafNode {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
     f.debug_struct("LeafNode")
       .field("id", &self.id)
-      .field("pk", &self.pk.to_bytes())
+    // FIXME
+    //   .field("pk", &self.pk.to_bytes())
       .finish()
   }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ParentNode {
-    // TODO: Handle multiple public keys for BeeKEM conflict resolution
-    pub pk: PublicKey,
-    /// This is a map in order to handle the case of blank siblings, when we must encrypt
-    /// the same secret key separately for each public key in the sibling resolution.
-    pub sk: BTreeMap<TreeNodeIndex, Encrypted<SecretKey>>,
-    /// The PublicKey of the child that encrypted this parent.
-    pub encrypter_pk: PublicKey,
-    /// If this is None, the sibling subtree was blank when encrypting this parent.
-    /// Otherwise, it is the first PublicKey in the sibling resolution, which the
-    /// encrypter used for its own Diffie Hellman shared secret.
-    pub encrypter_paired_pk: Option<PublicKey>,
+    pub secret_store: SecretStore,
+
+    // /// Invariant: PublicKeys must be in lexicographic order
+    // pub pk: Multikey,
+    // /// TODO: Document
+    // pub secret_store: SecretStore,
+}
+
+impl ParentNode {
+    pub fn has_conflict(&self) -> bool {
+        self.secret_store.has_conflict()
+    }
+
+    pub fn single_pk(&self) -> Option<PublicKey> {
+        self.secret_store.single_pk()
+    }
+
+    pub fn decrypt_secret(&self, child_idx: TreeNodeIndex, child_pk: PublicKey, child_sks: &mut BTreeMap<Vec<u8>, SecretKey>) -> Result<SecretKey, CGKAError> {
+        self.secret_store.decrypt_secret(child_idx, child_pk, child_sks)
+    }
+
+    pub fn decrypt_undecrypted_secrets(&self, child_idx: TreeNodeIndex, child_pk: PublicKey, child_sks: &mut BTreeMap<Vec<u8>, SecretKey>) -> Result<(), CGKAError> {
+        self.secret_store.decrypt_undecrypted_secrets(child_idx, child_pk, child_sks)
+    }
+
+    // pub fn encrypter_pk(&self) -> PublicKey {
+    //     self.secret_store.encrypter_pk
+    // }
+
+    // pub fn encrypter_paired_pk(&self) -> &Option<Multikey> {
+    //     &self.secret_store.encrypter_paired_pk
+    // }
 }
 
 impl Debug for ParentNode {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
     f.debug_struct("ParentNode")
-      .field("pk", &self.pk.to_bytes())
-      .field("encrypter_pk", &self.encrypter_pk.to_bytes())
-      .field("encrypter_paired_pk", &self.encrypter_paired_pk.map(|pk| pk.to_bytes()))
+    // FIXME
+    //   .field("pk", &self.pk.to_bytes())
+    //   .field("encrypter_pk", &self.encrypter_pk.to_bytes())
+    //   .field("encrypter_paired_pk", &self.encrypter_paired_pk.map(|pk| pk.to_bytes()))
       .finish()
   }
 }
@@ -606,6 +654,36 @@ fn encrypt_secret(
         .map_err(CGKAError::Encryption)?;
     let encrypted_secret: Encrypted<SecretKey> =
         Encrypted::new(nonce.into(), encrypted_secret_bytes);
+    Ok(encrypted_secret)
+}
+
+fn encrypt_bytes(
+    bytes: &[u8; 32],
+    encrypt_key: &SecretKey,
+) -> Result<(Siv, [u8; 32]), CGKAError> {
+    let mut nonce = [0u8; 24];
+    rand::thread_rng().fill_bytes(&mut nonce);
+    let symmetric_key = SymmetricKey::from(encrypt_key.to_bytes());
+    let encrypted_secret_bytes = symmetric_key
+        .encrypt(nonce.into(), bytes)
+        .map_err(CGKAError::Encryption)?;
+    Ok((nonce.into(), encrypted_secret_bytes))
+}
+
+fn encrypt_nested_secret(
+    secret: SecretKey,
+    encrypt_keys: Vec<SecretKey>,
+) -> Result<NestedEncrypted<SecretKey>, CGKAError> {
+    debug_assert!(encrypt_keys.len() >= 1);
+    let mut nonces: Vec<Siv> = Vec::new();
+    let (mut nonce, mut encrypted_secret_bytes): (Siv, [u8; 32]) = encrypt_bytes(&secret.to_bytes(), encrypt_keys[0])?;
+    nonces.push(nonce);
+    for encrypt_key in encrypt_keys.iter().skip(1) {
+        let (nonce, encrypted_secret_bytes): (Siv, [u8; 32]) = encrypt_bytes(&secret.to_bytes(), encrypt_key)?;
+        nonces.push(nonce);
+    }
+    let encrypted_secret: NestedEncrypted<SecretKey> =
+        NestedEncrypted::new(nonces, encrypted_secret_bytes);
     Ok(encrypted_secret)
 }
 
