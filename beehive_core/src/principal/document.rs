@@ -17,7 +17,6 @@ use crate::{
 use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
 use nonempty::NonEmpty;
-use serde::Serialize;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,

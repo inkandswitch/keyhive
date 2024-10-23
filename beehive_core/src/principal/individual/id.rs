@@ -36,7 +36,7 @@ impl From<IndividualId> for Identifier {
 
 impl From<ed25519_dalek::VerifyingKey> for IndividualId {
     fn from(verifying_key: ed25519_dalek::VerifyingKey) -> Self {
-        verifying_key.into()
+        IndividualId(verifying_key.into())
     }
 }
 

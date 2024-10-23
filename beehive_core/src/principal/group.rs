@@ -9,6 +9,7 @@ use super::{
     agent::{Agent, AgentId},
     document::Document,
     identifier::Identifier,
+    individual::Individual,
     verifiable::Verifiable,
 };
 use crate::{
@@ -110,8 +111,7 @@ impl<T: ContentRef> Group<T> {
         })
     }
 
-    // FIXME rename
-    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<T>>) {
+    pub fn add_delegation(&mut self, signed_delegation: Signed<Delegation<T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
@@ -131,15 +131,60 @@ impl<T: ContentRef> Group<T> {
         }
     }
 
+    pub fn add_member(
+        &mut self,
+        member_to_add: Agent<T>,
+        can: Access,
+        signing_key: &ed25519_dalek::SigningKey,
+        after_revocations: &[&Rc<Signed<Revocation<T>>>],
+        relevant_docs: &[&Rc<Document<T>>],
+    ) {
+        let indie: Individual = signing_key.verifying_key().into();
+        let agent: Agent<T> = Rc::new(indie).into();
+        let proof = if self.verifying_key() == signing_key.verifying_key() {
+            None
+        } else {
+            let p = self.get_capability(&agent.agent_id()).expect("FIXME");
+            if can > p.payload().can {
+                panic!("FIXME");
+            }
+            Some(p.clone())
+        };
+
+        let delegation = Signed::sign(
+            Delegation {
+                delegate: member_to_add,
+                can,
+                proof,
+                after_revocations: after_revocations.into_iter().cloned().cloned().collect(),
+                after_content: relevant_docs
+                    .iter()
+                    .map(|d| {
+                        (
+                            d.doc_id(),
+                            (
+                                (*d).clone(),
+                                d.content_heads.iter().map(|c| (*c).clone()).collect(),
+                            ),
+                        )
+                    })
+                    .collect(),
+            },
+            &signing_key,
+        );
+
+        self.add_delegation(delegation);
+    }
+
     pub fn revoke_member(
         &mut self,
-        member_id: &AgentId,
+        member_to_remove: &AgentId,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<Document<T>>],
     ) {
         let revocations = &mut self.state.revocations;
 
-        if let Some(revoke_dlgs) = self.members.remove(member_id) {
+        if let Some(revoke_dlgs) = self.members.remove(member_to_remove) {
             for dlg in revoke_dlgs.iter() {
                 let revocation = Signed::sign(
                     Revocation {
@@ -196,7 +241,10 @@ impl<T: ContentRef> Group<T> {
         }
     }
 
-    pub fn revoke(&mut self, signed_revocation: Signed<Revocation<T>>) {
+    pub fn add_revocation(
+        &mut self,
+        signed_revocation: Signed<Revocation<T>>,
+    ) -> Result<(), state::AddError> {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
@@ -210,7 +258,7 @@ impl<T: ContentRef> Group<T> {
                 .agent_id(),
         );
 
-        self.state.add_revocation(signed_revocation);
+        self.state.add_revocation(signed_revocation)
     }
 
     // pub fn add_member(&mut self, delegation: Signed<Delegation>) {
@@ -273,7 +321,7 @@ mod tests {
     }
 
     fn setup_groups<T: ContentRef>(
-        store: &mut Box<GroupStore<T>>,
+        store: &mut GroupStore<T>,
         alice: Rc<Individual>,
         bob: Rc<Individual>,
     ) -> [Rc<RefCell<Group<T>>>; 4] {
@@ -311,14 +359,7 @@ mod tests {
         [g0, g1, g2, g3]
     }
 
-    fn setup_store<T: ContentRef>(gs: [&mut Group<T>; 4]) -> [&mut Group<T>; 4] {
-        let [g0, g1, g2, g3] = gs;
-        g1.add_member(todo!());
-        g2.add_member(todo!());
-        g3.add_member(todo!());
-    }
-
-    fn setup_cyclic_store<T: ContentRef>(
+    fn setup_cyclic_groups<T: ContentRef>(
         gs: &mut GroupStore<T>,
         alice: Rc<Individual>,
         bob: Rc<Individual>,
@@ -326,27 +367,20 @@ mod tests {
         let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let active = Active::generate(signer);
 
-        let alice_agent: Agent<T> = alice.into();
-        let bob_agent: Agent<T> = bob.into();
+        let group0 = gs.generate_group(nonempty![alice.into()]);
+        let group1 = gs.generate_group(nonempty![bob.into()]);
+        let group2 = gs.generate_group(nonempty![group1.clone().into()]);
+        let group3 = gs.generate_group(nonempty![group2.clone().into()]);
+        let group4 = gs.generate_group(nonempty![group3.clone().into()]);
+        let group5 = gs.generate_group(nonempty![group4.clone().into()]);
+        let group6 = gs.generate_group(nonempty![group5.clone().into()]);
+        let group7 = gs.generate_group(nonempty![group6.clone().into()]);
+        let group8 = gs.generate_group(nonempty![group7.clone().into()]);
+        let group9 = gs.generate_group(nonempty![group8.clone().into()]);
 
-        let group0 = gs.generate_group(nonempty![alice_agent.clone()]);
-
-        let group1 = gs.generate_group(nonempty![bob_agent]);
-        let group1_agent: Agent<T> = group1.clone().into();
-
-        let group2 = gs.generate_group(nonempty![group1_agent.clone()]);
-        let group3 = gs.generate_group(nonempty![group1_agent.clone()]);
-        let group4 = gs.generate_group(nonempty![group1_agent.clone()]);
-        let group5 = gs.generate_group(nonempty![group1_agent.clone()]);
-        let group6 = gs.generate_group(nonempty![group1_agent.clone()]);
-        let group7 = gs.generate_group(nonempty![group1_agent.clone()]);
-        let group8 = gs.generate_group(nonempty![group1_agent.clone()]);
-        let group9 = gs.generate_group(nonempty![group1_agent.clone(), alice_agent]);
-        let x = group9.clone();
-
-        x.borrow_mut().add_member(Signed::sign(
+        group0.borrow_mut().add_delegation(Signed::sign(
             Delegation {
-                delegate: group0.clone().into(),
+                delegate: group9.clone().into(),
                 can: Access::Admin,
                 proof: None,
                 after_revocations: vec![],
@@ -363,83 +397,104 @@ mod tests {
     #[test]
     fn test_transitive_self() {
         let alice = Rc::new(setup_user());
-        let alice_agent: Agent<String> = alice.clone().into();
+        let alice_id = alice.agent_id();
 
         let bob = Rc::new(setup_user());
 
-        // let (gs, [g0, _g1, _g2, _g3]) = setup_store(&alice.clone(), &bob.clone());
         let mut gs: GroupStore<String> = GroupStore::new();
-        let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9] =
-            setup_cyclic_store(&mut gs, alice.clone(), bob.clone());
+        let [g0, ..] = setup_groups(&mut gs, alice.clone(), bob);
 
         let g0_mems = gs.transitive_members(&g0.clone().as_ref().clone().into_inner());
 
         assert_eq!(
             g0_mems,
-            BTreeMap::from_iter([(alice.agent_id(), (alice.into(), Access::Admin))])
+            BTreeMap::from_iter([(alice_id, (alice.into(), Access::Admin))])
         );
     }
 
-    // #[test]
-    // fn test_transitive_one() {
-    //     let alice = setup_user();
-    //     let alice_agent: Agent<String> = alice.clone().into();
+    #[test]
+    fn test_transitive_one() {
+        let alice = Rc::new(setup_user());
+        let alice_id = alice.agent_id();
 
-    //     let bob = setup_user();
+        let bob = Rc::new(setup_user());
 
-    //     let (gs, [_g0, g1, _g2, _g3]) = setup_store(&alice, &bob);
-    //     let g1_mems: BTreeMap<&Agent<_>, Access> = gs.transitive_members(&g1);
+        let mut gs: GroupStore<String> = GroupStore::new();
 
-    //     assert_eq!(
-    //         g1_mems,
-    //         BTreeMap::from_iter([(&alice_agent, Access::Admin)])
-    //     );
-    // }
+        let [_g0, g1, _g2, _g3] = setup_groups(&mut gs, alice.clone(), bob);
+        let g1_mems = gs.transitive_members(&g1.borrow());
 
-    // #[test]
-    // fn test_transitive_two() {
-    //     let alice = setup_user();
-    //     let bob = setup_user();
+        assert_eq!(
+            g1_mems,
+            BTreeMap::from_iter([(alice_id, (alice.clone().into(), Access::Admin))])
+        );
+    }
 
-    //     let (gs, [_g0, _g1, g2, _g3]) = setup_store(&alice, &bob);
-    //     let g2_mems: BTreeMap<&Agent<String>, Access> = gs.transitive_members(&g2);
+    #[test]
+    fn test_transitive_two() {
+        let alice = Rc::new(setup_user());
+        let alice_id = alice.agent_id();
 
-    //     assert_eq!(
-    //         g2_mems,
-    //         BTreeMap::from_iter([
-    //             (&alice.clone().into(), Access::Admin),
-    //             (&bob.clone().into(), Access::Admin)
-    //         ])
-    //     );
-    // }
+        let bob = Rc::new(setup_user());
+        let bob_id = bob.agent_id();
 
-    // #[test]
-    // fn test_transitive_tree() {
-    //     let alice = setup_user();
-    //     let bob = setup_user();
+        let mut gs: GroupStore<String> = GroupStore::new();
 
-    //     let (gs, [_g0, _g1, _g2, g3]) = setup_store(&alice, &bob);
-    //     let g3_mems: BTreeMap<Agent, Access> = gs.transitive_members(&g3);
+        let [_g0, _g1, g2, _g3] = setup_groups(&mut gs, alice.clone(), bob.clone());
+        let g1_mems = gs.transitive_members(&g2.borrow());
 
-    //     assert_eq!(
-    //         g3_mems,
-    //         BTreeMap::from_iter([(alice.into(), Access::Admin), (bob.into(), Access::Admin)])
-    //     );
-    // }
+        assert_eq!(
+            g1_mems,
+            BTreeMap::from_iter([
+                (alice_id, (alice.into(), Access::Admin)),
+                (bob_id, (bob.into(), Access::Admin))
+            ])
+        );
+    }
 
-    // #[test]
-    // fn test_transitive_cycles() {
-    //     let alice = setup_user();
-    //     let bob = setup_user();
+    #[test]
+    fn test_transitive_three() {
+        let alice = Rc::new(setup_user());
+        let alice_id = alice.agent_id();
 
-    //     let (gs, [_, _, _, _, _, _, _, _, _, g9]) = setup_cyclic_store(&alice, &bob);
-    //     let g9_mems: BTreeMap<Agent, Access> = gs.transitive_members(&g9);
+        let bob = Rc::new(setup_user());
+        let bob_id = bob.agent_id();
 
-    //     assert_eq!(
-    //         g9_mems,
-    //         BTreeMap::from_iter([(alice.into(), Access::Admin), (bob.into(), Access::Admin)])
-    //     );
-    // }
+        let mut gs: GroupStore<String> = GroupStore::new();
+
+        let [_g0, _g1, _g2, g3] = setup_groups(&mut gs, alice.clone(), bob.clone());
+        let g1_mems = gs.transitive_members(&g3.borrow());
+
+        assert_eq!(
+            g1_mems,
+            BTreeMap::from_iter([
+                (alice_id, (alice.into(), Access::Admin)),
+                (bob_id, (bob.into(), Access::Admin))
+            ])
+        );
+    }
+
+    #[test]
+    fn test_transitive_cycles() {
+        let alice = Rc::new(setup_user());
+        let alice_id = alice.agent_id();
+
+        let bob = Rc::new(setup_user());
+        let bob_id = bob.agent_id();
+
+        let mut gs: GroupStore<String> = GroupStore::new();
+
+        let [g0, ..] = setup_cyclic_groups(&mut gs, alice.clone(), bob.clone());
+        let g1_mems = gs.transitive_members(&g0.borrow());
+
+        assert_eq!(
+            g1_mems,
+            BTreeMap::from_iter([
+                (alice_id, (alice.into(), Access::Admin)),
+                (bob_id, (bob.into(), Access::Admin))
+            ])
+        );
+    }
 
     // #[test]
     // fn test_add_member() {

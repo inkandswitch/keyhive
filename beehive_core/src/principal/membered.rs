@@ -48,7 +48,7 @@ impl<'a, T: ContentRef> Membered<'a, T> {
     pub fn add_member(&mut self, delegation: Signed<Delegation<T>>) {
         match self {
             Membered::Group(group) => {
-                group.add_member(delegation);
+                group.add_delegation(delegation);
             }
             Membered::Document(document) => document.add_member(delegation),
         }

@@ -8,8 +8,7 @@ use crate::{
         active::Active,
         agent::{Agent, AgentId},
         document::{id::DocumentId, store::DocumentStore, Document},
-        group::{id::GroupId, store::GroupStore, Group},
-        identifier::Identifier,
+        group::{store::GroupStore, Group},
         individual::{id::IndividualId, Individual},
         membered::Membered,
         verifiable::Verifiable,
@@ -17,45 +16,48 @@ use crate::{
 };
 use nonempty::NonEmpty;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashSet},
+    rc::Rc,
+};
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
-pub struct Context<'a, T: ContentRef> {
+pub struct Context<T: ContentRef> {
     /// The [`Active`] user agent.
-    pub active: Active,
+    pub active: Rc<Active>,
 
     /// The [`Individual`]s that are known to this agent.
     pub individuals: BTreeMap<IndividualId, Individual>,
 
     /// The [`Group`]s that are known to this agent.
-    pub groups: GroupStore<'a, T>,
+    pub groups: GroupStore<T>,
 
     /// The [`Document`]s that are known to this agent.
-    pub docs: DocumentStore<'a, T>,
+    pub docs: DocumentStore<T>,
 }
 
-impl<'a, T: ContentRef> Context<'a, T> {
+impl<T: ContentRef> Context<T> {
     pub fn generate(signing_key: ed25519_dalek::SigningKey) -> Self {
         Self {
-            active: Active::generate(signing_key),
+            active: Rc::new(Active::generate(signing_key)),
             individuals: Default::default(),
             groups: GroupStore::new(),
             docs: DocumentStore::new(),
         }
     }
 
-    pub fn generate_group(&'a mut self, coparents: Vec<Agent<'a, T>>) -> GroupId {
-        let head = Agent::Active(&self.active);
+    pub fn generate_group(&mut self, coparents: Vec<Agent<T>>) -> Rc<RefCell<Group<T>>> {
         self.groups.generate_group(NonEmpty {
-            head,
+            head: self.active.clone().into(),
             tail: coparents,
         })
     }
 
-    pub fn generate_doc(&'a mut self, coparents: Vec<Agent<'a, T>>) -> DocumentId {
+    pub fn generate_doc(&mut self, coparents: Vec<Agent<T>>) -> DocumentId {
         let parents = NonEmpty {
-            head: (&self.active).into(),
+            head: self.active.clone().into(),
             tail: coparents,
         };
         self.docs.generate_document(parents)
@@ -86,32 +88,18 @@ impl<'a, T: ContentRef> Context<'a, T> {
     // }
 
     pub fn revoke_member(
-        &'a mut self,
+        &mut self,
         to_revoke: &AgentId,
-        resource: &'a mut Membered<'a, T>,
-        relevant_docs: &[&'a Document<'a, T>],
+        resource: &mut Membered<T>,
+        relevant_docs: &[&Rc<Document<T>>],
     ) {
         // FIXME check which docs are reachable from this group and include them automatically
         resource.revoke_member(to_revoke, &self.active.signer, relevant_docs);
     }
 
-    pub fn accessible_docs(&'a self) -> BTreeMap<DocumentId, (&'a Document<'a, T>, Access)> {
-        enum Focus<'b, U: ContentRef> {
-            Group(&'b Group<'b, U>),
-            Document(&'b Document<'b, U>),
-        }
-
-        impl<'b, U: ContentRef> Focus<'b, U> {
-            fn id(&self) -> Identifier {
-                match self {
-                    Focus::Group(group) => group.id(),
-                    Focus::Document(doc) => doc.id(),
-                }
-            }
-        }
-
-        let mut explore: Vec<(Focus<'a, T>, Access)> = vec![];
-        let mut caps: BTreeMap<DocumentId, (&'a Document<'a, T>, Access)> = BTreeMap::new();
+    pub fn accessible_docs(&self) -> BTreeMap<DocumentId, (&Document<T>, Access)> {
+        let mut explore: Vec<(Rc<RefCell<Group<T>>>, Access)> = vec![];
+        let mut caps: BTreeMap<DocumentId, (&Document<T>, Access)> = BTreeMap::new();
         let mut seen: HashSet<AgentId> = HashSet::new();
 
         let agent_id = self.active.agent_id();
@@ -121,7 +109,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
 
             let doc_id = doc.doc_id();
 
-            if let Some(proofs) = doc.member_refs().get(&agent_id) {
+            if let Some(proofs) = doc.members().get(&agent_id) {
                 for proof in proofs {
                     caps.insert(doc_id, (doc, proof.payload().can));
                 }
@@ -129,11 +117,11 @@ impl<'a, T: ContentRef> Context<'a, T> {
         }
 
         for group in self.groups.values() {
-            seen.insert(group.agent_id());
+            seen.insert(group.borrow().agent_id());
 
-            if let Some(proofs) = group.member_refs().get(&agent_id) {
+            if let Some(proofs) = group.borrow().members().get(&agent_id) {
                 for proof in proofs {
-                    explore.push((Focus::Group(group), proof.payload().can));
+                    explore.push((group.clone(), proof.payload().can));
                 }
             }
         }
@@ -146,7 +134,7 @@ impl<'a, T: ContentRef> Context<'a, T> {
 
                 let doc_id = doc.doc_id();
 
-                if let Some(proofs) = doc.member_refs().get(&agent_id) {
+                if let Some(proofs) = doc.members().get(&agent_id) {
                     for proof in proofs {
                         caps.insert(doc_id, (doc, proof.payload().can));
                     }
@@ -154,17 +142,17 @@ impl<'a, T: ContentRef> Context<'a, T> {
             }
 
             for (group_id, focus_group) in self.groups.iter() {
-                if seen.contains(&focus_group.agent_id()) {
+                if seen.contains(&focus_group.borrow().agent_id()) {
                     continue;
                 }
 
-                if group.id() == (*group_id).into() {
+                if group.borrow().id() == (*group_id).into() {
                     continue;
                 }
 
-                if let Some(proofs) = focus_group.member_refs().get(&agent_id) {
+                if let Some(proofs) = focus_group.borrow().members().get(&agent_id) {
                     for proof in proofs {
-                        explore.push((Focus::Group(focus_group), proof.payload().can));
+                        explore.push((focus_group.clone(), proof.payload().can));
                     }
                 }
             }
@@ -174,9 +162,9 @@ impl<'a, T: ContentRef> Context<'a, T> {
     }
 
     pub fn transitive_members(
-        &'a self,
-        membered: &'a Membered<'a, T>,
-    ) -> BTreeMap<AgentId, (Agent<'a, T>, Access)> {
+        &self,
+        membered: &Membered<T>,
+    ) -> BTreeMap<AgentId, (Agent<T>, Access)> {
         match membered {
             Membered::Group(group) => self.groups.transitive_members(group),
             Membered::Document(doc) => self.docs.transitive_members(doc),
@@ -184,14 +172,14 @@ impl<'a, T: ContentRef> Context<'a, T> {
     }
 }
 
-impl<'a, T: ContentRef> Verifiable for Context<'a, T> {
+impl<T: ContentRef> Verifiable for Context<T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.active.verifying_key()
     }
 }
 
-impl<'a, T: ContentRef> From<&'a Context<'a, T>> for Agent<'a, T> {
-    fn from(context: &'a Context<T>) -> Self {
-        (&context.active).into()
+impl<T: ContentRef> From<&Context<T>> for Agent<T> {
+    fn from(context: &Context<T>) -> Self {
+        context.active.clone().into()
     }
 }

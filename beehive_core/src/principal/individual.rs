@@ -133,7 +133,6 @@ mod tests {
     #[test]
     fn test_to_bytes() {
         let id = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()).verifying_key();
-
         let individual: Individual = id.into();
         assert_eq!(individual.id.to_bytes(), id.to_bytes());
     }

@@ -10,7 +10,6 @@ use crate::{
 };
 use base64::prelude::*;
 use nonempty::NonEmpty;
-use serde::Serialize;
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
