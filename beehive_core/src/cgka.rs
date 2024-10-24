@@ -4,18 +4,25 @@ pub mod change;
 pub mod secret_store;
 pub mod treemath;
 
+use std::collections::BTreeMap;
+
 use beekem::{BeeKEM, PublicKey, SecretKey};
 use bincode;
 use error::CGKAError;
 use change::{CGKAChange, CGKAOperation, TreePath};
+use secret_store::SecretKeyMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{crypto::hash::Hash, principal::identifier::Identifier};
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct CGKA {
     owner_id: Identifier,
     owner_pk: PublicKey,
+    // TODO: How do we safely store these in memory?
+    // Would it be better for this to be a new type to hide the fact we
+    // need to convert the PublicKey to bytes for the key?
+    owner_sks: SecretKeyMap,
     tree: BeeKEM,
 }
 
@@ -31,29 +38,48 @@ impl CGKA {
         if !participants.iter().any(|(id, pk)| *id == owner_id && *pk == owner_pk) {
             return Err(CGKAError::OwnerIdentifierNotFound);
         }
-        let mut tree = BeeKEM::new(participants)?;
-        tree.encrypt_path(owner_id, owner_pk, owner_sk)?;
-        Ok(Self {
+        let tree = BeeKEM::new(participants)?;
+        let mut owner_sks = SecretKeyMap::new();
+        owner_sks.insert(owner_pk, owner_sk);
+        let mut cgka = Self {
             owner_id,
             owner_pk,
+            owner_sks,
             tree,
-        })
+        };
+        cgka.tree.encrypt_path(owner_id, owner_pk, &mut cgka.owner_sks)?;
+        Ok(cgka)
     }
 
-    pub fn with_new_owner_id(&self, my_id: Identifier) -> Result<Self, CGKAError> {
+    pub fn with_new_owner(&self, my_id: Identifier, pk: PublicKey, sk: SecretKey) -> Result<Self, CGKAError> {
+        // TODO: Is the first public key the right thing to check? What about with conflicts?
+        if !(pk == self.tree.multikey_for_id(my_id)?.first_public_key()) {
+            return Err(CGKAError::PublicKeyNotFound);
+        }
         let mut cgka = self.clone();
         cgka.owner_id = my_id;
-        cgka.owner_pk = *cgka.tree.multikey_for_id(my_id)?;
+        cgka.owner_pk = pk;
+        cgka.owner_sks = SecretKeyMap::new();
+        cgka.owner_sks.insert(pk, sk);
         Ok(cgka)
     }
 }
 
+// TODO: Do we need this?
+// impl Debug for LeafNode {
+//   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+//     f.debug_struct("CGKA")
+//       .field("owner_id", &self.owner_id)
+//       .finish()
+//   }
+// }
+
 /// Public CGKA operations
 impl CGKA {
     /// Get secret for decryption/encryption.
-    pub fn secret(&mut self, owner_sk: SecretKey) -> Result<SecretKey, CGKAError> {
+    pub fn secret(&mut self) -> Result<SecretKey, CGKAError> {
         // Work from my leaf index up
-        self.tree.decrypt_tree_secret(self.owner_id, owner_sk)
+        self.tree.decrypt_tree_secret(self.owner_id, &mut self.owner_sks)
     }
 
     /// Add participant.
@@ -64,7 +90,7 @@ impl CGKA {
         owner_sk: SecretKey,
     ) -> Result<Option<CGKAChange>, CGKAError> {
         let leaf_index = self.tree.push_leaf(id, pk)?;
-        let (owner_path, undo) = self.tree.encrypt_path(self.owner_id, self.owner_pk, owner_sk)?;
+        let (owner_path, undo) = self.tree.encrypt_path(self.owner_id, self.owner_pk, &mut self.owner_sks)?;
         let op = CGKAOperation::Add{ id, pk, leaf_index, owner_path };
         // TODO: When should this be None? For example, if we've already applied this
         // add.
@@ -77,7 +103,7 @@ impl CGKA {
             return Err(CGKAError::RemoveLastMember);
         }
         let leaf_index = self.tree.remove_id(id)?;
-        let (owner_path, undo) = self.tree.encrypt_path(self.owner_id, self.owner_pk, owner_sk)?;
+        let (owner_path, undo) = self.tree.encrypt_path(self.owner_id, self.owner_pk, &mut self.owner_sks)?;
         let op = CGKAOperation::Remove { id, leaf_index, owner_path };
         // TODO: When should this be None? For example, if we've already applied this
         // remove.
@@ -92,7 +118,8 @@ impl CGKA {
         new_pk: PublicKey,
         new_sk: SecretKey,
     ) -> Result<Option<CGKAChange>, CGKAError> {
-        let (new_path, undo) = self.tree.encrypt_path(id, new_pk, new_sk)?;
+        self.owner_sks.insert(new_pk, new_sk);
+        let (new_path, undo) = self.tree.encrypt_path(id, new_pk, &mut self.owner_sks)?;
         if id == self.owner_id {
             self.owner_pk = new_pk;
         }
@@ -227,8 +254,8 @@ mod tests {
         let mut count = 0;
         for p in participants {
             count += 1;
-            cgka = cgka.with_new_owner_id(p.id)?;
-            let secret = cgka.secret(p.sk.clone())?;
+            cgka = cgka.with_new_owner(p.id, p.pk, p.sk.clone())?;
+            let secret = cgka.secret()?;
             assert_eq!(msg, decrypt_msg(encrypted.clone(), secret)?)
         }
         Ok(())
@@ -237,7 +264,7 @@ mod tests {
     fn update_every_path(cgka: &CGKA, participants: &Vec<Participant>) -> Result<(), CGKAError> {
         let mut cgka = cgka.clone();
         for p in participants {
-            cgka = cgka.with_new_owner_id(p.id)?;
+            cgka = cgka.with_new_owner(p.id, p.pk, p.sk.clone())?;
             cgka.update(p.id, p.pk, p.sk.clone())?;
         }
         Ok(())
@@ -261,14 +288,14 @@ mod tests {
             println!("My sk: {:?}", p.sk.to_bytes());
             count += 1;
             println!("\n-- with_new_owner");
-            cgka = cgka.with_new_owner_id(p.id)?;
+            cgka = cgka.with_new_owner(p.id, p.pk, p.sk.clone())?;
             println!("\n-- update");
             let (new_pk, new_sk) = key_pair();
             p.pk = new_pk;
             p.sk = new_sk.clone();
             cgka.update(p.id, new_pk, new_sk.clone())?;
             println!("\n-- get secret");
-            let secret = cgka.secret(new_sk.clone())?;
+            let secret = cgka.secret()?;
             msg += &n.to_string();
             println!("\n-- > encrypt_msg");
             let encrypted = encrypt_msg(&msg, secret)?;
@@ -316,10 +343,10 @@ mod tests {
         let mut cgka = setup_cgka(&participants, 0);
         let me = participants[0].clone();
         cgka.update(me.id, me.pk, me.sk.clone())?;
-        let secret = cgka.secret(me.sk.clone())?;
+        let secret = cgka.secret()?;
         let msg = "This is a message.";
         let encrypted = encrypt_msg(msg, secret)?;
-        let secret2 = cgka.secret(me.sk)?;
+        let secret2 = cgka.secret()?;
         assert_eq!(msg, &decrypt_msg(encrypted, secret2)?);
         Ok(())
     }
@@ -328,15 +355,16 @@ mod tests {
     fn test_simple_encrypt_and_decrypt() -> Result<(), CGKAError> {
         let participants = setup_participants(2);
         let mut cgka = setup_cgka(&participants, 0);
-        let (me_pk, me_sk) = key_pair();
-        cgka.update(participants[0].id, me_pk, me_sk.clone())?;
-        let (p1_pk, p1_sk) = key_pair();
-        cgka.update(participants[1].id, p1_pk, p1_sk.clone())?;
-        let secret = cgka.secret(me_sk)?;
+        let (new_me_pk, new_me_sk) = key_pair();
+        cgka.update(participants[0].id, new_me_pk, new_me_sk.clone())?;
+        let (new_p1_pk, new_p1_sk) = key_pair();
+        cgka.update(participants[1].id, new_p1_pk, new_p1_sk.clone())?;
+        let secret = cgka.secret()?;
         let msg = "This is a message.";
         let encrypted = encrypt_msg(msg, secret)?;
-        let mut cgka2 = cgka.with_new_owner_id(participants[1].id)?;
-        let secret2 = cgka2.secret(p1_sk)?;
+        let p1 = participants[1].clone();
+        let mut cgka2 = cgka.with_new_owner(p1.id, new_p1_pk, new_p1_sk.clone())?;
+        let secret2 = cgka2.secret()?;
         assert_eq!(msg, &decrypt_msg(encrypted, secret2)?);
         Ok(())
     }
@@ -366,7 +394,7 @@ mod tests {
         let new_p = setup_participant();
         participants.push(new_p.clone());
         cgka.add(new_p.id, new_p.pk, participants[0].sk.clone())?;
-        cgka.with_new_owner_id(new_p.id)?
+        cgka.with_new_owner(new_p.id, new_p.pk, new_p.sk.clone())?
             .update(new_p.id, new_p.pk, new_p.sk.clone())?;
         each_encrypts_and_all_decrypt(&cgka, &participants)
     }
@@ -390,7 +418,7 @@ mod tests {
         let mut cgka = setup_cgka(&participants, 0);
         update_every_path(&cgka, &participants)?;
         let new_owner = participants[4].clone();
-        cgka = cgka.with_new_owner_id(new_owner.id)?;
+        cgka = cgka.with_new_owner(new_owner.id, new_owner.pk, new_owner.sk.clone())?;
         let mut new_participants = Vec::new();
         for (idx, p) in participants.iter().enumerate() {
             if idx < 4 {
@@ -418,8 +446,8 @@ mod tests {
         let p7 = participants[1].clone();
         let initial_cgka = setup_cgka(&participants, 0);
         update_every_path(&initial_cgka, &participants)?;
-        let mut p5_cgka = initial_cgka.with_new_owner_id(p5.id)?;
-        let mut p7_cgka = initial_cgka.with_new_owner_id(p7.id)?;
+        let mut p5_cgka = initial_cgka.with_new_owner(p5.id, p5.pk, p5.sk.clone())?;
+        let mut p7_cgka = initial_cgka.with_new_owner(p7.id, p7.pk, p7.sk.clone())?;
         assert_eq!(p5_cgka.tree.hash(), p7_cgka.tree.hash());
 
         let (p5_pk, p5_sk) = key_pair();

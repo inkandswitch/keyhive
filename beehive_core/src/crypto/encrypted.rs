@@ -1,5 +1,7 @@
 //! Ciphertext with public metadata.
 
+use crate::cgka::beekem::PublicKey;
+
 use super::siv::Siv;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
@@ -31,10 +33,14 @@ impl<T> Encrypted<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NestedEncrypted<T> {
     /// The nonce used to encrypt the data.
     pub nonces: Vec<Siv>,
+
+    /// The public keys the encrypter used as DH partners when doing the
+    /// nested encryption.
+    pub paired_pks: Vec<PublicKey>,
 
     /// The encrypted data.
     pub ciphertext: Vec<u8>,
@@ -45,9 +51,10 @@ pub struct NestedEncrypted<T> {
 
 impl<T> NestedEncrypted<T> {
     /// Associate a nonce with a ciphertext and assert the plaintext type.
-    pub fn new(nonces: Vec<Siv>, ciphertext: Vec<u8>) -> Self {
+    pub fn new(nonces: Vec<Siv>, paired_pks: Vec<PublicKey>, ciphertext: Vec<u8>) -> Self {
         Self {
             nonces,
+            paired_pks,
             ciphertext,
             _plaintext_tag: PhantomData,
         }

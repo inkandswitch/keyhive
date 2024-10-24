@@ -1,7 +1,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum CGKAError {
     // FIXME: This is a placeholder to get things to compile
-    #[error("Conversion failed")]
+    #[error("Conversion to [u8; 32] failed")]
     Conversion,
 
     #[error("Decryption failed: {0}")]
@@ -27,6 +27,9 @@ pub enum CGKAError {
 
     #[error("PublicKey not found")]
     PublicKeyNotFound,
+
+    #[error("SecretKey not found")]
+    SecretKeyNotFound,
 
     #[error("Tried to remove last member from group")]
     RemoveLastMember,

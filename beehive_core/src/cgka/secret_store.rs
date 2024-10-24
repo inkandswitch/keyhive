@@ -26,7 +26,9 @@
 /// * * On a merge, the merger might not have the conflict node on its path.
 /// * *
 ///
-///
+/// * Invariants
+/// * * I should always have the secret keys I need to decrypt my path, even when there
+///     are conflicts along it. That's because I will have every update made at my leaf.
 ///
 
 
@@ -39,69 +41,116 @@ use crate::crypto::{encrypted::{Encrypted, NestedEncrypted}, siv::Siv, symmetric
 
 use super::{beekem::{PublicKey, SecretKey}, error::CGKAError, treemath::TreeNodeIndex};
 
+#[derive(Clone, Deserialize, Serialize)]
+pub struct SecretKeyMap(BTreeMap<Vec<u8>, SecretKey>);
+
+impl SecretKeyMap {
+    pub fn new() -> Self {
+        SecretKeyMap(BTreeMap::new())
+    }
+
+    pub fn insert(&mut self, pk: PublicKey, sk: SecretKey) {
+        self.0.insert(pk_to_bytes(&pk), sk);
+    }
+
+    pub fn get(&self, pk: &PublicKey) -> Option<&SecretKey> {
+        self.0.get(&pk_to_bytes(pk))
+    }
+
+    pub fn contains_key(&self, pk: &PublicKey) -> bool {
+        self.0.contains_key(&pk_to_bytes(pk))
+    }
+}
+
+fn pk_to_bytes(pk: &PublicKey) -> Vec<u8> {
+    pk.to_bytes().into()
+}
+
+
 #[derive(Clone, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Multikey {
     /// Invariant: PublicKeys must be in lexicographic order
-    pub keys: Vec<KeyWithEncryptingPair>,
+    pub keys: Vec<PublicKey>,
 }
 
 impl Multikey {
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
     pub fn has_conflict(&self) -> bool {
         self.keys.len() > 1
     }
 
-    pub fn push(&mut self, key: PublicKey, encrypter_pair_pk: PublicKey) {
-        self.keys.push(KeyWithEncryptingPair { key, encrypter_pair_pk });
+    pub fn push(&mut self, key: PublicKey) {
+        self.keys.push(key);
+    }
+
+    pub fn contains(&self, pk: &PublicKey) -> bool {
+        self.keys.contains(pk)
     }
 
     pub fn first_public_key(&self) -> PublicKey {
         debug_assert!(self.keys.len() > 0);
-        self.keys[0].key
+        self.keys[0]
     }
 
-    pub fn public_keys(&self) -> impl Iterator<Item = &PublicKey> {
-        self.keys.iter().map(|kep| &kep.key)
+    pub fn keys(&self) -> impl Iterator<Item = &PublicKey> {
+        self.keys.iter()
     }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
-pub struct KeyWithEncryptingPair {
-    pub key: PublicKey,
-    pub encrypter_pair_pk: PublicKey,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct SecretStore {
+    /// The PublicKeys corresponding to the versions.
+    /// Every encrypted secret key (and hence version) corresponds to a single public key.
+    multikey: Multikey,
     /// Invariant: there should always be at least one
     versions: Vec<SecretStoreVersion>,
 }
 
 impl SecretStore {
     // TODO: Constructor
+    pub fn new(pk: PublicKey, encrypter_pk: PublicKey, encrypter_paired_pk: Option<Multikey>, sk: BTreeMap<TreeNodeIndex, NestedEncrypted<SecretKey>>) -> Self {
+        let multikey = Multikey { keys: vec![pk] };
+        let version = SecretStoreVersion {
+            sk,
+            encrypter_pk,
+            encrypter_paired_multikey: encrypter_paired_pk,
+        };
+        Self {
+            multikey,
+            versions: vec![version],
+        }
+    }
+
+    pub fn has_conflict(&self) -> bool {
+        self.versions.len() > 1
+    }
+
+    pub fn multikey(&self) -> &Multikey {
+        &self.multikey
+    }
 
     // TODO: Handle multiple child pks
-    pub fn decrypt_secret(&self, child_idx: TreeNodeIndex, child_pk: PublicKey, child_sks: &mut BTreeMap<Vec<u8>, SecretKey>) -> Result<SecretKey, CGKAError> {
+    pub fn decrypt_secret(&self, child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &mut SecretKeyMap) -> Result<SecretKey, CGKAError> {
         if self.has_conflict() {
             return Err(CGKAError::UnexpectedKeyConflict);
         }
         // TODO: Should we just use the map instead of returning a secret. And then we just
         // call the decrypt_undecrypted_secrets method here?
-        self.versions[0].decrypt_secret(child_idx, child_pk, child_sks)
+        self.versions[0].decrypt_secret(child_idx, child_multikey, child_sks)
     }
 
-    pub fn decrypt_undecrypted_secrets(&self, child_idx: TreeNodeIndex, child_pk: PublicKey, child_sks: &BTreeMap<Vec<u8>, SecretKey>) -> Result<(), CGKAError> {
-        for version in self.versions {
-            let pk_bytes: Vec<u8> = version.pk.to_bytes().into(); =
-            if !child_sks.contains(&pk_bytes) {
-                let secret = version.decrypt_secret(child_idx, child_pk, child_sks)?;
-                child_sks.insert(pk_bytes, secret);
+    pub fn decrypt_undecrypted_secrets(&self, child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &mut SecretKeyMap) -> Result<(), CGKAError> {
+        debug_assert_eq!(self.multikey.len(), self.versions.len());
+        for (pk, version) in self.multikey.keys().zip(&self.versions) {
+            if !child_sks.contains_key(pk) {
+                let secret = version.decrypt_secret(child_idx, child_multikey, child_sks)?;
+                child_sks.insert(*pk, secret);
             }
         }
         Ok(())
-    }
-
-    pub fn has_conflict(&self) -> bool {
-        self.versions.len() > 1
     }
 
     pub fn single_pk(&self) -> Option<PublicKey> {
@@ -109,15 +158,13 @@ impl SecretStore {
         if self.has_conflict() {
             None
         } else {
-            Some(self.versions[0].pk)
+            Some(self.multikey.first_public_key())
         }
     }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct SecretStoreVersion {
-    /// Every encrypted secret key corresponds to a single public key.
-    pub pk: PublicKey,
     /// This is a map in order to handle the case of blank siblings, when we must encrypt
     /// the same secret key separately for each public key in the sibling resolution.
     pub sk: BTreeMap<TreeNodeIndex, NestedEncrypted<SecretKey>>,
@@ -127,7 +174,7 @@ pub struct SecretStoreVersion {
     /// Otherwise, it represents the first node in the sibling resolution, which the
     /// encrypter used for its own Diffie Hellman shared secret.
     /// Invariant: PublicKeys must be in lexicographic order
-    pub encrypter_paired_pk: Option<Multikey>,
+    pub encrypter_paired_multikey: Option<Multikey>,
 }
 
 impl SecretStoreVersion {
@@ -145,39 +192,34 @@ impl SecretStoreVersion {
     // }
 
     // TODO: Handle multiple child pks
-    pub fn decrypt_secret(&self, child_idx: TreeNodeIndex, child_pk: PublicKey, child_sks: &BTreeMap<Vec<u8>, SecretKey>) -> Result<SecretKey, CGKAError> {
-        let is_encrypter = child_pk == self.encrypter_pk;
+    pub fn decrypt_secret(&self, child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &SecretKeyMap) -> Result<SecretKey, CGKAError> {
+        let is_encrypter = child_multikey.contains(&self.encrypter_pk);
         let encrypted = self.sk.get(&child_idx)
             // FIXME: Pick a better error
             .ok_or(CGKAError::IdentifierNotFound)?;
         let decrypt_keys: Vec<SecretKey> = if is_encrypter {
-            let child_pk_bytes: Vec<u8> = child_pk.to_bytes().into();
-            let secret_key = child_sks.get(&child_pk_bytes)
-                .ok_or(CGKAError::PublicKeyNotFound)?;
-            if let Some(pair_keys) = &self.encrypter_paired_pk {
+            let secret_key = child_sks.get(&self.encrypter_pk)
+                .ok_or(CGKAError::SecretKeyNotFound)?;
+            if let Some(pair_keys) = &self.encrypter_paired_multikey {
                 pair_keys
                     .keys
                     .iter()
-                    .map(|kep| generate_shared_key(&kep.encrypter_pair_pk, secret_key.clone()))
+                    // TODO: Should this be kep.encrypter_paried_pk?
+                    .map(|pk| generate_shared_key(&pk, secret_key))
                     .collect()
             } else {
                 vec![secret_key.clone()]
             }
         } else {
-            // Since we're not the encrypter, there must be paired public keys.
-            let Some(ref pair_keys) = self.encrypter_paired_pk else {
-                return Err(CGKAError::PublicKeyNotFound);
-            };
-            pair_keys
-                .keys
+            encrypted
+                .paired_pks
                 .iter()
-                .map(|kep| {
-                    let encrypter_pair_pk_bytes: Vec<u8> = kep.encrypter_pair_pk.to_bytes().into();
-                    let secret_key_result = child_sks.get(&encrypter_pair_pk_bytes);
+                .map(|pk| {
+                    let secret_key_result = child_sks.get(&pk);
                     if let Some(secret_key) = secret_key_result {
-                        Ok(generate_shared_key(&self.encrypter_pk, secret_key.clone()))
+                        Ok(generate_shared_key(&self.encrypter_pk, secret_key))
                     } else {
-                        Err(CGKAError::PublicKeyNotFound)
+                        Err(CGKAError::SecretKeyNotFound)
                     }
                 })
                 .collect::<Result<Vec<StaticSecret>, CGKAError>>()?
@@ -214,7 +256,7 @@ fn decrypt_layer(
         .decrypt(*nonce, &ciphertext)
         .map_err(|e| CGKAError::Decryption(e.to_string()))?
         .try_into()
-        .map_err(|e| CGKAError::Conversion)
+        .map_err(|_e| CGKAError::Conversion)
 }
 
 fn generate_shared_key(their_public_key: &PublicKey, my_secret: &SecretKey) -> SecretKey {
