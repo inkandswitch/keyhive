@@ -426,31 +426,24 @@ mod tests {
         let p5 = participants[5].clone();
         let p6 = participants[6].clone();
         let initial_cgka = setup_cgka(&participants, 0);
-        println!("1");
         update_every_path(&initial_cgka, &participants)?;
         let mut p5_cgka = initial_cgka.with_new_owner(p5.id, p5.pk, p5.sk.clone())?;
         let mut p6_cgka = initial_cgka.with_new_owner(p6.id, p6.pk, p6.sk.clone())?;
-        println!("2");
         assert_eq!(p5_cgka.secret()?.to_bytes(), p6_cgka.secret()?.to_bytes());
         let (p5_pk, p5_sk) = key_pair();
         let p5_change = p5_cgka.update(p5.id, p5_pk, p5_sk)?.expect("Should have message");
-        println!("3");
         assert_ne!(p5_cgka.secret()?.to_bytes(), p6_cgka.secret()?.to_bytes());
         p6_cgka.merge(p5_change)?;
-        println!("4");
         assert_eq!(p5_cgka.secret()?.to_bytes(), p6_cgka.secret()?.to_bytes());
         let (p6_pk, p6_sk) = key_pair();
         let p6_change = p6_cgka.update(p6.id, p6_pk, p6_sk)?.expect("Should have message");
-        println!("5");
         assert_ne!(p5_cgka.secret()?.to_bytes(), p6_cgka.secret()?.to_bytes());
         p5_cgka.merge(p6_change)?;
-        println!("6");
         p6_cgka.secret()?;
-        println!("6a");
+        println!("a");
         p5_cgka.secret()?;
-        println!("6b");
+        println!("b");
         assert_eq!(p5_cgka.secret()?.to_bytes(), p6_cgka.secret()?.to_bytes());
-        println!("7");
 
         Ok(())
     }
