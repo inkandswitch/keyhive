@@ -58,9 +58,32 @@ use crate::{
     principal::identifier::Identifier,
 };
 
-use super::{change::{CGKAChange, TreePath}, error::CGKAError, secret_store::{Multikey, SecretKeyMap, SecretStore}, treemath};
+use super::{error::CGKAError, secret_store::{Multikey, SecretKeyMap, SecretStore}, treemath, CGKA};
 pub type PublicKey = x25519_dalek::PublicKey;
 pub type SecretKey = x25519_dalek::StaticSecret;
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct TreeChange {
+    // /// The id of the one who initiated the change.
+    // pub changer_id: Identifier,
+    pub prev_tree_hash: Hash<BeeKEM>,
+    // /// The new operation we're applying
+    // pub op: CGKAOperation,
+    /// The new path that was applied.
+    pub new_path: TreePath,
+    /// The path that is being replaced.
+    /// In order to rewind, we need the specific public keys along the path, which could
+    /// potentially only be reconstructed by replaying from the beginning otherwise.
+    pub undo: TreePath,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct TreePath {
+    pub leaf_id: Identifier,
+    pub leaf_idx: u32,
+    pub leaf_pk: PublicKey,
+    pub path: Vec<(u32, Option<ParentNode>)>,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct BeeKEM {
@@ -281,15 +304,18 @@ impl BeeKEM {
         id: Identifier,
         pk: PublicKey,
         sks: &mut SecretKeyMap,
-    ) -> Result<(TreePath, TreePath), CGKAError> {
+    ) -> Result<TreeChange, CGKAError> {
+        let prev_tree_hash = self.hash();
         let leaf_idx = *self.leaf_index_for_id(id)?;
         let mut new_path = TreePath {
+            leaf_id: id,
             leaf_idx: leaf_idx.u32(),
             // TODO: Does this need to be a multikey?
             leaf_pk: pk,
             path: Vec::new(),
         };
         let mut undo_path = TreePath {
+            leaf_id: id,
             leaf_idx: leaf_idx.u32(),
             // TODO: What should this be?
             leaf_pk: self.multikey_for_id(id)?.first_public_key(),
@@ -322,8 +348,56 @@ impl BeeKEM {
             child_sk = new_parent_sk;
             parent_idx = treemath::parent(child_idx);
         }
-        Ok((new_path, undo_path))
+        Ok(TreeChange {
+            prev_tree_hash,
+            new_path,
+            undo: undo_path,
+        })
     }
+
+    fn validate_change(&self, leaf_id: Identifier, change: &TreeChange) -> Result<(), CGKAError> {
+        // TODO: Should we verify that the path is the same as the direct path
+        // from the leaf?
+        if change.new_path.path.len() != self.path_length_for(LeafNodeIndex::new(change.new_path.leaf_idx)) {
+            return Err(CGKAError::InvalidPathLength);
+        }
+        if leaf_id != change.new_path.leaf_id {
+            return Err(CGKAError::IdentifierNotFound);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn overwrite_path(&mut self, change: TreeChange) -> Result<(), CGKAError> {
+        let leaf_idx = LeafNodeIndex::new(change.new_path.leaf_idx);
+        let leaf_id = self.leaf(leaf_idx)?.as_ref().ok_or(CGKAError::IdentifierNotFound)?.id;
+        self.validate_change(leaf_id, &change)?;
+        self.insert_leaf_at(leaf_idx, leaf_id, change.new_path.leaf_pk)?;
+        for (idx, node) in change.new_path.path {
+            let p_idx = ParentNodeIndex::new(idx);
+            if let Some(p_node) = node {
+                self.insert_parent_at(p_idx, p_node)?;
+            } else {
+                self.blank_parent(p_idx)?;
+            }
+        }
+        Ok(())
+    }
+
+    // pub(crate) fn apply_path(
+    //     &mut self,
+    //     change: TreeChange,
+    // ) -> Result<(), CGKAError> {
+    //     debug_assert_eq!(change.new_path.path.len(), change.undo.path.len());
+        // let leaf_idx = LeafNodeIndex::new(change.new_path.leaf_idx);
+    //     let leaf_id = self.leaf(leaf_idx)?.as_ref().ok_or(CGKAError::IdentifierNotFound)?.id;
+    //     self.validate_change(leaf_id, change)?;
+    //     for ((idx, node), (undo_idx, undo_node)) in change.new_path.path.iter().zip(change.undo.path) {
+    //         debug_assert_eq!(*idx, undo_idx);
+
+    //     }
+
+    //     Ok(())
+    // }
 
     pub(crate) fn has_root_key(&self) -> Result<bool, CGKAError> {
         let root_idx: TreeNodeIndex = treemath::root(self.tree_size);
@@ -336,35 +410,6 @@ impl BeeKEM {
         } else {
             false
         })
-    }
-
-    /// Overwrite all public keys on this path
-    pub(crate) fn apply_path(
-        &mut self,
-        id: Identifier,
-        path: TreePath,
-    ) -> Result<(), CGKAError> {
-        let leaf_idx = *self.leaf_index_for_id(id)?;
-        // TODO: Should we verify that the path is the same as the direct path
-        // from the leaf?
-        if path.path.len() != self.path_length_for(leaf_idx) {
-            return Err(CGKAError::InvalidPathLength);
-        }
-        if self.id_for_leaf(leaf_idx)? != id || leaf_idx.u32() != path.leaf_idx {
-            return Err(CGKAError::IdentifierNotFound);
-        }
-        self.insert_leaf_at(leaf_idx, id, path.leaf_pk)?;
-
-        for (idx, p_node) in path.path {
-            let p_idx = ParentNodeIndex::new(idx);
-            if let Some(node) = p_node {
-                self.insert_parent_at(p_idx, node.clone())?;
-            } else {
-                self.blank_parent(p_idx)?;
-            }
-        }
-
-        Ok(())
     }
 
     fn decrypt_parent_key(
