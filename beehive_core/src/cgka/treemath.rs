@@ -105,7 +105,7 @@ impl SubAssign<u32> for LeafNodeIndex {
 }
 
 /// ParentNodeIndex references a parent node in a tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ParentNodeIndex(u32);
 
 impl ParentNodeIndex {
@@ -203,7 +203,7 @@ impl From<ParentNodeIndex> for TreeNodeIndex {
 }
 
 /// TreeNodeIndex references a node in a tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TreeNodeIndex {
     Leaf(LeafNodeIndex),
     Parent(ParentNodeIndex),

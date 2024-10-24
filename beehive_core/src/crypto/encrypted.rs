@@ -33,7 +33,7 @@ impl<T> Encrypted<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NestedEncrypted<T> {
     /// The nonce used to encrypt the data.
     pub nonces: Vec<Siv>,

@@ -32,14 +32,14 @@
 ///
 
 
-use std::collections::BTreeMap;
+use std::{cmp::Ordering, collections::{BTreeMap, HashSet}, fmt::{self, Debug, Formatter}};
 
 use serde::{Deserialize, Serialize};
 use x25519_dalek::{x25519, StaticSecret};
 
 use crate::crypto::{encrypted::{Encrypted, NestedEncrypted}, siv::Siv, symmetric_key::SymmetricKey};
 
-use super::{beekem::{PublicKey, SecretKey}, error::CGKAError, treemath::TreeNodeIndex};
+use super::{beekem::{PublicKey, SecretKey}, error::CGKAError, treemath::TreeNodeIndex, CGKA};
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct SecretKeyMap(BTreeMap<Vec<u8>, SecretKey>);
@@ -74,6 +74,12 @@ pub struct Multikey {
 }
 
 impl Multikey {
+    pub fn from_iter(keys_iter: impl Iterator<Item = PublicKey>) -> Self {
+        Self {
+            keys: keys_iter.collect()
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.keys.len()
     }
@@ -84,6 +90,10 @@ impl Multikey {
 
     pub fn push(&mut self, key: PublicKey) {
         self.keys.push(key);
+    }
+
+    pub fn append(&mut self, other: &Multikey) {
+        self.keys.append(&mut other.keys.clone());
     }
 
     pub fn contains(&self, pk: &PublicKey) -> bool {
@@ -100,10 +110,21 @@ impl Multikey {
     }
 }
 
+impl Debug for Multikey {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    f.debug_struct("Multikey")
+      .field("keys", &self.keys.iter().map(|pk| pk.to_bytes()))
+      .finish()
+  }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct SecretStore {
     /// The PublicKeys corresponding to the versions.
     /// Every encrypted secret key (and hence version) corresponds to a single public key.
+    // TODO: It's error prone to have to keep this in sync with the versions list.
+    // But if we don't, we always have to calculate the multikey from the pks of the
+    // versions when the multikey of a node is needed.
     multikey: Multikey,
     /// Invariant: there should always be at least one
     versions: Vec<SecretStoreVersion>,
@@ -112,14 +133,14 @@ pub struct SecretStore {
 impl SecretStore {
     // TODO: Constructor
     pub fn new(pk: PublicKey, encrypter_pk: PublicKey, encrypter_paired_pk: Option<Multikey>, sk: BTreeMap<TreeNodeIndex, NestedEncrypted<SecretKey>>) -> Self {
-        let multikey = Multikey { keys: vec![pk] };
         let version = SecretStoreVersion {
+            pk,
             sk,
             encrypter_pk,
             encrypter_paired_multikey: encrypter_paired_pk,
         };
         Self {
-            multikey,
+            multikey: Multikey { keys: vec![pk] },
             versions: vec![version],
         }
     }
@@ -161,10 +182,49 @@ impl SecretStore {
             Some(self.multikey.first_public_key())
         }
     }
+
+    // TODO: Is it possible we're bringing in duplicate keys here?
+    pub fn merge(&mut self, other: Option<&SecretStore>, replaced: Option<&SecretStore>) -> Result<(), CGKAError> {
+        if let Some(s) = replaced {
+            self.remove_keys_from(s)?;
+        }
+        if let Some(o) = other {
+            self.versions.append(&mut o.versions.clone());
+            // This will overwrite self.multikey
+            self.sort_keys();
+        }
+        Ok(())
+    }
+
+    // TODO: Make this more performant.
+    fn remove_keys_from(&mut self, replaced: &SecretStore) -> Result<(), CGKAError> {
+        let mut remove_idxs = HashSet::new();
+        let keys_to_remove: HashSet<&PublicKey> = replaced.multikey.keys().collect();
+        let mut new_keys = Vec::new();
+        let mut new_versions = Vec::new();
+        for (idx, key) in self.multikey.keys().enumerate() {
+            if keys_to_remove.contains(key) {
+                remove_idxs.insert(idx);
+            } else {
+                new_keys.push(*key);
+                new_versions.push(self.versions[idx].clone());
+            }
+        }
+        self.multikey = Multikey { keys: new_keys };
+        self.versions = new_versions;
+        Ok(())
+    }
+
+    fn sort_keys(&mut self) {
+        self.versions.sort();
+        self.multikey = Multikey::from_iter(self.versions.iter().map(|v| v.pk));
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct SecretStoreVersion {
+    /// Every encrypted secret key (and hence version) corresponds to a single public key.
+    pub pk: PublicKey,
     /// This is a map in order to handle the case of blank siblings, when we must encrypt
     /// the same secret key separately for each public key in the sibling resolution.
     pub sk: BTreeMap<TreeNodeIndex, NestedEncrypted<SecretKey>>,
@@ -178,25 +238,11 @@ pub struct SecretStoreVersion {
 }
 
 impl SecretStoreVersion {
-    // pub fn get_encrypted_secret(&self, idx: TreeNodeIndex) -> Result<NestedEncrypted<Secret>, CGKAError> {
-    //     self.sk
-    //         .get(&idx)
-    //         // FIXME: Pick a better error
-    //         .ok_or(CGKAError::IdentifierNotFound)
-    // }
-
-    // pub fn derive_shared_secret(&self, child_pk: PublicKey, child_sks: BTreeMap<PublicKey, SecretKey>) -> SecretKey {
-    //     let is_encrypter = child_pk == self.encrypter_pk;
-    //     // TODO: Starting with the simplest case where there are no resolutions
-    //     // Fix this.
-    // }
-
     // TODO: Handle multiple child pks
     pub fn decrypt_secret(&self, child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &SecretKeyMap) -> Result<SecretKey, CGKAError> {
         let is_encrypter = child_multikey.contains(&self.encrypter_pk);
         let encrypted = self.sk.get(&child_idx)
-            // FIXME: Pick a better error
-            .ok_or(CGKAError::IdentifierNotFound)?;
+            .ok_or(CGKAError::EncryptedSecretNotFound)?;
         let decrypt_keys: Vec<SecretKey> = if is_encrypter {
             let secret_key = child_sks.get(&self.encrypter_pk)
                 .ok_or(CGKAError::SecretKeyNotFound)?;
@@ -225,6 +271,28 @@ impl SecretStoreVersion {
                 .collect::<Result<Vec<StaticSecret>, CGKAError>>()?
         };
         decrypt_nested_secret(encrypted, decrypt_keys)
+    }
+}
+
+impl PartialEq for SecretStoreVersion {
+    fn eq(&self, other: &Self) -> bool {
+        self.pk == other.pk && self.encrypter_pk == other.encrypter_pk &&
+            self.encrypter_paired_multikey == other.encrypter_paired_multikey
+            // TODO: Hashes
+            // && self.sk.hash() == other.sk.hash()
+    }
+}
+impl Eq for SecretStoreVersion {}
+
+impl Ord for SecretStoreVersion {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.pk.to_bytes().cmp(&other.pk.to_bytes())
+    }
+}
+
+impl PartialOrd for SecretStoreVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 

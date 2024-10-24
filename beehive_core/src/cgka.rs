@@ -140,34 +140,7 @@ impl CGKA {
 
     /// Merge
     pub fn merge(&mut self, change: TreeChange) -> Result<(), CGKAError> {
-        if change.prev_tree_hash == self.tree.hash() {
-            self.tree.overwrite_path(change)?;
-        } else {
-            // self.tree.apply_change(change);
-            todo!()
-        }
-        Ok(())
-        // match change.op {
-        //     CGKAOperation::Add { id, pk, leaf_index, owner_path } => {
-        //         todo!()
-        //     },
-        //     CGKAOperation::Remove { id, leaf_index, owner_path } => {
-        //         todo!()
-        //     },
-        //     CGKAOperation::Update { id, new_path } => {
-        //         self.merge_update(change.changer_id, id, new_path)
-        //     }
-        // }
-    }
-
-    fn merge_update(&mut self, changer_id: Identifier, id: Identifier, new_path: TreePath) -> Result<Option<TreeChange>, CGKAError> {
-        // TODO: Should this be an error?
-        if changer_id == self.owner_id {
-            return Ok(None)
-        }
-
-        // FIXME
-        Ok(None)
+        self.tree.apply_path(change)
     }
 
     // /// Hash of the tree
@@ -449,24 +422,62 @@ mod tests {
 
     #[test]
     fn test_fork_update_and_merge() -> Result<(), CGKAError> {
-        let participants = setup_participants(8);
+        let participants = setup_participants(7);
         let p5 = participants[5].clone();
-        let p7 = participants[1].clone();
+        let p6 = participants[6].clone();
+        let initial_cgka = setup_cgka(&participants, 0);
+        println!("1");
+        update_every_path(&initial_cgka, &participants)?;
+        let mut p5_cgka = initial_cgka.with_new_owner(p5.id, p5.pk, p5.sk.clone())?;
+        let mut p6_cgka = initial_cgka.with_new_owner(p6.id, p6.pk, p6.sk.clone())?;
+        println!("2");
+        assert_eq!(p5_cgka.secret()?.to_bytes(), p6_cgka.secret()?.to_bytes());
+        let (p5_pk, p5_sk) = key_pair();
+        let p5_change = p5_cgka.update(p5.id, p5_pk, p5_sk)?.expect("Should have message");
+        println!("3");
+        assert_ne!(p5_cgka.secret()?.to_bytes(), p6_cgka.secret()?.to_bytes());
+        p6_cgka.merge(p5_change)?;
+        println!("4");
+        assert_eq!(p5_cgka.secret()?.to_bytes(), p6_cgka.secret()?.to_bytes());
+        let (p6_pk, p6_sk) = key_pair();
+        let p6_change = p6_cgka.update(p6.id, p6_pk, p6_sk)?.expect("Should have message");
+        println!("5");
+        assert_ne!(p5_cgka.secret()?.to_bytes(), p6_cgka.secret()?.to_bytes());
+        p5_cgka.merge(p6_change)?;
+        println!("6");
+        p6_cgka.secret()?;
+        println!("6a");
+        p5_cgka.secret()?;
+        println!("6b");
+        assert_eq!(p5_cgka.secret()?.to_bytes(), p6_cgka.secret()?.to_bytes());
+        println!("7");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fork_concurrent_updates_and_merge() -> Result<(), CGKAError> {
+        let participants = setup_participants(7);
+        let p5 = participants[5].clone();
+        let p6 = participants[6].clone();
         let initial_cgka = setup_cgka(&participants, 0);
         update_every_path(&initial_cgka, &participants)?;
         let mut p5_cgka = initial_cgka.with_new_owner(p5.id, p5.pk, p5.sk.clone())?;
-        let mut p7_cgka = initial_cgka.with_new_owner(p7.id, p7.pk, p7.sk.clone())?;
-        assert_eq!(p5_cgka.tree.hash(), p7_cgka.tree.hash());
+        let mut p6_cgka = initial_cgka.with_new_owner(p6.id, p6.pk, p6.sk.clone())?;
+        assert_eq!(p5_cgka.secret()?.to_bytes(), p6_cgka.secret()?.to_bytes());
         let (p5_pk, p5_sk) = key_pair();
         let p5_change = p5_cgka.update(p5.id, p5_pk, p5_sk)?.expect("Should have message");
-        assert_ne!(p5_cgka.tree.hash(), p7_cgka.tree.hash());
-        p7_cgka.merge(p5_change)?;
-        assert_eq!(p5_cgka.tree.hash(), p7_cgka.tree.hash());
-        let (p7_pk, p7_sk) = key_pair();
-        let p7_change = p7_cgka.update(p7.id, p7_pk, p7_sk)?.expect("Should have message");
-        assert_ne!(p5_cgka.tree.hash(), p7_cgka.tree.hash());
-        p5_cgka.merge(p7_change)?;
-        assert_eq!(p5_cgka.tree.hash(), p7_cgka.tree.hash());
+        let (p6_pk2, p6_sk2) = key_pair();
+        let _p6_change = p6_cgka.update(p6.id, p6_pk2, p6_sk2)?.expect("Should have message");
+        assert_ne!(p5_cgka.secret()?.to_bytes(), p6_cgka.secret()?.to_bytes());
+        p6_cgka.merge(p5_change)?;
+        assert!(!p6_cgka.tree.has_root_key()?);
+        let (p6_pk3, p6_sk3) = key_pair();
+        let p6_change2 = p6_cgka.update(p6.id, p6_pk3, p6_sk3)?.expect("Should have message");
+        assert!(p6_cgka.tree.has_root_key()?);
+        assert_ne!(p5_cgka.secret()?.to_bytes(), p6_cgka.secret()?.to_bytes());
+        p5_cgka.merge(p6_change2)?;
+        assert_eq!(p5_cgka.secret()?.to_bytes(), p6_cgka.secret()?.to_bytes());
 
         Ok(())
     }

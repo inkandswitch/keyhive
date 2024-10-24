@@ -10,6 +10,9 @@ pub enum CGKAError {
     #[error("Encryption failed: {0}")]
     Encryption(chacha20poly1305::Error),
 
+    #[error("Encrypted secret not found")]
+    EncryptedSecretNotFound,
+
     #[error("Identifier not found")]
     IdentifierNotFound,
 

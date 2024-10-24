@@ -64,11 +64,6 @@ pub type SecretKey = x25519_dalek::StaticSecret;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct TreeChange {
-    // /// The id of the one who initiated the change.
-    // pub changer_id: Identifier,
-    pub prev_tree_hash: Hash<BeeKEM>,
-    // /// The new operation we're applying
-    // pub op: CGKAOperation,
     /// The new path that was applied.
     pub new_path: TreePath,
     /// The path that is being replaced.
@@ -305,7 +300,6 @@ impl BeeKEM {
         pk: PublicKey,
         sks: &mut SecretKeyMap,
     ) -> Result<TreeChange, CGKAError> {
-        let prev_tree_hash = self.hash();
         let leaf_idx = *self.leaf_index_for_id(id)?;
         let mut new_path = TreePath {
             leaf_id: id,
@@ -349,7 +343,6 @@ impl BeeKEM {
             parent_idx = treemath::parent(child_idx);
         }
         Ok(TreeChange {
-            prev_tree_hash,
             new_path,
             undo: undo_path,
         })
@@ -383,21 +376,36 @@ impl BeeKEM {
         Ok(())
     }
 
-    // pub(crate) fn apply_path(
-    //     &mut self,
-    //     change: TreeChange,
-    // ) -> Result<(), CGKAError> {
-    //     debug_assert_eq!(change.new_path.path.len(), change.undo.path.len());
-        // let leaf_idx = LeafNodeIndex::new(change.new_path.leaf_idx);
-    //     let leaf_id = self.leaf(leaf_idx)?.as_ref().ok_or(CGKAError::IdentifierNotFound)?.id;
-    //     self.validate_change(leaf_id, change)?;
-    //     for ((idx, node), (undo_idx, undo_node)) in change.new_path.path.iter().zip(change.undo.path) {
-    //         debug_assert_eq!(*idx, undo_idx);
-
-    //     }
-
-    //     Ok(())
-    // }
+    pub(crate) fn apply_path(
+        &mut self,
+        change: TreeChange,
+    ) -> Result<(), CGKAError> {
+        debug_assert_eq!(change.new_path.path.len(), change.undo.path.len());
+        let leaf_idx = LeafNodeIndex::new(change.new_path.leaf_idx);
+        let leaf_id = self.leaf(leaf_idx)?.as_ref().ok_or(CGKAError::IdentifierNotFound)?.id;
+        // TODO: Handle conflicting keys
+        self.insert_leaf_at(leaf_idx, leaf_id, change.new_path.leaf_pk)?;
+        self.validate_change(leaf_id, &change)?;
+        for ((idx, node), (undo_idx, undo_node)) in change.new_path.path.iter().zip(change.undo.path).skip(1) {
+            debug_assert_eq!(*idx, undo_idx);
+            let p_idx = ParentNodeIndex::new(*idx);
+            let current_p_node = self.parent(p_idx)?;
+            let new_p_node = if let Some(current) = current_p_node {
+                // TODO: borrow mutably here and then we don't need to clone and insert
+                let mut p_node = current.clone();
+                p_node.merge(node.as_ref().map(|p| &p.secret_store), undo_node.as_ref().map(|p| &p.secret_store))?;
+                Some(p_node)
+            } else {
+                node.clone()
+            };
+            if let Some(parent) = new_p_node {
+                self.insert_parent_at(p_idx, parent)?;
+            } else {
+                self.blank_parent(p_idx)?;
+            }
+        }
+        Ok(())
+    }
 
     pub(crate) fn has_root_key(&self) -> Result<bool, CGKAError> {
         let root_idx: TreeNodeIndex = treemath::root(self.tree_size);
@@ -610,7 +618,7 @@ impl Debug for LeafNode {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ParentNode {
-    secret_store: SecretStore,
+    pub secret_store: SecretStore,
 
     // /// Invariant: PublicKeys must be in lexicographic order
     // pub pk: Multikey,
@@ -643,6 +651,10 @@ impl ParentNode {
 
     pub fn decrypt_undecrypted_secrets(&self, child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &mut SecretKeyMap) -> Result<(), CGKAError> {
         self.secret_store.decrypt_undecrypted_secrets(child_idx, child_multikey, child_sks)
+    }
+
+    pub fn merge(&mut self, other: Option<&SecretStore>, replaced: Option<&SecretStore>) -> Result<(), CGKAError> {
+        self.secret_store.merge(other, replaced)
     }
 
     // pub fn encrypter_pk(&self) -> PublicKey {
@@ -705,10 +717,6 @@ fn encrypt_bytes(
     let encrypted_secret = symmetric_key
         .encrypt(nonce.into(), bytes)
         .map_err(CGKAError::Encryption)?;
-    // println!("{:?}", encrypted_secret);
-    // let encrypted_secret_bytes: [u8; 32] = encrypted_secret
-    //     .try_into()
-    //     .map_err(|_e| CGKAError::Conversion)?;
     Ok((nonce.into(), encrypted_secret))
 }
 
