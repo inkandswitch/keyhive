@@ -470,7 +470,13 @@ mod tests {
         let participants = setup_participants(participant_count);
         // TODO: Remove
         if !removes.is_empty() {
-            println!("|||===== Removes: {:?}", removes.iter().map(|idx| (idx, participants[*idx].id.verifying_key)).collect::<Vec<(&usize, VerifyingKey)>>());
+            println!(
+                "|||===== Removes: {:?}",
+                removes
+                    .iter()
+                    .map(|idx| (idx, participants[*idx].id.verifying_key))
+                    .collect::<Vec<(&usize, VerifyingKey)>>()
+            );
         }
         let p_a = participants[p_idx_a].clone();
         let p_b = participants[p_idx_b].clone();
@@ -568,8 +574,20 @@ mod tests {
         _fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, true, Vec::new())?;
         _fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, false, Vec::new())?;
         if !removes.is_empty() {
-            _fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, true, removes.clone())?;
-            _fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, false, removes)?;
+            _fork_concurrent_updates_and_merge(
+                participant_count,
+                p_idx_a,
+                p_idx_b,
+                true,
+                removes.clone(),
+            )?;
+            _fork_concurrent_updates_and_merge(
+                participant_count,
+                p_idx_a,
+                p_idx_b,
+                false,
+                removes,
+            )?;
         }
         Ok(())
     }

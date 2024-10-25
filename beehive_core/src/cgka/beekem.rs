@@ -373,25 +373,25 @@ impl BeeKEM {
         Ok(())
     }
 
-    pub(crate) fn overwrite_path(&mut self, change: TreeChange) -> Result<(), CGKAError> {
-        let leaf_idx = LeafNodeIndex::new(change.new_path.leaf_idx);
-        let leaf_id = self
-            .leaf(leaf_idx)?
-            .as_ref()
-            .ok_or(CGKAError::IdentifierNotFound)?
-            .id;
-        self.validate_change(leaf_id, &change)?;
-        self.insert_leaf_at(leaf_idx, leaf_id, change.new_path.leaf_pk)?;
-        for (idx, node) in change.new_path.path {
-            let p_idx = ParentNodeIndex::new(idx);
-            if let Some(p_node) = node {
-                self.insert_parent_at(p_idx, p_node)?;
-            } else {
-                self.blank_parent(p_idx)?;
-            }
-        }
-        Ok(())
-    }
+    // pub(crate) fn overwrite_path(&mut self, change: TreeChange) -> Result<(), CGKAError> {
+    //     let leaf_idx = LeafNodeIndex::new(change.new_path.leaf_idx);
+    //     let leaf_id = self
+    //         .leaf(leaf_idx)?
+    //         .as_ref()
+    //         .ok_or(CGKAError::IdentifierNotFound)?
+    //         .id;
+    //     self.validate_change(leaf_id, &change)?;
+    //     self.insert_leaf_at(leaf_idx, leaf_id, change.new_path.leaf_pk)?;
+    //     for (idx, node) in change.new_path.path {
+    //         let p_idx = ParentNodeIndex::new(idx);
+    //         if let Some(p_node) = node {
+    //             self.insert_parent_at(p_idx, p_node)?;
+    //         } else {
+    //             self.blank_parent(p_idx)?;
+    //         }
+    //     }
+    //     Ok(())
+    // }
 
     pub(crate) fn apply_path(&mut self, change: TreeChange) -> Result<(), CGKAError> {
         println!("\n\n apply_path(): ");
@@ -762,21 +762,6 @@ fn generate_shared_key(their_public_key: &PublicKey, my_secret: &SecretKey) -> S
     x25519(my_secret.to_bytes(), their_public_key.to_bytes()).into()
 }
 
-fn encrypt_secret(
-    secret: SecretKey,
-    encrypt_key: SecretKey,
-) -> Result<Encrypted<SecretKey>, CGKAError> {
-    let mut nonce = [0u8; 24];
-    rand::thread_rng().fill_bytes(&mut nonce);
-    let symmetric_key = SymmetricKey::from(encrypt_key.to_bytes());
-    let encrypted_secret_bytes = symmetric_key
-        .encrypt(nonce.into(), secret.as_bytes())
-        .map_err(CGKAError::Encryption)?;
-    let encrypted_secret: Encrypted<SecretKey> =
-        Encrypted::new(nonce.into(), encrypted_secret_bytes);
-    Ok(encrypted_secret)
-}
-
 fn encrypt_bytes(bytes: &[u8], encrypt_key: &SecretKey) -> Result<(Siv, Vec<u8>), CGKAError> {
     let mut nonce = [0u8; 24];
     rand::thread_rng().fill_bytes(&mut nonce);
@@ -804,18 +789,5 @@ fn encrypt_nested_secret(
     let encrypted_secret: NestedEncrypted<SecretKey> =
         NestedEncrypted::new(nonces, paired_pks, encrypted_secret_bytes);
     Ok(encrypted_secret)
-}
-
-fn decrypt_secret(
-    encrypted: &Encrypted<SecretKey>,
-    decrypt_key: SecretKey,
-) -> Result<SecretKey, CGKAError> {
-    let symmetric_key = SymmetricKey::from(decrypt_key.to_bytes());
-    let decrypted_bytes: [u8; 32] = symmetric_key
-        .decrypt(encrypted.nonce, &encrypted.ciphertext)
-        .map_err(|e| CGKAError::Decryption(e.to_string()))?
-        .try_into()
-        .map_err(|_e| CGKAError::Conversion)?;
-    Ok(StaticSecret::from(decrypted_bytes))
 }
 //////////////////////////////////////////////////////////////////
