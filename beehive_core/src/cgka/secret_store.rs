@@ -30,16 +30,27 @@
 /// * * I should always have the secret keys I need to decrypt my path, even when there
 ///     are conflicts along it. That's because I will have every update made at my leaf.
 ///
-
-
-use std::{cmp::Ordering, collections::{BTreeMap, HashSet}, fmt::{self, Debug, Formatter}};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, HashSet},
+    fmt::{self, Debug, Formatter},
+};
 
 use serde::{Deserialize, Serialize};
 use x25519_dalek::{x25519, StaticSecret};
 
-use crate::crypto::{encrypted::{Encrypted, NestedEncrypted}, siv::Siv, symmetric_key::SymmetricKey};
+use crate::crypto::{
+    encrypted::{Encrypted, NestedEncrypted},
+    siv::Siv,
+    symmetric_key::SymmetricKey,
+};
 
-use super::{beekem::{PublicKey, SecretKey}, error::CGKAError, treemath::TreeNodeIndex, CGKA};
+use super::{
+    beekem::{PublicKey, SecretKey},
+    error::CGKAError,
+    treemath::TreeNodeIndex,
+    CGKA,
+};
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct SecretKeyMap(BTreeMap<Vec<u8>, SecretKey>);
@@ -66,7 +77,6 @@ fn pk_to_bytes(pk: &PublicKey) -> Vec<u8> {
     pk.to_bytes().into()
 }
 
-
 #[derive(Clone, Eq, PartialEq, Deserialize, Serialize)]
 pub struct Multikey {
     /// Invariant: PublicKeys must be in lexicographic order
@@ -76,7 +86,7 @@ pub struct Multikey {
 impl Multikey {
     pub fn from_iter(keys_iter: impl Iterator<Item = PublicKey>) -> Self {
         Self {
-            keys: keys_iter.collect()
+            keys: keys_iter.collect(),
         }
     }
 
@@ -111,11 +121,11 @@ impl Multikey {
 }
 
 impl Debug for Multikey {
-  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-    f.debug_struct("Multikey")
-      .field("keys", &self.keys.iter().map(|pk| pk.to_bytes()))
-      .finish()
-  }
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Multikey")
+            .field("keys", &self.keys.iter().map(|pk| pk.to_bytes()))
+            .finish()
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -132,7 +142,12 @@ pub struct SecretStore {
 
 impl SecretStore {
     // TODO: Constructor
-    pub fn new(pk: PublicKey, encrypter_pk: PublicKey, encrypter_paired_pk: Option<Multikey>, sk: BTreeMap<TreeNodeIndex, NestedEncrypted<SecretKey>>) -> Self {
+    pub fn new(
+        pk: PublicKey,
+        encrypter_pk: PublicKey,
+        encrypter_paired_pk: Option<Multikey>,
+        sk: BTreeMap<TreeNodeIndex, NestedEncrypted<SecretKey>>,
+    ) -> Self {
         let version = SecretStoreVersion {
             pk,
             sk,
@@ -154,8 +169,16 @@ impl SecretStore {
     }
 
     // TODO: Handle multiple child pks
-    pub fn decrypt_secret(&self, non_blank_child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &mut SecretKeyMap) -> Result<SecretKey, CGKAError> {
-        println!("--Decrypting secret for child idx {:?}", non_blank_child_idx);
+    pub fn decrypt_secret(
+        &self,
+        non_blank_child_idx: TreeNodeIndex,
+        child_multikey: &Multikey,
+        child_sks: &mut SecretKeyMap,
+    ) -> Result<SecretKey, CGKAError> {
+        println!(
+            "--Decrypting secret for child idx {:?}",
+            non_blank_child_idx
+        );
         if self.has_conflict() {
             return Err(CGKAError::UnexpectedKeyConflict);
         }
@@ -164,7 +187,12 @@ impl SecretStore {
         self.versions[0].decrypt_secret(non_blank_child_idx, child_multikey, child_sks)
     }
 
-    pub fn decrypt_undecrypted_secrets(&self, child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &mut SecretKeyMap) -> Result<(), CGKAError> {
+    pub fn decrypt_undecrypted_secrets(
+        &self,
+        child_idx: TreeNodeIndex,
+        child_multikey: &Multikey,
+        child_sks: &mut SecretKeyMap,
+    ) -> Result<(), CGKAError> {
         debug_assert_eq!(self.multikey.len(), self.versions.len());
         for (pk, version) in self.multikey.keys().zip(&self.versions) {
             if !child_sks.contains_key(pk) {
@@ -185,7 +213,11 @@ impl SecretStore {
     }
 
     // TODO: Is it possible we're bringing in duplicate keys here?
-    pub fn merge(&mut self, other: Option<&SecretStore>, replaced: Option<&SecretStore>) -> Result<(), CGKAError> {
+    pub fn merge(
+        &mut self,
+        other: Option<&SecretStore>,
+        replaced: Option<&SecretStore>,
+    ) -> Result<(), CGKAError> {
         if let Some(s) = replaced {
             self.remove_keys_from(s)?;
         }
@@ -244,14 +276,22 @@ pub struct SecretStoreVersion {
 
 impl SecretStoreVersion {
     // TODO: Handle multiple child pks
-    pub fn decrypt_secret(&self, non_blank_child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &SecretKeyMap) -> Result<SecretKey, CGKAError> {
+    pub fn decrypt_secret(
+        &self,
+        non_blank_child_idx: TreeNodeIndex,
+        child_multikey: &Multikey,
+        child_sks: &SecretKeyMap,
+    ) -> Result<SecretKey, CGKAError> {
         println!("--Keys in SecretStore map: {:?}", self.sk.keys());
         println!("--Looking up secret for {:?}", non_blank_child_idx);
         let is_encrypter = child_multikey.contains(&self.encrypter_pk);
-        let encrypted = self.sk.get(&non_blank_child_idx)
+        let encrypted = self
+            .sk
+            .get(&non_blank_child_idx)
             .ok_or(CGKAError::EncryptedSecretNotFound)?;
         let decrypt_keys: Vec<SecretKey> = if is_encrypter {
-            let secret_key = child_sks.get(&self.encrypter_pk)
+            let secret_key = child_sks
+                .get(&self.encrypter_pk)
                 .ok_or(CGKAError::SecretKeyNotFound)?;
             if let Some(pair_keys) = &self.encrypter_paired_multikey {
                 pair_keys
@@ -286,10 +326,11 @@ impl SecretStoreVersion {
 
 impl PartialEq for SecretStoreVersion {
     fn eq(&self, other: &Self) -> bool {
-        self.pk == other.pk && self.encrypter_pk == other.encrypter_pk &&
-            self.encrypter_paired_multikey == other.encrypter_paired_multikey
-            // TODO: Hashes
-            // && self.sk.hash() == other.sk.hash()
+        self.pk == other.pk
+            && self.encrypter_pk == other.encrypter_pk
+            && self.encrypter_paired_multikey == other.encrypter_paired_multikey
+        // TODO: Hashes
+        // && self.sk.hash() == other.sk.hash()
     }
 }
 impl Eq for SecretStoreVersion {}
@@ -318,9 +359,15 @@ fn decrypt_nested_secret(
         let nonce = encrypted.nonces[idx];
         ciphertext = decrypt_layer(&ciphertext, &nonce, &decrypt_key)?;
     }
-    let decrypt_key = decrypt_keys.last().expect("Length should be greater than 0");
-    let nonce = encrypted.nonces.last().expect("Length should be greater than 0");
-    let decrypted_bytes: [u8; 32] = decrypt_layer(&ciphertext, nonce, decrypt_key)?.try_into()
+    let decrypt_key = decrypt_keys
+        .last()
+        .expect("Length should be greater than 0");
+    let nonce = encrypted
+        .nonces
+        .last()
+        .expect("Length should be greater than 0");
+    let decrypted_bytes: [u8; 32] = decrypt_layer(&ciphertext, nonce, decrypt_key)?
+        .try_into()
         .map_err(|e| CGKAError::Decryption("Expected 32 bytes".to_string()))?;
     Ok(StaticSecret::from(decrypted_bytes))
 }
@@ -361,4 +408,3 @@ fn generate_shared_key(their_public_key: &PublicKey, my_secret: &SecretKey) -> S
 //         }
 //     }
 // }
-

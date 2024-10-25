@@ -9,7 +9,7 @@ use error::CGKAError;
 use secret_store::SecretKeyMap;
 use serde::{Deserialize, Serialize};
 
-use crate::{principal::identifier::Identifier};
+use crate::principal::identifier::Identifier;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct CGKA {
@@ -32,7 +32,10 @@ impl CGKA {
         owner_pk: PublicKey,
         owner_sk: SecretKey,
     ) -> Result<Self, CGKAError> {
-        if !participants.iter().any(|(id, pk)| *id == owner_id && *pk == owner_pk) {
+        if !participants
+            .iter()
+            .any(|(id, pk)| *id == owner_id && *pk == owner_pk)
+        {
             return Err(CGKAError::OwnerIdentifierNotFound);
         }
         let tree = BeeKEM::new(participants)?;
@@ -45,11 +48,17 @@ impl CGKA {
             tree,
             changes: Vec::new(),
         };
-        cgka.tree.encrypt_path(owner_id, owner_pk, &mut cgka.owner_sks)?;
+        cgka.tree
+            .encrypt_path(owner_id, owner_pk, &mut cgka.owner_sks)?;
         Ok(cgka)
     }
 
-    pub fn with_new_owner(&self, my_id: Identifier, pk: PublicKey, sk: SecretKey) -> Result<Self, CGKAError> {
+    pub fn with_new_owner(
+        &self,
+        my_id: Identifier,
+        pk: PublicKey,
+        sk: SecretKey,
+    ) -> Result<Self, CGKAError> {
         // TODO: Is the first public key the right thing to check? What about with conflicts?
         if !(pk == self.tree.multikey_for_id(my_id)?.first_public_key()) {
             return Err(CGKAError::PublicKeyNotFound);
@@ -78,7 +87,8 @@ impl CGKA {
     pub fn secret(&mut self) -> Result<SecretKey, CGKAError> {
         println!("secret()");
         // Work from my leaf index up
-        self.tree.decrypt_tree_secret(self.owner_id, &mut self.owner_sks)
+        self.tree
+            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)
     }
 
     /// Add participant.
@@ -89,7 +99,9 @@ impl CGKA {
         owner_sk: SecretKey,
     ) -> Result<Option<TreeChange>, CGKAError> {
         let leaf_index = self.tree.push_leaf(id, pk)?;
-        let tree_change = self.tree.encrypt_path(self.owner_id, self.owner_pk, &mut self.owner_sks)?;
+        let tree_change =
+            self.tree
+                .encrypt_path(self.owner_id, self.owner_pk, &mut self.owner_sks)?;
         // let op = CGKAOperation::Add{ id, pk, leaf_index, owner_path };
         // let change = TreeChange { changer_id: self.owner_id, op, undo };
         self.changes.push(tree_change.clone());
@@ -99,12 +111,15 @@ impl CGKA {
     }
 
     /// Remove participant.
-    pub fn remove(&mut self, id: Identifier, owner_sk: SecretKey) -> Result<Option<TreeChange>, CGKAError> {
+    pub fn remove(&mut self, id: Identifier) -> Result<Option<TreeChange>, CGKAError> {
+        println!("| Removing id {:?}", id.verifying_key);
         if self.group_size() == 1 {
             return Err(CGKAError::RemoveLastMember);
         }
         let leaf_index = self.tree.remove_id(id)?;
-        let tree_change = self.tree.encrypt_path(self.owner_id, self.owner_pk, &mut self.owner_sks)?;
+        let tree_change =
+            self.tree
+                .encrypt_path(self.owner_id, self.owner_pk, &mut self.owner_sks)?;
         // let op = CGKAOperation::Remove { id, leaf_index, owner_path };
         // let change = TreeChange { changer_id: self.owner_id, op, undo };
         self.changes.push(tree_change.clone());
@@ -156,6 +171,7 @@ mod tests {
         aead::{Aead, KeyInit},
         XChaCha20Poly1305,
     };
+    use ed25519_dalek::VerifyingKey;
     use rand::RngCore;
     use std::str;
 
@@ -314,7 +330,7 @@ mod tests {
         let owner_sk = participants[0].sk.clone();
         let initial_participant_count = participants.len();
         let mut cgka = setup_cgka(&participants, 0);
-        cgka.remove(participants[1].id, owner_sk.clone())?;
+        cgka.remove(participants[1].id)?;
         assert_eq!(cgka.group_size(), initial_participant_count as u32 - 1);
         Ok(())
     }
@@ -362,7 +378,7 @@ mod tests {
             if idx % 2 == 0 {
                 new_participants.push(p.clone());
             } else {
-                cgka.remove(p.id, owner_sk.clone())?;
+                cgka.remove(p.id)?;
             }
         }
         each_encrypts_and_all_decrypt(&cgka, &new_participants)
@@ -389,7 +405,7 @@ mod tests {
         let owner_sk = participants[0].sk.clone();
         for _ in 0..4 {
             let p = participants.pop().unwrap();
-            cgka.remove(p.id, owner_sk.clone())?;
+            cgka.remove(p.id)?;
         }
         each_encrypts_and_all_decrypt(&cgka, &participants)
     }
@@ -404,7 +420,7 @@ mod tests {
         let mut new_participants = Vec::new();
         for (idx, p) in participants.iter().enumerate() {
             if idx < 4 {
-                cgka.remove(p.id, new_owner.sk.clone())?;
+                cgka.remove(p.id)?;
             } else {
                 new_participants.push(p.clone());
             }
@@ -420,15 +436,54 @@ mod tests {
         Ok(())
     }
 
-    fn fork_update_and_merge(participant_count: u32, p_idx_a: usize, p_idx_b: usize, should_update_every_path: bool) -> Result<(), CGKAError> {
+    fn fork_update_and_merge(
+        participant_count: u32,
+        p_idx_a: usize,
+        p_idx_b: usize,
+        removes: Vec<usize>,
+    ) -> Result<(), CGKAError> {
+        println!("------------------------------------------------------");
+        println!("fork_update_and_merge: updates,    no removes");
+        _fork_update_and_merge(participant_count, p_idx_a, p_idx_b, true, Vec::new())?;
+        println!("------------------------------------------------------");
+        println!("fork_update_and_merge: no updates, no removes");
+        _fork_update_and_merge(participant_count, p_idx_a, p_idx_b, false, Vec::new())?;
+        if !removes.is_empty() {
+            println!("------------------------------------------------------");
+            println!("fork_update_and_merge: updates,    removes");
+            _fork_update_and_merge(participant_count, p_idx_a, p_idx_b, true, removes.clone())?;
+            println!("------------------------------------------------------");
+            println!("fork_update_and_merge: no updates, removes");
+            _fork_update_and_merge(participant_count, p_idx_a, p_idx_b, false, removes)?;
+        }
+        Ok(())
+    }
+
+    fn _fork_update_and_merge(
+        participant_count: u32,
+        p_idx_a: usize,
+        p_idx_b: usize,
+        should_update_every_path: bool,
+        removes: Vec<usize>,
+    ) -> Result<(), CGKAError> {
         assert_ne!(p_idx_a, p_idx_b);
         let participants = setup_participants(participant_count);
+        // TODO: Remove
+        if !removes.is_empty() {
+            println!("|||===== Removes: {:?}", removes.iter().map(|idx| (idx, participants[*idx].id.verifying_key)).collect::<Vec<(&usize, VerifyingKey)>>());
+        }
         let p_a = participants[p_idx_a].clone();
         let p_b = participants[p_idx_b].clone();
-        let initial_cgka = setup_cgka(&participants, 0);
+        let mut initial_cgka = setup_cgka(&participants, 0);
         println!("\n\n update every path\n");
         if should_update_every_path {
             update_every_path(&initial_cgka, &participants)?;
+        }
+        if !removes.is_empty() {
+            for idx in removes {
+                assert!(idx != 0, "Can't remove owner!");
+                initial_cgka.remove(participants[idx].id)?;
+            }
         }
         let mut p_a_cgka = initial_cgka.with_new_owner(p_a.id, p_a.pk, p_a.sk.clone())?;
         let mut p_b_cgka = initial_cgka.with_new_owner(p_b.id, p_b.pk, p_b.sk.clone())?;
@@ -436,7 +491,9 @@ mod tests {
         assert_eq!(p_a_cgka.secret()?.to_bytes(), p_b_cgka.secret()?.to_bytes());
         println!("\n\n\n pa update |a: LeafNodeIndex({p_idx_a})\n");
         let (p_a_pk, p_a_sk) = key_pair();
-        let p_a_change = p_a_cgka.update(p_a.id, p_a_pk, p_a_sk)?.expect("Should have message");
+        let p_a_change = p_a_cgka
+            .update(p_a.id, p_a_pk, p_a_sk)?
+            .expect("Should have message");
         println!("\n\n secret assert_ne\n");
         assert_ne!(p_a_cgka.secret()?.to_bytes(), p_b_cgka.secret()?.to_bytes());
         println!("\n\n\n pb merge |b: LeafNodeIndex({p_idx_b})\n");
@@ -449,7 +506,9 @@ mod tests {
         assert_eq!(p_a_cgka.secret()?.to_bytes(), p_b_cgka.secret()?.to_bytes());
         println!("\n\n\n pb update |b: LeafNodeIndex({p_idx_b})\n");
         let (p_b_pk, p_b_sk) = key_pair();
-        let p_b_change = p_b_cgka.update(p_b.id, p_b_pk, p_b_sk)?.expect("Should have message");
+        let p_b_change = p_b_cgka
+            .update(p_b.id, p_b_pk, p_b_sk)?
+            .expect("Should have message");
         println!("\n\n\n secret assert_ne\n");
         assert_ne!(p_a_cgka.secret()?.to_bytes(), p_b_cgka.secret()?.to_bytes());
         println!("\n\n\n pa merge |a: LeafNodeIndex({p_idx_a})\n");
@@ -469,8 +528,8 @@ mod tests {
         let participant_count = 3;
         let p_idx_a = 0;
         let p_idx_b = 1;
-        fork_update_and_merge(participant_count, p_idx_a, p_idx_b, true)?;
-        fork_update_and_merge(participant_count, p_idx_a, p_idx_b, false)
+        let removes = Vec::new();
+        fork_update_and_merge(participant_count, p_idx_a, p_idx_b, removes)
     }
 
     #[test]
@@ -478,8 +537,8 @@ mod tests {
         let participant_count = 3;
         let p_idx_a = 1;
         let p_idx_b = 2;
-        fork_update_and_merge(participant_count, p_idx_a, p_idx_b, true)?;
-        fork_update_and_merge(participant_count, p_idx_a, p_idx_b, false)
+        let removes = Vec::new();
+        fork_update_and_merge(participant_count, p_idx_a, p_idx_b, removes)
     }
 
     #[test]
@@ -487,8 +546,8 @@ mod tests {
         let participant_count = 7;
         let p_idx_a = 5;
         let p_idx_b = 6;
-        fork_update_and_merge(participant_count, p_idx_a, p_idx_b, true)?;
-        fork_update_and_merge(participant_count, p_idx_a, p_idx_b, false)
+        let removes = vec![1, 2, 4];
+        fork_update_and_merge(participant_count, p_idx_a, p_idx_b, removes)
     }
 
     #[test]
@@ -496,34 +555,67 @@ mod tests {
         let participant_count = 7;
         let p_idx_a = 1;
         let p_idx_b = 6;
-        fork_update_and_merge(participant_count, p_idx_a, p_idx_b, true)?;
-        fork_update_and_merge(participant_count, p_idx_a, p_idx_b, false)
+        let removes = vec![2, 4];
+        fork_update_and_merge(participant_count, p_idx_a, p_idx_b, removes)
     }
 
-    fn fork_concurrent_updates_and_merge(participant_count: u32, p_idx_a: usize, p_idx_b: usize, should_update_every_path: bool) -> Result<(), CGKAError> {
+    fn fork_concurrent_updates_and_merge(
+        participant_count: u32,
+        p_idx_a: usize,
+        p_idx_b: usize,
+        removes: Vec<usize>,
+    ) -> Result<(), CGKAError> {
+        _fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, true, Vec::new())?;
+        _fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, false, Vec::new())?;
+        if !removes.is_empty() {
+            _fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, true, removes.clone())?;
+            _fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, false, removes)?;
+        }
+        Ok(())
+    }
+
+    fn _fork_concurrent_updates_and_merge(
+        participant_count: u32,
+        p_idx_a: usize,
+        p_idx_b: usize,
+        should_update_every_path: bool,
+        removes: Vec<usize>,
+    ) -> Result<(), CGKAError> {
         let participants = setup_participants(participant_count);
         let p_a = participants[p_idx_a].clone();
         let p_b = participants[p_idx_b].clone();
-        let initial_cgka = setup_cgka(&participants, 0);
+        let mut initial_cgka = setup_cgka(&participants, 0);
         if should_update_every_path {
             update_every_path(&initial_cgka, &participants)?;
+        }
+        if !removes.is_empty() {
+            for idx in removes {
+                assert!(idx != 0, "Can't remove owner!");
+                initial_cgka.remove(participants[idx].id)?;
+            }
         }
         let mut p_a_cgka = initial_cgka.with_new_owner(p_a.id, p_a.pk, p_a.sk.clone())?;
         let mut p_b_cgka = initial_cgka.with_new_owner(p_b.id, p_b.pk, p_b.sk.clone())?;
         assert_eq!(p_a_cgka.secret()?.to_bytes(), p_b_cgka.secret()?.to_bytes());
         let (p_a_pk, p_a_sk) = key_pair();
-        let p_a_change = p_a_cgka.update(p_a.id, p_a_pk, p_a_sk)?.expect("Should have message");
+        let p_a_change = p_a_cgka
+            .update(p_a.id, p_a_pk, p_a_sk)?
+            .expect("Should have message");
         let (p_b_pk2, p_b_sk2) = key_pair();
-        let _p_b_change = p_b_cgka.update(p_b.id, p_b_pk2, p_b_sk2)?.expect("Should have message");
+        let p_b_change = p_b_cgka
+            .update(p_b.id, p_b_pk2, p_b_sk2)?
+            .expect("Should have message");
         assert_ne!(p_a_cgka.secret()?.to_bytes(), p_b_cgka.secret()?.to_bytes());
         p_b_cgka.merge(p_a_change)?;
         assert!(!p_b_cgka.tree.has_root_key()?);
         let (p_b_pk3, p_b_sk3) = key_pair();
-        let p_b_change2 = p_b_cgka.update(p_b.id, p_b_pk3, p_b_sk3)?.expect("Should have message");
+        let p_b_change2 = p_b_cgka
+            .update(p_b.id, p_b_pk3, p_b_sk3)?
+            .expect("Should have message");
         assert!(p_b_cgka.tree.has_root_key()?);
         assert_ne!(p_a_cgka.secret()?.to_bytes(), p_b_cgka.secret()?.to_bytes());
-        // TODO: This is for the short term. We need to think about causal delivery
-        // which would mean p_a has to see p_b_change before p_b_change2.
+        // Changes will always be merged in causal order
+        p_a_cgka.merge(p_b_change)?;
         p_a_cgka.merge(p_b_change2)?;
         assert_eq!(p_a_cgka.secret()?.to_bytes(), p_b_cgka.secret()?.to_bytes());
 
@@ -535,8 +627,8 @@ mod tests {
         let participant_count = 3;
         let p_idx_a = 0;
         let p_idx_b = 1;
-        fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, true)?;
-        fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, false)
+        let removes = Vec::new();
+        fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, removes)
     }
 
     #[test]
@@ -544,8 +636,8 @@ mod tests {
         let participant_count = 3;
         let p_idx_a = 1;
         let p_idx_b = 2;
-        fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, true)?;
-        fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, false)
+        let removes = Vec::new();
+        fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, removes)
     }
 
     #[test]
@@ -553,8 +645,8 @@ mod tests {
         let participant_count = 7;
         let p_idx_a = 5;
         let p_idx_b = 6;
-        fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, true)?;
-        fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, false)
+        let removes = vec![1, 2, 4];
+        fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, removes)
     }
 
     #[test]
@@ -562,8 +654,8 @@ mod tests {
         let participant_count = 7;
         let p_idx_a = 1;
         let p_idx_b = 6;
-        fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, true)?;
-        fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, false)
+        let removes = vec![2, 4];
+        fork_concurrent_updates_and_merge(participant_count, p_idx_a, p_idx_b, removes)
     }
 
     // #[test]
