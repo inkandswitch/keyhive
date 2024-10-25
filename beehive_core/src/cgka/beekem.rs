@@ -258,6 +258,7 @@ impl BeeKEM {
         // let mut child_sk = owner_sks;
         let mut last_secret = None;
         let mut child_pk = &leaf.pk;
+        println!("|My pk: {:?}|", child_pk);
         let mut parent_idx: TreeNodeIndex = treemath::parent(child_idx).into();
         while !self.is_root(child_idx) {
             // Find the next non-blank parent
@@ -380,22 +381,30 @@ impl BeeKEM {
         &mut self,
         change: TreeChange,
     ) -> Result<(), CGKAError> {
+        println!("\n\n apply_path(): ");
+        println!("- leaf: {:?}", change.new_path.leaf_idx);
+        println!("- new_path: {:?}", change.new_path.path.iter().map(|(idx, _)| ParentNodeIndex::new(*idx)).collect::<Vec<ParentNodeIndex>>());
+        println!("- undo_path: {:?}", change.undo.path.iter().map(|(idx, _)| ParentNodeIndex::new(*idx)).collect::<Vec<ParentNodeIndex>>());
         debug_assert_eq!(change.new_path.path.len(), change.undo.path.len());
         let leaf_idx = LeafNodeIndex::new(change.new_path.leaf_idx);
         let leaf_id = self.leaf(leaf_idx)?.as_ref().ok_or(CGKAError::IdentifierNotFound)?.id;
         // TODO: Handle conflicting keys
         self.insert_leaf_at(leaf_idx, leaf_id, change.new_path.leaf_pk)?;
         self.validate_change(leaf_id, &change)?;
-        for ((idx, node), (undo_idx, undo_node)) in change.new_path.path.iter().zip(change.undo.path).skip(1) {
+        for ((idx, node), (undo_idx, undo_node)) in change.new_path.path.iter().zip(change.undo.path) {
             debug_assert_eq!(*idx, undo_idx);
+            println!("-- Next merging node: {:?}", ParentNodeIndex::new(*idx));
             let p_idx = ParentNodeIndex::new(*idx);
             let current_p_node = self.parent(p_idx)?;
             let new_p_node = if let Some(current) = current_p_node {
                 // TODO: borrow mutably here and then we don't need to clone and insert
                 let mut p_node = current.clone();
+                println!("_______");
+                println!("Merging in {:?}", p_idx);
                 p_node.merge(node.as_ref().map(|p| &p.secret_store), undo_node.as_ref().map(|p| &p.secret_store))?;
                 Some(p_node)
             } else {
+                println!("-- My node was blank, so just overwriting!");
                 node.clone()
             };
             if let Some(parent) = new_p_node {
@@ -429,6 +438,8 @@ impl BeeKEM {
     ) -> Result<Option<SecretKey>, CGKAError> {
         debug_assert!(!self.is_root(child_idx));
         let parent_idx = treemath::parent(child_idx);
+        println!("__________");
+        println!("Decrypting {:?}", parent_idx);
         debug_assert!(!self.is_blank(parent_idx.into())?);
         let parent = self
             .parent(parent_idx)?
@@ -436,10 +447,14 @@ impl BeeKEM {
             .ok_or(CGKAError::TreeIndexOutOfBounds)?;
 
         let maybe_secret = if let Some(parent_pk) = parent.single_pk() {
+            println!("--Single secret");
+            // TODO: Check if we have already decrypted this secret.
             let secret = parent.decrypt_secret(non_blank_child_idx, child_multikey, &mut child_sks)?;
+            println!("--Inserting decrypted secret from {:?} for pk {:?}", parent_idx, parent_pk);
             child_sks.insert(parent_pk, secret.clone());
             Some(secret)
         } else {
+            println!("--Multiple secrets");
             // If we haven't decrypted all secrets for a conflict node, we need to do
             // that before continuing.
             parent.decrypt_undecrypted_secrets(non_blank_child_idx, child_multikey, &mut child_sks)?;
@@ -645,8 +660,8 @@ impl ParentNode {
         self.secret_store.multikey()
     }
 
-    pub fn decrypt_secret(&self, child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &mut SecretKeyMap) -> Result<SecretKey, CGKAError> {
-        self.secret_store.decrypt_secret(child_idx, child_multikey, child_sks)
+    pub fn decrypt_secret(&self, non_blank_child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &mut SecretKeyMap) -> Result<SecretKey, CGKAError> {
+        self.secret_store.decrypt_secret(non_blank_child_idx, child_multikey, child_sks)
     }
 
     pub fn decrypt_undecrypted_secrets(&self, child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &mut SecretKeyMap) -> Result<(), CGKAError> {

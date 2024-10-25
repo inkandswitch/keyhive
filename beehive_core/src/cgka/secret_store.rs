@@ -154,13 +154,14 @@ impl SecretStore {
     }
 
     // TODO: Handle multiple child pks
-    pub fn decrypt_secret(&self, child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &mut SecretKeyMap) -> Result<SecretKey, CGKAError> {
+    pub fn decrypt_secret(&self, non_blank_child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &mut SecretKeyMap) -> Result<SecretKey, CGKAError> {
+        println!("--Decrypting secret for child idx {:?}", non_blank_child_idx);
         if self.has_conflict() {
             return Err(CGKAError::UnexpectedKeyConflict);
         }
         // TODO: Should we just use the map instead of returning a secret. And then we just
         // call the decrypt_undecrypted_secrets method here?
-        self.versions[0].decrypt_secret(child_idx, child_multikey, child_sks)
+        self.versions[0].decrypt_secret(non_blank_child_idx, child_multikey, child_sks)
     }
 
     pub fn decrypt_undecrypted_secrets(&self, child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &mut SecretKeyMap) -> Result<(), CGKAError> {
@@ -189,6 +190,10 @@ impl SecretStore {
             self.remove_keys_from(s)?;
         }
         if let Some(o) = other {
+            for v in &o.versions {
+                println!("--Merging in public keys: {:?}", v.pk);
+                println!("--Merging in SecretStore map: {:?}", v.sk.keys());
+            }
             self.versions.append(&mut o.versions.clone());
             // This will overwrite self.multikey
             self.sort_keys();
@@ -239,9 +244,11 @@ pub struct SecretStoreVersion {
 
 impl SecretStoreVersion {
     // TODO: Handle multiple child pks
-    pub fn decrypt_secret(&self, child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &SecretKeyMap) -> Result<SecretKey, CGKAError> {
+    pub fn decrypt_secret(&self, non_blank_child_idx: TreeNodeIndex, child_multikey: &Multikey, child_sks: &SecretKeyMap) -> Result<SecretKey, CGKAError> {
+        println!("--Keys in SecretStore map: {:?}", self.sk.keys());
+        println!("--Looking up secret for {:?}", non_blank_child_idx);
         let is_encrypter = child_multikey.contains(&self.encrypter_pk);
-        let encrypted = self.sk.get(&child_idx)
+        let encrypted = self.sk.get(&non_blank_child_idx)
             .ok_or(CGKAError::EncryptedSecretNotFound)?;
         let decrypt_keys: Vec<SecretKey> = if is_encrypter {
             let secret_key = child_sks.get(&self.encrypter_pk)
@@ -257,10 +264,13 @@ impl SecretStoreVersion {
                 vec![secret_key.clone()]
             }
         } else {
+            println!("-- I'm not encrypter, doing DH with paired_pks");
+            println!("-- All paired_pks: {:?}", encrypted.paired_pks);
             encrypted
                 .paired_pks
                 .iter()
                 .map(|pk| {
+                    println!("-- >> next paried_pk: {:?}", pk);
                     let secret_key_result = child_sks.get(&pk);
                     if let Some(secret_key) = secret_key_result {
                         Ok(generate_shared_key(&self.encrypter_pk, secret_key))
