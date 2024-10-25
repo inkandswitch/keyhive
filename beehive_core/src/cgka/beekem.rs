@@ -59,7 +59,6 @@ use x25519_dalek::{self, x25519, StaticSecret};
 use crate::{
     crypto::{
         encrypted::{Encrypted, NestedEncrypted},
-        hash::Hash,
         siv::Siv,
         symmetric_key::SymmetricKey,
     },
@@ -119,10 +118,10 @@ impl BeeKEM {
         Ok(tree)
     }
 
-    /// Hash of the tree
-    pub fn hash(&self) -> Hash<BeeKEM> {
-        Hash::hash(self.clone())
-    }
+    // /// Hash of the tree
+    // pub fn hash(&self) -> Hash<BeeKEM> {
+    //     Hash::hash(self.clone())
+    // }
 
     pub(crate) fn multikey_for_index(&self, idx: TreeNodeIndex) -> Result<&Multikey, CGKAError> {
         Ok(match idx {

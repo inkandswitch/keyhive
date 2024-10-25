@@ -112,7 +112,7 @@ impl CGKA {
 
     /// Remove participant.
     pub fn remove(&mut self, id: Identifier) -> Result<Option<TreeChange>, CGKAError> {
-        println!("| Removing id {:?}", id.verifying_key);
+        println!("| Removing id {:?}", id.0);
         if self.group_size() == 1 {
             return Err(CGKAError::RemoveLastMember);
         }
