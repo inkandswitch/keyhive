@@ -2,7 +2,10 @@ use super::{id::DocumentId, Document};
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    principal::agent::{Agent, AgentId},
+    principal::{
+        agent::{Agent, AgentId},
+        group::operation::delegation::DelegationError,
+    },
 };
 use nonempty::NonEmpty;
 use std::collections::BTreeMap;
@@ -27,11 +30,14 @@ impl<T: ContentRef> DocumentStore<T> {
         self.docs.get(id)
     }
 
-    pub fn generate_document(&mut self, parents: NonEmpty<Agent<T>>) -> DocumentId {
-        let new_doc = Document::generate(parents);
+    pub fn generate_document(
+        &mut self,
+        parents: NonEmpty<Agent<T>>,
+    ) -> Result<DocumentId, DelegationError> {
+        let new_doc = Document::generate(parents)?;
         let new_doc_id: DocumentId = new_doc.doc_id();
         self.insert(new_doc);
-        new_doc_id
+        Ok(new_doc_id)
     }
 
     pub fn transitive_members(&self, doc: &Document<T>) -> BTreeMap<AgentId, (Agent<T>, Access)> {

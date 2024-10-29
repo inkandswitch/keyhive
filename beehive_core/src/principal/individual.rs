@@ -4,7 +4,7 @@ pub mod id;
 pub mod state;
 
 use super::{agent::AgentId, verifiable::Verifiable};
-use crate::crypto::{digest::Digest, share_key::ShareKey};
+use crate::crypto::{digest::Digest, share_key::ShareKey, signed::SigningError};
 use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
@@ -41,13 +41,13 @@ pub struct Individual {
 }
 
 impl Individual {
-    pub fn generate(signer: &ed25519_dalek::SigningKey) -> Self {
-        let state = PrekeyState::generate(signer, 8);
-        Self {
+    pub fn generate(signer: &ed25519_dalek::SigningKey) -> Result<Self, SigningError> {
+        let state = PrekeyState::generate(signer, 8)?;
+        Ok(Self {
             id: IndividualId(signer.verifying_key().into()),
             prekeys: state.materialize(),
             prekey_state: state,
-        }
+        })
     }
 
     pub fn id(&self) -> IndividualId {

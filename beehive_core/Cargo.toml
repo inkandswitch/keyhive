@@ -15,9 +15,9 @@ aquamarine = { version = "0.6", optional = true }
 
 # Encoding
 base64 = "0.22"
+ciborium = "0.2.2"
 serde = { workspace = true }
 serde_bytes = "0.11.15"
-serde_cbor = "0.11.2"
 
 # Crypto
 aead = "0.5.2"

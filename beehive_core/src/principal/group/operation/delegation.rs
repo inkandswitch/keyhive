@@ -2,7 +2,10 @@ use super::revocation::{Revocation, StaticRevocation};
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed},
+    crypto::{
+        digest::Digest,
+        signed::{Signed, SigningError},
+    },
     principal::{
         agent::{Agent, AgentId},
         document::{id::DocumentId, Document},
@@ -11,6 +14,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, hash::Hash, rc::Rc};
+use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Delegation<T: ContentRef> {
@@ -154,4 +158,16 @@ impl<T: ContentRef> From<Delegation<T>> for StaticDelegation<T> {
                 .collect(),
         }
     }
+}
+
+/// Errors that can occur when using an active agent.
+#[derive(Debug, Error)]
+pub enum DelegationError {
+    /// The active agent is trying to delegate a capability that they do not have.
+    #[error("Rights escelation: attempted to delegate a capability that the active agent does not have.")]
+    Escelation,
+
+    /// Signature failed
+    #[error("{0}")]
+    SigningError(#[from] SigningError),
 }

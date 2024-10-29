@@ -2,6 +2,7 @@ use super::id::GroupId;
 use crate::{
     access::Access,
     content::reference::ContentRef,
+    crypto::signed::SigningError,
     principal::{
         agent::{Agent, AgentId},
         group::Group,
@@ -32,11 +33,14 @@ impl<T: ContentRef> GroupStore<T> {
         self.0.insert(id, group);
     }
 
-    pub fn generate_group(&mut self, parents: NonEmpty<Agent<T>>) -> Rc<RefCell<Group<T>>> {
-        let new_group: Group<T> = Group::generate(parents);
+    pub fn generate_group(
+        &mut self,
+        parents: NonEmpty<Agent<T>>,
+    ) -> Result<Rc<RefCell<Group<T>>>, SigningError> {
+        let new_group: Group<T> = Group::generate(parents)?;
         let rc = Rc::new(RefCell::new(new_group));
         self.insert(rc.clone());
-        rc
+        Ok(rc)
     }
 
     pub fn get(&self, id: &GroupId) -> Option<Rc<RefCell<Group<T>>>> {

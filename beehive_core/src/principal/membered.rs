@@ -5,7 +5,10 @@ use super::{
     identifier::Identifier,
     verifiable::Verifiable,
 };
-use crate::{content::reference::ContentRef, crypto::signed::Signed};
+use crate::{
+    content::reference::ContentRef,
+    crypto::signed::{Signed, SigningError},
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt, rc::Rc};
 
@@ -59,38 +62,15 @@ impl<'a, T: ContentRef> Membered<'a, T> {
         member_id: &AgentId,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<Document<T>>],
-    ) {
+    ) -> Result<(), SigningError> {
         match self {
-            Membered::Group(group) => {
-                group.revoke_member(member_id, signing_key, relevant_docs);
-            }
+            Membered::Group(group) => group.revoke_member(member_id, signing_key, relevant_docs),
             Membered::Document(document) => {
-                document.revoke_member(member_id, signing_key, relevant_docs);
+                document.revoke_member(member_id, signing_key, relevant_docs)
             }
         }
     }
 }
-
-// impl<'a, T: ContentRef> From<Membered<'a, T>> for Agent<'a, T> {
-//     fn from(membered: Membered<'a, T>) -> Self {
-//         match membered {
-//             Membered::Group(group) => group.into(),
-//             Membered::Document(document) => document.into(),
-//         }
-//     }
-// }
-
-// impl<'a, T: ContentRef> TryFrom<Agent<'a, T>> for Membered<'a, T> {
-//     type Error = &'static str; // FIXME
-//
-//     fn try_from(agent: Agent<'a, T>) -> Result<Self, Self::Error> {
-//         match agent {
-//             Agent::Group(group) => Ok(Membered::Group(group)),
-//             Agent::Document(document) => Ok(Membered::Document(document)),
-//             _ => Err("Agent is not a membered type"),
-//         }
-//     }
-// }
 
 impl<'a, T: ContentRef> From<&'a mut Group<T>> for Membered<'a, T> {
     fn from(group: &'a mut Group<T>) -> Self {

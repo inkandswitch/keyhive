@@ -13,7 +13,9 @@ use super::{
     verifiable::Verifiable,
 };
 use crate::{
-    access::Access, content::reference::ContentRef, crypto::signed::Signed,
+    access::Access,
+    content::reference::ContentRef,
+    crypto::signed::{Signed, SigningError},
     util::content_addressed_map::CaMap,
 };
 use id::GroupId;
@@ -41,7 +43,7 @@ pub struct Group<T: ContentRef> {
 
 impl<T: ContentRef> Group<T> {
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
-    pub fn generate(parents: NonEmpty<Agent<T>>) -> Group<T> {
+    pub fn generate(parents: NonEmpty<Agent<T>>) -> Result<Group<T>, SigningError> {
         let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let group_id = GroupId(group_signer.verifying_key().into());
 
@@ -49,8 +51,8 @@ impl<T: ContentRef> Group<T> {
         let mut delegation_heads = HashSet::new();
         let mut members = HashMap::new();
 
-        for parent in parents.iter() {
-            let dlg = Signed::sign(
+        parents.iter().try_fold((), |_, parent| {
+            let dlg = Signed::try_sign(
                 Delegation {
                     delegate: parent.clone(),
                     can: Access::Admin,
@@ -59,15 +61,17 @@ impl<T: ContentRef> Group<T> {
                     after_content: BTreeMap::new(),
                 },
                 &group_signer,
-            );
+            )?;
 
             let rc = Rc::new(dlg);
             delegations.insert(rc.clone());
             delegation_heads.insert(rc.clone());
             members.insert((*parent).agent_id(), vec![rc]);
-        }
 
-        Group {
+            Ok::<(), SigningError>(())
+        })?;
+
+        Ok(Group {
             members,
             state: state::GroupState {
                 id: group_id,
@@ -80,7 +84,7 @@ impl<T: ContentRef> Group<T> {
                 revocations: CaMap::new(),
                 revocation_quarantine: CaMap::new(),
             },
-        }
+        })
     }
 
     pub fn id(&self) -> Identifier {
@@ -138,7 +142,7 @@ impl<T: ContentRef> Group<T> {
         signing_key: &ed25519_dalek::SigningKey,
         after_revocations: &[&Rc<Signed<Revocation<T>>>],
         relevant_docs: &[&Rc<Document<T>>],
-    ) {
+    ) -> Result<(), SigningError> {
         let indie: Individual = signing_key.verifying_key().into();
         let agent: Agent<T> = Rc::new(indie).into();
         let proof = if self.verifying_key() == signing_key.verifying_key() {
@@ -154,7 +158,7 @@ impl<T: ContentRef> Group<T> {
             Some(p.clone())
         };
 
-        let delegation = Signed::sign(
+        let delegation = Signed::try_sign(
             Delegation {
                 delegate: member_to_add,
                 can,
@@ -174,9 +178,9 @@ impl<T: ContentRef> Group<T> {
                     .collect(),
             },
             &signing_key,
-        );
+        )?;
 
-        self.add_delegation(delegation);
+        Ok(self.add_delegation(delegation))
     }
 
     pub fn revoke_member(
@@ -184,12 +188,12 @@ impl<T: ContentRef> Group<T> {
         member_to_remove: &AgentId,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<Document<T>>],
-    ) {
+    ) -> Result<(), SigningError> {
         let revocations = &mut self.state.revocations;
 
         if let Some(revoke_dlgs) = self.members.remove(member_to_remove) {
-            for dlg in revoke_dlgs.iter() {
-                let revocation = Signed::sign(
+            revoke_dlgs.iter().try_fold((), |_, dlg| {
+                let revocation = Signed::try_sign(
                     Revocation {
                         revoke: dlg.clone(),
                         proof: None, // FIXME
@@ -207,10 +211,14 @@ impl<T: ContentRef> Group<T> {
                             .collect(),
                     },
                     &signing_key,
-                );
+                )?;
 
                 revocations.insert(Rc::new(revocation));
-            }
+
+                Ok(())
+            })
+        } else {
+            Ok(())
         }
 
         // FIXME check that you can actually do this with tiebreaking, seniroity etc etc

@@ -9,12 +9,18 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::{
-        encrypted::Encrypted, share_key::ShareKey, signed::Signed, siv::Siv,
+        encrypted::Encrypted,
+        share_key::ShareKey,
+        signed::{Signed, SigningError},
+        siv::Siv,
         symmetric_key::SymmetricKey,
     },
     principal::{
         agent::{Agent, AgentId},
-        group::operation::{delegation::Delegation, revocation::Revocation},
+        group::operation::{
+            delegation::{Delegation, DelegationError},
+            revocation::Revocation,
+        },
         membered::Membered,
     },
 };
@@ -36,12 +42,12 @@ pub struct Active {
 }
 
 impl Active {
-    pub fn generate(signer: SigningKey) -> Self {
-        Self {
-            individual: Individual::generate(&signer),
+    pub fn generate(signer: SigningKey) -> Result<Self, SigningError> {
+        Ok(Self {
+            individual: Individual::generate(&signer)?,
             share_key_pairs: BTreeMap::new(),
             signer,
-        }
+        })
     }
 
     pub fn id(&self) -> IndividualId {
@@ -53,8 +59,8 @@ impl Active {
     }
 
     /// Sign a payload.
-    pub fn sign<U: Serialize>(&self, payload: U) -> Signed<U> {
-        Signed::<U>::sign(payload, &self.signer)
+    pub fn try_sign<U: Serialize>(&self, payload: U) -> Result<Signed<U>, SigningError> {
+        Signed::<U>::try_sign(payload, &self.signer)
     }
 
     pub fn get_capability<'a, T: ContentRef>(
@@ -86,13 +92,13 @@ impl Active {
             return Err(DelegationError::Escelation);
         }
 
-        let delegation = self.sign(Delegation {
+        let delegation = self.try_sign(Delegation {
             delegate: delegate.clone(),
             can: attenuate,
             proof: Some(proof.clone()),
             after_revocations,
             after_content,
-        });
+        })?;
 
         // FIXME IVM
 
@@ -117,14 +123,6 @@ impl Active {
 
         Encrypted::new(nonce.into(), bytes)
     }
-}
-
-// FIXME move to Delegation?
-/// Errors that can occur when using an active agent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DelegationError {
-    /// The active agent is trying to delegate a capability that they do not have.
-    Escelation,
 }
 
 impl std::fmt::Display for Active {
@@ -232,6 +230,6 @@ mod tests {
         let message = "hello world".as_bytes();
         let signed = active.sign(message);
 
-        assert!(signed.verify().is_ok());
+        assert!(signed.try_verify().is_ok());
     }
 }

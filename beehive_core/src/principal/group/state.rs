@@ -8,8 +8,14 @@ use super::{
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed},
-    principal::{agent::Agent, identifier::Identifier, verifiable::Verifiable},
+    crypto::{
+        digest::Digest,
+        signed::{Signed, VerificationError},
+    },
+    principal::{
+        agent::Agent, group::operation::delegation::DelegationError, identifier::Identifier,
+        verifiable::Verifiable,
+    },
     util::content_addressed_map::CaMap,
 };
 use ed25519_dalek::VerifyingKey;
@@ -33,12 +39,12 @@ pub struct GroupState<T: ContentRef> {
 }
 
 impl<T: ContentRef> GroupState<T> {
-    pub fn generate(parents: Vec<Agent<T>>) -> Self {
+    pub fn generate(parents: Vec<Agent<T>>) -> Result<Self, DelegationError> {
         let mut rng = rand::thread_rng();
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
         let group_id = signing_key.verifying_key().into();
 
-        let mut group = GroupState {
+        let group = GroupState {
             id: GroupId(group_id),
 
             delegation_heads: HashSet::new(),
@@ -50,8 +56,8 @@ impl<T: ContentRef> GroupState<T> {
             revocation_quarantine: CaMap::new(),
         };
 
-        for parent in parents.iter() {
-            let dlg = Signed::sign(
+        parents.iter().try_fold(group, |mut acc, parent| {
+            let dlg = Signed::try_sign(
                 Delegation {
                     delegate: parent.clone(),
                     can: Access::Admin,
@@ -61,15 +67,15 @@ impl<T: ContentRef> GroupState<T> {
                     after_content: BTreeMap::new(),
                 },
                 &signing_key,
-            );
+            )?;
 
             let rc = Rc::new(dlg);
 
-            group.delegations.insert(rc.clone());
-            group.delegation_heads.insert(rc);
-        }
+            acc.delegations.insert(rc.clone());
+            acc.delegation_heads.insert(rc);
 
-        group
+            Ok(acc)
+        })
     }
 
     pub fn id(&self) -> Identifier {
@@ -101,14 +107,10 @@ impl<T: ContentRef> GroupState<T> {
         delegation: Signed<Delegation<T>>,
     ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
         if delegation.subject() != self.id.into() {
-            panic!("FIXME")
-            // return Err(signature::Error::InvalidSubject);
+            return Err(AddError::InvalidSubject(delegation.subject()));
         }
 
-        if delegation.verify().is_err() {
-            panic!("FIXME")
-            // return Err(signature::Error::InvalidSignature);
-        }
+        delegation.try_verify()?;
 
         let rc = Rc::new(delegation);
         let hash = self.delegations.insert(rc.clone());
@@ -124,14 +126,10 @@ impl<T: ContentRef> GroupState<T> {
 
     pub fn add_revocation(&mut self, revocation: Signed<Revocation<T>>) -> Result<(), AddError> {
         if revocation.subject() != self.id.into() {
-            panic!("FIXME")
-            // return Err(signature::Error::InvalidSubject);
+            return Err(AddError::InvalidSubject(revocation.subject()));
         }
 
-        if revocation.verify().is_err() {
-            panic!("FIXME")
-            // return Err(signature::Error::InvalidSignature);
-        }
+        revocation.try_verify()?;
 
         // FIXME also check if this op needs to go into the quarantine/buffer
 
@@ -203,11 +201,11 @@ impl<T: ContentRef> Verifiable for GroupState<T> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AddError {
-    #[error("Invalid subject")]
-    InvalidSubject,
+    #[error("Invalid subject {0}")]
+    InvalidSubject(Identifier),
 
     #[error("Invalid signature")]
-    InvalidSignature(#[from] signature::Error),
+    InvalidSignature(#[from] VerificationError),
 }
 
 // FIXME test

@@ -3,12 +3,12 @@
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::signed::Signed,
+    crypto::signed::{Signed, SigningError},
     principal::{
         active::Active,
         agent::{Agent, AgentId},
         document::{id::DocumentId, store::DocumentStore, Document},
-        group::{store::GroupStore, Group},
+        group::{operation::delegation::DelegationError, store::GroupStore, Group},
         individual::{id::IndividualId, Individual},
         membered::Membered,
         verifiable::Verifiable,
@@ -39,23 +39,29 @@ pub struct Context<T: ContentRef> {
 }
 
 impl<T: ContentRef> Context<T> {
-    pub fn generate(signing_key: ed25519_dalek::SigningKey) -> Self {
-        Self {
-            active: Rc::new(Active::generate(signing_key)),
+    pub fn generate(signing_key: ed25519_dalek::SigningKey) -> Result<Self, SigningError> {
+        Ok(Self {
+            active: Rc::new(Active::generate(signing_key)?),
             individuals: Default::default(),
             groups: GroupStore::new(),
             docs: DocumentStore::new(),
-        }
+        })
     }
 
-    pub fn generate_group(&mut self, coparents: Vec<Agent<T>>) -> Rc<RefCell<Group<T>>> {
+    pub fn generate_group(
+        &mut self,
+        coparents: Vec<Agent<T>>,
+    ) -> Result<Rc<RefCell<Group<T>>>, SigningError> {
         self.groups.generate_group(NonEmpty {
             head: self.active.clone().into(),
             tail: coparents,
         })
     }
 
-    pub fn generate_doc(&mut self, coparents: Vec<Agent<T>>) -> DocumentId {
+    pub fn generate_doc(
+        &mut self,
+        coparents: Vec<Agent<T>>,
+    ) -> Result<DocumentId, DelegationError> {
         let parents = NonEmpty {
             head: self.active.clone().into(),
             tail: coparents,
@@ -71,30 +77,18 @@ impl<T: ContentRef> Context<T> {
         self.active.agent_id()
     }
 
-    pub fn sign<U: Serialize>(&self, data: U) -> Signed<U> {
-        self.active.sign(data)
+    pub fn try_sign<U: Serialize>(&self, data: U) -> Result<Signed<U>, SigningError> {
+        self.active.try_sign(data)
     }
-
-    // pub fn encrypt(
-    //     &self,
-    //     data: Vec<u8>,
-    //     public_keys: HashSet<&ShareKey>,
-    // ) -> (
-    //     Encrypted<Vec<u8>>,
-    //     Encrypted<chacha20poly1305::XChaChaPoly1305>,
-    // ) {
-    //     let symmetric_key: [u8; 32] = rand::thread_rng();
-    //     dcgka_2m_broadcast(key, data, public_keys)
-    // }
 
     pub fn revoke_member(
         &mut self,
         to_revoke: &AgentId,
         resource: &mut Membered<T>,
         relevant_docs: &[&Rc<Document<T>>],
-    ) {
+    ) -> Result<(), SigningError> {
         // FIXME check which docs are reachable from this group and include them automatically
-        resource.revoke_member(to_revoke, &self.active.signer, relevant_docs);
+        resource.revoke_member(to_revoke, &self.active.signer, relevant_docs)
     }
 
     pub fn accessible_docs(&self) -> BTreeMap<DocumentId, (&Document<T>, Access)> {

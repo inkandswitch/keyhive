@@ -1,6 +1,6 @@
 use crate::crypto::{
     share_key::{ShareKey, ShareSecretKey},
-    signed::Signed,
+    signed::{Signed, SigningError},
 };
 use crate::util::content_addressed_map::CaMap;
 use serde::{Deserialize, Serialize};
@@ -20,20 +20,25 @@ impl PrekeyState {
         }
     }
 
-    pub fn generate(signing_key: &ed25519_dalek::SigningKey, size: usize) -> Self {
-        let mut keypairs = HashMap::new();
-        let mut ops = CaMap::new();
+    pub fn generate(
+        signing_key: &ed25519_dalek::SigningKey,
+        size: usize,
+    ) -> Result<Self, SigningError> {
+        let (keypairs, ops) = (0..size).try_fold(
+            (HashMap::new(), CaMap::new()),
+            |(mut keypairs, mut ops), _| {
+                let secret_key = ShareSecretKey::generate();
+                let share_key = secret_key.share_key();
 
-        for _ in 0..size {
-            let secret_key = ShareSecretKey::generate();
-            let share_key = secret_key.share_key();
+                let op = Signed::try_sign(KeyOp::Add(AddKeyOp { share_key }), &signing_key)?;
+                ops.insert(op.into());
+                keypairs.insert(share_key, secret_key);
 
-            let op = Signed::sign(KeyOp::Add(AddKeyOp { share_key }), &signing_key);
-            ops.insert(op.into());
-            keypairs.insert(share_key, secret_key);
-        }
+                Ok::<_, SigningError>((keypairs, ops))
+            },
+        )?;
 
-        Self { ops, keypairs }
+        Ok(Self { ops, keypairs })
     }
 
     pub fn materialize(&self) -> HashSet<ShareKey> {
