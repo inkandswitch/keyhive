@@ -20,12 +20,13 @@ use crate::{
 };
 use id::GroupId;
 use nonempty::NonEmpty;
-use operation::{delegation::Delegation, revocation::Revocation, Operation};
+use operation::{delegation::Delegation, revocation::Revocation, AncestorError, Operation};
 use serde::{ser::SerializeStruct, Serialize, Serializer};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
+use thiserror::Error;
 
 /// A collection of agents with no associated content.
 ///
@@ -142,7 +143,7 @@ impl<T: ContentRef> Group<T> {
         signing_key: &ed25519_dalek::SigningKey,
         after_revocations: &[&Rc<Signed<Revocation<T>>>],
         relevant_docs: &[&Rc<Document<T>>],
-    ) -> Result<(), SigningError> {
+    ) -> Result<(), AddMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
         let agent: Agent<T> = Rc::new(indie).into();
         let proof = if self.verifying_key() == signing_key.verifying_key() {
@@ -150,11 +151,15 @@ impl<T: ContentRef> Group<T> {
         } else {
             let p = self
                 .get_capability(&agent.agent_id())
-                .expect("FIXME error handling for user not found on group");
+                .ok_or(AddMemberError::NoProof)?;
 
             if can > p.payload().can {
-                panic!("FIXME escelation");
+                return Err(AddMemberError::AccessEscelation {
+                    wanted: can,
+                    have: p.payload().can,
+                });
             }
+
             Some(p.clone())
         };
 
@@ -224,32 +229,35 @@ impl<T: ContentRef> Group<T> {
         // FIXME check that you can actually do this with tiebreaking, seniroity etc etc
     }
 
-    pub fn materialize(&mut self) {
-        for (_, op) in
-            Operation::topsort(&self.state.delegation_heads, &self.state.revocation_heads)
-                .expect("FIXME")
-                .iter()
-        {
-            match op {
-                Operation::Delegation(d) => {
-                    if let Some(mut_dlgs) = self.members.get_mut(&d.payload().delegate.agent_id()) {
-                        mut_dlgs.push(d.clone());
-                    } else {
-                        self.members
-                            .insert(d.payload().delegate.agent_id(), vec![d.clone()]);
+    pub fn materialize(&mut self) -> Result<(), AncestorError> {
+        Ok(
+            for (_, op) in
+                Operation::topsort(&self.state.delegation_heads, &self.state.revocation_heads)?
+                    .iter()
+            {
+                match op {
+                    Operation::Delegation(d) => {
+                        if let Some(mut_dlgs) =
+                            self.members.get_mut(&d.payload().delegate.agent_id())
+                        {
+                            mut_dlgs.push(d.clone());
+                        } else {
+                            self.members
+                                .insert(d.payload().delegate.agent_id(), vec![d.clone()]);
+                        }
+                    }
+                    Operation::Revocation(r) => {
+                        if let Some(mut_dlgs) = self
+                            .members
+                            .get_mut(&r.payload().revoke.payload().delegate.agent_id())
+                        {
+                            // FIXME maintain this as a CaMap for easier removals, too
+                            mut_dlgs.retain(|d| *d != r.payload().revoke);
+                        }
                     }
                 }
-                Operation::Revocation(r) => {
-                    if let Some(mut_dlgs) = self
-                        .members
-                        .get_mut(&r.payload().revoke.payload().delegate.agent_id())
-                    {
-                        // FIXME maintain this as a CaMap for easier removals, too
-                        mut_dlgs.retain(|d| *d != r.payload().revoke);
-                    }
-                }
-            }
-        }
+            },
+        )
     }
 
     pub fn add_revocation(
@@ -314,6 +322,18 @@ impl<T: ContentRef> Serialize for Group<T> {
         state.serialize_field("state", &self.state)?;
         state.end()
     }
+}
+
+#[derive(Debug, Error)]
+pub enum AddMemberError {
+    #[error(transparent)]
+    SigningError(#[from] SigningError),
+
+    #[error("No proof found")]
+    NoProof,
+
+    #[error("Access escalation. Wanted {wanted}, only have {have}.")]
+    AccessEscelation { wanted: Access, have: Access },
 }
 
 #[cfg(test)]

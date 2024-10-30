@@ -20,7 +20,10 @@ pub fn dcgka_2m_broadcast<'a, T: Serialize>(
 
         let nonce = Siv::new(&shared_key, &key.0, doc);
 
-        let mut bytes = shared_key.encrypt(nonce, &[]).expect("FIXME").to_vec();
+        let mut bytes = shared_key
+            .encrypt(nonce, &[])
+            .expect("FIXME temp function")
+            .to_vec();
         bytes.append(&mut key.0.to_vec());
 
         let wrapped_key: Encrypted<chacha20poly1305::XChaCha20Poly1305> =

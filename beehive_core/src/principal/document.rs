@@ -12,7 +12,10 @@ use crate::{
     principal::{
         agent::{Agent, AgentId},
         group::{
-            operation::delegation::{Delegation, DelegationError},
+            operation::{
+                delegation::{Delegation, DelegationError},
+                AncestorError,
+            },
             Group,
         },
         identifier::Identifier,
@@ -122,8 +125,8 @@ impl<T: ContentRef> Document<T> {
             .revoke_member(member_id, signing_key, relevant_docs)
     }
 
-    pub fn materialize(&mut self) {
-        self.group.materialize();
+    pub fn materialize(&mut self) -> Result<(), AncestorError> {
+        self.group.materialize()
     }
 }
 
