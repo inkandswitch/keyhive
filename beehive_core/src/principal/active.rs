@@ -240,9 +240,9 @@ mod tests {
     #[test]
     fn test_sign() {
         let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Active::generate(signer);
+        let active = Active::generate(signer).unwrap();
         let message = "hello world".as_bytes();
-        let signed = active.sign(message);
+        let signed = active.try_sign(message).unwrap();
 
         assert!(signed.try_verify().is_ok());
     }

@@ -383,10 +383,16 @@ mod tests {
         let alice_agent: Agent<T> = alice.into();
         let bob_agent = bob.into();
 
-        let g0 = store.generate_group(nonempty![alice_agent.dupe()]);
-        let g1 = store.generate_group(nonempty![alice_agent, g0.clone().into()]);
-        let g2 = store.generate_group(nonempty![bob_agent, g1.clone().into()]);
-        let g3 = store.generate_group(nonempty![g1.clone().into(), g2.clone().into()]);
+        let g0 = store.generate_group(nonempty![alice_agent.dupe()]).unwrap();
+        let g1 = store
+            .generate_group(nonempty![alice_agent, g0.clone().into()])
+            .unwrap();
+        let g2 = store
+            .generate_group(nonempty![bob_agent, g1.clone().into()])
+            .unwrap();
+        let g3 = store
+            .generate_group(nonempty![g1.clone().into(), g2.clone().into()])
+            .unwrap();
 
         [g0, g1, g2, g3]
     }
@@ -397,29 +403,32 @@ mod tests {
         bob: Rc<Individual>,
     ) -> [Rc<RefCell<Group<T>>>; 10] {
         let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Active::generate(signer);
+        let active = Active::generate(signer).unwrap();
 
-        let group0 = gs.generate_group(nonempty![alice.into()]);
-        let group1 = gs.generate_group(nonempty![bob.into()]);
-        let group2 = gs.generate_group(nonempty![group1.clone().into()]);
-        let group3 = gs.generate_group(nonempty![group2.clone().into()]);
-        let group4 = gs.generate_group(nonempty![group3.clone().into()]);
-        let group5 = gs.generate_group(nonempty![group4.clone().into()]);
-        let group6 = gs.generate_group(nonempty![group5.clone().into()]);
-        let group7 = gs.generate_group(nonempty![group6.clone().into()]);
-        let group8 = gs.generate_group(nonempty![group7.clone().into()]);
-        let group9 = gs.generate_group(nonempty![group8.clone().into()]);
+        let group0 = gs.generate_group(nonempty![alice.into()]).unwrap();
+        let group1 = gs.generate_group(nonempty![bob.into()]).unwrap();
+        let group2 = gs.generate_group(nonempty![group1.clone().into()]).unwrap();
+        let group3 = gs.generate_group(nonempty![group2.clone().into()]).unwrap();
+        let group4 = gs.generate_group(nonempty![group3.clone().into()]).unwrap();
+        let group5 = gs.generate_group(nonempty![group4.clone().into()]).unwrap();
+        let group6 = gs.generate_group(nonempty![group5.clone().into()]).unwrap();
+        let group7 = gs.generate_group(nonempty![group6.clone().into()]).unwrap();
+        let group8 = gs.generate_group(nonempty![group7.clone().into()]).unwrap();
+        let group9 = gs.generate_group(nonempty![group8.clone().into()]).unwrap();
 
-        group0.borrow_mut().add_delegation(Signed::sign(
-            Delegation {
-                delegate: group9.clone().into(),
-                can: Access::Admin,
-                proof: None,
-                after_revocations: vec![],
-                after_content: BTreeMap::new(),
-            },
-            &active.signer,
-        ));
+        group0.borrow_mut().add_delegation(
+            Signed::try_sign(
+                Delegation {
+                    delegate: group9.clone().into(),
+                    can: Access::Admin,
+                    proof: None,
+                    after_revocations: vec![],
+                    after_content: BTreeMap::new(),
+                },
+                &active.signer,
+            )
+            .unwrap(),
+        );
 
         [
             group0, group1, group2, group3, group4, group5, group6, group7, group8, group9,
@@ -436,7 +445,7 @@ mod tests {
         let mut gs: GroupStore<String> = GroupStore::new();
         let [g0, ..] = setup_groups(&mut gs, alice.clone(), bob);
 
-        let g0_mems = gs.transitive_members(&g0.clone().as_ref().clone().into_inner());
+        let g0_mems = gs.transitive_members(&g0.dupe().as_ref().clone().into_inner());
 
         assert_eq!(
             g0_mems,
@@ -531,30 +540,36 @@ mod tests {
     #[test]
     fn test_add_member() {
         let alice = Rc::new(setup_user());
-        let alice_agent: Agent<_> = alice.clone().into();
+        let alice_agent: Agent<_> = alice.dupe().into();
 
         let bob = Rc::new(setup_user());
-        let bob_agent: Agent<_> = bob.clone().into();
+        let bob_agent: Agent<_> = bob.dupe().into();
 
         let carol = Rc::new(setup_user());
-        let carol_agent: Agent<_> = carol.clone().into();
+        let carol_agent: Agent<_> = carol.dupe().into();
 
         let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Rc::new(Active::generate(signer));
+        let active = Rc::new(Active::generate(signer).unwrap());
 
         let mut gs: GroupStore<String> = GroupStore::new();
 
-        let g0 = gs.generate_group(nonempty![active.clone().into()]);
-        let g1 = gs.generate_group(nonempty![alice_agent, bob_agent.clone(), g0.clone().into()]);
-        let g2 = gs.generate_group(nonempty![carol_agent, g1.clone().into()]);
+        let g0 = gs.generate_group(nonempty![active.dupe().into()]).unwrap();
+        let g1 = gs
+            .generate_group(nonempty![alice_agent, bob_agent.dupe(), g0.dupe().into()])
+            .unwrap();
+        let g2 = gs
+            .generate_group(nonempty![carol_agent, g1.dupe().into()])
+            .unwrap();
 
-        g0.borrow_mut().add_member(
-            carol.clone().into(),
-            Access::Write,
-            &active.signer,
-            &[],
-            &[],
-        );
+        g0.borrow_mut()
+            .add_member(
+                carol.clone().into(),
+                Access::Write,
+                &active.signer,
+                &[],
+                &[],
+            )
+            .unwrap();
 
         gs.insert(g0.clone().into());
         let g0_mems = gs.transitive_members(&g0.borrow());

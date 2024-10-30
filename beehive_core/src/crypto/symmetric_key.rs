@@ -18,15 +18,15 @@ use x25519_dalek::SharedSecret;
 /// # use std::rc::Rc;
 /// # use nonempty::nonempty;
 /// let plaintext = b"hello world";
-/// let user = Individual::generate(&mut ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+/// let user = Individual::generate(&mut ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())).unwrap();
 /// let user_agent: Agent<String> = Rc::new(user).into();
-/// let doc = Document::generate(nonempty![user_agent]);
+/// let doc = Document::generate(nonempty![user_agent]).unwrap();
 ///
 /// let key = SymmetricKey::generate();
-/// let nonce = Siv::new(&key, plaintext, &doc);
+/// let nonce = Siv::new(&key, plaintext, &doc).unwrap();
 ///
-/// let ciphertext = key.encrypt(nonce, plaintext).unwrap();
-/// let decrypted = key.decrypt(nonce, &ciphertext).unwrap();
+/// let ciphertext = key.try_encrypt(nonce, plaintext).unwrap();
+/// let decrypted = key.try_decrypt(nonce, &ciphertext).unwrap();
 ///
 /// assert_eq!(decrypted, plaintext);
 /// ```
