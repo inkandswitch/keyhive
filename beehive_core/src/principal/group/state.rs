@@ -18,6 +18,7 @@ use crate::{
     },
     util::content_addressed_map::CaMap,
 };
+use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use serde::{ser::SerializeStruct, Serialize, Serializer};
 use std::{
@@ -59,7 +60,7 @@ impl<T: ContentRef> GroupState<T> {
         parents.iter().try_fold(group, |mut acc, parent| {
             let dlg = Signed::try_sign(
                 Delegation {
-                    delegate: parent.clone(),
+                    delegate: parent.dupe(),
                     can: Access::Admin,
 
                     proof: None,
@@ -71,7 +72,7 @@ impl<T: ContentRef> GroupState<T> {
 
             let rc = Rc::new(dlg);
 
-            acc.delegations.insert(rc.clone());
+            acc.delegations.insert(rc.dupe());
             acc.delegation_heads.insert(rc);
 
             Ok(acc)
@@ -113,7 +114,7 @@ impl<T: ContentRef> GroupState<T> {
         delegation.try_verify()?;
 
         let rc = Rc::new(delegation);
-        let hash = self.delegations.insert(rc.clone());
+        let hash = self.delegations.insert(rc.dupe());
 
         if let Some(proof) = &rc.payload().proof {
             if self.delegations.remove_by_value(&proof).is_some() {

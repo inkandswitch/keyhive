@@ -25,6 +25,7 @@ use crate::{
         membered::Membered,
     },
 };
+use dupe::Dupe;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::Serialize;
 use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
@@ -100,9 +101,9 @@ impl Active {
 
         let delegation = self
             .try_sign(Delegation {
-                delegate: delegate.clone(),
+                delegate: delegate.dupe(),
                 can: attenuate,
-                proof: Some(proof.clone()),
+                proof: Some(proof.dupe()),
                 after_revocations,
                 after_content,
             })

@@ -10,6 +10,7 @@ use crate::{
         identifier::Identifier,
     },
 };
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, rc::Rc};
 
@@ -37,7 +38,7 @@ impl<T: ContentRef> Revocation<T> {
         Vec<Rc<Signed<Revocation<T>>>>,
         &BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)>,
     ) {
-        (vec![self.revoke.clone()], vec![], &self.after_content)
+        (vec![self.revoke.dupe()], vec![], &self.after_content)
     }
 }
 

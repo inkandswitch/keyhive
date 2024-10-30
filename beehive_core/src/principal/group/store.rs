@@ -10,6 +10,7 @@ use crate::{
     },
 };
 use base64::prelude::*;
+use dupe::{Dupe, IterDupedExt, OptionDupedExt};
 use nonempty::NonEmpty;
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
@@ -39,16 +40,16 @@ impl<T: ContentRef> GroupStore<T> {
     ) -> Result<Rc<RefCell<Group<T>>>, SigningError> {
         let new_group: Group<T> = Group::generate(parents)?;
         let rc = Rc::new(RefCell::new(new_group));
-        self.insert(rc.clone());
+        self.insert(rc.dupe());
         Ok(rc)
     }
 
     pub fn get(&self, id: &GroupId) -> Option<Rc<RefCell<Group<T>>>> {
-        self.0.get(id).cloned()
+        self.0.get(id).duped()
     }
 
     pub fn values(&self) -> Vec<Rc<RefCell<Group<T>>>> {
-        self.0.values().cloned().collect()
+        self.0.values().duped().collect()
     }
 
     pub fn iter(&self) -> std::collections::btree_map::Iter<GroupId, Rc<RefCell<Group<T>>>> {

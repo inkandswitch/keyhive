@@ -12,6 +12,7 @@ use crate::{
         identifier::Identifier,
     },
 };
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, hash::Hash, rc::Rc};
 use thiserror::Error;
@@ -56,7 +57,7 @@ impl<T: ContentRef> Delegation<T> {
         Option<Rc<Signed<Delegation<T>>>>,
         &[Rc<Signed<Revocation<T>>>],
     ) {
-        (self.proof.clone(), &self.after_revocations)
+        (self.proof.dupe(), &self.after_revocations)
     }
 
     pub fn is_root(&self) -> bool {

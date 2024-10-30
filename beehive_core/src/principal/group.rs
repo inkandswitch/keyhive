@@ -18,6 +18,7 @@ use crate::{
     crypto::signed::{Signed, SigningError},
     util::content_addressed_map::CaMap,
 };
+use dupe::{Dupe, IterDupedExt};
 use id::GroupId;
 use nonempty::NonEmpty;
 use operation::{delegation::Delegation, revocation::Revocation, AncestorError, Operation};
@@ -55,7 +56,7 @@ impl<T: ContentRef> Group<T> {
         parents.iter().try_fold((), |_, parent| {
             let dlg = Signed::try_sign(
                 Delegation {
-                    delegate: parent.clone(),
+                    delegate: parent.dupe(),
                     can: Access::Admin,
                     proof: None,
                     after_revocations: vec![],
@@ -65,8 +66,8 @@ impl<T: ContentRef> Group<T> {
             )?;
 
             let rc = Rc::new(dlg);
-            delegations.insert(rc.clone());
-            delegation_heads.insert(rc.clone());
+            delegations.insert(rc.dupe());
+            delegation_heads.insert(rc.dupe());
             members.insert((*parent).agent_id(), vec![rc]);
 
             Ok::<(), SigningError>(())
@@ -124,7 +125,7 @@ impl<T: ContentRef> Group<T> {
 
         let id = signed_delegation.payload().delegate.agent_id();
         let rc = Rc::new(signed_delegation);
-        self.state.delegations.insert(rc.clone());
+        self.state.delegations.insert(rc.dupe());
 
         match self.members.get_mut(&id) {
             Some(caps) => {
@@ -160,7 +161,7 @@ impl<T: ContentRef> Group<T> {
                 });
             }
 
-            Some(p.clone())
+            Some(p.dupe())
         };
 
         let delegation = Signed::try_sign(
@@ -168,14 +169,14 @@ impl<T: ContentRef> Group<T> {
                 delegate: member_to_add,
                 can,
                 proof,
-                after_revocations: after_revocations.into_iter().cloned().cloned().collect(),
+                after_revocations: after_revocations.into_iter().duped().duped().collect(),
                 after_content: relevant_docs
                     .iter()
                     .map(|d| {
                         (
                             d.doc_id(),
                             (
-                                (*d).clone(),
+                                (*d).dupe(),
                                 d.content_heads.iter().map(|c| (*c).clone()).collect(),
                             ),
                         )
@@ -200,7 +201,7 @@ impl<T: ContentRef> Group<T> {
             revoke_dlgs.iter().try_fold((), |_, dlg| {
                 let revocation = Signed::try_sign(
                     Revocation {
-                        revoke: dlg.clone(),
+                        revoke: dlg.dupe(),
                         proof: None, // FIXME
                         after_content: relevant_docs
                             .iter()
@@ -208,7 +209,7 @@ impl<T: ContentRef> Group<T> {
                                 (
                                     d.doc_id(),
                                     (
-                                        (*d).clone(),
+                                        (*d).dupe(),
                                         d.content_heads.iter().map(|c| (*c).clone()).collect(),
                                     ),
                                 )
@@ -240,10 +241,10 @@ impl<T: ContentRef> Group<T> {
                         if let Some(mut_dlgs) =
                             self.members.get_mut(&d.payload().delegate.agent_id())
                         {
-                            mut_dlgs.push(d.clone());
+                            mut_dlgs.push(d.dupe());
                         } else {
                             self.members
-                                .insert(d.payload().delegate.agent_id(), vec![d.clone()]);
+                                .insert(d.payload().delegate.agent_id(), vec![d.dupe()]);
                         }
                     }
                     Operation::Revocation(r) => {
@@ -382,7 +383,7 @@ mod tests {
         let alice_agent: Agent<T> = alice.into();
         let bob_agent = bob.into();
 
-        let g0 = store.generate_group(nonempty![alice_agent.clone()]);
+        let g0 = store.generate_group(nonempty![alice_agent.dupe()]);
         let g1 = store.generate_group(nonempty![alice_agent, g0.clone().into()]);
         let g2 = store.generate_group(nonempty![bob_agent, g1.clone().into()]);
         let g3 = store.generate_group(nonempty![g1.clone().into(), g2.clone().into()]);

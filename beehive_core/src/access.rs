@@ -1,5 +1,6 @@
 //! Access levels.
 
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -8,7 +9,9 @@ use proptest_derive::Arbitrary;
 
 /// Access levels for a capability.
 #[cfg_attr(feature = "test_utils", derive(Arbitrary))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Dupe, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub enum Access {
     /// The ability to retrieve bytes over the network.
     Pull,

@@ -136,7 +136,7 @@ impl<T: ContentRef> Operation<T> {
         Ok(ancestors.into_iter().fold(
             (CaMap::new(), 0),
             |(mut acc_set, acc_count), (op, count)| {
-                acc_set.insert(Rc::new(op.clone())); // FIXME move RCs out of CaMap
+                acc_set.insert(Rc::new(op)); // FIXME move RCs out of CaMap
 
                 if count > acc_count {
                     (acc_set, count)

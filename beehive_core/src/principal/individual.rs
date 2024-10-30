@@ -5,7 +5,6 @@ pub mod state;
 
 use super::{agent::AgentId, verifiable::Verifiable};
 use crate::crypto::{digest::Digest, share_key::ShareKey, signed::SigningError};
-use base64::prelude::*;
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
 use serde::{Deserialize, Serialize};
@@ -66,13 +65,6 @@ impl std::hash::Hash for Individual {
         for pk in self.prekeys.iter() {
             pk.hash(state);
         }
-    }
-}
-
-// FIXME required?
-impl std::fmt::Display for Individual {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        BASE64_STANDARD.encode(self.id.to_bytes()).fmt(f)
     }
 }
 

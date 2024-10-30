@@ -23,6 +23,7 @@ use crate::{
     },
     util::content_addressed_map::CaMap,
 };
+use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
 use nonempty::NonEmpty;
@@ -78,7 +79,7 @@ impl<T: ContentRef> Document<T> {
             |mut acc, parent| {
                 let dlg = Signed::try_sign(
                     Delegation {
-                        delegate: parent.clone(),
+                        delegate: parent.dupe(),
                         can: Access::Admin,
                         proof: None,
                         after_revocations: vec![],
@@ -88,8 +89,8 @@ impl<T: ContentRef> Document<T> {
                 )?;
 
                 let rc = Rc::new(dlg);
-                acc.group.state.delegations.insert(rc.clone());
-                acc.group.state.delegation_heads.insert(rc.clone());
+                acc.group.state.delegations.insert(rc.dupe());
+                acc.group.state.delegation_heads.insert(rc.dupe());
                 acc.group.members.insert(parent.agent_id(), vec![rc]);
 
                 Ok(acc)

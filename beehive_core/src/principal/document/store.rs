@@ -7,6 +7,7 @@ use crate::{
         group::operation::delegation::DelegationError,
     },
 };
+use dupe::Dupe;
 use nonempty::NonEmpty;
 use std::collections::BTreeMap;
 
@@ -52,7 +53,7 @@ impl<T: ContentRef> DocumentStore<T> {
         for dlgs in doc.group.members.values() {
             for delegation in dlgs {
                 explore.push(GroupAccess {
-                    agent: delegation.payload().delegate.clone(),
+                    agent: delegation.payload().delegate.dupe(),
                     agent_access: delegation.payload().can, // FIXME need to lookup
                     parent_access: Access::Admin,
                 });

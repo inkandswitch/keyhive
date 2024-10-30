@@ -14,6 +14,7 @@ use crate::{
         verifiable::Verifiable,
     },
 };
+use dupe::Dupe;
 use nonempty::NonEmpty;
 use serde::Serialize;
 use std::{
@@ -53,7 +54,7 @@ impl<T: ContentRef> Context<T> {
         coparents: Vec<Agent<T>>,
     ) -> Result<Rc<RefCell<Group<T>>>, SigningError> {
         self.groups.generate_group(NonEmpty {
-            head: self.active.clone().into(),
+            head: self.active.dupe().into(),
             tail: coparents,
         })
     }
@@ -63,7 +64,7 @@ impl<T: ContentRef> Context<T> {
         coparents: Vec<Agent<T>>,
     ) -> Result<DocumentId, DelegationError> {
         let parents = NonEmpty {
-            head: self.active.clone().into(),
+            head: self.active.dupe().into(),
             tail: coparents,
         };
         self.docs.generate_document(parents)
@@ -115,7 +116,7 @@ impl<T: ContentRef> Context<T> {
 
             if let Some(proofs) = group.borrow().members().get(&agent_id) {
                 for proof in proofs {
-                    explore.push((group.clone(), proof.payload().can));
+                    explore.push((group.dupe(), proof.payload().can));
                 }
             }
         }
@@ -146,7 +147,7 @@ impl<T: ContentRef> Context<T> {
 
                 if let Some(proofs) = focus_group.borrow().members().get(&agent_id) {
                     for proof in proofs {
-                        explore.push((focus_group.clone(), proof.payload().can));
+                        explore.push((focus_group.dupe(), proof.payload().can));
                     }
                 }
             }
@@ -174,6 +175,6 @@ impl<T: ContentRef> Verifiable for Context<T> {
 
 impl<T: ContentRef> From<&Context<T>> for Agent<T> {
     fn from(context: &Context<T>) -> Self {
-        context.active.clone().into()
+        context.active.dupe().into()
     }
 }
