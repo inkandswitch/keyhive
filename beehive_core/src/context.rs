@@ -24,7 +24,7 @@ use std::{
 };
 
 /// The main object for a user agent & top-level owned stores.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Context<T: ContentRef> {
     /// The [`Active`] user agent.
     pub active: Rc<Active>,

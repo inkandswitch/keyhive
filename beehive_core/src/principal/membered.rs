@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt, rc::Rc};
 
 /// The union of Agents that have updatable membership
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Membered<'a, T: ContentRef> {
     Group(&'a mut Group<T>),
     Document(&'a mut Document<T>),

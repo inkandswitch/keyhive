@@ -202,7 +202,7 @@ impl<T: ContentRef> Group<T> {
                 let revocation = Signed::try_sign(
                     Revocation {
                         revoke: dlg.dupe(),
-                        proof: None, // FIXME
+                        proof: None, // FIXME lookup a valid proof
                         after_content: relevant_docs
                             .iter()
                             .map(|d| {
@@ -301,6 +301,7 @@ impl<T: ContentRef> Verifiable for Group<T> {
     }
 }
 
+// FIXME test and consistent order
 impl<T: ContentRef> std::hash::Hash for Group<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         for m in self.members.iter() {

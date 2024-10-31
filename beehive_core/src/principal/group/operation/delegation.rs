@@ -77,51 +77,6 @@ impl<T: ContentRef> Signed<Delegation<T>> {
     }
 }
 
-// FIXME test FIXME just and compare?
-// impl<'a, T: ContentRef> PartialOrd for Delegation<'a, T> {
-//     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-//         let self_after = self.after();
-//         let other_after = other.after();
-//
-//         match self.can.partial_cmp(&other.can) {
-//             Some(std::cmp::Ordering::Equal) => {
-//                 match self
-//                     .delegate
-//                     .agent_id()
-//                     .partial_cmp(&other.delegate.agent_id())
-//                 {
-//                     Some(std::cmp::Ordering::Equal) => {
-//                         match self_after.0.len().partial_cmp(&other_after.0.len()) {
-//                             Some(std::cmp::Ordering::Equal) => {
-//                                 match self_after.1.len().partial_cmp(&other_after.1.len()) {
-//                                     Some(std::cmp::Ordering::Equal) => {
-//                                         let self_after = self_after
-//                                             .0
-//                                             .iter()
-//                                             .map(|d| d.subject())
-//                                             .collect::<Vec<_>>();
-//                                         let other_after = other_after
-//                                             .0
-//                                             .iter()
-//                                             .map(|d| d.subject())
-//                                             .collect::<Vec<_>>();
-//
-//                                         self_after.partial_cmp(&other_after)
-//                                     }
-//                                     other => other,
-//                                 }
-//                             }
-//                             other => other,
-//                         }
-//                     }
-//                     other => other,
-//                 }
-//             }
-//             other => other,
-//         }
-//     }
-// }
-
 impl<T: ContentRef> Serialize for Delegation<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // FIXME could be a heavy clone since this is used to hash

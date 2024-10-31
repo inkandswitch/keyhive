@@ -35,7 +35,7 @@ use std::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document<T: ContentRef> {
     pub(crate) group: Group<T>,
-    pub(crate) reader_keys: HashMap<IndividualId, (Rc<Individual>, ShareKey)>, // FIXME May remove when BeeKEM, also FIXME Individual ID
+    pub(crate) reader_keys: HashMap<IndividualId, (Rc<Individual>, ShareKey)>,
 
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
