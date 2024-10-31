@@ -118,7 +118,7 @@ impl Active {
         &self,
         doc: &Document<T>,
         to: &Individual,
-        message: &mut [u8],
+        mut message: Vec<u8>,
     ) -> Result<Encrypted<&[u8]>, ShareError> {
         let recipient_share_pk = doc
             .reader_keys
@@ -137,13 +137,11 @@ impl Active {
 
         let key: SymmetricKey = our_sk.diffie_hellman(&recipient_share_pk.1.into()).into();
 
-        let nonce = Siv::new(&key, message, doc).map_err(ShareError::SivError)?;
-        let bytes: Vec<u8> = key
-            .try_encrypt(nonce, message)
-            .map_err(ShareError::EncryptionFailed)?
-            .to_vec();
+        let nonce = Siv::new(&key, message.as_slice(), doc).map_err(ShareError::SivError)?;
+        key.try_encrypt(nonce, &mut message)
+            .map_err(ShareError::EncryptionFailed)?;
 
-        Ok(Encrypted::new(nonce.into(), bytes))
+        Ok(Encrypted::new(nonce.into(), message))
     }
 }
 

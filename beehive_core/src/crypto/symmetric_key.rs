@@ -1,7 +1,8 @@
 //! Symmetric cipher newtype.
 
-use super::siv::Siv;
-use aead::Aead;
+use super::siv::{Siv, SEPARATOR};
+// use aead::AeadInPlace;
+use chacha20poly1305::AeadInPlace;
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305};
 use serde::{Deserialize, Serialize};
 use x25519_dalek::SharedSecret;
@@ -51,13 +52,23 @@ impl SymmetricKey {
     }
 
     /// Encrypt data with the [`SymmetricKey`].
-    pub fn try_encrypt(&self, nonce: Siv, data: &[u8]) -> Result<Vec<u8>, chacha20poly1305::Error> {
-        self.to_xchacha().encrypt(&nonce.as_xnonce(), data)
+    pub fn try_encrypt(
+        &self,
+        nonce: Siv,
+        data: &mut Vec<u8>,
+    ) -> Result<(), chacha20poly1305::Error> {
+        self.to_xchacha()
+            .encrypt_in_place(&nonce.as_xnonce(), SEPARATOR, data)
     }
 
     /// Decrypt data with the [`SymmetricKey`].
-    pub fn try_decrypt(&self, nonce: Siv, data: &[u8]) -> Result<Vec<u8>, chacha20poly1305::Error> {
-        self.to_xchacha().decrypt(&nonce.as_xnonce(), data)
+    pub fn try_decrypt(
+        &self,
+        nonce: Siv,
+        data: &mut Vec<u8>,
+    ) -> Result<(), chacha20poly1305::Error> {
+        self.to_xchacha()
+            .decrypt_in_place(&nonce.as_xnonce(), SEPARATOR, data)
     }
 }
 

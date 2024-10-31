@@ -29,6 +29,8 @@ use std::io::Read;
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Siv(pub [u8; 24]);
 
+pub const SEPARATOR: &[u8] = b"/automerge/beehive/";
+
 impl Siv {
     pub fn new<T: ContentRef>(
         key: &SymmetricKey,
@@ -36,7 +38,7 @@ impl Siv {
         doc: &Document<T>,
     ) -> Result<Self, std::io::Error> {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(b"/automerge/beehive/"); // FIXME also use AEAD!
+        hasher.update(SEPARATOR);
         hasher.update(doc.doc_id().as_slice());
         hasher.update(key.as_slice());
         hasher.update(plaintext);
