@@ -18,7 +18,7 @@ use x25519_dalek::SharedSecret;
 /// # };
 /// # use std::rc::Rc;
 /// # use nonempty::nonempty;
-/// let plaintext = b"hello world";
+/// let mut plaintext = b"hello world";
 /// let user = Individual::generate(&mut ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())).unwrap();
 /// let user_agent: Agent<String> = Rc::new(user).into();
 /// let doc = Document::generate(nonempty![user_agent]).unwrap();
@@ -26,10 +26,11 @@ use x25519_dalek::SharedSecret;
 /// let key = SymmetricKey::generate();
 /// let nonce = Siv::new(&key, plaintext, &doc).unwrap();
 ///
-/// let ciphertext = key.try_encrypt(nonce, plaintext).unwrap();
-/// let decrypted = key.try_decrypt(nonce, &ciphertext).unwrap();
+/// let mut roundtrip_buf = plaintext.to_vec();
+/// key.try_encrypt(nonce, &mut roundtrip_buf).unwrap();
+/// key.try_decrypt(nonce, &mut roundtrip_buf).unwrap();
 ///
-/// assert_eq!(decrypted, plaintext);
+/// assert_eq!(roundtrip_buf.as_slice(), plaintext);
 /// ```
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SymmetricKey(pub [u8; 32]);
