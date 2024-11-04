@@ -54,7 +54,7 @@ Note that these names are _extremely loose_ and depend on the exact path of name
 
 You can also discover others names for you, such as `edgename://D04/That Person That I Met Once in Berlin`.
 
-This is especially helpful with address book documents controlled by groups, since this can be  FIXME
+This is especially helpful with address book documents controlled by groups, since this can be managed by the group itself.
 
 <!-- External Links -->
 [Spritely pet names]: https://spritely.institute/static/papers/petnames.html
