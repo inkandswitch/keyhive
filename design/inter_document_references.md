@@ -1,9 +1,5 @@
 # Inter-Document References
 
-FIXME rename to "causal pointer"
-
-FIXME TL;DR
-
 NOTE: this also gives a way to handle "branch heads".
 
 ```rust
@@ -13,4 +9,4 @@ struct SoftPointer {
 }
 ```
 
-TODO: Expand this section here to talk about how this enables you to track more like Git, including signing over data when updating a pointer.
+<!-- Expand this section here to talk about how this enables you to track more like Git, including signing over data when updating a pointer. -->

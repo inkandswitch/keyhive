@@ -169,7 +169,7 @@ flowchart
     pointer_head --> block3
 ```
 
-Note that this may not immedietly cover all of the nodes in the history. For example, above we were able to discover a complete history causally prior to `ej9`. Notably, this _does not_ include `fv7`, which we know a priori must be one of the following:
+Note that this may not immediately cover all of the nodes in the history. For example, above we were able to discover a complete history causally prior to `ej9`. Notably, this _does not_ include `fv7`, which we know a priori must be one of the following:
 
 * A concurrent operation
 * A _descendant_ of `ej9`
