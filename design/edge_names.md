@@ -48,7 +48,7 @@ flowchart TD
 
 Note that these names are _extremely loose_ and depend on the exact path of name authorities. By convention in this document, we will use the familiar URL format since it represents paths under an authority. For example:
 
-* `edgename:PvH` (i.e. your name for `6Mk`) FIXME URL structure
+* `edgename:PvH` (i.e. your name for `6Mk`)
 * `edgename://1dK/Peter van Hardenburg` directly claimed names
 * `edgename://1dK/Alex Good/Peter` transitive names
 
