@@ -58,10 +58,16 @@ impl PrekeyState {
         }
 
         for tombstone in to_drop {
-            keys.remove(&tombstone);
+            keys.remove(tombstone);
         }
 
         keys
+    }
+}
+
+impl Default for PrekeyState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -59,7 +59,7 @@ impl SymmetricKey {
         data: &mut Vec<u8>,
     ) -> Result<(), chacha20poly1305::Error> {
         self.to_xchacha()
-            .encrypt_in_place(&nonce.as_xnonce(), SEPARATOR, data)
+            .encrypt_in_place(nonce.as_xnonce(), SEPARATOR, data)
     }
 
     /// Decrypt data with the [`SymmetricKey`].
@@ -69,7 +69,7 @@ impl SymmetricKey {
         data: &mut Vec<u8>,
     ) -> Result<(), chacha20poly1305::Error> {
         self.to_xchacha()
-            .decrypt_in_place(&nonce.as_xnonce(), SEPARATOR, data)
+            .decrypt_in_place(nonce.as_xnonce(), SEPARATOR, data)
     }
 }
 

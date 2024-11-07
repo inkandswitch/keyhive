@@ -1,0 +1,28 @@
+name: Rust
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build
+      run: cargo build --verbose
+    - name: Check
+      run: cargo check --verbose
+    - name: Tests
+      run: cargo test --verbose
+    - name: Clippy
+      run: cargo clippy
+    - name: Security vulnerability audit
+      run: cargo audit

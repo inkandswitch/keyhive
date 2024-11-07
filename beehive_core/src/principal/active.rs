@@ -58,7 +58,7 @@ impl Active {
     }
 
     pub fn agent_id(&self) -> AgentId {
-        AgentId::IndividualId(self.id().into())
+        AgentId::IndividualId(self.id())
     }
 
     /// Sign a payload.
@@ -81,9 +81,9 @@ impl Active {
     }
 
     // FIXME replace with delegate_to
-    pub fn make_delegation<'a, T: ContentRef>(
+    pub fn make_delegation<T: ContentRef>(
         &self,
-        subject: &Membered<'a, T>,
+        subject: &Membered<'_, T>,
         attenuate: Access,
         delegate: Agent<T>,
         after_revocations: Vec<Rc<Signed<Revocation<T>>>>,
@@ -114,7 +114,7 @@ impl Active {
         Ok(delegation)
     }
 
-    pub fn encrypt_to<'a, T: ContentRef>(
+    pub fn encrypt_to<T: ContentRef>(
         &self,
         doc: &Document<T>,
         to: &Individual,
@@ -155,8 +155,8 @@ impl Debug for Active {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let keypairs_hidden_secret_keys: Vec<(&ShareKey, &str)> = self
             .share_key_pairs
-            .iter()
-            .map(|(pk, _sk)| (pk, "<SecretKey>"))
+            .keys()
+            .map(|pk| (pk, "<SecretKey>"))
             .collect();
 
         f.debug_struct("Active")

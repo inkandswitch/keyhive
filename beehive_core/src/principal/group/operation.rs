@@ -201,7 +201,7 @@ impl<T: ContentRef> Operation<T> {
 
                 // Causally concurrent ops, so check revocations
                 if op.is_revocation() {
-                    match longest_path.cmp(&other_longest_path) {
+                    match longest_path.cmp(other_longest_path) {
                         Ordering::Less => adjacencies
                             .add_dependency((*digest, op), (*other_digest, (*other_op).as_ref())),
                         Ordering::Greater => adjacencies
@@ -222,10 +222,7 @@ impl<T: ContentRef> Operation<T> {
             }
         }
 
-        Ok(adjacencies
-            .into_iter()
-            .map(|(k, v)| (k, v.clone()))
-            .collect())
+        Ok(adjacencies.map(|(k, v)| (k, v.clone())).collect())
     }
 }
 

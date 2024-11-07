@@ -55,11 +55,11 @@ impl<T: ContentRef> Document<T> {
     }
 
     pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
-        &self.group.members()
+        self.group.members()
     }
 
     pub fn delegations(&self) -> &CaMap<Signed<Delegation<T>>> {
-        &self.group.delegations()
+        self.group.delegations()
     }
 
     pub fn get_capabilty(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {

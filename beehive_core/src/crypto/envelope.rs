@@ -4,7 +4,7 @@ use super::{digest::Digest, read_capability::ReadCap, symmetric_key::SymmetricKe
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[cfg_attr(doc, aquamarine::aquamarine)]
+#[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
 /// A container for an arbitrary payload and the [`ReadCap`]s required to identify and decrypt its ancestors.
 ///
 /// This is the core primitive of [causal encryption]. In the diagram below, each large block represents

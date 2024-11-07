@@ -36,8 +36,8 @@ impl<'a, T: ContentRef> Membered<'a, T> {
 
     pub fn membered_id(&self) -> MemberedId {
         match self {
-            Membered::Group(group) => MemberedId::GroupId(group.group_id().into()),
-            Membered::Document(document) => MemberedId::DocumentId(document.doc_id().into()),
+            Membered::Group(group) => MemberedId::GroupId(group.group_id()),
+            Membered::Document(document) => MemberedId::DocumentId(document.doc_id()),
         }
     }
 
@@ -137,6 +137,6 @@ impl From<MemberedId> for Identifier {
 
 impl From<GroupId> for MemberedId {
     fn from(group_id: GroupId) -> Self {
-        MemberedId::GroupId(group_id.into())
+        MemberedId::GroupId(group_id)
     }
 }

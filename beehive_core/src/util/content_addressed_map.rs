@@ -23,26 +23,6 @@ impl<T: Serialize> CaMap<T> {
         Self(std::collections::BTreeMap::new())
     }
 
-    /// Build a [`CaMap`] from a type that can be converted [`IntoIterator`].
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use std::rc::Rc;
-    /// # use beehive_core::{crypto::digest::Digest, util::content_addressed_map::CaMap};
-    /// let observed: CaMap<u8> = CaMap::from_iter([1, 2, 3]);
-    /// assert_eq!(observed.len(), 3);
-    /// assert_eq!(observed.get(&Digest::hash(&2)), Some(&Rc::new(2)));
-    /// ```
-    pub fn from_iter<I: IntoIterator<Item = T>>(iterable: I) -> Self {
-        Self(
-            iterable
-                .into_iter()
-                .map(|preimage| (Digest::hash(&preimage), Rc::new(preimage)))
-                .collect(),
-        )
-    }
-
     /// Add a new value to the map, and return the associated [`Digest`].
     pub fn insert(&mut self, value: Rc<T>) -> Digest<T> {
         let key: Digest<T> = Digest::hash(&value);
@@ -98,6 +78,36 @@ impl<T: Serialize> CaMap<T> {
 
     pub fn contains_key(&self, hash: &Digest<T>) -> bool {
         self.0.contains_key(hash)
+    }
+}
+
+impl<T: Serialize> Default for CaMap<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Serialize> FromIterator<T> for CaMap<T> {
+    /// Build a [`CaMap`] from a type that can be converted [`IntoIterator`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::rc::Rc;
+    /// # use beehive_core::{crypto::digest::Digest, util::content_addressed_map::CaMap};
+    /// let observed: CaMap<u8> = CaMap::from_iter([1, 2, 3]);
+    /// assert_eq!(observed.len(), 3);
+    /// assert_eq!(observed.get(&Digest::hash(&2)), Some(&Rc::new(2)));
+    /// ```
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+    {
+        Self(
+            iter.into_iter()
+                .map(|preimage| (Digest::hash(&preimage), Rc::new(preimage)))
+                .collect(),
+        )
     }
 }
 

@@ -70,7 +70,7 @@ impl<T: ContentRef> Signed<Delegation<T>> {
         let mut head = self;
 
         while let Some(parent) = &head.payload().proof {
-            head = &parent;
+            head = parent;
         }
 
         head.id()

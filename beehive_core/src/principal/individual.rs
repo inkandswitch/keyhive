@@ -100,7 +100,7 @@ pub struct AddReadKey {
 
 impl PartialOrd for Individual {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.id.to_bytes().partial_cmp(&other.id.to_bytes())
+        Some(self.cmp(other))
     }
 }
 

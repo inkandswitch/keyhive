@@ -103,7 +103,7 @@ impl<T: ContentRef> GroupStore<T> {
                                 access.min(proof.payload().can).min(parent_access);
 
                             let best_access =
-                                if let Some((_, prev_found_path_access)) = caps.get(&mem) {
+                                if let Some((_, prev_found_path_access)) = caps.get(mem) {
                                     (*prev_found_path_access).max(current_path_access)
                                 } else {
                                     current_path_access
@@ -124,7 +124,7 @@ impl<T: ContentRef> GroupStore<T> {
                                 access.min(proof.payload().can).min(parent_access);
 
                             let best_access =
-                                if let Some((_, prev_found_path_access)) = caps.get(&mem) {
+                                if let Some((_, prev_found_path_access)) = caps.get(mem) {
                                     (*prev_found_path_access).max(current_path_access)
                                 } else {
                                     current_path_access
