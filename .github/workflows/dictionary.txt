@@ -3,7 +3,9 @@ ChaCha's
 Automerge
 BCP
 BChaCha
+BeeKEM
 BigCo
+CGKA
 CRDT
 ChaCha
 ChaCha's
@@ -15,6 +17,7 @@ EE
 EdDSA
 FIXME
 HChaCha
+Invariants
 Memoization
 MiCKey
 Nonces
@@ -43,8 +46,11 @@ decrypt
 decrypting
 deduplicate
 delegator
+encrypter
 encryptment
 expede
+invariant
+invariants
 lookups
 namespaced
 non-extractable
