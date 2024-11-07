@@ -64,7 +64,7 @@ impl<T: Serialize> Signed<T> {
     }
 }
 
-impl<'a, T: Serialize + PartialOrd> PartialOrd for Signed<T> {
+impl<T: Serialize + PartialOrd> PartialOrd for Signed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self
             .verifying_key
@@ -89,7 +89,7 @@ impl<T: Serialize + Ord> Ord for Signed<T> {
         match self
             .verifying_key
             .as_bytes()
-            .cmp(&other.verifying_key.as_bytes())
+            .cmp(other.verifying_key.as_bytes())
         {
             Ordering::Equal => match self.signature.to_bytes().cmp(&other.signature.to_bytes()) {
                 Ordering::Equal => self.payload.cmp(&other.payload),

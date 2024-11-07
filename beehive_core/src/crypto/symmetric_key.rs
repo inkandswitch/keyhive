@@ -52,12 +52,12 @@ impl SymmetricKey {
 
     /// Encrypt data with the [`SymmetricKey`].
     pub fn encrypt(&self, nonce: Siv, data: &[u8]) -> Result<Vec<u8>, chacha20poly1305::Error> {
-        self.to_xchacha().encrypt(&nonce.as_xnonce(), data)
+        self.to_xchacha().encrypt(nonce.as_xnonce(), data)
     }
 
     /// Decrypt data with the [`SymmetricKey`].
     pub fn decrypt(&self, nonce: Siv, data: &[u8]) -> Result<Vec<u8>, chacha20poly1305::Error> {
-        self.to_xchacha().decrypt(&nonce.as_xnonce(), data)
+        self.to_xchacha().decrypt(nonce.as_xnonce(), data)
     }
 }
 

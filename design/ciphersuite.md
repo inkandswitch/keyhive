@@ -15,7 +15,7 @@ This is a key committing, nonce misuse-resistant variant of [XChaCha20-BLAKE3] [
 
 [^bchacha-note]: Why not SChaCha or BChaCha? These look even better, but we're starting to increase the amount of custom crypto that we're rolling. The reasons for the enhancements in these variants make sense, but we're not going to (e.g.) implement our own library that doesn't include HChaCha.
 
-### Key Comittment & Misuse Resistant Nonces
+### Key Commitment & Misuse Resistant Nonces
 
 > [!CAUTION]
 > This simple-looking mechanism needs further careful review and scrutiny
@@ -28,7 +28,7 @@ Under the assumption that BLAKE3 is sufficiently fast[^blake3-perf], we use Keye
 
 To help prevent nonce misuse, including both the entire payload (including causal links), cryptographically random 32-byte ChaCha key, and a domain separator guarantees a unique nonce per payload. The only way to get the same nonce is to use the exact same payload: this prevents nonce reuse with the same key across multiple payloads, and the domain separator prevents it across documents.
 
-This strategy also commits to a specific key (and reduadanctly commits to the message). On one hand, it would be nice to be able to validate the key prior to decryption (and thus saving the work of decrypting a malicious payload in the first place), the reuse resistance includes all three.
+This strategy also commits to a specific key (and redundantly commits to the message). On one hand, it would be nice to be able to validate the key prior to decryption (and thus saving the work of decrypting a malicious payload in the first place), the reuse resistance includes all three.
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐

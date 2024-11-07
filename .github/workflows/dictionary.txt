@@ -5,12 +5,14 @@ BChaCha
 BigCo
 CRDT
 ChaCha
+ChaCha's
 Crypto
 DCGKA
 DCGKA's
 DNS
 EE
 EdDSA
+FIXME
 HChaCha
 Memoization
 MiCKey
@@ -21,6 +23,7 @@ PoLA
 SChaCha
 SPKI
 Stateful
+TODO
 WebCrypto
 XChaCha
 auth
