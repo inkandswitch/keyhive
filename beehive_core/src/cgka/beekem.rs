@@ -292,7 +292,7 @@ impl BeeKem {
             if let Some(store) = self.inner_node(parent_idx)? {
                 new_path.removed_keys.append(&mut store.node_key().keys());
             }
-            let (new_parent_pk, new_parent_sk) = kdf(&child_sk)?;
+            let (new_parent_pk, new_parent_sk) = kdf(&"FIXME", &child_sk);
             self.encrypt_key_for_parent(
                 child_idx,
                 child_pk,

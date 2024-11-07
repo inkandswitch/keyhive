@@ -1,8 +1,7 @@
 //! Ciphertext with public metadata.
 
-use crate::cgka::keys::PublicKey;
-
 use super::siv::Siv;
+use crate::cgka::keys::PublicKey;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 

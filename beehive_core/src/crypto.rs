@@ -1,6 +1,7 @@
 //! Cryptographic primitives, wrappers, and utilities.
 
 pub mod digest;
+pub mod domain_separator;
 pub mod encrypted;
 pub mod envelope;
 pub mod read_capability;

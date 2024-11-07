@@ -1,7 +1,6 @@
 //! Symmetric cipher newtype.
 
-use super::siv::{Siv, SEPARATOR};
-// use aead::AeadInPlace;
+use super::{domain_separator::SEPARATOR, siv::Siv};
 use chacha20poly1305::AeadInPlace;
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305};
 use serde::{Deserialize, Serialize};

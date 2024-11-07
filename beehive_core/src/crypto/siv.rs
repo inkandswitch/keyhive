@@ -1,6 +1,6 @@
 //! Nonce-misuse resistant initialization vector.
 
-use super::symmetric_key::SymmetricKey;
+use super::{domain_separator::SEPARATOR, symmetric_key::SymmetricKey};
 use crate::{content::reference::ContentRef, principal::document::Document};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
@@ -28,8 +28,6 @@ use std::io::Read;
 /// [chacha20-docs]: https://docs.rs/chacha20poly1305/0.10.1/chacha20poly1305/trait.AeadCore.html#method.generate_nonce
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Siv(pub [u8; 24]);
-
-pub const SEPARATOR: &[u8] = b"/automerge/beehive/";
 
 impl Siv {
     pub fn new<T: ContentRef>(

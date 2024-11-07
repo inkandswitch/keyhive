@@ -1,23 +1,24 @@
-/// TODO: Replace relying on these as much as possible with shared, core crypto code.
-use aead::OsRng;
-use rand::RngCore;
-
-use x25519_dalek::{x25519, StaticSecret};
-
-use crate::crypto::{encrypted::NestedEncrypted, siv::Siv, symmetric_key::SymmetricKey};
-
 use super::{
     error::CgkaError,
     keys::{PublicKey, SecretKey},
     treemath::{self, TreeNodeIndex, TreeSize},
 };
+use crate::crypto::{
+    domain_separator::SEPARATOR_STR, encrypted::NestedEncrypted, siv::Siv,
+    symmetric_key::SymmetricKey,
+};
+/// TODO: Replace relying on these as much as possible with shared, core crypto code.
+use aead::OsRng;
+use rand::RngCore;
+use x25519_dalek::{x25519, StaticSecret};
 
 /// Key derivation function
-pub(crate) fn kdf(last_sk: &SecretKey) -> Result<(PublicKey, SecretKey), CgkaError> {
-    let hash: [u8; 32] = *blake3::hash(last_sk.as_bytes()).as_bytes();
-    let sk = StaticSecret::from(hash);
+pub(crate) fn kdf(context: &str, last_sk: &SecretKey) -> (PublicKey, SecretKey) {
+    let separator = format!("{}{}", SEPARATOR_STR, context);
+    let derived_bytes: [u8; 32] = blake3::derive_key(&separator, last_sk.as_bytes());
+    let sk = StaticSecret::from(derived_bytes);
     let pk = PublicKey::from(&sk);
-    Ok((pk, sk))
+    (pk, sk)
 }
 
 pub(crate) fn derive_secret_from_hash_chain(
@@ -27,7 +28,7 @@ pub(crate) fn derive_secret_from_hash_chain(
 ) -> Result<SecretKey, CgkaError> {
     let path_length = treemath::direct_path(node_idx, tree_size).len();
     for _ in 0..path_length {
-        (_, secret) = kdf(&secret)?;
+        (_, secret) = kdf(&"FIXME use doc ID", &secret);
     }
     Ok(secret)
 }
