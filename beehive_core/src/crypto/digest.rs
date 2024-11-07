@@ -60,7 +60,7 @@ impl<T: Serialize> Digest<T> {
     pub fn trailing_zeros(&self) -> u8 {
         let mut count = 0;
 
-        for byte in self.raw.as_bytes().into_iter().rev() {
+        for byte in self.raw.as_bytes().iter().rev() {
             let zeros = byte.count_zeros() as u8;
             count += zeros;
 
@@ -84,7 +84,7 @@ impl<T: Serialize> Digest<T> {
     pub fn trailing_zero_bytes(&self) -> u8 {
         let mut count = 0;
 
-        for byte in self.raw.as_bytes().into_iter().rev() {
+        for byte in self.raw.as_bytes().iter().rev() {
             if *byte == 0 {
                 count += 1;
             } else {
@@ -136,10 +136,7 @@ impl<T: Serialize> Copy for Digest<T> {}
 
 impl<T: Serialize> Clone for Digest<T> {
     fn clone(&self) -> Self {
-        Self {
-            raw: self.raw,
-            _phantom: PhantomData,
-        }
+        *self
     }
 }
 
@@ -153,13 +150,13 @@ impl<T: Serialize> Eq for Digest<T> {}
 
 impl<T: Serialize> PartialOrd for Digest<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.raw.as_bytes().partial_cmp(&other.raw.as_bytes())
+        Some(self.cmp(other))
     }
 }
 
 impl<T: Serialize> Ord for Digest<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.raw.as_bytes().cmp(&other.raw.as_bytes())
+        self.raw.as_bytes().cmp(other.raw.as_bytes())
     }
 }
 

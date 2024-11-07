@@ -37,7 +37,7 @@ impl Identifier {
 
 impl Clone for Identifier {
     fn clone(&self) -> Self {
-        Self(self.0)
+        *self
     }
 }
 
@@ -49,7 +49,7 @@ impl std::hash::Hash for Identifier {
 
 impl std::fmt::Display for Identifier {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", BASE64_STANDARD.encode(&self.to_bytes()))
+        write!(f, "{}", BASE64_STANDARD.encode(self.to_bytes()))
     }
 }
 
@@ -63,13 +63,13 @@ impl Eq for Identifier {}
 
 impl PartialOrd for Identifier {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.as_bytes().partial_cmp(&other.as_bytes())
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for Identifier {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.as_bytes().cmp(&other.as_bytes())
+        self.as_bytes().cmp(other.as_bytes())
     }
 }
 

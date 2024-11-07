@@ -159,7 +159,7 @@ impl<T: ContentRef> Group<T> {
                 delegate: member_to_add,
                 can,
                 proof,
-                after_revocations: after_revocations.into_iter().cloned().cloned().collect(),
+                after_revocations: after_revocations.iter().cloned().cloned().collect(),
                 after_content: relevant_docs
                     .iter()
                     .map(|d| {
@@ -173,7 +173,7 @@ impl<T: ContentRef> Group<T> {
                     })
                     .collect(),
             },
-            &signing_key,
+            signing_key,
         );
 
         self.add_delegation(delegation);
@@ -206,7 +206,7 @@ impl<T: ContentRef> Group<T> {
                             })
                             .collect(),
                     },
-                    &signing_key,
+                    signing_key,
                 );
 
                 revocations.insert(Rc::new(revocation));

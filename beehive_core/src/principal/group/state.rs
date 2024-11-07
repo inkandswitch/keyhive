@@ -114,7 +114,7 @@ impl<T: ContentRef> GroupState<T> {
         let hash = self.delegations.insert(rc.clone());
 
         if let Some(proof) = &rc.payload().proof {
-            if self.delegations.remove_by_value(&proof).is_some() {
+            if self.delegations.remove_by_value(proof).is_some() {
                 self.delegation_heads.insert(rc);
             }
         }

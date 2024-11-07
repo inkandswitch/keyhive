@@ -74,12 +74,12 @@ flowchart
     end
 
     block3 ~~~ block4 ~~~ block1 ~~~ genesis ~~~ block2
-      
+
     subgraph head[Head 1]
       pointer_head["Pointer #️⃣"]
       key_head["Key 🔑"]
     end
-    
+
     pointer_head --> block3
 
     subgraph block3["e9j 🔓"]
@@ -104,7 +104,7 @@ flowchart
 
 ### Recursive Discovery
 
-By following the links in the graph recursively, we're able to discover the intermediate pointers and keys back to genesis. 
+By following the links in the graph recursively, we're able to discover the intermediate pointers and keys back to genesis.
 
 ```mermaid
 flowchart
@@ -156,20 +156,20 @@ flowchart
 
     pointer3_1 --> block1
     pointer3_2 --> block2
-    
+
     subgraph block4["fv7 🔒"]
       op4["???"]
     end
-      
+
     subgraph head[Head 1]
       pointer_head["Pointer #️⃣"]
       key_head["Key 🔑"]
     end
-    
+
     pointer_head --> block3
 ```
 
-Note that this may not immedietly cover all of the nodes in the history. For example, above we were able to discover a complete history causally prior to `ej9`. Notably, this _does not_ include `fv7`, which we know a priori must be one of the following:
+Note that this may not immediately cover all of the nodes in the history. For example, above we were able to discover a complete history causally prior to `ej9`. Notably, this _does not_ include `fv7`, which we know a priori must be one of the following:
 
 * A concurrent operation
 * A _descendant_ of `ej9`
@@ -231,7 +231,7 @@ flowchart
 
     pointer3_1 --> block1
     pointer3_2 --> block2
-    
+
     subgraph block4["fv7 🔓"]
       op4[Op 4]
 
@@ -242,21 +242,21 @@ flowchart
         end
       end
     end
-    
+
     pointer4_1 --> block2
-      
+
     subgraph head[Head 1]
       pointer_head["Pointer #️⃣"]
       key_head["Key 🔑"]
     end
-    
+
     pointer_head --> block3
 
     subgraph head2[Head 2]
       pointer_head_2["Pointer #️⃣"]
       key_head_2["Key 🔑"]
     end
-    
+
     pointer_head_2 --> block4
 ```
 

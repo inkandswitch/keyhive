@@ -41,7 +41,7 @@ impl Siv {
         hasher
             .finalize_xof()
             .take(24)
-            .read(&mut buf)
+            .read_exact(&mut buf)
             .expect("FIXME");
 
         Siv(buf)

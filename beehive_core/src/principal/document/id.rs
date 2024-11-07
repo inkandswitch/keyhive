@@ -28,7 +28,7 @@ impl From<DocumentId> for Identifier {
 
 impl From<DocumentId> for MemberedId {
     fn from(id: DocumentId) -> MemberedId {
-        MemberedId::DocumentId(id.into())
+        MemberedId::DocumentId(id)
     }
 }
 
