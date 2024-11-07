@@ -95,7 +95,7 @@ impl Active {
 
         if attenuate > proof.payload().can {
             return Err(ActiveDelegationError::DelegationError(
-                DelegationError::Escelation,
+                DelegationError::Escalation,
             ));
         }
 

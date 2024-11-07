@@ -120,8 +120,8 @@ impl<T: ContentRef> From<Delegation<T>> for StaticDelegation<T> {
 #[derive(Debug, Error)]
 pub enum DelegationError {
     /// The active agent is trying to delegate a capability that they do not have.
-    #[error("Rights escelation: attempted to delegate a capability that the active agent does not have.")]
-    Escelation,
+    #[error("Rights escalation: attempted to delegate a capability that the active agent does not have.")]
+    Escalation,
 
     /// Signature failed
     #[error("{0}")]

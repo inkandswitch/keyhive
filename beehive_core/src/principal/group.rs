@@ -155,7 +155,7 @@ impl<T: ContentRef> Group<T> {
                 .ok_or(AddMemberError::NoProof)?;
 
             if can > p.payload().can {
-                return Err(AddMemberError::AccessEscelation {
+                return Err(AddMemberError::AccessEscalation {
                     wanted: can,
                     have: p.payload().can,
                 });
@@ -335,7 +335,7 @@ pub enum AddMemberError {
     NoProof,
 
     #[error("Access escalation. Wanted {wanted}, only have {have}.")]
-    AccessEscelation { wanted: Access, have: Access },
+    AccessEscalation { wanted: Access, have: Access },
 }
 
 #[cfg(test)]
