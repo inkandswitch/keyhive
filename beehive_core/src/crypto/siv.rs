@@ -44,7 +44,7 @@ impl Siv {
         hasher.update(plaintext);
 
         let mut buf = [0; 24];
-        hasher.finalize_xof().take(24).read(&mut buf)?;
+        hasher.finalize_xof().read_exact(&mut buf)?;
 
         Ok(Siv(buf))
     }
