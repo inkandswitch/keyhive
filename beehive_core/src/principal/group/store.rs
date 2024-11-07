@@ -6,10 +6,8 @@ use crate::{
     principal::{
         agent::{Agent, AgentId},
         group::Group,
-        verifiable::Verifiable,
     },
 };
-use base64::prelude::*;
 use dupe::{Dupe, IterDupedExt, OptionDupedExt};
 use nonempty::NonEmpty;
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
@@ -20,13 +18,6 @@ pub struct GroupStore<T: ContentRef>(BTreeMap<GroupId, Rc<RefCell<Group<T>>>>);
 impl<T: ContentRef> GroupStore<T> {
     pub fn new() -> Self {
         GroupStore(BTreeMap::new())
-    }
-
-    pub fn pretty_print_direct_pks(&self) -> Vec<String> {
-        self.0
-            .values()
-            .map(|pk| BASE64_STANDARD.encode(pk.borrow().verifying_key()))
-            .collect()
     }
 
     pub fn insert(&mut self, group: Rc<RefCell<Group<T>>>) {
@@ -118,7 +109,7 @@ impl<T: ContentRef> GroupStore<T> {
                     }
                 }
                 Agent::Document(doc) => {
-                    for (mem, proof_hashes) in doc.group.members.iter() {
+                    for (mem, proof_hashes) in doc.borrow().group.members.iter() {
                         for proof in proof_hashes.iter() {
                             let current_path_access =
                                 access.min(proof.payload().can).min(parent_access);

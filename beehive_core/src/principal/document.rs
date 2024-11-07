@@ -118,7 +118,7 @@ impl<T: ContentRef> Document<T> {
 
     pub fn revoke_member(
         &mut self,
-        member_id: &AgentId,
+        member_id: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<Document<T>>],
     ) -> Result<(), SigningError> {

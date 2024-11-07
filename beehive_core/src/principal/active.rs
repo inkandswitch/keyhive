@@ -37,10 +37,13 @@ pub struct Active {
     /// The signing key of the active agent.
     pub signer: SigningKey,
 
+    // FIXME generalize to use e.g. KMS
+    // FIXME include timestamp for next PCS update
     /// The encryption "sharing" key pairs that the active agent has.
     /// This includes the secret keys for ECDH.
-    pub share_key_pairs: BTreeMap<ShareKey, x25519_dalek::StaticSecret>, // FIXME generalize to use e.g. KMS
+    pub share_key_pairs: BTreeMap<ShareKey, x25519_dalek::StaticSecret>,
 
+    /// The [`Individual`] static identifier.
     pub individual: Individual,
 }
 
@@ -61,16 +64,24 @@ impl Active {
         AgentId::IndividualId(self.id())
     }
 
+    pub fn rotate_prekey(&mut self, prekey: ShareKey) -> Result<ShareKey, SigningError> {
+        self.individual.rotate_prekey(prekey, &self.signer)
+    }
+
+    pub fn expand_prekeys(&mut self) -> Result<ShareKey, SigningError> {
+        self.individual.expand_prekeys(&self.signer)
+    }
+
     /// Sign a payload.
     pub fn try_sign<U: Serialize>(&self, payload: U) -> Result<Signed<U>, SigningError> {
         Signed::<U>::try_sign(payload, &self.signer)
     }
 
-    pub fn get_capability<'a, T: ContentRef>(
-        &'a self,
-        subject: &'a Membered<'a, T>,
+    pub fn get_capability<T: ContentRef>(
+        &self,
+        subject: Membered<T>,
         min: Access,
-    ) -> Option<&'a Rc<Signed<Delegation<T>>>> {
+    ) -> Option<Rc<Signed<Delegation<T>>>> {
         subject.get_capability(&self.agent_id()).and_then(|cap| {
             if cap.payload().can >= min {
                 Some(cap)
@@ -83,14 +94,14 @@ impl Active {
     // FIXME replace with delegate_to
     pub fn make_delegation<T: ContentRef>(
         &self,
-        subject: &Membered<'_, T>,
+        subject: Membered<T>,
         attenuate: Access,
         delegate: Agent<T>,
         after_revocations: Vec<Rc<Signed<Revocation<T>>>>,
         after_content: BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)>,
     ) -> Result<Signed<Delegation<T>>, ActiveDelegationError> {
         let proof = self
-            .get_capability(&subject, attenuate)
+            .get_capability(subject, attenuate)
             .ok_or(ActiveDelegationError::CannotFindProof)?;
 
         if attenuate > proof.payload().can {
@@ -137,9 +148,9 @@ impl Active {
 
         let key: SymmetricKey = our_sk.diffie_hellman(&recipient_share_pk.1.into()).into();
 
-        let nonce =
-            Siv::new(&key, message.as_slice(), doc.doc_id()).map_err(ShareError::SivError)?;
-        key.try_encrypt(nonce, &mut message)
+        let nonce = Siv::new(&key, &message, doc.doc_id()).map_err(ShareError::SivError)?;
+        let mut bytes = message.to_vec();
+        key.try_encrypt(nonce, &mut bytes)
             .map_err(ShareError::EncryptionFailed)?;
 
         Ok(Encrypted::new(nonce.into(), message))

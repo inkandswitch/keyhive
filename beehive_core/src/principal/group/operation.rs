@@ -1,6 +1,5 @@
 pub mod delegation;
 pub mod revocation;
-pub mod store;
 
 use crate::{
     content::reference::ContentRef,

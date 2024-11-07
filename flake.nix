@@ -31,10 +31,12 @@
 
         pkgs = import nixpkgs {
           inherit system overlays;
+          config.allowUnfree = true;
         };
 
         unstable = import nixos-unstable {
           inherit system overlays;
+          config.allowUnfree = true;
         };
 
         rustVersion = "1.80.1";
@@ -91,7 +93,7 @@
 
         cargo = "${pkgs.cargo}/bin/cargo";
         node = "${unstable.nodejs_20}/bin/node";
-        wasm-pack = "${pkgs.wasm-pack}/bin/wasm-pack";
+        wasm-pack = "${unstable.wasm-pack}/bin/wasm-pack";
         wasm-opt = "${pkgs.binaryen}/bin/wasm-opt";
 
         cmd = command-utils.cmd.${system};
@@ -101,10 +103,10 @@
             "${cargo} build --release";
 
          "release:wasm:web" = cmd "Build release for wasm32-unknown-unknown with web bindings"
-            "${wasm-pack} build --release --target=web";
+            "${wasm-pack} build ./beehive_wasm --release --target=web";
 
           "release:wasm:nodejs" = cmd "Build release for wasm32-unknown-unknown with Node.js bindgings"
-            "${wasm-pack} build --release --target=nodejs";
+            "${wasm-pack} build ./beehive_wasm --release --target=nodejs";
         };
 
         build = {
@@ -112,7 +114,7 @@
             "${cargo} build";
 
           "build:wasm:web" = cmd "Build for wasm32-unknown-unknown with web bindings"
-            "${wasm-pack} build --dev --target=web";
+            "${wasm-pack} build ./beehive_wasm --dev --target=web";
  
           "build:wasm:nodejs" = cmd "Build for wasm32-unknown-unknown with Node.js bindgings"
             "${wasm-pack} build --dev --target=nodejs";
@@ -160,7 +162,7 @@
             "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'test && test --doc'";
 
           "watch:test:wasm" = cmd "Run all Wasm tests on save"
-            "${cargo} watch --clear --exec 'test --target=wasm32-unknown-unknown && test --doc --target=wasm32-unknown-unknown'";
+            "${cargo} watch --clear --exec 'test beehive_wasm --target=wasm32-unknown-unknown && test --doc --target=wasm32-unknown-unknown'";
         };
 
         test = {
@@ -174,10 +176,16 @@
             "test:wasm:node && test:wasm:chrome";
 
           "test:wasm:node" = cmd "Run wasm-pack tests in Node.js"
-            "${wasm-pack} test --node";
+            "${wasm-pack} test --node beehive_wasm";
 
           "test:wasm:chrome" = cmd "Run wasm-pack tests in headless Chrome"
-            "${wasm-pack} test --headless --chrome";
+            "${wasm-pack} test --chrome beehive_wasm --features='browser_test'";
+
+          "test:wasm:firefox" = cmd "Run wasm-pack tests in headless Chrome"
+            "${wasm-pack} test --firefox beehive_wasm --features='browser_test'";
+
+          "test:wasm:safari" = cmd "Run wasm-pack tests in headless Chrome"
+            "${wasm-pack} test --safari beehive_wasm --features='browser_test'";
 
           "test:docs" = cmd "Run Cargo doctests"
             "${cargo} test --doc --features='mermaid_docs,test_utils'";
@@ -206,18 +214,16 @@
 
           nativeBuildInputs = with pkgs;
             [
+              (pkgs.hiPrio pkgs.rust-bin.nightly.latest.rustfmt)
+              command_menu
               direnv
               rust-toolchain
-              (pkgs.hiPrio pkgs.rust-bin.nightly.latest.rustfmt)
-
-              pkgs.wasm-pack
-              chromedriver
-              protobuf
+              unstable.binaryen
+              unstable.chromedriver
               unstable.irust
-              unstable.nodejs_20
               unstable.nodePackages.pnpm
-
-              command_menu
+              unstable.nodejs_20
+              unstable.wasm-pack
             ]
             ++ format-pkgs
             ++ cargo-installs

@@ -3,12 +3,16 @@
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::signed::{Signed, SigningError},
+    crypto::{
+        share_key::ShareKey,
+        signed::{Signed, SigningError},
+    },
     principal::{
         active::Active,
         agent::{Agent, AgentId},
         document::{id::DocumentId, store::DocumentStore, Document},
-        group::{operation::delegation::DelegationError, store::GroupStore, Group},
+        group::{id::GroupId, operation::delegation::DelegationError, store::GroupStore, Group},
+        identifier::Identifier,
         individual::{id::IndividualId, Individual},
         membered::Membered,
         verifiable::Verifiable,
@@ -27,10 +31,10 @@ use std::{
 #[derive(Debug, Clone)]
 pub struct Context<T: ContentRef> {
     /// The [`Active`] user agent.
-    pub active: Rc<Active>,
+    pub active: Rc<RefCell<Active>>,
 
     /// The [`Individual`]s that are known to this agent.
-    pub individuals: BTreeMap<IndividualId, Individual>,
+    pub individuals: BTreeMap<IndividualId, Rc<RefCell<Individual>>>,
 
     /// The [`Group`]s that are known to this agent.
     pub groups: GroupStore<T>,
@@ -40,9 +44,17 @@ pub struct Context<T: ContentRef> {
 }
 
 impl<T: ContentRef> Context<T> {
+    pub fn id(&self) -> IndividualId {
+        self.active.borrow().id()
+    }
+
+    pub fn agent_id(&self) -> AgentId {
+        self.active.borrow().agent_id()
+    }
+
     pub fn generate(signing_key: ed25519_dalek::SigningKey) -> Result<Self, SigningError> {
         Ok(Self {
-            active: Rc::new(Active::generate(signing_key)?),
+            active: Rc::new(RefCell::new(Active::generate(signing_key)?)),
             individuals: Default::default(),
             groups: GroupStore::new(),
             docs: DocumentStore::new(),
@@ -70,41 +82,66 @@ impl<T: ContentRef> Context<T> {
         self.docs.generate_document(parents)
     }
 
-    pub fn id(&self) -> IndividualId {
-        self.active.id()
+    pub fn rotate_prekey(&mut self, prekey: ShareKey) -> Result<ShareKey, SigningError> {
+        self.active.borrow_mut().rotate_prekey(prekey)
     }
 
-    pub fn agent_id(&self) -> AgentId {
-        self.active.agent_id()
+    pub fn expand_prekeys(&mut self) -> Result<ShareKey, SigningError> {
+        self.active.borrow_mut().expand_prekeys()
     }
 
     pub fn try_sign<U: Serialize>(&self, data: U) -> Result<Signed<U>, SigningError> {
-        self.active.try_sign(data)
+        self.active.borrow().try_sign(data)
+    }
+
+    pub fn add_member(
+        &mut self,
+        to_add: AgentId,
+        resource: &mut Membered<T>,
+        can: Access,
+    ) -> Result<(), SigningError> {
+        todo!()
+        // FIXME generate the delegation or fail with e.g. no proof
+        // resource.add_member(to_add, &self.active.borrow().signer)
+        // FIXME
+        // FIXME
+        // FIXME
+        // FIXME
+        // FIXME
+        // FIXME
+        // FIXME
+        // FIXME
+        // FIXME
+        // FIXME
     }
 
     pub fn revoke_member(
         &mut self,
-        to_revoke: &AgentId,
+        to_revoke: AgentId,
         resource: &mut Membered<T>,
-        relevant_docs: &[&Rc<Document<T>>],
     ) -> Result<(), SigningError> {
-        // FIXME check which docs are reachable from this group and include them automatically
-        resource.revoke_member(to_revoke, &self.active.signer, relevant_docs)
+        let relevant_docs = vec![]; // FIXME calcaulet reachable for revoked or just all known docs
+
+        resource.revoke_member(
+            to_revoke,
+            &self.active.borrow().signer,
+            relevant_docs.as_slice(),
+        )
     }
 
-    pub fn accessible_docs(&self) -> BTreeMap<DocumentId, (&Document<T>, Access)> {
+    pub fn reachable_docs(&self) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> {
         let mut explore: Vec<(Rc<RefCell<Group<T>>>, Access)> = vec![];
-        let mut caps: BTreeMap<DocumentId, (&Document<T>, Access)> = BTreeMap::new();
+        let mut caps: BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> = BTreeMap::new();
         let mut seen: HashSet<AgentId> = HashSet::new();
 
-        let agent_id = self.active.agent_id();
+        let agent_id = self.active.borrow().agent_id();
 
         for doc in self.docs.docs.values() {
-            seen.insert(doc.agent_id());
+            seen.insert(doc.clone().borrow().agent_id());
 
-            let doc_id = doc.doc_id();
+            let doc_id = doc.borrow().doc_id();
 
-            if let Some(proofs) = doc.members().get(&agent_id) {
+            if let Some(proofs) = doc.borrow().members().get(&agent_id) {
                 for proof in proofs {
                     caps.insert(doc_id, (doc, proof.payload().can));
                 }
@@ -123,13 +160,13 @@ impl<T: ContentRef> Context<T> {
 
         while let Some((group, _access)) = explore.pop() {
             for doc in self.docs.docs.values() {
-                if seen.contains(&doc.agent_id()) {
+                if seen.contains(&doc.borrow().agent_id()) {
                     continue;
                 }
 
-                let doc_id = doc.doc_id();
+                let doc_id = doc.borrow().doc_id();
 
-                if let Some(proofs) = doc.members().get(&agent_id) {
+                if let Some(proofs) = doc.borrow().members().get(&agent_id) {
                     for proof in proofs {
                         caps.insert(doc_id, (doc, proof.payload().can));
                     }
@@ -158,18 +195,34 @@ impl<T: ContentRef> Context<T> {
 
     pub fn transitive_members(
         &self,
-        membered: &Membered<T>,
+        membered: Membered<T>,
     ) -> BTreeMap<AgentId, (Agent<T>, Access)> {
         match membered {
-            Membered::Group(group) => self.groups.transitive_members(group),
-            Membered::Document(doc) => self.docs.transitive_members(doc),
+            Membered::Group(group) => self.groups.transitive_members(&group.borrow()),
+            Membered::Document(doc) => self.docs.transitive_members(&doc.borrow()),
         }
+    }
+
+    pub fn get_agent(&self, id: Identifier) -> Option<Agent<T>> {
+        if let Some(doc) = self.docs.get(&DocumentId(id)) {
+            return Some(doc.into());
+        }
+
+        if let Some(group) = self.groups.get(&GroupId::new(id)) {
+            return Some(group.into());
+        }
+
+        if let Some(indie) = self.individuals.get(&id.into()) {
+            return Some(indie.clone().into());
+        }
+
+        None
     }
 }
 
 impl<T: ContentRef> Verifiable for Context<T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.active.verifying_key()
+        self.active.borrow().verifying_key()
     }
 }
 

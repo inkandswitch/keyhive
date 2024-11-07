@@ -41,6 +41,32 @@ impl PrekeyState {
         Ok(Self { ops, keypairs })
     }
 
+    pub fn rotate(
+        &mut self,
+        old: ShareKey,
+        signer: &ed25519_dalek::SigningKey,
+    ) -> Result<ShareKey, SigningError> {
+        let new_secret = ShareSecretKey::generate();
+        let new = new_secret.share_key();
+        let op = Signed::try_sign(KeyOp::Update(ShareKeyOp { old, new }), signer)?;
+
+        self.ops.insert(op.into());
+        self.keypairs.insert(new, new_secret);
+
+        Ok(new)
+    }
+
+    pub fn expand(&mut self, signer: &ed25519_dalek::SigningKey) -> Result<ShareKey, SigningError> {
+        let new_secret = ShareSecretKey::generate();
+        let new = new_secret.share_key();
+        let op = Signed::try_sign(KeyOp::Add(AddKeyOp { share_key: new }), signer)?;
+
+        self.ops.insert(op.into());
+        self.keypairs.insert(new, new_secret);
+
+        Ok(new)
+    }
+
     pub fn materialize(&self) -> HashSet<ShareKey> {
         let mut keys = HashSet::new();
         let mut to_drop = vec![];

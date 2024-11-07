@@ -1,7 +1,6 @@
 //! The universally unique identifier of an [`Agent`](crate::principal::agentAgent).
 
 use super::verifiable::Verifiable;
-use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// A unique identifier for an [`Agent`](crate::principal::agentAgent).
@@ -49,7 +48,9 @@ impl std::hash::Hash for Identifier {
 
 impl std::fmt::Display for Identifier {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", BASE64_STANDARD.encode(self.to_bytes()))
+        self.as_slice()
+            .iter()
+            .fold(Ok(()), |_, byte| write!(f, "{:#x}", byte))
     }
 }
 

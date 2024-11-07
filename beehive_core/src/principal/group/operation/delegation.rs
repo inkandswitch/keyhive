@@ -36,6 +36,14 @@ impl<T: ContentRef> Delegation<T> {
         }
     }
 
+    pub fn delegate(&self) -> &Agent<T> {
+        &self.delegate
+    }
+
+    pub fn can(&self) -> Access {
+        self.can
+    }
+
     pub fn after(
         &self,
     ) -> (

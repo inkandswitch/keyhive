@@ -56,6 +56,26 @@ impl Individual {
     pub fn agent_id(&self) -> AgentId {
         AgentId::IndividualId(self.id)
     }
+
+    pub fn rotate_prekey(
+        &mut self,
+        old_key: ShareKey,
+        signer: &ed25519_dalek::SigningKey,
+    ) -> Result<ShareKey, SigningError> {
+        let new_key = self.prekey_state.rotate(old_key, signer)?;
+        self.prekeys.remove(&old_key);
+        self.prekeys.insert(new_key);
+        Ok(new_key)
+    }
+
+    pub fn expand_prekeys(
+        &mut self,
+        signer: &ed25519_dalek::SigningKey,
+    ) -> Result<ShareKey, SigningError> {
+        let new_key = self.prekey_state.expand(signer)?;
+        self.prekeys.insert(new_key);
+        Ok(new_key)
+    }
 }
 
 impl std::hash::Hash for Individual {

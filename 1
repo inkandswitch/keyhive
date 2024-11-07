@@ -1,0 +1,69 @@
+pick a39d27b Begin aligning BeeKEM types with Beehive ones
+s 5d65c3f Integrating types
+s cef95da Need to thread a doc in a few functions, but mostly there
+s 4054e7a Compiles, tests are probably broken
+s c24b65d Move final crate::cgka::crypto functions to crate::crypto
+s 6f5de03 Fix remaining warnings (except missing docs)
+s 068cfd5 Fix bugs and clean up confusing code (#22)
+s b1313d6 WIP
+s 3ab7406 Cleanup debug code, tests pasing again
+s b9c3521 update docs
+s 8eeb76c Enable test utils on GHA
+s 566d8d7 Put featrue flag back
+s 705fed2 Fix benches
+s 1f0e45a Inculde test_utils on non-doc tests
+s be55418 enable serde on nonempty
+s 7e1e46e Nix bench flake command
+s bf19ee5 Remove serde for nonempty
+s 3e45fd4 Clarify that the Separable implemenattion method is very low level
+s b05b219 Remove all temporary `.expect`s
+s ab20c55 Switch to Dupe
+s b6010b3 Doctests pass again
+s 2e14585 Cleaning up FIXMEs
+s 2066e57 Cleaning up more FIXMEs
+s a95399b Fix doctest
+s b7dab19 Start on top level Wasm interface, remove lifetime from membered
+s 3495f9a Rotate prekeys
+s af125b6 WIP reworking wasm add_member
+s b35c273 Save before switching branches
+s 84668a4 Save
+s 602eff7 Fix tests after merge
+s d7c3c62 remove dead files, more wrapped types
+s 2429d16 Save before rebase
+s 94cfbd3 Move divan to dev-dependencies (so wasm will compile)
+s 51265c6 Setup wasm test harness, initial few simlpe tests
+s 8308de7 GHA for wasm-pack
+s 2bb78ef Fix test
+s 5af2431 Typo
+s 3330f98 More GHA config
+
+# Rebase 59c7261..3330f98 onto 59c7261 (38 commands)
+#
+# Commands:
+# p, pick <commit> = use commit
+# r, reword <commit> = use commit, but edit the commit message
+# e, edit <commit> = use commit, but stop for amending
+# s, squash <commit> = use commit, but meld into previous commit
+# f, fixup [-C | -c] <commit> = like "squash" but keep only the previous
+#                    commit's log message, unless -C is used, in which case
+#                    keep only this commit's message; -c is same as -C but
+#                    opens the editor
+# x, exec <command> = run command (the rest of the line) using shell
+# b, break = stop here (continue rebase later with 'git rebase --continue')
+# d, drop <commit> = remove commit
+# l, label <label> = label current HEAD with a name
+# t, reset <label> = reset HEAD to a label
+# m, merge [-C <commit> | -c <commit>] <label> [# <oneline>]
+#         create a merge commit using the original merge commit's
+#         message (or the oneline, if no original merge commit was
+#         specified); use -c <commit> to reword the commit message
+# u, update-ref <ref> = track a placeholder for the <ref> to be updated
+#                       to this position in the new commits. The <ref> is
+#                       updated at the end of the rebase
+#
+# These lines can be re-ordered; they are executed from top to bottom.
+#
+# If you remove a line here THAT COMMIT WILL BE LOST.
+#
+# However, if you remove everything, the rebase will be aborted.
+#
