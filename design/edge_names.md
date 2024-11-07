@@ -48,13 +48,13 @@ flowchart TD
 
 Note that these names are _extremely loose_ and depend on the exact path of name authorities. By convention in this document, we will use the familiar URL format since it represents paths under an authority. For example:
 
-* `edgename:PvH` (i.e. your name for `6Mk`) FIXME URL structure
+* `edgename:PvH` (i.e. your name for `6Mk`)
 * `edgename://1dK/Peter van Hardenburg` directly claimed names
 * `edgename://1dK/Alex Good/Peter` transitive names
 
 You can also discover others names for you, such as `edgename://D04/That Person That I Met Once in Berlin`.
 
-This is especially helpful with address book documents controlled by groups, since this can be  FIXME
+This is especially helpful with address book documents controlled by groups, since this can be managed by the group itself.
 
 <!-- External Links -->
 [Spritely pet names]: https://spritely.institute/static/papers/petnames.html

@@ -2,15 +2,20 @@ use super::revocation::{Revocation, StaticRevocation};
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed},
+    crypto::{
+        digest::Digest,
+        signed::{Signed, SigningError},
+    },
     principal::{
         agent::{Agent, AgentId},
         document::{id::DocumentId, Document},
         identifier::Identifier,
     },
 };
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, hash::Hash, rc::Rc};
+use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Delegation<T: ContentRef> {
@@ -52,7 +57,7 @@ impl<T: ContentRef> Delegation<T> {
         Option<Rc<Signed<Delegation<T>>>>,
         &[Rc<Signed<Revocation<T>>>],
     ) {
-        (self.proof.clone(), &self.after_revocations)
+        (self.proof.dupe(), &self.after_revocations)
     }
 
     pub fn is_root(&self) -> bool {
@@ -71,51 +76,6 @@ impl<T: ContentRef> Signed<Delegation<T>> {
         head.id()
     }
 }
-
-// FIXME test FIXME just and compare?
-// impl<'a, T: ContentRef> PartialOrd for Delegation<'a, T> {
-//     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-//         let self_after = self.after();
-//         let other_after = other.after();
-//
-//         match self.can.partial_cmp(&other.can) {
-//             Some(std::cmp::Ordering::Equal) => {
-//                 match self
-//                     .delegate
-//                     .agent_id()
-//                     .partial_cmp(&other.delegate.agent_id())
-//                 {
-//                     Some(std::cmp::Ordering::Equal) => {
-//                         match self_after.0.len().partial_cmp(&other_after.0.len()) {
-//                             Some(std::cmp::Ordering::Equal) => {
-//                                 match self_after.1.len().partial_cmp(&other_after.1.len()) {
-//                                     Some(std::cmp::Ordering::Equal) => {
-//                                         let self_after = self_after
-//                                             .0
-//                                             .iter()
-//                                             .map(|d| d.subject())
-//                                             .collect::<Vec<_>>();
-//                                         let other_after = other_after
-//                                             .0
-//                                             .iter()
-//                                             .map(|d| d.subject())
-//                                             .collect::<Vec<_>>();
-//
-//                                         self_after.partial_cmp(&other_after)
-//                                     }
-//                                     other => other,
-//                                 }
-//                             }
-//                             other => other,
-//                         }
-//                     }
-//                     other => other,
-//                 }
-//             }
-//             other => other,
-//         }
-//     }
-// }
 
 impl<T: ContentRef> Serialize for Delegation<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -154,4 +114,16 @@ impl<T: ContentRef> From<Delegation<T>> for StaticDelegation<T> {
                 .collect(),
         }
     }
+}
+
+/// Errors that can occur when using an active agent.
+#[derive(Debug, Error)]
+pub enum DelegationError {
+    /// The active agent is trying to delegate a capability that they do not have.
+    #[error("Rights escalation: attempted to delegate a capability that the active agent does not have.")]
+    Escalation,
+
+    /// Signature failed
+    #[error("{0}")]
+    SigningError(#[from] SigningError),
 }

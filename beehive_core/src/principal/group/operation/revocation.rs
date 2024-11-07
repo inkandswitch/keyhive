@@ -10,6 +10,7 @@ use crate::{
         identifier::Identifier,
     },
 };
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, rc::Rc};
 
@@ -37,7 +38,7 @@ impl<T: ContentRef> Revocation<T> {
         Vec<Rc<Signed<Revocation<T>>>>,
         &BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)>,
     ) {
-        (vec![self.revoke.clone()], vec![], &self.after_content)
+        (vec![self.revoke.dupe()], vec![], &self.after_content)
     }
 }
 
@@ -46,52 +47,6 @@ impl<T: ContentRef> Signed<Revocation<T>> {
         self.payload().subject()
     }
 }
-
-// FIXME test
-// impl<'a, T: ContentRef> PartialOrd for Revocation<'a, T> {
-//     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-//         match self.revoke.partial_cmp(&other.revoke) {
-//             Some(std::cmp::Ordering::Equal) => match self.proof.partial_cmp(&other.proof) {
-//                 Some(std::cmp::Ordering::Equal) => self
-//                     .after_content
-//                     .iter()
-//                     .zip(other.after_content.iter())
-//                     .fold(
-//                         Some(std::cmp::Ordering::Equal),
-//                         |acc, ((doc_id1, content1), (doc_id2, content2))| {
-//                             if let Some(std::cmp::Ordering::Equal) = acc {
-//                                 match doc_id1.partial_cmp(&doc_id2) {
-//                                     Some(std::cmp::Ordering::Equal) => {
-//                                         content1.1.iter().zip(content2.1.iter()).fold(
-//                                             Some(std::cmp::Ordering::Equal),
-//                                             |acc, (content1, content2)| {
-//                                                 if let Some(std::cmp::Ordering::Equal) = acc {
-//                                                     content1.partial_cmp(content2)
-//                                                 } else {
-//                                                     acc
-//                                                 }
-//                                             },
-//                                         )
-//                                     }
-//                                     other => other,
-//                                 }
-//                             } else {
-//                                 acc
-//                             }
-//                         },
-//                     ),
-//                 other => other,
-//             },
-//             other => other,
-//         }
-//     }
-// }
-//
-// impl<'a, T: ContentRef> Ord for Revocation<'a, T> {
-//     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-//         self.partial_cmp(other).unwrap()
-//     }
-// }
 
 impl<T: ContentRef> std::hash::Hash for Revocation<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -109,19 +64,19 @@ impl<T: ContentRef> std::hash::Hash for Revocation<T> {
 
 impl<T: ContentRef> Serialize for Revocation<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // FIXME could be a heavy clone since this is used to hash
         StaticRevocation::from(self.clone()).serialize(serializer)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct StaticRevocation<T: ContentRef> {
+    /// The [`Delegation`] being revoked.
     pub revoke: Digest<Signed<StaticDelegation<T>>>,
 
-    // FIXME probably will just make this look at the ambient state,
-    // but in the meantime this is just so much easier
+    /// Proof that the revoker is allowed to perform this revocation.
     pub proof: Option<Digest<Signed<StaticDelegation<T>>>>,
 
+    /// The heads of relevant [`Document`] content at time of revocation.
     pub after_content: BTreeMap<Identifier, Vec<T>>,
 }
 

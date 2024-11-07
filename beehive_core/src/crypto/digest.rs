@@ -33,7 +33,9 @@ pub struct Digest<T: Serialize> {
 impl<T: Serialize> Digest<T> {
     /// Digest a value and retain its type as a phantom parameter.
     pub fn hash(preimage: &T) -> Self {
-        let bytes = serde_cbor::to_vec(preimage).expect("unable to serialize to bytes");
+        let mut bytes = vec![];
+        ciborium::into_writer(preimage, &mut bytes).expect("unable to serialize to bytes");
+
         Self {
             raw: blake3::hash(bytes.as_slice()),
             _phantom: PhantomData,

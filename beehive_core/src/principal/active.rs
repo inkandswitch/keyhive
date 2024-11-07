@@ -2,6 +2,7 @@
 
 use super::{
     document::{id::DocumentId, Document},
+    identifier::Identifier,
     individual::{id::IndividualId, Individual},
     verifiable::Verifiable,
 };
@@ -9,18 +10,26 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::{
-        encrypted::Encrypted, share_key::ShareKey, signed::Signed, siv::Siv,
+        encrypted::Encrypted,
+        share_key::ShareKey,
+        signed::{Signed, SigningError},
+        siv::Siv,
         symmetric_key::SymmetricKey,
     },
     principal::{
         agent::{Agent, AgentId},
-        group::operation::{delegation::Delegation, revocation::Revocation},
+        group::operation::{
+            delegation::{Delegation, DelegationError},
+            revocation::Revocation,
+        },
         membered::Membered,
     },
 };
+use dupe::Dupe;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::Serialize;
 use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
+use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
 #[derive(Clone, Serialize)]
@@ -36,12 +45,12 @@ pub struct Active {
 }
 
 impl Active {
-    pub fn generate(signer: SigningKey) -> Self {
-        Self {
-            individual: Individual::generate(&signer),
+    pub fn generate(signer: SigningKey) -> Result<Self, SigningError> {
+        Ok(Self {
+            individual: Individual::generate(&signer)?,
             share_key_pairs: BTreeMap::new(),
             signer,
-        }
+        })
     }
 
     pub fn id(&self) -> IndividualId {
@@ -53,8 +62,8 @@ impl Active {
     }
 
     /// Sign a payload.
-    pub fn sign<U: Serialize>(&self, payload: U) -> Signed<U> {
-        Signed::<U>::sign(payload, &self.signer)
+    pub fn try_sign<U: Serialize>(&self, payload: U) -> Result<Signed<U>, SigningError> {
+        Signed::<U>::try_sign(payload, &self.signer)
     }
 
     pub fn get_capability<'a, T: ContentRef>(
@@ -79,20 +88,26 @@ impl Active {
         delegate: Agent<T>,
         after_revocations: Vec<Rc<Signed<Revocation<T>>>>,
         after_content: BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)>,
-    ) -> Result<Signed<Delegation<T>>, DelegationError> {
-        let proof = self.get_capability(subject, attenuate).expect("FIXME");
+    ) -> Result<Signed<Delegation<T>>, ActiveDelegationError> {
+        let proof = self
+            .get_capability(&subject, attenuate)
+            .ok_or(ActiveDelegationError::CannotFindProof)?;
 
         if attenuate > proof.payload().can {
-            return Err(DelegationError::Escelation);
+            return Err(ActiveDelegationError::DelegationError(
+                DelegationError::Escalation,
+            ));
         }
 
-        let delegation = self.sign(Delegation {
-            delegate: delegate.clone(),
-            can: attenuate,
-            proof: Some(proof.clone()),
-            after_revocations,
-            after_content,
-        });
+        let delegation = self
+            .try_sign(Delegation {
+                delegate: delegate.dupe(),
+                can: attenuate,
+                proof: Some(proof.dupe()),
+                after_revocations,
+                after_content,
+            })
+            .map_err(DelegationError::SigningError)?;
 
         // FIXME IVM
 
@@ -103,28 +118,31 @@ impl Active {
         &self,
         doc: &Document<T>,
         to: &Individual,
-        message: &mut [u8],
-    ) -> Encrypted<&[u8]> {
-        let recipient_share_pk = doc.reader_keys.get(&to.id()).expect("FIXME");
-        let our_pk = doc.reader_keys.get(&self.id()).expect("FIXME");
+        mut message: Vec<u8>,
+    ) -> Result<Encrypted<&[u8]>, ShareError> {
+        let recipient_share_pk = doc
+            .reader_keys
+            .get(&to.id())
+            .ok_or_else(|| ShareError::MissingRecipientShareKey(to.id().into()))?;
 
-        let our_sk = self.share_key_pairs.get(&our_pk.1).expect("FIXME");
+        let our_pk = doc
+            .reader_keys
+            .get(&self.id())
+            .ok_or(ShareError::MissingYourSharePublicKey)?;
+
+        let our_sk = self
+            .share_key_pairs
+            .get(&our_pk.1)
+            .ok_or(ShareError::MissingYourShareSecretKey)?;
 
         let key: SymmetricKey = our_sk.diffie_hellman(&recipient_share_pk.1.into()).into();
 
-        let nonce = Siv::new(&key, message, doc);
-        let bytes: Vec<u8> = key.encrypt(nonce, message).expect("FIXME").to_vec();
+        let nonce = Siv::new(&key, message.as_slice(), doc).map_err(ShareError::SivError)?;
+        key.try_encrypt(nonce, &mut message)
+            .map_err(ShareError::EncryptionFailed)?;
 
-        Encrypted::new(nonce, bytes)
+        Ok(Encrypted::new(nonce.into(), message))
     }
-}
-
-// FIXME move to Delegation?
-/// Errors that can occur when using an active agent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DelegationError {
-    /// The active agent is trying to delegate a capability that they do not have.
-    Escelation,
 }
 
 impl std::fmt::Display for Active {
@@ -186,39 +204,31 @@ impl PartialEq for Active {
 
 impl Eq for Active {}
 
-// FIXME test
-impl PartialOrd for Active {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match self.id().partial_cmp(&other.id()) {
-            Some(std::cmp::Ordering::Equal) => {
-                match self.signer.to_bytes().partial_cmp(&other.signer.to_bytes()) {
-                    Some(std::cmp::Ordering::Equal) => self
-                        .share_key_pairs
-                        .iter()
-                        .zip(other.share_key_pairs.iter())
-                        .map(|((pk1, sk1), (pk2, sk2))| {
-                            pk1.partial_cmp(pk2).and_then(|pk_cmp| {
-                                sk1.to_bytes()
-                                    .partial_cmp(&sk2.to_bytes())
-                                    .and_then(|sk_cmp| pk_cmp.partial_cmp(&sk_cmp))
-                            })
-                        })
-                        .find(|cmp| *cmp != Some(std::cmp::Ordering::Equal))
-                        .unwrap_or(Some(std::cmp::Ordering::Equal)),
-                    cmp => cmp,
-                }
-            }
-            cmp => cmp,
-        }
-    }
+#[derive(Debug, Error)]
+pub enum ShareError {
+    #[error("The active agent cannot find a public ShareKey for themselves")]
+    MissingYourSharePublicKey,
+
+    #[error("The active agent cannot find a secret ShareKey for themselves")]
+    MissingYourShareSecretKey,
+
+    #[error("The active agent does not know the ShareKey for the recipient: {0}")]
+    MissingRecipientShareKey(Identifier),
+
+    #[error("Encryption failed: {0}")]
+    EncryptionFailed(chacha20poly1305::Error),
+
+    #[error("Siv error: {0}")]
+    SivError(std::io::Error),
 }
 
-// FIXME test
-impl Ord for Active {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other)
-            .expect("Nothing should prevent Active from being orderable")
-    }
+#[derive(Debug, Error)]
+pub enum ActiveDelegationError {
+    #[error("Cannot find proof at the requested access level")]
+    CannotFindProof,
+
+    #[error(transparent)]
+    DelegationError(#[from] DelegationError),
 }
 
 #[cfg(test)]
@@ -228,10 +238,10 @@ mod tests {
     #[test]
     fn test_sign() {
         let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Active::generate(signer);
+        let active = Active::generate(signer).unwrap();
         let message = "hello world".as_bytes();
-        let signed = active.sign(message);
+        let signed = active.try_sign(message).unwrap();
 
-        assert!(signed.verify().is_ok());
+        assert!(signed.try_verify().is_ok());
     }
 }

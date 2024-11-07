@@ -2,8 +2,12 @@ use super::{id::DocumentId, Document};
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    principal::agent::{Agent, AgentId},
+    principal::{
+        agent::{Agent, AgentId},
+        group::operation::delegation::DelegationError,
+    },
 };
+use dupe::Dupe;
 use nonempty::NonEmpty;
 use std::collections::BTreeMap;
 
@@ -27,11 +31,14 @@ impl<T: ContentRef> DocumentStore<T> {
         self.docs.get(id)
     }
 
-    pub fn generate_document(&mut self, parents: NonEmpty<Agent<T>>) -> DocumentId {
-        let new_doc = Document::generate(parents);
+    pub fn generate_document(
+        &mut self,
+        parents: NonEmpty<Agent<T>>,
+    ) -> Result<DocumentId, DelegationError> {
+        let new_doc = Document::generate(parents)?;
         let new_doc_id: DocumentId = new_doc.doc_id();
         self.insert(new_doc);
-        new_doc_id
+        Ok(new_doc_id)
     }
 
     pub fn transitive_members(&self, doc: &Document<T>) -> BTreeMap<AgentId, (Agent<T>, Access)> {
@@ -46,7 +53,7 @@ impl<T: ContentRef> DocumentStore<T> {
         for dlgs in doc.group.members.values() {
             for delegation in dlgs {
                 explore.push(GroupAccess {
-                    agent: delegation.payload().delegate.clone(),
+                    agent: delegation.payload().delegate.dupe(),
                     agent_access: delegation.payload().can, // FIXME need to lookup
                     parent_access: Access::Admin,
                 });

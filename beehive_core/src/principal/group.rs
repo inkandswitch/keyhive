@@ -13,17 +13,21 @@ use super::{
     verifiable::Verifiable,
 };
 use crate::{
-    access::Access, content::reference::ContentRef, crypto::signed::Signed,
+    access::Access,
+    content::reference::ContentRef,
+    crypto::signed::{Signed, SigningError},
     util::content_addressed_map::CaMap,
 };
+use dupe::{Dupe, IterDupedExt};
 use id::GroupId;
 use nonempty::NonEmpty;
-use operation::{delegation::Delegation, revocation::Revocation, Operation};
+use operation::{delegation::Delegation, revocation::Revocation, AncestorError, Operation};
 use serde::{ser::SerializeStruct, Serialize, Serializer};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
+use thiserror::Error;
 
 /// A collection of agents with no associated content.
 ///
@@ -41,7 +45,7 @@ pub struct Group<T: ContentRef> {
 
 impl<T: ContentRef> Group<T> {
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
-    pub fn generate(parents: NonEmpty<Agent<T>>) -> Group<T> {
+    pub fn generate(parents: NonEmpty<Agent<T>>) -> Result<Group<T>, SigningError> {
         let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let group_id = GroupId(group_signer.verifying_key().into());
 
@@ -49,25 +53,27 @@ impl<T: ContentRef> Group<T> {
         let mut delegation_heads = HashSet::new();
         let mut members = HashMap::new();
 
-        for parent in parents.iter() {
-            let dlg = Signed::sign(
+        parents.iter().try_fold((), |_, parent| {
+            let dlg = Signed::try_sign(
                 Delegation {
-                    delegate: parent.clone(),
+                    delegate: parent.dupe(),
                     can: Access::Admin,
                     proof: None,
                     after_revocations: vec![],
                     after_content: BTreeMap::new(),
                 },
                 &group_signer,
-            );
+            )?;
 
             let rc = Rc::new(dlg);
-            delegations.insert(rc.clone());
-            delegation_heads.insert(rc.clone());
+            delegations.insert(rc.dupe());
+            delegation_heads.insert(rc.dupe());
             members.insert((*parent).agent_id(), vec![rc]);
-        }
 
-        Group {
+            Ok::<(), SigningError>(())
+        })?;
+
+        Ok(Group {
             members,
             state: state::GroupState {
                 id: group_id,
@@ -80,7 +86,7 @@ impl<T: ContentRef> Group<T> {
                 revocations: CaMap::new(),
                 revocation_quarantine: CaMap::new(),
             },
-        }
+        })
     }
 
     pub fn id(&self) -> Identifier {
@@ -119,7 +125,7 @@ impl<T: ContentRef> Group<T> {
 
         let id = signed_delegation.payload().delegate.agent_id();
         let rc = Rc::new(signed_delegation);
-        self.state.delegations.insert(rc.clone());
+        self.state.delegations.insert(rc.dupe());
 
         match self.members.get_mut(&id) {
             Some(caps) => {
@@ -138,7 +144,7 @@ impl<T: ContentRef> Group<T> {
         signing_key: &ed25519_dalek::SigningKey,
         after_revocations: &[&Rc<Signed<Revocation<T>>>],
         relevant_docs: &[&Rc<Document<T>>],
-    ) {
+    ) -> Result<(), AddMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
         let agent: Agent<T> = Rc::new(indie).into();
         let proof = if self.verifying_key() == signing_key.verifying_key() {
@@ -146,37 +152,41 @@ impl<T: ContentRef> Group<T> {
         } else {
             let p = self
                 .get_capability(&agent.agent_id())
-                .expect("FIXME error handling for user not found on group");
+                .ok_or(AddMemberError::NoProof)?;
 
             if can > p.payload().can {
-                panic!("FIXME escelation");
+                return Err(AddMemberError::AccessEscalation {
+                    wanted: can,
+                    have: p.payload().can,
+                });
             }
-            Some(p.clone())
+
+            Some(p.dupe())
         };
 
-        let delegation = Signed::sign(
+        let delegation = Signed::try_sign(
             Delegation {
                 delegate: member_to_add,
                 can,
                 proof,
-                after_revocations: after_revocations.iter().cloned().cloned().collect(),
+                after_revocations: after_revocations.into_iter().duped().duped().collect(),
                 after_content: relevant_docs
                     .iter()
                     .map(|d| {
                         (
                             d.doc_id(),
                             (
-                                (*d).clone(),
+                                (*d).dupe(),
                                 d.content_heads.iter().map(|c| (*c).clone()).collect(),
                             ),
                         )
                     })
                     .collect(),
             },
-            signing_key,
-        );
+            &signing_key,
+        )?;
 
-        self.add_delegation(delegation);
+        Ok(self.add_delegation(delegation))
     }
 
     pub fn revoke_member(
@@ -184,64 +194,71 @@ impl<T: ContentRef> Group<T> {
         member_to_remove: &AgentId,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<Document<T>>],
-    ) {
+    ) -> Result<(), SigningError> {
         let revocations = &mut self.state.revocations;
 
         if let Some(revoke_dlgs) = self.members.remove(member_to_remove) {
-            for dlg in revoke_dlgs.iter() {
-                let revocation = Signed::sign(
+            revoke_dlgs.iter().try_fold((), |_, dlg| {
+                let revocation = Signed::try_sign(
                     Revocation {
-                        revoke: dlg.clone(),
-                        proof: None, // FIXME
+                        revoke: dlg.dupe(),
+                        proof: None, // FIXME lookup a valid proof
                         after_content: relevant_docs
                             .iter()
                             .map(|d| {
                                 (
                                     d.doc_id(),
                                     (
-                                        (*d).clone(),
+                                        (*d).dupe(),
                                         d.content_heads.iter().map(|c| (*c).clone()).collect(),
                                     ),
                                 )
                             })
                             .collect(),
                     },
-                    signing_key,
-                );
+                    &signing_key,
+                )?;
 
                 revocations.insert(Rc::new(revocation));
-            }
+
+                Ok(())
+            })
+        } else {
+            Ok(())
         }
 
         // FIXME check that you can actually do this with tiebreaking, seniroity etc etc
     }
 
-    pub fn materialize(&mut self) {
-        for (_, op) in
-            Operation::topsort(&self.state.delegation_heads, &self.state.revocation_heads)
-                .expect("FIXME")
-                .iter()
-        {
-            match op {
-                Operation::Delegation(d) => {
-                    if let Some(mut_dlgs) = self.members.get_mut(&d.payload().delegate.agent_id()) {
-                        mut_dlgs.push(d.clone());
-                    } else {
-                        self.members
-                            .insert(d.payload().delegate.agent_id(), vec![d.clone()]);
+    pub fn materialize(&mut self) -> Result<(), AncestorError> {
+        Ok(
+            for (_, op) in
+                Operation::topsort(&self.state.delegation_heads, &self.state.revocation_heads)?
+                    .iter()
+            {
+                match op {
+                    Operation::Delegation(d) => {
+                        if let Some(mut_dlgs) =
+                            self.members.get_mut(&d.payload().delegate.agent_id())
+                        {
+                            mut_dlgs.push(d.dupe());
+                        } else {
+                            self.members
+                                .insert(d.payload().delegate.agent_id(), vec![d.dupe()]);
+                        }
+                    }
+                    Operation::Revocation(r) => {
+                        if let Some(mut_dlgs) = self
+                            .members
+                            .get_mut(&r.payload().revoke.payload().delegate.agent_id())
+                        {
+                            // FIXME maintain this as a CaMap for easier removals, too
+                            mut_dlgs.retain(|d| *d != r.payload().revoke);
+                        }
                     }
                 }
-                Operation::Revocation(r) => {
-                    if let Some(mut_dlgs) = self
-                        .members
-                        .get_mut(&r.payload().revoke.payload().delegate.agent_id())
-                    {
-                        // FIXME maintain this as a CaMap for easier removals, too
-                        mut_dlgs.retain(|d| *d != r.payload().revoke);
-                    }
-                }
-            }
-        }
+            },
+        )
     }
 
     pub fn add_revocation(
@@ -284,6 +301,7 @@ impl<T: ContentRef> Verifiable for Group<T> {
     }
 }
 
+// FIXME test and consistent order
 impl<T: ContentRef> std::hash::Hash for Group<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         for m in self.members.iter() {
@@ -306,6 +324,18 @@ impl<T: ContentRef> Serialize for Group<T> {
         state.serialize_field("state", &self.state)?;
         state.end()
     }
+}
+
+#[derive(Debug, Error)]
+pub enum AddMemberError {
+    #[error(transparent)]
+    SigningError(#[from] SigningError),
+
+    #[error("No proof found")]
+    NoProof,
+
+    #[error("Access escalation. Wanted {wanted}, only have {have}.")]
+    AccessEscalation { wanted: Access, have: Access },
 }
 
 #[cfg(test)]
@@ -354,10 +384,16 @@ mod tests {
         let alice_agent: Agent<T> = alice.into();
         let bob_agent = bob.into();
 
-        let g0 = store.generate_group(nonempty![alice_agent.clone()]);
-        let g1 = store.generate_group(nonempty![alice_agent, g0.clone().into()]);
-        let g2 = store.generate_group(nonempty![bob_agent, g1.clone().into()]);
-        let g3 = store.generate_group(nonempty![g1.clone().into(), g2.clone().into()]);
+        let g0 = store.generate_group(nonempty![alice_agent.dupe()]).unwrap();
+        let g1 = store
+            .generate_group(nonempty![alice_agent, g0.clone().into()])
+            .unwrap();
+        let g2 = store
+            .generate_group(nonempty![bob_agent, g1.clone().into()])
+            .unwrap();
+        let g3 = store
+            .generate_group(nonempty![g1.clone().into(), g2.clone().into()])
+            .unwrap();
 
         [g0, g1, g2, g3]
     }
@@ -368,29 +404,32 @@ mod tests {
         bob: Rc<Individual>,
     ) -> [Rc<RefCell<Group<T>>>; 10] {
         let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Active::generate(signer);
+        let active = Active::generate(signer).unwrap();
 
-        let group0 = gs.generate_group(nonempty![alice.into()]);
-        let group1 = gs.generate_group(nonempty![bob.into()]);
-        let group2 = gs.generate_group(nonempty![group1.clone().into()]);
-        let group3 = gs.generate_group(nonempty![group2.clone().into()]);
-        let group4 = gs.generate_group(nonempty![group3.clone().into()]);
-        let group5 = gs.generate_group(nonempty![group4.clone().into()]);
-        let group6 = gs.generate_group(nonempty![group5.clone().into()]);
-        let group7 = gs.generate_group(nonempty![group6.clone().into()]);
-        let group8 = gs.generate_group(nonempty![group7.clone().into()]);
-        let group9 = gs.generate_group(nonempty![group8.clone().into()]);
+        let group0 = gs.generate_group(nonempty![alice.into()]).unwrap();
+        let group1 = gs.generate_group(nonempty![bob.into()]).unwrap();
+        let group2 = gs.generate_group(nonempty![group1.clone().into()]).unwrap();
+        let group3 = gs.generate_group(nonempty![group2.clone().into()]).unwrap();
+        let group4 = gs.generate_group(nonempty![group3.clone().into()]).unwrap();
+        let group5 = gs.generate_group(nonempty![group4.clone().into()]).unwrap();
+        let group6 = gs.generate_group(nonempty![group5.clone().into()]).unwrap();
+        let group7 = gs.generate_group(nonempty![group6.clone().into()]).unwrap();
+        let group8 = gs.generate_group(nonempty![group7.clone().into()]).unwrap();
+        let group9 = gs.generate_group(nonempty![group8.clone().into()]).unwrap();
 
-        group0.borrow_mut().add_delegation(Signed::sign(
-            Delegation {
-                delegate: group9.clone().into(),
-                can: Access::Admin,
-                proof: None,
-                after_revocations: vec![],
-                after_content: BTreeMap::new(),
-            },
-            &active.signer,
-        ));
+        group0.borrow_mut().add_delegation(
+            Signed::try_sign(
+                Delegation {
+                    delegate: group9.clone().into(),
+                    can: Access::Admin,
+                    proof: None,
+                    after_revocations: vec![],
+                    after_content: BTreeMap::new(),
+                },
+                &active.signer,
+            )
+            .unwrap(),
+        );
 
         [
             group0, group1, group2, group3, group4, group5, group6, group7, group8, group9,
@@ -407,7 +446,7 @@ mod tests {
         let mut gs: GroupStore<String> = GroupStore::new();
         let [g0, ..] = setup_groups(&mut gs, alice.clone(), bob);
 
-        let g0_mems = gs.transitive_members(&g0.clone().as_ref().clone().into_inner());
+        let g0_mems = gs.transitive_members(&g0.dupe().as_ref().clone().into_inner());
 
         assert_eq!(
             g0_mems,
@@ -502,30 +541,36 @@ mod tests {
     #[test]
     fn test_add_member() {
         let alice = Rc::new(setup_user());
-        let alice_agent: Agent<_> = alice.clone().into();
+        let alice_agent: Agent<_> = alice.dupe().into();
 
         let bob = Rc::new(setup_user());
-        let bob_agent: Agent<_> = bob.clone().into();
+        let bob_agent: Agent<_> = bob.dupe().into();
 
         let carol = Rc::new(setup_user());
-        let carol_agent: Agent<_> = carol.clone().into();
+        let carol_agent: Agent<_> = carol.dupe().into();
 
         let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Rc::new(Active::generate(signer));
+        let active = Rc::new(Active::generate(signer).unwrap());
 
         let mut gs: GroupStore<String> = GroupStore::new();
 
-        let g0 = gs.generate_group(nonempty![active.clone().into()]);
-        let g1 = gs.generate_group(nonempty![alice_agent, bob_agent.clone(), g0.clone().into()]);
-        let g2 = gs.generate_group(nonempty![carol_agent, g1.clone().into()]);
+        let g0 = gs.generate_group(nonempty![active.dupe().into()]).unwrap();
+        let g1 = gs
+            .generate_group(nonempty![alice_agent, bob_agent.dupe(), g0.dupe().into()])
+            .unwrap();
+        let g2 = gs
+            .generate_group(nonempty![carol_agent, g1.dupe().into()])
+            .unwrap();
 
-        g0.borrow_mut().add_member(
-            carol.clone().into(),
-            Access::Write,
-            &active.signer,
-            &[],
-            &[],
-        );
+        g0.borrow_mut()
+            .add_member(
+                carol.clone().into(),
+                Access::Write,
+                &active.signer,
+                &[],
+                &[],
+            )
+            .unwrap();
 
         gs.insert(g0.clone().into());
         let g0_mems = gs.transitive_members(&g0.borrow());

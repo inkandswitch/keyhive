@@ -29,22 +29,24 @@ use std::io::Read;
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Siv(pub [u8; 24]);
 
+pub const SEPARATOR: &[u8] = b"/automerge/beehive/";
+
 impl Siv {
-    pub fn new<T: ContentRef>(key: &SymmetricKey, plaintext: &[u8], doc: &Document<T>) -> Self {
+    pub fn new<T: ContentRef>(
+        key: &SymmetricKey,
+        plaintext: &[u8],
+        doc: &Document<T>,
+    ) -> Result<Self, std::io::Error> {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(b"/automerge/beehive/");
+        hasher.update(SEPARATOR);
         hasher.update(doc.doc_id().as_slice());
         hasher.update(key.as_slice());
         hasher.update(plaintext);
 
         let mut buf = [0; 24];
-        hasher
-            .finalize_xof()
-            .take(24)
-            .read_exact(&mut buf)
-            .expect("FIXME");
+        hasher.finalize_xof().read_exact(&mut buf)?;
 
-        Siv(buf)
+        Ok(Siv(buf))
     }
 
     /// Convert to a [`chacha20poly1305::XNonce`].

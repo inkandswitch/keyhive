@@ -380,7 +380,7 @@ And for Doc B:
 ```rust
 pub struct Attenuation {
     group_id: Option<GroupId>,
-    ceveats: CeveatDsl // FIXME: TBD
+    ceveats: CeveatDsl
 }
 
 enum AuthAction {

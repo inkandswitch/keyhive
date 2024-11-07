@@ -5,15 +5,25 @@ use super::{individual::id::IndividualId, verifiable::Verifiable};
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::{share_key::ShareKey, signed::Signed},
+    crypto::{
+        share_key::ShareKey,
+        signed::{Signed, SigningError},
+    },
     principal::{
         agent::{Agent, AgentId},
-        group::{operation::delegation::Delegation, Group},
+        group::{
+            operation::{
+                delegation::{Delegation, DelegationError},
+                AncestorError,
+            },
+            Group,
+        },
         identifier::Identifier,
         individual::Individual,
     },
     util::content_addressed_map::CaMap,
 };
+use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
 use nonempty::NonEmpty;
@@ -25,7 +35,7 @@ use std::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document<T: ContentRef> {
     pub(crate) group: Group<T>,
-    pub(crate) reader_keys: HashMap<IndividualId, (Rc<Individual>, ShareKey)>, // FIXME May remove when BeeKEM, also FIXME Individual ID
+    pub(crate) reader_keys: HashMap<IndividualId, (Rc<Individual>, ShareKey)>,
 
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
@@ -56,35 +66,36 @@ impl<T: ContentRef> Document<T> {
         self.group.get_capability(member_id)
     }
 
-    pub fn generate(parents: NonEmpty<Agent<T>>) -> Self {
+    pub fn generate(parents: NonEmpty<Agent<T>>) -> Result<Self, DelegationError> {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
 
-        let mut doc = Document {
-            group: Group::generate(parents.clone()),
-            reader_keys: HashMap::new(), // FIXME
-            content_state: HashSet::new(),
-            content_heads: HashSet::new(),
-        };
+        parents.iter().try_fold(
+            Document {
+                group: Group::generate(parents.clone())?,
+                reader_keys: HashMap::new(), // FIXME
+                content_state: HashSet::new(),
+                content_heads: HashSet::new(),
+            },
+            |mut acc, parent| {
+                let dlg = Signed::try_sign(
+                    Delegation {
+                        delegate: parent.dupe(),
+                        can: Access::Admin,
+                        proof: None,
+                        after_revocations: vec![],
+                        after_content: BTreeMap::new(),
+                    },
+                    &doc_signer,
+                )?;
 
-        for parent in parents.iter() {
-            let dlg = Signed::sign(
-                Delegation {
-                    delegate: parent.clone(),
-                    can: Access::Admin,
-                    proof: None,
-                    after_revocations: vec![],
-                    after_content: BTreeMap::new(),
-                },
-                &doc_signer,
-            );
+                let rc = Rc::new(dlg);
+                acc.group.state.delegations.insert(rc.dupe());
+                acc.group.state.delegation_heads.insert(rc.dupe());
+                acc.group.members.insert(parent.agent_id(), vec![rc]);
 
-            let rc = Rc::new(dlg);
-            doc.group.state.delegations.insert(rc.clone());
-            doc.group.state.delegation_heads.insert(rc.clone());
-            doc.group.members.insert(parent.agent_id(), vec![rc]);
-        }
-
-        doc
+                Ok(acc)
+            },
+        )
     }
 
     pub fn add_member(&mut self, signed_delegation: Signed<Delegation<T>>) {
@@ -110,13 +121,13 @@ impl<T: ContentRef> Document<T> {
         member_id: &AgentId,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<Document<T>>],
-    ) {
+    ) -> Result<(), SigningError> {
         self.group
-            .revoke_member(member_id, signing_key, relevant_docs);
+            .revoke_member(member_id, signing_key, relevant_docs)
     }
 
-    pub fn materialize(&mut self) {
-        self.group.materialize();
+    pub fn materialize(&mut self) -> Result<(), AncestorError> {
+        self.group.materialize()
     }
 }
 

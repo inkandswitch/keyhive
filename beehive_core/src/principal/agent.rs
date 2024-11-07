@@ -7,6 +7,7 @@ use super::{
     verifiable::Verifiable,
 };
 use crate::content::reference::ContentRef;
+use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, rc::Rc};
@@ -38,6 +39,17 @@ impl<T: ContentRef> Agent<T> {
             Agent::Individual(i) => i.agent_id(),
             Agent::Group(g) => (*g).borrow().agent_id(),
             Agent::Document(d) => d.agent_id(),
+        }
+    }
+}
+
+impl<T: ContentRef> Dupe for Agent<T> {
+    fn dupe(&self) -> Self {
+        match self {
+            Agent::Active(a) => Agent::Active(a.dupe()),
+            Agent::Individual(i) => Agent::Individual(i.dupe()),
+            Agent::Group(g) => Agent::Group(g.dupe()),
+            Agent::Document(d) => Agent::Document(d.dupe()),
         }
     }
 }

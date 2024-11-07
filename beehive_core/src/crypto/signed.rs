@@ -7,6 +7,7 @@ use std::{
     cmp::Ordering,
     hash::{Hash, Hasher},
 };
+use thiserror::Error;
 
 /// A wrapper to add a signature and signer information to an arbitrary payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,14 +23,15 @@ pub struct Signed<T: Serialize> {
 }
 
 impl<T: Serialize> Signed<T> {
-    pub fn sign(payload: T, signer: &ed25519_dalek::SigningKey) -> Self {
-        let payload_bytes: Vec<u8> = serde_cbor::to_vec(&payload).expect("FIXME");
+    pub fn try_sign(payload: T, signer: &ed25519_dalek::SigningKey) -> Result<Self, SigningError> {
+        let mut payload_bytes: Vec<u8> = vec![];
+        ciborium::into_writer(&payload, &mut payload_bytes)?;
 
-        Signed {
+        Ok(Signed {
             payload,
             verifying_key: signer.verifying_key(),
-            signature: signer.sign(payload_bytes.as_slice()),
-        }
+            signature: signer.try_sign(payload_bytes.as_slice())?,
+        })
     }
 
     pub fn payload(&self) -> &T {
@@ -48,11 +50,10 @@ impl<T: Serialize> Signed<T> {
         &self.signature
     }
 
-    pub fn verify(&self) -> Result<(), signature::Error> {
-        self.verifying_key.verify(
-            serde_cbor::to_vec(&self.payload).expect("FIXME").as_slice(),
-            &self.signature,
-        )
+    pub fn try_verify(&self) -> Result<(), VerificationError> {
+        let mut buf = vec![];
+        ciborium::into_writer(&self.payload, &mut buf)?;
+        Ok(self.verifying_key.verify(buf.as_slice(), &self.signature)?)
     }
 
     pub fn map<U: Serialize, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
@@ -105,8 +106,28 @@ impl<T: Serialize> Hash for Signed<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.verifying_key.as_bytes().hash(state);
         self.signature.to_bytes().hash(state);
-        serde_cbor::to_vec(&self.payload)
-            .expect("unable to serialize payload for hashing")
-            .hash(state);
+
+        let mut buf = vec![];
+        ciborium::into_writer(&self.payload, &mut buf)
+            .expect("unable to serialize payload for hashing");
+        buf.hash(state);
     }
+}
+
+#[derive(Debug, Error)]
+pub enum VerificationError {
+    #[error("Signature verification failed: {0}")]
+    SignatureVerificationFailed(#[from] signature::Error),
+
+    #[error("Payload deserialization failed: {0}")]
+    SerializationFailed(#[from] ciborium::ser::Error<std::io::Error>),
+}
+
+#[derive(Debug, Error)]
+pub enum SigningError {
+    #[error("Signing failed: {0}")]
+    SigningFailed(#[from] ed25519_dalek::SignatureError),
+
+    #[error("Payload serialization failed: {0}")]
+    SerializationFailed(#[from] ciborium::ser::Error<std::io::Error>),
 }

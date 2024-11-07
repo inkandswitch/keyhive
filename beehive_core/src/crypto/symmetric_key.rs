@@ -1,7 +1,8 @@
 //! Symmetric cipher newtype.
 
-use super::siv::Siv;
-use aead::Aead;
+use super::siv::{Siv, SEPARATOR};
+// use aead::AeadInPlace;
+use chacha20poly1305::AeadInPlace;
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305};
 use serde::{Deserialize, Serialize};
 use x25519_dalek::SharedSecret;
@@ -17,18 +18,19 @@ use x25519_dalek::SharedSecret;
 /// # };
 /// # use std::rc::Rc;
 /// # use nonempty::nonempty;
-/// let plaintext = b"hello world";
-/// let user = Individual::generate(&mut ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+/// let mut plaintext = b"hello world";
+/// let user = Individual::generate(&mut ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())).unwrap();
 /// let user_agent: Agent<String> = Rc::new(user).into();
-/// let doc = Document::generate(nonempty![user_agent]);
+/// let doc = Document::generate(nonempty![user_agent]).unwrap();
 ///
 /// let key = SymmetricKey::generate();
-/// let nonce = Siv::new(&key, plaintext, &doc);
+/// let nonce = Siv::new(&key, plaintext, &doc).unwrap();
 ///
-/// let ciphertext = key.encrypt(nonce, plaintext).unwrap();
-/// let decrypted = key.decrypt(nonce, &ciphertext).unwrap();
+/// let mut roundtrip_buf = plaintext.to_vec();
+/// key.try_encrypt(nonce, &mut roundtrip_buf).unwrap();
+/// key.try_decrypt(nonce, &mut roundtrip_buf).unwrap();
 ///
-/// assert_eq!(decrypted, plaintext);
+/// assert_eq!(roundtrip_buf.as_slice(), plaintext);
 /// ```
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SymmetricKey(pub [u8; 32]);
@@ -51,13 +53,23 @@ impl SymmetricKey {
     }
 
     /// Encrypt data with the [`SymmetricKey`].
-    pub fn encrypt(&self, nonce: Siv, data: &[u8]) -> Result<Vec<u8>, chacha20poly1305::Error> {
-        self.to_xchacha().encrypt(nonce.as_xnonce(), data)
+    pub fn try_encrypt(
+        &self,
+        nonce: Siv,
+        data: &mut Vec<u8>,
+    ) -> Result<(), chacha20poly1305::Error> {
+        self.to_xchacha()
+            .encrypt_in_place(nonce.as_xnonce(), SEPARATOR, data)
     }
 
     /// Decrypt data with the [`SymmetricKey`].
-    pub fn decrypt(&self, nonce: Siv, data: &[u8]) -> Result<Vec<u8>, chacha20poly1305::Error> {
-        self.to_xchacha().decrypt(nonce.as_xnonce(), data)
+    pub fn try_decrypt(
+        &self,
+        nonce: Siv,
+        data: &mut Vec<u8>,
+    ) -> Result<(), chacha20poly1305::Error> {
+        self.to_xchacha()
+            .decrypt_in_place(nonce.as_xnonce(), SEPARATOR, data)
     }
 }
 
