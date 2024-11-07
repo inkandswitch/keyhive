@@ -50,12 +50,13 @@ pub struct Cgka {
 /// Constructors
 impl Cgka {
     /// We assume members are in causal order.
-    pub fn new(
+    pub fn new<R: rand::CryptoRng + rand::RngCore>(
         members: NonEmpty<(IndividualId, ShareKey)>,
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
         owner_sk: ShareSecretKey,
+        csprng: &mut R,
     ) -> Result<Self, CgkaError> {
         if !members
             .iter()
@@ -74,7 +75,7 @@ impl Cgka {
             pcs_keys: Default::default(),
         };
         cgka.tree
-            .encrypt_path(owner_id, owner_pk, &mut cgka.owner_sks)?;
+            .encrypt_path(owner_id, owner_pk, &mut cgka.owner_sks, csprng)?;
         let pcs_key = PcsKey::derive_from(cgka.owner_id, &mut cgka.owner_sks, &cgka.tree)?;
         cgka.pcs_keys.insert(Rc::new(pcs_key));
         Ok(cgka)
@@ -197,15 +198,18 @@ impl Cgka {
     }
 
     /// Update key pair for this Identifier.
-    pub fn update(
+    pub fn update<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         id: IndividualId,
         new_pk: ShareKey,
         new_sk: ShareSecretKey,
+        csprng: &mut R,
     ) -> Result<CgkaOperation, CgkaError> {
         debug_assert!(id == self.owner_id);
         self.owner_sks.insert(new_pk, new_sk);
-        let maybe_new_path = self.tree.encrypt_path(id, new_pk, &mut self.owner_sks)?;
+        let maybe_new_path = self
+            .tree
+            .encrypt_path(id, new_pk, &mut self.owner_sks, csprng)?;
         if let Some(new_path) = maybe_new_path {
             let op = CgkaOperation::Update { id, new_path };
             Ok(op)
@@ -281,12 +285,13 @@ mod tests {
 
     #[test]
     fn test_simple_add() -> Result<(), CgkaError> {
-        let doc_id = DocumentId::generate();
+        let csprng = &mut rand::thread_rng();
+        let doc_id = DocumentId::generate(csprng);
         let members = setup_members(2);
         let initial_member_count = members.len();
         let mut cgka = setup_cgka(doc_id, &members, 0);
         assert!(cgka.has_pcs_key());
-        let new_m = TestMember::generate();
+        let new_m = TestMember::generate(csprng);
         cgka.add(new_m.id, new_m.pk)?;
         assert!(!cgka.has_pcs_key());
         assert_eq!(cgka.tree.member_count(), initial_member_count as u32 + 1);
@@ -295,7 +300,8 @@ mod tests {
 
     #[test]
     fn test_simple_remove() -> Result<(), CgkaError> {
-        let doc_id = DocumentId::generate();
+        let csprng = &mut rand::thread_rng();
+        let doc_id = DocumentId::generate(csprng);
         let members = setup_members(2);
         let initial_member_count = members.len();
         let mut cgka = setup_cgka(doc_id, &members, 0);
@@ -308,23 +314,31 @@ mod tests {
 
     #[test]
     fn test_no_root_key_after_concurrent_updates() -> Result<(), CgkaError> {
-        let doc_id = DocumentId::generate();
+        let csprng = &mut rand::thread_rng();
+        let doc_id = DocumentId::generate(csprng);
         let mut cgkas = setup_member_cgkas(doc_id, 7)?;
         assert!(cgkas[0].cgka.has_pcs_key());
-        let op1 = cgkas[1].update()?;
+        let op1 = cgkas[1]
+            .update(csprng)?
+            .ok_or(CgkaError::InvalidOperation)?;
         cgkas[0].cgka.merge(op1)?;
-        let op6 = cgkas[6].update()?;
+        let op6 = cgkas[6]
+            .update(csprng)?
+            .ok_or(CgkaError::InvalidOperation)?;
         cgkas[0].cgka.merge(op6)?;
         assert!(!cgkas[0].cgka.has_pcs_key());
         Ok(())
     }
 
-    fn update_merge_and_compare_secrets(
+    fn update_merge_and_compare_secrets<R: rand::CryptoRng + rand::RngCore>(
         member_cgkas: &mut Vec<TestMemberCgka>,
+        csprng: &mut R,
     ) -> Result<(), CgkaError> {
         // One member updates and all merge that in so that the tree has a root secret.
         let m_idx = if member_cgkas.len() > 1 { 1 } else { 0 };
-        let update_op = member_cgkas[m_idx].update()?;
+        let update_op = member_cgkas[m_idx]
+            .update(csprng)?
+            .ok_or(CgkaError::IdentifierNotFound)?;
         let post_update_secret_bytes = member_cgkas[m_idx].cgka.secret()?.to_bytes();
         for (idx, m) in member_cgkas.iter_mut().enumerate() {
             if idx == m_idx {
@@ -344,12 +358,13 @@ mod tests {
     /// concurrently. This function applies each round and then does a single update
     /// and merge across members to check that everyone converges on the same secret
     /// after that round.
-    fn run_test_rounds(
+    fn run_test_rounds<R: rand::CryptoRng + rand::RngCore>(
         member_count: u32,
         test_rounds: &[Vec<Box<TestOperation>>],
+        csprng: &mut R,
     ) -> Result<(), CgkaError> {
         assert!(member_count >= 1);
-        let doc_id = DocumentId::generate();
+        let doc_id = DocumentId::generate(csprng);
         let mut member_cgkas = setup_member_cgkas(doc_id, member_count)?;
         let mut initial_cgka = member_cgkas[0].cgka.clone();
         let initial_secret_bytes = initial_cgka.secret()?.to_bytes();
@@ -358,122 +373,150 @@ mod tests {
         }
         for test_round in test_rounds {
             apply_test_operations_rewind_and_merge_to_all(&mut member_cgkas, test_round)?;
-            update_merge_and_compare_secrets(&mut member_cgkas)?;
+            update_merge_and_compare_secrets(&mut member_cgkas, csprng)?;
         }
         Ok(())
     }
 
-    fn run_tests_for_1_to_32_members(
+    fn run_tests_for_1_to_32_members<R: rand::CryptoRng + rand::RngCore>(
         test_rounds: Vec<Vec<Box<TestOperation>>>,
+        csprng: &mut R,
     ) -> Result<(), CgkaError> {
         for n in 1..16 {
-            run_test_rounds(n, &test_rounds)?;
+            run_test_rounds(n, &test_rounds, csprng)?;
         }
-        run_test_rounds(20, &test_rounds)?;
-        run_test_rounds(25, &test_rounds)?;
-        run_test_rounds(31, &test_rounds)?;
-        run_test_rounds(32, &test_rounds)?;
+        run_test_rounds(20, &test_rounds, csprng)?;
+        run_test_rounds(25, &test_rounds, csprng)?;
+        run_test_rounds(31, &test_rounds, csprng)?;
+        run_test_rounds(32, &test_rounds, csprng)?;
         Ok(())
     }
 
     #[test]
     fn test_update_all_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![vec![update_all_members()]])
+        let mut csprng = rand::thread_rng();
+        run_tests_for_1_to_32_members(vec![vec![update_all_members()]], &mut csprng)
     }
 
     #[test]
     fn test_update_even_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![vec![update_even_members()]])
+        let mut csprng = rand::thread_rng();
+        run_tests_for_1_to_32_members(vec![vec![update_even_members()]], &mut csprng)
     }
 
     #[test]
     fn test_remove_odd_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![vec![remove_odd_members()]])
+        let csprng = &mut rand::thread_rng();
+        run_tests_for_1_to_32_members(vec![vec![remove_odd_members()]], csprng)
     }
 
     #[test]
     fn test_remove_from_right_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![vec![remove_from_right(1)]])
+        let csprng = &mut rand::thread_rng();
+        run_tests_for_1_to_32_members(vec![vec![remove_from_right(1)]], csprng)
     }
 
     #[test]
     fn test_remove_from_left_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![vec![remove_from_left(1)]])
+        let csprng = &mut rand::thread_rng();
+        run_tests_for_1_to_32_members(vec![vec![remove_from_left(1)]], csprng)
     }
 
     #[test]
     fn test_update_then_remove_then_update_even_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![
-            vec![update_all_members()],
-            vec![remove_odd_members()],
-            vec![update_even_members()],
-        ])
+        let mut csprng = rand::thread_rng();
+        run_tests_for_1_to_32_members(
+            vec![
+                vec![update_all_members()],
+                vec![remove_odd_members()],
+                vec![update_even_members()],
+            ],
+            &mut csprng,
+        )
     }
 
     #[test]
     fn test_update_and_remove_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![vec![
-            update_all_members(),
-            remove_odd_members(),
-            update_even_members(),
-        ]])
+        let mut csprng = rand::thread_rng();
+        run_tests_for_1_to_32_members(
+            vec![vec![
+                update_all_members(),
+                remove_odd_members(),
+                update_even_members(),
+            ]],
+            &mut csprng,
+        )
     }
 
     #[test]
     fn test_update_and_add_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![vec![update_all_members(), add_from_all_members()]])
+        let mut csprng = rand::thread_rng();
+        run_tests_for_1_to_32_members(
+            vec![vec![update_all_members(), add_from_all_members()]],
+            &mut csprng,
+        )
     }
 
     #[test]
     fn test_add_one_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![vec![add_from_first_member()]])
+        run_tests_for_1_to_32_members(vec![vec![add_from_first_member()]], &mut rand::thread_rng())
     }
 
     #[test]
     fn test_all_add_one_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![vec![add_from_all_members()]])
+        run_tests_for_1_to_32_members(vec![vec![add_from_all_members()]], &mut rand::thread_rng())
     }
 
     #[test]
     fn test_remove_then_all_add_one_then_remove_odd_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![
-            vec![remove_from_right(1)],
-            vec![add_from_all_members()],
-            vec![remove_odd_members()],
-        ])
+        run_tests_for_1_to_32_members(
+            vec![
+                vec![remove_from_right(1)],
+                vec![add_from_all_members()],
+                vec![remove_odd_members()],
+            ],
+            &mut rand::thread_rng(),
+        )
     }
 
     #[test]
     fn test_update_all_then_add_from_all_then_remove_odd_then_update_even_concurrently(
     ) -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![
-            vec![update_all_members()],
-            vec![add_from_all_members()],
-            vec![remove_odd_members()],
-            vec![update_even_members()],
-        ])
+        let mut csprng = rand::thread_rng();
+        run_tests_for_1_to_32_members(
+            vec![
+                vec![update_all_members()],
+                vec![add_from_all_members()],
+                vec![remove_odd_members()],
+                vec![update_even_members()],
+            ],
+            &mut csprng,
+        )
     }
 
     #[test]
     fn test_a_bunch_of_ops_in_rounds() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![vec![
-            update_all_members(),
-            add_from_all_members(),
-            add_from_first_member(),
-            remove_odd_members(),
-            add_from_first_member(),
-            remove_from_right(1),
-            remove_from_left(1),
-            update_even_members(),
-            add_from_first_member(),
-            update_even_members(),
-            add_from_first_member(),
-            remove_from_left(2),
-            remove_odd_members(),
-            update_all_members(),
-            add_from_first_member(),
-            remove_from_right(2),
-            update_even_members(),
-        ]])
+        run_tests_for_1_to_32_members(
+            vec![vec![
+                update_all_members(),
+                add_from_all_members(),
+                add_from_first_member(),
+                remove_odd_members(),
+                add_from_first_member(),
+                remove_from_right(1),
+                remove_from_left(1),
+                update_even_members(),
+                add_from_first_member(),
+                update_even_members(),
+                add_from_first_member(),
+                remove_from_left(2),
+                remove_odd_members(),
+                update_all_members(),
+                add_from_first_member(),
+                remove_from_right(2),
+                update_even_members(),
+            ]],
+            &mut rand::thread_rng(),
+        )
     }
 }

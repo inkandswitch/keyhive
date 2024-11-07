@@ -9,11 +9,11 @@ use crate::{
 };
 use dupe::Dupe;
 use nonempty::NonEmpty;
-use std::collections::BTreeMap;
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct DocumentStore<T: ContentRef> {
-    pub docs: BTreeMap<DocumentId, Document<T>>,
+    pub docs: BTreeMap<DocumentId, Rc<RefCell<Document<T>>>>,
 }
 
 impl<T: ContentRef> DocumentStore<T> {
@@ -23,12 +23,12 @@ impl<T: ContentRef> DocumentStore<T> {
         }
     }
 
-    pub fn insert(&mut self, doc: Document<T>) {
-        self.docs.insert(doc.doc_id(), doc);
+    pub fn insert(&mut self, doc: Rc<RefCell<Document<T>>>) {
+        self.docs.insert(doc.clone().borrow().doc_id(), doc);
     }
 
-    pub fn get(&self, id: &DocumentId) -> Option<&Document<T>> {
-        self.docs.get(id)
+    pub fn get(&self, id: &DocumentId) -> Option<Rc<RefCell<Document<T>>>> {
+        self.docs.get(id).cloned()
     }
 
     pub fn get_mut(&mut self, id: &DocumentId) -> Option<&mut Document<T>> {
@@ -41,7 +41,7 @@ impl<T: ContentRef> DocumentStore<T> {
     ) -> Result<DocumentId, DelegationError> {
         let new_doc = Document::generate(parents)?;
         let new_doc_id: DocumentId = new_doc.doc_id();
-        self.insert(new_doc);
+        self.insert(Rc::new(RefCell::new(new_doc)));
         Ok(new_doc_id)
     }
 
@@ -107,7 +107,7 @@ impl<T: ContentRef> DocumentStore<T> {
                     }
                 }
                 Agent::Document(doc) => {
-                    for (mem, proof_hashes) in doc.group.members.iter() {
+                    for (mem, proof_hashes) in doc.borrow().group.members.iter() {
                         for proof in proof_hashes.iter() {
                             let current_path_access =
                                 access.min(proof.payload().can).min(parent_access);

@@ -15,11 +15,12 @@ use x25519_dalek::SharedSecret;
 /// #     crypto::{siv::Siv, symmetric_key::SymmetricKey},
 /// #     principal::{agent::Agent, document::Document, individual::Individual},
 /// # };
-/// # use std::rc::Rc;
+/// # use std::{cell::RefCell, rc::Rc};
 /// # use nonempty::nonempty;
 /// let mut plaintext = b"hello world";
-/// let user = Individual::generate(&mut ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())).unwrap();
-/// let user_agent: Agent<String> = Rc::new(user).into();
+/// let mut sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+/// let user = Individual::generate(&mut sk, &mut rand::thread_rng()).unwrap();
+/// let user_agent: Agent<String> = Rc::new(RefCell::new(user)).into();
 /// let doc = Document::generate(nonempty![user_agent]).unwrap();
 ///
 /// let key = SymmetricKey::generate();

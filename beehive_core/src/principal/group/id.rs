@@ -2,10 +2,12 @@ use crate::principal::{identifier::Identifier, verifiable::Verifiable};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 
+/// A group identifier.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct GroupId(pub(crate) Identifier);
 
 impl GroupId {
+    /// Lift a generic identifier to a group identifier.
     pub fn new(identifier: Identifier) -> Self {
         Self(identifier)
     }

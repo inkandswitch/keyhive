@@ -1,6 +1,5 @@
 pub mod delegation;
 pub mod revocation;
-pub mod store;
 
 use crate::{
     content::reference::ContentRef,
@@ -15,6 +14,7 @@ use delegation::Delegation;
 use revocation::Revocation;
 use serde::Serialize;
 use std::{
+    cell::RefCell,
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
     hash::Hash,
@@ -70,7 +70,7 @@ impl<T: ContentRef> Operation<T> {
     ) -> (
         Vec<Rc<Signed<Delegation<T>>>>,
         Vec<Rc<Signed<Revocation<T>>>>,
-        &BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)>,
+        &BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
     ) {
         match self {
             Operation::Delegation(delegation) => {
@@ -84,7 +84,7 @@ impl<T: ContentRef> Operation<T> {
         }
     }
 
-    pub fn after_content(&self) -> &BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)> {
+    pub fn after_content(&self) -> &BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)> {
         match self {
             Operation::Delegation(delegation) => &delegation.payload().after_content,
             Operation::Revocation(revocation) => &revocation.payload().after_content,

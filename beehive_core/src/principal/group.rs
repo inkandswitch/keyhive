@@ -27,6 +27,7 @@ use nonempty::NonEmpty;
 use operation::{delegation::Delegation, revocation::Revocation, AncestorError, Operation};
 use serde::{ser::SerializeStruct, Serialize, Serializer};
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
@@ -133,6 +134,20 @@ impl<T: ContentRef> Group<T> {
         })
     }
 
+    pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
+        self.state
+            .revocations
+            .iter()
+            .filter_map(|(_digest, rvk)| {
+                if rvk.payload().revoke.payload().delegate == *agent {
+                    Some(rvk.dupe())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     pub fn add_delegation(&mut self, signed_delegation: Signed<Delegation<T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
@@ -159,10 +174,10 @@ impl<T: ContentRef> Group<T> {
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
         after_revocations: &[&Rc<Signed<Revocation<T>>>],
-        relevant_docs: &[&Rc<Document<T>>],
+        relevant_docs: &[&Rc<RefCell<Document<T>>>],
     ) -> Result<(), AddMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
-        let agent: Agent<T> = Rc::new(indie).into();
+        let agent: Agent<T> = indie.into();
         let proof = if self.verifying_key() == signing_key.verifying_key() {
             None
         } else {
@@ -185,15 +200,19 @@ impl<T: ContentRef> Group<T> {
                 delegate: member_to_add,
                 can,
                 proof,
-                after_revocations: after_revocations.into_iter().duped().duped().collect(),
+                after_revocations: after_revocations.iter().duped().duped().collect(),
                 after_content: relevant_docs
                     .iter()
                     .map(|d| {
                         (
-                            d.doc_id(),
+                            d.borrow().doc_id(),
                             (
                                 (*d).dupe(),
-                                d.content_heads.iter().map(|c| (*c).clone()).collect(),
+                                d.borrow()
+                                    .content_heads
+                                    .iter()
+                                    .map(|c| (*c).clone())
+                                    .collect(),
                             ),
                         )
                     })
@@ -207,13 +226,13 @@ impl<T: ContentRef> Group<T> {
 
     pub fn revoke_member(
         &mut self,
-        member_to_remove: &AgentId,
+        member_to_remove: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<Document<T>>],
+        relevant_docs: &[&Rc<RefCell<Document<T>>>], // TODO just lookup reachable docs directly
     ) -> Result<(), SigningError> {
         let revocations = &mut self.state.revocations;
 
-        if let Some(revoke_dlgs) = self.members.remove(member_to_remove) {
+        if let Some(revoke_dlgs) = self.members.remove(&member_to_remove) {
             revoke_dlgs.iter().try_fold((), |_, dlg| {
                 let revocation = Signed::try_sign(
                     Revocation {
@@ -223,10 +242,14 @@ impl<T: ContentRef> Group<T> {
                             .iter()
                             .map(|d| {
                                 (
-                                    d.doc_id(),
+                                    d.borrow().doc_id(),
                                     (
                                         (*d).dupe(),
-                                        d.content_heads.iter().map(|c| (*c).clone()).collect(),
+                                        (*d).borrow()
+                                            .content_heads
+                                            .iter()
+                                            .map(|c| (*c).clone())
+                                            .collect(),
                                     ),
                                 )
                             })
@@ -371,8 +394,8 @@ mod tests {
 
     fn setup_groups<T: ContentRef>(
         store: &mut GroupStore<T>,
-        alice: Rc<Individual>,
-        bob: Rc<Individual>,
+        alice: Rc<RefCell<Individual>>,
+        bob: Rc<RefCell<Individual>>,
     ) -> [Rc<RefCell<Group<T>>>; 4] {
         /*              ┌───────────┐        ┌───────────┐
                         │           │        │           │
@@ -414,13 +437,14 @@ mod tests {
         [g0, g1, g2, g3]
     }
 
-    fn setup_cyclic_groups<T: ContentRef>(
+    fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         gs: &mut GroupStore<T>,
-        alice: Rc<Individual>,
-        bob: Rc<Individual>,
+        alice: Rc<RefCell<Individual>>,
+        bob: Rc<RefCell<Individual>>,
+        csprng: &mut R,
     ) -> [Rc<RefCell<Group<T>>>; 10] {
         let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Active::generate(signer).unwrap();
+        let active = Active::generate(signer, csprng).unwrap();
 
         let group0 = gs.generate_group(nonempty![alice.into()]).unwrap();
         let group1 = gs.generate_group(nonempty![bob.into()]).unwrap();
@@ -454,10 +478,11 @@ mod tests {
 
     #[test]
     fn test_transitive_self() {
-        let alice = Rc::new(setup_user());
-        let alice_id = alice.agent_id();
+        let alice = Rc::new(RefCell::new(setup_user()));
+        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice_id = alice_agent.agent_id();
 
-        let bob = Rc::new(setup_user());
+        let bob = Rc::new(RefCell::new(setup_user()));
 
         let mut gs: GroupStore<String> = GroupStore::new();
         let [g0, ..] = setup_groups(&mut gs, alice.clone(), bob);
@@ -472,14 +497,15 @@ mod tests {
 
     #[test]
     fn test_transitive_one() {
-        let alice = Rc::new(setup_user());
-        let alice_id = alice.agent_id();
+        let alice = Rc::new(RefCell::new(setup_user()));
+        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice_id = alice_agent.agent_id();
 
-        let bob = Rc::new(setup_user());
+        let bob = Rc::new(RefCell::new(setup_user()));
 
         let mut gs: GroupStore<String> = GroupStore::new();
 
-        let [_g0, g1, _g2, _g3] = setup_groups(&mut gs, alice.clone(), bob);
+        let [_g0, g1, _g2, _g3] = setup_groups(&mut gs, alice.dupe(), bob);
         let g1_mems = gs.transitive_members(&g1.borrow());
 
         assert_eq!(
@@ -490,15 +516,17 @@ mod tests {
 
     #[test]
     fn test_transitive_two() {
-        let alice = Rc::new(setup_user());
-        let alice_id = alice.agent_id();
+        let alice = Rc::new(RefCell::new(setup_user()));
+        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice_id = alice_agent.agent_id();
 
-        let bob = Rc::new(setup_user());
-        let bob_id = bob.agent_id();
+        let bob = Rc::new(RefCell::new(setup_user()));
+        let bob_agent: Agent<String> = bob.dupe().into();
+        let bob_id = bob_agent.agent_id();
 
         let mut gs: GroupStore<String> = GroupStore::new();
 
-        let [_g0, _g1, g2, _g3] = setup_groups(&mut gs, alice.clone(), bob.clone());
+        let [_g0, _g1, g2, _g3] = setup_groups(&mut gs, alice.dupe(), bob.dupe());
         let g1_mems = gs.transitive_members(&g2.borrow());
 
         assert_eq!(
@@ -512,15 +540,17 @@ mod tests {
 
     #[test]
     fn test_transitive_three() {
-        let alice = Rc::new(setup_user());
-        let alice_id = alice.agent_id();
+        let alice = Rc::new(RefCell::new(setup_user()));
+        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice_id = alice_agent.agent_id();
 
-        let bob = Rc::new(setup_user());
-        let bob_id = bob.agent_id();
+        let bob = Rc::new(RefCell::new(setup_user()));
+        let bob_agent: Agent<String> = bob.dupe().into();
+        let bob_id = bob_agent.agent_id();
 
         let mut gs: GroupStore<String> = GroupStore::new();
 
-        let [_g0, _g1, _g2, g3] = setup_groups(&mut gs, alice.clone(), bob.clone());
+        let [_g0, _g1, _g2, g3] = setup_groups(&mut gs, alice.dupe(), bob.dupe());
         let g1_mems = gs.transitive_members(&g3.borrow());
 
         assert_eq!(
@@ -534,15 +564,19 @@ mod tests {
 
     #[test]
     fn test_transitive_cycles() {
-        let alice = Rc::new(setup_user());
-        let alice_id = alice.agent_id();
+        let csprng = &mut rand::thread_rng();
 
-        let bob = Rc::new(setup_user());
-        let bob_id = bob.agent_id();
+        let alice = Rc::new(RefCell::new(setup_user()));
+        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice_id = alice_agent.agent_id();
+
+        let bob = Rc::new(RefCell::new(setup_user()));
+        let bob_agent: Agent<String> = bob.dupe().into();
+        let bob_id = bob_agent.agent_id();
 
         let mut gs: GroupStore<String> = GroupStore::new();
 
-        let [g0, ..] = setup_cyclic_groups(&mut gs, alice.clone(), bob.clone());
+        let [g0, ..] = setup_cyclic_groups(&mut gs, alice.dupe(), bob.dupe(), csprng);
         let g1_mems = gs.transitive_members(&g0.borrow());
 
         assert_eq!(
@@ -556,33 +590,40 @@ mod tests {
 
     #[test]
     fn test_add_member() {
-        let alice = Rc::new(setup_user());
-        let alice_agent: Agent<_> = alice.dupe().into();
+        let csprng = &mut rand::thread_rng();
 
-        let bob = Rc::new(setup_user());
-        let bob_agent: Agent<_> = bob.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user()));
+        let alice_agent: Agent<String> = alice.dupe().into();
 
-        let carol = Rc::new(setup_user());
-        let carol_agent: Agent<_> = carol.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user()));
+        let bob_agent: Agent<String> = bob.dupe().into();
+
+        let carol = Rc::new(RefCell::new(setup_user()));
+        let carol_agent: Agent<String> = carol.dupe().into();
 
         let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Rc::new(Active::generate(signer).unwrap());
+        let active = Rc::new(RefCell::new(Active::generate(signer, csprng).unwrap()));
+        let active_agent: Agent<String> = active.dupe().into();
 
         let mut gs: GroupStore<String> = GroupStore::new();
 
         let g0 = gs.generate_group(nonempty![active.dupe().into()]).unwrap();
         let g1 = gs
-            .generate_group(nonempty![alice_agent, bob_agent.dupe(), g0.dupe().into()])
+            .generate_group(nonempty![
+                alice_agent.dupe(),
+                bob_agent.dupe(),
+                g0.dupe().into()
+            ])
             .unwrap();
         let g2 = gs
-            .generate_group(nonempty![carol_agent, g1.dupe().into()])
+            .generate_group(nonempty![carol_agent.dupe(), g1.dupe().into()])
             .unwrap();
 
         g0.borrow_mut()
             .add_member(
-                carol.clone().into(),
+                carol_agent.dupe(),
                 Access::Write,
-                &active.signer,
+                &active.borrow().signer,
                 &[],
                 &[],
             )
@@ -594,12 +635,12 @@ mod tests {
         assert_eq!(g0_mems.len(), 2);
 
         assert_eq!(
-            g0_mems.get(&active.agent_id()),
-            Some(&(active.clone().into(), Access::Admin))
+            g0_mems.get(&active.dupe().borrow().agent_id()),
+            Some(&(active.dupe().into(), Access::Admin))
         );
 
         assert_eq!(
-            g0_mems.get(&carol.agent_id()),
+            g0_mems.get(&carol_agent.agent_id()),
             Some(&(carol.clone().into(), Access::Write))
         );
 
@@ -608,22 +649,22 @@ mod tests {
         assert_eq!(g2_mems.len(), 4);
 
         assert_eq!(
-            g2_mems.get(&active.agent_id()),
+            g2_mems.get(&active_agent.agent_id()),
             Some(&(active.into(), Access::Admin))
         );
 
         assert_eq!(
-            g2_mems.get(&alice.agent_id()),
+            g2_mems.get(&alice_agent.agent_id()),
             Some(&(alice.into(), Access::Admin))
         );
 
         assert_eq!(
-            g2_mems.get(&bob.agent_id()),
+            g2_mems.get(&bob_agent.agent_id()),
             Some(&(bob.into(), Access::Admin))
         );
 
         assert_eq!(
-            g2_mems.get(&carol.agent_id()),
+            g2_mems.get(&carol_agent.agent_id()),
             Some(&(carol.into(), Access::Admin))
         );
     }

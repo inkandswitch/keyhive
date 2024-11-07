@@ -1,7 +1,6 @@
 //! The universally unique identifier of an [`Agent`](crate::principal::agentAgent).
 
 use super::verifiable::Verifiable;
-use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// A unique identifier for an [`Agent`](crate::principal::agentAgent).
@@ -14,8 +13,8 @@ pub struct Identifier(pub ed25519_dalek::VerifyingKey);
 
 impl Identifier {
     #[cfg(feature = "test_utils")]
-    pub fn generate() -> Self {
-        ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
+        ed25519_dalek::SigningKey::generate(csprng)
             .verifying_key()
             .into()
     }
@@ -49,7 +48,9 @@ impl std::hash::Hash for Identifier {
 
 impl std::fmt::Display for Identifier {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", BASE64_STANDARD.encode(self.to_bytes()))
+        self.as_slice()
+            .iter()
+            .fold(Ok(()), |_, byte| write!(f, "{:#x}", byte))
     }
 }
 

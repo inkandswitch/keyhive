@@ -155,21 +155,22 @@ mod tests {
 
     #[test]
     pub(crate) fn test_encrypt_and_decrypt() -> Result<(), chacha20poly1305::Error> {
-        let secret = ShareSecretKey::generate();
+        let csprng = &mut rand::thread_rng();
+        let secret = ShareSecretKey::generate(csprng);
         let id = Identifier(
             ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()).verifying_key(),
         );
         let doc_id = DocumentId(id);
 
-        let encrypter_share_secret_key = ShareSecretKey::generate();
+        let encrypter_share_secret_key = ShareSecretKey::generate(csprng);
         let encrypter_share_key = encrypter_share_secret_key.share_key();
 
-        let share_secret_key = ShareSecretKey::generate();
+        let share_secret_key = ShareSecretKey::generate(csprng);
         let share_key = share_secret_key.share_key();
         let mut encrypt_paired_pks = nonempty![share_key];
         let mut encrypt_paired_sks = nonempty![share_secret_key];
         for _ in 0..5 {
-            let share_secret_key = ShareSecretKey::generate();
+            let share_secret_key = ShareSecretKey::generate(csprng);
             let share_key = share_secret_key.share_key();
             encrypt_paired_pks.push(share_key);
             encrypt_paired_sks.push(share_secret_key);

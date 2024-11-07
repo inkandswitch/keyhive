@@ -31,10 +31,12 @@
 
         pkgs = import nixpkgs {
           inherit system overlays;
+          config.allowUnfree = true;
         };
 
         unstable = import nixos-unstable {
           inherit system overlays;
+          config.allowUnfree = true;
         };
 
         rustVersion = "1.80.1";
@@ -91,7 +93,9 @@
 
         cargo = "${pkgs.cargo}/bin/cargo";
         node = "${unstable.nodejs_20}/bin/node";
-        wasm-pack = "${pkgs.wasm-pack}/bin/wasm-pack";
+        pnpm = "${unstable.pnpm}/bin/pnpm";
+        playwright = "${pnpm} --dir=./beehive_wasm exec playwright";
+        wasm-pack = "${unstable.wasm-pack}/bin/wasm-pack";
         wasm-opt = "${pkgs.binaryen}/bin/wasm-opt";
 
         cmd = command-utils.cmd.${system};
@@ -101,10 +105,13 @@
             "${cargo} build --release";
 
          "release:wasm:web" = cmd "Build release for wasm32-unknown-unknown with web bindings"
-            "${wasm-pack} build --release --target=web";
+            "${wasm-pack} build ./beehive_wasm --release --target=web";
+
+         "release:wasm:bundler" = cmd "Build release for wasm32-unknown-unknown with bundler bindings"
+            "${wasm-pack} build ./beehive_wasm --release --target=bundler";
 
           "release:wasm:nodejs" = cmd "Build release for wasm32-unknown-unknown with Node.js bindgings"
-            "${wasm-pack} build --release --target=nodejs";
+            "${wasm-pack} build ./beehive_wasm --release --target=nodejs";
         };
 
         build = {
@@ -112,13 +119,13 @@
             "${cargo} build";
 
           "build:wasm:web" = cmd "Build for wasm32-unknown-unknown with web bindings"
-            "${wasm-pack} build --dev --target=web";
+            "${wasm-pack} build ./beehive_wasm --dev --target=web";
  
           "build:wasm:nodejs" = cmd "Build for wasm32-unknown-unknown with Node.js bindgings"
             "${wasm-pack} build --dev --target=nodejs";
 
           "build:node" = cmd "Build JS-wrapped Wasm library"
-            "${pkgs.nodePackages.pnpm}/bin/pnpm install && ${node} run build";
+            "${pnpm}/bin/pnpm install && ${node} run build";
 
           "build:wasi" = cmd "Build for Wasm32-WASI"
             "${cargo} build --target wasm32-wasi";
@@ -160,7 +167,7 @@
             "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'test && test --doc'";
 
           "watch:test:wasm" = cmd "Run all Wasm tests on save"
-            "${cargo} watch --clear --exec 'test --target=wasm32-unknown-unknown && test --doc --target=wasm32-unknown-unknown'";
+            "${cargo} watch --clear --exec 'test beehive_wasm --target=wasm32-unknown-unknown && test --doc --target=wasm32-unknown-unknown'";
         };
 
         test = {
@@ -171,13 +178,25 @@
             "${cargo} test --features='test_utils' && ${cargo} test --features='mermaid_docs,test_utils' --doc";
 
           "test:wasm" = cmd "Run wasm-pack tests on all targets"
-            "test:wasm:node && test:wasm:chrome";
+            "test:wasm:node && test:ts:web";
 
           "test:wasm:node" = cmd "Run wasm-pack tests in Node.js"
-            "${wasm-pack} test --node";
+            "${wasm-pack} test --node beehive_wasm";
+
+          "test:ts:web" = cmd "Run beehive_wasm Typescript tests in Playwright"
+            "${playwright} test";
+
+          "test:ts:web:report:latest" = cmd "Open the latest Playwright report"
+            "${playwright} show-report";
 
           "test:wasm:chrome" = cmd "Run wasm-pack tests in headless Chrome"
-            "${wasm-pack} test --headless --chrome";
+            "${wasm-pack} test --chrome beehive_wasm --features='browser_test'";
+
+          "test:wasm:firefox" = cmd "Run wasm-pack tests in headless Chrome"
+            "${wasm-pack} test --firefox beehive_wasm --features='browser_test'";
+
+          "test:wasm:safari" = cmd "Run wasm-pack tests in headless Chrome"
+            "${wasm-pack} test --safari beehive_wasm --features='browser_test'";
 
           "test:docs" = cmd "Run Cargo doctests"
             "${cargo} test --doc --features='mermaid_docs,test_utils'";
@@ -206,18 +225,18 @@
 
           nativeBuildInputs = with pkgs;
             [
-              direnv
-              rust-toolchain
               (pkgs.hiPrio pkgs.rust-bin.nightly.latest.rustfmt)
-
-              pkgs.wasm-pack
-              chromedriver
-              protobuf
-              unstable.irust
-              unstable.nodejs_20
-              unstable.nodePackages.pnpm
-
               command_menu
+              direnv
+              http-server
+              rust-toolchain
+              unstable.binaryen
+              unstable.chromedriver
+              unstable.irust
+              unstable.nodePackages.pnpm
+              unstable.nodePackages_latest.webpack-cli
+              unstable.nodejs_20
+              unstable.wasm-pack
             ]
             ++ format-pkgs
             ++ cargo-installs

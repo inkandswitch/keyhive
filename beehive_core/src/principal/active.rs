@@ -29,7 +29,7 @@ use dupe::Dupe;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use rand::{thread_rng, Rng};
 use serde::Serialize;
-use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
@@ -38,17 +38,23 @@ pub struct Active {
     /// The signing key of the active agent.
     pub signer: SigningKey,
 
+    // FIXME generalize to use e.g. KMS
+    // FIXME include timestamp for next PCS update
     /// The encryption "sharing" key pairs that the active agent has.
     /// This includes the secret keys for ECDH.
     pub prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>, // FIXME generalize to use e.g. KMS
 
+    /// The [`Individual`] static identifier.
     pub individual: Individual,
 }
 
 impl Active {
-    pub fn generate(signer: SigningKey) -> Result<Self, SigningError> {
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(
+        signer: SigningKey,
+        csprng: &mut R,
+    ) -> Result<Self, SigningError> {
         Ok(Self {
-            individual: Individual::generate(&signer)?,
+            individual: Individual::generate(&signer, csprng)?,
             prekey_pairs: BTreeMap::new(),
             signer,
         })
@@ -69,16 +75,31 @@ impl Active {
         *self.prekey_pairs.keys().nth(idx).expect("FIXME")
     }
 
+    pub fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        prekey: ShareKey,
+        csprng: &mut R,
+    ) -> Result<ShareKey, SigningError> {
+        self.individual.rotate_prekey(prekey, &self.signer, csprng)
+    }
+
+    pub fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        csprng: &mut R,
+    ) -> Result<ShareKey, SigningError> {
+        self.individual.expand_prekeys(&self.signer, csprng)
+    }
+
     /// Sign a payload.
     pub fn try_sign<U: Serialize>(&self, payload: U) -> Result<Signed<U>, SigningError> {
         Signed::<U>::try_sign(payload, &self.signer)
     }
 
-    pub fn get_capability<'a, T: ContentRef>(
-        &'a self,
-        subject: &'a Membered<'a, T>,
+    pub fn get_capability<T: ContentRef>(
+        &self,
+        subject: Membered<T>,
         min: Access,
-    ) -> Option<&'a Rc<Signed<Delegation<T>>>> {
+    ) -> Option<Rc<Signed<Delegation<T>>>> {
         subject.get_capability(&self.agent_id()).and_then(|cap| {
             if cap.payload().can >= min {
                 Some(cap)
@@ -91,14 +112,14 @@ impl Active {
     // FIXME replace with delegate_to
     pub fn make_delegation<T: ContentRef>(
         &self,
-        subject: &Membered<'_, T>,
+        subject: Membered<T>,
         attenuate: Access,
         delegate: Agent<T>,
         after_revocations: Vec<Rc<Signed<Revocation<T>>>>,
-        after_content: BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)>,
+        after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
     ) -> Result<Signed<Delegation<T>>, ActiveDelegationError> {
         let proof = self
-            .get_capability(&subject, attenuate)
+            .get_capability(subject, attenuate)
             .ok_or(ActiveDelegationError::CannotFindProof)?;
 
         if attenuate > proof.payload().can {
@@ -126,7 +147,7 @@ impl Active {
         &self,
         doc: &Document<T>,
         to: &Individual,
-        mut message: Vec<u8>,
+        message: Vec<u8>,
     ) -> Result<Encrypted<&[u8]>, ShareError> {
         let recipient_share_pk = doc
             .reader_keys
@@ -145,9 +166,9 @@ impl Active {
 
         let key: SymmetricKey = our_sk.derive_symmetric_key(&recipient_share_pk.1.into());
 
-        let nonce =
-            Siv::new(&key, message.as_slice(), doc.doc_id()).map_err(ShareError::SivError)?;
-        key.try_encrypt(nonce, &mut message)
+        let nonce = Siv::new(&key, &message, doc.doc_id()).map_err(ShareError::SivError)?;
+        let mut bytes = message.clone();
+        key.try_encrypt(nonce, &mut bytes)
             .map_err(ShareError::EncryptionFailed)?;
 
         Ok(Encrypted::new(nonce.into(), message))
@@ -246,8 +267,9 @@ mod tests {
 
     #[test]
     fn test_sign() {
+        let csprng = &mut rand::thread_rng();
         let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Active::generate(signer).unwrap();
+        let active = Active::generate(signer, csprng).unwrap();
         let message = "hello world".as_bytes();
         let signed = active.try_sign(message).unwrap();
 
