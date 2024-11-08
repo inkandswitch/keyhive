@@ -93,6 +93,15 @@ impl ShareSecretKey {
             .diffie_hellman(&other.0)
             .into()
     }
+
+    pub fn ratchet_forward(&self) -> Self {
+        let bytes = self.to_bytes();
+        Self::derive_from_bytes(bytes)
+    }
+
+    pub fn ratchet_n_forward(&self, n: usize) -> Self {
+        (0..n).fold(*self, |acc, _| acc.ratchet_forward())
+    }
 }
 
 impl From<ShareSecretKey> for x25519_dalek::StaticSecret {

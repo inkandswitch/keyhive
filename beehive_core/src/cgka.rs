@@ -1,5 +1,4 @@
 pub mod beekem;
-pub mod crypto;
 pub mod error;
 pub mod keys;
 pub mod operation;

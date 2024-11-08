@@ -71,30 +71,27 @@ impl<T> NestedEncrypted<T> {
         Vec<u8>: From<U>,
     {
         let mut ciphertext: Vec<u8> = secret.into();
-        let mut nonces: Vec<Siv> = Vec::new();
+        let mut layer_vec: Vec<(ShareKey, Siv)> = vec![];
 
         for (pk, sk) in encrypt_keys.iter() {
             let nonce =
                 Siv::new(&SymmetricKey::from(sk.to_bytes()), &ciphertext, doc_id).expect("FIXME");
 
-            nonces.push(nonce.clone());
+            layer_vec.push((*pk, nonce.clone()));
 
             sk.derive_symmetric_key(&pk)
                 .try_encrypt(nonce, &mut ciphertext)?
-            // .map_err(|e| CgkaError::Encryption(e.to_string()))?;
         }
 
-        todo!()
-
-        // for (_, encrypt_key) in encrypt_keys.iter().skip(1) {
-        //     (nonce, encrypted_secret_bytes) = encrypt_bytes(&encrypted_secret_bytes, encrypt_key)?;
-        //     nonces.push(nonce);
-        // }
-        // let encrypted_secret: NestedEncrypted<ShareSecretKey> =
-        //     NestedEncrypted::new(nonces, paired_pks, encrypted_secret_bytes);
-        // Ok(encrypted_secret)
+        Ok(NestedEncrypted {
+            layers: NonEmpty::from_vec(layer_vec)
+                .expect("must be nonempty since we iterated over a nonempty argument"),
+            ciphertext,
+            _plaintext_tag: PhantomData,
+        })
     }
 
+    // TODO validate nonce & AEAD
     pub fn try_decrypt(
         &self,
         decrypt_keys: &[ShareSecretKey],

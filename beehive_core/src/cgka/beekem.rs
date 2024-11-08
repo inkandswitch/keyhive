@@ -1,10 +1,5 @@
 use super::{
-    crypto::{derive_secret_from_hash_chain, kdf},
-    error::CgkaError,
-    keys::NodeKey,
-    keys::ShareKeyMap,
-    secret_store::SecretStore,
-    treemath,
+    error::CgkaError, keys::NodeKey, keys::ShareKeyMap, secret_store::SecretStore, treemath,
 };
 use crate::{
     crypto::{
@@ -216,7 +211,8 @@ impl BeeKem {
                 return Err(CgkaError::ShareKeyNotFound);
             };
             let secret = owner_sks.get(&pk).ok_or(CgkaError::ShareKeyNotFound)?;
-            return derive_secret_from_hash_chain(secret.clone(), leaf_idx.into(), self.tree_size);
+            return Ok(secret
+                .ratchet_n_forward(treemath::direct_path(leaf_idx.into(), self.tree_size).len()));
         }
 
         let mut child_idx: TreeNodeIndex = leaf_idx.into();
@@ -241,11 +237,9 @@ impl BeeKem {
                         .ok_or(CgkaError::CurrentEncrypterNotFound)?,
                 );
                 if parent_idx == TreeNodeIndex::Inner(lca_with_encrypter) {
-                    return derive_secret_from_hash_chain(
-                        secret.clone(),
-                        parent_idx,
-                        self.tree_size,
-                    );
+                    return Ok(secret.ratchet_n_forward(
+                        treemath::direct_path(parent_idx, self.tree_size).len(),
+                    ));
                 }
             }
             seen_idxs.push(parent_idx);
@@ -305,7 +299,11 @@ impl BeeKem {
             if let Some(store) = self.inner_node(parent_idx)? {
                 new_path.removed_keys.append(&mut store.node_key().keys());
             }
-            let (new_parent_pk, new_parent_sk) = kdf(&"FIXME", &child_sk);
+
+            let mut new_parent_sk = child_sk.clone();
+            new_parent_sk.ratchet_forward();
+
+            let new_parent_pk = new_parent_sk.share_key();
             self.encrypt_key_for_parent(
                 child_idx,
                 child_pk,
