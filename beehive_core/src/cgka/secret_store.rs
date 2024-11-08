@@ -13,7 +13,6 @@ use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashSet},
 };
-use x25519_dalek::StaticSecret;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SecretStore {
@@ -188,7 +187,7 @@ impl SecretStoreVersion {
                 pair_keys
                     .keys()
                     .iter()
-                    .map(|pk| generate_shared_key(pk, secret_key))
+                    .map(|pk| secret_key.derive_new_secret_key(pk))
                     .collect()
             } else {
                 vec![secret_key.clone()]
@@ -200,12 +199,12 @@ impl SecretStoreVersion {
                 .map(|pk| {
                     let secret_key_result = child_sks.get(pk);
                     if let Some(secret_key) = secret_key_result {
-                        Ok(generate_shared_key(&self.encrypter_pk, secret_key))
+                        Ok(secret_key.derive_new_secret_key(&self.encrypter_pk))
                     } else {
                         Err(CgkaError::SecretKeyNotFound)
                     }
                 })
-                .collect::<Result<Vec<StaticSecret>, CgkaError>>()?
+                .collect::<Result<Vec<_>, CgkaError>>()?
         };
         decrypt_nested_secret(encrypted, &decrypt_keys)
     }

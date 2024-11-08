@@ -2,7 +2,7 @@
 //!
 //! [ECDH]: https://wikipedia.org/wiki/Elliptic-curve_Diffie%E2%80%93Hellman
 
-use super::symmetric_key::SymmetricKey;
+use super::{domain_separator::SEPARATOR_STR, symmetric_key::SymmetricKey};
 use serde::{Deserialize, Serialize};
 
 /// Newtype around [x25519_dalek::PublicKey].
@@ -58,6 +58,10 @@ impl ShareSecretKey {
         x25519_dalek::StaticSecret::random().into()
     }
 
+    pub fn derive_from_bytes(bytes: [u8; 32]) -> Self {
+        Self(blake3::derive_key(SEPARATOR_STR, bytes.as_slice()))
+    }
+
     pub fn share_key(&self) -> ShareKey {
         ShareKey(x25519_dalek::PublicKey::from(
             &x25519_dalek::StaticSecret::from(*self),
@@ -70,6 +74,18 @@ impl ShareSecretKey {
 
     pub fn as_slice(&self) -> &[u8] {
         &self.0
+    }
+
+    pub fn derive_shared_secret(&self, other: &ShareKey) -> x25519_dalek::SharedSecret {
+        x25519_dalek::StaticSecret::from(*self).diffie_hellman(&other.0)
+    }
+
+    pub fn derive_new_secret_key(&self, other: &ShareKey) -> Self {
+        let bytes: [u8; 32] = x25519_dalek::StaticSecret::from(*self)
+            .diffie_hellman(&other.0)
+            .to_bytes();
+
+        Self::derive_from_bytes(bytes)
     }
 
     pub fn derive_symmetric_key(&self, other: &ShareKey) -> SymmetricKey {
