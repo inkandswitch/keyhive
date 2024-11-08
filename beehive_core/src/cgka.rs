@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// This Cgka struct provides a protocol-agnostic interface for retrieving the
 /// latest secret, rotating keys, and adding and removing members from the group.
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Cgka {
     owner_id: Identifier,
     /// Invariant: An owner will never have conflict keys for its public key since

@@ -74,6 +74,7 @@ impl<T> NestedEncrypted<T> {
         let mut layer_vec: Vec<(ShareKey, Siv)> = vec![];
 
         for (pk, sk) in encrypt_keys.iter() {
+            // FIXME lift the errors into one type
             let nonce =
                 Siv::new(&SymmetricKey::from(sk.to_bytes()), &ciphertext, doc_id).expect("FIXME");
 
@@ -102,7 +103,6 @@ impl<T> NestedEncrypted<T> {
             let key = sk.derive_symmetric_key(pk);
             key.try_decrypt(*nonce, &mut buf)?;
         }
-
         Ok(buf)
     }
 }

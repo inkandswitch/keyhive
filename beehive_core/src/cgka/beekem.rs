@@ -69,7 +69,7 @@ pub struct PathChange {
 /// [Causal TreeKEM]: https://mattweidner.com/assets/pdf/acs-dissertation.pdf
 /// [MLS]: https://messaginglayersecurity.rocks/
 /// [TreeKEM]: https://inria.hal.science/hal-02425247/file/treekem+(1).pdf
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct BeeKem {
     doc_id: DocumentId,
     next_leaf_idx: LeafNodeIndex,
@@ -300,7 +300,7 @@ impl BeeKem {
                 new_path.removed_keys.append(&mut store.node_key().keys());
             }
 
-            let mut new_parent_sk = child_sk.clone();
+            let new_parent_sk = child_sk.clone();
             new_parent_sk.ratchet_forward();
 
             let new_parent_pk = new_parent_sk.share_key();
@@ -660,7 +660,7 @@ impl BeeKem {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LeafNode {
     pub id: Identifier,
     pub pk: NodeKey,
