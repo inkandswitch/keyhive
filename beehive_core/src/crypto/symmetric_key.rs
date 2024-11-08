@@ -23,7 +23,7 @@ use x25519_dalek::SharedSecret;
 /// let doc = Document::generate(nonempty![user_agent]).unwrap();
 ///
 /// let key = SymmetricKey::generate();
-/// let nonce = Siv::new(&key, plaintext, &doc).unwrap();
+/// let nonce = Siv::new(&key, plaintext, doc.doc_id()).unwrap();
 ///
 /// let mut roundtrip_buf = plaintext.to_vec();
 /// key.try_encrypt(nonce, &mut roundtrip_buf).unwrap();
@@ -67,6 +67,7 @@ impl SymmetricKey {
         nonce: Siv,
         data: &mut Vec<u8>,
     ) -> Result<(), chacha20poly1305::Error> {
+        // FIXME check the siv against the plaintext
         self.to_xchacha()
             .decrypt_in_place(nonce.as_xnonce(), SEPARATOR, data)
     }

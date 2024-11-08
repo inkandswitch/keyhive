@@ -1,7 +1,7 @@
 //! Nonce-misuse resistant initialization vector.
 
 use super::{domain_separator::SEPARATOR, symmetric_key::SymmetricKey};
-use crate::{content::reference::ContentRef, principal::document::Document};
+use crate::principal::document::id::DocumentId;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 
@@ -30,14 +30,14 @@ use std::io::Read;
 pub struct Siv([u8; 24]);
 
 impl Siv {
-    pub fn new<T: ContentRef>(
+    pub fn new(
         key: &SymmetricKey,
         plaintext: &[u8],
-        doc: &Document<T>,
+        doc_id: DocumentId,
     ) -> Result<Self, std::io::Error> {
         let mut hasher = blake3::Hasher::new();
         hasher.update(SEPARATOR);
-        hasher.update(doc.doc_id().as_slice());
+        hasher.update(doc_id.as_slice());
         hasher.update(key.as_slice());
         hasher.update(plaintext);
 

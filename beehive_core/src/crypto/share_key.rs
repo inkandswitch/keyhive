@@ -106,3 +106,9 @@ impl From<x25519_dalek::StaticSecret> for ShareSecretKey {
         Self(secret.to_bytes())
     }
 }
+
+impl From<&ShareSecretKey> for Vec<u8> {
+    fn from(secret: &ShareSecretKey) -> Self {
+        secret.0.to_vec()
+    }
+}

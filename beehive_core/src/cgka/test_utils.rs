@@ -22,7 +22,8 @@ pub struct TestMember {
 impl TestMember {
     pub fn generate() -> Self {
         let id = Identifier(ed25519_dalek::SigningKey::generate(&mut OsRng).verifying_key());
-        let (pk, sk) = generate_key_pair();
+        let sk = ShareSecretKey::generate();
+        let pk = sk.public_key();
         Self { id, pk, sk }
     }
 }
@@ -48,7 +49,8 @@ impl TestMemberCgka {
     }
 
     pub fn update(&mut self) -> Result<Option<CgkaOperation>, CgkaError> {
-        let (pk, sk) = generate_key_pair();
+        let sk = ShareSecretKey::generate();
+        let pk = sk.public_key();
         self.m.pk = pk;
         self.m.sk = sk.clone();
         self.cgka.update(self.id(), pk, sk)

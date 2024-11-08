@@ -1,5 +1,4 @@
 use super::{
-    crypto::decrypt_nested_secret,
     error::CgkaError,
     keys::{ConflictKeys, NodeKey, ShareKeyMap},
     treemath::TreeNodeIndex,
@@ -179,10 +178,12 @@ impl SecretStoreVersion {
             .sk
             .get(lookup_idx)
             .ok_or(CgkaError::EncryptedSecretNotFound)?;
+
         let decrypt_keys: Vec<ShareSecretKey> = if is_encrypter {
             let secret_key = child_sks
                 .get(&self.encrypter_pk)
                 .ok_or(CgkaError::SecretKeyNotFound)?;
+
             if let Some(pair_keys) = &self.encrypter_paired_node_key {
                 pair_keys
                     .keys()
@@ -194,9 +195,9 @@ impl SecretStoreVersion {
             }
         } else {
             encrypted
-                .paired_pks
+                .layers
                 .iter()
-                .map(|pk| {
+                .map(|(pk, _nonce)| {
                     let secret_key_result = child_sks.get(pk);
                     if let Some(secret_key) = secret_key_result {
                         Ok(secret_key.derive_new_secret_key(&self.encrypter_pk))
@@ -206,7 +207,13 @@ impl SecretStoreVersion {
                 })
                 .collect::<Result<Vec<_>, CgkaError>>()?
         };
-        decrypt_nested_secret(encrypted, &decrypt_keys)
+
+        let decrypted: Vec<u8> = encrypted
+            .try_decrypt(decrypt_keys.as_slice())
+            .map_err(|e| CgkaError::Decryption(e.to_string()))?;
+
+        let arr: [u8; 32] = decrypted.try_into().map_err(|_| CgkaError::Conversion)?;
+        Ok(ShareSecretKey::derive_from_bytes(arr))
     }
 }
 

@@ -7,11 +7,13 @@ use super::{
     treemath,
 };
 use crate::{
-    cgka::crypto::encrypt_nested_secret,
-    crypto::share_key::{ShareKey, ShareSecretKey},
-    principal::identifier::Identifier,
+    crypto::{
+        encrypted::NestedEncrypted,
+        share_key::{ShareKey, ShareSecretKey},
+    },
+    principal::{document::id::DocumentId, identifier::Identifier},
 };
-use nonempty::nonempty;
+use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use treemath::{InnerNodeIndex, LeafNodeIndex, TreeNodeIndex, TreeSize};
@@ -74,6 +76,7 @@ pub struct PathChange {
 /// [TreeKEM]: https://inria.hal.science/hal-02425247/file/treekem+(1).pdf
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct BeeKem {
+    doc_id: DocumentId,
     next_leaf_idx: LeafNodeIndex,
     leaves: Vec<Option<LeafNode>>,
     inner_nodes: Vec<Option<InnerNode>>,
@@ -87,8 +90,12 @@ pub(crate) struct BeeKem {
 impl BeeKem {
     /// We assume members are added in causal order (a property guaranteed by
     /// Beehive as a whole).
-    pub(crate) fn new(members: Vec<(Identifier, ShareKey)>) -> Result<Self, CgkaError> {
+    pub(crate) fn new(
+        doc_id: DocumentId,
+        members: Vec<(Identifier, ShareKey)>,
+    ) -> Result<Self, CgkaError> {
         let mut tree = Self {
+            doc_id,
             next_leaf_idx: LeafNodeIndex::new(0),
             leaves: Vec::new(),
             inner_nodes: Vec::new(),
@@ -452,8 +459,13 @@ impl BeeKem {
             // Normally you use a DH shared key to encrypt/decrypt the next node up,
             // but if there's a blank sibling subtree, then you use your secret key
             // directly instead.
-            let encrypted_sk =
-                encrypt_nested_secret(new_parent_sk, &nonempty![(child_pk, child_sk.clone())])?;
+            let encrypted_sk = NestedEncrypted::<ShareSecretKey>::try_encrypt(
+                self.doc_id,
+                new_parent_sk,
+                &nonempty![(child_pk, child_sk.clone())],
+            )
+            .map_err(CgkaError::Encryption)?;
+
             secret_map.insert(child_idx, encrypted_sk);
             None
         } else {
@@ -467,9 +479,16 @@ impl BeeKem {
                 let shared_keys: Vec<(ShareKey, ShareSecretKey)> = sibling_node_key
                     .keys()
                     .iter()
-                    .map(|sibling_pk| (*sibling_pk, generate_shared_key(sibling_pk, child_sk)))
+                    .map(|sibling_pk| (*sibling_pk, child_sk.derive_new_secret_key(sibling_pk)))
                     .collect();
-                let encrypted_sk = encrypt_nested_secret(new_parent_sk, &shared_keys)?;
+
+                let encrypted_sk = NestedEncrypted::<ShareSecretKey>::try_encrypt(
+                    self.doc_id,
+                    new_parent_sk,
+                    &NonEmpty::from_vec(shared_keys).expect("some keys to exist"),
+                )
+                .map_err(CgkaError::Encryption)?;
+
                 if paired_pk.is_none() {
                     secret_map.insert(child_idx, encrypted_sk.clone());
                     paired_pk = Some(sibling_node_key.clone());

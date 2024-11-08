@@ -137,7 +137,8 @@ impl Active {
 
         let key: SymmetricKey = our_sk.diffie_hellman(&recipient_share_pk.1.into()).into();
 
-        let nonce = Siv::new(&key, message.as_slice(), doc).map_err(ShareError::SivError)?;
+        let nonce =
+            Siv::new(&key, message.as_slice(), doc.doc_id()).map_err(ShareError::SivError)?;
         key.try_encrypt(nonce, &mut message)
             .map_err(ShareError::EncryptionFailed)?;
 

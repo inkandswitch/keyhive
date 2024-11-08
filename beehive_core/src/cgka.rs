@@ -9,16 +9,15 @@ pub mod treemath;
 #[cfg(feature = "test_utils")]
 pub mod test_utils;
 
+use crate::{
+    crypto::share_key::{ShareKey, ShareSecretKey},
+    principal::{document::id::DocumentId, identifier::Identifier},
+};
 use beekem::BeeKem;
 use error::CgkaError;
 use keys::ShareKeyMap;
 use operation::CgkaOperation;
 use serde::{Deserialize, Serialize};
-
-use crate::{
-    crypto::share_key::{ShareKey, ShareSecretKey},
-    principal::identifier::Identifier,
-};
 
 /// A CGKA (Continuous Group Key Agreement) protocol is responsible for
 /// maintaining a stream of updating shared group keys over time. We are
@@ -41,6 +40,7 @@ impl Cgka {
     /// We assume members are in causal order.
     pub fn new(
         members: Vec<(Identifier, ShareKey)>,
+        doc_id: DocumentId,
         owner_id: Identifier,
         owner_pk: ShareKey,
         owner_sk: ShareSecretKey,
@@ -51,7 +51,7 @@ impl Cgka {
         {
             return Err(CgkaError::OwnerIdentifierNotFound);
         }
-        let tree = BeeKem::new(members)?;
+        let tree = BeeKem::new(doc_id, members)?;
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_pk, owner_sk);
         let mut cgka = Self {

@@ -2,9 +2,7 @@ use std::time::Duration;
 
 use aead::OsRng;
 use beehive_core::cgka::{
-    crypto::{
-        decrypt_nested_secret, encrypt_nested_secret, generate_key_pair, generate_shared_key,
-    },
+    crypto::{encrypt_nested_secret, generate_shared_key},
     error::CgkaError,
     test_utils::{
         setup_member_cgkas, setup_member_cgkas_with_all_updated_and_10_adds,
@@ -24,7 +22,8 @@ fn main() {
 )]
 fn create_key_pairs(n: u32) {
     for _ in 0..n {
-        generate_key_pair();
+        let s = SharedSecretKey::generate();
+        s.public_key();
     }
 }
 
@@ -38,13 +37,15 @@ fn encrypt_and_decrypt_log_2_of_members(iters_and_member_count: (u32, u32)) {
     for _ in 0..iters {
         for _ in 0..path_length {
             let secret = StaticSecret::random_from_rng(OsRng);
-            let (p1, _s1) = generate_key_pair();
-            let (_p2, s2) = generate_key_pair();
+            let s1 = ShareSecretKey::generate();
+            let p1 = s1.public_key();
+            let s2 = ShareSecretKey::generate();
+
             let shared_key = generate_shared_key(&p1, &s2);
             let keys = vec![(p1, shared_key)];
             let encrypted = encrypt_nested_secret(&secret, &keys).unwrap();
             let decrypt_keys: Vec<StaticSecret> = keys.iter().map(|(_pk, sk)| sk.clone()).collect();
-            decrypt_nested_secret(&encrypted, &decrypt_keys).unwrap();
+            encrypted.try_decrypt(&decrypt_keys).unwrap();
         }
     }
 }
