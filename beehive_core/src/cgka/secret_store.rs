@@ -1,21 +1,21 @@
+use super::{
+    crypto::decrypt_nested_secret,
+    error::CgkaError,
+    keys::{ConflictKeys, NodeKey, ShareKeyMap},
+    treemath::TreeNodeIndex,
+};
+use crate::crypto::{
+    encrypted::NestedEncrypted,
+    share_key::{ShareKey, ShareSecretKey},
+};
+use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashSet},
 };
-
-use serde::{Deserialize, Serialize};
 use x25519_dalek::StaticSecret;
 
-use crate::crypto::encrypted::NestedEncrypted;
-
-use super::{
-    crypto::{decrypt_nested_secret, generate_shared_key},
-    error::CgkaError,
-    keys::{NodeKey, PublicKey, SecretKey, SecretKeyMap},
-    treemath::TreeNodeIndex,
-};
-
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SecretStore {
     /// Invariant: Public keys are in lexicographic order.
     /// Every encrypted secret key (and hence version) corresponds to a single public key.
@@ -25,10 +25,10 @@ pub struct SecretStore {
 
 impl SecretStore {
     pub fn new(
-        pk: PublicKey,
-        encrypter_pk: PublicKey,
+        pk: ShareKey,
+        encrypter_pk: ShareKey,
         encrypter_paired_pk: Option<NodeKey>,
-        sk: BTreeMap<TreeNodeIndex, NestedEncrypted<SecretKey>>,
+        sk: BTreeMap<TreeNodeIndex, NestedEncrypted<ShareSecretKey>>,
     ) -> Self {
         let version = SecretStoreVersion {
             pk,
@@ -47,18 +47,39 @@ impl SecretStore {
 
     pub fn node_key(&self) -> NodeKey {
         if self.versions.len() == 1 {
-            NodeKey::PublicKey(self.versions[0].pk)
+            NodeKey::ShareKey(self.versions[0].pk)
         } else {
-            NodeKey::ConflictKeys(self.versions.iter().map(|s| s.pk).collect())
+            match self
+                .versions
+                .iter()
+                .map(|s| s.pk)
+                .collect::<Vec<_>>()
+                .as_slice()
+            {
+                [] => unreachable!("There will always be at least one key"),
+                [pk] => NodeKey::ShareKey(*pk),
+                [first, second] => ConflictKeys {
+                    first: *first,
+                    second: *second,
+                    more: vec![],
+                }
+                .into(),
+                [first, second, more @ ..] => ConflictKeys {
+                    first: *first,
+                    second: *second,
+                    more: more.to_vec(),
+                }
+                .into(),
+            }
         }
     }
 
     pub fn decrypt_secret(
         &self,
         child_node_key: &NodeKey,
-        child_sks: &mut SecretKeyMap,
+        child_sks: &mut ShareKeyMap,
         seen_idxs: &[TreeNodeIndex],
-    ) -> Result<SecretKey, CgkaError> {
+    ) -> Result<ShareSecretKey, CgkaError> {
         if self.has_conflict() {
             return Err(CgkaError::UnexpectedKeyConflict);
         }
@@ -69,7 +90,7 @@ impl SecretStore {
         &self,
         // child_idx: TreeNodeIndex,
         child_node_key: &NodeKey,
-        child_sks: &mut SecretKeyMap,
+        child_sks: &mut ShareKeyMap,
         seen_idxs: &[TreeNodeIndex],
     ) -> Result<(), CgkaError> {
         for version in &self.versions {
@@ -85,7 +106,7 @@ impl SecretStore {
     pub fn merge(
         &mut self,
         other: &SecretStore,
-        removed_keys: &[PublicKey],
+        removed_keys: &[ShareKey],
     ) -> Result<(), CgkaError> {
         self.remove_keys_from(removed_keys)?;
         self.versions.append(&mut other.versions.clone());
@@ -94,7 +115,7 @@ impl SecretStore {
     }
 
     // TODO: Make this more performant.
-    fn remove_keys_from(&mut self, removed_keys: &[PublicKey]) -> Result<(), CgkaError> {
+    fn remove_keys_from(&mut self, removed_keys: &[ShareKey]) -> Result<(), CgkaError> {
         if removed_keys.is_empty() {
             return Ok(());
         }
@@ -116,15 +137,15 @@ impl SecretStore {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct SecretStoreVersion {
     /// Every encrypted secret key (and hence version) corresponds to a single public key.
-    pub(crate) pk: PublicKey,
+    pub(crate) pk: ShareKey,
     /// This is a map in order to handle the case of blank siblings, when we must encrypt
     /// the same secret key separately for each public key in the sibling resolution.
-    pub(crate) sk: BTreeMap<TreeNodeIndex, NestedEncrypted<SecretKey>>,
+    pub(crate) sk: BTreeMap<TreeNodeIndex, NestedEncrypted<ShareSecretKey>>,
     /// The PublicKey of the child that encrypted this parent.
-    pub(crate) encrypter_pk: PublicKey,
+    pub(crate) encrypter_pk: ShareKey,
     /// If this is None, the sibling subtree was blank when encrypting this parent.
     /// Otherwise, it represents the first node in the sibling resolution, which the
     /// encrypter used for its own Diffie Hellman shared secret.
@@ -136,9 +157,9 @@ impl SecretStoreVersion {
     pub(crate) fn decrypt_secret(
         &self,
         child_node_key: &NodeKey,
-        child_sks: &SecretKeyMap,
+        child_sks: &ShareKeyMap,
         seen_idxs: &[TreeNodeIndex],
-    ) -> Result<SecretKey, CgkaError> {
+    ) -> Result<ShareSecretKey, CgkaError> {
         let is_encrypter = child_node_key.contains_key(&self.encrypter_pk);
         let mut lookup_idx = seen_idxs.last().ok_or(CgkaError::EncryptedSecretNotFound)?;
         // TODO: Refactor with fewer lines
@@ -159,7 +180,7 @@ impl SecretStoreVersion {
             .sk
             .get(lookup_idx)
             .ok_or(CgkaError::EncryptedSecretNotFound)?;
-        let decrypt_keys: Vec<SecretKey> = if is_encrypter {
+        let decrypt_keys: Vec<ShareSecretKey> = if is_encrypter {
             let secret_key = child_sks
                 .get(&self.encrypter_pk)
                 .ok_or(CgkaError::SecretKeyNotFound)?;
@@ -195,10 +216,10 @@ impl PartialEq for SecretStoreVersion {
         self.pk == other.pk
             && self.encrypter_pk == other.encrypter_pk
             && self.encrypter_paired_node_key == other.encrypter_paired_node_key
-        // TODO: Hashes
-        // && self.sk.hash() == other.sk.hash()
+            && self.sk == other.sk
     }
 }
+
 impl Eq for SecretStoreVersion {}
 
 impl Ord for SecretStoreVersion {

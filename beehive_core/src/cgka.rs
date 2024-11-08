@@ -4,16 +4,21 @@ pub mod error;
 pub mod keys;
 pub mod operation;
 pub mod secret_store;
-pub mod test_utils;
 pub mod treemath;
+
+#[cfg(feature = "test_utils")]
+pub mod test_utils;
 
 use beekem::BeeKem;
 use error::CgkaError;
-use keys::{PublicKey, SecretKey, SecretKeyMap};
+use keys::ShareKeyMap;
 use operation::CgkaOperation;
 use serde::{Deserialize, Serialize};
 
-use crate::principal::identifier::Identifier;
+use crate::{
+    crypto::share_key::{ShareKey, ShareSecretKey},
+    principal::identifier::Identifier,
+};
 
 /// A CGKA (Continuous Group Key Agreement) protocol is responsible for
 /// maintaining a stream of updating shared group keys over time. We are
@@ -26,8 +31,8 @@ pub struct Cgka {
     owner_id: Identifier,
     /// Invariant: An owner will never have conflict keys for its public key since
     /// any updates to that pk must be initiated by the owner.
-    owner_pk: PublicKey,
-    owner_sks: SecretKeyMap,
+    owner_pk: ShareKey,
+    owner_sks: ShareKeyMap,
     tree: BeeKem,
 }
 
@@ -35,10 +40,10 @@ pub struct Cgka {
 impl Cgka {
     /// We assume members are in causal order.
     pub fn new(
-        members: Vec<(Identifier, PublicKey)>,
+        members: Vec<(Identifier, ShareKey)>,
         owner_id: Identifier,
-        owner_pk: PublicKey,
-        owner_sk: SecretKey,
+        owner_pk: ShareKey,
+        owner_sk: ShareSecretKey,
     ) -> Result<Self, CgkaError> {
         if !members
             .iter()
@@ -47,7 +52,7 @@ impl Cgka {
             return Err(CgkaError::OwnerIdentifierNotFound);
         }
         let tree = BeeKem::new(members)?;
-        let mut owner_sks = SecretKeyMap::new();
+        let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_pk, owner_sk);
         let mut cgka = Self {
             owner_id,
@@ -65,16 +70,16 @@ impl Cgka {
     pub fn with_new_owner(
         &self,
         my_id: Identifier,
-        pk: PublicKey,
-        sk: SecretKey,
+        pk: ShareKey,
+        sk: ShareSecretKey,
     ) -> Result<Self, CgkaError> {
         if !self.tree.node_key_for_id(my_id)?.contains_key(&pk) {
-            return Err(CgkaError::PublicKeyNotFound);
+            return Err(CgkaError::ShareKeyNotFound);
         }
         let mut cgka = self.clone();
         cgka.owner_id = my_id;
         cgka.owner_pk = pk;
-        cgka.owner_sks = SecretKeyMap::new();
+        cgka.owner_sks = ShareKeyMap::new();
         cgka.owner_sks.insert(pk, sk);
         Ok(cgka)
     }
@@ -85,13 +90,13 @@ impl Cgka {
     /// Get secret for decryption/encryption. If you are using this for a new
     /// encryption, you need to update your leaf key first to ensure you are
     /// using a fresh root secret.
-    pub fn secret(&mut self) -> Result<SecretKey, CgkaError> {
+    pub fn secret(&mut self) -> Result<ShareSecretKey, CgkaError> {
         self.tree
             .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)
     }
 
     /// Add member.
-    pub fn add(&mut self, id: Identifier, pk: PublicKey) -> Result<CgkaOperation, CgkaError> {
+    pub fn add(&mut self, id: Identifier, pk: ShareKey) -> Result<CgkaOperation, CgkaError> {
         let leaf_index = self.tree.push_leaf(id, pk)?;
         let op = CgkaOperation::Add { id, pk, leaf_index };
         Ok(op)
@@ -111,8 +116,8 @@ impl Cgka {
     pub fn update(
         &mut self,
         id: Identifier,
-        new_pk: PublicKey,
-        new_sk: SecretKey,
+        new_pk: ShareKey,
+        new_sk: ShareSecretKey,
     ) -> Result<Option<CgkaOperation>, CgkaError> {
         debug_assert!(id == self.owner_id);
         self.owner_pk = new_pk;

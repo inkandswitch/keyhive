@@ -1,31 +1,38 @@
 use super::{
     error::CgkaError,
-    keys::{PublicKey, SecretKey},
     treemath::{self, TreeNodeIndex, TreeSize},
 };
-use crate::crypto::{
-    domain_separator::SEPARATOR_STR, encrypted::NestedEncrypted, siv::Siv,
-    symmetric_key::SymmetricKey,
+use crate::{
+    content::reference::ContentRef,
+    crypto::{
+        domain_separator::SEPARATOR_STR,
+        encrypted::NestedEncrypted,
+        share_key::{ShareKey, ShareSecretKey},
+        siv::Siv,
+        symmetric_key::SymmetricKey,
+    },
+    principal::document::Document,
 };
 /// TODO: Replace relying on these as much as possible with shared, core crypto code.
 use aead::OsRng;
-use rand::RngCore;
-use x25519_dalek::{x25519, StaticSecret};
+use nonempty::NonEmpty;
+use x25519_dalek::StaticSecret;
 
 /// Key derivation function
-pub(crate) fn kdf(context: &str, last_sk: &SecretKey) -> (PublicKey, SecretKey) {
-    let separator = format!("{}{}", SEPARATOR_STR, context);
-    let derived_bytes: [u8; 32] = blake3::derive_key(&separator, last_sk.as_bytes());
+pub(crate) fn kdf(context: &str, last_sk: &ShareSecretKey) -> (ShareKey, ShareSecretKey) {
+    let separator = format!("{}{}/beekem-node", SEPARATOR_STR, context);
+    let derived_bytes: [u8; 32] = blake3::derive_key(&separator, &last_sk.to_bytes());
     let sk = StaticSecret::from(derived_bytes);
-    let pk = PublicKey::from(&sk);
-    (pk, sk)
+    let pk: x25519_dalek::PublicKey = (&sk).into();
+    (pk.into(), sk.into())
 }
 
+// FIXME thread through the doc ID
 pub(crate) fn derive_secret_from_hash_chain(
-    mut secret: SecretKey,
+    mut secret: ShareSecretKey,
     node_idx: TreeNodeIndex,
     tree_size: TreeSize,
-) -> Result<SecretKey, CgkaError> {
+) -> Result<ShareSecretKey, CgkaError> {
     let path_length = treemath::direct_path(node_idx, tree_size).len();
     for _ in 0..path_length {
         (_, secret) = kdf(&"FIXME use doc ID", &secret);
@@ -33,49 +40,49 @@ pub(crate) fn derive_secret_from_hash_chain(
     Ok(secret)
 }
 
-pub fn generate_key_pair() -> (PublicKey, SecretKey) {
-    let sk = StaticSecret::random_from_rng(OsRng);
-    let pk = PublicKey::from(&sk);
-    (pk, sk)
+pub fn generate_key_pair() -> (ShareKey, ShareSecretKey) {
+    let sk = StaticSecret::random_from_rng(OsRng); // TODO thread an RNG around or use getrandpm
+    let pk = x25519_dalek::PublicKey::from(&sk);
+    (pk.into(), sk.into())
 }
 
-fn encrypt_bytes(bytes: &[u8], encrypt_key: &SecretKey) -> Result<(Siv, Vec<u8>), CgkaError> {
-    let mut nonce = [0u8; 24];
-    OsRng.fill_bytes(&mut nonce);
-    let mut encrypted = bytes.to_vec();
-    SymmetricKey::from(encrypt_key.to_bytes())
-        .try_encrypt(nonce.into(), &mut encrypted)
-        .map_err(CgkaError::Encryption)?;
-    Ok((nonce.into(), encrypted))
-}
-
-pub fn encrypt_nested_secret(
-    secret: &SecretKey,
-    encrypt_keys: &[(PublicKey, SecretKey)],
-) -> Result<NestedEncrypted<SecretKey>, CgkaError> {
-    debug_assert!(!encrypt_keys.is_empty());
-    let paired_pks = encrypt_keys.iter().map(|(pk, _)| *pk).collect();
+pub fn encrypt_nested_secret<T: ContentRef>(
+    doc: &Document<T>,
+    secret: &ShareSecretKey,
+    encrypt_keys: &NonEmpty<(ShareKey, ShareSecretKey)>,
+) -> Result<NestedEncrypted<ShareSecretKey>, CgkaError> {
+    let mut ciphertext = secret.to_bytes().to_vec();
     let mut nonces: Vec<Siv> = Vec::new();
-    let (mut nonce, mut encrypted_secret_bytes): (Siv, Vec<u8>) =
-        encrypt_bytes(&secret.to_bytes(), &encrypt_keys[0].1)?;
-    nonces.push(nonce);
-    for (_, encrypt_key) in encrypt_keys.iter().skip(1) {
-        (nonce, encrypted_secret_bytes) = encrypt_bytes(&encrypted_secret_bytes, encrypt_key)?;
-        nonces.push(nonce);
+
+    for (pk, sk) in encrypt_keys.iter() {
+        let nonce = Siv::new(&SymmetricKey::from(sk.to_bytes()), &ciphertext, doc).expect("FIXME");
+        nonces.push(nonce.clone());
+
+        sk.derive_symmetric_key(&pk)
+            .try_encrypt(nonce, &mut ciphertext)
+            .expect("FIXME");
+        // .map_err(|e| CgkaError::Encryption(e.to_string()))?;
     }
-    let encrypted_secret: NestedEncrypted<SecretKey> =
-        NestedEncrypted::new(nonces, paired_pks, encrypted_secret_bytes);
-    Ok(encrypted_secret)
+
+    todo!()
+
+    // for (_, encrypt_key) in encrypt_keys.iter().skip(1) {
+    //     (nonce, encrypted_secret_bytes) = encrypt_bytes(&encrypted_secret_bytes, encrypt_key)?;
+    //     nonces.push(nonce);
+    // }
+    // let encrypted_secret: NestedEncrypted<ShareSecretKey> =
+    //     NestedEncrypted::new(nonces, paired_pks, encrypted_secret_bytes);
+    // Ok(encrypted_secret)
 }
 
-pub fn generate_shared_key(their_public_key: &PublicKey, my_secret: &SecretKey) -> SecretKey {
-    x25519(my_secret.to_bytes(), their_public_key.to_bytes()).into()
-}
+// pub fn generate_shared_key(their_public_key: &ShareKey, my_secret: &SecretKey) -> SecretKey {
+//     x25519(my_secret.to_bytes(), their_public_key.to_bytes()).into()
+// }
 
 pub fn decrypt_nested_secret(
-    encrypted: &NestedEncrypted<SecretKey>,
-    decrypt_keys: &[SecretKey],
-) -> Result<SecretKey, CgkaError> {
+    encrypted: &NestedEncrypted<ShareSecretKey>,
+    decrypt_keys: &[ShareSecretKey],
+) -> Result<ShareSecretKey, CgkaError> {
     debug_assert!(!encrypted.nonces.is_empty());
     debug_assert_eq!(encrypted.nonces.len(), decrypt_keys.len());
     let mut ciphertext = encrypted.ciphertext.clone();
@@ -88,17 +95,19 @@ pub fn decrypt_nested_secret(
         .try_into()
         .map_err(|_e| CgkaError::Decryption("Expected 32 bytes".to_string()))?;
 
-    Ok(StaticSecret::from(decrypted_bytes))
+    Ok(StaticSecret::from(decrypted_bytes).into())
 }
 
 fn decrypt_layer(
     ciphertext: &[u8],
     nonce: &Siv,
-    decrypt_key: &SecretKey,
+    decrypt_key: &ShareSecretKey,
 ) -> Result<Vec<u8>, CgkaError> {
     let mut decrypted = ciphertext.to_vec();
+
     SymmetricKey::from(decrypt_key.to_bytes())
         .try_decrypt(*nonce, &mut decrypted)
-        .map_err(|e| CgkaError::Decryption(e.to_string()));
+        .map_err(|e| CgkaError::Decryption(e.to_string()))?;
+
     Ok(decrypted)
 }

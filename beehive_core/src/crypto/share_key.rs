@@ -2,6 +2,7 @@
 //!
 //! [ECDH]: https://wikipedia.org/wiki/Elliptic-curve_Diffie%E2%80%93Hellman
 
+use super::symmetric_key::SymmetricKey;
 use serde::{Deserialize, Serialize};
 
 /// Newtype around [x25519_dalek::PublicKey].
@@ -14,6 +15,14 @@ impl ShareKey {
         Self(x25519_dalek::PublicKey::from(
             &x25519_dalek::EphemeralSecret::random(),
         ))
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        self.0.as_bytes()
+    }
+
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.0.to_bytes()
     }
 }
 
@@ -35,6 +44,12 @@ impl From<ShareKey> for x25519_dalek::PublicKey {
     }
 }
 
+impl From<x25519_dalek::PublicKey> for ShareKey {
+    fn from(key: x25519_dalek::PublicKey) -> Self {
+        ShareKey(key)
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ShareSecretKey([u8; 32]);
 
@@ -49,12 +64,18 @@ impl ShareSecretKey {
         ))
     }
 
-    pub fn as_bytes(&self) -> [u8; 32] {
+    pub fn to_bytes(&self) -> [u8; 32] {
         self.0
     }
 
     pub fn as_slice(&self) -> &[u8] {
         &self.0
+    }
+
+    pub fn derive_symmetric_key(&self, other: &ShareKey) -> SymmetricKey {
+        x25519_dalek::StaticSecret::from(*self)
+            .diffie_hellman(&other.0)
+            .into()
     }
 }
 

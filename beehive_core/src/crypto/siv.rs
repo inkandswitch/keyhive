@@ -27,7 +27,7 @@ use std::io::Read;
 /// [Invisible Salamanders]: https://eprint.iacr.org/2019/016.pdf
 /// [chacha20-docs]: https://docs.rs/chacha20poly1305/0.10.1/chacha20poly1305/trait.AeadCore.html#method.generate_nonce
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct Siv(pub [u8; 24]);
+pub struct Siv([u8; 24]);
 
 impl Siv {
     pub fn new<T: ContentRef>(

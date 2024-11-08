@@ -33,8 +33,8 @@ pub enum CgkaError {
     #[error("Owner Identifier not found")]
     OwnerIdentifierNotFound,
 
-    #[error("PublicKey not found")]
-    PublicKeyNotFound,
+    #[error("ShareKey not found")]
+    ShareKeyNotFound,
 
     #[error("SecretKey not found")]
     SecretKeyNotFound,
