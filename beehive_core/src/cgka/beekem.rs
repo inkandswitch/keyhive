@@ -231,6 +231,7 @@ impl BeeKem {
             last_secret_decrypted =
                 self.decrypt_parent_key(child_idx, &child_node_key, &seen_idxs, owner_sks)?;
             if let Some(ref secret) = last_secret_decrypted {
+                dbg!("Ho!");
                 let lca_with_encrypter = treemath::lowest_common_ancestor(
                     leaf_idx,
                     self.current_secret_encrypter_leaf_idx

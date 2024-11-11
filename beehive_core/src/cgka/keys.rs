@@ -125,7 +125,7 @@ impl NodeKey {
                 } else {
                     let mut new_keys = new_key.keys();
                     new_keys.push(*key);
-                    new_keys.sort_by_key(|pk| *pk);
+                    new_keys.sort();
 
                     match new_keys.as_slice() {
                         [] => unreachable!("No keys to merge"),

@@ -1,6 +1,6 @@
 //! Symmetric cipher newtype.
 
-use super::{domain_separator::SEPARATOR, siv::Siv};
+use super::{domain_separator::SEPARATOR, separable::Separable, siv::Siv};
 use chacha20poly1305::AeadInPlace;
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305};
 use serde::{Deserialize, Serialize};
@@ -100,5 +100,11 @@ impl From<SharedSecret> for SymmetricKey {
 impl std::fmt::Debug for SymmetricKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         "<SymmetricKey>".fmt(f)
+    }
+}
+
+impl Separable for SymmetricKey {
+    fn from_32_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
     }
 }

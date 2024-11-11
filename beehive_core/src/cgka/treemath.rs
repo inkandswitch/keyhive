@@ -25,9 +25,6 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-// pub(crate) const MAX_TREE_SIZE: u32 = 1 << 30;
-// pub(crate) const MIN_TREE_SIZE: u32 = 1;
-
 /// LeafNodeIndex references a leaf node in a tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LeafNodeIndex(u32);
@@ -53,16 +50,6 @@ impl LeafNodeIndex {
     pub fn usize(&self) -> usize {
         self.u32() as usize
     }
-
-    // /// Return a LeafNodeIndex x places to the right
-    // pub(crate) fn inc(&self, x: u32) -> LeafNodeIndex {
-    //     LeafNodeIndex::new(self.0 + x)
-    // }
-
-    // /// Return a LeafNodeIndex x places to the left
-    // pub(crate) fn dec(&self, x: u32) -> LeafNodeIndex {
-    //     LeafNodeIndex::new(self.0 - x)
-    // }
 
     /// Return the index as a TreeNodeIndex value.
     fn to_tree_index(self) -> u32 {
@@ -123,16 +110,6 @@ impl InnerNodeIndex {
         self.0 as usize
     }
 
-    // /// Return a InnerNodeIndex x places to the right
-    // pub(crate) fn inc(&self, x: u32) -> InnerNodeIndex {
-    //     InnerNodeIndex::new(self.0 + x)
-    // }
-
-    // /// Return a InnerNodeIndex x places to the left
-    // pub(crate) fn dec(&self, x: u32) -> InnerNodeIndex {
-    //     InnerNodeIndex::new(self.0 - x)
-    // }
-
     /// Return the index as a TreeNodeIndex value.
     fn to_tree_index(self) -> u32 {
         self.0 * 2 + 1
@@ -174,22 +151,6 @@ impl SubAssign<u32> for InnerNodeIndex {
     }
 }
 
-// #[cfg(test)]
-// impl InnerNodeIndex {
-//     /// Re-exported for testing.
-//     pub(crate) fn test_from_tree_index(node_index: u32) -> Self {
-//         Self::from_tree_index(node_index)
-//     }
-// }
-
-// #[cfg(test)]
-// impl InnerNodeIndex {
-//     /// Re-exported for testing.
-//     pub(crate) fn test_to_tree_index(self) -> u32 {
-//         self.to_tree_index()
-//     }
-// }
-
 impl From<LeafNodeIndex> for TreeNodeIndex {
     fn from(leaf_index: LeafNodeIndex) -> Self {
         TreeNodeIndex::Leaf(leaf_index)
@@ -219,12 +180,6 @@ impl TreeNodeIndex {
         }
     }
 
-    // /// Re-exported for testing.
-    // #[cfg(test)]
-    // pub(crate) fn test_new(index: u32) -> Self {
-    //     Self::new(index)
-    // }
-
     /// Return the inner value as `u32`.
     pub fn u32(&self) -> u32 {
         match self {
@@ -232,24 +187,6 @@ impl TreeNodeIndex {
             TreeNodeIndex::Inner(index) => index.to_tree_index(),
         }
     }
-
-    // /// Re-exported for testing.
-    // #[cfg(test)]
-    // pub(crate) fn test_u32(&self) -> u32 {
-    //     self.u32()
-    // }
-
-    // /// Return the inner value as `usize`.
-    // #[cfg(test)]
-    // fn usize(&self) -> usize {
-    //     self.u32() as usize
-    // }
-
-    // /// Re-exported for testing.
-    // #[cfg(test)]
-    // pub(crate) fn test_usize(&self) -> usize {
-    //     self.usize()
-    // }
 }
 
 impl Ord for TreeNodeIndex {
@@ -298,6 +235,7 @@ impl TreeSize {
 
     // /// Returns `true` if the leaf is in the left subtree and `false` otherwise.
     // /// If there is only one leaf in the tree, it returns `false`.
+    #[allow(dead_code)]
     #[cfg(any(feature = "test_utils", test))]
     pub(crate) fn leaf_is_left(&self, leaf_index: LeafNodeIndex) -> bool {
         leaf_index.u32() < self.leaf_count() / 2
@@ -307,16 +245,6 @@ impl TreeSize {
     pub(super) fn inc(&mut self) {
         self.0 = self.0 * 2 + 1;
     }
-
-    // /// Decrease the size.
-    // pub(super) fn dec(&mut self) {
-    //     debug_assert!(self.0 >= 2);
-    //     if self.0 >= 2 {
-    //         self.0 = (self.0 + 1) / 2 - 1;
-    //     } else {
-    //         self.0 = 0;
-    //     }
-    // }
 }
 
 #[test]
@@ -425,12 +353,6 @@ pub(crate) fn sibling(index: TreeNodeIndex) -> TreeNodeIndex {
     }
 }
 
-// /// Re-exported for testing.
-// #[cfg(any(feature = "test_utils", test))]
-// pub(crate) fn test_sibling(index: TreeNodeIndex) -> TreeNodeIndex {
-//     sibling(index)
-// }
-
 /// Direct path from a node to the root.
 /// Does not include the node itself.
 pub(crate) fn direct_path(node_index: TreeNodeIndex, size: TreeSize) -> Vec<InnerNodeIndex> {
@@ -445,25 +367,6 @@ pub(crate) fn direct_path(node_index: TreeNodeIndex, size: TreeSize) -> Vec<Inne
     }
     d
 }
-
-// /// Copath of a leaf node.
-// pub(crate) fn copath(leaf_index: LeafNodeIndex, size: TreeSize) -> Vec<TreeNodeIndex> {
-//     // Start with leaf
-//     let mut full_path = vec![TreeNodeIndex::Leaf(leaf_index)];
-//     let mut direct_path = direct_path(leaf_index, size);
-//     if !direct_path.is_empty() {
-//         // Remove root
-//         direct_path.pop();
-//     }
-//     full_path.append(
-//         &mut direct_path
-//             .iter()
-//             .map(|i| TreeNodeIndex::Parent(*i))
-//             .collect(),
-//     );
-
-//     full_path.into_iter().map(sibling).collect()
-// }
 
 /// Common ancestor of two leaf nodes, aka the node where their direct paths
 /// intersect.
@@ -487,41 +390,7 @@ pub(super) fn lowest_common_ancestor(x: LeafNodeIndex, y: LeafNodeIndex) -> Inne
     InnerNodeIndex::from_tree_index((xn << k) + (1 << (k - 1)) - 1)
 }
 
-// /// The common direct path of two leaf nodes, i.e. the path from their common
-// /// ancestor to the root.
-// pub(crate) fn common_direct_path(
-//     x: LeafNodeIndex,
-//     y: LeafNodeIndex,
-//     size: TreeSize,
-// ) -> Vec<InnerNodeIndex> {
-//     let mut x_path = direct_path(x, size);
-//     let mut y_path = direct_path(y, size);
-//     x_path.reverse();
-//     y_path.reverse();
-
-//     let mut common_path = vec![];
-
-//     for (x, y) in x_path.iter().zip(y_path.iter()) {
-//         if x == y {
-//             common_path.push(*x);
-//         } else {
-//             break;
-//         }
-//     }
-
-//     common_path.reverse();
-//     common_path
-// }
-
-// #[cfg(any(feature = "test_utils", test))]
-// pub(crate) fn node_width(n: usize) -> usize {
-//     if n == 0 {
-//         0
-//     } else {
-//         2 * (n - 1) + 1
-//     }
-// }
-
+#[allow(dead_code)]
 #[cfg(any(feature = "test_utils", test))]
 pub(crate) fn is_node_in_tree(node_index: TreeNodeIndex, size: TreeSize) -> bool {
     node_index.u32() < size.u32()

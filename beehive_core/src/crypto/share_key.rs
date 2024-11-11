@@ -2,12 +2,12 @@
 //!
 //! [ECDH]: https://wikipedia.org/wiki/Elliptic-curve_Diffie%E2%80%93Hellman
 
-use super::{domain_separator::SEPARATOR_STR, symmetric_key::SymmetricKey};
+use super::{separable::Separable, symmetric_key::SymmetricKey};
 use serde::{Deserialize, Serialize};
 
 /// Newtype around [x25519_dalek::PublicKey].
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ShareKey(pub x25519_dalek::PublicKey);
+pub struct ShareKey(pub(crate) x25519_dalek::PublicKey);
 
 impl ShareKey {
     #[cfg(feature = "test_utils")]
@@ -56,11 +56,8 @@ pub struct ShareSecretKey(pub [u8; 32]);
 
 impl ShareSecretKey {
     pub fn generate() -> Self {
+        dbg!("generate");
         x25519_dalek::StaticSecret::random().into()
-    }
-
-    pub fn derive_from_bytes(bytes: [u8; 32]) -> Self {
-        Self(blake3::derive_key(SEPARATOR_STR, bytes.as_slice()))
     }
 
     pub fn share_key(&self) -> ShareKey {
@@ -77,30 +74,32 @@ impl ShareSecretKey {
         &self.0
     }
 
-    pub fn derive_shared_secret(&self, other: &ShareKey) -> x25519_dalek::SharedSecret {
-        x25519_dalek::StaticSecret::from(*self).diffie_hellman(&other.0)
-    }
-
     pub fn derive_new_secret_key(&self, other: &ShareKey) -> Self {
+        dbg!("derive_new_secret_key");
         let bytes: [u8; 32] = x25519_dalek::StaticSecret::from(*self)
             .diffie_hellman(&other.0)
             .to_bytes();
 
-        Self::derive_from_bytes(bytes)
+        Self::derive_from_bytes(bytes.as_slice())
     }
 
     pub fn derive_symmetric_key(&self, other: &ShareKey) -> SymmetricKey {
-        x25519_dalek::StaticSecret::from(*self)
+        dbg!("derive_symmetric_key");
+        let secret = x25519_dalek::StaticSecret::from(*self)
             .diffie_hellman(&other.0)
-            .into()
+            .to_bytes();
+
+        Self::derive_from_bytes(secret.as_slice()).0.into()
     }
 
     pub fn ratchet_forward(&self) -> Self {
+        dbg!("ratchet_forward");
         let bytes = self.to_bytes();
-        Self::derive_from_bytes(bytes)
+        Self::derive_from_bytes(bytes.as_slice())
     }
 
     pub fn ratchet_n_forward(&self, n: usize) -> Self {
+        dbg!("ratchet_n_forward", n);
         (0..n).fold(*self, |acc, _| acc.ratchet_forward())
     }
 }
@@ -120,5 +119,11 @@ impl From<x25519_dalek::StaticSecret> for ShareSecretKey {
 impl From<&ShareSecretKey> for Vec<u8> {
     fn from(secret: &ShareSecretKey) -> Self {
         secret.0.to_vec()
+    }
+}
+
+impl Separable for ShareSecretKey {
+    fn from_32_bytes(bytes: [u8; 32]) -> Self {
+        ShareSecretKey(bytes)
     }
 }

@@ -187,9 +187,10 @@ mod tests {
 
     #[test]
     fn test_simple_add() -> Result<(), CgkaError> {
+        let doc_id = DocumentId::generate();
         let members = setup_members(2);
         let initial_member_count = members.len();
-        let mut cgka = setup_cgka(&members, 0);
+        let mut cgka = setup_cgka(doc_id, &members, 0);
         assert!(cgka.tree.has_root_key()?);
         let new_m = TestMember::generate();
         cgka.add(new_m.id, new_m.pk)?;
@@ -200,9 +201,10 @@ mod tests {
 
     #[test]
     fn test_simple_remove() -> Result<(), CgkaError> {
+        let doc_id = DocumentId::generate();
         let members = setup_members(2);
         let initial_member_count = members.len();
-        let mut cgka = setup_cgka(&members, 0);
+        let mut cgka = setup_cgka(doc_id, &members, 0);
         assert!(cgka.tree.has_root_key()?);
         cgka.remove(members[1].id)?;
         assert!(!cgka.tree.has_root_key()?);
@@ -212,7 +214,8 @@ mod tests {
 
     #[test]
     fn test_no_root_key_after_concurrent_updates() -> Result<(), CgkaError> {
-        let mut cgkas = setup_member_cgkas(7)?;
+        let doc_id = DocumentId::generate();
+        let mut cgkas = setup_member_cgkas(doc_id, 7)?;
         assert!(cgkas[0].cgka.tree.has_root_key()?);
         let op1 = cgkas[1].update()?.ok_or(CgkaError::InvalidOperation)?;
         cgkas[0].cgka.merge(op1)?;
@@ -254,7 +257,8 @@ mod tests {
         test_rounds: &[Vec<Box<TestOperation>>],
     ) -> Result<(), CgkaError> {
         assert!(member_count >= 1);
-        let mut member_cgkas = setup_member_cgkas(member_count)?;
+        let doc_id = DocumentId::generate();
+        let mut member_cgkas = setup_member_cgkas(doc_id, member_count)?;
         let mut initial_cgka = member_cgkas[0].cgka.clone();
         let initial_secret_bytes = initial_cgka.secret()?.to_bytes();
         for m in &mut member_cgkas {

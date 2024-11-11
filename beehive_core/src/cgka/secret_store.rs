@@ -5,6 +5,7 @@ use super::{
 };
 use crate::crypto::{
     encrypted::NestedEncrypted,
+    separable::Separable,
     share_key::{ShareKey, ShareSecretKey},
 };
 use serde::{Deserialize, Serialize};
@@ -84,7 +85,6 @@ impl SecretStore {
 
     pub fn decrypt_undecrypted_secrets(
         &self,
-        // child_idx: TreeNodeIndex,
         child_node_key: &NodeKey,
         child_sks: &mut ShareKeyMap,
         seen_idxs: &[TreeNodeIndex],
@@ -177,26 +177,21 @@ impl SecretStoreVersion {
                 .get(&self.encrypter_pk)
                 .ok_or(CgkaError::SecretKeyNotFound)?;
 
-            encrypted.try_encrypter_decrypt(secret_key)
+            encrypted
+                .try_encrypter_decrypt(secret_key)
                 .map_err(|e| CgkaError::Decryption(e.to_string()))?
         } else {
             child_sks.decrypt_nested_sibling_encryption(self.encrypter_pk, encrypted)?
         };
 
         let arr: [u8; 32] = decrypted.try_into().map_err(|_| CgkaError::Conversion)?;
-        // !@ FIXME: derive_from_bytes ratchets the key forward, but we're trying to
-        // decrypt the key as-is. I've set the ShareSecretKey wrapped value to pub to
-        // allow this to work.
         Ok(ShareSecretKey(arr))
-        // Ok(ShareSecretKey::derive_from_bytes(arr))
     }
 }
 
 impl PartialEq for SecretStoreVersion {
     fn eq(&self, other: &Self) -> bool {
-        self.pk == other.pk
-            && self.encrypter_pk == other.encrypter_pk
-            && self.sk == other.sk
+        self.pk == other.pk && self.encrypter_pk == other.encrypter_pk && self.sk == other.sk
     }
 }
 
