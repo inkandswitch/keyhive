@@ -141,7 +141,8 @@ async fn sync_root_doc<R: rand::Rng>(
 
     SyncDocResult {
         found,
-        snapshot: their_snapshot,
+        local_snapshot: our_snapshot.id(),
+        remote_snapshot: their_snapshot,
         differing_docs: our_differing.union(&their_differing).cloned().collect(),
     }
 }

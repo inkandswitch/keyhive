@@ -829,7 +829,8 @@ mod error {
 #[derive(Debug)]
 pub struct SyncDocResult {
     pub found: bool,
-    pub snapshot: snapshots::SnapshotId,
+    pub remote_snapshot: snapshots::SnapshotId,
+    pub local_snapshot: snapshots::SnapshotId,
     pub differing_docs: HashSet<DocumentId>,
 }
 

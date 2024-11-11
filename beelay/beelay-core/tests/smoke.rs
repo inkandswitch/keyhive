@@ -2,12 +2,21 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use beelay_core::{
     io::{IoAction, IoResult},
-    BundleSpec, CommitHash, CommitOrBundle, DocEvent, DocumentId, PeerId,
+    BundleSpec, CommitHash, CommitOrBundle, DocEvent, DocumentId, PeerId, SnapshotId,
+    SyncDocResult,
 };
+
+fn init_logging() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_test_writer()
+        .pretty()
+        .init();
+}
 
 #[test]
 fn save_and_load() {
-    // tracing_subscriber::fmt::init();
+    init_logging();
     let mut network = Network::new();
     let peer1 = network.create_peer("peer1");
 
@@ -23,7 +32,7 @@ fn save_and_load() {
 
 #[test]
 fn create_and_sync() {
-    // tracing_subscriber::fmt::init();
+    init_logging();
     let mut network = Network::new();
     let peer1 = network.create_peer("peer1");
     let peer2 = network.create_peer("peer2");
@@ -50,7 +59,7 @@ fn create_and_sync() {
         to: doc2_id,
     });
 
-    let docs_on_2 = network.beelay(&peer2).sync_doc(doc1_id, peer1.clone());
+    let sync_with_2 = network.beelay(&peer2).sync_doc(doc1_id, peer1.clone());
 
     let commits_on_2: HashSet<beelay_core::Commit> = network
         .beelay(&peer2)
@@ -68,7 +77,10 @@ fn create_and_sync() {
         .into_iter()
         .collect::<HashSet<_>>();
 
-    let docs_on_2 = docs_on_2.into_iter().collect::<HashSet<_>>();
+    let docs_on_2 = sync_with_2
+        .differing_docs
+        .into_iter()
+        .collect::<HashSet<_>>();
     let expected_docs = vec![doc1_id, doc2_id].into_iter().collect::<HashSet<_>>();
 
     if !(docs_on_2 == expected_docs) {
@@ -79,6 +91,7 @@ fn create_and_sync() {
     assert_eq!(commits_on_2, expected_commits);
 }
 
+#[test]
 #[test]
 fn listen() {
     tracing_subscriber::fmt()
@@ -97,8 +110,11 @@ fn listen() {
         .beelay(&peer1)
         .add_commits(doc1_id, vec![commit1.clone()]);
 
-    network.beelay(&peer1).sync_doc(doc1_id, peer2.clone());
-    network.beelay(&peer3).sync_doc(doc1_id, peer2.clone());
+    let _sync_with_2 = network.beelay(&peer1).sync_doc(doc1_id, peer2.clone());
+    let sync_with_3 = network.beelay(&peer2).sync_doc(doc1_id, peer3.clone());
+    network
+        .beelay(&peer2)
+        .listen(&peer3, sync_with_3.remote_snapshot);
 
     // Now add a commit on beelay 3 and check that it appears on beelay 2
     let commit2 = beelay_core::Commit::new(
@@ -109,12 +125,12 @@ fn listen() {
     network
         .beelay(&peer3)
         .add_commits(doc1_id, vec![commit2.clone()]);
-    let notifications = network.beelay(&peer1).pop_notifications();
+    let notifications = network.beelay(&peer2).pop_notifications();
     assert_eq!(notifications.len(), 1);
     assert_eq!(
         notifications[0],
         DocEvent {
-            peer: peer2,
+            peer: peer3,
             doc: doc1_id,
             data: CommitOrBundle::Commit(commit2)
         }
@@ -144,7 +160,7 @@ impl<'a> BeelayHandle<'a> {
         }
     }
 
-    fn sync_doc(&mut self, doc: DocumentId, peer: PeerId) -> HashSet<DocumentId> {
+    fn sync_doc(&mut self, doc: DocumentId, peer: PeerId) -> SyncDocResult {
         let story = {
             let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
             let (story, event) = beelay_core::Event::sync_doc(doc, peer);
@@ -154,7 +170,23 @@ impl<'a> BeelayHandle<'a> {
         self.network.run_until_quiescent();
         let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
         match beelay.completed_stories.remove(&story) {
-            Some(beelay_core::StoryResult::SyncDoc(result)) => result.differing_docs,
+            Some(beelay_core::StoryResult::SyncDoc(result)) => result,
+            Some(other) => panic!("unexpected story result: {:?}", other),
+            None => panic!("no story result"),
+        }
+    }
+
+    fn listen(&mut self, with_peer: &PeerId, from_snapshot: SnapshotId) {
+        let story = {
+            let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
+            let (story, event) = beelay_core::Event::listen(with_peer.clone(), from_snapshot);
+            beelay.inbox.push_back(event);
+            story
+        };
+        self.network.run_until_quiescent();
+        let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
+        match beelay.completed_stories.remove(&story) {
+            Some(beelay_core::StoryResult::Listen) => (),
             Some(other) => panic!("unexpected story result: {:?}", other),
             None => panic!("no story result"),
         }

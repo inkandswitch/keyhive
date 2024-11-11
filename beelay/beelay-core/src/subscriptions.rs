@@ -65,6 +65,7 @@ impl Log {
     }
 }
 
+#[derive(Debug)]
 struct Subscription {
     offset: usize,
     peer: PeerId,
@@ -79,10 +80,13 @@ impl Subscriptions {
     }
 
     pub(crate) fn create(&mut self, peer: PeerId, starting_from: &Snapshot) {
+        let mut docs = starting_from.our_docs().clone();
+        docs.insert(starting_from.root_doc().clone());
+        tracing::trace!(?peer, start_docs=?docs, "Creating subscription");
         self.0.push(Subscription {
             offset: starting_from.local_log_offset(),
             peer,
-            docs: starting_from.our_docs().clone(),
+            docs,
         })
     }
 
