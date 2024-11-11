@@ -1,4 +1,7 @@
-use crate::crypto::{encrypted::NestedEncrypted, share_key::{ShareKey, ShareSecretKey}};
+use crate::crypto::{
+    encrypted::NestedEncrypted,
+    share_key::{ShareKey, ShareSecretKey},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -28,14 +31,20 @@ impl ShareKeyMap {
     }
 
     /// Decrypt a NestedEncryption that you did not encrypt.
-    pub fn decrypt_nested_sibling_encryption(&self, encrypter_pk: ShareKey, encrypted: &NestedEncrypted<ShareSecretKey>) -> Result<Vec<u8>, CgkaError> {
+    pub fn decrypt_nested_sibling_encryption(
+        &self,
+        encrypter_pk: ShareKey,
+        encrypted: &NestedEncrypted<ShareSecretKey>,
+    ) -> Result<Vec<u8>, CgkaError> {
         let mut decrypt_keys = Vec::new();
         for (pk, _) in &encrypted.layers {
             let sk = self.get(pk).ok_or(CgkaError::SecretKeyNotFound)?;
             let key = sk.derive_symmetric_key(&encrypter_pk);
             decrypt_keys.push(key);
         }
-        encrypted.try_sibling_decrypt(&decrypt_keys).map_err(|e| CgkaError::Decryption(e.to_string()))
+        encrypted
+            .try_sibling_decrypt(&decrypt_keys)
+            .map_err(|e| CgkaError::Decryption(e.to_string()))
     }
 }
 
@@ -116,7 +125,15 @@ impl NodeKey {
         }
     }
 
-    // TODO what are `removed` here? On a single key the key is never removed? Should this be an Option?
+    /// Merge in a new [`NodeKey`].
+    ///
+    /// # Arguments
+    ///
+    /// * `self`
+    /// * `new_key` —  The new key to merge into the existing keys.
+    /// * `removed` —  The keys removed as part of a [`PathChange`](super::beekem::PathChange).
+    ///                It's possible that `new_key` will be one of those,
+    ///                in which case a new key is substituted.
     pub fn merge(&self, new_key: &NodeKey, removed: &[ShareKey]) -> Self {
         match self {
             NodeKey::ShareKey(key) => {
