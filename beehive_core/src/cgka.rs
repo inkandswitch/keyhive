@@ -5,7 +5,7 @@ pub mod operation;
 pub mod secret_store;
 pub mod treemath;
 
-#[cfg(feature = "test_utils")]
+// #[cfg(feature = "test_utils")]
 pub mod test_utils;
 
 use crate::{

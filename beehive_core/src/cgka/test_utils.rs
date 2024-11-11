@@ -2,33 +2,31 @@ use std::{collections::HashMap, mem};
 
 use aead::OsRng;
 
-use crate::principal::identifier::Identifier;
+use crate::{crypto::share_key::{ShareKey, ShareSecretKey}, principal::{document::id::DocumentId, identifier::Identifier}};
 
 use super::{
-    crypto::generate_key_pair,
     error::CgkaError,
-    keys::{PublicKey, SecretKey},
     operation::CgkaOperation,
     Cgka,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TestMember {
     pub id: Identifier,
-    pub pk: PublicKey,
-    pub sk: SecretKey,
+    pub pk: ShareKey,
+    pub sk: ShareSecretKey,
 }
 
 impl TestMember {
     pub fn generate() -> Self {
         let id = Identifier(ed25519_dalek::SigningKey::generate(&mut OsRng).verifying_key());
         let sk = ShareSecretKey::generate();
-        let pk = sk.public_key();
+        let pk = sk.share_key();
         Self { id, pk, sk }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TestMemberCgka {
     pub m: TestMember,
     pub cgka: Cgka,
@@ -50,13 +48,14 @@ impl TestMemberCgka {
 
     pub fn update(&mut self) -> Result<Option<CgkaOperation>, CgkaError> {
         let sk = ShareSecretKey::generate();
-        let pk = sk.public_key();
+        let pk = sk.share_key();
         self.m.pk = pk;
         self.m.sk = sk.clone();
         self.cgka.update(self.id(), pk, sk)
     }
 }
 
+#[derive(Debug)]
 pub struct TestConcurrentOperations {
     pub ops: HashMap<Identifier, Vec<CgkaOperation>>,
     pub remove_ops: HashMap<Identifier, Vec<CgkaOperation>>,
@@ -119,8 +118,12 @@ pub fn setup_members(member_count: u32) -> Vec<TestMember> {
 
 pub fn setup_cgka(members: &[TestMember], m_idx: usize) -> Cgka {
     let owner = members[m_idx].clone();
+    let verifying_key = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
+            .verifying_key();
+    let doc_id = Identifier(verifying_key);
     Cgka::new(
         members.iter().map(|p| (p.id, p.pk)).collect(),
+        DocumentId(doc_id),
         owner.id,
         owner.pk,
         owner.sk.clone(),
@@ -169,6 +172,7 @@ pub fn setup_updated_and_synced_member_cgkas(
     Ok(member_cgkas)
 }
 
+#[derive(Debug)]
 pub enum TestMergeStrategy {
     MergeToAllMembers,
     MergeToOneMemberAndClone,
