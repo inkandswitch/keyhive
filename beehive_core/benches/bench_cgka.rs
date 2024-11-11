@@ -7,11 +7,11 @@ use beehive_core::{
             TestMemberCgka,
         },
     },
-    crypto::shar_key::{ShareKey, ShareSecretKey},
+    crypto::{encrypted::NestedEncrypted, share_key::ShareSecretKey},
+    principal::document::id::DocumentId,
 };
 use divan::Bencher;
 use nonempty::nonempty;
-use std::time::Duration;
 use std::time::Duration;
 use x25519_dalek::StaticSecret;
 
@@ -34,9 +34,8 @@ fn create_key_pairs(n: u32) {
     max_time = Duration::from_secs(120),
 )]
 fn encrypt_and_decrypt_log_2_of_members(iters_and_member_count: (u32, u32)) {
-    let verifying_key =
-        ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()).verifying_key();
-    let doc_id = DocumentId(Identifier(verifying_key));
+    let doc_id = DocumentId::generate();
+
     let (iters, member_count) = iters_and_member_count;
     let path_length = (member_count as f32).log2() as u32 + 1;
     for _ in 0..iters {
@@ -83,14 +82,14 @@ where
     max_time = Duration::from_secs(120),
 )]
 fn apply_100_updates_and_sibling_decrypt(bencher: Bencher, member_count: u32) {
+    let doc_id = DocumentId::generate();
+
     bencher
         .with_inputs(|| {
             let paired_idx = 1;
-            setup_group_and_two_primaries(
-                member_count,
-                paired_idx,
-                setup_updated_and_synced_member_cgkas,
-            )
+            setup_group_and_two_primaries(member_count, paired_idx, |x| {
+                setup_updated_and_synced_member_cgkas(doc_id, x)
+            })
         })
         .bench_local_refs(|(first_cgka, sibling_cgka)| {
             for _ in 0..100 {
@@ -108,14 +107,14 @@ fn apply_100_updates_and_sibling_decrypt(bencher: Bencher, member_count: u32) {
     max_time = Duration::from_secs(120),
 )]
 fn apply_100_updates_and_distant_member_decrypt(bencher: Bencher, member_count: u32) {
+    let doc_id = DocumentId::generate();
+
     bencher
         .with_inputs(|| {
             let paired_idx = member_count as usize - 1;
-            setup_group_and_two_primaries(
-                member_count,
-                paired_idx,
-                setup_updated_and_synced_member_cgkas,
-            )
+            setup_group_and_two_primaries(member_count, paired_idx, |x| {
+                setup_updated_and_synced_member_cgkas(doc_id, x)
+            })
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
@@ -136,14 +135,14 @@ fn apply_100_updates_and_distant_member_decrypt_with_maximum_conflict_keys(
     bencher: Bencher,
     member_count: u32,
 ) {
+    let doc_id = DocumentId::generate();
+
     bencher
         .with_inputs(|| {
             let paired_idx = member_count as usize - 1;
-            setup_group_and_two_primaries(
-                member_count,
-                paired_idx,
-                setup_member_cgkas_with_maximum_conflict_keys,
-            )
+            setup_group_and_two_primaries(member_count, paired_idx, |x| {
+                setup_member_cgkas_with_maximum_conflict_keys(doc_id, x)
+            })
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
@@ -161,14 +160,14 @@ fn apply_100_updates_and_distant_member_decrypt_with_maximum_conflict_keys(
     max_time = Duration::from_secs(120),
 )]
 fn apply_100_updates_and_distant_member_decrypt_after_adds(bencher: Bencher, member_count: u32) {
+    let doc_id = DocumentId::generate();
+
     bencher
         .with_inputs(|| {
             let paired_idx = member_count as usize - 1;
-            setup_group_and_two_primaries(
-                member_count,
-                paired_idx,
-                setup_member_cgkas_with_all_updated_and_10_adds,
-            )
+            setup_group_and_two_primaries(member_count, paired_idx, |x| {
+                setup_member_cgkas_with_all_updated_and_10_adds(doc_id, x)
+            })
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
@@ -189,10 +188,14 @@ fn apply_100_updates_and_distant_member_decrypt_with_blank_nodes(
     bencher: Bencher,
     member_count: u32,
 ) {
+    let doc_id = DocumentId::generate();
+
     bencher
         .with_inputs(|| {
             let paired_idx = member_count as usize - 1;
-            setup_group_and_two_primaries(member_count, paired_idx, setup_member_cgkas)
+            setup_group_and_two_primaries(member_count, paired_idx, |x| {
+                setup_member_cgkas(doc_id, x)
+            })
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
