@@ -51,7 +51,8 @@ impl From<x25519_dalek::PublicKey> for ShareKey {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct ShareSecretKey([u8; 32]);
+// FIXME: Made pub to get tests passing. Need to revisit.
+pub struct ShareSecretKey(pub [u8; 32]);
 
 impl ShareSecretKey {
     pub fn generate() -> Self {

@@ -2,33 +2,31 @@ use std::{collections::HashMap, mem};
 
 use aead::OsRng;
 
-use crate::principal::identifier::Identifier;
+use crate::{crypto::share_key::{ShareKey, ShareSecretKey}, principal::{document::id::DocumentId, identifier::Identifier}};
 
 use super::{
-    crypto::generate_key_pair,
     error::CgkaError,
-    keys::{PublicKey, SecretKey},
     operation::CgkaOperation,
     Cgka,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TestMember {
     pub id: Identifier,
-    pub pk: PublicKey,
-    pub sk: SecretKey,
+    pub pk: ShareKey,
+    pub sk: ShareSecretKey,
 }
 
 impl TestMember {
     pub fn generate() -> Self {
         let id = Identifier(ed25519_dalek::SigningKey::generate(&mut OsRng).verifying_key());
         let sk = ShareSecretKey::generate();
-        let pk = sk.public_key();
+        let pk = sk.share_key();
         Self { id, pk, sk }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TestMemberCgka {
     pub m: TestMember,
     pub cgka: Cgka,
@@ -50,13 +48,14 @@ impl TestMemberCgka {
 
     pub fn update(&mut self) -> Result<Option<CgkaOperation>, CgkaError> {
         let sk = ShareSecretKey::generate();
-        let pk = sk.public_key();
+        let pk = sk.share_key();
         self.m.pk = pk;
-        self.m.sk = sk.clone();
+        self.m.sk = sk;
         self.cgka.update(self.id(), pk, sk)
     }
 }
 
+#[derive(Debug)]
 pub struct TestConcurrentOperations {
     pub ops: HashMap<Identifier, Vec<CgkaOperation>>,
     pub remove_ops: HashMap<Identifier, Vec<CgkaOperation>>,
@@ -119,11 +118,15 @@ pub fn setup_members(member_count: u32) -> Vec<TestMember> {
 
 pub fn setup_cgka(members: &[TestMember], m_idx: usize) -> Cgka {
     let owner = members[m_idx].clone();
+    let verifying_key = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
+            .verifying_key();
+    let doc_id = Identifier(verifying_key);
     Cgka::new(
         members.iter().map(|p| (p.id, p.pk)).collect(),
+        DocumentId(doc_id),
         owner.id,
         owner.pk,
-        owner.sk.clone(),
+        owner.sk,
     )
     .expect("CGKA construction failed")
 }
@@ -135,7 +138,7 @@ pub fn setup_member_cgkas(member_count: u32) -> Result<Vec<TestMemberCgka>, Cgka
     let initial_cgka = setup_cgka(&members, 0);
     let mut member_cgkas = Vec::new();
     for m in members {
-        let cgka = initial_cgka.with_new_owner(m.id, m.pk, m.sk.clone())?;
+        let cgka = initial_cgka.with_new_owner(m.id, m.pk, m.sk)?;
         member_cgkas.push(TestMemberCgka::new(m.clone(), cgka));
     }
     Ok(member_cgkas)
@@ -152,7 +155,7 @@ pub fn setup_updated_and_synced_member_cgkas(
     for m in members.iter_mut().skip(1) {
         let cgka = member_cgkas[0]
             .cgka
-            .with_new_owner(m.id, m.pk, m.sk.clone())?;
+            .with_new_owner(m.id, m.pk, m.sk)?;
         let mut member_cgka = TestMemberCgka::new(m.clone(), cgka);
         let maybe_op = member_cgka.update()?;
         let Some(op) = maybe_op else {
@@ -163,12 +166,13 @@ pub fn setup_updated_and_synced_member_cgkas(
     }
     let base_cgka = member_cgkas[0].cgka.clone();
     for m in member_cgkas.iter_mut().skip(1) {
-        m.cgka = base_cgka.with_new_owner(m.id(), m.m.pk, m.m.sk.clone())?;
+        m.cgka = base_cgka.with_new_owner(m.id(), m.m.pk, m.m.sk)?;
     }
 
     Ok(member_cgkas)
 }
 
+#[derive(Debug)]
 pub enum TestMergeStrategy {
     MergeToAllMembers,
     MergeToOneMemberAndClone,
@@ -207,7 +211,7 @@ pub fn apply_test_operations(
             }
             let base_cgka = member_cgkas[0].cgka.clone();
             for m in member_cgkas.iter_mut().skip(1) {
-                m.cgka = base_cgka.with_new_owner(m.id(), m.m.pk, m.m.sk.clone())?;
+                m.cgka = base_cgka.with_new_owner(m.id(), m.m.pk, m.m.sk)?;
             }
         }
     }
@@ -215,7 +219,7 @@ pub fn apply_test_operations(
     for m in added_members {
         let new_m_cgka = member_cgkas[0]
             .cgka
-            .with_new_owner(m.id, m.pk, m.sk.clone())?;
+            .with_new_owner(m.id, m.pk, m.sk)?;
         member_cgkas.push(TestMemberCgka::new(m.clone(), new_m_cgka));
     }
     Ok(())

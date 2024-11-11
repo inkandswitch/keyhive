@@ -65,7 +65,8 @@ impl<T> NestedEncrypted<T> {
     pub fn try_encrypt<U>(
         doc_id: DocumentId,
         secret: U,
-        encrypt_keys: &NonEmpty<(ShareKey, ShareSecretKey)>,
+        encrypter_sk: &ShareSecretKey,
+        paired_share_keys: &NonEmpty<ShareKey>,
     ) -> Result<Self, chacha20poly1305::Error>
     where
         Vec<u8>: From<U>,
@@ -73,15 +74,13 @@ impl<T> NestedEncrypted<T> {
         let mut ciphertext: Vec<u8> = secret.into();
         let mut layer_vec: Vec<(ShareKey, Siv)> = vec![];
 
-        for (pk, sk) in encrypt_keys.iter() {
-            // FIXME lift the errors into one type
+        for pk in paired_share_keys.iter() {
+            let key = encrypter_sk.derive_symmetric_key(pk);
             let nonce =
-                Siv::new(&SymmetricKey::from(sk.to_bytes()), &ciphertext, doc_id).expect("FIXME");
-
-            layer_vec.push((*pk, nonce.clone()));
-
-            sk.derive_symmetric_key(&pk)
-                .try_encrypt(nonce, &mut ciphertext)?
+                Siv::new(&key, &ciphertext, doc_id).expect("FIXME");
+            layer_vec.push((*pk, nonce));
+            // FIXME lift the errors into one type
+            key.try_encrypt(nonce, &mut ciphertext)?
         }
 
         Ok(NestedEncrypted {
@@ -93,14 +92,26 @@ impl<T> NestedEncrypted<T> {
     }
 
     // TODO validate nonce & AEAD
-    pub fn try_decrypt(
+    pub fn try_encrypter_decrypt(
         &self,
-        decrypt_keys: &[ShareSecretKey],
+        encrypter_secret_key: &ShareSecretKey,
     ) -> Result<Vec<u8>, chacha20poly1305::Error> {
         let mut buf: Vec<u8> = self.ciphertext.clone();
-        for (idx, (pk, nonce)) in self.layers.iter().enumerate().rev() {
-            let sk = &decrypt_keys[idx];
-            let key = sk.derive_symmetric_key(pk);
+        for (pk, nonce) in self.layers.iter().rev() {
+            let key = encrypter_secret_key.derive_symmetric_key(pk);
+            key.try_decrypt(*nonce, &mut buf)?;
+        }
+        Ok(buf)
+    }
+
+    // TODO validate nonce & AEAD
+    pub fn try_sibling_decrypt(
+        &self,
+        decrypt_keys: &[SymmetricKey],
+    ) -> Result<Vec<u8>, chacha20poly1305::Error> {
+        let mut buf: Vec<u8> = self.ciphertext.clone();
+        for (idx, (_pk, nonce)) in self.layers.iter().enumerate().rev() {
+            let key = &decrypt_keys[idx];
             key.try_decrypt(*nonce, &mut buf)?;
         }
         Ok(buf)
@@ -131,5 +142,62 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for NestedEncrypted<T> {
             })?,
             helper.ciphertext,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use aead::OsRng;
+    use nonempty::nonempty;
+
+    use super::NestedEncrypted;
+    use crate::crypto::symmetric_key::SymmetricKey;
+    use crate::principal::document::id::DocumentId;
+    use crate::principal::identifier::Identifier;
+    use super::super::share_key::ShareSecretKey;
+
+    #[test]
+    pub(crate) fn test_encrypt_and_decrypt() -> Result<(), chacha20poly1305::Error> {
+        let secret = ShareSecretKey::generate();
+        let id = Identifier(ed25519_dalek::SigningKey::generate(&mut OsRng).verifying_key());
+        let doc_id = DocumentId(id);
+
+        let encrypter_share_secret_key = ShareSecretKey::generate();
+        let encrypter_share_key = encrypter_share_secret_key.share_key();
+
+        let share_secret_key = ShareSecretKey::generate();
+        let share_key = share_secret_key.share_key();
+        let mut encrypt_paired_pks = nonempty![share_key];
+        let mut encrypt_paired_sks = nonempty![share_secret_key];
+        for _ in 0..5 {
+            let share_secret_key = ShareSecretKey::generate();
+            let share_key = share_secret_key.share_key();
+            encrypt_paired_pks.push(share_key);
+            encrypt_paired_sks.push(share_secret_key);
+        }
+
+        let nested_encrypted = NestedEncrypted::<ShareSecretKey>::try_encrypt(
+            doc_id,
+            secret.to_bytes(),
+            &encrypter_share_secret_key,
+            &encrypt_paired_pks,
+        )?;
+
+        let decrypt_keys: Vec<SymmetricKey> = encrypt_paired_sks
+            .iter()
+            .map(|sk| sk.derive_symmetric_key(&encrypter_share_key))
+            .collect();
+
+        let decrypted = nested_encrypted.try_sibling_decrypt(
+            &decrypt_keys
+        )?;
+
+        assert_eq!(secret.to_bytes(), decrypted.as_slice());
+
+        let encrypters_decrypted = nested_encrypted.try_encrypter_decrypt(
+            &encrypter_share_secret_key
+        )?;
+        assert_eq!(secret.to_bytes(), encrypters_decrypted.as_slice());
+        Ok(())
     }
 }
