@@ -5,6 +5,8 @@ pub mod operation;
 pub mod secret_store;
 pub mod treemath;
 
+// FIXME: This is also used for benches, so using the feature flag breaks
+// the build
 // #[cfg(feature = "test_utils")]
 pub mod test_utils;
 

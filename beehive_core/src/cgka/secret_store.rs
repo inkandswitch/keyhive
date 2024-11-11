@@ -25,14 +25,12 @@ impl SecretStore {
     pub fn new(
         pk: ShareKey,
         encrypter_pk: ShareKey,
-        encrypter_paired_pk: Option<NodeKey>,
         sk: BTreeMap<TreeNodeIndex, NestedEncrypted<ShareSecretKey>>,
     ) -> Self {
         let version = SecretStoreVersion {
             pk,
             sk,
             encrypter_pk,
-            encrypter_paired_node_key: encrypter_paired_pk,
         };
         Self {
             versions: vec![version],
@@ -144,11 +142,6 @@ pub(crate) struct SecretStoreVersion {
     pub(crate) sk: BTreeMap<TreeNodeIndex, NestedEncrypted<ShareSecretKey>>,
     /// The PublicKey of the child that encrypted this parent.
     pub(crate) encrypter_pk: ShareKey,
-    /// If this is None, the sibling subtree was blank when encrypting this parent.
-    /// Otherwise, it represents the first node in the sibling resolution, which the
-    /// encrypter used for its own Diffie Hellman shared secret.
-    /// Invariant: PublicKeys must be in lexicographic order
-    pub(crate) encrypter_paired_node_key: Option<NodeKey>,
 }
 
 impl SecretStoreVersion {
@@ -179,41 +172,23 @@ impl SecretStoreVersion {
             .get(lookup_idx)
             .ok_or(CgkaError::EncryptedSecretNotFound)?;
 
-        let decrypt_keys: Vec<ShareSecretKey> = if is_encrypter {
+        let decrypted: Vec<u8> = if is_encrypter {
             let secret_key = child_sks
                 .get(&self.encrypter_pk)
                 .ok_or(CgkaError::SecretKeyNotFound)?;
 
-            if let Some(pair_keys) = &self.encrypter_paired_node_key {
-                pair_keys
-                    .keys()
-                    .iter()
-                    .map(|pk| secret_key.derive_new_secret_key(pk))
-                    .collect()
-            } else {
-                vec![secret_key.clone()]
-            }
+            encrypted.try_encrypter_decrypt(secret_key)
+                .map_err(|e| CgkaError::Decryption(e.to_string()))?
         } else {
-            encrypted
-                .layers
-                .iter()
-                .map(|(pk, _nonce)| {
-                    let secret_key_result = child_sks.get(pk);
-                    if let Some(secret_key) = secret_key_result {
-                        Ok(secret_key.derive_new_secret_key(&self.encrypter_pk))
-                    } else {
-                        Err(CgkaError::SecretKeyNotFound)
-                    }
-                })
-                .collect::<Result<Vec<_>, CgkaError>>()?
+            child_sks.decrypt_nested_sibling_encryption(self.encrypter_pk, encrypted)?
         };
 
-        let decrypted: Vec<u8> = encrypted
-            .try_decrypt(decrypt_keys.as_slice())
-            .map_err(|e| CgkaError::Decryption(e.to_string()))?;
-
         let arr: [u8; 32] = decrypted.try_into().map_err(|_| CgkaError::Conversion)?;
-        Ok(ShareSecretKey::derive_from_bytes(arr))
+        // !@ FIXME: derive_from_bytes ratchets the key forward, but we're trying to
+        // decrypt the key as-is. I've set the ShareSecretKey wrapped value to pub to
+        // allow this to work.
+        Ok(ShareSecretKey(arr))
+        // Ok(ShareSecretKey::derive_from_bytes(arr))
     }
 }
 
@@ -221,7 +196,6 @@ impl PartialEq for SecretStoreVersion {
     fn eq(&self, other: &Self) -> bool {
         self.pk == other.pk
             && self.encrypter_pk == other.encrypter_pk
-            && self.encrypter_paired_node_key == other.encrypter_paired_node_key
             && self.sk == other.sk
     }
 }

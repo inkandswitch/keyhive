@@ -50,7 +50,7 @@ impl TestMemberCgka {
         let sk = ShareSecretKey::generate();
         let pk = sk.share_key();
         self.m.pk = pk;
-        self.m.sk = sk.clone();
+        self.m.sk = sk;
         self.cgka.update(self.id(), pk, sk)
     }
 }
@@ -126,7 +126,7 @@ pub fn setup_cgka(members: &[TestMember], m_idx: usize) -> Cgka {
         DocumentId(doc_id),
         owner.id,
         owner.pk,
-        owner.sk.clone(),
+        owner.sk,
     )
     .expect("CGKA construction failed")
 }
@@ -138,7 +138,7 @@ pub fn setup_member_cgkas(member_count: u32) -> Result<Vec<TestMemberCgka>, Cgka
     let initial_cgka = setup_cgka(&members, 0);
     let mut member_cgkas = Vec::new();
     for m in members {
-        let cgka = initial_cgka.with_new_owner(m.id, m.pk, m.sk.clone())?;
+        let cgka = initial_cgka.with_new_owner(m.id, m.pk, m.sk)?;
         member_cgkas.push(TestMemberCgka::new(m.clone(), cgka));
     }
     Ok(member_cgkas)
@@ -155,7 +155,7 @@ pub fn setup_updated_and_synced_member_cgkas(
     for m in members.iter_mut().skip(1) {
         let cgka = member_cgkas[0]
             .cgka
-            .with_new_owner(m.id, m.pk, m.sk.clone())?;
+            .with_new_owner(m.id, m.pk, m.sk)?;
         let mut member_cgka = TestMemberCgka::new(m.clone(), cgka);
         let maybe_op = member_cgka.update()?;
         let Some(op) = maybe_op else {
@@ -166,7 +166,7 @@ pub fn setup_updated_and_synced_member_cgkas(
     }
     let base_cgka = member_cgkas[0].cgka.clone();
     for m in member_cgkas.iter_mut().skip(1) {
-        m.cgka = base_cgka.with_new_owner(m.id(), m.m.pk, m.m.sk.clone())?;
+        m.cgka = base_cgka.with_new_owner(m.id(), m.m.pk, m.m.sk)?;
     }
 
     Ok(member_cgkas)
@@ -211,7 +211,7 @@ pub fn apply_test_operations(
             }
             let base_cgka = member_cgkas[0].cgka.clone();
             for m in member_cgkas.iter_mut().skip(1) {
-                m.cgka = base_cgka.with_new_owner(m.id(), m.m.pk, m.m.sk.clone())?;
+                m.cgka = base_cgka.with_new_owner(m.id(), m.m.pk, m.m.sk)?;
             }
         }
     }
@@ -219,7 +219,7 @@ pub fn apply_test_operations(
     for m in added_members {
         let new_m_cgka = member_cgkas[0]
             .cgka
-            .with_new_owner(m.id, m.pk, m.sk.clone())?;
+            .with_new_owner(m.id, m.pk, m.sk)?;
         member_cgkas.push(TestMemberCgka::new(m.clone(), new_m_cgka));
     }
     Ok(())

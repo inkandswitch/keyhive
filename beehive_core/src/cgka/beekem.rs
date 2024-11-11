@@ -241,6 +241,7 @@ impl BeeKem {
                         treemath::direct_path(parent_idx, self.tree_size).len(),
                     ));
                 }
+
             }
             seen_idxs.push(parent_idx);
             child_node_key = self.node_key_for_index(parent_idx)?;
@@ -258,9 +259,9 @@ impl BeeKem {
     /// blank it can be many nodes).
     ///
     /// If the sibling node's resolution is empty, then you will generate the new key
-    /// pair but encrypt the secret with your last secret (instead of using Diffie Hellman
-    /// with a sibling). The secret store for that parent will then only have an entry
-    /// for you.
+    /// pair but encrypt the secret by doing Diffie Hellman with a different key pair
+    /// generated just for that purpose. The secret store for that parent will then
+    /// only have an entry for you.
     ///
     /// If one or more members of your sibling's resolution have conflicting public keys,
     /// then you will do a nested encryption of the secret using all of the conflicting
@@ -293,16 +294,13 @@ impl BeeKem {
         // key in the past. And as it moves up the path, it will generate a new public
         // key for each ancestor up to the root.
         let mut child_pk = pk;
-        let mut child_sk = sks.get(&pk).ok_or(CgkaError::SecretKeyNotFound)?.clone();
+        let mut child_sk = *sks.get(&pk).ok_or(CgkaError::SecretKeyNotFound)?;
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
             if let Some(store) = self.inner_node(parent_idx)? {
                 new_path.removed_keys.append(&mut store.node_key().keys());
             }
-
-            let new_parent_sk = child_sk.clone();
-            new_parent_sk.ratchet_forward();
-
+            let new_parent_sk = child_sk.ratchet_forward();
             let new_parent_pk = new_parent_sk.share_key();
             self.encrypt_key_for_parent(
                 child_idx,
@@ -312,7 +310,7 @@ impl BeeKem {
                 &new_parent_sk,
             )?;
             // Add to our ShareKeyMap so we won't have to decrypt in the future
-            sks.insert(new_parent_pk, new_parent_sk.clone());
+            sks.insert(new_parent_pk, new_parent_sk);
             new_path.path.push((
                 parent_idx.u32(),
                 self.inner_node(parent_idx)?
@@ -411,7 +409,7 @@ impl BeeKem {
                     return Ok(child_sks.get(&parent_pk).cloned());
                 }
                 let secret = parent.decrypt_secret(child_node_key, child_sks, seen_idxs)?;
-                child_sks.insert(parent_pk, secret.clone());
+                child_sks.insert(parent_pk, secret);
                 Some(secret)
             }
         };
@@ -453,53 +451,48 @@ impl BeeKem {
         let mut secret_map = BTreeMap::new();
         let mut sibling_resolution = Vec::new();
         self.append_resolution(sibling_idx, &mut sibling_resolution)?;
-        let encrypter_paired_pk = if sibling_resolution.is_empty() {
+        if sibling_resolution.is_empty() {
             // Normally you use a DH shared key to encrypt/decrypt the next node up,
-            // but if there's a blank sibling subtree, then you use your secret key
-            // directly instead.
+            // but if there's a blank sibling subtree, then you generate a key pair
+            // just to do DH with when ecrypting the new parent secret.
+            let paired_sk = ShareSecretKey::generate();
+            let paired_pk = paired_sk.share_key();
             let encrypted_sk = NestedEncrypted::<ShareSecretKey>::try_encrypt(
                 self.doc_id,
                 new_parent_sk,
-                &nonempty![(child_pk, child_sk.clone())],
+                child_sk,
+                &nonempty![paired_pk],
             )
             .map_err(CgkaError::Encryption)?;
 
             secret_map.insert(child_idx, encrypted_sk);
-            None
         } else {
             // Encrypt the secret for every node in the sibling resolution, using
             // a new DH shared secret to do the encryption for each node. If a node in
             // the resolution has conflicting public keys, you must do a nested encryption
             // for that node.
-            let mut paired_pk = None;
+            let mut used_paired_sibling = false;
             for idx in sibling_resolution {
                 let sibling_node_key = self.node_key_for_index(idx)?;
-                let shared_keys: Vec<(ShareKey, ShareSecretKey)> = sibling_node_key
-                    .keys()
-                    .iter()
-                    .map(|sibling_pk| (*sibling_pk, child_sk.derive_new_secret_key(sibling_pk)))
-                    .collect();
-
                 let encrypted_sk = NestedEncrypted::<ShareSecretKey>::try_encrypt(
                     self.doc_id,
                     new_parent_sk,
-                    &NonEmpty::from_vec(shared_keys).expect("some keys to exist"),
+                    child_sk,
+                    &NonEmpty::from_vec(sibling_node_key.keys()).expect("some keys to exist"),
                 )
                 .map_err(CgkaError::Encryption)?;
 
-                if paired_pk.is_none() {
+                if !used_paired_sibling {
                     secret_map.insert(child_idx, encrypted_sk.clone());
-                    paired_pk = Some(sibling_node_key.clone());
+                    used_paired_sibling = true;
                 }
                 secret_map.insert(idx, encrypted_sk);
             }
-            paired_pk
         };
 
         Ok(SecretStore::new(
             new_parent_pk,
             child_pk,
-            encrypter_paired_pk,
             secret_map,
         ))
     }

@@ -24,5 +24,7 @@ jobs:
       run: cargo test --verbose
     - name: Clippy
       run: cargo clippy
+    - name: Compile benches
+      run: cargo bench --no-run
     - name: Security vulnerability audit
       run: cargo audit

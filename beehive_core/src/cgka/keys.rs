@@ -1,6 +1,8 @@
-use crate::crypto::share_key::{ShareKey, ShareSecretKey};
+use crate::crypto::{encrypted::NestedEncrypted, share_key::{ShareKey, ShareSecretKey}};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+use super::error::CgkaError;
 
 /// A ShareSecretKeyMap is used to store the secret keys for all of the public keys
 /// on your path that you have encountered so far (either because you added them
@@ -18,11 +20,22 @@ impl ShareKeyMap {
     }
 
     pub fn get(&self, pk: &ShareKey) -> Option<&ShareSecretKey> {
-        self.0.get(&pk)
+        self.0.get(pk)
     }
 
     pub fn contains_key(&self, pk: &ShareKey) -> bool {
-        self.0.contains_key(&pk)
+        self.0.contains_key(pk)
+    }
+
+    /// Decrypt a NestedEncryption that you did not encrypt.
+    pub fn decrypt_nested_sibling_encryption(&self, encrypter_pk: ShareKey, encrypted: &NestedEncrypted<ShareSecretKey>) -> Result<Vec<u8>, CgkaError> {
+        let mut decrypt_keys = Vec::new();
+        for (pk, _) in &encrypted.layers {
+            let sk = self.get(pk).ok_or(CgkaError::SecretKeyNotFound)?;
+            let key = sk.derive_symmetric_key(&encrypter_pk);
+            decrypt_keys.push(key);
+        }
+        encrypted.try_sibling_decrypt(&decrypt_keys).map_err(|e| CgkaError::Decryption(e.to_string()))
     }
 }
 
@@ -54,6 +67,7 @@ impl ConflictKeys {
         self.first == *key || self.second == *key || self.more.contains(key)
     }
 
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         2 + self.more.len()
     }
