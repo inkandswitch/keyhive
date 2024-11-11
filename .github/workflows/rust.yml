@@ -18,10 +18,12 @@ jobs:
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
+    - name: Build with Test Utils
+      run: cargo build --verbose --features=test_utils
     - name: Check
-      run: cargo check --verbose
+      run: cargo check --verbose --features=test_utils
     - name: Tests
-      run: cargo test --verbose
+      run: cargo test --verbose --features=test_utils
     - name: Clippy
       run: cargo clippy
     - name: Compile benches
