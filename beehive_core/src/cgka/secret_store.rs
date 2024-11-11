@@ -5,7 +5,6 @@ use super::{
 };
 use crate::crypto::{
     encrypted::NestedEncrypted,
-    separable::Separable,
     share_key::{ShareKey, ShareSecretKey},
 };
 use serde::{Deserialize, Serialize};
@@ -185,7 +184,7 @@ impl SecretStoreVersion {
         };
 
         let arr: [u8; 32] = decrypted.try_into().map_err(|_| CgkaError::Conversion)?;
-        Ok(ShareSecretKey(arr))
+        Ok(ShareSecretKey::force_from_bytes(arr))
     }
 }
 

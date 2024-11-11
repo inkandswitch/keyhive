@@ -32,7 +32,7 @@ use x25519_dalek::SharedSecret;
 /// assert_eq!(roundtrip_buf.as_slice(), plaintext);
 /// ```
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct SymmetricKey(pub [u8; 32]);
+pub struct SymmetricKey([u8; 32]);
 
 impl SymmetricKey {
     /// Get the key as a byte slice.

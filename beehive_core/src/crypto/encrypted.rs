@@ -76,8 +76,7 @@ impl<T> NestedEncrypted<T> {
 
         for pk in paired_share_keys.iter() {
             let key = encrypter_sk.derive_symmetric_key(pk);
-            let nonce =
-                Siv::new(&key, &ciphertext, doc_id).expect("FIXME");
+            let nonce = Siv::new(&key, &ciphertext, doc_id).expect("FIXME");
             layer_vec.push((*pk, nonce));
             // FIXME lift the errors into one type
             key.try_encrypt(nonce, &mut ciphertext)?
@@ -147,19 +146,20 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for NestedEncrypted<T> {
 
 #[cfg(test)]
 mod tests {
-    use aead::OsRng;
     use nonempty::nonempty;
 
+    use super::super::share_key::ShareSecretKey;
     use super::NestedEncrypted;
     use crate::crypto::symmetric_key::SymmetricKey;
     use crate::principal::document::id::DocumentId;
     use crate::principal::identifier::Identifier;
-    use super::super::share_key::ShareSecretKey;
 
     #[test]
     pub(crate) fn test_encrypt_and_decrypt() -> Result<(), chacha20poly1305::Error> {
         let secret = ShareSecretKey::generate();
-        let id = Identifier(ed25519_dalek::SigningKey::generate(&mut OsRng).verifying_key());
+        let id = Identifier(
+            ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()).verifying_key(),
+        );
         let doc_id = DocumentId(id);
 
         let encrypter_share_secret_key = ShareSecretKey::generate();
@@ -188,15 +188,12 @@ mod tests {
             .map(|sk| sk.derive_symmetric_key(&encrypter_share_key))
             .collect();
 
-        let decrypted = nested_encrypted.try_sibling_decrypt(
-            &decrypt_keys
-        )?;
+        let decrypted = nested_encrypted.try_sibling_decrypt(&decrypt_keys)?;
 
         assert_eq!(secret.to_bytes(), decrypted.as_slice());
 
-        let encrypters_decrypted = nested_encrypted.try_encrypter_decrypt(
-            &encrypter_share_secret_key
-        )?;
+        let encrypters_decrypted =
+            nested_encrypted.try_encrypter_decrypt(&encrypter_share_secret_key)?;
         assert_eq!(secret.to_bytes(), encrypters_decrypted.as_slice());
         Ok(())
     }

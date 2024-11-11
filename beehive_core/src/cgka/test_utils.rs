@@ -50,7 +50,7 @@ impl TestMemberCgka {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct TestConcurrentOperations {
     pub ops: HashMap<Identifier, Vec<CgkaOperation>>,
     pub remove_ops: HashMap<Identifier, Vec<CgkaOperation>>,
@@ -96,12 +96,6 @@ impl TestConcurrentOperations {
     }
 }
 
-impl Default for TestConcurrentOperations {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub fn setup_members(member_count: u32) -> Vec<TestMember> {
     assert!(member_count > 0);
     let mut ms = Vec::new();
@@ -112,6 +106,8 @@ pub fn setup_members(member_count: u32) -> Vec<TestMember> {
 }
 
 pub fn setup_cgka(doc_id: DocumentId, members: &[TestMember], m_idx: usize) -> Cgka {
+    let owner = &members[m_idx];
+
     Cgka::new(
         members.iter().map(|p| (p.id, p.pk)).collect(),
         doc_id,
@@ -428,7 +424,6 @@ fn check_same_secret(member_cgkas: &mut Vec<TestMemberCgka>) -> Result<(), CgkaE
     let secret_bytes = member_cgkas[0].cgka.secret()?.to_bytes();
     for m in member_cgkas.iter_mut().skip(1) {
         assert!(m.cgka.tree.has_root_key()?);
-        dbg!("*");
         assert_eq!(m.cgka.secret()?.to_bytes(), secret_bytes)
     }
     Ok(())

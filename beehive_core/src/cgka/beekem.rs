@@ -231,7 +231,6 @@ impl BeeKem {
             last_secret_decrypted =
                 self.decrypt_parent_key(child_idx, &child_node_key, &seen_idxs, owner_sks)?;
             if let Some(ref secret) = last_secret_decrypted {
-                dbg!("Ho!");
                 let lca_with_encrypter = treemath::lowest_common_ancestor(
                     leaf_idx,
                     self.current_secret_encrypter_leaf_idx
@@ -242,7 +241,6 @@ impl BeeKem {
                         treemath::direct_path(parent_idx, self.tree_size).len(),
                     ));
                 }
-
             }
             seen_idxs.push(parent_idx);
             child_node_key = self.node_key_for_index(parent_idx)?;
@@ -491,11 +489,7 @@ impl BeeKem {
             }
         };
 
-        Ok(SecretStore::new(
-            new_parent_pk,
-            child_pk,
-            secret_map,
-        ))
+        Ok(SecretStore::new(new_parent_pk, child_pk, secret_map))
     }
 
     fn node_key_for_index(&self, idx: TreeNodeIndex) -> Result<NodeKey, CgkaError> {
