@@ -36,6 +36,7 @@ impl<R: rand::Rng> State<R> {
                 put: JobTracker::new(),
                 delete: JobTracker::new(),
                 requests: JobTracker::new(),
+                asks: JobTracker::new(),
                 wakers: Rc::new(RefCell::new(HashMap::new())),
                 fire_and_forget_requests: Vec::new(),
                 pending_puts: HashMap::new(),
@@ -74,6 +75,7 @@ pub(crate) struct Io {
     put: JobTracker<IoTaskId, (StorageKey, Vec<u8>), ()>,
     delete: JobTracker<IoTaskId, StorageKey, ()>,
     requests: JobTracker<RequestId, OutgoingRequest, IncomingResponse>,
+    asks: JobTracker<IoTaskId, DocumentId, HashSet<PeerId>>,
     fire_and_forget_requests: Vec<(RequestId, OutgoingRequest)>,
     // We don't actually use wakers at all, we keep track of the top level task
     // to wake up when a job completes in each JobTracker. However, the
@@ -99,6 +101,7 @@ impl Io {
             }
             IoResultPayload::Delete => self.delete.complete_job(id, ()),
             IoResultPayload::LoadRange(payload) => self.load_range.complete_job(id, payload),
+            IoResultPayload::Ask(peers) => self.asks.complete_job(id, peers),
         };
         self.process_completed_tasks(&completed_tasks);
 
@@ -148,6 +151,12 @@ impl Io {
                 .pop_new_jobs()
                 .into_iter()
                 .map(|(task_id, (key, data))| IoTask::put(task_id, key, data)),
+        );
+        result.extend(
+            self.asks
+                .pop_new_jobs()
+                .into_iter()
+                .map(|(task_id, doc_id)| IoTask::ask(task_id, doc_id)),
         );
         result
     }
@@ -486,6 +495,16 @@ impl<R: rand::Rng> TaskEffects<R> {
     pub(crate) fn our_peer_id(&self) -> std::cell::Ref<'_, PeerId> {
         let state = RefCell::borrow(&self.state);
         std::cell::Ref::map(state, |s: &State<R>| &s.our_peer_id)
+    }
+
+    pub(crate) fn who_should_i_ask(
+        &self,
+        about_doc: DocumentId,
+    ) -> impl Future<Output = HashSet<PeerId>> {
+        let task_id = IoTaskId::new();
+        State::task_fut(self.state.clone(), self.task, |io| {
+            io.asks.run(self.task, task_id, about_doc)
+        })
     }
 }
 

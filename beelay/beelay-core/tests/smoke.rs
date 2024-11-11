@@ -92,6 +92,46 @@ fn create_and_sync() {
 }
 
 #[test]
+fn request_from_connected() {
+    // Test that in a network like this:
+    //
+    // peer1 <-> peer2 <-> peer3
+    //
+    // If peer1 has a document and peer 2 is configured to forward requests to
+    // peer1 then requesting the document on peer3 will result in the document
+    // being synced to peer3.
+
+    init_logging();
+    let mut network = Network::new();
+    let peer1 = network.create_peer("peer1");
+    let peer2 = network.create_peer("peer2");
+    let peer3 = network.create_peer("peer3");
+
+    network.forward_requests(&peer2, &peer1);
+
+    let doc1_id = network.beelay(&peer1).create_doc();
+    let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
+    network
+        .beelay(&peer1)
+        .add_commits(doc1_id, vec![commit1.clone()]);
+
+    let sync_with_2 = network.beelay(&peer3).sync_doc(doc1_id, peer2.clone());
+    let commits_on_3: HashSet<beelay_core::Commit> = network
+        .beelay(&peer3)
+        .load_doc(doc1_id)
+        .unwrap_or_else(Vec::new)
+        .into_iter()
+        .map(|c| {
+            let CommitOrBundle::Commit(c) = c else {
+                panic!("expected commit");
+            };
+            c
+        })
+        .collect();
+    let expected_commits = vec![commit1.clone()].into_iter().collect::<HashSet<_>>();
+    assert_eq!(commits_on_3, expected_commits);
+}
+
 #[test]
 fn listen() {
     tracing_subscriber::fmt()
@@ -286,6 +326,14 @@ impl Network {
         peer_id
     }
 
+    fn forward_requests(&mut self, from: &PeerId, to: &PeerId) {
+        self.beelays
+            .get_mut(from)
+            .unwrap()
+            .peers_to_forward_to
+            .push(to.clone());
+    }
+
     fn run_until_quiescent(&mut self) {
         loop {
             let mut messages_this_round = HashMap::new();
@@ -319,6 +367,7 @@ struct BeelayWrapper {
     inbox: VecDeque<beelay_core::Event>,
     completed_stories: HashMap<beelay_core::StoryId, beelay_core::StoryResult>,
     notifications: Vec<DocEvent>,
+    peers_to_forward_to: Vec<beelay_core::PeerId>,
 }
 
 impl BeelayWrapper {
@@ -330,6 +379,7 @@ impl BeelayWrapper {
             inbox: VecDeque::new(),
             completed_stories: HashMap::new(),
             notifications: Vec::new(),
+            peers_to_forward_to: Vec::new(),
         }
     }
 
@@ -377,6 +427,9 @@ impl BeelayWrapper {
                     })
                     .collect();
                 IoResult::load_range(id, results)
+            }
+            IoAction::Ask { about: _ } => {
+                IoResult::ask(id, self.peers_to_forward_to.iter().cloned().collect())
             }
         };
         beelay_core::Event::io_complete(result)

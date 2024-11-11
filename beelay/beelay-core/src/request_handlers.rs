@@ -3,8 +3,8 @@ use crate::{
     messages::{BlobRef, ContentAndIndex, FetchedSedimentree, TreePart, UploadItem},
     riblt::{self, doc_and_heads::CodedDocAndHeadsSymbol},
     sedimentree::{self, LooseCommit},
-    snapshots, CommitBundle, CommitCategory, DocumentId, OutgoingResponse, PeerId, RequestId,
-    Response, StorageKey,
+    snapshots, sync_docs, CommitBundle, CommitCategory, DocumentId, OutgoingResponse, PeerId,
+    RequestId, Response, StorageKey,
 };
 
 pub(super) async fn handle_request<R: rand::Rng>(
@@ -163,7 +163,24 @@ async fn create_snapshot<R: rand::Rng>(
     mut effects: crate::effects::TaskEffects<R>,
     root_doc: DocumentId,
 ) -> (snapshots::SnapshotId, Vec<CodedDocAndHeadsSymbol>) {
-    let snapshot = snapshots::Snapshot::load(effects.clone(), root_doc).await;
+    let mut snapshot = snapshots::Snapshot::load(effects.clone(), root_doc).await;
+    if !snapshot.we_have_doc() {
+        let peers_to_ask = effects.who_should_i_ask(root_doc.clone()).await;
+        if !peers_to_ask.is_empty() {
+            tracing::trace!(
+                ?peers_to_ask,
+                "we don't have the doc locally, asking remotes"
+            );
+            let syncing = peers_to_ask
+                .into_iter()
+                .map(|p| sync_docs::sync_root_doc(effects.clone(), snapshot.clone(), p.clone()));
+            futures::future::join_all(syncing).await;
+            snapshot = snapshots::Snapshot::load(effects.clone(), root_doc).await;
+            tracing::trace!(we_have_doc=%snapshot.we_have_doc(), "finished requesting missing doc from peers");
+        } else {
+            tracing::trace!("we don't have doc but there are no peers to ask for missing doc");
+        }
+    }
     let snapshot_id = snapshot.id();
     let mut encoder = riblt::doc_and_heads::Encoder::new(&snapshot);
     let first_symbols = encoder.next_n_symbols(10);

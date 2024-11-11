@@ -1,9 +1,9 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::StorageKey;
+use crate::{DocumentId, PeerId, StorageKey};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct IoTaskId(u64);
@@ -63,6 +63,13 @@ impl IoTask {
         }
     }
 
+    pub(crate) fn ask(id: IoTaskId, doc: DocumentId) -> IoTask {
+        IoTask {
+            id,
+            action: IoAction::Ask { about: doc },
+        }
+    }
+
     pub fn action(&self) -> &IoAction {
         &self.action
     }
@@ -82,6 +89,7 @@ pub enum IoAction {
     LoadRange { prefix: StorageKey },
     Put { key: StorageKey, data: Vec<u8> },
     Delete { key: StorageKey },
+    Ask { about: DocumentId },
 }
 
 pub struct IoResult {
@@ -102,6 +110,7 @@ impl std::fmt::Debug for IoResult {
             IoResultPayload::LoadRange(payload) => format!("LoadRange({} keys)", payload.len()),
             IoResultPayload::Put => "Put".to_string(),
             IoResultPayload::Delete => "Delete".to_string(),
+            IoResultPayload::Ask(peers) => format!("Ask({} peers)", peers.len()),
         };
         f.debug_struct("IoResult")
             .field("id", &self.id)
@@ -139,6 +148,13 @@ impl IoResult {
         }
     }
 
+    pub fn ask(id: IoTaskId, peers: HashSet<PeerId>) -> IoResult {
+        IoResult {
+            id,
+            payload: IoResultPayload::Ask(peers),
+        }
+    }
+
     pub(crate) fn take_payload(self) -> IoResultPayload {
         self.payload
     }
@@ -153,4 +169,5 @@ pub(crate) enum IoResultPayload {
     LoadRange(HashMap<StorageKey, Vec<u8>>),
     Put,
     Delete,
+    Ask(HashSet<PeerId>),
 }

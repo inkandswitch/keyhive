@@ -32,6 +32,7 @@ mod snapshots;
 mod subscriptions;
 pub use snapshots::SnapshotId;
 pub(crate) mod riblt;
+mod sync_docs;
 
 mod hex;
 mod leb128;
@@ -230,7 +231,6 @@ impl<R: rand::Rng + 'static> Beelay<R> {
             new_tasks: Vec::new(),
             completed_stories: HashMap::new(),
             notifications: Vec::new(),
-            requested_docs: Vec::new(),
         };
         match event.0 {
             EventInner::IoComplete(result) => {
@@ -246,11 +246,6 @@ impl<R: rand::Rng + 'static> Beelay<R> {
                             %peer,
                             "received request"
                         );
-                        if let Request::CreateSnapshot { root_doc } = &request {
-                            event_results
-                                .requested_docs
-                                .push((peer.clone(), root_doc.clone()));
-                        }
                         let req_effects = effects::TaskEffects::new(id, self.state.clone());
                         let response =
                             request_handlers::handle_request(req_effects, peer, id, request)
@@ -397,8 +392,12 @@ pub struct EventResults {
     pub completed_stories: HashMap<StoryId, StoryResult>,
     /// New notifications
     pub notifications: Vec<DocEvent>,
-    /// Documents requested
-    pub requested_docs: Vec<(PeerId, DocumentId)>,
+}
+
+#[derive(Debug)]
+pub struct Ask {
+    pub requesting_peer: PeerId,
+    pub doc: DocumentId,
 }
 
 #[derive(Debug)]

@@ -4,7 +4,8 @@ use std::{
 };
 
 use crate::{
-    effects::TaskEffects, hex, parse, reachability, sedimentree::MinimalTreeHash, DocumentId,
+    effects::TaskEffects, hex, parse, reachability, sedimentree::MinimalTreeHash, CommitCategory,
+    DocumentId, StorageKey,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, Hash)]
@@ -59,6 +60,7 @@ impl SnapshotId {
 pub(crate) struct Snapshot {
     root_doc: DocumentId,
     id: SnapshotId,
+    we_have_doc: bool,
     local: HashMap<DocumentId, MinimalTreeHash>,
     local_log_offset: usize,
 }
@@ -69,10 +71,22 @@ impl Snapshot {
         root_doc: DocumentId,
     ) -> Self {
         let id = SnapshotId::random(&mut *effects.rng());
-        let docs_to_hashes = reachability::load_reachable_docs(effects.clone(), root_doc).await;
+        let we_have_doc = !effects
+            .load_range(StorageKey::sedimentree_root(
+                &root_doc,
+                CommitCategory::Content,
+            ))
+            .await
+            .is_empty();
+        let docs_to_hashes = if we_have_doc {
+            reachability::load_reachable_docs(effects.clone(), root_doc).await
+        } else {
+            HashMap::new()
+        };
         Self {
             id,
             root_doc,
+            we_have_doc,
             local: docs_to_hashes,
             local_log_offset: effects.log().offset(),
         }
@@ -88,6 +102,10 @@ impl Snapshot {
 
     pub(crate) fn local_log_offset(&self) -> usize {
         self.local_log_offset
+    }
+
+    pub(crate) fn we_have_doc(&self) -> bool {
+        self.we_have_doc
     }
 
     pub(crate) fn our_docs(&self) -> HashSet<DocumentId> {
