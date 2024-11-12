@@ -125,11 +125,8 @@
         };
 
         bench = {
-          "bench" = cmd "Run benchmarks, including test utils"
-            "${cargo} bench --features test_utils";
-
-          "bench:host" = cmd "Run host Criterion benchmarks"
-            "${cargo} criterion";
+          "bench:host" = cmd "Run benchmarks, including test utils"
+            "${cargo} bench --features=test_utils";
 
           "bench:host:open" = cmd "Open host Criterion benchmarks in browser"
             "${pkgs.xdg-utils}/bin/xdg-open ./target/criterion/report/index.html";
@@ -160,7 +157,7 @@
             "${cargo} watch --clear --exec 'clippy -- -W clippy::pedantic'";
 
           "watch:test:host" = cmd "Run all host tests on save"
-            "${cargo} watch --clear --features=mermaid_docs,test_utils --exec 'test && test --doc'";
+            "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'test && test --doc'";
 
           "watch:test:wasm" = cmd "Run all Wasm tests on save"
             "${cargo} watch --clear --exec 'test --target=wasm32-unknown-unknown && test --doc --target=wasm32-unknown-unknown'";
@@ -171,7 +168,7 @@
             "test:host && test:docs && test:wasm";
 
           "test:host" = cmd "Run Cargo tests for host target"
-            "${cargo} test && ${cargo} test --features=mermaid_docs,test_utils --doc";
+            "${cargo} test --features='test_utils' && ${cargo} test --features='mermaid_docs,test_utils' --doc";
 
           "test:wasm" = cmd "Run wasm-pack tests on all targets"
             "test:wasm:node && test:wasm:chrome";
@@ -183,7 +180,7 @@
             "${wasm-pack} test --headless --chrome";
 
           "test:docs" = cmd "Run Cargo doctests"
-            "${cargo} test --doc --features=mermaid_docs,test_utils";
+            "${cargo} test --doc --features='mermaid_docs,test_utils'";
         };
 
         docs = {

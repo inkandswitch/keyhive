@@ -1,33 +1,27 @@
+use super::{error::CgkaError, operation::CgkaOperation, Cgka};
+use crate::{
+    crypto::share_key::{ShareKey, ShareSecretKey},
+    principal::{document::id::DocumentId, identifier::Identifier},
+};
 use std::{collections::HashMap, mem};
 
-use aead::OsRng;
-
-use crate::principal::identifier::Identifier;
-
-use super::{
-    crypto::generate_key_pair,
-    error::CgkaError,
-    keys::{PublicKey, SecretKey},
-    operation::CgkaOperation,
-    Cgka,
-};
-
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TestMember {
     pub id: Identifier,
-    pub pk: PublicKey,
-    pub sk: SecretKey,
+    pub pk: ShareKey,
+    pub sk: ShareSecretKey,
 }
 
 impl TestMember {
     pub fn generate() -> Self {
-        let id = Identifier(ed25519_dalek::SigningKey::generate(&mut OsRng).verifying_key());
-        let (pk, sk) = generate_key_pair();
+        let id = Identifier::generate();
+        let sk = ShareSecretKey::generate();
+        let pk = sk.share_key();
         Self { id, pk, sk }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TestMemberCgka {
     pub m: TestMember,
     pub cgka: Cgka,
@@ -48,13 +42,15 @@ impl TestMemberCgka {
     }
 
     pub fn update(&mut self) -> Result<Option<CgkaOperation>, CgkaError> {
-        let (pk, sk) = generate_key_pair();
+        let sk = ShareSecretKey::generate();
+        let pk = sk.share_key();
         self.m.pk = pk;
-        self.m.sk = sk.clone();
+        self.m.sk = sk;
         self.cgka.update(self.id(), pk, sk)
     }
 }
 
+#[derive(Debug, Default, Clone)]
 pub struct TestConcurrentOperations {
     pub ops: HashMap<Identifier, Vec<CgkaOperation>>,
     pub remove_ops: HashMap<Identifier, Vec<CgkaOperation>>,
@@ -100,12 +96,6 @@ impl TestConcurrentOperations {
     }
 }
 
-impl Default for TestConcurrentOperations {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub fn setup_members(member_count: u32) -> Vec<TestMember> {
     assert!(member_count > 0);
     let mut ms = Vec::new();
@@ -115,25 +105,30 @@ pub fn setup_members(member_count: u32) -> Vec<TestMember> {
     ms
 }
 
-pub fn setup_cgka(members: &[TestMember], m_idx: usize) -> Cgka {
-    let owner = members[m_idx].clone();
+pub fn setup_cgka(doc_id: DocumentId, members: &[TestMember], m_idx: usize) -> Cgka {
+    let owner = &members[m_idx];
+
     Cgka::new(
         members.iter().map(|p| (p.id, p.pk)).collect(),
+        doc_id,
         owner.id,
         owner.pk,
-        owner.sk.clone(),
+        owner.sk,
     )
     .expect("CGKA construction failed")
 }
 
 /// Set up cgkas for all members with the same secret, but only the initial member
 /// has updated its path.
-pub fn setup_member_cgkas(member_count: u32) -> Result<Vec<TestMemberCgka>, CgkaError> {
+pub fn setup_member_cgkas(
+    doc_id: DocumentId,
+    member_count: u32,
+) -> Result<Vec<TestMemberCgka>, CgkaError> {
     let members = setup_members(member_count);
-    let initial_cgka = setup_cgka(&members, 0);
+    let initial_cgka = setup_cgka(doc_id, &members, 0);
     let mut member_cgkas = Vec::new();
     for m in members {
-        let cgka = initial_cgka.with_new_owner(m.id, m.pk, m.sk.clone())?;
+        let cgka = initial_cgka.with_new_owner(m.id, m.pk, m.sk)?;
         member_cgkas.push(TestMemberCgka::new(m.clone(), cgka));
     }
     Ok(member_cgkas)
@@ -142,15 +137,14 @@ pub fn setup_member_cgkas(member_count: u32) -> Result<Vec<TestMemberCgka>, Cgka
 /// Set up cgkas for all members with the same secret, with every member
 /// having updated its path and no conflict keys in the inner nodes.
 pub fn setup_updated_and_synced_member_cgkas(
+    doc_id: DocumentId,
     member_count: u32,
 ) -> Result<Vec<TestMemberCgka>, CgkaError> {
     let mut members = setup_members(member_count);
-    let initial_cgka = setup_cgka(&members, 0);
+    let initial_cgka = setup_cgka(doc_id, &members, 0);
     let mut member_cgkas = vec![TestMemberCgka::new(members[0].clone(), initial_cgka)];
     for m in members.iter_mut().skip(1) {
-        let cgka = member_cgkas[0]
-            .cgka
-            .with_new_owner(m.id, m.pk, m.sk.clone())?;
+        let cgka = member_cgkas[0].cgka.with_new_owner(m.id, m.pk, m.sk)?;
         let mut member_cgka = TestMemberCgka::new(m.clone(), cgka);
         let maybe_op = member_cgka.update()?;
         let Some(op) = maybe_op else {
@@ -161,12 +155,13 @@ pub fn setup_updated_and_synced_member_cgkas(
     }
     let base_cgka = member_cgkas[0].cgka.clone();
     for m in member_cgkas.iter_mut().skip(1) {
-        m.cgka = base_cgka.with_new_owner(m.id(), m.m.pk, m.m.sk.clone())?;
+        m.cgka = base_cgka.with_new_owner(m.id(), m.m.pk, m.m.sk)?;
     }
 
     Ok(member_cgkas)
 }
 
+#[derive(Debug, Clone)]
 pub enum TestMergeStrategy {
     MergeToAllMembers,
     MergeToOneMemberAndClone,
@@ -205,15 +200,13 @@ pub fn apply_test_operations(
             }
             let base_cgka = member_cgkas[0].cgka.clone();
             for m in member_cgkas.iter_mut().skip(1) {
-                m.cgka = base_cgka.with_new_owner(m.id(), m.m.pk, m.m.sk.clone())?;
+                m.cgka = base_cgka.with_new_owner(m.id(), m.m.pk, m.m.sk)?;
             }
         }
     }
 
     for m in added_members {
-        let new_m_cgka = member_cgkas[0]
-            .cgka
-            .with_new_owner(m.id, m.pk, m.sk.clone())?;
+        let new_m_cgka = member_cgkas[0].cgka.with_new_owner(m.id, m.pk, m.sk)?;
         member_cgkas.push(TestMemberCgka::new(m.clone(), new_m_cgka));
     }
     Ok(())
@@ -246,9 +239,10 @@ pub fn apply_test_operations_and_merge(
 }
 
 pub fn setup_member_cgkas_with_maximum_conflict_keys(
+    doc_id: DocumentId,
     member_count: u32,
 ) -> Result<Vec<TestMemberCgka>, CgkaError> {
-    let mut member_cgkas = setup_member_cgkas(member_count)?;
+    let mut member_cgkas = setup_member_cgkas(doc_id, member_count)?;
     // Every member concurrently updates its own path. When these are all merged,
     // the tree will contain the maximum possible number of conflict keys in inner nodes.
     apply_test_operations_and_merge(&mut member_cgkas, &[update_all_members()])?;
@@ -260,12 +254,13 @@ pub fn setup_member_cgkas_with_maximum_conflict_keys(
 }
 
 pub fn setup_member_cgkas_with_all_updated_and_10_adds(
+    doc_id: DocumentId,
     member_count: u32,
 ) -> Result<Vec<TestMemberCgka>, CgkaError> {
     let add_count = 10;
     debug_assert!(member_count > add_count);
     let member_count = member_count - add_count;
-    let mut member_cgkas = setup_updated_and_synced_member_cgkas(member_count)?;
+    let mut member_cgkas = setup_updated_and_synced_member_cgkas(doc_id, member_count)?;
     apply_test_operations_and_merge(
         &mut member_cgkas,
         &[add_from_last_n_members(add_count as usize)],
@@ -423,6 +418,7 @@ pub fn update_even_members() -> Box<TestOperation> {
     })
 }
 
+#[allow(dead_code)]
 #[cfg(any(feature = "test_utils", test))]
 fn check_same_secret(member_cgkas: &mut Vec<TestMemberCgka>) -> Result<(), CgkaError> {
     let secret_bytes = member_cgkas[0].cgka.secret()?.to_bytes();
@@ -435,25 +431,28 @@ fn check_same_secret(member_cgkas: &mut Vec<TestMemberCgka>) -> Result<(), CgkaE
 
 #[test]
 fn test_setup_member_cgkas() -> Result<(), CgkaError> {
+    let doc_id = DocumentId::generate();
     let member_count = 4;
-    let mut member_cgkas = setup_member_cgkas(member_count)?;
+    let mut member_cgkas = setup_member_cgkas(doc_id, member_count)?;
     assert_eq!(member_cgkas.len(), member_count as usize);
     check_same_secret(&mut member_cgkas)
 }
 
 #[test]
 fn test_setup_updated_and_synced_member_cgkas() -> Result<(), CgkaError> {
+    let doc_id = DocumentId::generate();
     let member_count = 4;
-    let mut member_cgkas = setup_updated_and_synced_member_cgkas(member_count)?;
+    let mut member_cgkas = setup_updated_and_synced_member_cgkas(doc_id, member_count)?;
     assert_eq!(member_cgkas.len(), member_count as usize);
     check_same_secret(&mut member_cgkas)
 }
 
 #[test]
 fn test_setup_add() -> Result<(), CgkaError> {
+    let doc_id = DocumentId::generate();
     let add_count = 2;
     let member_count = 4;
-    let mut member_cgkas = setup_member_cgkas(member_count)?;
+    let mut member_cgkas = setup_member_cgkas(doc_id, member_count)?;
     assert_eq!(member_cgkas.len(), member_count as usize);
     apply_test_operations_and_merge(
         &mut member_cgkas,
@@ -465,22 +464,27 @@ fn test_setup_add() -> Result<(), CgkaError> {
 
 #[test]
 fn test_setup_remove() -> Result<(), CgkaError> {
+    let doc_id = DocumentId::generate();
     let remove_count = 2;
     let member_count = 4;
-    let mut member_cgkas = setup_member_cgkas(member_count)?;
+
+    let mut member_cgkas = setup_member_cgkas(doc_id, member_count)?;
     assert_eq!(member_cgkas.len(), member_count as usize);
+
     apply_test_operations_and_merge(
         &mut member_cgkas,
         &vec![remove_from_right(remove_count as usize)],
     )?;
+
     assert_eq!(member_cgkas.len(), (member_count - remove_count) as usize);
     Ok(())
 }
 
 #[test]
 fn test_setup_update() -> Result<(), CgkaError> {
+    let doc_id = DocumentId::generate();
     let member_count = 4;
-    let mut member_cgkas = setup_member_cgkas(member_count)?;
+    let mut member_cgkas = setup_member_cgkas(doc_id, member_count)?;
     assert_eq!(member_cgkas.len(), member_count as usize);
     apply_test_operations_and_merge(&mut member_cgkas, &vec![update_first_member()])?;
     assert_eq!(member_cgkas.len(), member_count as usize);

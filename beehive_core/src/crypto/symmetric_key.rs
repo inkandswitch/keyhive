@@ -1,7 +1,6 @@
 //! Symmetric cipher newtype.
 
-use super::siv::{Siv, SEPARATOR};
-// use aead::AeadInPlace;
+use super::{domain_separator::SEPARATOR, separable::Separable, siv::Siv};
 use chacha20poly1305::AeadInPlace;
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305};
 use serde::{Deserialize, Serialize};
@@ -24,7 +23,7 @@ use x25519_dalek::SharedSecret;
 /// let doc = Document::generate(nonempty![user_agent]).unwrap();
 ///
 /// let key = SymmetricKey::generate();
-/// let nonce = Siv::new(&key, plaintext, &doc).unwrap();
+/// let nonce = Siv::new(&key, plaintext, doc.doc_id()).unwrap();
 ///
 /// let mut roundtrip_buf = plaintext.to_vec();
 /// key.try_encrypt(nonce, &mut roundtrip_buf).unwrap();
@@ -33,7 +32,7 @@ use x25519_dalek::SharedSecret;
 /// assert_eq!(roundtrip_buf.as_slice(), plaintext);
 /// ```
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct SymmetricKey(pub [u8; 32]);
+pub struct SymmetricKey([u8; 32]);
 
 impl SymmetricKey {
     /// Get the key as a byte slice.
@@ -68,6 +67,7 @@ impl SymmetricKey {
         nonce: Siv,
         data: &mut Vec<u8>,
     ) -> Result<(), chacha20poly1305::Error> {
+        // FIXME check the siv against the plaintext
         self.to_xchacha()
             .decrypt_in_place(nonce.as_xnonce(), SEPARATOR, data)
     }
@@ -100,5 +100,11 @@ impl From<SharedSecret> for SymmetricKey {
 impl std::fmt::Debug for SymmetricKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         "<SymmetricKey>".fmt(f)
+    }
+}
+
+impl Separable for SymmetricKey {
+    fn directly_from_32_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
     }
 }

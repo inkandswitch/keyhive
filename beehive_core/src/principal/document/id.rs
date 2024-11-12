@@ -7,6 +7,11 @@ use std::fmt::{Display, Formatter};
 pub struct DocumentId(pub Identifier);
 
 impl DocumentId {
+    #[cfg(feature = "test_utils")]
+    pub fn generate() -> Self {
+        Self(Identifier::generate())
+    }
+
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
     }

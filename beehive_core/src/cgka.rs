@@ -1,19 +1,22 @@
 pub mod beekem;
-pub mod crypto;
 pub mod error;
 pub mod keys;
 pub mod operation;
 pub mod secret_store;
-pub mod test_utils;
 pub mod treemath;
 
+#[cfg(feature = "test_utils")]
+pub mod test_utils;
+
+use crate::{
+    crypto::share_key::{ShareKey, ShareSecretKey},
+    principal::{document::id::DocumentId, identifier::Identifier},
+};
 use beekem::BeeKem;
 use error::CgkaError;
-use keys::{PublicKey, SecretKey, SecretKeyMap};
+use keys::ShareKeyMap;
 use operation::CgkaOperation;
 use serde::{Deserialize, Serialize};
-
-use crate::principal::identifier::Identifier;
 
 /// A CGKA (Continuous Group Key Agreement) protocol is responsible for
 /// maintaining a stream of updating shared group keys over time. We are
@@ -21,13 +24,13 @@ use crate::principal::identifier::Identifier;
 ///
 /// This Cgka struct provides a protocol-agnostic interface for retrieving the
 /// latest secret, rotating keys, and adding and removing members from the group.
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Cgka {
     owner_id: Identifier,
     /// Invariant: An owner will never have conflict keys for its public key since
     /// any updates to that pk must be initiated by the owner.
-    owner_pk: PublicKey,
-    owner_sks: SecretKeyMap,
+    owner_pk: ShareKey,
+    owner_sks: ShareKeyMap,
     tree: BeeKem,
 }
 
@@ -35,10 +38,11 @@ pub struct Cgka {
 impl Cgka {
     /// We assume members are in causal order.
     pub fn new(
-        members: Vec<(Identifier, PublicKey)>,
+        members: Vec<(Identifier, ShareKey)>,
+        doc_id: DocumentId,
         owner_id: Identifier,
-        owner_pk: PublicKey,
-        owner_sk: SecretKey,
+        owner_pk: ShareKey,
+        owner_sk: ShareSecretKey,
     ) -> Result<Self, CgkaError> {
         if !members
             .iter()
@@ -46,8 +50,8 @@ impl Cgka {
         {
             return Err(CgkaError::OwnerIdentifierNotFound);
         }
-        let tree = BeeKem::new(members)?;
-        let mut owner_sks = SecretKeyMap::new();
+        let tree = BeeKem::new(doc_id, members)?;
+        let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_pk, owner_sk);
         let mut cgka = Self {
             owner_id,
@@ -65,16 +69,16 @@ impl Cgka {
     pub fn with_new_owner(
         &self,
         my_id: Identifier,
-        pk: PublicKey,
-        sk: SecretKey,
+        pk: ShareKey,
+        sk: ShareSecretKey,
     ) -> Result<Self, CgkaError> {
         if !self.tree.node_key_for_id(my_id)?.contains_key(&pk) {
-            return Err(CgkaError::PublicKeyNotFound);
+            return Err(CgkaError::ShareKeyNotFound);
         }
         let mut cgka = self.clone();
         cgka.owner_id = my_id;
         cgka.owner_pk = pk;
-        cgka.owner_sks = SecretKeyMap::new();
+        cgka.owner_sks = ShareKeyMap::new();
         cgka.owner_sks.insert(pk, sk);
         Ok(cgka)
     }
@@ -85,13 +89,13 @@ impl Cgka {
     /// Get secret for decryption/encryption. If you are using this for a new
     /// encryption, you need to update your leaf key first to ensure you are
     /// using a fresh root secret.
-    pub fn secret(&mut self) -> Result<SecretKey, CgkaError> {
+    pub fn secret(&mut self) -> Result<ShareSecretKey, CgkaError> {
         self.tree
             .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)
     }
 
     /// Add member.
-    pub fn add(&mut self, id: Identifier, pk: PublicKey) -> Result<CgkaOperation, CgkaError> {
+    pub fn add(&mut self, id: Identifier, pk: ShareKey) -> Result<CgkaOperation, CgkaError> {
         let leaf_index = self.tree.push_leaf(id, pk)?;
         let op = CgkaOperation::Add { id, pk, leaf_index };
         Ok(op)
@@ -102,6 +106,7 @@ impl Cgka {
         if self.group_size() == 1 {
             return Err(CgkaError::RemoveLastMember);
         }
+
         let removed_keys = self.tree.remove_id(id)?;
         let op = CgkaOperation::Remove { id, removed_keys };
         Ok(op)
@@ -111,8 +116,8 @@ impl Cgka {
     pub fn update(
         &mut self,
         id: Identifier,
-        new_pk: PublicKey,
-        new_sk: SecretKey,
+        new_pk: ShareKey,
+        new_sk: ShareSecretKey,
     ) -> Result<Option<CgkaOperation>, CgkaError> {
         debug_assert!(id == self.owner_id);
         self.owner_pk = new_pk;
@@ -181,9 +186,10 @@ mod tests {
 
     #[test]
     fn test_simple_add() -> Result<(), CgkaError> {
+        let doc_id = DocumentId::generate();
         let members = setup_members(2);
         let initial_member_count = members.len();
-        let mut cgka = setup_cgka(&members, 0);
+        let mut cgka = setup_cgka(doc_id, &members, 0);
         assert!(cgka.tree.has_root_key()?);
         let new_m = TestMember::generate();
         cgka.add(new_m.id, new_m.pk)?;
@@ -194,9 +200,10 @@ mod tests {
 
     #[test]
     fn test_simple_remove() -> Result<(), CgkaError> {
+        let doc_id = DocumentId::generate();
         let members = setup_members(2);
         let initial_member_count = members.len();
-        let mut cgka = setup_cgka(&members, 0);
+        let mut cgka = setup_cgka(doc_id, &members, 0);
         assert!(cgka.tree.has_root_key()?);
         cgka.remove(members[1].id)?;
         assert!(!cgka.tree.has_root_key()?);
@@ -206,7 +213,8 @@ mod tests {
 
     #[test]
     fn test_no_root_key_after_concurrent_updates() -> Result<(), CgkaError> {
-        let mut cgkas = setup_member_cgkas(7)?;
+        let doc_id = DocumentId::generate();
+        let mut cgkas = setup_member_cgkas(doc_id, 7)?;
         assert!(cgkas[0].cgka.tree.has_root_key()?);
         let op1 = cgkas[1].update()?.ok_or(CgkaError::InvalidOperation)?;
         cgkas[0].cgka.merge(op1)?;
@@ -248,7 +256,8 @@ mod tests {
         test_rounds: &[Vec<Box<TestOperation>>],
     ) -> Result<(), CgkaError> {
         assert!(member_count >= 1);
-        let mut member_cgkas = setup_member_cgkas(member_count)?;
+        let doc_id = DocumentId::generate();
+        let mut member_cgkas = setup_member_cgkas(doc_id, member_count)?;
         let mut initial_cgka = member_cgkas[0].cgka.clone();
         let initial_secret_bytes = initial_cgka.secret()?.to_bytes();
         for m in &mut member_cgkas {
