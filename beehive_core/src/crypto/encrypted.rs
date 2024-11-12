@@ -37,7 +37,6 @@ impl<T> Encrypted<T> {
     }
 }
 
-// FIXME consider Vec<(Pk, Nonce, Ciphertext)> instead due to fewer possible errors
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct NestedEncrypted<T> {
     /// The nonce used to encrypt the data and

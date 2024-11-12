@@ -132,7 +132,7 @@ impl NodeKey {
     /// * `self`
     /// * `new_key` —  The new key to merge into the existing keys.
     /// * `removed` —  The keys removed as part of a [`PathChange`](super::beekem::PathChange).
-    ///                It's possible that `new_key` will be one of those,
+    ///                It's possible that `self` will be one of those,
     ///                in which case a new key is substituted.
     pub fn merge(&self, new_key: &NodeKey, removed: &[ShareKey]) -> Self {
         match self {
