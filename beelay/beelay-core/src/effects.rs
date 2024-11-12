@@ -1,6 +1,6 @@
 use std::{
     borrow::BorrowMut,
-    cell::{RefCell, RefMut},
+    cell::{Ref, RefCell, RefMut},
     collections::{HashMap, HashSet},
     future::Future,
     rc::Rc,
@@ -13,8 +13,8 @@ use crate::{
     messages::{FetchedSedimentree, Notification, UploadItem},
     riblt::{self, doc_and_heads::CodedDocAndHeadsSymbol},
     snapshots::{self},
-    subscriptions, BlobHash, CommitCategory, DocumentId, IoTaskId, PeerId, Request, RequestId,
-    Response, SnapshotId, StorageKey, Task,
+    subscriptions, BlobHash, CommitCategory, DocEvent, DocumentId, IoTaskId, PeerId, Request,
+    RequestId, Response, SnapshotId, StorageKey, Task,
 };
 
 pub(crate) struct State<R> {
@@ -39,6 +39,7 @@ impl<R: rand::Rng> State<R> {
                 asks: JobTracker::new(),
                 wakers: Rc::new(RefCell::new(HashMap::new())),
                 fire_and_forget_requests: Vec::new(),
+                emitted_doc_events: Vec::new(),
                 pending_puts: HashMap::new(),
             },
             log: subscriptions::Log::new(),
@@ -46,6 +47,10 @@ impl<R: rand::Rng> State<R> {
             snapshots: HashMap::new(),
             rng,
         }
+    }
+
+    pub(crate) fn log(&mut self) -> &mut subscriptions::Log {
+        &mut self.log
     }
 
     pub(crate) fn new_notifications(&mut self) -> HashMap<PeerId, Vec<Notification>> {
@@ -76,6 +81,7 @@ pub(crate) struct Io {
     delete: JobTracker<IoTaskId, StorageKey, ()>,
     requests: JobTracker<RequestId, OutgoingRequest, IncomingResponse>,
     asks: JobTracker<IoTaskId, DocumentId, HashSet<PeerId>>,
+    emitted_doc_events: Vec<DocEvent>,
     fire_and_forget_requests: Vec<(RequestId, OutgoingRequest)>,
     // We don't actually use wakers at all, we keep track of the top level task
     // to wake up when a job completes in each JobTracker. However, the
@@ -165,6 +171,10 @@ impl Io {
         let mut requests = self.requests.pop_new_jobs();
         requests.extend(std::mem::take(&mut self.fire_and_forget_requests).into_iter());
         requests
+    }
+
+    pub(crate) fn pop_new_notifications(&mut self) -> Vec<DocEvent> {
+        std::mem::take(&mut self.emitted_doc_events)
     }
 }
 
@@ -309,6 +319,7 @@ impl<R: rand::Rng> TaskEffects<R> {
     }
 
     pub(crate) fn put(&self, key: StorageKey, value: Vec<u8>) -> impl Future<Output = ()> {
+        tracing::trace!(?key, num_bytes = value.len(), "putting");
         let task_id = IoTaskId::new();
         RefCell::borrow_mut(&self.state)
             .io
@@ -467,7 +478,7 @@ impl<R: rand::Rng> TaskEffects<R> {
         self.fire_and_forget(to_peer, request);
     }
 
-    pub(crate) fn snapshots<'a>(
+    pub(crate) fn snapshots_mut<'a>(
         &'a mut self,
     ) -> RefMut<
         'a,
@@ -475,6 +486,14 @@ impl<R: rand::Rng> TaskEffects<R> {
     > {
         let state = RefCell::borrow_mut(&self.state);
         RefMut::map(state, |s| &mut s.snapshots)
+    }
+
+    pub(crate) fn snapshots<'a>(
+        &'a self,
+    ) -> Ref<'a, HashMap<snapshots::SnapshotId, (snapshots::Snapshot, riblt::doc_and_heads::Encoder)>>
+    {
+        let state = RefCell::borrow(&self.state);
+        Ref::map(state, |s| &s.snapshots)
     }
 
     pub(crate) fn log<'a>(&'a mut self) -> RefMut<'a, subscriptions::Log> {
@@ -505,6 +524,11 @@ impl<R: rand::Rng> TaskEffects<R> {
         State::task_fut(self.state.clone(), self.task, |io| {
             io.asks.run(self.task, task_id, about_doc)
         })
+    }
+
+    pub(crate) fn emit_doc_event(&self, evt: DocEvent) {
+        let mut state = RefCell::borrow_mut(&self.state);
+        state.io.emitted_doc_events.push(evt);
     }
 }
 

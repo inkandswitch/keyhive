@@ -15,7 +15,7 @@ use crate::{
 #[tracing::instrument(skip(effects, our_snapshot))]
 pub(crate) async fn sync_root_doc<R: rand::Rng>(
     effects: crate::effects::TaskEffects<R>,
-    our_snapshot: snapshots::Snapshot,
+    our_snapshot: &snapshots::Snapshot,
     remote_peer: PeerId,
 ) -> SyncDocResult {
     tracing::trace!("beginning root doc sync");

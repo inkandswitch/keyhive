@@ -102,7 +102,7 @@ pub(crate) async fn sync_linked_docs<R: rand::Rng>(
     remote_peer: PeerId,
 ) -> SyncDocResult {
     let our_snapshot = snapshots::Snapshot::load(effects.clone(), root.clone()).await;
-    sync_docs::sync_root_doc(effects, our_snapshot, remote_peer).await
+    sync_docs::sync_root_doc(effects, &our_snapshot, remote_peer).await
 }
 
 #[tracing::instrument(skip(effects, commits))]

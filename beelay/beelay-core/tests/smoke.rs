@@ -133,6 +133,67 @@ fn request_from_connected() {
 }
 
 #[test]
+fn listen_to_connected() {
+    // Test that in a network like this:
+    //
+    // peer1 <-> peer2 <-> peer3
+    //
+    // If peer1 has a document and peer 2 is configured to forward requests to
+    // peer1 then listening to the document on peer3 will result in updates on
+    // peer1 being propagated to peer3.
+
+    init_logging();
+    let mut network = Network::new();
+    let peer1 = network.create_peer("peer1");
+    let peer2 = network.create_peer("peer2");
+    let peer3 = network.create_peer("peer3");
+
+    network.forward_requests(&peer2, &peer1);
+
+    let doc1_id = network.beelay(&peer1).create_doc();
+    let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
+    network
+        .beelay(&peer1)
+        .add_commits(doc1_id, vec![commit1.clone()]);
+
+    // Sync up
+    let sync_with_2 = network.beelay(&peer3).sync_doc(doc1_id, peer2.clone());
+
+    // Now listen to further changes on peer3
+    network
+        .beelay(&peer3)
+        .listen(&peer2, sync_with_2.remote_snapshot);
+
+    // Now make a change on peer1
+    let commit2 = beelay_core::Commit::new(
+        vec![commit1.hash()],
+        vec![4, 5, 6],
+        CommitHash::from([2; 32]),
+    );
+    network
+        .beelay(&peer1)
+        .add_commits(doc1_id, vec![commit2.clone()]);
+
+    // The commits should have been forwarded to peer3
+    let commits_on_3: HashSet<beelay_core::Commit> = network
+        .beelay(&peer3)
+        .load_doc(doc1_id)
+        .unwrap_or_else(Vec::new)
+        .into_iter()
+        .map(|c| {
+            let CommitOrBundle::Commit(c) = c else {
+                panic!("expected commit");
+            };
+            c
+        })
+        .collect();
+    let expected_commits = vec![commit1.clone(), commit2.clone()]
+        .into_iter()
+        .collect::<HashSet<_>>();
+    assert_eq!(commits_on_3, expected_commits);
+}
+
+#[test]
 fn listen() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::TRACE)
@@ -316,7 +377,8 @@ impl Network {
     }
 
     fn create_peer(&mut self, nickname: &str) -> PeerId {
-        let peer_id = beelay_core::PeerId::random(&mut rand::thread_rng());
+        // let peer_id = beelay_core::PeerId::random(&mut rand::thread_rng());
+        let peer_id = beelay_core::PeerId::from(nickname.to_string());
         let beelay = BeelayWrapper::new(beelay_core::Beelay::new(
             peer_id.clone(),
             rand::thread_rng(),

@@ -3,9 +3,8 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     messages::{Notification, UploadItem},
     parse,
-    sedimentree::{LooseCommit, Stratum},
     snapshots::Snapshot,
-    Commit, CommitBundle, CommitCategory, CommitOrBundle, DocumentId, PeerId,
+    CommitCategory, DocumentId, PeerId,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, Hash)]
@@ -49,6 +48,15 @@ impl Log {
         self.0.len()
     }
 
+    pub(crate) fn remote_notification(&mut self, notification: &Notification) {
+        self.0.push(DocEvent {
+            doc: notification.doc,
+            from_peer: notification.from_peer.clone(),
+            contents: notification.data.clone(),
+            category: CommitCategory::Content,
+        })
+    }
+
     pub(crate) fn new_commit(
         &mut self,
         doc: DocumentId,
@@ -66,10 +74,23 @@ impl Log {
 }
 
 #[derive(Debug)]
-struct Subscription {
+pub(crate) struct Subscription {
     offset: usize,
     peer: PeerId,
     docs: HashSet<DocumentId>,
+}
+
+impl Subscription {
+    pub(crate) fn new(for_peer: &PeerId, starting_from: &Snapshot) -> Self {
+        let mut docs = starting_from.our_docs().clone();
+        docs.insert(starting_from.root_doc().clone());
+        tracing::trace!(?for_peer, start_docs=?docs, "Creating subscription");
+        Subscription {
+            offset: starting_from.local_log_offset(),
+            peer: for_peer.clone(),
+            docs,
+        }
+    }
 }
 
 pub(crate) struct Subscriptions(Vec<Subscription>);
@@ -79,15 +100,8 @@ impl Subscriptions {
         Self(Vec::new())
     }
 
-    pub(crate) fn create(&mut self, peer: PeerId, starting_from: &Snapshot) {
-        let mut docs = starting_from.our_docs().clone();
-        docs.insert(starting_from.root_doc().clone());
-        tracing::trace!(?peer, start_docs=?docs, "Creating subscription");
-        self.0.push(Subscription {
-            offset: starting_from.local_log_offset(),
-            peer,
-            docs,
-        })
+    pub(crate) fn add(&mut self, sub: Subscription) {
+        self.0.push(sub)
     }
 
     pub(crate) fn new_events(&mut self, log: &Log) -> HashMap<PeerId, Vec<Notification>> {

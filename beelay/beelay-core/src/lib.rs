@@ -31,6 +31,7 @@ mod sedimentree;
 mod snapshots;
 mod subscriptions;
 pub use snapshots::SnapshotId;
+mod notification_handler;
 pub(crate) mod riblt;
 mod sync_docs;
 
@@ -92,6 +93,8 @@ pub struct Beelay<R> {
     request_handlers: HashMap<RequestId, LocalBoxFuture<'static, Option<OutgoingResponse>>>,
     /// Long running stories which are currently in progress
     stories: HashMap<StoryId, LocalBoxFuture<'static, StoryResult>>,
+    /// Notificatoins we are in the process of handling
+    notification_handlers: HashMap<notification_handler::HandlerId, LocalBoxFuture<'static, ()>>,
     /// The state which is available to each task (request handler or story)
     state: Rc<RefCell<effects::State<R>>>,
 }
@@ -195,6 +198,7 @@ unsafe impl<R: Send> Send for Beelay<R> {}
 enum Task {
     Request(RequestId),
     Story(StoryId),
+    NotificationHandler(notification_handler::HandlerId),
 }
 
 impl From<StoryId> for Task {
@@ -209,12 +213,19 @@ impl From<RequestId> for Task {
     }
 }
 
+impl From<notification_handler::HandlerId> for Task {
+    fn from(value: notification_handler::HandlerId) -> Self {
+        Task::NotificationHandler(value)
+    }
+}
+
 impl<R: rand::Rng + 'static> Beelay<R> {
     pub fn new(peer_id: PeerId, rng: R) -> Beelay<R> {
         Beelay {
             peer_id: peer_id.clone(),
             request_handlers: HashMap::new(),
             stories: HashMap::new(),
+            notification_handlers: HashMap::new(),
             state: Rc::new(RefCell::new(effects::State::new(rng, peer_id))),
         }
     }
@@ -264,38 +275,12 @@ impl<R: rand::Rng + 'static> Beelay<R> {
                         woken_tasks.extend(self.state.borrow_mut().io.response_received(response));
                     }
                     Message::Notification(notification) => {
-                        tracing::debug!(?notification, "received notification");
-                        let Notification {
-                            from_peer,
-                            doc,
-                            data,
-                        } = notification;
-                        let UploadItem { blob, tree_part } = data;
-                        let BlobRef::Inline(blob) = blob else {
-                            panic!("blob refs in notifications not yet supported");
-                        };
-                        let data = match tree_part {
-                            TreePart::Commit { hash, parents } => {
-                                CommitOrBundle::Commit(Commit::new(parents, blob, hash))
-                            }
-                            TreePart::Stratum {
-                                start,
-                                end,
-                                checkpoints,
-                            } => CommitOrBundle::Bundle(
-                                CommitBundle::builder()
-                                    .start(start)
-                                    .end(end)
-                                    .bundled_commits(blob)
-                                    .checkpoints(checkpoints)
-                                    .build(),
-                            ),
-                        };
-                        event_results.notifications.push(DocEvent {
-                            peer: from_peer,
-                            doc,
-                            data,
-                        });
+                        let handler_id = notification_handler::HandlerId::new();
+                        let effects = effects::TaskEffects::new(handler_id, self.state.clone());
+                        let handler =
+                            notification_handler::handle(effects, notification).boxed_local();
+                        self.notification_handlers.insert(handler_id, handler);
+                        woken_tasks.push(handler_id.into());
                     }
                 }
             }
@@ -344,8 +329,18 @@ impl<R: rand::Rng + 'static> Beelay<R> {
                         }
                     }
                 }
+                Task::NotificationHandler(handle_id) => {
+                    if let Some(fut) = self.notification_handlers.get_mut(&handle_id) {
+                        if let std::task::Poll::Ready(_) = fut.poll_unpin(&mut cx) {
+                            self.notification_handlers.remove(&handle_id);
+                        }
+                    }
+                }
             }
         }
+        event_results
+            .notifications
+            .extend(self.state.borrow_mut().io.pop_new_notifications());
         event_results
             .new_tasks
             .extend(self.state.borrow_mut().io.pop_new_tasks());

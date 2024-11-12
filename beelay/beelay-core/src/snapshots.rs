@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     effects::TaskEffects, hex, parse, reachability, sedimentree::MinimalTreeHash, CommitCategory,
-    DocumentId, StorageKey,
+    DocumentId, PeerId, StorageKey,
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, Hash)]
@@ -56,13 +56,13 @@ impl SnapshotId {
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct Snapshot {
     root_doc: DocumentId,
     id: SnapshotId,
     we_have_doc: bool,
     local: HashMap<DocumentId, MinimalTreeHash>,
     local_log_offset: usize,
+    remote_snapshots: HashMap<PeerId, SnapshotId>,
 }
 
 impl Snapshot {
@@ -89,6 +89,7 @@ impl Snapshot {
             we_have_doc,
             local: docs_to_hashes,
             local_log_offset: effects.log().offset(),
+            remote_snapshots: HashMap::new(),
         }
     }
 
@@ -114,6 +115,14 @@ impl Snapshot {
 
     pub(crate) fn our_docs_2(&self) -> &HashMap<DocumentId, MinimalTreeHash> {
         &self.local
+    }
+
+    pub(crate) fn add_remote(&mut self, peer: PeerId, snapshot: SnapshotId) {
+        self.remote_snapshots.insert(peer, snapshot);
+    }
+
+    pub(crate) fn remote_snapshots(&self) -> &HashMap<PeerId, SnapshotId> {
+        &self.remote_snapshots
     }
 }
 

@@ -3,8 +3,10 @@ use crate::{
     messages::{BlobRef, ContentAndIndex, FetchedSedimentree, TreePart, UploadItem},
     riblt::{self, doc_and_heads::CodedDocAndHeadsSymbol},
     sedimentree::{self, LooseCommit},
-    snapshots, sync_docs, CommitBundle, CommitCategory, DocumentId, OutgoingResponse, PeerId,
-    RequestId, Response, StorageKey,
+    snapshots,
+    subscriptions::Subscription,
+    sync_docs, CommitBundle, CommitCategory, DocumentId, OutgoingResponse, PeerId, RequestId,
+    Response, StorageKey,
 };
 
 pub(super) async fn handle_request<R: rand::Rng>(
@@ -47,19 +49,33 @@ pub(super) async fn handle_request<R: rand::Rng>(
             }
         }
         crate::Request::SnapshotSymbols { snapshot_id } => {
-            if let Some((_, encoder)) = effects.snapshots().get_mut(&snapshot_id) {
+            if let Some((_, encoder)) = effects.snapshots_mut().get_mut(&snapshot_id) {
                 Response::SnapshotSymbols(encoder.next_n_symbols(100))
             } else {
                 Response::Error("no such snapshot".to_string())
             }
         }
         crate::Request::Listen(snapshot_id) => {
-            let snapshot = effects
+            let sub = effects
+                .snapshots_mut()
+                .get(&snapshot_id)
+                .map(|(s, _)| Subscription::new(&from, s));
+            let remote_snapshots = effects
                 .snapshots()
                 .get(&snapshot_id)
-                .map(|(s, _)| s.clone());
-            if let Some(snapshot) = snapshot {
-                effects.subscriptions().create(from, &snapshot);
+                .map(|(s, _)| {
+                    s.remote_snapshots()
+                        .iter()
+                        .map(|(p, s)| (p.clone(), s.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            for (remote_peer, remote_snapshot) in remote_snapshots {
+                tracing::trace!(source_remote_peer=%from, target_remote_peer=%remote_peer, %remote_snapshot, "forwarding listen request");
+                effects.listen(remote_peer.clone(), remote_snapshot);
+            }
+            if let Some(sub) = sub {
+                effects.subscriptions().add(sub);
                 return None;
             } else {
                 Response::Error(format!("no such snapshot"))
@@ -171,11 +187,15 @@ async fn create_snapshot<R: rand::Rng>(
                 ?peers_to_ask,
                 "we don't have the doc locally, asking remotes"
             );
-            let syncing = peers_to_ask
-                .into_iter()
-                .map(|p| sync_docs::sync_root_doc(effects.clone(), snapshot.clone(), p.clone()));
-            futures::future::join_all(syncing).await;
+            let syncing = peers_to_ask.into_iter().map(|p| async {
+                let result = sync_docs::sync_root_doc(effects.clone(), &snapshot, p.clone()).await;
+                (p, result)
+            });
+            let forwarded = futures::future::join_all(syncing).await;
             snapshot = snapshots::Snapshot::load(effects.clone(), root_doc).await;
+            for (peer, sync_result) in forwarded {
+                snapshot.add_remote(peer, sync_result.remote_snapshot);
+            }
             tracing::trace!(we_have_doc=%snapshot.we_have_doc(), "finished requesting missing doc from peers");
         } else {
             tracing::trace!("we don't have doc but there are no peers to ask for missing doc");
@@ -184,6 +204,8 @@ async fn create_snapshot<R: rand::Rng>(
     let snapshot_id = snapshot.id();
     let mut encoder = riblt::doc_and_heads::Encoder::new(&snapshot);
     let first_symbols = encoder.next_n_symbols(10);
-    effects.snapshots().insert(snapshot_id, (snapshot, encoder));
+    effects
+        .snapshots_mut()
+        .insert(snapshot_id, (snapshot, encoder));
     (snapshot_id, first_symbols)
 }
