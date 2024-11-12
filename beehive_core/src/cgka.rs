@@ -106,6 +106,7 @@ impl Cgka {
         if self.group_size() == 1 {
             return Err(CgkaError::RemoveLastMember);
         }
+
         let removed_keys = self.tree.remove_id(id)?;
         let op = CgkaOperation::Remove { id, removed_keys };
         Ok(op)

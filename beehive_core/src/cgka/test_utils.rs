@@ -467,12 +467,15 @@ fn test_setup_remove() -> Result<(), CgkaError> {
     let doc_id = DocumentId::generate();
     let remove_count = 2;
     let member_count = 4;
+
     let mut member_cgkas = setup_member_cgkas(doc_id, member_count)?;
     assert_eq!(member_cgkas.len(), member_count as usize);
+
     apply_test_operations_and_merge(
         &mut member_cgkas,
         &vec![remove_from_right(remove_count as usize)],
     )?;
+
     assert_eq!(member_cgkas.len(), (member_count - remove_count) as usize);
     Ok(())
 }
