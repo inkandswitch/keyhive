@@ -125,11 +125,8 @@
         };
 
         bench = {
-          "bench" = cmd "Run benchmarks, including test utils"
-            "${cargo} bench --features test_utils";
-
-          "bench:host" = cmd "Run host Criterion benchmarks"
-            "${cargo} criterion";
+          "bench:host" = cmd "Run benchmarks, including test utils"
+            "${cargo} bench --features=test_utils";
 
           "bench:host:open" = cmd "Open host Criterion benchmarks in browser"
             "${pkgs.xdg-utils}/bin/xdg-open ./target/criterion/report/index.html";
