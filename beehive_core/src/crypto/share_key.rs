@@ -121,7 +121,7 @@ impl From<&ShareSecretKey> for Vec<u8> {
 }
 
 impl Separable for ShareSecretKey {
-    fn from_32_bytes(bytes: [u8; 32]) -> Self {
+    fn directly_from_32_bytes(bytes: [u8; 32]) -> Self {
         ShareSecretKey(bytes)
     }
 }

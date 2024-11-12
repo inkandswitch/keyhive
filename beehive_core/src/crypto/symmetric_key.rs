@@ -104,7 +104,7 @@ impl std::fmt::Debug for SymmetricKey {
 }
 
 impl Separable for SymmetricKey {
-    fn from_32_bytes(bytes: [u8; 32]) -> Self {
+    fn directly_from_32_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 }
