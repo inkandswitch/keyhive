@@ -69,7 +69,7 @@ pub struct PathChange {
 /// [Causal TreeKEM]: https://mattweidner.com/assets/pdf/acs-dissertation.pdf
 /// [MLS]: https://messaginglayersecurity.rocks/
 /// [TreeKEM]: https://inria.hal.science/hal-02425247/file/treekem+(1).pdf
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct BeeKem {
     doc_id: DocumentId,
     next_leaf_idx: LeafNodeIndex,
@@ -200,7 +200,7 @@ impl BeeKem {
             .leaf(leaf_idx)?
             .as_ref()
             .ok_or(CgkaError::OwnerIdentifierNotFound)?;
-        if !self.has_root_key()? {
+        if !self.has_root_key() {
             return Err(CgkaError::NoRootKey);
         }
         if self.is_blank(leaf_idx.into())? {
@@ -357,7 +357,7 @@ impl BeeKem {
                 self.insert_inner_node_at(current_idx, node.clone())?;
             }
         }
-        if self.has_root_key()? {
+        if self.has_root_key() {
             self.current_secret_encrypter_leaf_idx = Some(leaf_idx);
         } else {
             self.current_secret_encrypter_leaf_idx = None;
@@ -365,17 +365,20 @@ impl BeeKem {
         Ok(())
     }
 
-    pub(crate) fn has_root_key(&self) -> Result<bool, CgkaError> {
+    pub(crate) fn has_root_key(&self) -> bool {
         let root_idx: TreeNodeIndex = treemath::root(self.tree_size);
         let TreeNodeIndex::Inner(p_idx) = root_idx else {
-            return Err(CgkaError::TreeIndexOutOfBounds);
+            panic!("BeeKEM should always have a root node.")
         };
-        Ok(if let Some(r) = self.inner_node(p_idx)? {
+        if let Some(r) = self
+            .inner_node(p_idx)
+            .expect("root node index to be in tree")
+        {
             // A root with a public key conflict does not have a decryption secret
             !r.has_conflict()
         } else {
             false
-        })
+        }
     }
 
     /// Returns the secret if there is a single parent public key.
@@ -648,7 +651,7 @@ impl BeeKem {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct LeafNode {
     pub id: Identifier,
     pub pk: NodeKey,
