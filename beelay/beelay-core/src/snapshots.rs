@@ -8,7 +8,7 @@ use crate::{
     DocumentId, PeerId, StorageKey,
 };
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, serde::Serialize, Hash)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct SnapshotId([u8; 16]);
 
@@ -30,6 +30,12 @@ impl std::str::FromStr for SnapshotId {
 impl std::fmt::Display for SnapshotId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         hex::encode(&self.0).fmt(f)
+    }
+}
+
+impl std::fmt::Debug for SnapshotId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
     }
 }
 

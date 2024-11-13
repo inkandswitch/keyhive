@@ -93,20 +93,26 @@ impl Subscription {
     }
 }
 
-pub(crate) struct Subscriptions(Vec<Subscription>);
+pub(crate) struct Subscriptions {
+    our_peer_id: PeerId,
+    subscriptions: Vec<Subscription>,
+}
 
 impl Subscriptions {
-    pub(crate) fn new() -> Self {
-        Self(Vec::new())
+    pub(crate) fn new(our_peer_id: PeerId) -> Self {
+        Self {
+            our_peer_id,
+            subscriptions: Vec::new(),
+        }
     }
 
     pub(crate) fn add(&mut self, sub: Subscription) {
-        self.0.push(sub)
+        self.subscriptions.push(sub)
     }
 
     pub(crate) fn new_events(&mut self, log: &Log) -> HashMap<PeerId, Vec<Notification>> {
         let mut result = HashMap::new();
-        for sub in &mut self.0 {
+        for sub in &mut self.subscriptions {
             let events: &mut Vec<Notification> = result.entry(sub.peer.clone()).or_default();
             for event in &log.0[sub.offset..] {
                 if sub.docs.contains(&event.doc)
@@ -114,7 +120,7 @@ impl Subscriptions {
                     && event.category == CommitCategory::Content
                 {
                     events.push(Notification {
-                        from_peer: event.from_peer.clone(),
+                        from_peer: self.our_peer_id.clone(),
                         doc: event.doc.clone(),
                         data: event.contents.clone(),
                     })

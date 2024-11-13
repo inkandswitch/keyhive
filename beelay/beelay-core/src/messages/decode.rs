@@ -148,6 +148,7 @@ fn parse_response(
             let (input, symbols) = parse::many(input, CodedDocAndHeadsSymbol::parse)?;
             Ok((input, super::Response::SnapshotSymbols(symbols)))
         }),
+        ResponseType::Listen => Ok((input, super::Response::Listen)),
     }?;
     Ok((input, Message::Response(request_id, resp)))
 }

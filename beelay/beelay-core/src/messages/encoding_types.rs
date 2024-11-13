@@ -107,6 +107,7 @@ pub(super) enum ResponseType {
     FetchBlobPart,
     CreateSnapshot,
     SnapshotSymbols,
+    Listen,
 }
 
 impl ResponseType {
@@ -133,6 +134,7 @@ impl TryFrom<u8> for ResponseType {
             3 => Ok(Self::FetchBlobPart),
             4 => Ok(Self::CreateSnapshot),
             5 => Ok(Self::SnapshotSymbols),
+            6 => Ok(Self::Listen),
             _ => Err(error::InvalidResponseType(value)),
         }
     }
@@ -147,6 +149,7 @@ impl From<ResponseType> for u8 {
             ResponseType::FetchBlobPart => 3,
             ResponseType::CreateSnapshot => 4,
             ResponseType::SnapshotSymbols => 5,
+            ResponseType::Listen => 6,
         }
     }
 }

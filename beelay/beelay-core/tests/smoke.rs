@@ -7,8 +7,8 @@ use beelay_core::{
 };
 
 fn init_logging() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
+    tracing_subscriber::fmt::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_test_writer()
         .pretty()
         .init();
@@ -195,11 +195,7 @@ fn listen_to_connected() {
 
 #[test]
 fn listen() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .with_test_writer()
-        .pretty()
-        .init();
+    init_logging();
     let mut network = Network::new();
     let peer1 = network.create_peer("peer1");
     let peer2 = network.create_peer("peer2");
@@ -236,6 +232,79 @@ fn listen() {
             data: CommitOrBundle::Commit(commit2)
         }
     );
+}
+
+#[test]
+fn three_peers_listening_to_each_other_do_not_loop() {
+    init_logging();
+    let mut network = Network::new();
+    let peer1 = network.create_peer("peer1");
+    let peer2 = network.create_peer("peer2");
+    let peer3 = network.create_peer("peer3");
+
+    network.forward_requests(&peer2, &peer3);
+    network.forward_requests(&peer2, &peer1);
+
+    let doc1_id = network.beelay(&peer1).create_doc();
+    let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
+    network
+        .beelay(&peer1)
+        .add_commits(doc1_id, vec![commit1.clone()]);
+
+    let sync_with_2 = network.beelay(&peer1).sync_doc(doc1_id, peer2.clone());
+    network
+        .beelay(&peer1)
+        .listen(&peer2, sync_with_2.remote_snapshot);
+
+    let sync_with_3 = network.beelay(&peer3).sync_doc(doc1_id, peer2.clone());
+    network
+        .beelay(&peer3)
+        .listen(&peer2, sync_with_3.remote_snapshot);
+
+    // Now add a commit on beelay 1 and check that everything terminates
+    let commit2 = beelay_core::Commit::new(
+        vec![commit1.hash()],
+        vec![4, 5, 6],
+        CommitHash::from([2; 32]),
+    );
+    network
+        .beelay(&peer1)
+        .add_commits(doc1_id, vec![commit2.clone()]);
+}
+
+#[test]
+fn two_peers_listening_to_each_other_do_not_loop() {
+    init_logging();
+    let mut network = Network::new();
+    let peer1 = network.create_peer("peer1");
+    let peer2 = network.create_peer("peer2");
+
+    network.forward_requests(&peer1, &peer2);
+    network.forward_requests(&peer2, &peer1);
+
+    let doc1_id = network.beelay(&peer1).create_doc();
+    let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
+    network
+        .beelay(&peer1)
+        .add_commits(doc1_id, vec![commit1.clone()]);
+
+    let sync_with_2 = network.beelay(&peer1).sync_doc(doc1_id, peer2.clone());
+    network
+        .beelay(&peer1)
+        .listen(&peer2, sync_with_2.remote_snapshot);
+    network
+        .beelay(&peer2)
+        .listen(&peer1, sync_with_2.local_snapshot);
+
+    // Now add a commit on beelay 1 and check that everything terminates
+    let commit2 = beelay_core::Commit::new(
+        vec![commit1.hash()],
+        vec![4, 5, 6],
+        CommitHash::from([2; 32]),
+    );
+    network
+        .beelay(&peer1)
+        .add_commits(doc1_id, vec![commit2.clone()]);
 }
 
 struct BeelayHandle<'a> {

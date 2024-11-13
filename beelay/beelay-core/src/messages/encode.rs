@@ -110,5 +110,8 @@ fn encode_response(buf: &mut Vec<u8>, id: RequestId, resp: &Response) {
             encode_uleb128(buf, desc.len() as u64);
             buf.extend_from_slice(desc.as_bytes());
         }
+        Response::Listen => {
+            buf.push(ResponseType::Listen.into());
+        }
     }
 }

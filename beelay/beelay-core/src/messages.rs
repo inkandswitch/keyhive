@@ -101,6 +101,7 @@ pub(crate) enum Response {
         first_symbols: Vec<CodedDocAndHeadsSymbol>,
     },
     SnapshotSymbols(Vec<CodedDocAndHeadsSymbol>),
+    Listen,
 }
 
 impl std::fmt::Display for Response {
@@ -124,6 +125,7 @@ impl std::fmt::Display for Response {
             Response::SnapshotSymbols(symbols) => {
                 write!(f, "SnapshotSymbols({} symbols)", symbols.len())
             }
+            Response::Listen => write!(f, "Listen"),
         }
     }
 }

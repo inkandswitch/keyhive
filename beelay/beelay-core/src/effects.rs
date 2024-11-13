@@ -29,7 +29,7 @@ pub(crate) struct State<R> {
 impl<R: rand::Rng> State<R> {
     pub(crate) fn new(rng: R, our_peer_id: PeerId) -> Self {
         Self {
-            our_peer_id,
+            our_peer_id: our_peer_id.clone(),
             io: Io {
                 load_range: JobTracker::new(),
                 load: JobTracker::new(),
@@ -38,12 +38,11 @@ impl<R: rand::Rng> State<R> {
                 requests: JobTracker::new(),
                 asks: JobTracker::new(),
                 wakers: Rc::new(RefCell::new(HashMap::new())),
-                fire_and_forget_requests: Vec::new(),
                 emitted_doc_events: Vec::new(),
                 pending_puts: HashMap::new(),
             },
             log: subscriptions::Log::new(),
-            subscriptions: subscriptions::Subscriptions::new(),
+            subscriptions: subscriptions::Subscriptions::new(our_peer_id),
             snapshots: HashMap::new(),
             rng,
         }
@@ -82,7 +81,6 @@ pub(crate) struct Io {
     requests: JobTracker<RequestId, OutgoingRequest, IncomingResponse>,
     asks: JobTracker<IoTaskId, DocumentId, HashSet<PeerId>>,
     emitted_doc_events: Vec<DocEvent>,
-    fire_and_forget_requests: Vec<(RequestId, OutgoingRequest)>,
     // We don't actually use wakers at all, we keep track of the top level task
     // to wake up when a job completes in each JobTracker. However, the
     // contract of the `Future` trait is that when a task is due to be woken up
@@ -168,9 +166,7 @@ impl Io {
     }
 
     pub(crate) fn pop_new_requests(&mut self) -> Vec<(RequestId, OutgoingRequest)> {
-        let mut requests = self.requests.pop_new_jobs();
-        requests.extend(std::mem::take(&mut self.fire_and_forget_requests).into_iter());
-        requests
+        self.requests.pop_new_jobs()
     }
 
     pub(crate) fn pop_new_notifications(&mut self) -> Vec<DocEvent> {
@@ -292,7 +288,6 @@ impl<R: rand::Rng> TaskEffects<R> {
         prefix: StorageKey,
     ) -> impl Future<Output = HashMap<StorageKey, Vec<u8>>> + 'static {
         let task_id = IoTaskId::new();
-        tracing::trace!(cache=?RefCell::borrow(&self.state).io.pending_puts, "loading range");
         let cached = RefCell::borrow(&self.state)
             .io
             .pending_puts
@@ -308,7 +303,7 @@ impl<R: rand::Rng> TaskEffects<R> {
                 }
             })
             .collect::<HashMap<_, _>>();
-        tracing::trace!(?prefix, ?cached, "loading range");
+        tracing::trace!(?prefix, "loading range");
         let load = State::task_fut(self.state.clone(), self.task, move |io| {
             io.load_range.run(self.task, task_id, prefix)
         });
@@ -351,18 +346,6 @@ impl<R: rand::Rng> TaskEffects<R> {
         State::task_fut(self.state.clone(), self.task, |io| {
             io.requests.run(self.task, request_id, request)
         })
-    }
-
-    fn fire_and_forget(&self, to_peer: PeerId, request: Request) {
-        let request_id = RequestId::new(&mut *self.rng());
-        let request = OutgoingRequest {
-            target: to_peer,
-            request,
-        };
-        RefCell::borrow_mut(&self.state)
-            .io
-            .fire_and_forget_requests
-            .push((request_id, request));
     }
 
     pub(crate) fn upload_commits(
@@ -473,9 +456,21 @@ impl<R: rand::Rng> TaskEffects<R> {
         }
     }
 
-    pub(crate) fn listen(&self, to_peer: PeerId, on_snapshot: SnapshotId) {
+    pub(crate) fn listen(
+        &self,
+        to_peer: PeerId,
+        on_snapshot: SnapshotId,
+    ) -> impl Future<Output = Result<(), RpcError>> {
         let request = Request::Listen(on_snapshot);
-        self.fire_and_forget(to_peer, request);
+        let task = self.request(to_peer, request);
+        async move {
+            let response = task.await;
+            match response.response {
+                crate::Response::Listen => Ok(()),
+                crate::Response::Error(err) => Err(RpcError::ErrorReported(err)),
+                _ => Err(RpcError::IncorrectResponseType),
+            }
+        }
     }
 
     pub(crate) fn snapshots_mut<'a>(

@@ -236,6 +236,7 @@ impl<R: rand::Rng + 'static> Beelay<R> {
 
     #[tracing::instrument(skip(self, event), fields(local_peer=%self.peer_id))]
     pub fn handle_event(&mut self, event: Event) -> Result<EventResults, Error> {
+        tracing::trace!(?event, "handling event");
         let mut woken_tasks: Vec<Task> = Vec::new();
         let mut event_results = EventResults {
             new_messages: Vec::new(),

@@ -89,10 +89,13 @@ pub(super) fn handle_story<'a, R: rand::Rng + 'static>(
         Story::Listen {
             peer_id,
             snapshot_id,
-        } => {
-            effects.listen(peer_id, snapshot_id);
-            futures::future::ready(StoryResult::Listen).boxed_local()
+        } => async move {
+            if let Err(e) = effects.listen(peer_id, snapshot_id).await {
+                tracing::error!(err=?e, "error listening to peer");
+            }
+            StoryResult::Listen
         }
+        .boxed_local(),
     }
 }
 
@@ -111,6 +114,8 @@ async fn add_commits<R: rand::Rng>(
     doc_id: DocumentId,
     commits: Vec<Commit>,
 ) -> Vec<BundleSpec> {
+    // TODO: This function should return an error if we are missing a chain from
+    // each commit back to the last bundle boundary.
     tracing::trace!("adding commits");
 
     let has_commit_boundary = commits
@@ -122,6 +127,11 @@ async fn add_commits<R: rand::Rng>(
         async move {
             let blob = BlobMeta::new(commit.contents());
             let key = StorageKey::blob(blob.hash());
+            let have_commit = effects.load(key.clone()).await.is_some();
+            if have_commit {
+                tracing::debug!(hash=%commit.hash(), "commit already exists in storage");
+                return;
+            }
             effects.put(key, commit.contents().to_vec()).await;
 
             let loose =
@@ -139,7 +149,6 @@ async fn add_commits<R: rand::Rng>(
             effects
                 .log()
                 .new_commit(doc_id, our_peer_id, item.clone(), CommitCategory::Content);
-            item
         }
     });
     let _ = futures::future::join_all(save_tasks).await;
