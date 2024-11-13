@@ -93,6 +93,8 @@
 
         cargo = "${pkgs.cargo}/bin/cargo";
         node = "${unstable.nodejs_20}/bin/node";
+        pnpm = "${unstable.pnpm}/bin/pnpm";
+        playwright = "${pnpm} --dir=./beehive_wasm exec playwright";
         wasm-pack = "${unstable.wasm-pack}/bin/wasm-pack";
         wasm-opt = "${pkgs.binaryen}/bin/wasm-opt";
 
@@ -104,6 +106,9 @@
 
          "release:wasm:web" = cmd "Build release for wasm32-unknown-unknown with web bindings"
             "${wasm-pack} build ./beehive_wasm --release --target=web";
+
+         "release:wasm:bundler" = cmd "Build release for wasm32-unknown-unknown with bundler bindings"
+            "${wasm-pack} build ./beehive_wasm --release --target=bundler";
 
           "release:wasm:nodejs" = cmd "Build release for wasm32-unknown-unknown with Node.js bindgings"
             "${wasm-pack} build ./beehive_wasm --release --target=nodejs";
@@ -120,7 +125,7 @@
             "${wasm-pack} build --dev --target=nodejs";
 
           "build:node" = cmd "Build JS-wrapped Wasm library"
-            "${pkgs.nodePackages.pnpm}/bin/pnpm install && ${node} run build";
+            "${pnpm}/bin/pnpm install && ${node} run build";
 
           "build:wasi" = cmd "Build for Wasm32-WASI"
             "${cargo} build --target wasm32-wasi";
@@ -178,6 +183,12 @@
           "test:wasm:node" = cmd "Run wasm-pack tests in Node.js"
             "${wasm-pack} test --node beehive_wasm";
 
+          "test:ts:web" = cmd "Run beehive_wasm Typescript tests in Playwright"
+            "${playwright} test";
+
+          "test:ts:web:report:latest" = cmd "Open the latest Playwright report"
+            "${playwright} show-report";
+
           "test:wasm:chrome" = cmd "Run wasm-pack tests in headless Chrome"
             "${wasm-pack} test --chrome beehive_wasm --features='browser_test'";
 
@@ -217,11 +228,13 @@
               (pkgs.hiPrio pkgs.rust-bin.nightly.latest.rustfmt)
               command_menu
               direnv
+              http-server
               rust-toolchain
               unstable.binaryen
               unstable.chromedriver
               unstable.irust
               unstable.nodePackages.pnpm
+              unstable.nodePackages_latest.webpack-cli
               unstable.nodejs_20
               unstable.wasm-pack
             ]
