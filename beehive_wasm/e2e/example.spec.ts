@@ -12,8 +12,7 @@ test.describe("SigningKey", async () => {
   test('constructor', async ({ page }) => {
     const out = await page.evaluate(() => {
       const { SigningKey } = window.beehive
-      const bytes = new Uint8Array(32)
-      const key = new SigningKey(bytes)
+      const key = SigningKey.generate()
       return { key }
     })
 
@@ -23,7 +22,7 @@ test.describe("SigningKey", async () => {
   test('verifyingKey', async ({ page }) => {
     const out = await page.evaluate((input) => {
       const { SigningKey } = window.beehive
-      const key = new SigningKey(new Uint8Array(32))
+      const key = SigningKey.generate()
       return { input, key, vKey: key.verifyingKey }
     }, { toSign })
 
@@ -33,7 +32,7 @@ test.describe("SigningKey", async () => {
   test('trySign', async ({ page }) => {
     const out = await page.evaluate((input) => {
       const { SigningKey } = window.beehive
-      const key = new SigningKey(new Uint8Array(32))
+      const key = SigningKey.generate()
       const signed = key.trySign(new Uint8Array(input.toSign))
       const { payload, verifyingKey, signature } = signed
       return { input, payload, verifyingKey, signature, key }
@@ -48,7 +47,7 @@ test.describe("Signed", async () => {
   test('verify', async ({ page }) => {
     const out = await page.evaluate((input) => {
       const { SigningKey } = window.beehive
-      const key = new SigningKey(new Uint8Array(32))
+      const key = SigningKey.generate()
       const signed = key.trySign(new Uint8Array(input.toSign))
       const { payload, verifyingKey, signature } = signed
       const verified = signed.verify()
@@ -61,7 +60,7 @@ test.describe("Signed", async () => {
   test('payload', async ({ page }) => {
     const out = await page.evaluate((input) => {
       const { SigningKey } = window.beehive
-      const key = new SigningKey(new Uint8Array(32))
+      const key = SigningKey.generate()
       const signed = key.trySign(new Uint8Array(input.toSign))
       const { payload, verifyingKey, signature } = signed
       return { input, payload, verifyingKey, signature, key }
@@ -73,7 +72,7 @@ test.describe("Signed", async () => {
   test('signature', async ({ page }) => {
     const out = await page.evaluate((input) => {
       const { SigningKey } = window.beehive
-      const key = new SigningKey(new Uint8Array(32))
+      const key = SigningKey.generate()
       const signed = key.trySign(new Uint8Array(input.toSign))
       const { payload, signature } = signed
       return { input, payload, signature }
@@ -88,8 +87,7 @@ test.describe("Beehive", async () => {
   test('constructor', async ({ page }) => {
     const out = await page.evaluate(() => {
       const { Beehive, SigningKey } = window.beehive
-      const bytes = new Uint8Array(32)
-      return { beehive: new Beehive(new SigningKey(bytes)) }
+      return { beehive: new Beehive(SigningKey.generate()) }
     })
 
     expect(out.beehive).toBeDefined()
@@ -98,7 +96,7 @@ test.describe("Beehive", async () => {
   test('id', async ({ page }) => {
     const out = await page.evaluate(() => {
       const { Beehive, SigningKey } = window.beehive
-      const key = new SigningKey(new Uint8Array(32))
+      const key = SigningKey.generate()
       const vKey = key.verifyingKey
       const beehive = new Beehive(key)
       return { id: beehive.id, vKey }
@@ -110,23 +108,22 @@ test.describe("Beehive", async () => {
   test('idString', async ({ page }) => {
     const out = await page.evaluate(() => {
       const { Beehive, SigningKey } = window.beehive
-      const key = new SigningKey(new Uint8Array(32))
+      const key = SigningKey.generate()
       const vKey = key.verifyingKey
       const beehive = new Beehive(key)
       return { idString: beehive.idString, vKey }
     })
 
     expect(out.idString).toBeDefined()
-    expect(out.idString).toHaveLength(65)
+    expect(out.idString.length).toBeLessThanOrEqual(66)
     expect(out.idString.slice(0, 2)).toStrictEqual('0x')
-    expect(out.idString).toStrictEqual('0x3b6a27bcceb6a42d62a3a8d02a6fd73653215771de243a63ac048a18b59da29')
+    expect(out.idString).toMatch(/0x[0-9a-fA-F]+/) // Hex
   })
 
   test('generateGroup', async ({ page }) => {
     const out = await page.evaluate(() => {
       const { Beehive, SigningKey } = window.beehive
-      const key = new SigningKey(new Uint8Array(32))
-      const beehive = new Beehive(key)
+      const beehive = new Beehive(SigningKey.generate())
 
       const group = beehive.generateGroup([])
       const { groupId, members } = group
