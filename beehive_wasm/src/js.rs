@@ -3,7 +3,7 @@ pub mod agent;
 pub mod document;
 pub mod document_id;
 pub mod group;
-// FIXME remove pub mod group_id;
+pub mod group_id;
 pub mod identifier;
 pub mod membered;
 pub mod share_key;

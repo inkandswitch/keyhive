@@ -11,7 +11,7 @@ pub struct JsSigningKey(pub(crate) ed25519_dalek::SigningKey);
 #[wasm_bindgen(js_class = "SigningKey")]
 impl JsSigningKey {
     #[wasm_bindgen(constructor)]
-    pub fn new(bytes: js_sys::Uint8Array) -> Result<Self, CannotParseEd25519SigningKey> {
+    pub fn new(bytes: &[u8]) -> Result<Self, CannotParseEd25519SigningKey> {
         let vec: [u8; 32] = bytes
             .to_vec()
             .try_into()
@@ -22,13 +22,18 @@ impl JsSigningKey {
         Ok(JsSigningKey(key))
     }
 
+    #[wasm_bindgen(getter, js_name = "verifyingKey")]
+    pub fn verfiying_key(&self) -> Vec<u8> {
+        self.0.verifying_key().to_bytes().to_vec()
+    }
+
     pub fn generate() -> Result<Self, GenSigningKeyError> {
         let mut buf = [0u8; 32];
         buf.try_fill(&mut rand::thread_rng())
             .map_err(|_| GenSigningKeyError::RngError)?;
 
-        let bytes: js_sys::Uint8Array = buf.as_slice().into();
-        JsSigningKey::new(bytes).map_err(|_| GenSigningKeyError::CannotParseEd25519SigningKey)
+        JsSigningKey::new(buf.as_slice())
+            .map_err(|_| GenSigningKeyError::CannotParseEd25519SigningKey)
     }
 
     // FIXME better error

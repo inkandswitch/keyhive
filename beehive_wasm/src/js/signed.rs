@@ -1,3 +1,4 @@
+use super::signing_key::JsSigningKey;
 use beehive_core::crypto::signed::Signed;
 use wasm_bindgen::prelude::*;
 
@@ -12,13 +13,13 @@ impl JsSigned {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn data(&self) -> Vec<u8> {
+    pub fn payload(&self) -> Vec<u8> {
         self.0.payload().clone()
     }
 
     #[wasm_bindgen(getter, js_name = verifyingKey)]
     pub fn verifying_key(&self) -> Vec<u8> {
-        self.0.signature().to_vec()
+        self.0.verifying_key().to_bytes().to_vec()
     }
 
     #[wasm_bindgen(getter)]

@@ -1,4 +1,4 @@
-use super::{access::JsAccess, agent::JsAgent};
+use super::{access::JsAccess, agent::JsAgent, group_id::JsGroupId, identifier::JsIdentifier};
 use beehive_core::{
     crypto::signed::Signed,
     principal::{
@@ -16,6 +16,17 @@ pub struct JsGroup(pub(crate) Rc<RefCell<Group<automerge::ChangeHash>>>);
 
 #[wasm_bindgen(js_class = Group)]
 impl JsGroup {
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> JsIdentifier {
+        JsIdentifier(self.0.borrow().id())
+    }
+
+    #[wasm_bindgen(getter, js_name = groupId)]
+    pub fn group_id(&self) -> JsGroupId {
+        JsGroupId(self.0.borrow().group_id())
+    }
+
+    #[wasm_bindgen(getter)]
     pub fn members(&self) -> Vec<Capability> {
         self.0
             .borrow()

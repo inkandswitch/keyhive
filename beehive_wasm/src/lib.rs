@@ -19,34 +19,34 @@ pub fn set_panic_hook() {
     console_error_panic_hook::set_once();
 }
 
-#[wasm_bindgen]
+#[wasm_bindgen(js_name = Beehive)]
 #[derive(Debug)]
 pub struct JsBeehive {
     ctx: Context<automerge::ChangeHash>,
 }
 
-#[wasm_bindgen]
+#[wasm_bindgen(js_class = Beehive)]
 impl JsBeehive {
     #[wasm_bindgen(constructor)]
-    pub fn generate(signing_key: JsSigningKey) -> Result<JsBeehive, SigningError> {
+    pub fn new(signing_key: JsSigningKey) -> Result<JsBeehive, SigningError> {
         Ok(JsBeehive {
             ctx: Context::generate(signing_key.0).map_err(|_| SigningError)?,
         })
     }
 
-    #[wasm_bindgen(js_name = id)]
-    pub fn id(&self) -> js_sys::Uint8Array {
-        self.ctx.id().as_slice().into()
+    #[wasm_bindgen(getter, js_name = id)]
+    pub fn id(&self) -> Vec<u8> {
+        self.ctx.id().as_slice().to_vec()
     }
 
-    #[wasm_bindgen(js_name = idString)]
+    #[wasm_bindgen(getter, js_name = idString)]
     pub fn id_string(&self) -> String {
         self.ctx
             .id()
             .as_slice()
             .iter()
-            .fold(String::new(), |mut acc, byte| {
-                acc.push_str(&format!("{:#x}", byte));
+            .fold("0x".to_string(), |mut acc, byte| {
+                acc.push_str(&format!("{:x}", byte));
                 acc
             })
     }
