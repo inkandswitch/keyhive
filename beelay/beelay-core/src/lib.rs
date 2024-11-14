@@ -424,6 +424,7 @@ impl Event {
         )
     }
 
+    #[tracing::instrument(skip(commits))]
     pub fn add_commits(root_id: DocumentId, commits: Vec<Commit>) -> (StoryId, Event) {
         let story_id = StoryId::new();
         (

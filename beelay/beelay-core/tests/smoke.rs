@@ -5,13 +5,14 @@ use beelay_core::{
     BundleSpec, CommitHash, CommitOrBundle, DocEvent, DocumentId, PeerId, SnapshotId,
     SyncDocResult,
 };
+use rand::Rng;
 
 fn init_logging() {
-    tracing_subscriber::fmt::fmt()
+    let _ = tracing_subscriber::fmt::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_test_writer()
         .pretty()
-        .init();
+        .try_init();
 }
 
 #[test]
@@ -305,6 +306,55 @@ fn two_peers_listening_to_each_other_do_not_loop() {
     network
         .beelay(&peer1)
         .add_commits(doc1_id, vec![commit2.clone()]);
+}
+
+#[test]
+fn saving_many_times_loads_correctly() {
+    init_logging();
+    let mut network = Network::new();
+    let peer = network.create_peer("peer");
+
+    let doc_id = network.beelay(&peer).create_doc();
+
+    let mut saved_commits = HashSet::new();
+
+    const NUM_COMMITS: usize = 101;
+    let mut last_commit_hash = None;
+    for i in 0..NUM_COMMITS {
+        let this_hash = CommitHash::from([i as u8; 32]);
+        let commit = beelay_core::Commit::new(
+            last_commit_hash.iter().cloned().collect(),
+            vec![i as u8; 3],
+            this_hash,
+        );
+        saved_commits.insert(commit.clone());
+        network.beelay(&peer).add_commits(doc_id, vec![commit]);
+        last_commit_hash = Some(this_hash);
+    }
+
+    let loaded_commits = network
+        .beelay(&peer)
+        .load_doc(doc_id)
+        .expect("doc not found")
+        .into_iter()
+        .map(|c_or_b| {
+            let CommitOrBundle::Commit(c) = c_or_b else {
+                panic!("expected a commit");
+            };
+            c
+        })
+        .collect::<HashSet<_>>();
+    assert_eq!(loaded_commits.len(), NUM_COMMITS);
+    if loaded_commits != saved_commits {
+        let diff = loaded_commits
+            .symmetric_difference(&saved_commits)
+            .collect::<Vec<_>>();
+        println!(
+            "saved and loaded commits differ, {} differing elements",
+            diff.len()
+        );
+        println!("difference: {:?}", diff);
+    }
 }
 
 struct BeelayHandle<'a> {

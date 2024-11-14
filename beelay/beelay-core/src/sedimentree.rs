@@ -7,7 +7,7 @@ pub(crate) mod storage;
 
 /// The top most bundle boundary level of a sedimentree, if a commit hash is
 /// equal to or lower than this level then it is a checkpoint
-pub(crate) const TOP_BUNDLE_LEVEL: Level = Level(2);
+pub(crate) const TOP_STRATA_LEVEL: Level = Level(2);
 
 #[derive(Clone, PartialEq, Eq, serde::Serialize, Default)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
@@ -436,7 +436,7 @@ impl Sedimentree {
                     checkpoints.push(commit_hash);
                 }
             }
-            if level <= TOP_BUNDLE_LEVEL {
+            if level <= TOP_STRATA_LEVEL {
                 if let Some((start, checkpoints)) = runs_by_level.remove(&level) {
                     if !self.strata.iter().any(|s| s.supports_block(commit_hash)) {
                         all_bundles.push(BundleSpec {
@@ -556,10 +556,12 @@ impl From<[u8; 32]> for MinimalTreeHash {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use num::Num;
 
     use super::{Stratum, StratumMeta};
-    use crate::{blob::BlobMeta, CommitHash};
+    use crate::{blob::BlobMeta, parse, CommitHash};
 
     pub(crate) fn hash_with_trailing_zeros(
         unstructured: &mut arbitrary::Unstructured<'_>,
@@ -660,5 +662,62 @@ mod tests {
                 assert!(lower_level.supports(&higher_level));
             },
         )
+    }
+
+    #[test]
+    fn loose_commit_encoding_roundtrip() {
+        bolero::check!()
+            .with_arbitrary::<super::LooseCommit>()
+            .for_each(|c| {
+                let mut out = Vec::new();
+                c.encode(&mut out);
+                let (_, decoded) = super::LooseCommit::parse(parse::Input::new(&out)).unwrap();
+                assert_eq!(c, &decoded);
+            });
+    }
+
+    #[test]
+    fn minimized_loose_commit_dag_doesnt_change() {
+        #[derive(Debug)]
+        struct Scenario {
+            commits: Vec<super::LooseCommit>,
+        }
+        impl<'a> arbitrary::Arbitrary<'a> for Scenario {
+            fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+                let mut frontier: Vec<CommitHash> = Vec::new();
+                let num_commits: u32 = u.int_in_range(1..=20)?;
+                let mut result = Vec::with_capacity(num_commits as usize);
+                for _ in 0..num_commits {
+                    let contents = Vec::<u8>::arbitrary(u)?;
+                    let blob = BlobMeta::new(&contents);
+                    let hash = crate::CommitHash::arbitrary(u)?;
+                    let mut parents = Vec::new();
+                    let mut num_parents = u.int_in_range(0..=frontier.len())?;
+                    let mut parent_choices = frontier.iter().collect::<Vec<_>>();
+                    while num_parents > 0 {
+                        let parent = u.choose(&parent_choices)?;
+                        parents.push(**parent);
+                        parent_choices
+                            .remove(parent_choices.iter().position(|p| p == parent).unwrap());
+                        num_parents -= 1;
+                    }
+                    frontier.retain(|p| !parents.contains(p));
+                    frontier.push(hash);
+                    result.push(super::LooseCommit {
+                        hash,
+                        parents,
+                        blob,
+                    });
+                }
+                Ok(Scenario { commits: result })
+            }
+        }
+        bolero::check!()
+            .with_arbitrary::<Scenario>()
+            .for_each(|Scenario { commits }| {
+                let tree = super::Sedimentree::new(vec![], commits.clone());
+                let minimized = tree.minimize();
+                assert_eq!(tree, minimized);
+            })
     }
 }

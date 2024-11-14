@@ -116,15 +116,15 @@ async fn add_commits<R: rand::Rng>(
 ) -> Vec<BundleSpec> {
     // TODO: This function should return an error if we are missing a chain from
     // each commit back to the last bundle boundary.
-    tracing::trace!("adding commits");
 
     let has_commit_boundary = commits
         .iter()
-        .any(|c| sedimentree::Level::from(c.hash()) <= sedimentree::TOP_BUNDLE_LEVEL);
+        .any(|c| sedimentree::Level::from(c.hash()) <= sedimentree::TOP_STRATA_LEVEL);
 
     let save_tasks = commits.into_iter().map(|commit| {
         let mut effects = effects.clone();
         async move {
+            tracing::debug!(commit = %commit.hash(), "adding commit");
             let blob = BlobMeta::new(commit.contents());
             let key = StorageKey::blob(blob.hash());
             let have_commit = effects.load(key.clone()).await.is_some();

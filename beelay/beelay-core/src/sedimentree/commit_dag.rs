@@ -192,38 +192,44 @@ impl CommitDag {
         tips.sort_by_key(|idx| self.nodes[idx.0].hash);
 
         for tip in tips {
-            let mut block = None;
+            let mut block: Option<(CommitHash, Vec<CommitHash>)> = None;
             for hash in self.reverse_topo(tip) {
                 let level = super::Level::from(hash);
-                if level <= super::TOP_BUNDLE_LEVEL {
-                    // Starting a new block, flush the old one
-                    if let Some((block, commits)) = block.take() {
+                if level <= super::TOP_STRATA_LEVEL {
+                    // We're in a block and we just found a checkpoint, this must be the start hash
+                    // for the block we're in. Flush the current block and start a new one.
+                    if let Some((block, mut commits)) = block.take() {
                         for commit in commits {
                             blockless_commits.remove(&commit);
                             commits_to_blocks
                                 .entry(commit)
-                                .or_insert(Vec::new())
+                                .or_insert_with(Vec::new)
                                 .push(block);
                         }
                     }
-                    block = Some((hash, vec![]));
+                    block = Some((hash, vec![hash]));
                 }
                 if let Some((_, commits)) = &mut block {
-                    if level > super::TOP_BUNDLE_LEVEL {
+                    if level > super::TOP_STRATA_LEVEL {
                         commits.push(hash);
                     }
                 } else {
-                    if !commits_to_blocks.contains_key(&hash) && level > super::TOP_BUNDLE_LEVEL {
+                    if !commits_to_blocks.contains_key(&hash) && level > super::TOP_STRATA_LEVEL {
                         blockless_commits.insert(hash);
                     }
                 }
             }
-            // We never found a start hash for this block, so flush it to the blockless commits
-            if let Some((_, commits)) = block.take() {
+            // We never found a start hash for this block, so the start must be the root hash
+            if let Some((end, commits)) = block.take() {
+                commits_to_blocks
+                    .entry(end)
+                    .or_insert_with(Vec::new)
+                    .push(end);
                 for commit in commits {
-                    if !commits_to_blocks.contains_key(&commit) {
-                        blockless_commits.insert(commit);
-                    }
+                    commits_to_blocks
+                        .entry(commit)
+                        .or_insert_with(Vec::new)
+                        .push(end);
                 }
             }
         }
@@ -690,7 +696,7 @@ mod tests {
             strata => [
                 {start: a, end: d, checkpoints: []}
             ],
-            simplified => [c, e]
+            simplified => [a, c, e]
         );
     }
 
@@ -711,7 +717,37 @@ mod tests {
             strata => [
                 {start: c, end: d, checkpoints: []}
             ],
-            simplified => [a]
+            simplified => [a, c]
+        );
+    }
+
+    #[test]
+    fn simplify_block_boundaries_without_strata() {
+        simplify_test!(
+            rng => &mut rand::thread_rng(),
+            nodes => | node | level |
+                     |   a  |   2   |
+                     |   b  |   0   |,
+            graph => {
+                a --> b
+            },
+            strata => [],
+            simplified => [a, b]
+        );
+    }
+
+    #[test]
+    fn simplify_consevutive_block_boundary_commits_without_strata() {
+        simplify_test!(
+            rng => &mut rand::thread_rng(),
+            nodes => | node | level |
+                     |   a  |   2   |
+                     |   b  |   2   |,
+            graph => {
+                a --> b
+            },
+            strata => [],
+            simplified => [a, b]
         );
     }
 
