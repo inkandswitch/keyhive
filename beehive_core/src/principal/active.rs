@@ -28,7 +28,7 @@ use crate::{
 use dupe::Dupe;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::Serialize;
-use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
@@ -98,7 +98,7 @@ impl Active {
         attenuate: Access,
         delegate: Agent<T>,
         after_revocations: Vec<Rc<Signed<Revocation<T>>>>,
-        after_content: BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)>,
+        after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
     ) -> Result<Signed<Delegation<T>>, ActiveDelegationError> {
         let proof = self
             .get_capability(subject, attenuate)
@@ -129,7 +129,7 @@ impl Active {
         &self,
         doc: &Document<T>,
         to: &Individual,
-        mut message: Vec<u8>,
+        message: Vec<u8>,
     ) -> Result<Encrypted<&[u8]>, ShareError> {
         let recipient_share_pk = doc
             .reader_keys
@@ -149,7 +149,7 @@ impl Active {
         let key: SymmetricKey = our_sk.diffie_hellman(&recipient_share_pk.1.into()).into();
 
         let nonce = Siv::new(&key, &message, doc.doc_id()).map_err(ShareError::SivError)?;
-        let mut bytes = message.to_vec();
+        let mut bytes = message.clone();
         key.try_encrypt(nonce, &mut bytes)
             .map_err(ShareError::EncryptionFailed)?;
 

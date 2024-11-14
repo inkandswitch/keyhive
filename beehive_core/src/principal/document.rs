@@ -14,6 +14,7 @@ use crate::{
         group::{
             operation::{
                 delegation::{Delegation, DelegationError},
+                revocation::Revocation,
                 AncestorError,
             },
             Group,
@@ -28,6 +29,7 @@ use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
 use nonempty::NonEmpty;
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
@@ -120,10 +122,14 @@ impl<T: ContentRef> Document<T> {
         &mut self,
         member_id: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<Document<T>>],
+        relevant_docs: &[&Rc<RefCell<Document<T>>>],
     ) -> Result<(), SigningError> {
         self.group
             .revoke_member(member_id, signing_key, relevant_docs)
+    }
+
+    pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
+        self.group.get_agent_revocations(agent)
     }
 
     pub fn materialize(&mut self) -> Result<(), AncestorError> {

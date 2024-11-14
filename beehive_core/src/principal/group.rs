@@ -24,6 +24,7 @@ use nonempty::NonEmpty;
 use operation::{delegation::Delegation, revocation::Revocation, AncestorError, Operation};
 use serde::{ser::SerializeStruct, Serialize, Serializer};
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
@@ -117,6 +118,20 @@ impl<T: ContentRef> Group<T> {
         })
     }
 
+    pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
+        self.state
+            .revocations
+            .iter()
+            .filter_map(|(_digest, rvk)| {
+                if rvk.payload().revoke.payload().delegate == *agent {
+                    Some(rvk.dupe())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     pub fn add_delegation(&mut self, signed_delegation: Signed<Delegation<T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
@@ -143,7 +158,7 @@ impl<T: ContentRef> Group<T> {
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
         after_revocations: &[&Rc<Signed<Revocation<T>>>],
-        relevant_docs: &[&Rc<Document<T>>],
+        relevant_docs: &[&Rc<RefCell<Document<T>>>],
     ) -> Result<(), AddMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
         let agent: Agent<T> = indie.into();
@@ -174,10 +189,14 @@ impl<T: ContentRef> Group<T> {
                     .iter()
                     .map(|d| {
                         (
-                            d.doc_id(),
+                            d.borrow().doc_id(),
                             (
                                 (*d).dupe(),
-                                d.content_heads.iter().map(|c| (*c).clone()).collect(),
+                                d.borrow()
+                                    .content_heads
+                                    .iter()
+                                    .map(|c| (*c).clone())
+                                    .collect(),
                             ),
                         )
                     })
@@ -193,7 +212,7 @@ impl<T: ContentRef> Group<T> {
         &mut self,
         member_to_remove: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<Document<T>>], // TODO just lookup reachable docs directly
+        relevant_docs: &[&Rc<RefCell<Document<T>>>], // TODO just lookup reachable docs directly
     ) -> Result<(), SigningError> {
         let revocations = &mut self.state.revocations;
 
@@ -207,10 +226,14 @@ impl<T: ContentRef> Group<T> {
                             .iter()
                             .map(|d| {
                                 (
-                                    d.doc_id(),
+                                    d.borrow().doc_id(),
                                     (
                                         (*d).dupe(),
-                                        d.content_heads.iter().map(|c| (*c).clone()).collect(),
+                                        (*d).borrow()
+                                            .content_heads
+                                            .iter()
+                                            .map(|c| (*c).clone())
+                                            .collect(),
                                     ),
                                 )
                             })

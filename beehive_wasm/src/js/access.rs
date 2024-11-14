@@ -1,5 +1,6 @@
 use beehive_core::access::Access;
 use dupe::Dupe;
+use std::ops::Deref;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Access)]
@@ -22,5 +23,13 @@ impl JsAccess {
     #[wasm_bindgen(js_name = toString)]
     pub fn to_string(&self) -> String {
         self.0.to_string()
+    }
+}
+
+impl Deref for JsAccess {
+    type Target = Access;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

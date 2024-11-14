@@ -1,4 +1,5 @@
 use beehive_core::principal::agent::Agent;
+use std::ops::Deref;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Agent)]
@@ -41,5 +42,13 @@ impl JsAgent {
             Agent::Document(_) => true,
             _ => false,
         }
+    }
+}
+
+impl Deref for JsAgent {
+    type Target = Agent<automerge::ChangeHash>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

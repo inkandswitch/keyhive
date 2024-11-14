@@ -1,4 +1,3 @@
-use super::signing_key::JsSigningKey;
 use beehive_core::crypto::signed::Signed;
 use wasm_bindgen::prelude::*;
 

@@ -11,7 +11,7 @@ rust-version.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-automerge = "^0.5"
+automerge = { version = "^0.5", features = ["wasm"] }
 beehive_core = { path = "../beehive_core" }
 dupe = { workspace = true }
 ed25519-dalek = { workspace = true }

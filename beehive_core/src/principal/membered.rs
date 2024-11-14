@@ -1,7 +1,11 @@
 use super::{
-    agent::AgentId,
+    agent::{Agent, AgentId},
     document::{id::DocumentId, Document},
-    group::{id::GroupId, operation::delegation::Delegation, Group},
+    group::{
+        id::GroupId,
+        operation::{delegation::Delegation, revocation::Revocation},
+        Group,
+    },
     identifier::Identifier,
     verifiable::Verifiable,
 };
@@ -64,7 +68,7 @@ impl<T: ContentRef> Membered<T> {
         &mut self,
         member_id: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<Document<T>>],
+        relevant_docs: &[&Rc<RefCell<Document<T>>>],
     ) -> Result<(), SigningError> {
         match self {
             Membered::Group(group) => {
@@ -77,6 +81,13 @@ impl<T: ContentRef> Membered<T> {
                     .borrow_mut()
                     .revoke_member(member_id, signing_key, relevant_docs)
             }
+        }
+    }
+
+    pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
+        match self {
+            Membered::Group(group) => group.borrow().get_agent_revocations(agent),
+            Membered::Document(document) => document.borrow().get_agent_revocations(agent),
         }
     }
 }

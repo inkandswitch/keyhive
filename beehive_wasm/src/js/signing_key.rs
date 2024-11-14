@@ -1,6 +1,7 @@
 use super::signed::JsSigned;
-use beehive_core::crypto::signed::Signed;
+use beehive_core::crypto::signed::{Signed, SigningError};
 use rand::Fill;
+use std::ops::Deref;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -36,12 +37,17 @@ impl JsSigningKey {
             .map_err(|_| GenSigningKeyError::CannotParseEd25519SigningKey)
     }
 
-    // FIXME better error
     #[wasm_bindgen(js_name = trySign)]
-    pub fn try_sign(&self, data: &[u8]) -> Result<JsSigned, String> {
-        Ok(JsSigned(
-            Signed::try_sign(data.to_vec(), &self.0).map_err(|e| e.to_string())?,
-        ))
+    pub fn try_sign(&self, data: &[u8]) -> Result<JsSigned, JsSigningError> {
+        Ok(JsSigned(Signed::try_sign(data.to_vec(), &self.0)?))
+    }
+}
+
+impl Deref for JsSigningKey {
+    type Target = ed25519_dalek::SigningKey;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -58,6 +64,24 @@ pub enum GenSigningKeyError {
 
     #[error("Cannot parse ed25519 signing key")]
     CannotParseEd25519SigningKey,
+}
+
+#[wasm_bindgen(js_name = "SigningError")]
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct JsSigningError(Box<SigningError>);
+
+#[wasm_bindgen(js_class = "SigningError")]
+impl JsSigningError {
+    pub fn message(&self) -> String {
+        self.0.to_string()
+    }
+}
+
+impl From<SigningError> for JsSigningError {
+    fn from(e: SigningError) -> Self {
+        JsSigningError(Box::new(e))
+    }
 }
 
 #[cfg(test)]

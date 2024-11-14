@@ -1,5 +1,7 @@
 pub mod access;
 pub mod agent;
+pub mod beehive;
+pub mod delegation;
 pub mod document;
 pub mod document_id;
 pub mod group;

@@ -11,7 +11,12 @@ use crate::{
         active::Active,
         agent::{Agent, AgentId},
         document::{id::DocumentId, store::DocumentStore, Document},
-        group::{id::GroupId, operation::delegation::DelegationError, store::GroupStore, Group},
+        group::{
+            id::GroupId,
+            operation::delegation::{Delegation, DelegationError},
+            store::GroupStore,
+            Group,
+        },
         identifier::Identifier,
         individual::{id::IndividualId, Individual},
         membered::Membered,
@@ -94,25 +99,37 @@ impl<T: ContentRef> Context<T> {
         self.active.borrow().try_sign(data)
     }
 
+    pub fn register_individual(&mut self, individual: Individual) {
+        self.individuals
+            .insert(individual.id().into(), Rc::new(RefCell::new(individual)));
+    }
+
     pub fn add_member(
         &mut self,
-        to_add: AgentId,
+        to_add: Agent<T>,
         resource: &mut Membered<T>,
         can: Access,
-    ) -> Result<(), SigningError> {
-        todo!()
-        // FIXME generate the delegation or fail with e.g. no proof
-        // resource.add_member(to_add, &self.active.borrow().signer)
-        // FIXME
-        // FIXME
-        // FIXME
-        // FIXME
-        // FIXME
-        // FIXME
-        // FIXME
-        // FIXME
-        // FIXME
-        // FIXME
+        after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+    ) -> Result<(), DelegationError> {
+        let proof = resource
+            .get_capability(&self.active.borrow().agent_id())
+            .ok_or(DelegationError::Escalation)?;
+
+        if can > proof.payload().can {
+            return Err(DelegationError::Escalation);
+        }
+
+        let after_revocations = resource.get_agent_revocations(&to_add);
+
+        let dlg = self.try_sign(Delegation {
+            delegate: to_add,
+            proof: Some(proof),
+            can,
+            after_revocations,
+            after_content,
+        })?;
+
+        Ok(resource.add_member(dlg))
     }
 
     pub fn revoke_member(
@@ -120,7 +137,7 @@ impl<T: ContentRef> Context<T> {
         to_revoke: AgentId,
         resource: &mut Membered<T>,
     ) -> Result<(), SigningError> {
-        let relevant_docs = vec![]; // FIXME calcaulet reachable for revoked or just all known docs
+        let relevant_docs = vec![]; // FIXME calculate reachable for revoked or just all known docs
 
         resource.revoke_member(
             to_revoke,
@@ -130,11 +147,28 @@ impl<T: ContentRef> Context<T> {
     }
 
     pub fn reachable_docs(&self) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> {
+        self.docs_reachable_by_agent(self.active.dupe().into())
+    }
+
+    pub fn reachable_members(
+        &self,
+        membered: Membered<T>,
+    ) -> BTreeMap<AgentId, (Agent<T>, Access)> {
+        match membered {
+            Membered::Group(group) => self.groups.transitive_members(&group.borrow()),
+            Membered::Document(doc) => self.docs.transitive_members(&doc.borrow()),
+        }
+    }
+
+    pub fn docs_reachable_by_agent(
+        &self,
+        agent: Agent<T>,
+    ) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> {
         let mut explore: Vec<(Rc<RefCell<Group<T>>>, Access)> = vec![];
         let mut caps: BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> = BTreeMap::new();
         let mut seen: HashSet<AgentId> = HashSet::new();
 
-        let agent_id = self.active.borrow().agent_id();
+        let agent_id = agent.agent_id();
 
         for doc in self.docs.docs.values() {
             seen.insert(doc.clone().borrow().agent_id());
@@ -191,16 +225,6 @@ impl<T: ContentRef> Context<T> {
         }
 
         caps
-    }
-
-    pub fn transitive_members(
-        &self,
-        membered: Membered<T>,
-    ) -> BTreeMap<AgentId, (Agent<T>, Access)> {
-        match membered {
-            Membered::Group(group) => self.groups.transitive_members(&group.borrow()),
-            Membered::Document(doc) => self.docs.transitive_members(&doc.borrow()),
-        }
     }
 
     pub fn get_agent(&self, id: Identifier) -> Option<Agent<T>> {
