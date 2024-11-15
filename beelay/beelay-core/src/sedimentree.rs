@@ -34,7 +34,7 @@ impl SedimentreeSummary {
     }
 }
 
-#[derive(Copy, Debug, Clone, PartialEq, Eq, Ord, Hash)]
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Level(u32);
 
 impl<'a> From<&'a CommitHash> for Level {
@@ -59,12 +59,18 @@ impl std::fmt::Display for Level {
 // "lower". This is mainly so that the sedmintree metaphor holds
 impl PartialOrd for Level {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Level {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         if self.0 < other.0 {
-            Some(std::cmp::Ordering::Greater)
+            std::cmp::Ordering::Greater
         } else if self.0 > other.0 {
-            Some(std::cmp::Ordering::Less)
+            std::cmp::Ordering::Less
         } else {
-            Some(std::cmp::Ordering::Equal)
+            std::cmp::Ordering::Equal
         }
     }
 }
