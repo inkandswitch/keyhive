@@ -495,6 +495,18 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         ops
     }
 
+    pub fn get_individual(&self, id: IndividualId) -> Option<&Rc<RefCell<Individual>>> {
+        self.individuals.get(&id)
+    }
+
+    pub fn get_group(&self, id: GroupId) -> Option<&Rc<RefCell<Group<T>>>> {
+        self.groups.get(&id)
+    }
+
+    pub fn get_document(&self, id: DocumentId) -> Option<&Rc<RefCell<Document<T>>>> {
+        self.docs.get(&id)
+    }
+
     pub fn get_peer(&self, id: Identifier) -> Option<Peer<T>> {
         let indie_id = IndividualId(id);
 
