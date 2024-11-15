@@ -154,3 +154,39 @@ pub enum ReceiveError {
     #[error(transparent)]
     DecryptionFailed(#[from] DecryptError),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_setup() {
+        let m = Manager::new(&mut rand::thread_rng());
+        assert_eq!(m.channels.len(), 0);
+    }
+
+    #[test]
+    fn test_dial() {
+        let mut m1 = Manager::new(&mut rand::thread_rng());
+        let m2 = Manager::new(&mut rand::thread_rng());
+
+        let intro_key = m1.introduction_public_key.clone();
+        let d = m1.dial(&m2.verifier, &mut rand::thread_rng()).unwrap();
+
+        assert!(d.verify().is_ok());
+        assert_eq!(d.payload.to, m2.verifier);
+        assert_eq!(d.payload.introduction_public_key, intro_key);
+        assert!(m1.channels.is_empty());
+    }
+
+    #[test]
+    fn test_handshake() {
+        let mut m1 = Manager::new(&mut rand::thread_rng());
+        let mut m2 = Manager::new(&mut rand::thread_rng());
+
+        let d = m1.dial(&m2.verifier, &mut rand::thread_rng()).unwrap();
+        m2.handshake(&d, &mut rand::thread_rng()).unwrap();
+
+        assert!(m2.channels.contains_key(&m1.verifier));
+    }
+}
