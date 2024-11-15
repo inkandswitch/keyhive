@@ -2,9 +2,12 @@ use crate::principal::{
     document::id::DocumentId, group::id::GroupId, identifier::Identifier,
     individual::id::IndividualId, verifiable::Verifiable,
 };
+use derive_more::Display;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Display, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub enum AgentId {
     ActiveId(IndividualId),
     IndividualId(IndividualId),

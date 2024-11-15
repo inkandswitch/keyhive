@@ -3,6 +3,7 @@
 use crate::{
     ability::Ability,
     access::Access,
+    archive::Archive,
     cgka::error::CgkaError,
     content::reference::ContentRef,
     crypto::{
@@ -15,10 +16,10 @@ use crate::{
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
-        document::AddMemberError,
         document::{
-            id::DocumentId, AddMemberUpdate, DecryptError, Document, EncryptError,
-            EncryptedContentWithUpdate, RevokeMemberUpdate,
+            id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError, Document, EncryptError,
+            EncryptedContentWithUpdate, MissingIndividualError, RevokeMemberUpdate,
+            TryFromDocumentArchiveError,
         },
         group::{
             error::AddError,
@@ -28,6 +29,7 @@ use crate::{
                 revocation::{Revocation, StaticRevocation},
                 Operation, StaticOperation,
             },
+            state::MissingOperation,
             Group, RevokeMemberError,
         },
         identifier::Identifier,
@@ -39,6 +41,7 @@ use crate::{
     },
     util::content_addressed_map::CaMap,
 };
+use derivative::Derivative;
 use dupe::Dupe;
 use nonempty::NonEmpty;
 use serde::Serialize;
@@ -50,7 +53,8 @@ use std::{
 use thiserror::Error;
 
 /// The main object for a user agent & top-level owned stores.
-#[derive(Debug)]
+#[derive(Debug, Derivative)]
+#[derivative(PartialEq, Eq)]
 pub struct Beehive<T: ContentRef, R: rand::CryptoRng + rand::RngCore> {
     /// The [`Active`] user agent.
     active: Rc<RefCell<Active>>,
@@ -71,6 +75,7 @@ pub struct Beehive<T: ContentRef, R: rand::CryptoRng + rand::RngCore> {
     revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
 
     /// Cryptographically secure (pseudo)random number generator.
+    #[derivative(PartialEq = "ignore")]
     csprng: R,
 }
 
@@ -765,6 +770,241 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
         group
     }
+
+    pub fn into_archive(&self) -> Archive<T> {
+        Archive {
+            active: self.active.borrow().clone(),
+            topsorted_ops: Operation::<T>::topsort(
+                &self.delegations.borrow(),
+                &self.revocations.borrow(),
+            )
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect(),
+            individuals: self
+                .individuals
+                .iter()
+                .map(|(k, rc_v)| (*k, rc_v.borrow().clone()))
+                .collect(),
+            groups: self
+                .groups
+                .iter()
+                .map(|(k, rc_v)| (*k, rc_v.borrow().clone().into()))
+                .collect(),
+            docs: self
+                .docs
+                .iter()
+                .map(|(k, rc_v)| (*k, rc_v.borrow().clone().into()))
+                .collect(),
+        }
+    }
+
+    pub fn try_from_archive(
+        archive: &Archive<T>,
+        csprng: R,
+    ) -> Result<Self, TryFromArchiveError<T>> {
+        let active = Rc::new(RefCell::new(archive.active.clone()));
+
+        let delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>> = Default::default();
+        let revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>> = Default::default();
+
+        let mut individuals = HashMap::new();
+        for (k, v) in archive.individuals.iter() {
+            individuals.insert(*k, Rc::new(RefCell::new(v.clone())));
+        }
+
+        let mut groups = HashMap::new();
+        for (group_id, group_archive) in archive.groups.iter() {
+            groups.insert(
+                *group_id,
+                Rc::new(RefCell::new(Group::<T>::dummy_from_archive(
+                    group_archive.clone(),
+                    delegations.dupe(),
+                    revocations.dupe(),
+                ))),
+            );
+        }
+
+        let mut docs = HashMap::new();
+        for (doc_id, doc_archive) in archive.docs.iter() {
+            docs.insert(
+                *doc_id,
+                Rc::new(RefCell::new(Document::<T>::dummy_from_archive(
+                    doc_archive.clone(),
+                    &individuals,
+                    delegations.dupe(),
+                    revocations.dupe(),
+                )?)),
+            );
+        }
+
+        for (digest, static_op) in archive.topsorted_ops.iter() {
+            match static_op {
+                StaticOperation::Delegation(sd) => {
+                    let proof: Option<Rc<Signed<Delegation<T>>>> = sd
+                        .payload
+                        .proof
+                        .map(|proof_digest| {
+                            delegations
+                                .borrow()
+                                .get(&proof_digest.into())
+                                .ok_or(TryFromArchiveError::MissingDelegation(proof_digest.into()))
+                                .cloned()
+                        })
+                        .transpose()?;
+
+                    let mut after_revocations = vec![];
+                    for rev_digest in sd.payload.after_revocations.iter() {
+                        let r: Rc<Signed<Revocation<T>>> = revocations
+                            .borrow()
+                            .get(&rev_digest.into())
+                            .ok_or(TryFromArchiveError::MissingRevocation(rev_digest.into()))?
+                            .dupe();
+
+                        after_revocations.push(r);
+                    }
+
+                    let id = sd.payload.delegate;
+                    let delegate: Agent<T> = if id == archive.active.id().into() {
+                        active.dupe().into()
+                    } else {
+                        individuals
+                            .get(&IndividualId(id))
+                            .map(|i| i.dupe().into())
+                            .or_else(|| groups.get(&GroupId(id)).map(|g| g.dupe().into()))
+                            .or_else(|| docs.get(&DocumentId(id)).map(|d| d.dupe().into()))
+                            .ok_or(TryFromArchiveError::MissingAgent(Box::new(id)))?
+                    };
+
+                    delegations.borrow_mut().0.insert(
+                        (*digest).into(),
+                        Rc::new(Signed {
+                            signature: sd.signature,
+                            issuer: sd.issuer,
+                            payload: Delegation {
+                                delegate,
+                                proof,
+                                can: sd.payload.can,
+                                after_revocations,
+                                after_content: sd.payload.after_content.clone(),
+                            },
+                        }),
+                    );
+                }
+                StaticOperation::Revocation(sr) => {
+                    revocations.borrow_mut().0.insert(
+                        (*digest).into(),
+                        Rc::new(Signed {
+                            issuer: sr.issuer,
+                            signature: sr.signature,
+                            payload: Revocation {
+                                revoke: delegations
+                                    .borrow()
+                                    .get(&sr.payload.revoke.into())
+                                    .ok_or(TryFromArchiveError::MissingDelegation(
+                                        sr.payload.revoke.into(),
+                                    ))
+                                    .cloned()?,
+                                proof: sr
+                                    .payload
+                                    .proof
+                                    .map(|proof_digest| {
+                                        delegations
+                                            .borrow()
+                                            .get(&proof_digest.into())
+                                            .ok_or(TryFromArchiveError::MissingDelegation(
+                                                proof_digest.into(),
+                                            ))
+                                            .cloned()
+                                    })
+                                    .transpose()?,
+                                after_content: sr.payload.after_content.clone(),
+                            },
+                        }),
+                    );
+                }
+            };
+        }
+
+        fn reify_ops<U: ContentRef>(
+            group: &mut Group<U>,
+            dlg_store: Rc<RefCell<CaMap<Signed<Delegation<U>>>>>,
+            rev_store: Rc<RefCell<CaMap<Signed<Revocation<U>>>>>,
+            dlg_head_hashes: &HashSet<Digest<Signed<Delegation<U>>>>,
+            rev_head_hashes: &HashSet<Digest<Signed<Revocation<U>>>>,
+            members: HashMap<AgentId, Vec<Digest<Signed<Delegation<U>>>>>,
+        ) -> Result<(), TryFromArchiveError<U>> {
+            let read_dlgs = dlg_store.borrow();
+            let read_revs = rev_store.borrow();
+
+            for dlg_hash in dlg_head_hashes.iter() {
+                let actual_dlg = read_dlgs
+                    .get(dlg_hash)
+                    .ok_or(TryFromArchiveError::MissingDelegation(*dlg_hash))?;
+                group.state.delegation_heads.insert(actual_dlg.dupe());
+            }
+
+            for rev_hash in rev_head_hashes.iter() {
+                let actual_rev = read_revs
+                    .get(rev_hash)
+                    .ok_or(TryFromArchiveError::MissingRevocation(*rev_hash))?;
+                group.state.revocation_heads.insert(actual_rev.dupe());
+            }
+
+            for (agent_id, proof_hashes) in members.iter() {
+                let mut proofs = vec![];
+                for proof_hash in proof_hashes.iter() {
+                    let actual_dlg = read_dlgs
+                        .get(proof_hash)
+                        .ok_or(TryFromArchiveError::MissingDelegation(*proof_hash))?;
+                    proofs.push(actual_dlg.dupe());
+                }
+                group.members.insert(*agent_id, proofs);
+            }
+
+            Ok(())
+        }
+
+        for (group_id, group) in groups.iter() {
+            let group_archive = archive
+                .groups
+                .get(group_id)
+                .ok_or(TryFromArchiveError::MissingGroup(Box::new(*group_id)))?;
+            reify_ops(
+                &mut group.borrow_mut(),
+                delegations.dupe(),
+                revocations.dupe(),
+                &group_archive.state.delegation_heads,
+                &group_archive.state.revocation_heads,
+                group_archive.members.clone(),
+            )?;
+        }
+
+        for (doc_id, doc) in docs.iter() {
+            let doc_archive = archive
+                .docs
+                .get(doc_id)
+                .ok_or(TryFromArchiveError::MissingDocument(Box::new(*doc_id)))?;
+            reify_ops(
+                &mut doc.borrow_mut().group,
+                delegations.dupe(),
+                revocations.dupe(),
+                &doc_archive.group.state.delegation_heads,
+                &doc_archive.group.state.revocation_heads,
+                doc_archive.group.members.clone(),
+            )?;
+        }
+
+        Ok(Self {
+            active,
+            individuals,
+            groups,
+            docs,
+            delegations,
+            revocations,
+            csprng,
+        })
+    }
 }
 
 impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Verifiable for Beehive<T, R> {
@@ -797,12 +1037,104 @@ pub enum ReceieveStaticDelegationError<T: ContentRef> {
     GroupReceiveError(#[from] AddError),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum TryFromArchiveError<T: ContentRef> {
+    #[error("Missing delegation: {0}")]
+    MissingDelegation(#[from] Digest<Signed<Delegation<T>>>),
+
+    #[error("Missing revocation: {0}")]
+    MissingRevocation(#[from] Digest<Signed<Revocation<T>>>),
+
+    #[error("Missing individual: {0}")]
+    MissingIndividual(Box<IndividualId>),
+
+    #[error("Missing group: {0}")]
+    MissingGroup(Box<GroupId>),
+
+    #[error("Missing document: {0}")]
+    MissingDocument(Box<DocumentId>),
+
+    #[error("Missing agent: {0}")]
+    MissingAgent(Box<Identifier>),
+}
+
+impl<T: ContentRef> From<MissingIndividualError> for TryFromArchiveError<T> {
+    fn from(e: MissingIndividualError) -> Self {
+        TryFromArchiveError::MissingIndividual(e.0)
+    }
+}
+
+impl<T: ContentRef> From<MissingOperation<T>> for TryFromArchiveError<T> {
+    fn from(e: MissingOperation<T>) -> Self {
+        match e {
+            MissingOperation::Delegation(d) => TryFromArchiveError::MissingDelegation(d),
+            MissingOperation::Revocation(r) => TryFromArchiveError::MissingRevocation(r),
+        }
+    }
+}
+
+impl<T: ContentRef> From<TryFromDocumentArchiveError<T>> for TryFromArchiveError<T> {
+    fn from(e: TryFromDocumentArchiveError<T>) -> Self {
+        match e {
+            TryFromDocumentArchiveError::MissingDelegation(d) => {
+                TryFromArchiveError::MissingDelegation(d)
+            }
+            TryFromDocumentArchiveError::MissingRevocation(r) => {
+                TryFromArchiveError::MissingRevocation(r)
+            }
+            TryFromDocumentArchiveError::MissingIndividual(i) => {
+                TryFromArchiveError::MissingIndividual(Box::new(i))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{access::Access, principal::public::Public};
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn test_archival_round_trip() {
+        let mut csprng = rand::thread_rng();
+
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
+        let mut hive = Beehive::generate(sk, rand::thread_rng()).unwrap();
+
+        let indie_sk = ed25519_dalek::SigningKey::generate(&mut csprng);
+        let indie = Rc::new(RefCell::new(
+            Individual::generate(&indie_sk, &mut csprng).unwrap(),
+        ));
+
+        hive.register_individual(indie.dupe());
+        hive.generate_group(vec![indie.dupe().into()]).unwrap();
+        hive.generate_doc(
+            vec![indie.into()],
+            nonempty!["ref1".to_string(), "ref2".to_string()],
+        )
+        .unwrap();
+
+        assert!(hive.active.borrow().prekey_pairs.len() > 0);
+        assert_eq!(hive.individuals.len(), 2);
+        assert_eq!(hive.groups.len(), 1);
+        assert_eq!(hive.docs.len(), 1);
+        assert_eq!(hive.delegations.borrow().len(), 4);
+        assert_eq!(hive.revocations.borrow().len(), 0);
+
+        let archive = hive.into_archive();
+
+        assert_eq!(hive.id(), archive.active.id());
+        assert_eq!(archive.individuals.len(), 2);
+        assert_eq!(archive.groups.len(), 1);
+        assert_eq!(archive.docs.len(), 1);
+        assert_eq!(archive.topsorted_ops.len(), 4);
+
+        let hive_from_archive = Beehive::try_from_archive(&archive, rand::thread_rng()).unwrap();
+
+        assert_eq!(hive, hive_from_archive);
+    }
 
     #[test]
     fn test_receive_delegations_associately() {

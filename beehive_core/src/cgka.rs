@@ -31,6 +31,7 @@ use error::CgkaError;
 use keys::ShareKeyMap;
 use nonempty::NonEmpty;
 use operation::{CgkaEpoch, CgkaOperation, CgkaOperationGraph};
+use serde::{Deserialize, Serialize};
 
 /// Exposes CGKA (Continuous Group Key Agreement) operations like deriving
 /// a new application secret, rotating keys, and adding and removing members
@@ -42,7 +43,7 @@ use operation::{CgkaEpoch, CgkaOperation, CgkaOperationGraph};
 ///
 /// We assume that all operations are received in causal order (a property
 /// guaranteed by Beehive as a whole).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cgka {
     doc_id: DocumentId,
     /// The id of the member who owns this tree.

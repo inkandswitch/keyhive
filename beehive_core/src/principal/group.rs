@@ -27,13 +27,13 @@ use dupe::{Dupe, IterDupedExt};
 use id::GroupId;
 use nonempty::NonEmpty;
 use operation::{delegation::Delegation, revocation::Revocation, Operation};
-use serde::{ser::SerializeStruct, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
-use thiserror::Error;
+use thiserror::Error; // FIXME move to group::error.
 
 /// A collection of agents with no associated content.
 ///
@@ -45,7 +45,7 @@ pub struct Group<T: ContentRef> {
     pub(crate) individual: Individual,
 
     /// The current view of members of a group.
-    pub(crate) members: HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>>,
+    pub(crate) members: HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>>, // FIXME nonempty?
 
     /// The `Group`'s underlying (causal) delegation state.
     pub(crate) state: state::GroupState<T>,
@@ -510,6 +510,23 @@ impl<T: ContentRef> Group<T> {
             }
         }
     }
+
+    pub(crate) fn dummy_from_archive(
+        archive: GroupArchive<T>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+    ) -> Self {
+        let mut members = HashMap::new();
+        for (agent_id, _dlg_hashes) in archive.members.iter() {
+            members.insert(*agent_id, vec![]);
+        }
+
+        Self {
+            members,
+            individual: archive.individual,
+            state: state::GroupState::dummy_from_archive(archive.state, delegations, revocations),
+        }
+    }
 }
 
 impl<T: ContentRef> Verifiable for Group<T> {
@@ -518,18 +535,27 @@ impl<T: ContentRef> Verifiable for Group<T> {
     }
 }
 
-impl<T: ContentRef> Serialize for Group<T> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let members = self
-            .members
-            .iter()
-            .map(|(k, v)| (k, v.len()))
-            .collect::<HashMap<_, _>>();
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupArchive<T: ContentRef> {
+    pub(crate) individual: Individual,
+    pub(crate) members: HashMap<AgentId, Vec<Digest<Signed<Delegation<T>>>>>,
+    pub(crate) state: state::GroupStateArchive<T>,
+}
 
-        let mut state = serializer.serialize_struct("Group", 2)?;
-        state.serialize_field("members", &members)?;
-        state.serialize_field("state", &self.state)?;
-        state.end()
+impl<T: ContentRef> From<Group<T>> for GroupArchive<T> {
+    fn from(group: Group<T>) -> Self {
+        GroupArchive {
+            individual: group.individual.clone(),
+            members: group
+                .members
+                .iter()
+                .map(|(k, vs)| {
+                    let hashes = vs.iter().map(|v| Digest::hash(v.as_ref())).collect();
+                    (*k, hashes)
+                })
+                .collect(),
+            state: state::GroupStateArchive::<T>::from(&group.state),
+        }
     }
 }
 

@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 [dependencies]
 beehive_core = { path = "../beehive_core" }
 
+bincode = { workspace = true }
 derive_more = { workspace = true }
 dupe = { workspace = true }
 ed25519-dalek = { workspace = true }

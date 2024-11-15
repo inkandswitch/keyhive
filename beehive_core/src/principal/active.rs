@@ -25,12 +25,12 @@ use crate::{
 use derivative::Derivative;
 use dupe::Dupe;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
-#[derive(Clone, Derivative, Serialize)]
+#[derive(Clone, Derivative, Serialize, Deserialize)]
 #[derivative(Hash, PartialEq)]
 pub struct Active {
     /// The signing key of the active agent.

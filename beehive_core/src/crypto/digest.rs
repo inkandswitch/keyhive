@@ -288,8 +288,26 @@ impl<T: ContentRef> From<Digest<StaticOperation<T>>> for Digest<Signed<StaticDel
     }
 }
 
+impl<T: ContentRef> From<Digest<StaticOperation<T>>> for Digest<Signed<Delegation<T>>> {
+    fn from(hash: Digest<StaticOperation<T>>) -> Self {
+        hash.coerce()
+    }
+}
+
 impl<T: ContentRef> From<Digest<StaticOperation<T>>> for Digest<Signed<StaticRevocation<T>>> {
     fn from(hash: Digest<StaticOperation<T>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<Digest<StaticOperation<T>>> for Digest<Signed<Revocation<T>>> {
+    fn from(hash: Digest<StaticOperation<T>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<Digest<Operation<T>>> for Digest<StaticOperation<T>> {
+    fn from(hash: Digest<Operation<T>>) -> Self {
         hash.coerce()
     }
 }

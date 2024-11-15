@@ -1,6 +1,6 @@
 pub mod id;
 
-use super::{individual::id::IndividualId, verifiable::Verifiable};
+use super::{group::AddGroupMemberError, individual::id::IndividualId, verifiable::Verifiable};
 use crate::{
     access::Access,
     cgka::{error::CgkaError, keys::ShareKeyMap, operation::CgkaOperation, Cgka},
@@ -11,6 +11,7 @@ use crate::{
         share_key::{ShareKey, ShareSecretKey},
         signed::Signed,
     },
+    error::missing_dependency::MissingDependency,
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
@@ -20,7 +21,8 @@ use crate::{
                 delegation::{Delegation, DelegationError},
                 revocation::Revocation,
             },
-            AddGroupMemberError, Group, RevokeMemberError,
+            state::MissingOperation,
+            Group, GroupArchive, RevokeMemberError,
         },
         identifier::Identifier,
         individual::Individual,
@@ -31,6 +33,7 @@ use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
 use nonempty::NonEmpty;
+use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
@@ -41,7 +44,7 @@ use thiserror::Error;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document<T: ContentRef> {
     pub(crate) group: Group<T>,
-    pub(crate) reader_keys: HashMap<IndividualId, (Rc<Individual>, ShareKey)>,
+    pub(crate) reader_keys: HashMap<IndividualId, (Rc<RefCell<Individual>>, ShareKey)>,
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
     pub(crate) cgka: Cgka,
@@ -292,6 +295,36 @@ impl<T: ContentRef> Document<T> {
             .map_err(DecryptError::DecryptionFailed)?;
         Ok(plaintext)
     }
+
+    pub(crate) fn dummy_from_archive(
+        archive: DocumentArchive<T>,
+        individuals: &HashMap<IndividualId, Rc<RefCell<Individual>>>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+    ) -> Result<Self, MissingIndividualError> {
+        Ok(Document {
+            group: Group::<T>::dummy_from_archive(archive.group, delegations, revocations),
+            reader_keys: archive.reader_keys.into_iter().try_fold(
+                HashMap::new(),
+                |mut acc, (id, share_key)| {
+                    acc.insert(
+                        id,
+                        (
+                            individuals
+                                .get(&id)
+                                .ok_or(MissingIndividualError(Box::new(id)))?
+                                .dupe(),
+                            share_key,
+                        ),
+                    );
+                    Ok(acc)
+                },
+            )?,
+            content_heads: archive.content_heads,
+            content_state: archive.content_state,
+            cgka: archive.cgka,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -306,14 +339,9 @@ pub struct RevokeMemberUpdate<T: ContentRef> {
     pub(crate) cgka_ops: Vec<CgkaOperation>,
 }
 
-#[derive(Debug, Error)]
-pub enum AddMemberError {
-    #[error(transparent)]
-    AddMemberError(#[from] AddGroupMemberError),
-
-    #[error(transparent)]
-    CgkaError(#[from] CgkaError),
-}
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("Missing individual: {0}")]
+pub struct MissingIndividualError(pub Box<IndividualId>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum EncryptError {
@@ -331,6 +359,15 @@ pub struct EncryptedContentWithUpdate<T: ContentRef> {
     pub(crate) update_op: Option<CgkaOperation>,
 }
 
+#[derive(Debug, Error)]
+pub enum AddMemberError {
+    #[error(transparent)]
+    AddMemberError(#[from] AddGroupMemberError),
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DecryptError {
     #[error("Key not found")]
@@ -342,5 +379,59 @@ pub enum DecryptError {
 impl<T: ContentRef> Verifiable for Document<T> {
     fn verifying_key(&self) -> VerifyingKey {
         self.group.verifying_key()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct DocumentArchive<T: ContentRef> {
+    pub(crate) group: GroupArchive<T>,
+    pub(crate) reader_keys: HashMap<IndividualId, ShareKey>,
+    pub(crate) content_heads: HashSet<T>,
+    pub(crate) content_state: HashSet<T>,
+    pub(crate) cgka: Cgka,
+}
+
+impl<T: ContentRef> From<Document<T>> for DocumentArchive<T> {
+    fn from(doc: Document<T>) -> Self {
+        DocumentArchive {
+            group: doc.group.into(),
+            reader_keys: doc
+                .reader_keys
+                .into_iter()
+                .map(|(id, (_, share_key))| (id, share_key))
+                .collect(),
+            content_heads: doc.content_heads,
+            content_state: doc.content_state,
+            cgka: doc.cgka,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum TryFromDocumentArchiveError<T: ContentRef> {
+    #[error("Cannot find individual: {0}")]
+    MissingIndividual(IndividualId),
+
+    #[error("Cannot find delegation: {0}")]
+    MissingDelegation(Digest<Signed<Delegation<T>>>),
+
+    #[error("Cannot find revocation: {0}")]
+    MissingRevocation(Digest<Signed<Revocation<T>>>),
+}
+
+impl<T: ContentRef> From<MissingDependency<Digest<Signed<Delegation<T>>>>>
+    for TryFromDocumentArchiveError<T>
+{
+    fn from(e: MissingDependency<Digest<Signed<Delegation<T>>>>) -> Self {
+        TryFromDocumentArchiveError::MissingDelegation(e.0)
+    }
+}
+
+impl<T: ContentRef> From<MissingOperation<T>> for TryFromDocumentArchiveError<T> {
+    fn from(missing: MissingOperation<T>) -> Self {
+        match missing {
+            MissingOperation::Delegation(d) => TryFromDocumentArchiveError::MissingDelegation(d),
+            MissingOperation::Revocation(r) => TryFromDocumentArchiveError::MissingRevocation(r),
+        }
     }
 }
