@@ -12,8 +12,8 @@ use std::{
 use thiserror::Error;
 
 /// A wrapper to add a signature and signer information to an arbitrary payload.
-#[derive(Clone, Derivative, Eq, Serialize, Deserialize)]
-#[derivative(Debug, PartialEq, Hash)]
+#[derive(Clone, Derivative, Serialize, Deserialize)]
+#[derivative(Debug, PartialEq, Eq, Hash)]
 pub struct Signed<T: Serialize> {
     /// The data that was signed.
     #[derivative(PartialEq = "ignore", Hash = "ignore")]

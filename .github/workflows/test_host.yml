@@ -17,5 +17,5 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Build
-      run: cargo test --verbose --features=test_utils
+    - name: Test
+      run: cargo test --workspace --exclude beehive_wasm --verbose --features=test_utils

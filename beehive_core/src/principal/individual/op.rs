@@ -3,37 +3,98 @@
 pub mod add_key;
 pub mod rotate_key;
 
-use crate::crypto::share_key::ShareKey;
+use crate::{
+    crypto::{
+        share_key::ShareKey,
+        signed::{Signed, VerificationError},
+    },
+    principal::verifiable::Verifiable,
+};
+use derive_more::{From, TryInto};
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 /// Operations for updating prekeys.
 ///
 /// Note that the number of keys only ever increases.
 /// This prevents the case where all keys are remved and the user is unable to be
 /// added to a [`Cgka`][crate::cgka::Cgka].
-#[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash, Serialize, Deserialize, From, TryInto)]
 pub enum KeyOp {
     /// Add a new key.
-    Add(add_key::AddKeyOp),
+    Add(Rc<Signed<add_key::AddKeyOp>>),
 
     /// Retire and replace an existing key.
-    Rotate(rotate_key::RotateKeyOp),
+    Rotate(Rc<Signed<rotate_key::RotateKeyOp>>),
 }
 
 impl KeyOp {
-    pub fn add(share_key: ShareKey) -> Self {
-        KeyOp::Add(add_key::AddKeyOp { share_key })
+    pub fn topsort(key_ops: HashSet<KeyOp>) -> Vec<KeyOp> {
+        let mut heads: Vec<KeyOp> = vec![];
+        let mut rotate_key_ops: HashMap<ShareKey, HashSet<KeyOp>> = HashMap::new();
+
+        for key_op in key_ops.iter() {
+            match key_op {
+                KeyOp::Add(_add) => {
+                    heads.push(key_op.dupe());
+                }
+                KeyOp::Rotate(rot) => {
+                    rotate_key_ops
+                        .entry(rot.payload.old)
+                        .and_modify(|set| {
+                            set.insert(key_op.dupe());
+                        })
+                        .or_insert(HashSet::from_iter([key_op.dupe()]));
+                }
+            }
+        }
+
+        let mut topsorted = vec![];
+
+        while let Some(head) = heads.pop() {
+            if let Some(ops) = rotate_key_ops.get(head.new_key()) {
+                for op in ops.iter() {
+                    heads.push(op.dupe());
+                }
+            }
+
+            topsorted.push(head.dupe());
+        }
+
+        topsorted
     }
 
-    pub fn rotate(old: ShareKey, new: ShareKey) -> Self {
-        KeyOp::Rotate(rotate_key::RotateKeyOp { old, new })
-    }
-
-    pub fn new_share_key(&self) -> ShareKey {
+    pub fn new_key(&self) -> &ShareKey {
         match self {
-            KeyOp::Add(op) => op.share_key,
-            KeyOp::Rotate(op) => op.new,
+            KeyOp::Add(add) => &add.payload.share_key,
+            KeyOp::Rotate(rot) => &rot.payload.new,
+        }
+    }
+
+    pub fn try_verify(&self) -> Result<(), VerificationError> {
+        match self {
+            KeyOp::Add(add) => add.try_verify(),
+            KeyOp::Rotate(rot) => rot.try_verify(),
+        }
+    }
+
+    pub fn issuer(&self) -> &ed25519_dalek::VerifyingKey {
+        match self {
+            KeyOp::Add(add) => &add.issuer,
+            KeyOp::Rotate(rot) => &rot.issuer,
+        }
+    }
+}
+
+impl Verifiable for KeyOp {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        match self {
+            KeyOp::Add(add) => add.verifying_key(),
+            KeyOp::Rotate(rot) => rot.verifying_key(),
         }
     }
 }

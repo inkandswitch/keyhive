@@ -5,6 +5,7 @@ pub mod revocation;
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
+    listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{document::id::DocumentId, identifier::Identifier, verifiable::Verifiable},
     util::content_addressed_map::CaMap,
 };
@@ -22,13 +23,34 @@ use std::{
 };
 use topological_sort::TopologicalSort;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Dupe)]
-pub enum Operation<T: ContentRef> {
-    Delegation(Rc<Signed<Delegation<T>>>),
-    Revocation(Rc<Signed<Revocation<T>>>),
+#[derive(Debug, Dupe, Clone)]
+pub enum Operation<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+    Delegation(Rc<Signed<Delegation<T, L>>>),
+    Revocation(Rc<Signed<Revocation<T, L>>>),
 }
 
-impl<T: ContentRef + Serialize> Serialize for Operation<T> {
+impl<T: ContentRef, L: MembershipListener<T>> std::hash::Hash for Operation<T, L> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Operation::Delegation(delegation) => delegation.signature.to_bytes().hash(state),
+            Operation::Revocation(revocation) => revocation.signature.to_bytes().hash(state),
+        }
+    }
+}
+
+impl<T: ContentRef, L: MembershipListener<T>> PartialEq for Operation<T, L> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Operation::Delegation(d1), Operation::Delegation(d2)) => d1 == d2,
+            (Operation::Revocation(r1), Operation::Revocation(r2)) => r1 == r2,
+            _ => false,
+        }
+    }
+}
+
+impl<T: ContentRef, L: MembershipListener<T>> Eq for Operation<T, L> {}
+
+impl<T: ContentRef + Serialize, L: MembershipListener<T>> Serialize for Operation<T, L> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
             Operation::Delegation(delegation) => delegation.serialize(serializer),
@@ -37,7 +59,7 @@ impl<T: ContentRef + Serialize> Serialize for Operation<T> {
     }
 }
 
-impl<T: ContentRef> Operation<T> {
+impl<T: ContentRef, L: MembershipListener<T>> Operation<T, L> {
     pub fn subject_id(&self) -> Identifier {
         match self {
             Operation::Delegation(delegation) => delegation.subject_id(),
@@ -63,7 +85,7 @@ impl<T: ContentRef> Operation<T> {
         !self.is_delegation()
     }
 
-    pub fn after_auth(&self) -> Vec<Operation<T>> {
+    pub fn after_auth(&self) -> Vec<Operation<T, L>> {
         let deps = self.after();
         deps.delegations
             .into_iter()
@@ -72,10 +94,10 @@ impl<T: ContentRef> Operation<T> {
             .collect()
     }
 
-    pub fn after(&self) -> Dependencies<T> {
+    pub fn after(&self) -> Dependencies<T, L> {
         match self {
-            Operation::Delegation(delegation) => delegation.payload().after(),
-            Operation::Revocation(revocation) => revocation.payload().after(),
+            Operation::Delegation(delegation) => delegation.payload.after(),
+            Operation::Revocation(revocation) => revocation.payload.after(),
         }
     }
 
@@ -93,7 +115,7 @@ impl<T: ContentRef> Operation<T> {
         }
     }
 
-    pub fn ancestors(&self) -> (CaMap<Operation<T>>, usize) {
+    pub fn ancestors(&self) -> (CaMap<Operation<T, L>>, usize) {
         if self.is_root() {
             return (CaMap::new(), 1);
         }
@@ -137,13 +159,13 @@ impl<T: ContentRef> Operation<T> {
 
     #[allow(clippy::type_complexity)] // Clippy doens't like the returned pair
     pub fn topsort(
-        delegation_heads: &CaMap<Signed<Delegation<T>>>,
-        revocation_heads: &CaMap<Signed<Revocation<T>>>,
-    ) -> Vec<(Digest<Operation<T>>, Operation<T>)> {
+        delegation_heads: &CaMap<Signed<Delegation<T, L>>>,
+        revocation_heads: &CaMap<Signed<Revocation<T, L>>>,
+    ) -> Vec<(Digest<Operation<T, L>>, Operation<T, L>)> {
         // NOTE: BTreeMap to get deterministic order
         let mut ops_with_ancestors: BTreeMap<
-            Digest<Operation<T>>,
-            (Operation<T>, CaMap<Operation<T>>, usize),
+            Digest<Operation<T, L>>,
+            (Operation<T, L>, CaMap<Operation<T, L>>, usize),
         > = BTreeMap::new();
 
         #[derive(Debug, Clone, PartialEq, Eq, From, Into)]
@@ -161,17 +183,17 @@ impl<T: ContentRef> Operation<T> {
             }
         }
 
-        let mut leftovers: HashMap<Key, Operation<T>> = HashMap::new();
-        let mut explore: Vec<Operation<T>> = vec![];
+        let mut leftovers: HashMap<Key, Operation<T, L>> = HashMap::new();
+        let mut explore: Vec<Operation<T, L>> = vec![];
 
         for dlg in delegation_heads.values() {
-            let op: Operation<T> = dlg.dupe().into();
+            let op: Operation<T, L> = dlg.dupe().into();
             leftovers.insert(op.signature().into(), op.clone());
             explore.push(op);
         }
 
         for rev in revocation_heads.values() {
-            let op: Operation<T> = rev.dupe().into();
+            let op: Operation<T, L> = rev.dupe().into();
             leftovers.insert(op.signature().into(), op.clone());
             explore.push(op);
         }
@@ -186,7 +208,7 @@ impl<T: ContentRef> Operation<T> {
             ops_with_ancestors.insert(Digest::hash(&op), (op, ancestors, longest_path));
         }
 
-        let mut adjacencies: TopologicalSort<(Digest<Operation<T>>, &Operation<T>)> =
+        let mut adjacencies: TopologicalSort<(Digest<Operation<T, L>>, &Operation<T, L>)> =
             topological_sort::TopologicalSort::new();
 
         for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
@@ -196,11 +218,11 @@ impl<T: ContentRef> Operation<T> {
                     .expect("values that we just put there to be there");
 
                 #[allow(clippy::mutable_key_type)]
-                let ancestor_set: HashSet<&Operation<T>> =
+                let ancestor_set: HashSet<&Operation<T, L>> =
                     op_ancestors.values().map(|op| op.as_ref()).collect();
 
                 #[allow(clippy::mutable_key_type)]
-                let other_ancestor_set: HashSet<&Operation<T>> =
+                let other_ancestor_set: HashSet<&Operation<T, L>> =
                     other_ancestors.values().map(|op| op.as_ref()).collect();
 
                 if other_ancestor_set.contains(op) || ancestor_set.is_subset(&other_ancestor_set) {
@@ -254,7 +276,7 @@ impl<T: ContentRef> Operation<T> {
             }
         }
 
-        let mut history: Vec<(Digest<Operation<T>>, Operation<T>)> = leftovers
+        let mut history: Vec<(Digest<Operation<T, L>>, Operation<T, L>)> = leftovers
             .values()
             .map(|op| (Digest::hash(op), op.clone()))
             .collect();
@@ -279,7 +301,7 @@ impl<T: ContentRef> Operation<T> {
     }
 }
 
-impl<T: ContentRef> Verifiable for Operation<T> {
+impl<T: ContentRef, L: MembershipListener<T>> Verifiable for Operation<T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         match self {
             Operation::Delegation(delegation) => delegation.verifying_key(),
@@ -288,14 +310,18 @@ impl<T: ContentRef> Verifiable for Operation<T> {
     }
 }
 
-impl<T: ContentRef> From<Rc<Signed<Delegation<T>>>> for Operation<T> {
-    fn from(delegation: Rc<Signed<Delegation<T>>>) -> Self {
+impl<T: ContentRef, L: MembershipListener<T>> From<Rc<Signed<Delegation<T, L>>>>
+    for Operation<T, L>
+{
+    fn from(delegation: Rc<Signed<Delegation<T, L>>>) -> Self {
         Operation::Delegation(delegation)
     }
 }
 
-impl<T: ContentRef> From<Rc<Signed<Revocation<T>>>> for Operation<T> {
-    fn from(revocation: Rc<Signed<Revocation<T>>>) -> Self {
+impl<T: ContentRef, L: MembershipListener<T>> From<Rc<Signed<Revocation<T, L>>>>
+    for Operation<T, L>
+{
+    fn from(revocation: Rc<Signed<Revocation<T, L>>>) -> Self {
         Operation::Revocation(revocation)
     }
 }

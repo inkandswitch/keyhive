@@ -201,7 +201,7 @@ impl PartialOrd for TreeNodeIndex {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 pub(crate) struct TreeSize(u32);
 
 impl TreeSize {

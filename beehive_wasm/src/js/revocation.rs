@@ -1,6 +1,6 @@
 use super::{
-    change_ref::JsChangeRef, history::JsHistory, identifier::JsIdentifier,
-    signed_delegation::JsSignedDelegation,
+    change_ref::JsChangeRef, event_handler::JsEventHandler, history::JsHistory,
+    identifier::JsIdentifier, signed_delegation::JsSignedDelegation,
 };
 use beehive_core::principal::group::operation::revocation::Revocation;
 use derive_more::{From, Into};
@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Revocation)]
 #[derive(Debug, Clone, From, Into)]
-pub struct JsRevocation(pub(crate) Revocation<JsChangeRef>);
+pub struct JsRevocation(pub(crate) Revocation<JsChangeRef, JsEventHandler>);
 
 #[wasm_bindgen(js_class = Revocation)]
 impl JsRevocation {

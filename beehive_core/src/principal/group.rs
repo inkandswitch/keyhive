@@ -5,6 +5,8 @@ pub mod id;
 pub mod operation;
 pub mod state;
 
+use self::operation::delegation::StaticDelegation;
+
 use super::{
     agent::{id::AgentId, Agent},
     document::{id::DocumentId, Document},
@@ -21,8 +23,12 @@ use crate::{
         share_key::ShareKey,
         signed::{Signed, SigningError},
     },
+    listener::{membership::MembershipListener, no_listener::NoListener},
     util::content_addressed_map::CaMap,
 };
+use derivative::Derivative;
+use derive_more::Debug;
+use derive_where::derive_where;
 use dupe::{Dupe, IterDupedExt};
 use id::GroupId;
 use nonempty::{nonempty, NonEmpty};
@@ -31,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
+    hash::{Hash, Hasher},
     rc::Rc,
 };
 use thiserror::Error;
@@ -40,28 +47,35 @@ use thiserror::Error;
 /// Groups are stateful agents. It is possible the delegate control over them,
 /// and they can be delegated to. This produces transitives lines of authority
 /// through the network of [`Agent`]s.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Group<T: ContentRef> {
+#[derive(Debug, Clone, Eq, Derivative)]
+#[derive_where(PartialEq; T)]
+pub struct Group<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
     pub(crate) individual: Individual,
 
     /// The current view of members of a group.
-    pub(crate) members: HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T>>>>>,
+    pub(crate) members: HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T, L>>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
-    pub(crate) state: state::GroupState<T>,
+    pub(crate) state: state::GroupState<T, L>,
+
+    #[debug(skip)]
+    #[derive_where(skip)]
+    pub(crate) listener: L,
 }
 
-impl<T: ContentRef> Group<T> {
+impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
     pub fn from_individual(
         individual: Individual,
-        head: Rc<Signed<Delegation<T>>>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+        head: Rc<Signed<Delegation<T, L>>>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
+        listener: L,
     ) -> Self {
         let mut group = Self {
             individual,
             members: HashMap::new(),
             state: state::GroupState::new(head, delegations, revocations),
+            listener,
         };
         group.rebuild();
         group
@@ -69,22 +83,31 @@ impl<T: ContentRef> Group<T> {
 
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        parents: NonEmpty<Agent<T>>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+        parents: NonEmpty<Agent<T, L>>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
+        listener: L,
         csprng: &mut R,
-    ) -> Result<Group<T>, SigningError> {
+    ) -> Result<Group<T, L>, SigningError> {
         let sk = ed25519_dalek::SigningKey::generate(csprng);
-        Self::generate_after_content(&sk, parents, delegations, revocations, Default::default())
+        Self::generate_after_content(
+            &sk,
+            parents,
+            delegations,
+            revocations,
+            Default::default(),
+            listener,
+        )
     }
 
     pub(crate) fn generate_after_content(
         signing_key: &ed25519_dalek::SigningKey,
-        parents: NonEmpty<Agent<T>>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+        parents: NonEmpty<Agent<T, L>>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Group<T>, SigningError> {
+        listener: L,
+    ) -> Result<Group<T, L>, SigningError> {
         let id = signing_key.verifying_key().into();
         let group_id = GroupId(id);
 
@@ -128,6 +151,7 @@ impl<T: ContentRef> Group<T> {
             individual: Individual::new(id.into()),
             members,
             state,
+            listener,
         })
     }
 
@@ -159,18 +183,18 @@ impl<T: ContentRef> Group<T> {
         )
     }
 
-    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T>>>>> {
+    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T, L>>>>> {
         &self.members
     }
 
-    pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<T>, Access)> {
-        struct GroupAccess<U: ContentRef> {
-            agent: Agent<U>,
+    pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<T, L>, Access)> {
+        struct GroupAccess<U: ContentRef, M: MembershipListener<U>> {
+            agent: Agent<U, M>,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess<T>> = vec![];
+        let mut explore: Vec<GroupAccess<T, L>> = vec![];
         let mut seen: HashSet<([u8; 64], Access)> = HashSet::new();
 
         for member in self.members.keys() {
@@ -187,7 +211,7 @@ impl<T: ContentRef> Group<T> {
             });
         }
 
-        let mut caps: HashMap<Identifier, (Agent<T>, Access)> = HashMap::new();
+        let mut caps: HashMap<Identifier, (Agent<T, L>, Access)> = HashMap::new();
 
         while let Some(GroupAccess {
             agent: member,
@@ -209,7 +233,7 @@ impl<T: ContentRef> Group<T> {
             caps.insert(member.id(), (member.dupe(), current_path_access));
 
             if let Some(membered) = match member {
-                Agent::Group(inner_group) => Some(Membered::<T>::from(inner_group)),
+                Agent::Group(inner_group) => Some(Membered::<T, L>::from(inner_group)),
                 Agent::Document(doc) => Some(doc.into()),
                 _ => None,
             } {
@@ -238,15 +262,15 @@ impl<T: ContentRef> Group<T> {
         caps
     }
 
-    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<T>>> {
+    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<T, L>>> {
         &self.state.delegation_heads
     }
 
-    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<T>>> {
+    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<T, L>>> {
         &self.state.revocation_heads
     }
 
-    pub fn get_capability(&self, member_id: &Identifier) -> Option<&Rc<Signed<Delegation<T>>>> {
+    pub fn get_capability(&self, member_id: &Identifier) -> Option<&Rc<Signed<Delegation<T, L>>>> {
         self.members.get(member_id).and_then(|delegations| {
             delegations
                 .iter()
@@ -254,17 +278,7 @@ impl<T: ContentRef> Group<T> {
         })
     }
 
-    pub fn get_transitive_capability(
-        &self,
-        member_id: &Identifier,
-    ) -> Option<&Rc<Signed<Delegation<T>>>> {
-        self.get_capability(member_id).or_else(|| {
-            // FIXME
-            todo!("FIXME");
-        })
-    }
-
-    pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
+    pub fn get_agent_revocations(&self, agent: &Agent<T, L>) -> Vec<Rc<Signed<Revocation<T, L>>>> {
         self.state
             .revocations
             .borrow()
@@ -281,8 +295,8 @@ impl<T: ContentRef> Group<T> {
 
     pub fn receive_delegation(
         &mut self,
-        delegation: Rc<Signed<Delegation<T>>>,
-    ) -> Result<Digest<Signed<Delegation<T>>>, error::AddError> {
+        delegation: Rc<Signed<Delegation<T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<T, L>>>, error::AddError> {
         let digest = self.state.add_delegation(delegation)?;
         self.rebuild();
         Ok(digest)
@@ -290,8 +304,8 @@ impl<T: ContentRef> Group<T> {
 
     pub fn receive_revocation(
         &mut self,
-        revocation: Rc<Signed<Revocation<T>>>,
-    ) -> Result<Digest<Signed<Revocation<T>>>, error::AddError> {
+        revocation: Rc<Signed<Revocation<T, L>>>,
+    ) -> Result<Digest<Signed<Revocation<T, L>>>, error::AddError> {
         let digest = self.state.add_revocation(revocation)?;
         self.rebuild();
         Ok(digest)
@@ -300,11 +314,11 @@ impl<T: ContentRef> Group<T> {
     // FIXME make note that the best way to do this is to add_deegation after get_capability
     pub fn add_member(
         &mut self,
-        member_to_add: Agent<T>,
+        member_to_add: Agent<T, L>,
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Document<T>],
-    ) -> Result<Rc<Signed<Delegation<T>>>, AddGroupMemberError> {
+        relevant_docs: &[&Document<T, L>],
+    ) -> Result<Rc<Signed<Delegation<T, L>>>, AddGroupMemberError> {
         let after_content = relevant_docs
             .iter()
             .map(|d| {
@@ -320,13 +334,13 @@ impl<T: ContentRef> Group<T> {
 
     pub(crate) fn add_member_with_manual_content(
         &mut self,
-        member_to_add: Agent<T>,
+        member_to_add: Agent<T, L>,
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Rc<Signed<Delegation<T>>>, AddGroupMemberError> {
+    ) -> Result<Rc<Signed<Delegation<T, L>>>, AddGroupMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
-        let agent: Agent<T> = indie.into();
+        let agent: Agent<T, L> = indie.into();
 
         let proof = if self.verifying_key() == signing_key.verifying_key() {
             None
@@ -357,6 +371,7 @@ impl<T: ContentRef> Group<T> {
         )?;
 
         let rc = Rc::new(delegation);
+        self.listener.on_delegation(&rc);
         let _digest = self.receive_delegation(rc.dupe())?;
         Ok(rc)
     }
@@ -366,11 +381,11 @@ impl<T: ContentRef> Group<T> {
         member_to_remove: Identifier,
         signing_key: &ed25519_dalek::SigningKey,
         after_content: &BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
+    ) -> Result<Vec<Rc<Signed<Revocation<T, L>>>>, RevokeMemberError> {
         let vk = signing_key.verifying_key();
         let mut revocations = vec![];
 
-        let all_to_revoke: Vec<Rc<Signed<Delegation<T>>>> = self
+        let all_to_revoke: Vec<Rc<Signed<Delegation<T, L>>>> = self
             .members()
             .get(&member_to_remove)
             .map(|ne| Vec::<_>::from(ne.clone())) // Semi-inexpensive because `Vec<Rc<_>>`
@@ -455,16 +470,20 @@ impl<T: ContentRef> Group<T> {
             }
         }
 
+        for r in revocations.iter() {
+            self.listener.on_revocation(&r);
+        }
+
         Ok(revocations)
     }
 
     fn build_revocation(
         &mut self,
         signing_key: &ed25519_dalek::SigningKey,
-        revoke: Rc<Signed<Delegation<T>>>,
-        proof: Option<Rc<Signed<Delegation<T>>>>,
+        revoke: Rc<Signed<Delegation<T, L>>>,
+        proof: Option<Rc<Signed<Delegation<T, L>>>>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Rc<Signed<Revocation<T>>>, SigningError> {
+    ) -> Result<Rc<Signed<Revocation<T, L>>>, SigningError> {
         let revocation = Signed::try_sign(
             Revocation {
                 revoke,
@@ -556,18 +575,28 @@ impl<T: ContentRef> Group<T> {
 
     pub(crate) fn dummy_from_archive(
         archive: GroupArchive<T>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
+        listener: L,
     ) -> Self {
         Self {
             members: HashMap::new(),
             individual: archive.individual,
             state: state::GroupState::dummy_from_archive(archive.state, delegations, revocations),
+            listener,
         }
     }
 }
 
-impl<T: ContentRef> Verifiable for Group<T> {
+impl<T: ContentRef, L: MembershipListener<T>> Hash for Group<T, L> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.individual.hash(state);
+        self.members.iter().collect::<BTreeMap<_, _>>().hash(state);
+        self.state.hash(state);
+    }
+}
+
+impl<T: ContentRef, L: MembershipListener<T>> Verifiable for Group<T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }
@@ -576,7 +605,7 @@ impl<T: ContentRef> Verifiable for Group<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupArchive<T: ContentRef> {
     pub(crate) individual: Individual,
-    pub(crate) members: HashMap<Identifier, NonEmpty<Digest<Signed<Delegation<T>>>>>,
+    pub(crate) members: HashMap<Identifier, NonEmpty<Digest<Signed<StaticDelegation<T>>>>>,
     pub(crate) state: state::GroupStateArchive<T>,
 }
 
@@ -588,7 +617,8 @@ impl<T: ContentRef> From<Group<T>> for GroupArchive<T> {
                 .members
                 .iter()
                 .fold(HashMap::new(), |mut acc, (k, vs)| {
-                    let hashes: Vec<_> = vs.iter().map(|v| Digest::hash(v.as_ref())).collect();
+                    let hashes: Vec<_> =
+                        vs.iter().map(|v| Digest::hash(v.as_ref()).into()).collect();
                     if let Some(ne) = NonEmpty::from_vec(hashes) {
                         acc.insert(*k, ne);
                     }
@@ -638,7 +668,7 @@ mod tests {
 
     fn setup_user(csprng: &mut (impl rand::CryptoRng + rand::RngCore)) -> Active {
         let sk = ed25519_dalek::SigningKey::generate(csprng);
-        Active::generate(sk, csprng).unwrap()
+        Active::generate(sk, NoListener, csprng).unwrap()
     }
 
     fn setup_groups<T: ContentRef>(
@@ -680,6 +710,7 @@ mod tests {
                 nonempty![alice_agent.dupe()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 csprng,
             )
             .unwrap(),
@@ -690,6 +721,7 @@ mod tests {
                 nonempty![alice_agent, g0.clone().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 csprng,
             )
             .unwrap(),
@@ -700,6 +732,7 @@ mod tests {
                 nonempty![bob_agent, g1.clone().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 csprng,
             )
             .unwrap(),
@@ -710,6 +743,7 @@ mod tests {
                 nonempty![g1.clone().into(), g2.clone().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 csprng,
             )
             .unwrap(),
@@ -731,6 +765,7 @@ mod tests {
                 nonempty![alice.dupe().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 csprng,
             )
             .unwrap(),
@@ -741,6 +776,7 @@ mod tests {
                 nonempty![bob.into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 csprng,
             )
             .unwrap(),
@@ -751,6 +787,7 @@ mod tests {
                 nonempty![group1.clone().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 csprng,
             )
             .unwrap(),
@@ -761,6 +798,7 @@ mod tests {
                 nonempty![group2.clone().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 csprng,
             )
             .unwrap(),
@@ -771,6 +809,7 @@ mod tests {
                 nonempty![group3.clone().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 csprng,
             )
             .unwrap(),
@@ -781,6 +820,7 @@ mod tests {
                 nonempty![group4.clone().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 csprng,
             )
             .unwrap(),
@@ -791,6 +831,7 @@ mod tests {
                 nonempty![group5.clone().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 csprng,
             )
             .unwrap(),
@@ -801,6 +842,7 @@ mod tests {
                 nonempty![group6.clone().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 csprng,
             )
             .unwrap(),
@@ -811,6 +853,7 @@ mod tests {
                 nonempty![group7.clone().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 csprng,
             )
             .unwrap(),
@@ -821,6 +864,7 @@ mod tests {
                 nonempty![group8.clone().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 csprng,
             )
             .unwrap(),
@@ -998,16 +1042,18 @@ mod tests {
         let mut csprng = rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(&mut csprng)));
-        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice_agent: Agent = alice.dupe().into();
 
         let bob = Rc::new(RefCell::new(setup_user(&mut csprng)));
-        let bob_agent: Agent<String> = bob.dupe().into();
+        let bob_agent: Agent = bob.dupe().into();
 
         let carol = Rc::new(RefCell::new(setup_user(&mut csprng)));
-        let carol_agent: Agent<String> = carol.dupe().into();
+        let carol_agent: Agent = carol.dupe().into();
 
         let signer = ed25519_dalek::SigningKey::generate(&mut csprng);
-        let active = Rc::new(RefCell::new(Active::generate(signer, &mut csprng).unwrap()));
+        let active = Rc::new(RefCell::new(
+            Active::generate(signer, NoListener, &mut csprng).unwrap(),
+        ));
 
         let dlg_store = Rc::new(RefCell::new(CaMap::new()));
         let rev_store = Rc::new(RefCell::new(CaMap::new()));
@@ -1017,6 +1063,7 @@ mod tests {
                 nonempty![active.dupe().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 &mut csprng,
             )
             .unwrap(),
@@ -1027,6 +1074,7 @@ mod tests {
                 nonempty![alice_agent.dupe(), bob_agent.dupe(), g0.dupe().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 &mut csprng,
             )
             .unwrap(),
@@ -1037,6 +1085,7 @@ mod tests {
                 nonempty![g1.dupe().into()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
+                NoListener,
                 &mut csprng,
             )
             .unwrap(),

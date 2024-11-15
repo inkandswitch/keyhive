@@ -12,6 +12,7 @@ use x25519_dalek::SharedSecret;
 /// ```
 /// # use beehive_core::{
 /// #     crypto::{siv::Siv, symmetric_key::SymmetricKey},
+/// #     listener::no_listener::NoListener,
 /// #     principal::{agent::Agent, document::Document, individual::Individual},
 /// #     util::content_addressed_map::CaMap,
 /// # };
@@ -32,6 +33,7 @@ use x25519_dalek::SharedSecret;
 ///     nonempty!["commit-1".to_string()],
 ///     delegation_store,
 ///     revocation_store,
+///     NoListener,
 ///     &mut csprng
 /// ).unwrap();
 ///

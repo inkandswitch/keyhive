@@ -31,6 +31,7 @@ thiserror = { workspace = true }
 # Utilities
 derivative = "2.2"
 derive_more = { workspace = true }
+derive-where = "1.2"
 dupe = { workspace = true }
 nonempty = { workspace = true }
 topological-sort = "0.2"

@@ -10,7 +10,7 @@ test.describe("Beehive", async () => {
   test('constructor', async ({ page }) => {
     const out = await page.evaluate(() => {
       const { Beehive, SigningKey } = window.beehive
-      return { beehive: new Beehive(SigningKey.generate()) }
+      return { beehive: new Beehive(SigningKey.generate(), console.log) }
     })
 
     expect(out.beehive).toBeDefined()
@@ -21,7 +21,7 @@ test.describe("Beehive", async () => {
       const { Beehive, SigningKey } = window.beehive
       const sk = SigningKey.generate()
       const vk = sk.verifyingKey
-      const beehive = new Beehive(sk)
+      const beehive = new Beehive(sk, console.log)
       return { id: beehive.id.bytes, vk }
     })
 
@@ -33,7 +33,7 @@ test.describe("Beehive", async () => {
       const { Beehive, SigningKey } = window.beehive
       const key = SigningKey.generate()
       const vKey = key.verifyingKey
-      const beehive = new Beehive(key)
+      const beehive = new Beehive(key, console.log)
       return { idString: beehive.idString, vKey }
     }
 
@@ -51,7 +51,7 @@ test.describe("Beehive", async () => {
   test.describe('generateGroup', async () => {
     const scenario = () => {
       const { Beehive, SigningKey } = window.beehive
-      const beehive = new Beehive(SigningKey.generate())
+      const beehive = new Beehive(SigningKey.generate(), (_) => {})
 
       const group = beehive.generateGroup([])
       const { groupId, members } = group
@@ -113,6 +113,26 @@ test.describe("Beehive", async () => {
     test('round trip', async ({ page }) => {
       const out = await page.evaluate(scenario)
       expect(out.beehive.id).toBe(out.roundTrip.id)
+    })
+  })
+
+  test.describe('event listener', async () => {
+    const scenario = () => {
+      const { Beehive, SigningKey } = window.beehive
+      const events = [];
+      const beehive = new Beehive(SigningKey.generate(), (event) => {
+        console.log(event);
+        events.push(event.variant);
+      })
+
+      beehive.expandPrekeys()
+      return { events }
+    }
+
+    test('records a prekey rotation', async ({ page }) => {
+      const out = await page.evaluate(scenario)
+      expect(out.events).toHaveLength(1)
+      expect(out.events[0]).toBe("PREKEYS_EXPANDED")
     })
   })
 })

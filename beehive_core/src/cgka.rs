@@ -8,11 +8,6 @@ pub mod treemath;
 #[cfg(feature = "test_utils")]
 pub mod test_utils;
 
-use std::{
-    borrow::Borrow,
-    collections::{HashMap, HashSet},
-};
-
 use crate::{
     content::reference::ContentRef,
     crypto::{
@@ -27,11 +22,17 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use beekem::BeeKem;
+use derivative::Derivative;
 use error::CgkaError;
 use keys::ShareKeyMap;
 use nonempty::NonEmpty;
 use operation::{CgkaEpoch, CgkaOperation, CgkaOperationGraph};
 use serde::{Deserialize, Serialize};
+use std::{
+    borrow::Borrow,
+    collections::{BTreeSet, HashMap, HashSet},
+    hash::{Hash, Hasher},
+};
 
 /// Exposes CGKA (Continuous Group Key Agreement) operations like deriving
 /// a new application secret, rotating keys, and adding and removing members
@@ -43,7 +44,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// We assume that all operations are received in causal order (a property
 /// guaranteed by Beehive as a whole).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Derivative)]
+#[derivative(Hash)]
 pub struct Cgka {
     doc_id: DocumentId,
     /// The id of the member who owns this tree.
@@ -57,10 +59,25 @@ pub struct Cgka {
     ///tree due to a structural change.
     pending_ops_for_structural_change: bool,
     // TODO: Enable policies to evict older entries.
+    #[derivative(Hash(hash_with = "hash_pcs_keys"))]
     pcs_keys: CaMap<PcsKey>,
+
     /// The update operations for each PCS key.
+    #[derivative(Hash(hash_with = "hashed_key_bytes"))]
     pcs_key_ops: HashMap<Digest<PcsKey>, Digest<CgkaOperation>>,
+
     original_member: (IndividualId, ShareKey),
+}
+
+fn hash_pcs_keys<H: Hasher>(pcs_keys: &CaMap<PcsKey>, state: &mut H) {
+    pcs_keys.keys().collect::<BTreeSet<_>>().hash(state)
+}
+
+fn hashed_key_bytes<T: Serialize, V, H: Hasher>(hmap: &HashMap<Digest<T>, V>, state: &mut H) {
+    hmap.keys()
+        .map(|k| k.as_slice())
+        .collect::<BTreeSet<_>>()
+        .hash(state)
 }
 
 impl Cgka {

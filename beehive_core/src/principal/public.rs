@@ -1,15 +1,21 @@
 use super::{
     active::Active,
     identifier::Identifier,
-    individual::{op::KeyOp, state::PrekeyState, Individual},
+    individual::{op::add_key::AddKeyOp, state::PrekeyState, Individual},
     verifiable::Verifiable,
 };
-use crate::crypto::{
-    share_key::{ShareKey, ShareSecretKey},
-    signed::Signed,
+use crate::{
+    crypto::{
+        share_key::{ShareKey, ShareSecretKey},
+        signed::Signed,
+    },
+    listener::prekey::PrekeyListener,
 };
 use dupe::Dupe;
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    rc::Rc,
+};
 
 /// A well-known agent that can be used by anyone. ⚠ USE WITH CAUTION ⚠
 ///
@@ -38,8 +44,16 @@ impl Public {
     }
 
     pub fn individual(&self) -> Individual {
-        let op = Signed::try_sign(KeyOp::add(self.share_key()), &self.signing_key())
-            .expect("signature with well-known key should work");
+        let op = Rc::new(
+            Signed::try_sign(
+                AddKeyOp {
+                    share_key: self.share_key(),
+                },
+                &self.signing_key(),
+            )
+            .expect("signature with well-known key should work"),
+        )
+        .into();
 
         Individual {
             id: self.verifying_key().into(),
@@ -49,11 +63,12 @@ impl Public {
         }
     }
 
-    pub fn active(&self) -> Active {
+    pub fn active<L: PrekeyListener>(&self, listener: L) -> Active<L> {
         Active {
             signing_key: self.signing_key(),
             prekey_pairs: BTreeMap::from_iter([(self.share_key(), self.share_secret_key())]),
             individual: self.individual(),
+            listener,
         }
     }
 }

@@ -1,5 +1,3 @@
-// FIXME move to Group
-
 use super::{
     delegation::{Delegation, StaticDelegation},
     dependencies::Dependencies,
@@ -7,6 +5,7 @@ use super::{
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
+    listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::id::AgentId, document::id::DocumentId, identifier::Identifier},
 };
 use dupe::Dupe;
@@ -14,18 +13,18 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, rc::Rc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Revocation<T: ContentRef> {
-    pub(crate) revoke: Rc<Signed<Delegation<T>>>,
-    pub(crate) proof: Option<Rc<Signed<Delegation<T>>>>,
+pub struct Revocation<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+    pub(crate) revoke: Rc<Signed<Delegation<T, L>>>,
+    pub(crate) proof: Option<Rc<Signed<Delegation<T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<T: ContentRef> Revocation<T> {
+impl<T: ContentRef, L: MembershipListener<T>> Revocation<T, L> {
     pub fn subject_id(&self) -> Identifier {
         self.revoke.subject_id()
     }
 
-    pub fn revoked(&self) -> &Rc<Signed<Delegation<T>>> {
+    pub fn revoked(&self) -> &Rc<Signed<Delegation<T, L>>> {
         &self.revoke
     }
 
@@ -33,11 +32,11 @@ impl<T: ContentRef> Revocation<T> {
         self.revoke.payload().delegate.agent_id()
     }
 
-    pub fn proof(&self) -> Option<Rc<Signed<Delegation<T>>>> {
+    pub fn proof(&self) -> Option<Rc<Signed<Delegation<T, L>>>> {
         self.proof.dupe()
     }
 
-    pub fn after(&self) -> Dependencies<T> {
+    pub fn after(&self) -> Dependencies<T, L> {
         let mut delegations = vec![self.revoke.dupe()];
         if let Some(dlg) = &self.proof {
             delegations.push(dlg.clone());
@@ -51,13 +50,13 @@ impl<T: ContentRef> Revocation<T> {
     }
 }
 
-impl<T: ContentRef> Signed<Revocation<T>> {
+impl<T: ContentRef, L: MembershipListener<T>> Signed<Revocation<T, L>> {
     pub fn subject_id(&self) -> Identifier {
         self.payload.subject_id()
     }
 }
 
-impl<T: ContentRef> std::hash::Hash for Revocation<T> {
+impl<T: ContentRef, L: MembershipListener<T>> std::hash::Hash for Revocation<T, L> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.revoke.hash(state);
         self.proof.hash(state);
@@ -68,7 +67,7 @@ impl<T: ContentRef> std::hash::Hash for Revocation<T> {
     }
 }
 
-impl<T: ContentRef> Serialize for Revocation<T> {
+impl<T: ContentRef, L: MembershipListener<T>> Serialize for Revocation<T, L> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         StaticRevocation::from(self.clone()).serialize(serializer)
     }
@@ -76,7 +75,7 @@ impl<T: ContentRef> Serialize for Revocation<T> {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
-pub struct StaticRevocation<T: ContentRef> {
+pub struct StaticRevocation<T: ContentRef = [u8; 32]> {
     /// The [`Delegation`] being revoked.
     pub revoke: Digest<Signed<StaticDelegation<T>>>,
 
@@ -87,8 +86,8 @@ pub struct StaticRevocation<T: ContentRef> {
     pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<T: ContentRef> From<Revocation<T>> for StaticRevocation<T> {
-    fn from(revocation: Revocation<T>) -> Self {
+impl<T: ContentRef, L: MembershipListener<T>> From<Revocation<T, L>> for StaticRevocation<T> {
+    fn from(revocation: Revocation<T, L>) -> Self {
         Self {
             revoke: Digest::hash(revocation.revoke.as_ref()).into(),
             proof: revocation.proof.map(|p| Digest::hash(p.as_ref()).into()),

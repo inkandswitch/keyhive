@@ -1,11 +1,11 @@
-use super::change_ref::JsChangeRef;
+use super::{change_ref::JsChangeRef, event_handler::JsEventHandler};
 use beehive_core::principal::agent::Agent;
 use derive_more::{Deref, Display, From, Into};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Agent)]
 #[derive(Debug, Clone, From, Into, Deref, Display)]
-pub struct JsAgent(pub(crate) Agent<JsChangeRef>);
+pub struct JsAgent(pub(crate) Agent<JsChangeRef, JsEventHandler>);
 
 #[wasm_bindgen(js_class = Agent)]
 impl JsAgent {

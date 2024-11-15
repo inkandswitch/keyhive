@@ -7,6 +7,7 @@ use super::{
     delegation::JsDelegationError,
     document::JsDocument,
     encrypted::JsEncrypted,
+    event_handler::JsEventHandler,
     group::JsGroup,
     identifier::JsIdentifier,
     individual_id::JsIndividualId,
@@ -32,15 +33,19 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Beehive)]
-#[derive(Debug, From, Into)]
-pub struct JsBeehive(Beehive<JsChangeRef, rand::rngs::ThreadRng>);
+#[derive(Debug)]
+pub struct JsBeehive(Beehive<JsChangeRef, JsEventHandler, rand::rngs::ThreadRng>);
 
 #[wasm_bindgen(js_class = Beehive)]
 impl JsBeehive {
     #[wasm_bindgen(constructor)]
-    pub fn new(signing_key: JsSigningKey) -> Result<JsBeehive, JsSigningError> {
+    pub fn new(
+        signing_key: JsSigningKey,
+        event_handler: &js_sys::Function,
+    ) -> Result<JsBeehive, JsSigningError> {
         Ok(JsBeehive(Beehive::generate(
             ed25519_dalek::SigningKey::from_bytes(&signing_key.0),
+            JsEventHandler(event_handler.clone()),
             rand::thread_rng(),
         )?))
     }
@@ -195,12 +200,14 @@ impl JsBeehive {
 
     #[wasm_bindgen(js_name = rotatePrekey)]
     pub fn rotate_prekey(&mut self, prekey: JsShareKey) -> Result<JsShareKey, JsSigningError> {
-        Ok(self.0.rotate_prekey(prekey.0).map(JsShareKey)?)
+        let op = self.0.rotate_prekey(prekey.0)?;
+        Ok(JsShareKey(op.payload().new))
     }
 
     #[wasm_bindgen(js_name = expandPrekeys)]
     pub fn expand_prekeys(&mut self) -> Result<JsShareKey, JsSigningError> {
-        Ok(self.0.expand_prekeys().map(JsShareKey)?)
+        let op = self.0.expand_prekeys()?;
+        Ok(JsShareKey(op.payload().share_key))
     }
 
     #[wasm_bindgen(js_name = getAgent)]
@@ -232,14 +239,20 @@ mod tests {
     #[cfg(feature = "browser_test")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+    #[allow(unused)]
     fn setup() -> JsBeehive {
-        JsBeehive::new(JsSigningKey::generate().unwrap()).unwrap()
+        JsBeehive::new(
+            JsSigningKey::generate().unwrap(),
+            &js_sys::Function::new_with_args("event", "console.log(event)"),
+        )
+        .unwrap()
     }
 
     mod id {
         use super::*;
 
-        #[wasm_bindgen_test(unsupported = test)]
+        #[wasm_bindgen_test]
+        #[allow(unused)]
         fn test_length() {
             let bh = setup();
             assert_eq!(bh.id().bytes().len(), 32);
@@ -249,7 +262,8 @@ mod tests {
     mod try_sign {
         use super::*;
 
-        #[wasm_bindgen_test(unsupported = test)]
+        #[wasm_bindgen_test]
+        #[allow(unused)]
         fn test_round_trip() {
             let bh = setup();
             let signed = bh.try_sign(vec![1, 2, 3]).unwrap();
@@ -261,7 +275,8 @@ mod tests {
         use super::*;
         use std::error::Error;
 
-        #[wasm_bindgen_test(unsupported = test)]
+        #[wasm_bindgen_test]
+        #[allow(unused)]
         fn test_encrypt_decrypt() -> Result<(), Box<dyn Error>> {
             let mut bh = setup();
             bh.expand_prekeys().unwrap();

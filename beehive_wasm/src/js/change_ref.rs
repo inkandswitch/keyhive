@@ -1,5 +1,6 @@
 use derive_more::{From, Into};
 use serde::{Deserialize, Serialize};
+use derive_more::{From, Into};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = ChangeRef)]

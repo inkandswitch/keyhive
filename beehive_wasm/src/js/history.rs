@@ -1,6 +1,7 @@
 use super::{
     change_ref::JsChangeRef, doc_content_refs::DocContentRefs, document_id::JsDocumentId,
-    signed_delegation::JsSignedDelegation, signed_revocation::JsSignedRevocation,
+    event_handler::JsEventHandler, signed_delegation::JsSignedDelegation,
+    signed_revocation::JsSignedRevocation,
 };
 use beehive_core::{
     crypto::signed::Signed,
@@ -18,8 +19,8 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(js_name = History)]
 #[derive(Debug, Clone)]
 pub struct JsHistory {
-    pub(crate) delegations: Vec<Rc<Signed<Delegation<JsChangeRef>>>>,
-    pub(crate) revocations: Vec<Rc<Signed<Revocation<JsChangeRef>>>>,
+    pub(crate) delegations: Vec<Rc<Signed<Delegation<JsChangeRef, JsEventHandler>>>>,
+    pub(crate) revocations: Vec<Rc<Signed<Revocation<JsChangeRef, JsEventHandler>>>>,
     pub(crate) content: BTreeMap<DocumentId, Vec<JsChangeRef>>,
 }
 
@@ -51,8 +52,8 @@ impl JsHistory {
     }
 }
 
-impl From<Dependencies<'_, JsChangeRef>> for JsHistory {
-    fn from(deps: Dependencies<JsChangeRef>) -> Self {
+impl From<Dependencies<'_, JsChangeRef, JsEventHandler>> for JsHistory {
+    fn from(deps: Dependencies<JsChangeRef, JsEventHandler>) -> Self {
         Self {
             delegations: deps.delegations,
             revocations: deps.revocations,

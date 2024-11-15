@@ -9,6 +9,7 @@ use crate::{
         digest::Digest,
         signed::{Signed, SigningError},
     },
+    listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
         agent::{id::AgentId, Agent},
         document::id::DocumentId,
@@ -20,17 +21,30 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, hash::Hash, rc::Rc};
 use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Delegation<T: ContentRef> {
-    pub(crate) delegate: Agent<T>,
+#[derive(Debug, Clone)]
+pub struct Delegation<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+    pub(crate) delegate: Agent<T, L>,
     pub(crate) can: Access,
 
-    pub(crate) proof: Option<Rc<Signed<Delegation<T>>>>,
-    pub(crate) after_revocations: Vec<Rc<Signed<Revocation<T>>>>,
+    pub(crate) proof: Option<Rc<Signed<Delegation<T, L>>>>,
+    pub(crate) after_revocations: Vec<Rc<Signed<Revocation<T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<T: ContentRef> Delegation<T> {
+// FIXME FIXME
+impl<T: ContentRef, L: MembershipListener<T>> PartialEq for Delegation<T, L> {
+    fn eq(&self, other: &Self) -> bool {
+        self.delegate == other.delegate
+            && self.can == other.can
+            && self.proof == other.proof
+            && self.after_revocations == other.after_revocations
+            && self.after_content == other.after_content
+    }
+}
+
+impl<T: ContentRef, L: MembershipListener<T>> Eq for Delegation<T, L> {}
+
+impl<T: ContentRef, L: MembershipListener<T>> Delegation<T, L> {
     pub fn subject_id(&self, issuer: AgentId) -> Identifier {
         if let Some(proof) = &self.proof {
             proof.subject_id()
@@ -39,7 +53,7 @@ impl<T: ContentRef> Delegation<T> {
         }
     }
 
-    pub fn delegate(&self) -> &Agent<T> {
+    pub fn delegate(&self) -> &Agent<T, L> {
         &self.delegate
     }
 
@@ -47,15 +61,15 @@ impl<T: ContentRef> Delegation<T> {
         self.can
     }
 
-    pub fn proof(&self) -> Option<&Rc<Signed<Delegation<T>>>> {
+    pub fn proof(&self) -> Option<&Rc<Signed<Delegation<T, L>>>> {
         self.proof.as_ref()
     }
 
-    pub fn after_revocations(&self) -> &[Rc<Signed<Revocation<T>>>] {
+    pub fn after_revocations(&self) -> &[Rc<Signed<Revocation<T, L>>>] {
         &self.after_revocations
     }
 
-    pub fn after(&self) -> Dependencies<T> {
+    pub fn after(&self) -> Dependencies<T, L> {
         let AfterAuth {
             optional_delegation,
             revocations,
@@ -70,7 +84,7 @@ impl<T: ContentRef> Delegation<T> {
         }
     }
 
-    pub fn after_auth(&self) -> AfterAuth<T> {
+    pub fn after_auth(&self) -> AfterAuth<T, L> {
         AfterAuth {
             optional_delegation: self.proof.dupe(),
             revocations: &self.after_revocations,
@@ -81,7 +95,7 @@ impl<T: ContentRef> Delegation<T> {
         self.proof.is_none()
     }
 
-    pub fn proof_lineage(&self) -> Vec<Rc<Signed<Delegation<T>>>> {
+    pub fn proof_lineage(&self) -> Vec<Rc<Signed<Delegation<T, L>>>> {
         let mut lineage = vec![];
         let mut head = self;
 
@@ -93,7 +107,7 @@ impl<T: ContentRef> Delegation<T> {
         lineage
     }
 
-    pub fn is_descendant_of(&self, maybe_ancestor: &Signed<Delegation<T>>) -> bool {
+    pub fn is_descendant_of(&self, maybe_ancestor: &Signed<Delegation<T, L>>) -> bool {
         let mut head = self;
 
         while let Some(proof) = &head.proof {
@@ -107,7 +121,7 @@ impl<T: ContentRef> Delegation<T> {
         false
     }
 
-    pub fn is_ancestor_of(&self, maybe_descendant: &Signed<Delegation<T>>) -> bool {
+    pub fn is_ancestor_of(&self, maybe_descendant: &Signed<Delegation<T, L>>) -> bool {
         let mut head = maybe_descendant.payload();
 
         while let Some(proof) = &head.proof {
@@ -122,7 +136,7 @@ impl<T: ContentRef> Delegation<T> {
     }
 }
 
-impl<T: ContentRef> Signed<Delegation<T>> {
+impl<T: ContentRef, L: MembershipListener<T>> Signed<Delegation<T, L>> {
     pub fn subject_id(&self) -> Identifier {
         let mut head = self;
 
@@ -134,7 +148,7 @@ impl<T: ContentRef> Signed<Delegation<T>> {
     }
 }
 
-impl<T: ContentRef> Serialize for Delegation<T> {
+impl<T: ContentRef, L: MembershipListener<T>> Serialize for Delegation<T, L> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         StaticDelegation::from(self.clone()).serialize(serializer)
     }
@@ -152,8 +166,8 @@ pub struct StaticDelegation<T: ContentRef> {
     pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<T: ContentRef> From<Delegation<T>> for StaticDelegation<T> {
-    fn from(delegation: Delegation<T>) -> Self {
+impl<T: ContentRef, L: MembershipListener<T>> From<Delegation<T, L>> for StaticDelegation<T> {
+    fn from(delegation: Delegation<T, L>) -> Self {
         Self {
             can: delegation.can,
             proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).into()),
@@ -169,9 +183,9 @@ impl<T: ContentRef> From<Delegation<T>> for StaticDelegation<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AfterAuth<'a, T: ContentRef> {
-    pub(crate) optional_delegation: Option<Rc<Signed<Delegation<T>>>>,
-    pub(crate) revocations: &'a [Rc<Signed<Revocation<T>>>],
+pub struct AfterAuth<'a, T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+    pub(crate) optional_delegation: Option<Rc<Signed<Delegation<T, L>>>>,
+    pub(crate) revocations: &'a [Rc<Signed<Revocation<T, L>>>],
 }
 
 /// Errors that can occur when using an active agent.

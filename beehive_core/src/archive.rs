@@ -1,6 +1,7 @@
 use crate::{
     content::reference::ContentRef,
     crypto::digest::Digest,
+    listener::no_listener::NoListener,
     principal::{
         active::Active,
         document::{id::DocumentId, DocumentArchive},
@@ -13,7 +14,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Archive<T: ContentRef> {
-    pub(crate) active: Active,
+    pub(crate) active: Active<NoListener>,
     pub(crate) topsorted_ops: Vec<(Digest<StaticOperation<T>>, StaticOperation<T>)>,
     pub(crate) individuals: HashMap<IndividualId, Individual>,
     pub(crate) groups: HashMap<GroupId, GroupArchive<T>>,
