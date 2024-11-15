@@ -6,7 +6,7 @@ use crate::util::content_addressed_map::CaMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrekeyState {
     pub ops: CaMap<Signed<KeyOp>>,
     pub keypairs: HashMap<ShareKey, ShareSecretKey>,
@@ -62,12 +62,6 @@ impl PrekeyState {
         }
 
         keys
-    }
-}
-
-impl Default for PrekeyState {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

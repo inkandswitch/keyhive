@@ -10,7 +10,7 @@ use super::error::CgkaError;
 /// A ShareSecretKeyMap is used to store the secret keys for all of the public keys
 /// on your path that you have encountered so far (either because you added them
 /// to your path as part of an update or decrypted them when decrypting your path).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ShareKeyMap(BTreeMap<ShareKey, ShareSecretKey>);
 
 impl ShareKeyMap {
@@ -45,12 +45,6 @@ impl ShareKeyMap {
         encrypted
             .try_sibling_decrypt(&decrypt_keys)
             .map_err(|e| CgkaError::Decryption(e.to_string()))
-    }
-}
-
-impl Default for ShareKeyMap {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

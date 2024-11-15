@@ -422,7 +422,7 @@ pub fn update_even_members() -> Box<TestOperation> {
 fn check_same_secret(member_cgkas: &mut Vec<TestMemberCgka>) -> Result<(), CgkaError> {
     let secret_bytes = member_cgkas[0].cgka.secret()?.to_bytes();
     for m in member_cgkas.iter_mut().skip(1) {
-        assert!(m.cgka.has_secret());
+        assert!(m.cgka.has_pcs_key());
         assert_eq!(m.cgka.secret()?.to_bytes(), secret_bytes)
     }
     Ok(())

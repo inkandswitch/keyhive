@@ -13,14 +13,34 @@ use super::{error::CgkaError, keys::ShareKeyMap, BeeKem};
 
 const STATIC_CONTEXT: &str = "/automerge/beehive/beekem/app_secret/";
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ApplicationSecretWithAddress<T: ContentRef> {
-    pub app_secret: SymmetricKey,
-    pub address: EncryptionKeyAddress<T>,
+pub struct ApplicationSecret<T: ContentRef> {
+    key: SymmetricKey,
+    metadata: ApplicationSecretMetadata<T>,
+}
+
+impl<T: ContentRef> ApplicationSecret<T> {
+    pub fn new(
+        key: SymmetricKey,
+        metadata: ApplicationSecretMetadata<T>,
+    ) -> Self {
+        Self {
+            key,
+            metadata,
+        }
+    }
+
+    pub fn key(&self) -> &SymmetricKey {
+        &self.key
+    }
+
+    pub fn metadata(&self) -> &ApplicationSecretMetadata<T> {
+        &self.metadata
+    }
 }
 
 // TODO: Rename
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-pub struct EncryptionKeyAddress<T: ContentRef> {
+pub struct ApplicationSecretMetadata<T: ContentRef> {
     pub writer_id: Identifier,
     // FIXME: Can we get this elsewhere rather than in this struct?
     pub content_ref: T,

@@ -5,7 +5,7 @@ pub mod store;
 use super::{individual::id::IndividualId, verifiable::Verifiable};
 use crate::{
     access::Access,
-    cgka::{encryption_key::EncryptionKeyAddress, Cgka},
+    cgka::{encryption_key::ApplicationSecretMetadata, Cgka},
     content::reference::ContentRef,
     crypto::{
         encrypted::Encrypted,
@@ -157,35 +157,54 @@ impl<T: ContentRef> Document<T> {
         self.group.materialize()
     }
 
+    pub fn has_pcs_key(&self) -> bool {
+        self.cgka.has_pcs_key()
+    }
+
+    // FIXME: Add error type
+    pub fn pcs_update(
+        &mut self,
+        id: Identifier,
+        pk: ShareKey,
+        sk: ShareSecretKey,
+    ) {
+        self.cgka.update(id, pk, sk).expect("FIXME");
+    }
+
     pub fn encrypt_content(
         &mut self,
         content_ref: &T,
         content: &[u8],
         // FIXME: What should this type really be?
         pred_ref: &T,
-        pk: ShareKey,
-        sk: ShareSecretKey,
+        // FIXME: We should only need to pass in a public and secret key when
+        // doing a PCS update. Note that if the BeeKEM tree does not contain a
+        // root secret (e.g. because of conflict keys), then you need to do an
+        // PCS update before you can encrypt.
+        // One approach would be to assume encrypt_content will only be called
+        // after checking if there is a current root secret. That's what we're doing
+        // right now.
     ) -> Encrypted<Vec<u8>> {
-        let app_secret_with_address = self
+        let app_secret = self
             .cgka
-            .new_app_secret_for(content_ref, content, pred_ref, pk, sk)
+            .new_app_secret_for(content_ref, content, pred_ref)
             .expect("FIXME");
         let mut ciphertext = content.to_vec();
-        app_secret_with_address
-            .app_secret
-            .try_encrypt(app_secret_with_address.address.nonce, &mut ciphertext)
+        app_secret
+            .key()
+            .try_encrypt(app_secret.metadata().nonce, &mut ciphertext)
             .unwrap();
-        Encrypted::new(app_secret_with_address.address.nonce, ciphertext)
+        Encrypted::new(app_secret.metadata().nonce, ciphertext)
     }
 
     pub fn decrypt_content(
         &mut self,
-        encrypted_content: Encrypted<Vec<u8>>,
-        address: EncryptionKeyAddress<T>,
+        encrypted_content: &Encrypted<Vec<u8>>,
+        metadata: &ApplicationSecretMetadata<T>,
     ) -> Vec<u8> {
         let decrypt_key = self
             .cgka
-            .decryption_key_for(&address)
+            .decryption_key_for(&metadata)
             .expect("FIXME")
             .expect("FIXME");
         let mut plaintext = encrypted_content.ciphertext.clone();
