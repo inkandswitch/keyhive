@@ -302,6 +302,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_root_key_after_update_is_not_leaf_sk() -> Result<(), CgkaError> {
+        let doc_id = DocumentId::generate();
+        let members = setup_members(2);
+        let initial_member_count = members.len();
+        let mut cgka = setup_cgka(doc_id, &members, 0);
+        let sk = ShareSecretKey::generate();
+        let pk = sk.share_key();
+        cgka.update(cgka.owner_id, pk, sk.clone())?;
+        assert_ne!(sk, cgka.secret()?);
+        Ok(())
+    }
+
+    #[test]
     fn test_simple_add() -> Result<(), CgkaError> {
         let doc_id = DocumentId::generate();
         let members = setup_members(2);
