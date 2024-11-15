@@ -18,11 +18,11 @@ bincode = "1.3"
 serde = { workspace = true }
 
 # Crypto
-blake3 = "1.5"
-chacha20poly1305 = "0.10.1"
-ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
-signature = "2.2"
-x25519-dalek = { version = "2.0", features = ["getrandom", "serde", "static_secrets"] }
+blake3 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+ed25519-dalek = { workspace = true }
+signature = { workspace = true }
+x25519-dalek = { workspace = true }
 
 # Error Handling
 thiserror = { workspace = true }
@@ -30,15 +30,13 @@ thiserror = { workspace = true }
 # Utilities
 dupe = { workspace = true }
 nonempty = "0.10.0"
-rand = { workspace = true }
-topological-sort = "0.2.2"
 
-# Tests & Test Utils
+# Testing
 proptest = { version = "1.5", optional = true }
 proptest-derive = { version = "0.5.0", optional = true }
 
 [dev-dependencies]
-
+# Benchmarks
 divan = { version = "0.1.15" }
 
 [features]
