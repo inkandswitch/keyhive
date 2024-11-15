@@ -4,12 +4,17 @@ use futures::{future::LocalBoxFuture, FutureExt};
 
 use crate::{
     blob::BlobMeta,
+    deser::Encode,
     effects::TaskEffects,
+    endpoint,
     messages::{BlobRef, TreePart, UploadItem},
+    notification_handler,
+    peer_address::TargetNodeInfo,
     reachability::ReachabilityIndexEntry,
     sedimentree::{self, LooseCommit},
-    snapshots, sync_docs, AddLink, BundleSpec, Commit, CommitBundle, CommitCategory,
-    CommitOrBundle, DocumentId, PeerId, StorageKey, Story, SyncDocResult,
+    snapshots, stream, sync_docs, AddLink, Audience, BundleSpec, Commit, CommitBundle,
+    CommitCategory, CommitOrBundle, DocumentId, Forwarding, PeerAddress, SnapshotId, StorageKey,
+    SyncDocResult,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -22,8 +27,8 @@ impl StoryId {
         Self(LAST_STORY_ID.fetch_add(1, Ordering::Relaxed))
     }
 
-    pub fn serialize(&self) -> String {
-        self.0.to_string()
+    pub fn serialize(&self) -> u64 {
+        self.0
     }
 }
 
@@ -36,29 +41,78 @@ impl std::str::FromStr for StoryId {
 }
 
 #[derive(Debug)]
+pub(crate) enum Story {
+    // Stories which require some kind of suspend
+    Async(AsyncStory),
+    // Stories which just twiddle some state and immediately return
+    SyncStory(SyncStory),
+}
+
+#[derive(Debug)]
+pub(crate) enum SyncStory {
+    CreateStream(stream::StreamDirection, Forwarding),
+    RegisterEndpoint(Audience, Forwarding),
+    UnregisterEndpoints(endpoint::EndpointId),
+}
+
+#[derive(Debug)]
+pub(crate) enum AsyncStory {
+    SyncDoc {
+        root_id: DocumentId,
+        remote: PeerAddress,
+    },
+    AddCommits {
+        doc_id: DocumentId,
+        commits: Vec<Commit>,
+    },
+    LoadDoc {
+        doc_id: DocumentId,
+    },
+    CreateDoc,
+    AddLink(AddLink),
+    AddBundle {
+        doc_id: DocumentId,
+        bundle: CommitBundle,
+    },
+    Listen {
+        peer: PeerAddress,
+        snapshot_id: SnapshotId,
+    },
+}
+
+#[derive(Debug)]
 pub enum StoryResult {
-    SyncDoc(SyncDocResult),
+    SyncDoc(Result<SyncDocResult, super::error::SyncDoc>),
     AddCommits(Vec<BundleSpec>),
     AddLink,
     AddBundle,
     CreateDoc(DocumentId),
     LoadDoc(Option<Vec<CommitOrBundle>>),
-    Listen,
+    Listen(Result<(), super::error::Listen>),
+    CreateStream(stream::StreamId),
+    DisconnectStream,
+    HandleMessage(Result<(), stream::StreamError>),
+    RegisterEndpoint(endpoint::EndpointId),
+    UnregisterEndpoint,
 }
 
-pub(super) fn handle_story<R: rand::Rng + 'static>(
+pub(super) fn handle_story<R: rand::Rng + rand::CryptoRng + 'static>(
     mut effects: crate::effects::TaskEffects<R>,
-    story: super::Story,
+    story: super::AsyncStory,
 ) -> LocalBoxFuture<'static, StoryResult> {
     match story {
-        Story::SyncDoc {
-            root_id,
-            peer: with_peer,
-        } => {
-            async move { StoryResult::SyncDoc(sync_linked_docs(effects, root_id, with_peer).await) }
-                .boxed_local()
+        AsyncStory::SyncDoc { root_id, remote } => async move {
+            match TargetNodeInfo::lookup(&mut effects, remote, None) {
+                Err(e) => {
+                    StoryResult::SyncDoc(Err(super::error::SyncDoc::BadPeerAddress(e.to_string())))
+                }
+                Ok(target) => {
+                    StoryResult::SyncDoc(sync_linked_docs(effects, root_id, target).await)
+                }
+            }
         }
-        Story::AddCommits {
+        .boxed_local(),
+        AsyncStory::AddCommits {
             doc_id: dag_id,
             commits,
         } => async move {
@@ -66,50 +120,56 @@ pub(super) fn handle_story<R: rand::Rng + 'static>(
             StoryResult::AddCommits(result)
         }
         .boxed_local(),
-        Story::LoadDoc { doc_id } => async move {
+        AsyncStory::LoadDoc { doc_id } => async move {
             StoryResult::LoadDoc(
                 load_doc_commits(&mut effects, &doc_id, CommitCategory::Content).await,
             )
         }
         .boxed_local(),
-        Story::CreateDoc => {
+        AsyncStory::CreateDoc => {
             async move { StoryResult::CreateDoc(create_doc(effects).await) }.boxed_local()
         }
-        Story::AddLink(add) => async move {
+        AsyncStory::AddLink(add) => async move {
             add_link(effects, add).await;
             tracing::trace!("add link complete");
             StoryResult::AddLink
         }
         .boxed_local(),
-        Story::AddBundle { doc_id, bundle } => async move {
+        AsyncStory::AddBundle { doc_id, bundle } => async move {
             add_bundle(effects, doc_id, bundle).await;
             StoryResult::AddBundle
         }
         .boxed_local(),
-        Story::Listen {
-            peer_id,
-            snapshot_id,
-        } => async move {
-            if let Err(e) = effects.listen(peer_id, snapshot_id).await {
-                tracing::error!(err=?e, "error listening to peer");
-            }
-            StoryResult::Listen
+        AsyncStory::Listen { peer, snapshot_id } => async move {
+            let target = match TargetNodeInfo::lookup(&mut effects, peer, None) {
+                Ok(t) => t,
+                Err(e) => {
+                    return StoryResult::Listen(Err(super::error::Listen::BadPeerAddress(
+                        e.to_string(),
+                    )))
+                }
+            };
+            effects.spawn(move |effects| async move {
+                notification_handler::listen(effects, snapshot_id, target).await;
+            });
+            StoryResult::Listen(Ok(()))
         }
         .boxed_local(),
     }
 }
 
-pub(crate) async fn sync_linked_docs<R: rand::Rng>(
+pub(crate) async fn sync_linked_docs<R: rand::Rng + rand::CryptoRng>(
     effects: crate::effects::TaskEffects<R>,
     root: DocumentId,
-    remote_peer: PeerId,
-) -> SyncDocResult {
-    let our_snapshot = snapshots::Snapshot::load(effects.clone(), root).await;
-    sync_docs::sync_root_doc(effects, &our_snapshot, remote_peer).await
+    remote: crate::TargetNodeInfo,
+) -> Result<SyncDocResult, crate::error::SyncDoc> {
+    let our_snapshot = snapshots::Snapshot::load(effects.clone(), root, None).await;
+    tracing::debug!(our_snapshot=%our_snapshot.id(), ?root, ?remote, "beginning linked doc sync");
+    Ok(sync_docs::sync_root_doc(effects, &our_snapshot, remote).await?)
 }
 
 #[tracing::instrument(skip(effects, commits))]
-async fn add_commits<R: rand::Rng>(
+async fn add_commits<R: rand::Rng + rand::CryptoRng + 'static>(
     effects: crate::effects::TaskEffects<R>,
     doc_id: DocumentId,
     commits: Vec<Commit>,
@@ -145,10 +205,28 @@ async fn add_commits<R: rand::Rng>(
                     parents: commit.parents().to_vec(),
                 },
             };
-            let our_peer_id = effects.our_peer_id().clone();
             effects
                 .log()
-                .new_commit(doc_id, our_peer_id, item.clone(), CommitCategory::Content);
+                .new_local_commit(doc_id, item.clone(), CommitCategory::Content);
+            let forwarding_peers = effects.who_should_i_ask(doc_id);
+            if !forwarding_peers.is_empty() {
+                tracing::debug!(commit=%commit.hash(), ?forwarding_peers, "forwarding commit");
+                for peer in forwarding_peers {
+                    let target = peer.clone();
+                    let doc_id = doc_id.clone();
+                    let item = item.clone();
+                    effects.spawn(move |effects| async move {
+                        let _ = effects
+                            .upload_commits(
+                                target,
+                                doc_id,
+                                vec![item.clone()],
+                                CommitCategory::Content,
+                            )
+                            .await;
+                    });
+                }
+            }
         }
     });
     let _ = futures::future::join_all(save_tasks).await;
@@ -172,11 +250,14 @@ async fn add_commits<R: rand::Rng>(
 }
 
 #[tracing::instrument(skip(effects, link), fields(from=%link.from, to=%link.to))]
-async fn add_link<R: rand::Rng>(effects: crate::effects::TaskEffects<R>, link: AddLink) {
+async fn add_link<R: rand::Rng + rand::CryptoRng>(
+    effects: crate::effects::TaskEffects<R>,
+    link: AddLink,
+) {
     tracing::trace!("adding link");
-    let index_tree = sedimentree::storage::load(
+    let links_tree = sedimentree::storage::load(
         effects.clone(),
-        StorageKey::sedimentree_root(&link.from, CommitCategory::Index),
+        StorageKey::sedimentree_root(&link.from, CommitCategory::Links),
     )
     .await
     .unwrap_or_default();
@@ -188,24 +269,26 @@ async fn add_link<R: rand::Rng>(effects: crate::effects::TaskEffects<R>, link: A
         .put(StorageKey::blob(blob.hash()), encoded.clone())
         .await;
 
-    let commit = LooseCommit::new(new_entry.hash(), index_tree.heads(), blob);
+    let commit = LooseCommit::new(new_entry.hash(), links_tree.heads(), blob);
     sedimentree::storage::write_loose_commit(
         effects.clone(),
-        StorageKey::sedimentree_root(&link.from, CommitCategory::Index),
+        StorageKey::sedimentree_root(&link.from, CommitCategory::Links),
         &commit,
     )
     .await;
 }
 
 #[tracing::instrument(skip(effects))]
-async fn create_doc<R: rand::Rng>(effects: crate::effects::TaskEffects<R>) -> DocumentId {
+async fn create_doc<R: rand::Rng + rand::CryptoRng>(
+    effects: crate::effects::TaskEffects<R>,
+) -> DocumentId {
     let doc_id = DocumentId::random(&mut *effects.rng());
     tracing::trace!(?doc_id, "creating doc");
     doc_id
 }
 
 #[tracing::instrument(skip(effects, content))]
-async fn load_doc_commits<R: rand::Rng>(
+async fn load_doc_commits<R: rand::Rng + rand::CryptoRng>(
     effects: &mut crate::effects::TaskEffects<R>,
     doc_id: &DocumentId,
     content: CommitCategory,
@@ -252,7 +335,7 @@ async fn load_doc_commits<R: rand::Rng>(
     Some(bundles)
 }
 
-async fn add_bundle<R: rand::Rng>(
+async fn add_bundle<R: rand::Rng + rand::CryptoRng>(
     effects: TaskEffects<R>,
     doc_id: DocumentId,
     bundle: CommitBundle,

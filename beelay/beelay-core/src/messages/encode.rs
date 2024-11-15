@@ -1,27 +1,8 @@
-use crate::{leb128::encode_uleb128, messages::Request, RequestId, Response};
+use crate::{deser::Encode, leb128::encode_uleb128, messages::Request, Response};
 
-use super::{
-    encoding_types::{MessageType, RequestType, ResponseType},
-    Message,
-};
+use super::encoding_types::{RequestType, ResponseType};
 
-pub(super) fn encode(payload: &super::Payload) -> Vec<u8> {
-    let mut buf = Vec::new();
-    match &payload.0 {
-        Message::Request(id, req) => encode_request(&mut buf, *id, req),
-        Message::Response(id, res) => encode_response(&mut buf, *id, res),
-        Message::Notification(notification) => {
-            buf.push(MessageType::Notification.into());
-            notification.encode(&mut buf);
-        }
-    }
-    buf
-}
-
-fn encode_request(buf: &mut Vec<u8>, id: RequestId, req: &Request) {
-    buf.push(MessageType::Request.into());
-    buf.extend_from_slice(id.as_bytes());
-
+pub(super) fn encode_request(buf: &mut Vec<u8>, req: &Request) {
     match req {
         Request::UploadBlob(blob) => {
             buf.push(RequestType::UploadBlob.into());
@@ -34,16 +15,16 @@ fn encode_request(buf: &mut Vec<u8>, id: RequestId, req: &Request) {
             category,
         } => {
             buf.push(RequestType::UploadCommits.into());
-            doc.encode(buf);
-            category.encode(buf);
+            doc.encode_into(buf);
+            category.encode_into(buf);
             encode_uleb128(buf, data.len() as u64);
             for datum in data {
-                datum.encode(buf);
+                datum.encode_into(buf);
             }
         }
         Request::FetchSedimentree(doc_id) => {
             buf.push(RequestType::FetchMinimalBundles.into());
-            doc_id.encode(buf);
+            doc_id.encode_into(buf);
         }
         Request::FetchBlobPart {
             blob,
@@ -51,36 +32,43 @@ fn encode_request(buf: &mut Vec<u8>, id: RequestId, req: &Request) {
             length,
         } => {
             buf.push(RequestType::FetchBlobPart.into());
-            blob.encode(buf);
+            blob.encode_into(buf);
             encode_uleb128(buf, *offset);
             encode_uleb128(buf, *length);
         }
-        Request::CreateSnapshot { root_doc } => {
+        Request::CreateSnapshot {
+            root_doc,
+            source_snapshot,
+        } => {
             buf.push(RequestType::CreateSnapshot.into());
-            root_doc.encode(buf);
+            root_doc.encode_into(buf);
+            source_snapshot.encode_into(buf);
         }
         Request::SnapshotSymbols { snapshot_id } => {
             buf.push(RequestType::SnapshotSymbols.into());
-            snapshot_id.encode(buf);
+            snapshot_id.encode_into(buf);
         }
-        Request::Listen(snapshot_id) => {
+        Request::Listen(snapshot_id, remote_offset) => {
             buf.push(RequestType::Listen.into());
-            snapshot_id.encode(buf);
+            snapshot_id.encode_into(buf);
+            if let Some(offset) = remote_offset {
+                buf.push(1);
+                encode_uleb128(buf, *offset);
+            } else {
+                buf.push(0);
+            }
         }
     }
 }
 
-fn encode_response(buf: &mut Vec<u8>, id: RequestId, resp: &Response) {
-    buf.push(MessageType::Response.into());
-    buf.extend_from_slice(id.as_bytes());
-
+pub(crate) fn encode_response(buf: &mut Vec<u8>, resp: &Response) {
     match &resp {
         Response::UploadCommits => {
             buf.push(ResponseType::UploadCommits.into());
         }
         Response::FetchSedimentree(fetched) => {
             buf.push(ResponseType::FetchSedimentree.into());
-            fetched.encode(buf);
+            fetched.encode_into(buf);
         }
         Response::FetchBlobPart(data) => {
             buf.push(ResponseType::FetchBlobPart.into());
@@ -95,14 +83,14 @@ fn encode_response(buf: &mut Vec<u8>, id: RequestId, resp: &Response) {
             buf.extend_from_slice(snapshot_id.as_bytes());
             encode_uleb128(buf, first_symbols.len() as u64);
             for symbol in first_symbols {
-                symbol.encode(buf);
+                symbol.encode_into(buf);
             }
         }
         Response::SnapshotSymbols(symbols) => {
             buf.push(ResponseType::SnapshotSymbols.into());
             encode_uleb128(buf, symbols.len() as u64);
             for symbol in symbols {
-                symbol.encode(buf);
+                symbol.encode_into(buf);
             }
         }
         Response::Error(desc) => {
@@ -110,8 +98,16 @@ fn encode_response(buf: &mut Vec<u8>, id: RequestId, resp: &Response) {
             encode_uleb128(buf, desc.len() as u64);
             buf.extend_from_slice(desc.as_bytes());
         }
-        Response::Listen => {
+        Response::Listen {
+            notifications,
+            remote_offset,
+        } => {
             buf.push(ResponseType::Listen.into());
+            encode_uleb128(buf, notifications.len() as u64);
+            for notification in notifications {
+                notification.encode_into(buf);
+            }
+            encode_uleb128(buf, *remote_offset);
         }
     }
 }

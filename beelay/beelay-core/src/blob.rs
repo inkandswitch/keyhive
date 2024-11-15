@@ -1,6 +1,9 @@
 use std::str::FromStr;
 
-use crate::{leb128, parse};
+use crate::{
+    deser::{Encode, Parse},
+    leb128, parse,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Hash)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
@@ -9,26 +12,28 @@ pub struct BlobMeta {
     size_bytes: u64,
 }
 
+impl Encode for BlobMeta {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.hash.encode_into(out);
+        leb128::encode_uleb128(out, self.size_bytes);
+    }
+}
+
+impl Parse<'_> for BlobMeta {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        input.parse_in_ctx("BlobMeta", |input| {
+            let (input, hash) = input.parse_in_ctx("hash", BlobHash::parse)?;
+            let (input, size_bytes) = input.parse_in_ctx("size", leb128::parse)?;
+            Ok((input, BlobMeta { hash, size_bytes }))
+        })
+    }
+}
+
 impl BlobMeta {
     pub(crate) fn new(contents: &[u8]) -> Self {
         let hash = BlobHash::hash_of(contents);
         let size_bytes = contents.len() as u64;
         Self { hash, size_bytes }
-    }
-
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, BlobMeta), parse::ParseError> {
-        input.with_context("BlobMeta", |input| {
-            let (input, hash) = BlobHash::parse(input)?;
-            let (input, size_bytes) = leb128::parse(input)?;
-            Ok((input, BlobMeta { hash, size_bytes }))
-        })
-    }
-
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        self.hash.encode(buf);
-        leb128::encode_uleb128(buf, self.size_bytes);
     }
 
     pub fn hash(&self) -> BlobHash {
@@ -44,6 +49,21 @@ impl BlobMeta {
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct BlobHash([u8; 32]);
 
+impl Encode for BlobHash {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.0);
+    }
+}
+
+impl Parse<'_> for BlobHash {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, BlobHash), parse::ParseError> {
+        input.parse_in_ctx("BlobHash", |input| {
+            let (input, hash_bytes) = input.parse_in_ctx("hash", parse::arr::<32>)?;
+            Ok((input, BlobHash::from(hash_bytes)))
+        })
+    }
+}
+
 impl std::fmt::Debug for BlobHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "BlobHash({})", crate::hex::encode(&self.0))
@@ -56,19 +76,6 @@ impl BlobHash {
         let mut bytes = [0; 32];
         bytes.copy_from_slice(hash.as_bytes());
         Self(bytes)
-    }
-
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, BlobHash), parse::ParseError> {
-        input.with_context("BlobHash", |input| {
-            let (input, hash_bytes) = parse::arr::<32>(input)?;
-            Ok((input, BlobHash::from(hash_bytes)))
-        })
-    }
-
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.0);
     }
 }
 

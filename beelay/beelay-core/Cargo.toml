@@ -19,14 +19,17 @@ tracing = "0.1.40"
 # Crypto
 blake3 = { workspace = true }
 chacha20poly1305 = { workspace = true }
-ed25519-dalek = { workspace = true }
+ed25519-dalek.workspace = true
 signature = { workspace = true }
 x25519-dalek = { workspace = true }
 
 [dev-dependencies]
+test-utils = { path = "../test-utils" }
 arbitrary = { version = "1.3.2", features = ["derive"] }
 bolero = { version = "0.11.1", features = ["arbitrary"] }
 image = "0.24.7"
+lazy_static = "1.5.0"
+nu-ansi-term = "0.50.1"
 resvg = { version = "0.43.0", default-features = false, features = [
     "text",
     "system-fonts",

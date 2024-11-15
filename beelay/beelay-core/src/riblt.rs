@@ -331,13 +331,35 @@ impl<T: Symbol + Copy> Decoder<T> {
 pub mod doc_and_heads {
     use std::hash::{Hash, Hasher};
 
-    use crate::{leb128, parse, sedimentree::MinimalTreeHash, DocumentId};
+    use crate::{
+        deser::{Encode, Parse},
+        leb128, parse,
+        sedimentree::MinimalTreeHash,
+        DocumentId,
+    };
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize)]
     #[cfg_attr(test, derive(arbitrary::Arbitrary))]
     pub(crate) struct DocAndHeadsSymbol {
         part1: [u8; 16],
         part2: [u8; 32],
+    }
+
+    impl Encode for DocAndHeadsSymbol {
+        fn encode_into(&self, out: &mut Vec<u8>) {
+            out.extend(&self.part1);
+            out.extend(&self.part2);
+        }
+    }
+
+    impl Parse<'_> for DocAndHeadsSymbol {
+        fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+            input.parse_in_ctx("RibltSymbol", |input| {
+                let (input, part1) = input.parse_in_ctx("part1", parse::arr::<16>)?;
+                let (input, part2) = input.parse_in_ctx("part2", parse::arr::<32>)?;
+                Ok((input, Self { part1, part2 }))
+            })
+        }
     }
 
     impl DocAndHeadsSymbol {
@@ -378,22 +400,7 @@ pub mod doc_and_heads {
         }
     }
 
-    impl DocAndHeadsSymbol {
-        pub(crate) fn parse(
-            input: parse::Input<'_>,
-        ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-            input.with_context("RibltSymbol", |input| {
-                let (input, part1) = parse::arr::<16>(input)?;
-                let (input, part2) = parse::arr::<32>(input)?;
-                Ok((input, Self { part1, part2 }))
-            })
-        }
-
-        pub(crate) fn encode(&self, out: &mut Vec<u8>) {
-            out.extend(&self.part1);
-            out.extend(&self.part2);
-        }
-    }
+    impl DocAndHeadsSymbol {}
 
     #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
     #[cfg_attr(test, derive(arbitrary::Arbitrary))]
@@ -403,30 +410,34 @@ pub mod doc_and_heads {
         count: i64,
     }
 
-    impl CodedDocAndHeadsSymbol {
-        pub(crate) fn parse(
-            input: parse::Input<'_>,
-        ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-            let (input, symbol) = DocAndHeadsSymbol::parse(input)?;
-            let (input, hash_bytes) = parse::arr::<8>(input)?;
-            let hash = u64::from_be_bytes(hash_bytes);
-            let (input, count) = leb128::signed::parse(input)?;
-            Ok((
-                input,
-                Self {
-                    symbol,
-                    hash,
-                    count,
-                },
-            ))
-        }
-
-        pub(crate) fn encode(&self, out: &mut Vec<u8>) {
-            self.symbol.encode(out);
+    impl Encode for CodedDocAndHeadsSymbol {
+        fn encode_into(&self, out: &mut Vec<u8>) {
+            self.symbol.encode_into(out);
             out.extend(self.hash.to_be_bytes());
             leb128::signed::encode(out, self.count);
         }
+    }
 
+    impl Parse<'_> for CodedDocAndHeadsSymbol {
+        fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+            input.parse_in_ctx("CodedDocAndHeadsSymbol", |input| {
+                let (input, symbol) = DocAndHeadsSymbol::parse_in_ctx("symbol", input)?;
+                let (input, hash_bytes) = input.parse_in_ctx("hash", parse::arr::<8>)?;
+                let hash = u64::from_be_bytes(hash_bytes);
+                let (input, count) = input.parse_in_ctx("count", leb128::signed::parse)?;
+                Ok((
+                    input,
+                    Self {
+                        symbol,
+                        hash,
+                        count,
+                    },
+                ))
+            })
+        }
+    }
+
+    impl CodedDocAndHeadsSymbol {
         pub(crate) fn into_coded(self) -> super::CodedSymbol<DocAndHeadsSymbol> {
             super::CodedSymbol {
                 symbol: self.symbol,
@@ -441,9 +452,11 @@ pub mod doc_and_heads {
     }
 
     impl Encoder {
-        pub(crate) fn new(snapshot: &crate::snapshots::Snapshot) -> Self {
+        pub(crate) fn new<'a, I: Iterator<Item = (&'a DocumentId, &'a MinimalTreeHash)>>(
+            items: I,
+        ) -> Self {
             let mut enc = super::Encoder::new();
-            for (doc, heads) in snapshot.our_docs_2() {
+            for (doc, heads) in items {
                 enc.add_symbol(&DocAndHeadsSymbol::new(doc, heads));
             }
             Encoder { riblt: enc }

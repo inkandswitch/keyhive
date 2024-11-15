@@ -1,0 +1,46 @@
+[package]
+name = "beelay"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[features]
+tokio = ["dep:tokio", "dep:tokio-util"]
+tokio-tungstenite = ["dep:tokio", "dep:tokio-util"]
+tungstenite = ["dep:tungstenite"]
+axum = ["dep:axum", "tokio"]
+
+[dependencies]
+test-utils = { path = "../test-utils" }
+beelay-core = { path = "../beelay-core" }
+futures = "0.3.30"
+rand = "0.8.5"
+tracing = "0.1.40"
+tokio = { version = "1.40.0", features = ["full"], optional = true }
+tokio-util = { version = "0.7.12", features = [
+    "codec",
+    "net",
+], optional = true }
+tungstenite = { version = "0.24.0", optional = true }
+axum = { version = "0.7.5", features = ["ws"], optional = true }
+minicbor = { version = "0.25.0", features = ["alloc"] }
+hex = "0.4.3"
+bytes = "1.7.1"
+tempfile = "3.12.0"
+ed25519-dalek.workspace = true
+
+[dev-dependencies]
+blake3 = "1.5.4"
+petgraph = "0.6.5"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+
+[[example]]
+name = "counter"
+required-features = ["tokio"]
+
+[[test]]
+name = "smoke"
+required-features = ["tokio"]

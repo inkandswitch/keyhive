@@ -1,12 +1,15 @@
 use futures::StreamExt;
 
 use crate::{
-    blob::BlobMeta, effects::TaskEffects, parse, Commit, CommitBundle, CommitOrBundle, StorageKey,
+    blob::BlobMeta,
+    deser::{Encode, Parse},
+    effects::TaskEffects,
+    parse, Commit, CommitBundle, CommitOrBundle, StorageKey,
 };
 
 use super::{Diff, LooseCommit, Sedimentree, Stratum};
 
-pub(crate) async fn load<R: rand::Rng>(
+pub(crate) async fn load<R: rand::Rng + rand::CryptoRng>(
     effects: TaskEffects<R>,
     path: StorageKey,
 ) -> Option<Sedimentree> {
@@ -69,7 +72,7 @@ pub(crate) async fn load<R: rand::Rng>(
     }
 }
 
-pub(crate) async fn update<R: rand::Rng>(
+pub(crate) async fn update<R: rand::Rng + rand::CryptoRng>(
     effects: TaskEffects<R>,
     path: StorageKey,
     original: Option<&Sedimentree>,
@@ -96,7 +99,7 @@ pub(crate) async fn update<R: rand::Rng>(
             async move {
                 let key = strata_path(&path, s);
                 let mut data = Vec::new();
-                s.encode(&mut data);
+                s.encode_into(&mut data);
                 effects.put(key, data).await;
             }
         })
@@ -108,7 +111,7 @@ pub(crate) async fn update<R: rand::Rng>(
         async move {
             let key = commit_path(&path, c);
             let mut data = Vec::new();
-            c.encode(&mut data);
+            c.encode_into(&mut data);
             effects.put(key, data).await;
         }
     });
@@ -120,7 +123,7 @@ pub(crate) async fn update<R: rand::Rng>(
     .await;
 }
 
-pub(crate) fn data<R: rand::Rng>(
+pub(crate) fn data<R: rand::Rng + rand::CryptoRng>(
     effects: TaskEffects<R>,
     tree: Sedimentree,
 ) -> impl futures::Stream<Item = CommitOrBundle> {
@@ -154,18 +157,18 @@ pub(crate) fn data<R: rand::Rng>(
     futures::stream::FuturesUnordered::from_iter(items).filter_map(futures::future::ready)
 }
 
-pub(crate) async fn write_loose_commit<R: rand::Rng>(
+pub(crate) async fn write_loose_commit<R: rand::Rng + rand::CryptoRng>(
     effects: TaskEffects<R>,
     path: StorageKey,
     commit: &LooseCommit,
 ) {
     let key = commit_path(&path, commit);
     let mut data = Vec::new();
-    commit.encode(&mut data);
+    commit.encode_into(&mut data);
     effects.put(key, data).await;
 }
 
-pub(crate) async fn write_bundle<R: rand::Rng>(
+pub(crate) async fn write_bundle<R: rand::Rng + rand::CryptoRng>(
     effects: TaskEffects<R>,
     path: StorageKey,
     bundle: CommitBundle,
@@ -185,7 +188,7 @@ pub(crate) async fn write_bundle<R: rand::Rng>(
     );
     let key = strata_path(&path, &stratum);
     let mut stratum_bytes = Vec::new();
-    stratum.encode(&mut stratum_bytes);
+    stratum.encode_into(&mut stratum_bytes);
     effects.put(key, stratum_bytes).await;
 }
 
