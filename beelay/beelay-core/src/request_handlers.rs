@@ -1,118 +1,220 @@
+use std::sync::Arc;
+
+use futures::FutureExt;
+use keyhive_core::principal::identifier::Identifier;
+
 use crate::{
+    auth,
     blob::BlobMeta,
-    messages::{BlobRef, ContentAndIndex, FetchedSedimentree, TreePart, UploadItem},
-    riblt::{self, doc_and_heads::CodedDocAndHeadsSymbol},
+    keyhive_sync::{self, KeyhiveSyncId},
+    log::Source,
+    network::messages::{self, BlobRef, ContentAndLinks, FetchedSedimentree, TreePart, UploadItem},
+    riblt,
     sedimentree::{self, LooseCommit},
-    snapshots,
-    subscriptions::Subscription,
-    sync_docs, CommitBundle, CommitCategory, DocumentId, OutgoingResponse, PeerId, RequestId,
-    Response, StorageKey,
+    snapshots::{self, Snapshot},
+    state::{RpcError, TaskContext},
+    sync_docs, Audience, Commit, CommitBundle, CommitCategory, CommitHash, CommitOrBundle,
+    DocumentId, OutgoingResponse, PeerId, Response, SnapshotId, StorageKey,
 };
 
-pub(super) async fn handle_request<R: rand::Rng>(
-    mut effects: crate::effects::TaskEffects<R>,
-    from: PeerId,
-    req_id: RequestId,
-    request: crate::Request,
-) -> Option<OutgoingResponse> {
+#[derive(Debug, thiserror::Error)]
+#[error("auth failed")]
+pub struct AuthenticationFailed;
+
+pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
+    ctx: crate::state::TaskContext<R>,
+    request: auth::Signed<auth::Message>,
+    receive_audience: Option<String>,
+) -> Result<OutgoingResponse, AuthenticationFailed> {
+    let recv_aud = receive_audience.map(Audience::service_name);
+    let (request, from) = match ctx.auth().authenticate_received_msg(request, recv_aud) {
+        Ok(authed) => (authed.content, PeerId::from(authed.from)),
+        Err(e) => {
+            tracing::debug!(err=?e, "failed to authenticate incoming message");
+            return Err(AuthenticationFailed);
+        }
+    };
     let response = match request {
         crate::Request::UploadCommits {
             doc,
             data,
             category,
         } => {
-            upload_commits(effects, from.clone(), doc, data, category).await;
+            if !ctx.keyhive().can_write(from, &doc) {
+                return Ok(OutgoingResponse {
+                    audience: Audience::peer(&from),
+                    response: Response::AuthorizationFailed,
+                });
+            }
+            upload_commits(ctx, from, doc, data, category).await;
             Response::UploadCommits
         }
         crate::Request::FetchSedimentree(doc_id) => {
-            let trees = fetch_sedimentree(effects, doc_id).await;
+            if !ctx.keyhive().can_read(from, &doc_id) {
+                // TODO: Return an empty response rather than an authorization failure?
+                return Ok(OutgoingResponse {
+                    audience: Audience::peer(&from),
+                    response: Response::AuthorizationFailed,
+                });
+            }
+            let trees = fetch_sedimentree(ctx, doc_id).await;
             Response::FetchSedimentree(trees)
         }
         crate::Request::FetchBlobPart {
             blob,
             offset,
             length,
-        } => match effects.load(StorageKey::blob(blob)).await {
-            None => Response::Error("no such blob".to_string()),
-            Some(data) => {
-                let offset = offset as usize;
-                let length = length as usize;
-                Response::FetchBlobPart(data[offset..offset + length].to_vec())
+        } => {
+            // TODO: Scope the fetchblob by document ID so we can check permissions
+            match ctx.storage().load(StorageKey::blob(blob)).await {
+                None => Response::Error("no such blob".to_string()),
+                Some(data) => {
+                    let offset = offset as usize;
+                    let length = length as usize;
+                    Response::FetchBlobPart(data[offset..offset + length].to_vec())
+                }
             }
-        },
+        }
         crate::Request::UploadBlob(_vec) => todo!(),
-        crate::Request::CreateSnapshot { root_doc } => {
+        crate::Request::CreateSnapshot {
+            root_doc,
+            source_snapshot,
+        } => {
             let (snapshot_id, first_symbols) =
-                create_snapshot(effects, from.clone(), root_doc).await;
+                create_snapshot(ctx, from, source_snapshot, root_doc).await;
             Response::CreateSnapshot {
                 snapshot_id,
                 first_symbols,
             }
         }
         crate::Request::SnapshotSymbols { snapshot_id } => {
-            if let Some((_, encoder)) = effects.snapshots_mut().get_mut(&snapshot_id) {
-                Response::SnapshotSymbols(encoder.next_n_symbols(100))
+            if let Some(symbols) = ctx.snapshots().next_snapshot_symbols(snapshot_id, 100) {
+                Response::SnapshotSymbols(symbols)
             } else {
                 Response::Error("no such snapshot".to_string())
             }
         }
-        crate::Request::Listen(snapshot_id) => {
-            let sub = effects
-                .snapshots_mut()
-                .get(&snapshot_id)
-                .map(|(s, _)| Subscription::new(&from, s));
-            let remote_snapshots = effects
-                .snapshots()
-                .get(&snapshot_id)
-                .map(|(s, _)| {
-                    s.remote_snapshots()
-                        .iter()
-                        .map(|(p, s)| (p.clone(), *s))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let do_listen = remote_snapshots.into_iter().map(|(remote_peer, remote_snapshot)| {
-               tracing::trace!(source_remote_peer=%from, target_remote_peer=%remote_peer, %remote_snapshot, "forwarding listen request");
-               effects.listen(remote_peer, remote_snapshot)
-            });
-            futures::future::join_all(do_listen).await;
-            if let Some(sub) = sub {
-                effects.subscriptions().add(sub);
-                Response::Listen
-            } else {
-                Response::Error("no such snapshot".to_string())
+        crate::Request::Listen(snapshot_id, from_offset) => {
+            let result = handle_listen(ctx, from, snapshot_id, from_offset).await;
+            match result {
+                Ok((events, remote_offset)) => Response::Listen {
+                    notifications: events,
+                    remote_offset,
+                },
+                Err(e) => Response::Error(e.to_string()),
             }
+        }
+        messages::Request::BeginAuthSync => {
+            let (session_id, first_symbols) =
+                ctx.keyhive().new_keyhive_sync_session(from, Vec::new());
+            Response::BeginAuthSync {
+                session_id,
+                first_symbols,
+            }
+        }
+        messages::Request::KeyhiveSymbols { session_id } => {
+            if let Some(symbols) = ctx.keyhive().next_n_keyhive_sync_symbols(session_id, 100) {
+                Response::KeyhiveSymbols(symbols)
+            } else {
+                Response::Error("no such session".to_string())
+            }
+        }
+        messages::Request::RequestKeyhiveOps {
+            session: _,
+            op_hashes,
+        } => {
+            let ops = ctx
+                .keyhive()
+                .get_keyhive_ops(op_hashes.into_iter().map(|o| o.into()).collect());
+            Response::RequestKeyhiveOps(
+                ops.into_iter()
+                    .map(|o| keyhive_sync::KeyhiveOp::from(o))
+                    .collect(),
+            )
+        }
+        messages::Request::UploadKeyhiveOps {
+            source_session,
+            ops,
+        } => {
+            ctx.keyhive().apply_keyhive_ops(ops.clone()).expect("FIXME");
+            if !ctx.keyhive().has_agent_session(source_session) {
+                tracing::trace!("uploading ops to forwarding peers");
+                ctx.keyhive().track_agent_session(source_session);
+                let forwarding_peers = ctx.forwarding_peers();
+                let upload_tasks = forwarding_peers.into_iter().filter_map({
+                    let ctx = ctx.clone();
+                    move |peer| {
+                        if peer.is_source_of(&from) {
+                            None
+                        } else {
+                            Some(ctx.requests().upload_keyhive_ops(
+                                peer,
+                                ops.clone(),
+                                source_session,
+                            ))
+                        }
+                    }
+                });
+                futures::future::join_all(upload_tasks).await;
+                ctx.keyhive().end_agent_session(source_session);
+            }
+            Response::UploadKeyhiveOps
+        }
+        messages::Request::Ping => Response::Pong,
+        messages::Request::RequestKeyhiveOpsForAgent { sync_id, agent } => {
+            Response::RequestKeyhiveOpsForAgent(fetch_keyhive_ops(ctx, sync_id, agent).await)
         }
     };
-    Some(OutgoingResponse {
-        target: from,
-        id: req_id,
+    Ok(OutgoingResponse {
+        audience: Audience::peer(&from),
         response,
     })
 }
 
-async fn fetch_sedimentree<R: rand::Rng>(
-    effects: crate::effects::TaskEffects<R>,
+#[tracing::instrument(skip(ctx))]
+async fn fetch_keyhive_ops<R: rand::Rng + rand::CryptoRng + 'static>(
+    ctx: TaskContext<R>,
+    sync_id: KeyhiveSyncId,
+    agent: Identifier,
+) -> Vec<keyhive_core::event::StaticEvent<CommitHash>> {
+    if ctx.keyhive().has_agent_session(sync_id) {
+        tracing::trace!("we're already forwarding this session, returning nothing");
+        return Vec::new();
+    }
+    tracing::trace!(%agent, "agent not found locally, requesting from forwarding peers");
+    ctx.keyhive().track_agent_session(sync_id);
+    keyhive_sync::request_agent_ops_from_forwarding_peers(ctx.clone(), agent, Some(sync_id)).await;
+    ctx.keyhive().end_agent_session(sync_id);
+    ctx.keyhive()
+        .events_for_agent(agent)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| e.into())
+        .collect()
+}
+
+async fn fetch_sedimentree<R: rand::Rng + rand::CryptoRng>(
+    ctx: crate::state::TaskContext<R>,
     doc_id: DocumentId,
 ) -> FetchedSedimentree {
     let content_root = StorageKey::sedimentree_root(&doc_id, CommitCategory::Content);
-    let reachability_root = StorageKey::sedimentree_root(&doc_id, CommitCategory::Index);
+    let reachability_root = StorageKey::sedimentree_root(&doc_id, CommitCategory::Links);
 
-    let content = crate::sedimentree::storage::load(effects.clone(), content_root);
-    let index = crate::sedimentree::storage::load(effects, reachability_root);
-    let (content, index) = futures::future::join(content, index).await;
-    match (content, index) {
+    let content = crate::sedimentree::storage::load(ctx.clone(), content_root);
+    let links = crate::sedimentree::storage::load(ctx, reachability_root);
+    let (content, links) = futures::future::join(content, links).await;
+    match (content, links) {
         (None, _) => FetchedSedimentree::NotFound,
-        (Some(content), index) => FetchedSedimentree::Found(ContentAndIndex {
+        (Some(content), links) => FetchedSedimentree::Found(ContentAndLinks {
             content: content.minimize().summarize(),
-            index: index.map(|i| i.minimize().summarize()).unwrap_or_default(),
+            links: links.map(|i| i.minimize().summarize()).unwrap_or_default(),
         }),
     }
 }
 
-#[tracing::instrument(skip(effects))]
-async fn upload_commits<R: rand::Rng>(
-    effects: crate::effects::TaskEffects<R>,
+#[tracing::instrument(skip(ctx, from_peer), fields(from_peer = %from_peer))]
+async fn upload_commits<R: rand::Rng + rand::CryptoRng + 'static>(
+    ctx: crate::state::TaskContext<R>,
     from_peer: PeerId,
     doc: DocumentId,
     data: Vec<UploadItem>,
@@ -120,13 +222,17 @@ async fn upload_commits<R: rand::Rng>(
 ) {
     tracing::trace!("handling upload");
     let tasks = data.into_iter().map(|d| {
-        let mut effects = effects.clone();
-        let from_peer = from_peer.clone();
+        let mut ctx = ctx.clone();
         async move {
+            if ctx.log().has_item(&d) {
+                tracing::debug!("we recently handled this upload, skipping");
+                return;
+            }
             let (blob, data) = match d.blob.clone() {
                 BlobRef::Blob(b) => {
-                    let data = effects.load(StorageKey::blob(b)).await;
+                    let data = ctx.storage().load(StorageKey::blob(b)).await;
                     let Some(data) = data else {
+                        tracing::error!("no such blob");
                         // TODO: return an error
                         panic!("no such blob")
                     };
@@ -134,18 +240,70 @@ async fn upload_commits<R: rand::Rng>(
                 }
                 BlobRef::Inline(contents) => {
                     let blob = BlobMeta::new(&contents);
-                    effects
+                    ctx.storage()
                         .put(StorageKey::blob(blob.hash()), contents.clone())
                         .await;
                     (blob, contents)
                 }
             };
-            effects.log().new_commit(doc, from_peer, d.clone(), content);
+            ctx.log()
+                .new_remote_commit(doc, from_peer, d.clone(), content);
+            tracing::trace!("stored uploaded blobs, emitting event");
+            ctx.emit_doc_event(crate::DocEvent {
+                doc,
+                data: match d.tree_part {
+                    TreePart::Commit { hash, ref parents } => {
+                        CommitOrBundle::Commit(Commit::new(parents.clone(), data.clone(), hash))
+                    }
+                    TreePart::Stratum {
+                        start,
+                        end,
+                        ref checkpoints,
+                    } => CommitOrBundle::Bundle(
+                        CommitBundle::builder()
+                            .start(start)
+                            .end(end)
+                            .checkpoints(checkpoints.clone())
+                            .bundled_commits(data.clone())
+                            .build(),
+                    ),
+                },
+            });
+            for peer in ctx.forwarding_peers() {
+                if peer.is_source_of(&from_peer) {
+                    continue;
+                }
+                // FIXME: We should centralize this silly ping business
+                let peer_id = match peer.last_known_peer_id {
+                    Some(peer_id) => peer_id,
+                    None => {
+                        tracing::trace!("no known peer id, pinging");
+                        ctx.requests().ping(peer.clone()).await.unwrap()
+                    }
+                };
+                tracing::trace!(to_peer=%peer_id, "forwarding uploaded commits");
+                if !ctx.keyhive().can_read(peer_id, &doc) {
+                    tracing::trace!("not forwarding to peer without access");
+                    continue;
+                }
+                let ctx = ctx.clone();
+                let d = d.clone();
+                ctx.spawn(move |ctx| async move {
+                    keyhive_sync::sync_keyhive(ctx.clone(), peer.clone(), Vec::new()).await;
+                    if let Err(e) = ctx
+                        .requests()
+                        .upload_commits(peer, doc, vec![d], content)
+                        .await
+                    {
+                        tracing::warn!(err=?e, "error forwarding upload to peer");
+                    }
+                })
+            }
             match d.tree_part {
                 TreePart::Commit { hash, parents } => {
                     let commit = LooseCommit::new(hash, parents, blob);
                     sedimentree::storage::write_loose_commit(
-                        effects.clone(),
+                        ctx.clone(),
                         StorageKey::sedimentree_root(&doc, content),
                         &commit,
                     )
@@ -163,7 +321,7 @@ async fn upload_commits<R: rand::Rng>(
                         .bundled_commits(data)
                         .build();
                     sedimentree::storage::write_bundle(
-                        effects.clone(),
+                        ctx.clone(),
                         StorageKey::sedimentree_root(&doc, content),
                         bundle,
                     )
@@ -175,36 +333,237 @@ async fn upload_commits<R: rand::Rng>(
     futures::future::join_all(tasks).await;
 }
 
-async fn create_snapshot<R: rand::Rng>(
-    mut effects: crate::effects::TaskEffects<R>,
-    requestor: PeerId,
+async fn create_snapshot<R: rand::Rng + rand::CryptoRng + 'static>(
+    mut ctx: crate::state::TaskContext<R>,
+    requestor: crate::PeerId,
+    source_snapshot: SnapshotId,
     root_doc: DocumentId,
-) -> (snapshots::SnapshotId, Vec<CodedDocAndHeadsSymbol>) {
-    let mut snapshot = snapshots::Snapshot::load(effects.clone(), root_doc).await;
+) -> (
+    snapshots::SnapshotId,
+    Vec<riblt::CodedSymbol<riblt::doc_and_heads::DocAndHeadsSymbol>>,
+) {
+    if ctx
+        .snapshots()
+        .we_have_snapshot_with_source(source_snapshot)
+    {
+        tracing::debug!("forwarding loop detected, returning empty snapshot");
+        // We're in a forward loop, create an empty snapshot and return
+        // TODO: Actually handle this properly
+        let empty = snapshots::Snapshot::empty(&mut ctx, root_doc, Some(source_snapshot));
+        let empty = ctx.snapshots().store_snapshot(empty);
+        let symbols = ctx
+            .snapshots()
+            .next_snapshot_symbols(empty.id(), 10)
+            .expect("symbols should exist");
+        return (empty.id(), symbols);
+    }
 
-    let mut peers_to_ask = effects.who_should_i_ask(root_doc).await;
-    peers_to_ask.remove(&requestor);
-    if !peers_to_ask.is_empty() {
-        tracing::trace!(?peers_to_ask, "asking remote peers");
-        let syncing = peers_to_ask.into_iter().map(|p| async {
-            let result = sync_docs::sync_root_doc(effects.clone(), &snapshot, p.clone()).await;
-            (p, result)
+    let snapshot = snapshots::Snapshot::load(
+        ctx.clone(),
+        Some(requestor),
+        root_doc,
+        Some(source_snapshot),
+    )
+    .await;
+    let mut snapshot = ctx.snapshots().store_snapshot(snapshot);
+
+    let mut nodes_to_ask = ctx.forwarding_peers();
+    nodes_to_ask.retain(|n| !n.is_source_of(&requestor));
+    if !nodes_to_ask.is_empty() {
+        if tracing::enabled!(tracing::Level::TRACE) {
+            let nodes_to_ask = nodes_to_ask
+                .iter()
+                .map(|n| n.audience().to_string())
+                .collect::<Vec<_>>();
+            tracing::trace!(?nodes_to_ask, %requestor, "asking remote peers");
+        } else {
+            tracing::debug!(%requestor, "asking remote peers");
+        }
+        let syncing = nodes_to_ask.into_iter().map(|c| {
+            let fut = sync_docs::sync_root_doc(ctx.clone(), &snapshot, c.clone());
+            fut.map(move |r| (c, r))
         });
         let forwarded = futures::future::join_all(syncing).await;
-        snapshot = snapshots::Snapshot::load(effects.clone(), root_doc).await;
+        let mut reloaded_snapshot = snapshots::Snapshot::load(
+            ctx.clone(),
+            Some(requestor),
+            root_doc,
+            Some(source_snapshot),
+        )
+        .await;
         for (peer, sync_result) in forwarded {
-            snapshot.add_remote(peer, sync_result.remote_snapshot);
+            match sync_result {
+                Ok(sync_result) => {
+                    reloaded_snapshot.add_remote(peer, sync_result.remote_snapshot);
+                }
+                Err(e) => {
+                    tracing::warn!(err=?e, "error forwarding create snapshot to remote");
+                }
+            }
         }
+        snapshot = ctx.snapshots().store_snapshot(reloaded_snapshot);
         tracing::trace!(we_have_doc=%snapshot.we_have_doc(), "finished requesting missing doc from peers");
     } else {
         tracing::trace!("no peers to ask");
     }
 
+    if !ctx.keyhive().can_read(requestor, &root_doc) {
+        tracing::debug!("peer not authorized to read root doc, returning empty");
+        // TODO: Have an actual empty response
+        let empty = snapshots::Snapshot::empty(&mut ctx, root_doc, Some(source_snapshot));
+        let empty = ctx.snapshots().store_snapshot(empty);
+        let symbols = ctx
+            .snapshots()
+            .next_snapshot_symbols(empty.id(), 10)
+            .expect("symbols should exist");
+        return (empty.id(), symbols);
+    }
+
     let snapshot_id = snapshot.id();
-    let mut encoder = riblt::doc_and_heads::Encoder::new(&snapshot);
-    let first_symbols = encoder.next_n_symbols(10);
-    effects
-        .snapshots_mut()
-        .insert(snapshot_id, (snapshot, encoder));
+    let first_symbols = ctx
+        .snapshots()
+        .next_snapshot_symbols(snapshot_id, 10)
+        .expect("symbols exist");
     (snapshot_id, first_symbols)
+}
+
+async fn handle_listen<R: rand::Rng + rand::CryptoRng + 'static>(
+    mut ctx: crate::state::TaskContext<R>,
+    from_peer: PeerId,
+    on_snapshot: SnapshotId,
+    from_offset: Option<u64>,
+) -> Result<(Vec<messages::Notification>, u64), RpcError> {
+    let snapshot = ctx
+        .snapshots()
+        .lookup_snapshot(on_snapshot)
+        .ok_or_else(|| RpcError::ErrorReported("No such snapshot".to_string()))?;
+
+    ensure_forwarded_listens(ctx.clone(), &from_peer, snapshot.clone());
+
+    // Check local log
+    let local_entries = ctx
+        .log()
+        .entries_for(&snapshot, from_offset)
+        .into_iter()
+        .filter(|e| e.source != Source::Remote(from_peer))
+        .collect::<Vec<_>>();
+    if !local_entries.is_empty() {
+        return Ok((
+            local_entries_to_notifications(local_entries),
+            ctx.log().offset() as u64,
+        ));
+    }
+
+    // If no local entries, wait for new ones
+    let mut stopping = ctx.stopping().fuse();
+    loop {
+        ensure_forwarded_listens(ctx.clone(), &from_peer, snapshot.clone());
+        futures::select! {
+            _ = ctx.wait_for_new_log_entries().fuse() => {
+                let new_entries = ctx
+                    .log()
+                    .entries_for(&snapshot, from_offset);
+                let filtered = new_entries
+                    .into_iter()
+                    .filter(|e| {
+                        if e.source == Source::Remote(from_peer) {
+                            return false;
+                        }
+                        if !ctx.keyhive().can_read(from_peer, &e.doc) {
+                            return false;
+                        }
+                        return true
+                    })
+                    .collect::<Vec<_>>();
+                if !filtered.is_empty() {
+                    return Ok((
+                        local_entries_to_notifications(filtered),
+                        ctx.log().offset() as u64,
+                    ));
+                }
+            },
+            _ = stopping => {
+                tracing::trace!("beelay is stopping, returning empty from listen request");
+                return Ok((vec![], 0));
+            }
+        }
+    }
+}
+
+fn local_entries_to_notifications(
+    entries: Vec<crate::log::DocEvent>,
+) -> Vec<messages::Notification> {
+    entries
+        .into_iter()
+        .map(|e| messages::Notification {
+            doc: e.doc,
+            data: e.contents,
+        })
+        .collect()
+}
+
+// Ensure that for a given snapshot there are in-flight listen requests to all forwarding targets
+fn ensure_forwarded_listens<R: rand::Rng + rand::CryptoRng + 'static>(
+    ctx: TaskContext<R>,
+    from_peer: &PeerId,
+    snapshot: Arc<Snapshot>,
+) {
+    let forward_targets = snapshot
+        .remote_snapshots()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect::<Vec<_>>();
+    for (target, remote_snapshot_id) in forward_targets {
+        if !target.is_source_of(from_peer) {
+            if !ctx
+                .forwarded_listens()
+                .is_in_progress(target.target.clone(), remote_snapshot_id)
+            {
+                tracing::trace!(to=%target, snapshot=%snapshot.id(), %remote_snapshot_id, "forwarding listen request");
+                ctx.forwarded_listens()
+                    .begin_forward(&target.target, remote_snapshot_id);
+                let ctx = ctx.clone();
+                ctx.spawn(move |ctx| async move {
+                    let listen_req = ctx.requests().listen(
+                        target.clone(),
+                        remote_snapshot_id,
+                        ctx.forwarded_listens()
+                            .offset(&target.target, remote_snapshot_id),
+                    );
+                    let (notifications, new_offset, notifying_peer) = futures::select! {
+                        response = listen_req.fuse() => {
+                                match response {
+                                    Ok(r) => r,
+                                    Err(e) => {
+                                        tracing::error!(err=?e, "error forwarding listen request");
+                                        ctx
+                                            .forwarded_listens()
+                                            .forward_failed(&target.target, remote_snapshot_id);
+                                        return;
+                                    }
+                                }
+                            }
+                        _ = ctx.stopping().fuse() => {
+                            tracing::trace!("stop in forwarded listen");
+                            return;
+                        }
+                    };
+
+                    for notification in notifications {
+                        crate::listen::persist_listen_event(
+                            ctx.clone(),
+                            notifying_peer,
+                            notification,
+                        )
+                        .await;
+                    }
+                    ctx.forwarded_listens().complete_forward(
+                        &target.target,
+                        remote_snapshot_id,
+                        new_offset,
+                    );
+                });
+            }
+        }
+    }
 }

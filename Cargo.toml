@@ -4,13 +4,15 @@ members = [
     "keyhive_core",
     "keyhive_wasm",
     "beelay/beelay-core",
+    "beelay/beelay",
+    "beelay/test-utils",
 ]
 
 [workspace.package]
 authors = [
-    "Alex Good <alex@memoryandthought.me>",
-    "John Mumm",
-    "Brooklyn Zelenka <hello@brooklynzelenka.com>",
+  "Alex Good <alex@memoryandthought.me>",
+  "John Mumm",
+  "Brooklyn Zelenka <hello@brooklynzelenka.com>",
 ]
 
 edition = "2021"

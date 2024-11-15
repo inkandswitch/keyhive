@@ -1,6 +1,10 @@
 use std::collections::{BTreeMap, HashSet};
 
-use crate::{blob::BlobMeta, leb128::encode_uleb128, parse, BundleSpec, CommitHash, DocumentId};
+use crate::{
+    blob::BlobMeta,
+    serialization::{parse, Encode, Parse},
+    BundleSpec, CommitHash, DocumentId,
+};
 
 mod commit_dag;
 pub(crate) mod storage;
@@ -88,6 +92,24 @@ pub(crate) struct StratumMeta {
     blob: BlobMeta,
 }
 
+impl Encode for StratumMeta {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.start.encode_into(out);
+        self.end.encode_into(out);
+        self.blob.encode_into(out);
+    }
+}
+impl Parse<'_> for StratumMeta {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        input.parse_in_ctx("StratumMeta", |input| {
+            let (input, start) = CommitHash::parse_in_ctx("start", input)?;
+            let (input, end) = CommitHash::parse_in_ctx("end", input)?;
+            let (input, blob) = BlobMeta::parse_in_ctx("blob", input)?;
+            Ok((input, Self { start, end, blob }))
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub(crate) struct LooseCommit {
@@ -130,15 +152,22 @@ impl LooseCommit {
     pub(crate) fn blob(&self) -> &BlobMeta {
         &self.blob
     }
+}
 
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("LooseCommit", |input| {
-            let (input, hash) = CommitHash::parse(input)?;
-            let (input, parents) =
-                input.with_context("parents", |input| parse::many(input, CommitHash::parse))?;
-            let (input, blob) = BlobMeta::parse(input)?;
+impl Encode for LooseCommit {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.hash.encode_into(out);
+        self.parents.encode_into(out);
+        self.blob.encode_into(out);
+    }
+}
+
+impl Parse<'_> for LooseCommit {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        input.parse_in_ctx("LooseCommit", |input| {
+            let (input, hash) = CommitHash::parse_in_ctx("hash", input)?;
+            let (input, parents) = Vec::<CommitHash>::parse_in_ctx("parents", input)?;
+            let (input, blob) = BlobMeta::parse_in_ctx("blob", input)?;
             Ok((
                 input,
                 Self {
@@ -148,15 +177,6 @@ impl LooseCommit {
                 },
             ))
         })
-    }
-
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        self.hash.encode(buf);
-        encode_uleb128(buf, self.parents.len() as u64);
-        for parent in &self.parents {
-            parent.encode(buf);
-        }
-        self.blob.encode(buf);
     }
 }
 
@@ -169,34 +189,6 @@ impl Stratum {
     ) -> Self {
         let meta = StratumMeta { start, end, blob };
         Self { meta, checkpoints }
-    }
-
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("Stratum", |input| {
-            let (input, start) = CommitHash::parse(input)?;
-            let (input, end) = CommitHash::parse(input)?;
-            let (input, blob) = BlobMeta::parse(input)?;
-            let (input, checkpoints) = parse::many(input, CommitHash::parse)?;
-            Ok((
-                input,
-                Self {
-                    meta: StratumMeta { start, end, blob },
-                    checkpoints,
-                },
-            ))
-        })
-    }
-
-    pub(crate) fn encode(&self, out: &mut Vec<u8>) {
-        self.meta.start.encode(out);
-        self.meta.end.encode(out);
-        self.meta.blob.encode(out);
-        encode_uleb128(out, self.checkpoints.len() as u64);
-        for checkpoint in &self.checkpoints {
-            checkpoint.encode(out);
-        }
     }
 
     pub(crate) fn supports(&self, other: &StratumMeta) -> bool {
@@ -243,6 +235,33 @@ impl Stratum {
     }
 }
 
+impl Encode for Stratum {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.meta.start.encode_into(out);
+        self.meta.end.encode_into(out);
+        self.meta.blob.encode_into(out);
+        self.checkpoints.encode_into(out);
+    }
+}
+
+impl Parse<'_> for Stratum {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        input.parse_in_ctx("Stratum", |input| {
+            let (input, start) = CommitHash::parse_in_ctx("start", input)?;
+            let (input, end) = CommitHash::parse_in_ctx("end", input)?;
+            let (input, blob) = BlobMeta::parse_in_ctx("blob", input)?;
+            let (input, checkpoints) = Vec::<CommitHash>::parse_in_ctx("checkpoints", input)?;
+            Ok((
+                input,
+                Self {
+                    meta: StratumMeta { start, end, blob },
+                    checkpoints,
+                },
+            ))
+        })
+    }
+}
+
 impl StratumMeta {
     #[cfg(test)]
     pub(crate) fn new(start: CommitHash, end: CommitHash, blob: BlobMeta) -> Self {
@@ -257,23 +276,6 @@ impl StratumMeta {
 
     pub(crate) fn blob(&self) -> &BlobMeta {
         &self.blob
-    }
-
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("StratumMeta", |input| {
-            let (input, start) = CommitHash::parse(input)?;
-            let (input, end) = CommitHash::parse(input)?;
-            let (input, blob) = BlobMeta::parse(input)?;
-            Ok((input, Self { start, end, blob }))
-        })
-    }
-
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        self.start.encode(buf);
-        self.end.encode(buf);
-        self.blob.encode(buf);
     }
 }
 
@@ -469,32 +471,20 @@ impl Sedimentree {
     }
 }
 
-impl SedimentreeSummary {
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("SedimentreeSummary", |input| {
-            let (input, levels) = parse::many(input, StratumMeta::parse)?;
-            let (input, commits) = parse::many(input, LooseCommit::parse)?;
-            Ok((
-                input,
-                Self {
-                    strata: levels,
-                    commits,
-                },
-            ))
+impl Parse<'_> for SedimentreeSummary {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        input.parse_in_ctx("SedimentreeSummary", |input| {
+            let (input, strata) = Vec::<StratumMeta>::parse_in_ctx("strata", input)?;
+            let (input, commits) = Vec::<LooseCommit>::parse_in_ctx("commits", input)?;
+            Ok((input, Self { strata, commits }))
         })
     }
+}
 
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        encode_uleb128(buf, self.strata.len() as u64);
-        for level in &self.strata {
-            level.encode(buf);
-        }
-        encode_uleb128(buf, self.commits.len() as u64);
-        for commit in &self.commits {
-            commit.encode(buf);
-        }
+impl Encode for SedimentreeSummary {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.strata.encode_into(out);
+        self.commits.encode_into(out);
     }
 }
 
@@ -553,7 +543,11 @@ mod tests {
     use num::Num;
 
     use super::{Stratum, StratumMeta};
-    use crate::{blob::BlobMeta, parse, CommitHash};
+    use crate::{
+        blob::BlobMeta,
+        serialization::{parse, Encode, Parse},
+        CommitHash,
+    };
 
     pub(crate) fn hash_with_trailing_zeros(
         unstructured: &mut arbitrary::Unstructured<'_>,
@@ -662,9 +656,8 @@ mod tests {
         bolero::check!()
             .with_arbitrary::<super::LooseCommit>()
             .for_each(|c| {
-                let mut out = Vec::new();
-                c.encode(&mut out);
-                let (_, decoded) = super::LooseCommit::parse(parse::Input::new(&out)).unwrap();
+                let encoded = c.encode();
+                let (_, decoded) = super::LooseCommit::parse(parse::Input::new(&encoded)).unwrap();
                 assert_eq!(c, &decoded);
             });
     }

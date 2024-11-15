@@ -1,4 +1,11 @@
-use std::vec::Vec;
+use std::{collections::HashSet, hash::Hash, vec::Vec};
+
+use futures::{pin_mut, StreamExt, TryStream, TryStreamExt};
+
+use crate::{
+    serialization::{leb128, parse, Encode, Parse},
+    state::{RpcError, TaskContext},
+};
 
 pub(crate) trait Symbol {
     fn zero() -> Self;
@@ -57,11 +64,39 @@ impl<T: Symbol + Copy> HashedSymbol<T> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub(crate) struct CodedSymbol<T: Symbol + Copy> {
     pub(crate) symbol: T,
     pub(crate) hash: u64,
     pub(crate) count: i64,
+}
+
+impl<T: Encode + Symbol + Copy> Encode for CodedSymbol<T> {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.symbol.encode_into(out);
+        out.extend(self.hash.to_be_bytes());
+        leb128::signed::encode(out, self.count);
+    }
+}
+
+impl<'a, T: Parse<'a> + Copy + Symbol> Parse<'a> for CodedSymbol<T> {
+    fn parse(input: parse::Input<'a>) -> Result<(parse::Input<'a>, Self), parse::ParseError> {
+        input.parse_in_ctx("CodedSymbol", |input| {
+            let (input, symbol) = T::parse_in_ctx("symbol", input)?;
+            let (input, hash_bytes) = input.parse_in_ctx("hash", parse::arr::<8>)?;
+            let hash = u64::from_be_bytes(hash_bytes);
+            let (input, count) = input.parse_in_ctx("count", leb128::signed::parse)?;
+            Ok((
+                input,
+                Self {
+                    symbol,
+                    hash,
+                    count,
+                },
+            ))
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -70,6 +105,21 @@ pub(crate) struct Encoder<T: Symbol + Copy> {
     mappings: Vec<RandomMapping>,
     queue: Vec<SymbolMapping>,
     next_idx: u64,
+}
+
+impl<T: Symbol + Copy> Encoder<T> {
+    pub(crate) fn next_n_symbols(&mut self, n: u64) -> Vec<CodedSymbol<T>> {
+        let mut result = vec![];
+        for _ in 0..n {
+            let symbol = self.produce_next_coded_symbol();
+            result.push(CodedSymbol {
+                symbol: symbol.symbol,
+                hash: symbol.hash,
+                count: symbol.count,
+            });
+        }
+        result
+    }
 }
 
 #[derive(Clone)]
@@ -331,13 +381,34 @@ impl<T: Symbol + Copy> Decoder<T> {
 pub mod doc_and_heads {
     use std::hash::{Hash, Hasher};
 
-    use crate::{leb128, parse, sedimentree::MinimalTreeHash, DocumentId};
+    use crate::{
+        sedimentree::MinimalTreeHash,
+        serialization::{parse, Encode, Parse},
+        DocumentId,
+    };
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize)]
     #[cfg_attr(test, derive(arbitrary::Arbitrary))]
     pub(crate) struct DocAndHeadsSymbol {
-        part1: [u8; 16],
+        part1: [u8; 32],
         part2: [u8; 32],
+    }
+
+    impl Encode for DocAndHeadsSymbol {
+        fn encode_into(&self, out: &mut Vec<u8>) {
+            out.extend(&self.part1);
+            out.extend(&self.part2);
+        }
+    }
+
+    impl Parse<'_> for DocAndHeadsSymbol {
+        fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+            input.parse_in_ctx("RibltSymbol", |input| {
+                let (input, part1) = input.parse_in_ctx("part1", parse::arr::<32>)?;
+                let (input, part2) = input.parse_in_ctx("part2", parse::arr::<32>)?;
+                Ok((input, Self { part1, part2 }))
+            })
+        }
     }
 
     impl DocAndHeadsSymbol {
@@ -349,7 +420,8 @@ pub mod doc_and_heads {
         }
         pub(crate) fn decode(self) -> (DocumentId, MinimalTreeHash) {
             (
-                DocumentId::from(self.part1),
+                //TODO: return an error
+                DocumentId::try_from(self.part1).unwrap(),
                 MinimalTreeHash::from(self.part2),
             )
         }
@@ -358,7 +430,7 @@ pub mod doc_and_heads {
     impl super::Symbol for DocAndHeadsSymbol {
         fn zero() -> Self {
             Self {
-                part1: [0; 16],
+                part1: [0; 32],
                 part2: [0; 32],
             }
         }
@@ -377,89 +449,73 @@ pub mod doc_and_heads {
             hasher.finish()
         }
     }
+}
 
-    impl DocAndHeadsSymbol {
-        pub(crate) fn parse(
-            input: parse::Input<'_>,
-        ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-            input.with_context("RibltSymbol", |input| {
-                let (input, part1) = parse::arr::<16>(input)?;
-                let (input, part2) = parse::arr::<32>(input)?;
-                Ok((input, Self { part1, part2 }))
-            })
-        }
+pub(crate) struct RibltResult<T> {
+    pub(crate) only_on_local: HashSet<T>,
+    pub(crate) only_on_remote: HashSet<T>,
+}
 
-        pub(crate) fn encode(&self, out: &mut Vec<u8>) {
-            out.extend(&self.part1);
-            out.extend(&self.part2);
-        }
-    }
+pub(crate) trait RibltSync<R: rand::Rng + rand::CryptoRng> {
+    type Item: Symbol + Copy + Eq + Hash;
+    type LocalState;
+    type RemoteState;
 
-    #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-    #[cfg_attr(test, derive(arbitrary::Arbitrary))]
-    pub(crate) struct CodedDocAndHeadsSymbol {
-        symbol: DocAndHeadsSymbol,
-        hash: u64,
-        count: i64,
-    }
+    async fn local_state(&self, ctx: &TaskContext<R>) -> Decoder<Self::Item>;
+    async fn initial_symbols(
+        &self,
+        ctx: &TaskContext<R>,
+    ) -> Result<Vec<CodedSymbol<Self::Item>>, RpcError>;
+    async fn next_symbols(
+        &self,
+        ctx: &TaskContext<R>,
+    ) -> Result<Vec<CodedSymbol<Self::Item>>, RpcError>;
+}
 
-    impl CodedDocAndHeadsSymbol {
-        pub(crate) fn parse(
-            input: parse::Input<'_>,
-        ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-            let (input, symbol) = DocAndHeadsSymbol::parse(input)?;
-            let (input, hash_bytes) = parse::arr::<8>(input)?;
-            let hash = u64::from_be_bytes(hash_bytes);
-            let (input, count) = leb128::signed::parse(input)?;
-            Ok((
-                input,
-                Self {
-                    symbol,
-                    hash,
-                    count,
-                },
-            ))
-        }
+pub(crate) async fn do_riblt<R: rand::Rng + rand::CryptoRng, S: RibltSync<R>>(
+    ctx: TaskContext<R>,
+    sync: S,
+) -> Result<RibltResult<S::Item>, RpcError> {
+    let mut decoder = sync.local_state(&ctx).await;
 
-        pub(crate) fn encode(&self, out: &mut Vec<u8>) {
-            self.symbol.encode(out);
-            out.extend(self.hash.to_be_bytes());
-            leb128::signed::encode(out, self.count);
-        }
+    let first_symbols = sync.initial_symbols(&ctx).await?;
 
-        pub(crate) fn into_coded(self) -> super::CodedSymbol<DocAndHeadsSymbol> {
-            super::CodedSymbol {
-                symbol: self.symbol,
-                count: self.count,
-                hash: self.hash,
-            }
+    // Yeesh this is gross
+    let symbols = futures::stream::once(futures::future::ready(Ok(futures::stream::iter(
+        first_symbols.into_iter().map(Ok),
+    ))))
+    .chain(futures::stream::try_unfold(
+        (ctx, sync),
+        move |(ctx, sync)| async move {
+            let symbols = sync.next_symbols(&ctx).await?;
+            Ok(Some((
+                futures::stream::iter(symbols.into_iter().map(Ok)),
+                (ctx, sync),
+            )))
+        },
+    ))
+    .try_flatten();
+    pin_mut!(symbols);
+    while let Some(symbol) = symbols.next().await {
+        let symbol = symbol?;
+        decoder.add_coded_symbol(&symbol);
+        decoder.try_decode().unwrap();
+        if decoder.decoded() {
+            break;
         }
     }
-
-    pub(crate) struct Encoder {
-        riblt: super::Encoder<DocAndHeadsSymbol>,
-    }
-
-    impl Encoder {
-        pub(crate) fn new(snapshot: &crate::snapshots::Snapshot) -> Self {
-            let mut enc = super::Encoder::new();
-            for (doc, heads) in snapshot.our_docs_2() {
-                enc.add_symbol(&DocAndHeadsSymbol::new(doc, heads));
-            }
-            Encoder { riblt: enc }
-        }
-
-        pub(crate) fn next_n_symbols(&mut self, n: u64) -> Vec<CodedDocAndHeadsSymbol> {
-            let mut result = vec![];
-            for _ in 0..n {
-                let symbol = self.riblt.produce_next_coded_symbol();
-                result.push(CodedDocAndHeadsSymbol {
-                    symbol: symbol.symbol,
-                    hash: symbol.hash,
-                    count: symbol.count,
-                });
-            }
-            result
-        }
-    }
+    let only_on_remote = decoder
+        .get_remote_symbols()
+        .into_iter()
+        .map(|s| s.symbol())
+        .collect();
+    let only_on_local = decoder
+        .get_local_symbols()
+        .into_iter()
+        .map(|s| s.symbol())
+        .collect();
+    Ok(RibltResult {
+        only_on_local,
+        only_on_remote,
+    })
 }
