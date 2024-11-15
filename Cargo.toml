@@ -4,13 +4,15 @@ members = [
     "beehive_core",
     "beehive_wasm",
     "beelay/beelay-core",
+    "beelay/beelay",
+    "beelay/test-utils",
 ]
 
 [workspace.package]
 authors = [
-  "Alex Good <alex@memoryandthought.me>",
-  "John Mumm",
-  "Brooklyn Zelenka <hello@brooklynzelenka.com>",
+    "Alex Good <alex@memoryandthought.me>",
+    "John Mumm",
+    "Brooklyn Zelenka <hello@brooklynzelenka.com>",
 ]
 
 edition = "2021"
@@ -28,4 +30,8 @@ rand = "0.8.5"
 serde = { version = "1.0", features = ["derive"] }
 signature = "2.2"
 thiserror = "1.0"
-x25519-dalek = { version = "2.0", features = ["serde", "reusable_secrets", "static_secrets"] }
+x25519-dalek = { version = "2.0", features = [
+    "serde",
+    "reusable_secrets",
+    "static_secrets",
+] }

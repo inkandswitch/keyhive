@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use futures::StreamExt;
 
 use crate::{
+    deser::{Encode, Parse},
     effects::TaskEffects,
     parse,
     sedimentree::{self, MinimalTreeHash},
@@ -22,10 +23,13 @@ impl ReachabilityIndex {
         }
     }
 
-    pub(crate) async fn load<R: rand::Rng>(effects: TaskEffects<R>, doc_id: &DocumentId) -> Self {
+    pub(crate) async fn load<R: rand::Rng + rand::CryptoRng>(
+        effects: TaskEffects<R>,
+        doc_id: &DocumentId,
+    ) -> Self {
         let tree = sedimentree::storage::load(
             effects.clone(),
-            StorageKey::sedimentree_root(doc_id, CommitCategory::Index),
+            StorageKey::sedimentree_root(doc_id, CommitCategory::Links),
         )
         .await
         .unwrap_or_default();
@@ -96,24 +100,26 @@ impl ReachabilityIndexEntry {
         ReachabilityIndexEntry(document_id)
     }
 
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        let (input, doc_id) = DocumentId::parse(input)?;
-        Ok((input, ReachabilityIndexEntry::new(doc_id)))
-    }
-
-    pub(crate) fn encode(&self) -> Vec<u8> {
-        self.0.as_bytes().to_vec()
-    }
-
     pub(crate) fn hash(&self) -> CommitHash {
         let data = self.encode();
         <[u8; 32]>::from(blake3::hash(&data)).into()
     }
 }
 
-pub(crate) async fn load_reachable_docs<R: rand::Rng>(
+impl Parse<'_> for ReachabilityIndexEntry {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        let (input, doc_id) = DocumentId::parse_in_ctx("doc_id", input)?;
+        Ok((input, ReachabilityIndexEntry::new(doc_id)))
+    }
+}
+
+impl Encode for ReachabilityIndexEntry {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
+    }
+}
+
+pub(crate) async fn load_reachable_docs<R: rand::Rng + rand::CryptoRng>(
     effects: TaskEffects<R>,
     root: DocumentId,
 ) -> HashMap<DocumentId, MinimalTreeHash> {

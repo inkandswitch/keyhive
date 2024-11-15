@@ -1,93 +1,15 @@
 use crate::{
-    leb128::encode_uleb128, parse, riblt::doc_and_heads::CodedDocAndHeadsSymbol,
-    sedimentree::SedimentreeSummary, BlobHash, CommitCategory, CommitHash, DocumentId, PeerId,
-    RequestId, SnapshotId,
+    deser::{Encode, Parse},
+    leb128::encode_uleb128,
+    parse,
+    riblt::doc_and_heads::CodedDocAndHeadsSymbol,
+    sedimentree::SedimentreeSummary,
+    BlobHash, CommitCategory, CommitHash, DocumentId, SnapshotId,
 };
 
 mod decode;
 mod encode;
 mod encoding_types;
-pub use decode::DecodeError;
-pub mod stream;
-
-#[derive(Debug)]
-pub struct Envelope {
-    pub(crate) sender: PeerId,
-    pub(crate) recipient: PeerId,
-    pub(crate) payload: Payload,
-}
-
-impl Envelope {
-    pub fn new(sender: PeerId, recipient: PeerId, payload: Payload) -> Self {
-        Self {
-            sender,
-            recipient,
-            payload,
-        }
-    }
-
-    pub fn sender(&self) -> &PeerId {
-        &self.sender
-    }
-
-    pub fn recipient(&self) -> &PeerId {
-        &self.recipient
-    }
-
-    pub fn payload(&self) -> &Payload {
-        &self.payload
-    }
-
-    pub(crate) fn take_payload(self) -> Payload {
-        self.payload
-    }
-}
-
-// A wrapper around the message enum so we can keep Message private
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-#[cfg_attr(test, derive(arbitrary::Arbitrary))]
-pub struct Payload(Message);
-
-impl Payload {
-    pub(crate) fn new(message: Message) -> Self {
-        Self(message)
-    }
-
-    pub fn encode(&self) -> Vec<u8> {
-        encode::encode(self)
-    }
-
-    pub(crate) fn into_message(self) -> Message {
-        self.0
-    }
-}
-
-impl<'a> TryFrom<&'a [u8]> for Payload {
-    type Error = decode::DecodeError;
-
-    fn try_from(bytes: &'a [u8]) -> Result<Self, Self::Error> {
-        let (msg, _) = decode::decode(bytes)?;
-        Ok(msg)
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, serde::Serialize)]
-#[cfg_attr(test, derive(arbitrary::Arbitrary))]
-pub(crate) enum Message {
-    Request(RequestId, Request),
-    Response(RequestId, Response),
-    Notification(Notification),
-}
-
-impl std::fmt::Debug for Message {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Message::Request(id, req) => write!(f, "Request(id={}, {})", id, req),
-            Message::Response(id, resp) => write!(f, "Response(id={}, {})", id, resp),
-            Message::Notification(notification) => write!(f, "Notification({})", notification),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
@@ -101,7 +23,22 @@ pub(crate) enum Response {
         first_symbols: Vec<CodedDocAndHeadsSymbol>,
     },
     SnapshotSymbols(Vec<CodedDocAndHeadsSymbol>),
-    Listen,
+    Listen {
+        notifications: Vec<Notification>,
+        remote_offset: u64,
+    },
+}
+
+impl Parse<'_> for Response {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        decode::parse_response(input)
+    }
+}
+
+impl Encode for Response {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        encode::encode_response(out, self);
+    }
 }
 
 impl std::fmt::Display for Response {
@@ -125,7 +62,17 @@ impl std::fmt::Display for Response {
             Response::SnapshotSymbols(symbols) => {
                 write!(f, "SnapshotSymbols({} symbols)", symbols.len())
             }
-            Response::Listen => write!(f, "Listen"),
+            Response::Listen {
+                notifications,
+                remote_offset,
+            } => {
+                write!(
+                    f,
+                    "Listen({} notifications, new_offset={})",
+                    notifications.len(),
+                    remote_offset
+                )
+            }
         }
     }
 }
@@ -135,42 +82,44 @@ impl std::fmt::Display for Response {
 #[derive(serde::Serialize)]
 pub(crate) enum FetchedSedimentree {
     NotFound,
-    Found(ContentAndIndex),
+    Found(ContentAndLinks),
 }
 
-impl FetchedSedimentree {
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("FetchedSedimentree", |input| {
-            let (input, tag) = parse::u8(input)?;
+impl Parse<'_> for FetchedSedimentree {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        input.parse_in_ctx("FetchedSedimentree", |input| {
+            let (input, tag) = input.parse_in_ctx("tag", parse::u8)?;
             match tag {
                 0 => Ok((input, FetchedSedimentree::NotFound)),
-                1 => {
-                    let (input, content_bundles) = SedimentreeSummary::parse(input)?;
-                    let (input, index_bundles) = SedimentreeSummary::parse(input)?;
+                1 => input.parse_in_ctx("Found", |input| {
+                    let (input, content_bundles) =
+                        input.parse_in_ctx("content", SedimentreeSummary::parse)?;
+                    let (input, index_bundles) =
+                        input.parse_in_ctx("links", SedimentreeSummary::parse)?;
                     Ok((
                         input,
-                        FetchedSedimentree::Found(ContentAndIndex {
-                            index: index_bundles,
+                        FetchedSedimentree::Found(ContentAndLinks {
+                            links: index_bundles,
                             content: content_bundles,
                         }),
                     ))
-                }
+                }),
                 _ => Err(input.error("unknown tag")),
             }
         })
     }
+}
 
-    pub(crate) fn encode(&self, out: &mut Vec<u8>) {
+impl Encode for FetchedSedimentree {
+    fn encode_into(&self, out: &mut Vec<u8>) {
         match self {
             FetchedSedimentree::NotFound => {
                 out.push(0);
             }
-            FetchedSedimentree::Found(ContentAndIndex { content, index }) => {
+            FetchedSedimentree::Found(ContentAndLinks { content, links }) => {
                 out.push(1);
-                content.encode(out);
-                index.encode(out);
+                content.encode_into(out);
+                links.encode_into(out);
             }
         }
     }
@@ -179,9 +128,9 @@ impl FetchedSedimentree {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 #[derive(serde::Serialize)]
-pub(crate) struct ContentAndIndex {
+pub(crate) struct ContentAndLinks {
     pub(crate) content: SedimentreeSummary,
-    pub(crate) index: SedimentreeSummary,
+    pub(crate) links: SedimentreeSummary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,11 +151,32 @@ pub(crate) enum Request {
     },
     CreateSnapshot {
         root_doc: DocumentId,
+        source_snapshot: SnapshotId,
     },
     SnapshotSymbols {
         snapshot_id: SnapshotId,
     },
-    Listen(SnapshotId),
+    Listen(SnapshotId, Option<u64>),
+}
+
+impl Parse<'_> for Request {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        decode::parse_request(input)
+    }
+}
+
+impl Encode for Request {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        encode::encode_request(out, self);
+    }
+}
+
+impl From<Request> for Vec<u8> {
+    fn from(value: Request) -> Self {
+        let mut out = Vec::new();
+        encode::encode_request(&mut out, &value);
+        out
+    }
 }
 
 impl std::fmt::Display for Request {
@@ -220,13 +190,22 @@ impl std::fmt::Display for Request {
                 offset,
                 length,
             } => write!(f, "FetchBlobPart({:?}, {}, {})", blob, offset, length),
-            Request::CreateSnapshot { root_doc } => {
-                write!(f, "CreateSnapshot({})", root_doc)
+            Request::CreateSnapshot {
+                root_doc,
+                source_snapshot,
+            } => {
+                write!(
+                    f,
+                    "CreateSnapshot(root: {}, source: {})",
+                    root_doc, source_snapshot
+                )
             }
             Request::SnapshotSymbols { snapshot_id } => {
                 write!(f, "SnapshotSymbols({})", snapshot_id)
             }
-            Request::Listen(snapshot_id) => write!(f, "Listen({})", snapshot_id),
+            Request::Listen(snapshot_id, from_offset) => {
+                write!(f, "Listen({}, {:?})", snapshot_id, from_offset)
+            }
         }
     }
 }
@@ -238,18 +217,20 @@ pub struct UploadItem {
     pub(crate) tree_part: TreePart,
 }
 
-impl UploadItem {
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        let (input, blob) = BlobRef::parse(input)?;
-        let (input, tree_part) = TreePart::parse(input)?;
-        Ok((input, UploadItem { blob, tree_part }))
+impl Parse<'_> for UploadItem {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        input.parse_in_ctx("UploadItem", |input| {
+            let (input, blob) = BlobRef::parse_in_ctx("blob", input)?;
+            let (input, tree_part) = TreePart::parse_in_ctx("tree_part", input)?;
+            Ok((input, UploadItem { blob, tree_part }))
+        })
     }
+}
 
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        self.blob.encode(buf);
-        self.tree_part.encode(buf);
+impl Encode for UploadItem {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.blob.encode_into(out);
+        self.tree_part.encode_into(out);
     }
 }
 
@@ -267,17 +248,38 @@ pub enum TreePart {
     },
 }
 
-impl TreePart {
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("TreePart", |input| {
+impl Encode for TreePart {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        match self {
+            TreePart::Stratum {
+                start,
+                end,
+                checkpoints,
+            } => {
+                out.push(0);
+                start.encode_into(out);
+                end.encode_into(out);
+                checkpoints.encode_into(out);
+            }
+            TreePart::Commit { hash, parents } => {
+                out.push(1);
+                hash.encode_into(out);
+                parents.encode_into(out);
+            }
+        }
+    }
+}
+
+impl Parse<'_> for TreePart {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        input.parse_in_ctx("TreePart", |input| {
             let (input, tag) = parse::u8(input)?;
             match tag {
                 0 => {
-                    let (input, start) = CommitHash::parse(input)?;
-                    let (input, end) = CommitHash::parse(input)?;
-                    let (input, checkpoints) = parse::many(input, CommitHash::parse)?;
+                    let (input, start) = input.parse_in_ctx("start", CommitHash::parse)?;
+                    let (input, end) = input.parse_in_ctx("end", CommitHash::parse)?;
+                    let (input, checkpoints) =
+                        input.parse_in_ctx("checkpoints", Vec::<CommitHash>::parse)?;
                     Ok((
                         input,
                         Self::Stratum {
@@ -288,39 +290,14 @@ impl TreePart {
                     ))
                 }
                 1 => {
-                    let (input, hash) = CommitHash::parse(input)?;
-                    let (input, parents) = parse::many(input, CommitHash::parse)?;
+                    let (input, hash) = input.parse_in_ctx("hash", CommitHash::parse)?;
+                    let (input, parents) =
+                        input.parse_in_ctx("parents", Vec::<CommitHash>::parse)?;
                     Ok((input, Self::Commit { hash, parents }))
                 }
                 other => Err(input.error(format!("invalid tag: {}", other))),
             }
         })
-    }
-
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        match self {
-            TreePart::Stratum {
-                start,
-                end,
-                checkpoints,
-            } => {
-                buf.push(0);
-                start.encode(buf);
-                end.encode(buf);
-                encode_uleb128(buf, checkpoints.len() as u64);
-                for checkpoint in checkpoints {
-                    checkpoint.encode(buf);
-                }
-            }
-            TreePart::Commit { hash, parents } => {
-                buf.push(1);
-                hash.encode(buf);
-                encode_uleb128(buf, parents.len() as u64);
-                for parent in parents {
-                    parent.encode(buf);
-                }
-            }
-        }
     }
 }
 
@@ -331,31 +308,31 @@ pub enum BlobRef {
     Inline(Vec<u8>),
 }
 
-impl BlobRef {
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("BlobRef", |input| {
-            let (input, tag) = parse::u8(input)?;
+impl Parse<'_> for BlobRef {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        input.parse_in_ctx("BlobRef", |input| {
+            let (input, tag) = input.parse_in_ctx("tag", parse::u8)?;
             match tag {
-                0 => {
-                    let (input, hash) = BlobHash::parse(input)?;
+                0 => input.parse_in_ctx("Blob", |input| {
+                    let (input, hash) = input.parse_in_ctx("hash", BlobHash::parse)?;
                     Ok((input, BlobRef::Blob(hash)))
-                }
-                1 => {
-                    let (input, data) = parse::slice(input)?;
+                }),
+                1 => input.parse_in_ctx("Inline", |input| {
+                    let (input, data) = input.parse_in_ctx("data", parse::slice)?;
                     Ok((input, BlobRef::Inline(data.to_vec())))
-                }
+                }),
                 other => Err(input.error(format!("invalid tag: {}", other))),
             }
         })
     }
+}
 
-    pub(crate) fn encode(&self, out: &mut Vec<u8>) {
+impl Encode for BlobRef {
+    fn encode_into(&self, out: &mut Vec<u8>) {
         match self {
             BlobRef::Blob(hash) => {
                 out.push(0);
-                hash.encode(out);
+                hash.encode_into(out);
             }
             BlobRef::Inline(data) => {
                 out.push(1);
@@ -369,7 +346,6 @@ impl BlobRef {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct Notification {
-    pub(crate) from_peer: PeerId,
     pub(crate) doc: DocumentId,
     pub(crate) data: UploadItem,
 }
@@ -387,42 +363,67 @@ impl std::fmt::Display for Notification {
     }
 }
 
-impl Notification {
+impl Parse<'_> for Notification {
     fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("Notification", |input| {
-            let (input, from_peer) = PeerId::parse(input)?;
-            let (input, doc_id) = DocumentId::parse(input)?;
-            let (input, data) = UploadItem::parse(input)?;
-            Ok((
-                input,
-                Self {
-                    from_peer,
-                    doc: doc_id,
-                    data,
-                },
-            ))
+        input.parse_in_ctx("Notification", |input| {
+            let (input, doc_id) = input.parse_in_ctx("doc_id", DocumentId::parse)?;
+            let (input, data) = input.parse_in_ctx("data", UploadItem::parse)?;
+            Ok((input, Self { doc: doc_id, data }))
         })
     }
+}
 
-    fn encode(&self, out: &mut Vec<u8>) {
-        self.from_peer.encode(out);
-        self.doc.encode(out);
-        self.data.encode(out);
+impl Encode for Notification {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.doc.encode_into(out);
+        self.data.encode_into(out);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        deser::{Encode, Parse},
+        messages::{Notification, Request, Response},
+        parse,
+    };
 
     #[test]
-    fn message_encoding_roundtrip() {
+    fn req_encoding_roundtrip() {
         bolero::check!()
-            .with_arbitrary::<super::Payload>()
-            .for_each(|msg| {
-                let encoded = super::encode::encode(msg);
-                let (decoded, len) = super::decode::decode(&encoded).unwrap();
-                assert_eq!(len, encoded.len());
-                assert_eq!(msg, &decoded);
+            .with_arbitrary::<super::Request>()
+            .for_each(|req| {
+                let encoded = req.encode();
+                let input = parse::Input::new(&encoded);
+                let (input, decoded) = Request::parse(input).unwrap();
+                assert!(input.is_empty());
+                assert_eq!(req, &decoded);
+            });
+    }
+
+    #[test]
+    fn resp_encoding_roundtrip() {
+        bolero::check!()
+            .with_arbitrary::<super::Response>()
+            .for_each(|resp| {
+                let encoded = resp.encode();
+                let input = parse::Input::new(&encoded);
+                let (input, decoded) = Response::parse(input).unwrap();
+                assert!(input.is_empty());
+                assert_eq!(resp, &decoded);
+            });
+    }
+
+    #[test]
+    fn notification_encoding_roundtrip() {
+        bolero::check!()
+            .with_arbitrary::<super::Notification>()
+            .for_each(|noti| {
+                let encoded = noti.encode();
+                let input = parse::Input::new(&encoded);
+                let (input, decoded) = Notification::parse(input).unwrap();
+                assert!(input.is_empty());
+                assert_eq!(noti, &decoded);
             });
     }
 }

@@ -1,12 +1,58 @@
 use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
+    sync::Arc,
 };
 
 use crate::{
-    effects::TaskEffects, hex, parse, reachability, sedimentree::MinimalTreeHash, CommitCategory,
-    DocumentId, PeerId, StorageKey,
+    deser::{Encode, Parse},
+    effects::TaskEffects,
+    hex, parse, reachability, riblt,
+    sedimentree::MinimalTreeHash,
+    CommitCategory, DocumentId, StorageKey, TargetNodeInfo,
 };
+
+pub struct Snapshots {
+    snapshots: HashMap<SnapshotId, (Arc<Snapshot>, riblt::doc_and_heads::Encoder)>,
+}
+
+impl Snapshots {
+    pub(crate) fn new() -> Self {
+        Self {
+            snapshots: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn store(&mut self, snapshot: Snapshot) -> Arc<Snapshot> {
+        let snapshot = Arc::new(snapshot);
+        let encoder = snapshot.encoder();
+        self.snapshots
+            .insert(snapshot.id(), (snapshot.clone(), encoder));
+        snapshot
+    }
+
+    pub(crate) fn next_n_symbols(
+        &mut self,
+        snapshot_id: SnapshotId,
+        count: u64,
+    ) -> Option<Vec<riblt::doc_and_heads::CodedDocAndHeadsSymbol>> {
+        let (_snapshot, encoder) = self.snapshots.get_mut(&snapshot_id)?;
+        let symbols = encoder.next_n_symbols(count);
+        Some(symbols)
+    }
+
+    pub(crate) fn we_have_snapshot_with_source(&self, source: SnapshotId) -> bool {
+        self.snapshots
+            .values()
+            .any(|(snapshot, _)| snapshot.source() == source)
+    }
+
+    pub(crate) fn lookup(&self, snapshot_id: SnapshotId) -> Option<Arc<Snapshot>> {
+        self.snapshots
+            .get(&snapshot_id)
+            .map(|(snapshot, _)| snapshot.clone())
+    }
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, serde::Serialize, Hash)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
@@ -40,19 +86,8 @@ impl std::fmt::Debug for SnapshotId {
 }
 
 impl SnapshotId {
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        let (input, id) = parse::arr::<16>(input)?;
-        Ok((input, Self(id)))
-    }
-
     pub(crate) fn as_bytes(&self) -> &[u8; 16] {
         &self.0
-    }
-
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.0);
     }
 
     pub(crate) fn random<R: rand::Rng>(rng: &mut R) -> Self {
@@ -62,19 +97,53 @@ impl SnapshotId {
     }
 }
 
+impl Encode for SnapshotId {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.0);
+    }
+}
+
+impl Parse<'_> for SnapshotId {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        let (input, id) = parse::arr::<16>(input)?;
+        Ok((input, Self(id)))
+    }
+}
+
 pub(crate) struct Snapshot {
     root_doc: DocumentId,
     id: SnapshotId,
     we_have_doc: bool,
     local: HashMap<DocumentId, MinimalTreeHash>,
     local_log_offset: usize,
-    remote_snapshots: HashMap<PeerId, SnapshotId>,
+    remote_snapshots: HashMap<TargetNodeInfo, SnapshotId>,
+    // The ID of the snapshot on the first node it was created on, used to avoid forwarding loops
+    // TODO: come up with something more principled
+    source: SnapshotId,
 }
 
 impl Snapshot {
-    pub(crate) async fn load<R: rand::Rng>(
+    pub(crate) fn empty<R: rand::Rng + rand::CryptoRng>(
+        effects: &mut TaskEffects<R>,
+        root_doc: DocumentId,
+        source_id: Option<SnapshotId>,
+    ) -> Self {
+        let id = SnapshotId::random(&mut *effects.rng());
+        Self {
+            id,
+            root_doc,
+            we_have_doc: false,
+            local: HashMap::new(),
+            local_log_offset: effects.log().offset(),
+            remote_snapshots: HashMap::new(),
+            source: source_id.unwrap_or(id),
+        }
+    }
+
+    pub(crate) async fn load<R: rand::Rng + rand::CryptoRng>(
         mut effects: TaskEffects<R>,
         root_doc: DocumentId,
+        source: Option<SnapshotId>,
     ) -> Self {
         let id = SnapshotId::random(&mut *effects.rng());
         let we_have_doc = !effects
@@ -96,11 +165,16 @@ impl Snapshot {
             local: docs_to_hashes,
             local_log_offset: effects.log().offset(),
             remote_snapshots: HashMap::new(),
+            source: source.unwrap_or(id),
         }
     }
 
     pub(crate) fn id(&self) -> SnapshotId {
         self.id
+    }
+
+    pub(crate) fn source(&self) -> SnapshotId {
+        self.source
     }
 
     pub(crate) fn root_doc(&self) -> &DocumentId {
@@ -115,20 +189,28 @@ impl Snapshot {
         self.we_have_doc
     }
 
-    pub(crate) fn our_docs(&self) -> HashSet<DocumentId> {
-        self.local.keys().cloned().collect()
+    pub(crate) fn our_doc_ids(&self) -> HashSet<DocumentId> {
+        self.local
+            .keys()
+            .chain(std::iter::once(&self.root_doc))
+            .cloned()
+            .collect()
     }
 
-    pub(crate) fn our_docs_2(&self) -> &HashMap<DocumentId, MinimalTreeHash> {
+    pub(crate) fn our_docs(&self) -> &HashMap<DocumentId, MinimalTreeHash> {
         &self.local
     }
 
-    pub(crate) fn add_remote(&mut self, peer: PeerId, snapshot: SnapshotId) {
-        self.remote_snapshots.insert(peer, snapshot);
+    pub(crate) fn add_remote(&mut self, remote: TargetNodeInfo, snapshot: SnapshotId) {
+        self.remote_snapshots.insert(remote, snapshot);
     }
 
-    pub(crate) fn remote_snapshots(&self) -> &HashMap<PeerId, SnapshotId> {
+    pub(crate) fn remote_snapshots(&self) -> &HashMap<TargetNodeInfo, SnapshotId> {
         &self.remote_snapshots
+    }
+
+    pub(crate) fn encoder(&self) -> riblt::doc_and_heads::Encoder {
+        riblt::doc_and_heads::Encoder::new(self.local.iter())
     }
 }
 

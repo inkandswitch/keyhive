@@ -1,10 +1,28 @@
-use crate::{hex, parse};
+use crate::{
+    deser::{Encode, Parse},
+    hex, parse,
+};
 
 pub use error::InvalidCommitHash;
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq, Ord, PartialOrd, serde::Serialize)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct CommitHash([u8; 32]);
+
+impl Encode for CommitHash {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.0);
+    }
+}
+
+impl Parse<'_> for CommitHash {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        input.parse_in_ctx("CommitHash", |input| {
+            let (input, hash_bytes) = parse::arr::<32>(input)?;
+            Ok((input, CommitHash::from(hash_bytes)))
+        })
+    }
+}
 
 impl CommitHash {
     pub fn as_bytes(&self) -> [u8; 32] {
@@ -14,14 +32,10 @@ impl CommitHash {
     pub(crate) fn parse(
         input: parse::Input<'_>,
     ) -> Result<(parse::Input<'_>, CommitHash), parse::ParseError> {
-        input.with_context("CommitHash", |input| {
+        input.parse_in_ctx("CommitHash", |input| {
             let (input, hash_bytes) = parse::arr::<32>(input)?;
             Ok((input, CommitHash::from(hash_bytes)))
         })
-    }
-
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.0);
     }
 }
 

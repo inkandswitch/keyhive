@@ -1,32 +1,58 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use futures::{pin_mut, StreamExt};
 
 use crate::{
     blob::BlobMeta,
-    effects::TaskEffects,
+    effects::{RpcError, TaskEffects},
     messages::{BlobRef, Notification, TreePart, UploadItem},
     sedimentree::{self, LooseCommit},
-    Commit, CommitBundle, CommitCategory, CommitOrBundle, DocEvent, StorageKey,
+    Commit, CommitBundle, CommitCategory, CommitOrBundle, DocEvent, SnapshotId, StorageKey,
 };
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct HandlerId(u64);
-
-static LAST_HANDLER_ID: AtomicU64 = AtomicU64::new(0);
-
-impl HandlerId {
-    pub(crate) fn new() -> HandlerId {
-        HandlerId(LAST_HANDLER_ID.fetch_add(1, Ordering::Relaxed))
+pub(crate) async fn listen<R: rand::Rng + rand::CryptoRng>(
+    effects: TaskEffects<R>,
+    on_snapshot: SnapshotId,
+    to_peer: crate::TargetNodeInfo,
+) {
+    let handler_effects = effects.clone();
+    let notification_stream =
+        futures::stream::try_unfold((effects, None), |(effects, remote_offset)| {
+            let to_peer = to_peer.clone();
+            async move {
+                tracing::info!("making a listen request");
+                let (notifications, remote_offset, from) = effects
+                    .listen(to_peer.clone(), on_snapshot, remote_offset)
+                    .await?;
+                Ok::<_, RpcError>(Some((
+                    (notifications, from),
+                    (effects, Some(remote_offset)),
+                )))
+            }
+        });
+    pin_mut!(notification_stream);
+    while let Some(notifications) = notification_stream.next().await {
+        match notifications {
+            Ok((n, from)) => {
+                tracing::debug!("received notifications from remote");
+                for notification in n {
+                    handle(handler_effects.clone(), from, notification).await;
+                }
+            }
+            Err(e) => {
+                tracing::error!(?e, "error listening for notifications");
+                break;
+            }
+        }
     }
 }
 
-pub(crate) async fn handle<R: rand::Rng>(mut effects: TaskEffects<R>, notification: Notification) {
+pub(crate) async fn handle<R: rand::Rng + rand::CryptoRng>(
+    mut effects: TaskEffects<R>,
+    for_peer: crate::PeerId,
+    notification: Notification,
+) {
     tracing::debug!(?notification, "received notification");
-    effects.log().remote_notification(&notification);
-    let Notification {
-        from_peer,
-        doc,
-        data,
-    } = notification;
+    effects.log().remote_notification(for_peer, &notification);
+    let Notification { doc, data } = notification;
     let UploadItem { blob, tree_part } = data;
     let BlobRef::Inline(blob_data) = blob else {
         panic!("blob refs in notifications not yet supported");
@@ -73,7 +99,6 @@ pub(crate) async fn handle<R: rand::Rng>(mut effects: TaskEffects<R>, notificati
         }
     }
     effects.emit_doc_event(DocEvent {
-        peer: from_peer,
         doc,
         data: data.clone(),
     });

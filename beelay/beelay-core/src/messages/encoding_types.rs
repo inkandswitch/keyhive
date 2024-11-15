@@ -1,47 +1,5 @@
 use crate::parse;
 
-pub(super) enum MessageType {
-    Request,
-    Response,
-    Notification,
-}
-
-impl MessageType {
-    pub(super) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("MessageDirection", |input| {
-            let (input, byte) = parse::u8(input)?;
-            let msg_type = MessageType::try_from(byte)
-                .map_err(|e| input.error(format!("invalid message type: {:?}", e)))?;
-            Ok((input, msg_type))
-        })
-    }
-}
-
-impl TryFrom<u8> for MessageType {
-    type Error = error::InvalidMessageDirection;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::Request),
-            1 => Ok(Self::Response),
-            3 => Ok(Self::Notification),
-            other => Err(error::InvalidMessageDirection(other)),
-        }
-    }
-}
-
-impl From<MessageType> for u8 {
-    fn from(msg_type: MessageType) -> u8 {
-        match msg_type {
-            MessageType::Request => 0,
-            MessageType::Response => 1,
-            MessageType::Notification => 3,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub(super) enum RequestType {
@@ -58,7 +16,7 @@ impl RequestType {
     pub(super) fn parse(
         input: parse::Input<'_>,
     ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("RequestType", |input| {
+        input.parse_in_ctx("RequestType", |input| {
             let (input, byte) = parse::u8(input)?;
             let req_type = RequestType::try_from(byte)
                 .map_err(|e| input.error(format!("invalid request type: {}", e)))?;
@@ -114,7 +72,7 @@ impl ResponseType {
     pub(super) fn parse(
         input: parse::Input<'_>,
     ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("ResponseType", |input| {
+        input.parse_in_ctx("ResponseType", |input| {
             let (input, byte) = parse::u8(input)?;
             let req_type = ResponseType::try_from(byte)
                 .map_err(|e| input.error(format!("invalid request type: {:?}", e)))?;

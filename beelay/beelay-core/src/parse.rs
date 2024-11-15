@@ -2,7 +2,9 @@ pub(crate) use error::{NotEnoughInput, ParseError};
 
 #[derive(Clone)]
 pub(super) struct Input<'a> {
-    context: Vec<String>,
+    // This field is used for more detailed error messages in debug builds
+    #[cfg(debug_assertions)]
+    context: Vec<&'static str>,
     data: &'a [u8],
     offset: usize,
 }
@@ -12,6 +14,7 @@ impl<'a> Input<'a> {
         Self {
             data,
             offset: 0,
+            #[cfg(debug_assertions)]
             context: Vec::new(),
         }
     }
@@ -24,6 +27,7 @@ impl<'a> Input<'a> {
         Some((
             Self {
                 data: rest,
+                #[cfg(debug_assertions)]
                 context: self.context,
                 offset: self.offset + len,
             },
@@ -31,30 +35,31 @@ impl<'a> Input<'a> {
         ))
     }
 
-    pub(crate) fn with_context<
-        S: AsRef<str>,
+    pub(crate) fn parse_in_ctx<
         T,
-        F: for<'b> Fn(Input<'b>) -> Result<(Input<'b>, T), error::ParseError>,
+        F: FnOnce(Input<'a>) -> Result<(Input<'a>, T), error::ParseError>,
     >(
-        mut self,
-        context: S,
+        #[allow(unused_mut)] mut self,
+        #[allow(unused_variables)] context: &'static str,
         f: F,
     ) -> Result<(Input<'a>, T), error::ParseError> {
-        self.context.push(context.as_ref().to_string());
-        let (mut input, result) = f(self)?;
-        input.context.pop();
-        Ok((input, result))
+        #[cfg(debug_assertions)]
+        {
+            self.context.push(context);
+            let (mut input, result) = f(self)?;
+            input.context.pop();
+            Ok((input, result))
+        }
+        #[cfg(not(debug_assertions))]
+        f(self)
     }
 
     pub(crate) fn error<S: AsRef<str>>(&self, msg: S) -> error::ParseError {
         error::ParseError::Other {
+            #[cfg(debug_assertions)]
             context: self.context.clone(),
             error: msg.as_ref().to_string(),
         }
-    }
-
-    pub(crate) fn offset(&self) -> usize {
-        self.offset
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -70,6 +75,14 @@ pub(super) fn u8(input: Input<'_>) -> Result<(Input<'_>, u8), error::ParseError>
     }
 }
 
+pub(super) fn u64_be(input: Input<'_>) -> Result<(Input<'_>, u64), error::ParseError> {
+    if let Some((input, data)) = input.read(8) {
+        Ok((input, u64::from_be_bytes(data.try_into().unwrap())))
+    } else {
+        Err(error::ParseError::NotEnoughInput)
+    }
+}
+
 #[allow(dead_code)]
 pub(super) fn bool(input: Input<'_>) -> Result<(Input<'_>, bool), error::ParseError> {
     let (input, data) = u8(input)?;
@@ -77,7 +90,7 @@ pub(super) fn bool(input: Input<'_>) -> Result<(Input<'_>, bool), error::ParseEr
 }
 
 pub(super) fn slice(input: Input<'_>) -> Result<(Input<'_>, &'_ [u8]), error::ParseError> {
-    let (input, len) = input.with_context("slice length", crate::leb128::parse)?;
+    let (input, len) = input.parse_in_ctx("slice length", crate::leb128::parse)?;
     let (input, data) = input
         .read(len as usize)
         .ok_or(error::ParseError::NotEnoughInput)?;
@@ -90,23 +103,6 @@ pub(super) fn str(input: Input<'_>) -> Result<(Input<'_>, &'_ str), error::Parse
     let result =
         std::str::from_utf8(data).map_err(|e| input.error(format!("invalid string: {}", e)))?;
     Ok((input, result))
-}
-
-pub(super) fn many<F: for<'b> Fn(Input<'b>) -> Result<(Input<'b>, T), error::ParseError>, T>(
-    input: Input<'_>,
-    f: F,
-) -> Result<(Input<'_>, Vec<T>), error::ParseError> {
-    let mut res = Vec::new();
-    let (mut input, count) = input.with_context("number of items", crate::leb128::parse)?;
-
-    for elem in 0..count {
-        let (i, v) = input.with_context(format!("element {}", elem), &f)?;
-        // let (i, v) = f(input)?;
-        input = i;
-        res.push(v);
-    }
-
-    Ok((input, res))
 }
 
 pub(super) fn arr<const N: usize>(
@@ -139,19 +135,28 @@ pub(super) mod error {
 
     pub enum ParseError {
         NotEnoughInput,
-        Other { context: Vec<String>, error: String },
+        Other {
+            #[cfg(debug_assertions)]
+            context: Vec<&'static str>,
+            error: String,
+        },
     }
 
     impl std::fmt::Display for ParseError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
                 ParseError::NotEnoughInput => write!(f, "not enough input"),
+                #[cfg(debug_assertions)]
                 ParseError::Other { context, error } => {
                     write!(f, "error: {}", error)?;
                     for ctx in context {
                         write!(f, "\n  in {}", ctx)?;
                     }
                     Ok(())
+                }
+                #[cfg(not(debug_assertions))]
+                ParseError::Other { error } => {
+                    write!(f, "error: {}", error)
                 }
             }
         }

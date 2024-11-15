@@ -1,0 +1,14 @@
+[package]
+name = "test-utils"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+lazy_static = "1.5.0"
+nu-ansi-term = "0.50.1"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }

@@ -1,27 +1,35 @@
+use futures::{pin_mut, FutureExt};
+
 use crate::{
     blob::BlobMeta,
-    messages::{BlobRef, ContentAndIndex, FetchedSedimentree, TreePart, UploadItem},
-    riblt::{self, doc_and_heads::CodedDocAndHeadsSymbol},
+    effects::RpcError,
+    log::Source,
+    messages::{BlobRef, ContentAndLinks, FetchedSedimentree, TreePart, UploadItem},
+    riblt::doc_and_heads::CodedDocAndHeadsSymbol,
     sedimentree::{self, LooseCommit},
-    snapshots,
-    subscriptions::Subscription,
-    sync_docs, CommitBundle, CommitCategory, DocumentId, OutgoingResponse, PeerId, RequestId,
-    Response, StorageKey,
+    snapshots, sync_docs, Audience, Commit, CommitBundle, CommitCategory, CommitOrBundle,
+    DocumentId, OutgoingResponse, PeerId, Response, SnapshotId, StorageKey,
 };
 
-pub(super) async fn handle_request<R: rand::Rng>(
-    mut effects: crate::effects::TaskEffects<R>,
+#[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
+pub(crate) enum RequestSource {
+    Stream(crate::StreamId, crate::connection::ConnRequestId),
+    Command(crate::InboundRequestId),
+}
+
+pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
+    effects: crate::effects::TaskEffects<R>,
+    source: RequestSource,
     from: PeerId,
-    req_id: RequestId,
     request: crate::Request,
-) -> Option<OutgoingResponse> {
+) -> OutgoingResponse {
     let response = match request {
         crate::Request::UploadCommits {
             doc,
             data,
             category,
         } => {
-            upload_commits(effects, from.clone(), doc, data, category).await;
+            upload_commits(effects, from, doc, data, category).await;
             Response::UploadCommits
         }
         crate::Request::FetchSedimentree(doc_id) => {
@@ -41,77 +49,63 @@ pub(super) async fn handle_request<R: rand::Rng>(
             }
         },
         crate::Request::UploadBlob(_vec) => todo!(),
-        crate::Request::CreateSnapshot { root_doc } => {
+        crate::Request::CreateSnapshot {
+            root_doc,
+            source_snapshot,
+        } => {
             let (snapshot_id, first_symbols) =
-                create_snapshot(effects, from.clone(), root_doc).await;
+                create_snapshot(effects, from, source_snapshot, root_doc).await;
             Response::CreateSnapshot {
                 snapshot_id,
                 first_symbols,
             }
         }
         crate::Request::SnapshotSymbols { snapshot_id } => {
-            if let Some((_, encoder)) = effects.snapshots_mut().get_mut(&snapshot_id) {
-                Response::SnapshotSymbols(encoder.next_n_symbols(100))
+            if let Some(symbols) = effects.next_snapshot_symbols(snapshot_id, 100) {
+                Response::SnapshotSymbols(symbols)
             } else {
                 Response::Error("no such snapshot".to_string())
             }
         }
-        crate::Request::Listen(snapshot_id) => {
-            let sub = effects
-                .snapshots_mut()
-                .get(&snapshot_id)
-                .map(|(s, _)| Subscription::new(&from, s));
-            let remote_snapshots = effects
-                .snapshots()
-                .get(&snapshot_id)
-                .map(|(s, _)| {
-                    s.remote_snapshots()
-                        .iter()
-                        .map(|(p, s)| (p.clone(), *s))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let do_listen = remote_snapshots.into_iter().map(|(remote_peer, remote_snapshot)| {
-               tracing::trace!(source_remote_peer=%from, target_remote_peer=%remote_peer, %remote_snapshot, "forwarding listen request");
-               effects.listen(remote_peer, remote_snapshot)
-            });
-            futures::future::join_all(do_listen).await;
-            if let Some(sub) = sub {
-                effects.subscriptions().add(sub);
-                Response::Listen
-            } else {
-                Response::Error("no such snapshot".to_string())
+        crate::Request::Listen(snapshot_id, from_offset) => {
+            let result = handle_listen(effects, from, snapshot_id, from_offset).await;
+            match result {
+                Ok((events, remote_offset)) => Response::Listen {
+                    notifications: events,
+                    remote_offset,
+                },
+                Err(e) => Response::Error(e.to_string()),
             }
         }
     };
-    Some(OutgoingResponse {
-        target: from,
-        id: req_id,
+    OutgoingResponse {
+        audience: Audience::peer(&from),
         response,
-    })
+        responding_to: source,
+    }
 }
 
-async fn fetch_sedimentree<R: rand::Rng>(
+async fn fetch_sedimentree<R: rand::Rng + rand::CryptoRng>(
     effects: crate::effects::TaskEffects<R>,
     doc_id: DocumentId,
 ) -> FetchedSedimentree {
     let content_root = StorageKey::sedimentree_root(&doc_id, CommitCategory::Content);
-    let reachability_root = StorageKey::sedimentree_root(&doc_id, CommitCategory::Index);
+    let reachability_root = StorageKey::sedimentree_root(&doc_id, CommitCategory::Links);
 
     let content = crate::sedimentree::storage::load(effects.clone(), content_root);
-    let index = crate::sedimentree::storage::load(effects, reachability_root);
-    let (content, index) = futures::future::join(content, index).await;
-    match (content, index) {
+    let links = crate::sedimentree::storage::load(effects, reachability_root);
+    let (content, links) = futures::future::join(content, links).await;
+    match (content, links) {
         (None, _) => FetchedSedimentree::NotFound,
-        (Some(content), index) => FetchedSedimentree::Found(ContentAndIndex {
+        (Some(content), links) => FetchedSedimentree::Found(ContentAndLinks {
             content: content.minimize().summarize(),
-            index: index.map(|i| i.minimize().summarize()).unwrap_or_default(),
+            links: links.map(|i| i.minimize().summarize()).unwrap_or_default(),
         }),
     }
 }
 
-#[tracing::instrument(skip(effects))]
-async fn upload_commits<R: rand::Rng>(
+#[tracing::instrument(skip(effects, from_peer), fields(from_peer = %from_peer))]
+async fn upload_commits<R: rand::Rng + rand::CryptoRng + 'static>(
     effects: crate::effects::TaskEffects<R>,
     from_peer: PeerId,
     doc: DocumentId,
@@ -121,12 +115,16 @@ async fn upload_commits<R: rand::Rng>(
     tracing::trace!("handling upload");
     let tasks = data.into_iter().map(|d| {
         let mut effects = effects.clone();
-        let from_peer = from_peer.clone();
         async move {
+            if effects.log().has_item(&d) {
+                tracing::debug!("we recently handled this upload, skipping");
+                return;
+            }
             let (blob, data) = match d.blob.clone() {
                 BlobRef::Blob(b) => {
                     let data = effects.load(StorageKey::blob(b)).await;
                     let Some(data) = data else {
+                        tracing::error!("no such blob");
                         // TODO: return an error
                         panic!("no such blob")
                     };
@@ -140,7 +138,41 @@ async fn upload_commits<R: rand::Rng>(
                     (blob, contents)
                 }
             };
-            effects.log().new_commit(doc, from_peer, d.clone(), content);
+            effects
+                .log()
+                .new_remote_commit(doc, from_peer, d.clone(), content);
+            tracing::trace!("stored uploaded blobs, emitting event");
+            effects.emit_doc_event(crate::DocEvent {
+                doc,
+                data: match d.tree_part {
+                    TreePart::Commit { hash, ref parents } => {
+                        CommitOrBundle::Commit(Commit::new(parents.clone(), data.clone(), hash))
+                    }
+                    TreePart::Stratum {
+                        start,
+                        end,
+                        ref checkpoints,
+                    } => CommitOrBundle::Bundle(
+                        CommitBundle::builder()
+                            .start(start)
+                            .end(end)
+                            .checkpoints(checkpoints.clone())
+                            .bundled_commits(data.clone())
+                            .build(),
+                    ),
+                },
+            });
+            for peer in effects.who_should_i_ask(doc) {
+                if !peer.is_source_of(&from_peer) {
+                    let effects = effects.clone();
+                    let d = d.clone();
+                    effects.spawn(move |effects| async move {
+                        if let Err(e) = effects.upload_commits(peer, doc, vec![d], content).await {
+                            tracing::warn!(err=?e, "error forwarding upload to peer");
+                        }
+                    })
+                }
+            }
             match d.tree_part {
                 TreePart::Commit { hash, parents } => {
                     let commit = LooseCommit::new(hash, parents, blob);
@@ -175,36 +207,132 @@ async fn upload_commits<R: rand::Rng>(
     futures::future::join_all(tasks).await;
 }
 
-async fn create_snapshot<R: rand::Rng>(
+async fn create_snapshot<R: rand::Rng + rand::CryptoRng>(
     mut effects: crate::effects::TaskEffects<R>,
-    requestor: PeerId,
+    requestor: crate::PeerId,
+    source_snapshot: SnapshotId,
     root_doc: DocumentId,
 ) -> (snapshots::SnapshotId, Vec<CodedDocAndHeadsSymbol>) {
-    let mut snapshot = snapshots::Snapshot::load(effects.clone(), root_doc).await;
+    if effects.we_have_snapshot_with_source(source_snapshot) {
+        tracing::debug!("forwarding loop detected, returning empty snapshot");
+        // We're in a forward loop, create an empty snapshot and return
+        // TODO: Actually handle this properly
+        let empty = snapshots::Snapshot::empty(&mut effects, root_doc, Some(source_snapshot));
+        let empty = effects.store_snapshot(empty);
+        let symbols = effects
+            .next_snapshot_symbols(empty.id(), 10)
+            .expect("symbols should exist");
+        return (empty.id(), symbols);
+    }
 
-    let mut peers_to_ask = effects.who_should_i_ask(root_doc).await;
-    peers_to_ask.remove(&requestor);
-    if !peers_to_ask.is_empty() {
-        tracing::trace!(?peers_to_ask, "asking remote peers");
-        let syncing = peers_to_ask.into_iter().map(|p| async {
-            let result = sync_docs::sync_root_doc(effects.clone(), &snapshot, p.clone()).await;
-            (p, result)
+    let snapshot =
+        snapshots::Snapshot::load(effects.clone(), root_doc, Some(source_snapshot)).await;
+    let mut snapshot = effects.store_snapshot(snapshot);
+
+    let mut nodes_to_ask = effects.who_should_i_ask(root_doc);
+    nodes_to_ask.retain(|n| !n.is_source_of(&requestor));
+    if !nodes_to_ask.is_empty() {
+        if tracing::enabled!(tracing::Level::TRACE) {
+            let nodes_to_ask = nodes_to_ask
+                .iter()
+                .map(|n| n.audience().to_string())
+                .collect::<Vec<_>>();
+            tracing::trace!(?nodes_to_ask, %requestor, "asking remote peers");
+        } else {
+            tracing::debug!(%requestor, "asking remote peers");
+        }
+        let syncing = nodes_to_ask.into_iter().map(|c| {
+            let fut = sync_docs::sync_root_doc(effects.clone(), &snapshot, c.clone());
+            fut.map(move |r| (c, r))
         });
         let forwarded = futures::future::join_all(syncing).await;
-        snapshot = snapshots::Snapshot::load(effects.clone(), root_doc).await;
+        let mut reloaded_snapshot =
+            snapshots::Snapshot::load(effects.clone(), root_doc, Some(source_snapshot)).await;
         for (peer, sync_result) in forwarded {
-            snapshot.add_remote(peer, sync_result.remote_snapshot);
+            match sync_result {
+                Ok(sync_result) => {
+                    reloaded_snapshot.add_remote(peer, sync_result.remote_snapshot);
+                }
+                Err(e) => {
+                    tracing::warn!(err=?e, "error forwarding create snapshot to remote");
+                }
+            }
         }
+        snapshot = effects.store_snapshot(reloaded_snapshot);
         tracing::trace!(we_have_doc=%snapshot.we_have_doc(), "finished requesting missing doc from peers");
     } else {
         tracing::trace!("no peers to ask");
     }
 
     let snapshot_id = snapshot.id();
-    let mut encoder = riblt::doc_and_heads::Encoder::new(&snapshot);
-    let first_symbols = encoder.next_n_symbols(10);
-    effects
-        .snapshots_mut()
-        .insert(snapshot_id, (snapshot, encoder));
+    let first_symbols = effects
+        .next_snapshot_symbols(snapshot_id, 10)
+        .expect("symbols exist");
     (snapshot_id, first_symbols)
+}
+
+async fn handle_listen<R: rand::Rng + rand::CryptoRng>(
+    mut effects: crate::effects::TaskEffects<R>,
+    from_peer: PeerId,
+    on_snapshot: SnapshotId,
+    from_offset: Option<u64>,
+) -> Result<(Vec<crate::messages::Notification>, u64), RpcError> {
+    let snapshot = effects
+        .lookup_snapshot(on_snapshot)
+        .ok_or_else(|| RpcError::ErrorReported("No such snapshot".to_string()))?;
+
+    effects.ensure_forwarded_listen(from_peer, snapshot.clone());
+
+    // Check local log
+    let local_entries = effects
+        .log()
+        .entries_for(&snapshot, from_offset)
+        .into_iter()
+        .filter(|e| e.source != Source::Remote(from_peer))
+        .collect::<Vec<_>>();
+    if !local_entries.is_empty() {
+        return Ok((
+            local_entries_to_notifications(local_entries),
+            effects.log().offset() as u64,
+        ));
+    }
+
+    // If no local entries, wait for new ones
+    let stopping = effects.stopping().fuse();
+    pin_mut!(stopping);
+    let new_entries = loop {
+        futures::select! {
+            new_entries = effects.new_local_log_entries(snapshot.clone()).fuse() => {
+                tracing::trace!(?new_entries, "checking local log");
+                let new_entries = new_entries
+                    .into_iter()
+                    .filter(|e| e.source != Source::Remote(from_peer))
+                    .collect::<Vec<_>>();
+                if !new_entries.is_empty() {
+                    break new_entries;
+                }
+            },
+            _ = stopping => {
+                tracing::trace!("beelay is stopping, returning empty from listen request");
+                break vec![];
+            }
+        }
+    };
+
+    Ok((
+        local_entries_to_notifications(new_entries),
+        effects.log().offset() as u64,
+    ))
+}
+
+fn local_entries_to_notifications(
+    entries: Vec<crate::log::DocEvent>,
+) -> Vec<crate::messages::Notification> {
+    entries
+        .into_iter()
+        .map(|e| crate::messages::Notification {
+            doc: e.doc,
+            data: e.contents,
+        })
+        .collect()
 }

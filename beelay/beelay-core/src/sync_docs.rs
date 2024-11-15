@@ -1,30 +1,31 @@
 use std::collections::HashSet;
 
-use futures::{pin_mut, StreamExt};
+use futures::{pin_mut, StreamExt, TryStreamExt};
 
 use crate::{
     blob::BlobMeta,
+    deser::Parse,
     effects::TaskEffects,
-    messages::{BlobRef, ContentAndIndex, FetchedSedimentree, TreePart, UploadItem},
+    messages::{BlobRef, ContentAndLinks, FetchedSedimentree, TreePart, UploadItem},
     parse,
     riblt::{self, doc_and_heads::DocAndHeadsSymbol},
     sedimentree::{self, LooseCommit, RemoteDiff, Stratum},
-    snapshots, CommitCategory, DocumentId, PeerId, StorageKey, SyncDocResult,
+    snapshots, CommitCategory, DocumentId, StorageKey, SyncDocResult, TargetNodeInfo,
 };
 
-#[tracing::instrument(skip(effects, our_snapshot))]
-pub(crate) async fn sync_root_doc<R: rand::Rng>(
+#[tracing::instrument(skip(effects, our_snapshot, remote), fields(remote=%remote.target()))]
+pub(crate) async fn sync_root_doc<R: rand::Rng + rand::CryptoRng>(
     effects: crate::effects::TaskEffects<R>,
     our_snapshot: &snapshots::Snapshot,
-    remote_peer: PeerId,
-) -> SyncDocResult {
+    remote: TargetNodeInfo,
+) -> Result<SyncDocResult, crate::effects::RpcError> {
     tracing::trace!("beginning root doc sync");
 
     let OutOfSync {
         their_differing,
         our_differing,
         their_snapshot,
-    } = find_out_of_sync_docs(effects.clone(), our_snapshot, remote_peer.clone()).await;
+    } = find_out_of_sync_docs(effects.clone(), our_snapshot, remote.clone()).await?;
 
     tracing::trace!(?our_differing, ?their_differing, we_have_doc=%our_snapshot.we_have_doc(), "syncing differing docs");
 
@@ -33,15 +34,15 @@ pub(crate) async fn sync_root_doc<R: rand::Rng>(
     let syncing = our_differing
         .union(&their_differing)
         .cloned()
-        .map(|d| sync_doc(effects.clone(), remote_peer.clone(), d));
+        .map(|d| sync_doc(effects.clone(), remote.clone(), d));
     futures::future::join_all(syncing).await;
 
-    SyncDocResult {
+    Ok(SyncDocResult {
         found,
         local_snapshot: our_snapshot.id(),
         remote_snapshot: their_snapshot,
         differing_docs: our_differing.union(&their_differing).cloned().collect(),
-    }
+    })
 }
 
 struct OutOfSync {
@@ -50,37 +51,44 @@ struct OutOfSync {
     their_snapshot: crate::SnapshotId,
 }
 
-async fn find_out_of_sync_docs<R: rand::Rng>(
+async fn find_out_of_sync_docs<R: rand::Rng + rand::CryptoRng>(
     effects: TaskEffects<R>,
     local_snapshot: &crate::snapshots::Snapshot,
-    peer: PeerId,
-) -> OutOfSync {
+    on_peer: TargetNodeInfo,
+) -> Result<OutOfSync, crate::effects::RpcError> {
     // Make a remote snapshot and stream symbols from it until we have decoded
     let (snapshot_id, first_symbols) = effects
-        .create_snapshot(peer.clone(), *local_snapshot.root_doc())
-        .await
-        .unwrap();
+        .create_snapshot(
+            on_peer.clone(),
+            local_snapshot.source(),
+            *local_snapshot.root_doc(),
+        )
+        .await?;
     let mut local_riblt = riblt::Decoder::<riblt::doc_and_heads::DocAndHeadsSymbol>::new();
-    for (doc_id, heads) in local_snapshot.our_docs_2().iter() {
+    for (doc_id, heads) in local_snapshot.our_docs().iter() {
         local_riblt.add_symbol(&DocAndHeadsSymbol::new(doc_id, heads));
     }
-    let symbols = futures::stream::iter(first_symbols).chain(
-        futures::stream::unfold(effects, move |effects| {
-            let effects = effects.clone();
-            let snapshot_id = snapshot_id;
-            let peer = peer.clone();
-            async move {
-                let symbols = effects
-                    .fetch_snapshot_symbols(peer, snapshot_id)
-                    .await
-                    .unwrap();
-                Some((futures::stream::iter(symbols), effects))
-            }
-        })
-        .flatten(),
-    );
+
+    // Yeesh this is gross
+    let symbols = futures::stream::once(futures::future::ready(Ok(futures::stream::iter(
+        first_symbols.into_iter().map(Ok),
+    ))))
+    .chain(futures::stream::try_unfold(effects, move |effects| {
+        let effects = effects.clone();
+        let snapshot_id = snapshot_id;
+        let peer = on_peer.clone();
+        async move {
+            let symbols = effects.fetch_snapshot_symbols(peer, snapshot_id).await?;
+            Ok(Some((
+                futures::stream::iter(symbols.into_iter().map(Ok)),
+                effects,
+            )))
+        }
+    }))
+    .try_flatten();
     pin_mut!(symbols);
     while let Some(symbol) = symbols.next().await {
+        let symbol = symbol?;
         local_riblt.add_coded_symbol(&symbol.into_coded());
         local_riblt.try_decode().unwrap();
         if local_riblt.decoded() {
@@ -95,32 +103,31 @@ async fn find_out_of_sync_docs<R: rand::Rng>(
         .get_local_symbols()
         .into_iter()
         .map(|s| s.symbol().decode().0);
-    OutOfSync {
+    Ok(OutOfSync {
         their_differing: remote_differing_docs.collect(),
         our_differing: local_differing_docs.collect(),
         their_snapshot: snapshot_id,
-    }
+    })
 }
 
-async fn sync_doc<R: rand::Rng>(
+async fn sync_doc<R: rand::Rng + rand::CryptoRng>(
     effects: crate::effects::TaskEffects<R>,
-    peer: PeerId,
+    peer: TargetNodeInfo,
     doc: DocumentId,
-) {
-    tracing::trace!(peer=%peer, %doc, "syncing doc");
+) -> Result<(), crate::effects::RpcError> {
+    tracing::debug!(peer=%peer, %doc, "syncing doc");
     let content_root = StorageKey::sedimentree_root(&doc, CommitCategory::Content);
     let our_content = sedimentree::storage::load(effects.clone(), content_root.clone()).await;
 
-    let index_root = StorageKey::sedimentree_root(&doc, CommitCategory::Index);
-    let our_index = sedimentree::storage::load(effects.clone(), index_root.clone()).await;
+    let links_root = StorageKey::sedimentree_root(&doc, CommitCategory::Links);
+    let our_links = sedimentree::storage::load(effects.clone(), links_root.clone()).await;
 
-    let (their_index, their_content) =
-        match effects.fetch_sedimentrees(peer.clone(), doc).await.unwrap() {
-            FetchedSedimentree::Found(ContentAndIndex { content, index }) => {
-                (Some(index), Some(content))
-            }
-            FetchedSedimentree::NotFound => (None, None),
-        };
+    let (their_links, their_content) = match effects.fetch_sedimentrees(peer.clone(), doc).await? {
+        FetchedSedimentree::Found(ContentAndLinks { content, links }) => {
+            (Some(links), Some(content))
+        }
+        FetchedSedimentree::NotFound => (None, None),
+    };
 
     let sync_content = sync_sedimentree(
         effects.clone(),
@@ -130,25 +137,28 @@ async fn sync_doc<R: rand::Rng>(
         our_content,
         their_content,
     );
-    let sync_index = sync_sedimentree(
-        effects.clone(),
-        peer.clone(),
+    let sync_links = sync_sedimentree(
+        effects,
+        peer,
         doc,
-        CommitCategory::Index,
-        our_index,
-        their_index,
+        CommitCategory::Links,
+        our_links,
+        their_links,
     );
-    futures::future::join(sync_content, sync_index).await;
+    let (content, links) = futures::future::join(sync_content, sync_links).await;
+    content?;
+    links?;
+    Ok(())
 }
 
-async fn sync_sedimentree<R: rand::Rng>(
+async fn sync_sedimentree<R: rand::Rng + rand::CryptoRng>(
     effects: TaskEffects<R>,
-    with_peer: PeerId,
+    with_peer: TargetNodeInfo,
     doc: DocumentId,
     category: CommitCategory,
     local: Option<sedimentree::Sedimentree>,
     remote: Option<sedimentree::SedimentreeSummary>,
-) {
+) -> Result<(), crate::effects::RpcError> {
     let RemoteDiff {
         remote_strata,
         remote_commits,
@@ -158,7 +168,7 @@ async fn sync_sedimentree<R: rand::Rng>(
         (Some(local), Some(remote)) => local.diff_remote(remote),
         (None, Some(remote)) => remote.as_remote_diff(),
         (Some(local), None) => local.as_local_diff(),
-        (None, None) => return,
+        (None, None) => return Ok(()),
     };
 
     let root = StorageKey::sedimentree_root(&doc, category);
@@ -181,11 +191,9 @@ async fn sync_sedimentree<R: rand::Rng>(
             let effects = effects.clone();
             let peer = peer.clone();
             async move {
-                fetch_blob(effects.clone(), peer.clone(), *c.blob())
-                    .await
-                    .unwrap();
+                fetch_blob(effects.clone(), peer.clone(), *c.blob()).await?;
                 let commit = LooseCommit::new(c.hash(), c.parents().to_vec(), *c.blob());
-                commit
+                Ok::<_, crate::effects::RpcError>(commit)
             }
         });
         let (downloaded_strata, downloaded_commits) = futures::future::join(
@@ -198,9 +206,11 @@ async fn sync_sedimentree<R: rand::Rng>(
             updated.add_stratum(stratum);
         }
         for commit in downloaded_commits {
+            let commit = commit?;
             updated.add_commit(commit);
         }
         sedimentree::storage::update(effects, root, local.as_ref(), &updated.minimize()).await;
+        Ok::<_, crate::effects::RpcError>(())
     };
 
     let upload = async {
@@ -247,18 +257,24 @@ async fn sync_sedimentree<R: rand::Rng>(
                 }
             });
         let to_upload = futures::future::join_all(to_upload).await;
+        if to_upload.is_empty() {
+            return Ok::<_, crate::effects::RpcError>(());
+        }
         effects
             .upload_commits(peer, doc, to_upload, category)
-            .await
-            .unwrap();
+            .await?;
+        Ok(())
     };
 
-    futures::future::join(download, upload).await;
+    let (download, upload) = futures::future::join(download, upload).await;
+    download?;
+    upload?;
+    Ok(())
 }
 
-async fn fetch_blob<R: rand::Rng>(
+async fn fetch_blob<R: rand::Rng + rand::CryptoRng>(
     effects: TaskEffects<R>,
-    from_peer: PeerId,
+    from_peer: TargetNodeInfo,
     blob: BlobMeta,
 ) -> Result<Vec<u8>, crate::effects::RpcError> {
     let data = effects

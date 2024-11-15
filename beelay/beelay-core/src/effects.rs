@@ -1,60 +1,77 @@
 use std::{
-    borrow::BorrowMut,
-    cell::{Ref, RefCell, RefMut},
+    cell::{RefCell, RefMut},
     collections::{HashMap, HashSet},
     future::Future,
     rc::Rc,
-    sync::Arc,
+    sync::{atomic::AtomicBool, Arc},
     task::{self, Waker},
 };
 
+use ed25519_dalek::SigningKey;
+use futures::FutureExt;
+
 use crate::{
+    auth::Authenticated,
+    endpoint,
     io::{IoResult, IoResultPayload, IoTask},
+    log,
     messages::{FetchedSedimentree, Notification, UploadItem},
     riblt::{self, doc_and_heads::CodedDocAndHeadsSymbol},
-    snapshots::{self},
-    subscriptions, BlobHash, CommitCategory, DocEvent, DocumentId, IoTaskId, PeerId, Request,
-    RequestId, Response, SnapshotId, StorageKey, Task,
+    snapshots::{self, Snapshot, Snapshots},
+    spawn, stream, BlobHash, CommitCategory, DocEvent, DocumentId, IoTaskId, OutboundRequestId,
+    PeerId, Request, Response, SnapshotId, StorageKey, TargetNodeInfo, Task,
 };
 
 pub(crate) struct State<R> {
     pub(crate) io: Io,
-    our_peer_id: PeerId,
-    snapshots: HashMap<snapshots::SnapshotId, (snapshots::Snapshot, riblt::doc_and_heads::Encoder)>,
-    log: subscriptions::Log,
-    subscriptions: subscriptions::Subscriptions,
+    pub(crate) auth: crate::auth::manager::Manager,
+    snapshots: Snapshots,
+    log: log::Log,
+    awaiting_new_log_entries: HashMap<Task, LogEntryListener>,
+    last_checked_log_offset: usize,
+    pub listens_to_forward: Vec<(PeerId, Arc<Snapshot>)>,
+    pub spawned_tasks: HashMap<spawn::SpawnId, crate::task::ActiveTask>,
+    pub(crate) streams: stream::Streams,
+    pub(crate) endpoints: endpoint::Endpoints,
     rng: R,
 }
 
-impl<R: rand::Rng> State<R> {
-    pub(crate) fn new(rng: R, our_peer_id: PeerId) -> Self {
+struct LogEntryListener {
+    snapshot: Arc<snapshots::Snapshot>,
+    events: Rc<RefCell<Option<Vec<crate::log::DocEvent>>>>,
+}
+
+impl<R: rand::Rng + rand::CryptoRng> State<R> {
+    pub(crate) fn new(rng: R, signing_key: SigningKey) -> Self {
         Self {
-            our_peer_id: our_peer_id.clone(),
             io: Io {
                 load_range: JobTracker::new(),
                 load: JobTracker::new(),
                 put: JobTracker::new(),
                 delete: JobTracker::new(),
                 requests: JobTracker::new(),
-                asks: JobTracker::new(),
                 wakers: Rc::new(RefCell::new(HashMap::new())),
                 emitted_doc_events: Vec::new(),
                 pending_puts: HashMap::new(),
+                awaiting_stop: HashSet::new(),
+                stopping: Arc::new(AtomicBool::new(false)),
             },
-            log: subscriptions::Log::new(),
-            subscriptions: subscriptions::Subscriptions::new(our_peer_id),
-            snapshots: HashMap::new(),
+            auth: crate::auth::manager::Manager::new(signing_key.clone(), None),
+            log: log::Log::new(),
+            snapshots: Snapshots::new(),
+            awaiting_new_log_entries: HashMap::new(),
+            last_checked_log_offset: 0,
+            listens_to_forward: Vec::new(),
+            spawned_tasks: HashMap::new(),
+            streams: stream::Streams::new(signing_key),
+            endpoints: endpoint::Endpoints::new(),
             rng,
         }
     }
 
-    pub(crate) fn new_notifications(&mut self) -> HashMap<PeerId, Vec<Notification>> {
-        self.subscriptions.new_events(&self.log)
-    }
-
     fn task_fut<T, F: FnOnce(&mut Io) -> Rc<RefCell<Option<T>>>>(
         this: Rc<RefCell<Self>>,
-        task: Task,
+        task: &Rc<RefCell<crate::task::TaskData>>,
         f: F,
     ) -> TaskFuture<T> {
         let state = RefCell::borrow_mut(&this);
@@ -64,18 +81,37 @@ impl<R: rand::Rng> State<R> {
         TaskFuture {
             result,
             wakers,
-            task,
+            task: task.borrow().id,
         }
+    }
+
+    pub(super) fn pop_log_listeners(&mut self) -> Vec<Task> {
+        let mut result = Vec::new();
+        for (task, LogEntryListener { snapshot, events }) in self.awaiting_new_log_entries.iter() {
+            let entries = self
+                .log
+                .entries_for(snapshot, Some(self.last_checked_log_offset as u64));
+            if !entries.is_empty() {
+                RefCell::borrow_mut(events).replace(entries);
+                result.push(*task);
+            }
+        }
+        for task in &result {
+            self.awaiting_new_log_entries.remove(task);
+        }
+        self.last_checked_log_offset = self.log.offset();
+        result
     }
 }
 
 pub(crate) struct Io {
+    stopping: Arc<AtomicBool>,
     load_range: JobTracker<IoTaskId, StorageKey, HashMap<StorageKey, Vec<u8>>>,
     load: JobTracker<IoTaskId, StorageKey, Option<Vec<u8>>>,
     put: JobTracker<IoTaskId, (StorageKey, Vec<u8>), ()>,
     delete: JobTracker<IoTaskId, StorageKey, ()>,
-    requests: JobTracker<RequestId, OutgoingRequest, IncomingResponse>,
-    asks: JobTracker<IoTaskId, DocumentId, HashSet<PeerId>>,
+    requests:
+        JobTracker<OutboundRequestId, OutgoingRequest, Result<Authenticated<Response>, RpcError>>,
     emitted_doc_events: Vec<DocEvent>,
     // We don't actually use wakers at all, we keep track of the top level task
     // to wake up when a job completes in each JobTracker. However, the
@@ -88,6 +124,7 @@ pub(crate) struct Io {
     // though we don't use this mechanism ourselves.
     wakers: Rc<RefCell<HashMap<Task, Vec<Waker>>>>,
     pending_puts: HashMap<IoTaskId, (StorageKey, Vec<u8>)>,
+    awaiting_stop: HashSet<Task>,
 }
 
 impl Io {
@@ -101,20 +138,45 @@ impl Io {
             }
             IoResultPayload::Delete => self.delete.complete_job(id, ()),
             IoResultPayload::LoadRange(payload) => self.load_range.complete_job(id, payload),
-            IoResultPayload::Ask(peers) => self.asks.complete_job(id, peers),
         };
         self.process_completed_tasks(&completed_tasks);
 
         completed_tasks
     }
 
-    pub(crate) fn response_received(&mut self, response: IncomingResponse) -> Vec<Task> {
-        let completed_tasks = self.requests.complete_job(response.id, response);
-        self.process_completed_tasks(&completed_tasks);
-        completed_tasks
+    pub(crate) fn response_received(
+        &mut self,
+        req_id: OutboundRequestId,
+        response: Result<Authenticated<Response>, RpcError>,
+    ) -> Vec<Task> {
+        let woken_tasks = self.requests.complete_job(req_id, response);
+        self.process_completed_tasks(&woken_tasks);
+        woken_tasks
     }
 
-    fn process_completed_tasks(&self, completed_tasks: &[Task]) {
+    pub(crate) fn response_failed(
+        &mut self,
+        req_id: OutboundRequestId,
+        failure: RpcError,
+    ) -> Vec<Task> {
+        let woken_tasks = self
+            .requests
+            .complete_job(req_id, Err(RpcError::NoResponse));
+        self.process_completed_tasks(&woken_tasks);
+        woken_tasks
+    }
+
+    pub(crate) fn stop(&mut self) -> Vec<Task> {
+        self.stopping
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let woken_tasks = std::mem::take(&mut self.awaiting_stop)
+            .into_iter()
+            .collect::<Vec<_>>();
+        self.process_completed_tasks(&woken_tasks);
+        woken_tasks
+    }
+
+    fn process_completed_tasks(&mut self, completed_tasks: &[Task]) {
         let mut wakers_by_taskid = RefCell::borrow_mut(&self.wakers);
         for initiator in completed_tasks.iter() {
             if let Some(mut wakers) = wakers_by_taskid.remove(initiator) {
@@ -122,6 +184,9 @@ impl Io {
                     waker.wake();
                 }
             }
+            // Remove the initiator from any other waiting queues as we're going to wake
+            // it up anyway (need to think more about cancellation safety)
+            self.awaiting_stop.remove(initiator);
         }
     }
 
@@ -152,32 +217,35 @@ impl Io {
                 .into_iter()
                 .map(|(task_id, (key, data))| IoTask::put(task_id, key, data)),
         );
-        result.extend(
-            self.asks
-                .pop_new_jobs()
-                .into_iter()
-                .map(|(task_id, doc_id)| IoTask::ask(task_id, doc_id)),
-        );
         result
     }
 
-    pub(crate) fn pop_new_requests(&mut self) -> Vec<(RequestId, OutgoingRequest)> {
+    pub(crate) fn pop_new_requests(&mut self) -> Vec<(OutboundRequestId, OutgoingRequest)> {
         self.requests.pop_new_jobs()
     }
 
     pub(crate) fn pop_new_notifications(&mut self) -> Vec<DocEvent> {
         std::mem::take(&mut self.emitted_doc_events)
     }
+
+    pub(crate) fn cancel(&mut self, op: crate::task::OperationDescriptor) {
+        match op {
+            crate::task::OperationDescriptor::Load(io_task_id) => self.load.remove(io_task_id),
+            crate::task::OperationDescriptor::LoadRange(io_task_id) => {
+                self.load_range.remove(io_task_id)
+            }
+            crate::task::OperationDescriptor::Put(io_task_id) => self.put.remove(io_task_id),
+            crate::task::OperationDescriptor::Delete(io_task_id) => self.delete.remove(io_task_id),
+            crate::task::OperationDescriptor::Request(outbound_request_id) => {
+                self.requests.remove(outbound_request_id);
+            }
+        }
+    }
 }
 
 pub(super) struct OutgoingRequest {
-    pub(super) target: PeerId,
+    pub(super) target: TargetNodeInfo,
     pub(super) request: Request,
-}
-
-pub(crate) struct IncomingResponse {
-    pub(super) id: RequestId,
-    pub(super) response: Response,
 }
 
 pub(crate) struct JobTracker<Descriptor, Payload, Result> {
@@ -197,6 +265,12 @@ impl<Descriptor: Eq + std::hash::Hash + Clone, Payload, Result>
         }
     }
 
+    pub(crate) fn remove(&mut self, descriptor: Descriptor) {
+        self.running.remove(&descriptor);
+        self.initiators_by_job.remove(&descriptor);
+        self.new.retain(|(d, _)| d != &descriptor);
+    }
+
     pub(crate) fn run(
         &mut self,
         initiator: Task,
@@ -208,7 +282,7 @@ impl<Descriptor: Eq + std::hash::Hash + Clone, Payload, Result>
                 .entry(descriptor.clone())
                 .or_default()
                 .insert(initiator);
-            return self.running.get(&descriptor).unwrap().clone();
+            self.running.get(&descriptor).unwrap().clone()
         } else {
             let result = Rc::new(RefCell::new(None));
             self.new.push((descriptor.clone(), payload));
@@ -226,8 +300,8 @@ impl<Descriptor: Eq + std::hash::Hash + Clone, Payload, Result>
     }
 
     pub(crate) fn complete_job(&mut self, descriptor: Descriptor, result: Result) -> Vec<Task> {
-        if let Some(mut running) = self.running.remove(&descriptor) {
-            running.borrow_mut().replace(Some(result));
+        if let Some(running) = self.running.remove(&descriptor) {
+            running.borrow_mut().replace(result);
         } else {
             #[cfg(debug_assertions)]
             panic!("job not found");
@@ -251,32 +325,42 @@ impl<Descriptor: Eq + std::hash::Hash + Clone, Payload, Result>
 }
 
 pub(crate) struct TaskEffects<R> {
-    task: Task,
+    task_data: Rc<RefCell<crate::task::TaskData>>,
     state: Rc<RefCell<State<R>>>,
 }
 
 impl<R> std::clone::Clone for TaskEffects<R> {
     fn clone(&self) -> Self {
         Self {
-            task: self.task,
+            task_data: self.task_data.clone(),
             state: self.state.clone(),
         }
     }
 }
 
-impl<R: rand::Rng> TaskEffects<R> {
+impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
     pub(crate) fn new<I: Into<Task>>(task: I, state: Rc<RefCell<State<R>>>) -> Self {
+        let id = task.into();
         Self {
-            task: task.into(),
+            task_data: Rc::new(RefCell::new(crate::task::TaskData {
+                id,
+                pending_operations: RefCell::new(HashSet::new()),
+            })),
             state,
         }
     }
 
     pub(crate) fn load(&self, key: StorageKey) -> impl Future<Output = Option<Vec<u8>>> {
         let task_id = IoTaskId::new();
-        State::task_fut(self.state.clone(), self.task, |io| {
-            io.load.run(self.task, task_id, key)
-        })
+        let result = State::task_fut(self.state.clone(), &self.task_data, |io| {
+            io.load.run(self.task_data.borrow().id, task_id, key)
+        });
+        self.task_data
+            .borrow_mut()
+            .pending_operations
+            .borrow_mut()
+            .insert(crate::task::OperationDescriptor::Load(task_id));
+        result
     }
 
     pub(crate) fn load_range(
@@ -300,13 +384,20 @@ impl<R: rand::Rng> TaskEffects<R> {
             })
             .collect::<HashMap<_, _>>();
         tracing::trace!(?prefix, "loading range");
-        let load = State::task_fut(self.state.clone(), self.task, move |io| {
-            io.load_range.run(self.task, task_id, prefix)
+        let load = State::task_fut(self.state.clone(), &self.task_data, move |io| {
+            io.load_range
+                .run(self.task_data.borrow().id, task_id, prefix)
         });
-        async move {
+        let result = async move {
             let stored = load.await;
             stored.into_iter().chain(cached).collect()
-        }
+        };
+        self.task_data
+            .borrow_mut()
+            .pending_operations
+            .borrow_mut()
+            .insert(crate::task::OperationDescriptor::LoadRange(task_id));
+        result
     }
 
     pub(crate) fn put(&self, key: StorageKey, value: Vec<u8>) -> impl Future<Output = ()> {
@@ -316,49 +407,68 @@ impl<R: rand::Rng> TaskEffects<R> {
             .io
             .pending_puts
             .insert(task_id, (key.clone(), value.clone()));
-        State::task_fut(self.state.clone(), self.task, |io| {
-            io.put.run(self.task, task_id, (key, value))
-        })
+        let result = State::task_fut(self.state.clone(), &self.task_data, |io| {
+            io.put
+                .run(self.task_data.borrow().id, task_id, (key, value))
+        });
+        self.task_data
+            .borrow_mut()
+            .pending_operations
+            .borrow_mut()
+            .insert(crate::task::OperationDescriptor::Put(task_id));
+        result
     }
 
     #[allow(dead_code)]
     pub(crate) fn delete(&self, key: StorageKey) -> impl Future<Output = ()> {
         let task_id = IoTaskId::new();
-        let fut = State::task_fut(self.state.clone(), self.task, |io| {
-            io.delete.run(self.task, task_id, key)
+        let fut = State::task_fut(self.state.clone(), &self.task_data, |io| {
+            io.delete.run(self.task_data.borrow().id, task_id, key)
         });
-        async move {
-            fut.await;
-        }
+        self.task_data
+            .borrow_mut()
+            .pending_operations
+            .borrow_mut()
+            .insert(crate::task::OperationDescriptor::Delete(task_id));
+        fut
     }
 
-    fn request(&self, from: PeerId, request: Request) -> impl Future<Output = IncomingResponse> {
-        let request_id = RequestId::new(&mut *self.rng());
-        let request = OutgoingRequest {
-            target: from,
-            request,
-        };
-        State::task_fut(self.state.clone(), self.task, |io| {
-            io.requests.run(self.task, request_id, request)
-        })
+    fn request(
+        &self,
+        target: TargetNodeInfo,
+        request: Request,
+    ) -> impl Future<Output = Result<Authenticated<Response>, RpcError>> {
+        let request_id = OutboundRequestId::new();
+        let request = OutgoingRequest { target, request };
+        let result = State::task_fut(self.state.clone(), &self.task_data, |io| {
+            io.requests
+                .run(self.task_data.borrow().id, request_id, request)
+        });
+        self.task_data
+            .borrow_mut()
+            .pending_operations
+            .borrow_mut()
+            .insert(crate::task::OperationDescriptor::Request(request_id));
+        result
     }
 
     pub(crate) fn upload_commits(
         &self,
-        to_peer: PeerId,
-        dag: DocumentId,
+        target: TargetNodeInfo,
+        doc: DocumentId,
         data: Vec<UploadItem>,
         category: CommitCategory,
     ) -> impl Future<Output = Result<(), RpcError>> {
+        tracing::trace!("sending upload request");
         let request = Request::UploadCommits {
-            doc: dag,
+            doc,
             data,
             category,
         };
-        let task = self.request(to_peer, request);
+        let task = self.request(target, request);
         async move {
-            let response = task.await;
-            match response.response {
+            let response = task.await?;
+            match response.content {
                 crate::Response::UploadCommits => Ok(()),
                 crate::Response::Error(err) => Err(RpcError::ErrorReported(err)),
                 _ => Err(RpcError::IncorrectResponseType),
@@ -368,7 +478,7 @@ impl<R: rand::Rng> TaskEffects<R> {
 
     pub(crate) fn fetch_blob_part(
         &self,
-        from_peer: PeerId,
+        target: TargetNodeInfo,
         blob: BlobHash,
         start: u64,
         length: u64,
@@ -378,10 +488,10 @@ impl<R: rand::Rng> TaskEffects<R> {
             offset: start,
             length,
         };
-        let task = self.request(from_peer, request);
+        let task = self.request(target, request);
         async move {
-            let response = task.await;
-            match response.response {
+            let response = task.await?;
+            match response.content {
                 crate::Response::FetchBlobPart(data) => Ok(data),
                 crate::Response::Error(err) => Err(RpcError::ErrorReported(err)),
                 _ => Err(RpcError::IncorrectResponseType),
@@ -391,14 +501,14 @@ impl<R: rand::Rng> TaskEffects<R> {
 
     pub(crate) fn fetch_sedimentrees(
         &self,
-        from_peer: PeerId,
+        from: TargetNodeInfo,
         doc: DocumentId,
     ) -> impl Future<Output = Result<FetchedSedimentree, RpcError>> {
         let request = Request::FetchSedimentree(doc);
-        let task = self.request(from_peer, request);
+        let task = self.request(from, request);
         async move {
-            let response = task.await;
-            match response.response {
+            let response = task.await?;
+            match response.content {
                 crate::Response::FetchSedimentree(result) => Ok(result),
                 crate::Response::Error(err) => Err(RpcError::ErrorReported(err)),
                 _ => Err(RpcError::IncorrectResponseType),
@@ -408,7 +518,8 @@ impl<R: rand::Rng> TaskEffects<R> {
 
     pub(crate) fn create_snapshot(
         &self,
-        on_peer: PeerId,
+        on_peer: TargetNodeInfo,
+        source_snapshot: SnapshotId,
         root_doc: DocumentId,
     ) -> impl Future<
         Output = Result<
@@ -419,11 +530,14 @@ impl<R: rand::Rng> TaskEffects<R> {
             RpcError,
         >,
     > {
-        let request = Request::CreateSnapshot { root_doc };
+        let request = Request::CreateSnapshot {
+            root_doc,
+            source_snapshot,
+        };
         let task = self.request(on_peer, request);
         async move {
-            let response = task.await;
-            match response.response {
+            let response = task.await?;
+            match response.content {
                 crate::Response::CreateSnapshot {
                     snapshot_id,
                     first_symbols,
@@ -436,14 +550,14 @@ impl<R: rand::Rng> TaskEffects<R> {
 
     pub(crate) fn fetch_snapshot_symbols(
         &self,
-        from_peer: PeerId,
+        from_peer: TargetNodeInfo,
         snapshot_id: SnapshotId,
     ) -> impl Future<Output = Result<Vec<CodedDocAndHeadsSymbol>, RpcError>> {
         let request = Request::SnapshotSymbols { snapshot_id };
         let task = self.request(from_peer, request);
         async move {
-            let response = task.await;
-            match response.response {
+            let response = task.await?;
+            match response.content {
                 crate::Response::SnapshotSymbols(symbols) => Ok(symbols),
                 crate::Response::Error(err) => Err(RpcError::ErrorReported(err)),
                 _ => Err(RpcError::IncorrectResponseType),
@@ -453,47 +567,28 @@ impl<R: rand::Rng> TaskEffects<R> {
 
     pub(crate) fn listen(
         &self,
-        to_peer: PeerId,
+        to_peer: TargetNodeInfo,
         on_snapshot: SnapshotId,
-    ) -> impl Future<Output = Result<(), RpcError>> {
-        let request = Request::Listen(on_snapshot);
+        from_offset: Option<u64>,
+    ) -> impl Future<Output = Result<(Vec<Notification>, u64, PeerId), RpcError>> {
+        let request = Request::Listen(on_snapshot, from_offset);
         let task = self.request(to_peer, request);
         async move {
-            let response = task.await;
-            match response.response {
-                crate::Response::Listen => Ok(()),
+            let response = task.await?;
+            match response.content {
+                crate::Response::Listen {
+                    notifications,
+                    remote_offset,
+                } => Ok((notifications, remote_offset, response.from.into())),
                 crate::Response::Error(err) => Err(RpcError::ErrorReported(err)),
                 _ => Err(RpcError::IncorrectResponseType),
             }
         }
     }
 
-    pub(crate) fn snapshots_mut(
-        &mut self,
-    ) -> RefMut<
-        '_,
-        HashMap<snapshots::SnapshotId, (snapshots::Snapshot, riblt::doc_and_heads::Encoder)>,
-    > {
-        let state = RefCell::borrow_mut(&self.state);
-        RefMut::map(state, |s| &mut s.snapshots)
-    }
-
-    pub(crate) fn snapshots(
-        &self,
-    ) -> Ref<'_, HashMap<snapshots::SnapshotId, (snapshots::Snapshot, riblt::doc_and_heads::Encoder)>>
-    {
-        let state = RefCell::borrow(&self.state);
-        Ref::map(state, |s| &s.snapshots)
-    }
-
-    pub(crate) fn log(&mut self) -> RefMut<'_, subscriptions::Log> {
+    pub(crate) fn log(&mut self) -> RefMut<'_, log::Log> {
         let state = RefCell::borrow_mut(&self.state);
         RefMut::map(state, |s| &mut s.log)
-    }
-
-    pub(crate) fn subscriptions(&mut self) -> RefMut<'_, subscriptions::Subscriptions> {
-        let state = RefCell::borrow_mut(&self.state);
-        RefMut::map(state, |s| &mut s.subscriptions)
     }
 
     pub(crate) fn rng(&self) -> std::cell::RefMut<'_, R> {
@@ -501,37 +596,146 @@ impl<R: rand::Rng> TaskEffects<R> {
         RefMut::map(state, |j| &mut j.rng)
     }
 
-    pub(crate) fn our_peer_id(&self) -> std::cell::Ref<'_, PeerId> {
-        let state = RefCell::borrow(&self.state);
-        std::cell::Ref::map(state, |s: &State<R>| &s.our_peer_id)
-    }
-
-    pub(crate) fn who_should_i_ask(
-        &self,
-        about_doc: DocumentId,
-    ) -> impl Future<Output = HashSet<PeerId>> {
-        let task_id = IoTaskId::new();
-        State::task_fut(self.state.clone(), self.task, |io| {
-            io.asks.run(self.task, task_id, about_doc)
-        })
+    pub(crate) fn who_should_i_ask(&self, _about_doc: DocumentId) -> HashSet<TargetNodeInfo> {
+        let state = self.state.borrow();
+        state
+            .streams
+            .forward_targets()
+            .chain(state.endpoints.forward_targets())
+            .collect()
     }
 
     pub(crate) fn emit_doc_event(&self, evt: DocEvent) {
         let mut state = RefCell::borrow_mut(&self.state);
         state.io.emitted_doc_events.push(evt);
     }
+
+    pub(crate) fn new_local_log_entries(
+        &self,
+        for_snapshot: Arc<crate::snapshots::Snapshot>,
+    ) -> impl Future<Output = Vec<crate::log::DocEvent>> {
+        let mut state = RefCell::borrow_mut(&self.state);
+        let result = Rc::new(RefCell::new(None));
+        state.awaiting_new_log_entries.insert(
+            self.task_data.borrow().id,
+            LogEntryListener {
+                snapshot: for_snapshot,
+                events: result.clone(),
+            },
+        );
+        NewLogEntries {
+            task: self.task_data.borrow().id,
+            result,
+            wakers: state.io.wakers.clone(),
+        }
+    }
+
+    pub(crate) fn ensure_forwarded_listen(
+        &self,
+        from_peer: PeerId,
+        for_snapshot: Arc<crate::snapshots::Snapshot>,
+    ) {
+        let mut state = RefCell::borrow_mut(&self.state);
+        state.listens_to_forward.push((from_peer, for_snapshot));
+    }
+
+    pub(crate) fn spawn<F, O: Future<Output = ()> + 'static>(&self, f: F)
+    where
+        F: FnOnce(TaskEffects<R>) -> O + 'static,
+        R: 'static,
+    {
+        let task_id = spawn::SpawnId::new();
+        let task_data = Rc::new(RefCell::new(crate::task::TaskData {
+            id: task_id.into(),
+            pending_operations: RefCell::new(HashSet::new()),
+        }));
+        let effects = TaskEffects {
+            task_data,
+            state: self.state.clone(),
+        };
+        let fut = async move {
+            let _result = f(effects).await;
+            crate::task::TaskResult::Spawn
+        }
+        .boxed_local();
+
+        let task = crate::task::ActiveTask::new(task_id, fut);
+        let mut state = RefCell::borrow_mut(&self.state);
+        state.spawned_tasks.insert(task_id, task);
+    }
+
+    pub(crate) fn endpoint_audience(
+        &self,
+        endpoint_id: endpoint::EndpointId,
+    ) -> Option<crate::Audience> {
+        let state = RefCell::borrow(&self.state);
+        state.endpoints.audience_of(endpoint_id)
+    }
+
+    pub(crate) fn stream_audience(&self, stream_id: stream::StreamId) -> Option<crate::Audience> {
+        let state = RefCell::borrow(&self.state);
+        state.streams.audience_of(stream_id)
+    }
+
+    pub(crate) fn store_snapshot(&self, snapshot: Snapshot) -> Arc<Snapshot> {
+        let mut state = RefCell::borrow_mut(&self.state);
+        state.snapshots.store(snapshot)
+    }
+
+    pub(crate) fn next_snapshot_symbols(
+        &self,
+        snapshot_id: SnapshotId,
+        count: u64,
+    ) -> Option<Vec<riblt::doc_and_heads::CodedDocAndHeadsSymbol>> {
+        let mut state = RefCell::borrow_mut(&self.state);
+        state.snapshots.next_n_symbols(snapshot_id, count)
+    }
+
+    pub(crate) fn we_have_snapshot_with_source(&self, source: SnapshotId) -> bool {
+        let state = RefCell::borrow(&self.state);
+        state.snapshots.we_have_snapshot_with_source(source)
+    }
+
+    pub(crate) fn lookup_snapshot(&self, snapshot: SnapshotId) -> Option<Arc<Snapshot>> {
+        let state = RefCell::borrow(&self.state);
+        state.snapshots.lookup(snapshot)
+    }
+
+    pub(crate) fn stopping(&self) -> impl Future<Output = ()> {
+        let mut state = RefCell::borrow_mut(&self.state);
+        state.io.awaiting_stop.insert(self.task_data.borrow().id);
+        Stopping {
+            result: state.io.stopping.clone(),
+            task: self.task_data.borrow().id,
+            wakers: state.io.wakers.clone(),
+        }
+    }
 }
 
 pub(crate) enum RpcError {
+    // The other end said we are not authenticated
+    AuthFailed,
+    // The response was not authenticated
+    ResponseAuthFailed,
+    // The other end reported some kind of error
     ErrorReported(String),
     IncorrectResponseType,
+    InvalidResponse,
+    // There was no response (usually because the other end has gone away)
+    NoResponse,
+    StreamDisconnected,
 }
 
 impl std::fmt::Display for RpcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            RpcError::AuthFailed => write!(f, "Auth failed"),
+            RpcError::ResponseAuthFailed => write!(f, "Response failed authentication"),
+            RpcError::NoResponse => write!(f, "we never got a response"),
+            RpcError::StreamDisconnected => write!(f, "stream disconnected"),
             RpcError::ErrorReported(err) => write!(f, "{}", err),
             RpcError::IncorrectResponseType => write!(f, "Incorrect response type"),
+            RpcError::InvalidResponse => write!(f, "invalid response"),
         }
     }
 }
@@ -554,10 +758,10 @@ impl<T> Future for TaskFuture<T> {
     type Output = T;
 
     fn poll(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         cx: &mut task::Context<'_>,
     ) -> task::Poll<Self::Output> {
-        let result = self.result.borrow_mut();
+        let mut result = self.result.borrow_mut();
         if let Some(result) = result.take() {
             task::Poll::Ready(result)
         } else {
@@ -573,4 +777,56 @@ pub(super) struct NoopWaker;
 
 impl task::Wake for NoopWaker {
     fn wake(self: Arc<Self>) {}
+}
+
+struct NewLogEntries {
+    task: Task,
+    result: Rc<RefCell<Option<Vec<crate::log::DocEvent>>>>,
+    wakers: Rc<RefCell<HashMap<Task, Vec<Waker>>>>,
+}
+
+impl std::future::Future for NewLogEntries {
+    type Output = Vec<crate::log::DocEvent>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+    ) -> task::Poll<Self::Output> {
+        if let Some(result) = RefCell::borrow_mut(&self.result).as_mut() {
+            task::Poll::Ready(std::mem::take(result))
+        } else {
+            let mut wakers_by_task = RefCell::borrow_mut(&self.wakers);
+            wakers_by_task
+                .entry(self.task)
+                .or_default()
+                .push(cx.waker().clone());
+            task::Poll::Pending
+        }
+    }
+}
+
+struct Stopping {
+    task: Task,
+    result: Arc<AtomicBool>,
+    wakers: Rc<RefCell<HashMap<Task, Vec<Waker>>>>,
+}
+
+impl std::future::Future for Stopping {
+    type Output = ();
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+    ) -> task::Poll<Self::Output> {
+        if self.result.load(std::sync::atomic::Ordering::Relaxed) {
+            task::Poll::Ready(())
+        } else {
+            let mut wakers_by_task = RefCell::borrow_mut(&self.wakers);
+            wakers_by_task
+                .entry(self.task)
+                .or_default()
+                .push(cx.waker().clone());
+            task::Poll::Pending
+        }
+    }
 }
