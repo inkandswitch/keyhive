@@ -3,45 +3,59 @@ use chacha20poly1305::{AeadInPlace, KeyInit, XChaCha20Poly1305, XNonce};
 use ed25519_dalek::VerifyingKey;
 use std::collections::HashMap;
 use thiserror::Error;
-use x25519_dalek::SharedSecret;
+use x25519_dalek::{PublicKey, ReusableSecret, SharedSecret};
 
-/// Pairwise channel state
-pub struct Channel {
+/// Pairwise channel state.
+///
+/// This channel implements a simple causal delivery mechanism,
+/// and buffers messages delivered out of sequence.
+pub struct Session {
+    /// Root session secret.
+    ///
+    /// All other Session keys are derived from this root secret.
+    /// This value must not be changed. To rotate the secret, open a new channel.
     secret: SharedSecret,
 
-    our_id: VerifyingKey,
+    /// Latest ratchet for items that we send.
     our_ratchet: [u8; 32],
+
+    /// The number of messages that we've sent on this channel.
     our_seq_id: u64,
 
-    their_id: VerifyingKey,
+    /// Latest ratchet for items that we receive.
     their_ratchet: [u8; 32],
+
+    /// The number of messages that they've sent on this channel.
     their_seq_id: u64,
 
+    /// Messages that have been delivered out of order.
     message_buffer: HashMap<u64, Vec<u8>>,
 }
 
-impl Channel {
-    pub fn new(channel_secret: SharedSecret, us: VerifyingKey, them: VerifyingKey) -> Self {
+impl Session {
+    pub fn new(our_sk: &ReusableSecret, their_pk: &PublicKey) -> Self {
         Self {
-            secret: channel_secret,
+            secret: our_sk.diffie_hellman(&their_pk),
 
-            our_id: us,
-            our_ratchet: us.to_bytes(),
+            our_ratchet: PublicKey::from(our_sk).to_bytes(),
             our_seq_id: 0,
 
-            their_id: them,
-            their_ratchet: them.to_bytes(),
+            their_ratchet: their_pk.to_bytes(),
             their_seq_id: 0,
 
             message_buffer: HashMap::new(),
         }
     }
 
-    pub fn try_encrypt(&mut self, msg: &[u8]) -> Result<Encrypted, chacha20poly1305::Error> {
+    pub fn try_encrypt(
+        &mut self,
+        our_id: &VerifyingKey,
+        msg: &[u8],
+    ) -> Result<Encrypted, chacha20poly1305::Error> {
         let (key, nonce, new_ratchet, assoc_data) = step_ratchet(
             &mut self.our_ratchet,
             &self.secret,
-            self.our_id,
+            *our_id,
             self.our_seq_id,
         );
 
@@ -59,7 +73,11 @@ impl Channel {
         Ok(encrypted)
     }
 
-    pub fn try_decrypt(&mut self, envelope: Encrypted) -> Result<Vec<u8>, DecryptError> {
+    pub fn try_decrypt(
+        &mut self,
+        their_id: &VerifyingKey,
+        envelope: Encrypted,
+    ) -> Result<Vec<u8>, DecryptError> {
         if envelope.seq_id != self.their_seq_id + 1 {
             self.message_buffer
                 .insert(envelope.seq_id, envelope.ciphertext);
@@ -73,7 +91,7 @@ impl Channel {
         let (key, nonce, new_ratchet, assoc_data) = step_ratchet(
             &mut self.their_ratchet,
             &self.secret,
-            self.their_id,
+            *their_id,
             self.their_seq_id,
         );
 

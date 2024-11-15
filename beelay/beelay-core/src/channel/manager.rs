@@ -1,26 +1,39 @@
+//! The high level API for pairwise channels.
+
 use super::{
-    channel::{Channel, DecryptError},
     dial::Dial,
     encrypted::Encrypted,
     hang_up::HangUp,
+    session::{DecryptError, Session},
     signed::Signed,
 };
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use std::collections::HashMap;
 use thiserror::Error;
-use x25519_dalek::{PublicKey, ReusableSecret, SharedSecret};
+use x25519_dalek::{PublicKey, ReusableSecret};
 
-pub struct State {
+pub struct Manager {
+    /// The manager's verifying key.
     pub verifier: VerifyingKey,
+
+    /// The manager's signing key.
     pub signer: SigningKey,
 
+    /// Latest introduction public key.
+    ///
+    /// This value is rotated on each connection attempt.
     pub introduction_public_key: PublicKey,
+
+    /// Latest introduction secret key.
+    ///
+    /// Despite how the type is named, this value is rotated on each connection attempt.
     pub introduction_secret_key: ReusableSecret,
 
-    pub channels: HashMap<VerifyingKey, Channel>,
+    /// The channels managed by this manager.
+    pub channels: HashMap<VerifyingKey, Session>,
 }
 
-impl State {
+impl Manager {
     pub fn new<R: rand::CryptoRng + rand::RngCore + Clone>(csprng: &mut R) -> Self {
         let introduction_secret_key = ReusableSecret::random_from_rng(csprng.clone());
         let signer = SigningKey::generate(csprng);
@@ -36,24 +49,37 @@ impl State {
         }
     }
 
+    pub fn dial<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        to: &VerifyingKey,
+        csprng: &mut R,
+    ) -> Result<Signed<Dial>, signature::Error> {
+        let old_sk = self.refresh_introduction_key(csprng);
+
+        let dial = Dial {
+            to: *to,
+            introduction_public_key: PublicKey::from(&old_sk),
+        };
+
+        Signed::try_sign(dial, &self.signer)
+    }
+
     pub fn handshake<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         dial: &Signed<Dial>,
         csprng: &mut R,
-    ) -> Result<(), ()> {
-        dial.verify().map_err(|_| ())?;
+    ) -> Result<(), HandshakeError> {
+        dial.verify()
+            .map_err(|_| HandshakeError::InvalidSignature)?;
 
         if self.channels.contains_key(&dial.verifier) {
-            return Err(());
+            return Err(HandshakeError::DuplicateSession);
         }
 
         let old_sk = self.refresh_introduction_key(csprng);
-        let channel_secret: SharedSecret =
-            old_sk.diffie_hellman(&dial.payload.introduction_public_key);
-
         self.channels.insert(
             dial.verifier,
-            Channel::new(channel_secret, self.verifier, dial.verifier),
+            Session::new(&old_sk, &dial.payload.introduction_public_key),
         );
 
         Ok(())
@@ -63,14 +89,18 @@ impl State {
         Signed::try_sign(HangUp, &self.signer)
     }
 
+    pub fn remove(&mut self, verifier: &VerifyingKey) -> Option<Session> {
+        self.channels.remove(verifier)
+    }
+
     pub fn send(&mut self, to: &VerifyingKey, msg: &[u8]) -> Result<Encrypted, SendError> {
         let channel = self
             .channels
             .get_mut(to)
-            .ok_or(SendError::ChannelNotFound)?;
+            .ok_or(SendError::SessionNotFound)?;
 
         channel
-            .try_encrypt(msg)
+            .try_encrypt(&self.verifier, msg)
             .map_err(SendError::EncryptionFailed)
     }
 
@@ -82,9 +112,9 @@ impl State {
         let channel = self
             .channels
             .get_mut(&from)
-            .ok_or(ReceiveError::ChannelNotFound)?;
+            .ok_or(ReceiveError::SessionNotFound)?;
 
-        Ok(channel.try_decrypt(msg.clone())?)
+        Ok(channel.try_decrypt(from, msg.clone())?)
     }
 
     pub fn refresh_introduction_key<R: rand::CryptoRng + rand::RngCore>(
@@ -99,9 +129,18 @@ impl State {
 }
 
 #[derive(Debug, Clone, Error)]
+pub enum HandshakeError {
+    #[error("Invalid signature")]
+    InvalidSignature,
+
+    #[error("Duplicate session")]
+    DuplicateSession,
+}
+
+#[derive(Debug, Clone, Error)]
 pub enum SendError {
-    #[error("Channel not found")]
-    ChannelNotFound,
+    #[error("Session not found")]
+    SessionNotFound,
 
     #[error("Unable to encrypt message")]
     EncryptionFailed(chacha20poly1305::Error),
@@ -109,8 +148,8 @@ pub enum SendError {
 
 #[derive(Debug, Clone, Error)]
 pub enum ReceiveError {
-    #[error("Channel not found")]
-    ChannelNotFound,
+    #[error("Session not found")]
+    SessionNotFound,
 
     #[error(transparent)]
     DecryptionFailed(#[from] DecryptError),
