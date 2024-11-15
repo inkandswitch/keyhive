@@ -89,6 +89,12 @@ impl<T: Serialize> CaMap<T> {
     pub fn contains_key(&self, hash: &Digest<T>) -> bool {
         self.0.contains_key(hash)
     }
+
+    pub fn merge(&mut self, other: Self) {
+        for (k, v) in other.0 {
+            self.0.insert(k, v);
+        }
+    }
 }
 
 impl<T: Serialize> Default for CaMap<T> {

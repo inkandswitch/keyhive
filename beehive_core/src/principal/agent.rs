@@ -10,18 +10,20 @@ use super::{
     verifiable::Verifiable,
 };
 use crate::{content::reference::ContentRef, crypto::share_key::ShareKey};
+use derive_more::From;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
+    fmt::{Display, Formatter},
     rc::Rc,
 };
 
 /// Immutable union over all agent types.
 ///
 /// This type is very lightweight to clone, since it only contains immutable references to the actual agents.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, From)]
 pub enum Agent<T: ContentRef> {
     Active(Rc<RefCell<Active>>),
     Individual(Rc<RefCell<Individual>>),
@@ -88,21 +90,9 @@ impl<T: ContentRef> From<Active> for Agent<T> {
     }
 }
 
-impl<T: ContentRef> From<Rc<RefCell<Active>>> for Agent<T> {
-    fn from(a: Rc<RefCell<Active>>) -> Self {
-        Agent::Active(a)
-    }
-}
-
 impl<T: ContentRef> From<Individual> for Agent<T> {
     fn from(i: Individual) -> Self {
         Agent::Individual(Rc::new(RefCell::new(i)))
-    }
-}
-
-impl<T: ContentRef> From<Rc<RefCell<Individual>>> for Agent<T> {
-    fn from(i: Rc<RefCell<Individual>>) -> Self {
-        Agent::Individual(i)
     }
 }
 
@@ -121,21 +111,9 @@ impl<T: ContentRef> From<Membered<T>> for Agent<T> {
     }
 }
 
-impl<T: ContentRef> From<Rc<RefCell<Group<T>>>> for Agent<T> {
-    fn from(g: Rc<RefCell<Group<T>>>) -> Self {
-        Agent::Group(g)
-    }
-}
-
 impl<T: ContentRef> From<Document<T>> for Agent<T> {
     fn from(d: Document<T>) -> Self {
         Agent::Document(Rc::new(RefCell::new(d)))
-    }
-}
-
-impl<T: ContentRef> From<Rc<RefCell<Document<T>>>> for Agent<T> {
-    fn from(d: Rc<RefCell<Document<T>>>) -> Self {
-        Agent::Document(d)
     }
 }
 
@@ -147,5 +125,11 @@ impl<T: ContentRef> Verifiable for Agent<T> {
             Agent::Group(g) => (*g).borrow().verifying_key(),
             Agent::Document(d) => d.borrow().group.verifying_key(),
         }
+    }
+}
+
+impl<T: ContentRef> Display for Agent<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.id())
     }
 }

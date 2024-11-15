@@ -15,6 +15,7 @@ pub mod history;
 pub mod identifier;
 pub mod individual_id;
 pub mod membered;
+pub mod peer;
 pub mod revocation;
 pub mod revoke_member_error;
 pub mod share_key;

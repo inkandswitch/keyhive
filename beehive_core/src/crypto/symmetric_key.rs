@@ -29,6 +29,7 @@ use x25519_dalek::SharedSecret;
 /// let revocation_store = Rc::new(RefCell::new(CaMap::new()));
 /// let doc = Document::generate(
 ///     nonempty![user_agent],
+///     nonempty!["commit-1".to_string()],
 ///     delegation_store,
 ///     revocation_store,
 ///     &mut csprng

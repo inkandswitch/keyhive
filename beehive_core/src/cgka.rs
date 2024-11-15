@@ -543,6 +543,7 @@ mod tests {
     ) -> Result<(), CgkaError> {
         let m_idx = if member_cgkas.len() > 1 { 1 } else { 0 };
         let (post_update_pcs_key, update_op) = member_cgkas[m_idx].update(csprng)?;
+        // let post_update_pcs_key = member_cgkas[m_idx].cgka.derive_pcs_key()?;
         for (idx, m) in member_cgkas.iter_mut().enumerate() {
             if idx == m_idx {
                 continue;

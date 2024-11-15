@@ -12,6 +12,7 @@ use proptest_derive::Arbitrary;
 #[derive(
     Debug, Clone, Dupe, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum Access {
     /// The ability to retrieve bytes over the network.
     Pull,

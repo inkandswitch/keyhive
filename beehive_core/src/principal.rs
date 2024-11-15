@@ -3,11 +3,10 @@
 pub mod active;
 pub mod agent;
 pub mod document;
-pub mod encryption_response;
 pub mod group;
 pub mod identifier;
 pub mod individual;
 pub mod membered;
+pub mod peer;
 pub mod public;
-pub mod revocation_ops;
 pub mod verifiable;
