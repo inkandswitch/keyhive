@@ -1,6 +1,6 @@
 use crate::{
-    parse, riblt::doc_and_heads::CodedDocAndHeadsSymbol, BlobHash, Commit, CommitCategory,
-    CommitHash, DocumentId, Payload, RequestId, SnapshotId,
+    parse, riblt::doc_and_heads::CodedDocAndHeadsSymbol, BlobHash, CommitCategory, DocumentId,
+    Payload, RequestId, SnapshotId,
 };
 
 use super::{
@@ -22,12 +22,8 @@ pub(crate) fn parse_payload(
     input.with_context("payload", |input| {
         let (input, message_type) = MessageType::parse(input)?;
         let (input, message) = match message_type {
-            MessageType::Request => {
-                input.with_context("request payload", |input| parse_request(input))
-            }
-            MessageType::Response => {
-                input.with_context("response payload", |input| parse_response(input))
-            }
+            MessageType::Request => input.with_context("request payload", parse_request),
+            MessageType::Response => input.with_context("response payload", parse_response),
             MessageType::Notification => input.with_context("notification payload", |input| {
                 let (input, notification) = Notification::parse(input)?;
                 Ok((input, Message::Notification(notification)))
@@ -151,15 +147,6 @@ fn parse_response(
         ResponseType::Listen => Ok((input, super::Response::Listen)),
     }?;
     Ok((input, Message::Response(request_id, resp)))
-}
-
-fn parse_commit(input: parse::Input) -> Result<(parse::Input<'_>, Commit), parse::ParseError> {
-    input.with_context("Commit", |input| {
-        let (input, parents) = parse::many(input, CommitHash::parse)?;
-        let (input, hash) = CommitHash::parse(input)?;
-        let (input, content) = parse::slice(input)?;
-        Ok((input, Commit::new(parents, content.to_vec(), hash)))
-    })
 }
 
 mod error {

@@ -34,11 +34,10 @@ impl ReachabilityIndex {
             .await;
         let altogether = items
             .into_iter()
-            .map(|i| match i {
+            .flat_map(|i| match i {
                 CommitOrBundle::Commit(c) => c.contents().to_vec(),
                 CommitOrBundle::Bundle(b) => b.bundled_commits().to_vec(),
             })
-            .flatten()
             .collect::<Vec<_>>();
         let mut result = ReachabilityIndex::new();
         let mut input = parse::Input::new(&altogether);

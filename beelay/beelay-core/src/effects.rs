@@ -48,10 +48,6 @@ impl<R: rand::Rng> State<R> {
         }
     }
 
-    pub(crate) fn log(&mut self) -> &mut subscriptions::Log {
-        &mut self.log
-    }
-
     pub(crate) fn new_notifications(&mut self) -> HashMap<PeerId, Vec<Notification>> {
         self.subscriptions.new_events(&self.log)
     }
@@ -63,7 +59,7 @@ impl<R: rand::Rng> State<R> {
     ) -> TaskFuture<T> {
         let state = RefCell::borrow_mut(&this);
         let mut io = RefMut::map(state, |s| &mut s.io);
-        let result = f(&mut *io);
+        let result = f(&mut io);
         let wakers = io.wakers.clone();
         TaskFuture {
             result,
@@ -118,8 +114,8 @@ impl Io {
         completed_tasks
     }
 
-    fn process_completed_tasks(&mut self, completed_tasks: &[Task]) {
-        let mut wakers_by_taskid = RefCell::borrow_mut(&mut self.wakers);
+    fn process_completed_tasks(&self, completed_tasks: &[Task]) {
+        let mut wakers_by_taskid = RefCell::borrow_mut(&self.wakers);
         for initiator in completed_tasks.iter() {
             if let Some(mut wakers) = wakers_by_taskid.remove(initiator) {
                 for waker in wakers.drain(..) {
@@ -320,10 +316,9 @@ impl<R: rand::Rng> TaskEffects<R> {
             .io
             .pending_puts
             .insert(task_id, (key.clone(), value.clone()));
-        let fut = State::task_fut(self.state.clone(), self.task, |io| {
+        State::task_fut(self.state.clone(), self.task, |io| {
             io.put.run(self.task, task_id, (key, value))
-        });
-        fut
+        })
     }
 
     #[allow(dead_code)]
@@ -473,30 +468,30 @@ impl<R: rand::Rng> TaskEffects<R> {
         }
     }
 
-    pub(crate) fn snapshots_mut<'a>(
-        &'a mut self,
+    pub(crate) fn snapshots_mut(
+        &mut self,
     ) -> RefMut<
-        'a,
+        '_,
         HashMap<snapshots::SnapshotId, (snapshots::Snapshot, riblt::doc_and_heads::Encoder)>,
     > {
         let state = RefCell::borrow_mut(&self.state);
         RefMut::map(state, |s| &mut s.snapshots)
     }
 
-    pub(crate) fn snapshots<'a>(
-        &'a self,
-    ) -> Ref<'a, HashMap<snapshots::SnapshotId, (snapshots::Snapshot, riblt::doc_and_heads::Encoder)>>
+    pub(crate) fn snapshots(
+        &self,
+    ) -> Ref<'_, HashMap<snapshots::SnapshotId, (snapshots::Snapshot, riblt::doc_and_heads::Encoder)>>
     {
         let state = RefCell::borrow(&self.state);
         Ref::map(state, |s| &s.snapshots)
     }
 
-    pub(crate) fn log<'a>(&'a mut self) -> RefMut<'a, subscriptions::Log> {
+    pub(crate) fn log(&mut self) -> RefMut<'_, subscriptions::Log> {
         let state = RefCell::borrow_mut(&self.state);
         RefMut::map(state, |s| &mut s.log)
     }
 
-    pub(crate) fn subscriptions<'a>(&'a mut self) -> RefMut<'a, subscriptions::Subscriptions> {
+    pub(crate) fn subscriptions(&mut self) -> RefMut<'_, subscriptions::Subscriptions> {
         let state = RefCell::borrow_mut(&self.state);
         RefMut::map(state, |s| &mut s.subscriptions)
     }
@@ -567,9 +562,7 @@ impl<T> Future for TaskFuture<T> {
             task::Poll::Ready(result)
         } else {
             let mut wakers_by_task = RefCell::borrow_mut(&self.wakers);
-            let wakers = wakers_by_task
-                .entry(self.task)
-                .or_insert_with(|| Vec::new());
+            let wakers = wakers_by_task.entry(self.task).or_default();
             wakers.push(cx.waker().clone());
             task::Poll::Pending
         }

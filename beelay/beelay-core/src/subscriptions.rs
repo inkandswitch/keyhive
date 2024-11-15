@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     messages::{Notification, UploadItem},
-    parse,
     snapshots::Snapshot,
     CommitCategory, DocumentId, PeerId,
 };
@@ -10,25 +9,6 @@ use crate::{
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, Hash)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct SubscriptionId([u8; 16]);
-
-impl SubscriptionId {
-    pub(crate) fn random<R: rand::Rng>(rng: &mut R) -> Self {
-        let mut id = [0; 16];
-        rng.fill_bytes(&mut id);
-        Self(id)
-    }
-
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        let (input, id) = parse::arr::<16>(input)?;
-        Ok((input, Self(id)))
-    }
-
-    pub(crate) fn as_bytes(&self) -> &[u8; 16] {
-        &self.0
-    }
-}
 
 pub(crate) struct DocEvent {
     doc: DocumentId,
@@ -83,7 +63,7 @@ pub(crate) struct Subscription {
 impl Subscription {
     pub(crate) fn new(for_peer: &PeerId, starting_from: &Snapshot) -> Self {
         let mut docs = starting_from.our_docs().clone();
-        docs.insert(starting_from.root_doc().clone());
+        docs.insert(*starting_from.root_doc());
         tracing::trace!(?for_peer, start_docs=?docs, "Creating subscription");
         Subscription {
             offset: starting_from.local_log_offset(),
@@ -121,7 +101,7 @@ impl Subscriptions {
                 {
                     events.push(Notification {
                         from_peer: self.our_peer_id.clone(),
-                        doc: event.doc.clone(),
+                        doc: event.doc,
                         data: event.contents.clone(),
                     })
                 }

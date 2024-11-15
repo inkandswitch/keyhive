@@ -8,23 +8,19 @@ pub(crate) trait Symbol {
 
 #[derive(Clone, Copy)]
 pub(crate) enum Direction {
-    ADD = 1,
-    REMOVE = -1,
+    Add = 1,
+    Remove = -1,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) enum Error {
     InvalidDegree = 1,
-    InvalidSize = 2,
-    DecodeFailed = 3,
 }
 
 impl std::fmt::Debug for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::InvalidDegree => f.write_str("InvalidDegree"),
-            Error::InvalidSize => f.write_str("InvalidSize"),
-            Error::DecodeFailed => f.write_str("DecodeFailed"),
         }
     }
 }
@@ -95,7 +91,7 @@ impl RandomMapping {
                 * (((1i64 << 32) as f64) / f64::sqrt((r as f64) + 1.0) - 1.0))
                 .ceil() as u64,
         );
-        return self.last_idx;
+        self.last_idx
     }
 }
 
@@ -109,19 +105,12 @@ impl<T: Symbol + Copy> CodedSymbol<T> {
 
 impl<T: Symbol + Copy> Encoder<T> {
     pub(crate) fn new() -> Self {
-        return Encoder::<T> {
+        Encoder::<T> {
             symbols: Vec::<HashedSymbol<T>>::new(),
             mappings: Vec::<RandomMapping>::new(),
             queue: Vec::<SymbolMapping>::new(),
             next_idx: 0,
-        };
-    }
-
-    pub(crate) fn reset(&mut self) {
-        self.symbols.clear();
-        self.mappings.clear();
-        self.queue.clear();
-        self.next_idx = 0;
+        }
     }
 
     pub(crate) fn add_hashed_symbol_with_mapping(
@@ -206,40 +195,31 @@ impl<T: Symbol + Copy> Encoder<T> {
         }
 
         self.next_idx += 1;
-        return next_sym;
+        next_sym
     }
 
     pub(crate) fn produce_next_coded_symbol(&mut self) -> CodedSymbol<T> {
-        return self.apply_window(
+        self.apply_window(
             &CodedSymbol::<T> {
                 symbol: T::zero(),
                 hash: 0,
                 count: 0,
             },
-            Direction::ADD,
-        );
+            Direction::Add,
+        )
     }
 }
 
 impl<T: Symbol + Copy> Decoder<T> {
     pub(crate) fn new() -> Self {
-        return Decoder::<T> {
+        Decoder::<T> {
             coded: Vec::<CodedSymbol<T>>::new(),
             local: Encoder::<T>::new(),
             remote: Encoder::<T>::new(),
             window: Encoder::<T>::new(),
             decodable: Vec::<i64>::new(),
             num_decoded: 0,
-        };
-    }
-
-    pub(crate) fn reset(&mut self) {
-        self.coded.clear();
-        self.local.reset();
-        self.remote.reset();
-        self.window.reset();
-        self.decodable.clear();
-        self.num_decoded = 0;
+        }
     }
 
     pub(crate) fn add_symbol(&mut self, sym: &T) {
@@ -250,9 +230,9 @@ impl<T: Symbol + Copy> Decoder<T> {
     }
 
     pub(crate) fn add_coded_symbol(&mut self, sym: &CodedSymbol<T>) {
-        let mut next_sym = self.window.apply_window(sym, Direction::REMOVE);
-        next_sym = self.remote.apply_window(&next_sym, Direction::REMOVE);
-        next_sym = self.local.apply_window(&next_sym, Direction::ADD);
+        let mut next_sym = self.window.apply_window(sym, Direction::Remove);
+        next_sym = self.remote.apply_window(&next_sym, Direction::Remove);
+        next_sym = self.local.apply_window(&next_sym, Direction::Add);
 
         self.coded.push(next_sym);
 
@@ -272,7 +252,7 @@ impl<T: Symbol + Copy> Decoder<T> {
 
         while mapp.last_idx < (self.coded.len() as u64) {
             let n = mapp.last_idx as usize;
-            self.coded[n].apply(&sym, direction);
+            self.coded[n].apply(sym, direction);
 
             if (self.coded[n].count == -1 || self.coded[n].count == 1)
                 && self.coded[n].hash == self.coded[n].symbol.hash()
@@ -283,7 +263,7 @@ impl<T: Symbol + Copy> Decoder<T> {
             mapp.next_index();
         }
 
-        return mapp;
+        mapp
     }
 
     pub(crate) fn try_decode(&mut self) -> Result<(), Error> {
@@ -302,7 +282,7 @@ impl<T: Symbol + Copy> Decoder<T> {
                         hash: sym.hash,
                     };
 
-                    let mapp = self.apply_new_symbol(&new_sym, Direction::REMOVE);
+                    let mapp = self.apply_new_symbol(&new_sym, Direction::Remove);
                     self.remote.add_hashed_symbol_with_mapping(&new_sym, &mapp);
                     self.num_decoded += 1;
                 }
@@ -313,7 +293,7 @@ impl<T: Symbol + Copy> Decoder<T> {
                         hash: sym.hash,
                     };
 
-                    let mapp = self.apply_new_symbol(&new_sym, Direction::ADD);
+                    let mapp = self.apply_new_symbol(&new_sym, Direction::Add);
                     self.local.add_hashed_symbol_with_mapping(&new_sym, &mapp);
                     self.num_decoded += 1;
                 }
@@ -332,19 +312,19 @@ impl<T: Symbol + Copy> Decoder<T> {
 
         self.decodable.clear();
 
-        return Ok(());
+        Ok(())
     }
 
     pub(crate) fn decoded(&self) -> bool {
-        return self.num_decoded == (self.coded.len() as u64);
+        self.num_decoded == (self.coded.len() as u64)
     }
 
     pub(crate) fn get_remote_symbols(&self) -> Vec<HashedSymbol<T>> {
-        return self.remote.symbols.clone();
+        self.remote.symbols.clone()
     }
 
     pub(crate) fn get_local_symbols(&self) -> Vec<HashedSymbol<T>> {
-        return self.local.symbols.clone();
+        self.local.symbols.clone()
     }
 }
 
@@ -363,8 +343,8 @@ pub mod doc_and_heads {
     impl DocAndHeadsSymbol {
         pub(crate) fn new(doc: &DocumentId, hash: &MinimalTreeHash) -> Self {
             Self {
-                part1: doc.as_bytes().clone(),
-                part2: hash.as_bytes().clone(),
+                part1: *doc.as_bytes(),
+                part2: *hash.as_bytes(),
             }
         }
         pub(crate) fn decode(self) -> (DocumentId, MinimalTreeHash) {
@@ -447,7 +427,7 @@ pub mod doc_and_heads {
             leb128::signed::encode(out, self.count);
         }
 
-        pub(crate) fn into_coded(&self) -> super::CodedSymbol<DocAndHeadsSymbol> {
+        pub(crate) fn into_coded(self) -> super::CodedSymbol<DocAndHeadsSymbol> {
             super::CodedSymbol {
                 symbol: self.symbol,
                 count: self.count,
@@ -464,7 +444,7 @@ pub mod doc_and_heads {
         pub(crate) fn new(snapshot: &crate::snapshots::Snapshot) -> Self {
             let mut enc = super::Encoder::new();
             for (doc, heads) in snapshot.our_docs_2() {
-                enc.add_symbol(&DocAndHeadsSymbol::new(&doc, &heads));
+                enc.add_symbol(&DocAndHeadsSymbol::new(doc, heads));
             }
             Encoder { riblt: enc }
         }

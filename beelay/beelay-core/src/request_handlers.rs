@@ -67,7 +67,7 @@ pub(super) async fn handle_request<R: rand::Rng>(
                 .map(|(s, _)| {
                     s.remote_snapshots()
                         .iter()
-                        .map(|(p, s)| (p.clone(), s.clone()))
+                        .map(|(p, s)| (p.clone(), *s))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
@@ -80,7 +80,7 @@ pub(super) async fn handle_request<R: rand::Rng>(
                 effects.subscriptions().add(sub);
                 Response::Listen
             } else {
-                Response::Error(format!("no such snapshot"))
+                Response::Error("no such snapshot".to_string())
             }
         }
     };
@@ -140,9 +140,7 @@ async fn upload_commits<R: rand::Rng>(
                     (blob, contents)
                 }
             };
-            effects
-                .log()
-                .new_commit(doc.clone(), from_peer, d.clone(), content);
+            effects.log().new_commit(doc, from_peer, d.clone(), content);
             match d.tree_part {
                 TreePart::Commit { hash, parents } => {
                     let commit = LooseCommit::new(hash, parents, blob);
@@ -184,7 +182,7 @@ async fn create_snapshot<R: rand::Rng>(
 ) -> (snapshots::SnapshotId, Vec<CodedDocAndHeadsSymbol>) {
     let mut snapshot = snapshots::Snapshot::load(effects.clone(), root_doc).await;
 
-    let mut peers_to_ask = effects.who_should_i_ask(root_doc.clone()).await;
+    let mut peers_to_ask = effects.who_should_i_ask(root_doc).await;
     peers_to_ask.remove(&requestor);
     if !peers_to_ask.is_empty() {
         tracing::trace!(?peers_to_ask, "asking remote peers");

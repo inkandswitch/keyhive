@@ -5,7 +5,6 @@ use beelay_core::{
     BundleSpec, CommitHash, CommitOrBundle, DocEvent, DocumentId, PeerId, SnapshotId,
     SyncDocResult,
 };
-use rand::Rng;
 
 fn init_logging() {
     let _ = tracing_subscriber::fmt::fmt()
@@ -25,9 +24,9 @@ fn save_and_load() {
     let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
     network
         .beelay(&peer1)
-        .add_commits(doc_id.clone(), vec![commit1.clone()]);
+        .add_commits(doc_id, vec![commit1.clone()]);
 
-    let loaded = network.beelay(&peer1).load_doc(doc_id.clone()).unwrap();
+    let loaded = network.beelay(&peer1).load_doc(doc_id).unwrap();
     assert_eq!(loaded, vec![CommitOrBundle::Commit(commit1)]);
 }
 
@@ -65,7 +64,7 @@ fn create_and_sync() {
     let commits_on_2: HashSet<beelay_core::Commit> = network
         .beelay(&peer2)
         .load_doc(doc1_id)
-        .unwrap_or_else(Vec::new)
+        .unwrap_or_default()
         .into_iter()
         .map(|c| {
             let CommitOrBundle::Commit(c) = c else {
@@ -116,11 +115,11 @@ fn request_from_connected() {
         .beelay(&peer1)
         .add_commits(doc1_id, vec![commit1.clone()]);
 
-    let sync_with_2 = network.beelay(&peer3).sync_doc(doc1_id, peer2.clone());
+    network.beelay(&peer3).sync_doc(doc1_id, peer2.clone());
     let commits_on_3: HashSet<beelay_core::Commit> = network
         .beelay(&peer3)
         .load_doc(doc1_id)
-        .unwrap_or_else(Vec::new)
+        .unwrap_or_default()
         .into_iter()
         .map(|c| {
             let CommitOrBundle::Commit(c) = c else {
@@ -179,7 +178,7 @@ fn listen_to_connected() {
     let commits_on_3: HashSet<beelay_core::Commit> = network
         .beelay(&peer3)
         .load_doc(doc1_id)
-        .unwrap_or_else(Vec::new)
+        .unwrap_or_default()
         .into_iter()
         .map(|c| {
             let CommitOrBundle::Commit(c) = c else {
