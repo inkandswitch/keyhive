@@ -34,13 +34,24 @@ pub struct Session {
 
 impl Session {
     pub fn new(our_sk: &ReusableSecret, their_pk: &PublicKey) -> Self {
-        Self {
-            secret: our_sk.diffie_hellman(&their_pk),
+        let secret = our_sk.diffie_hellman(&their_pk);
+        let secret_bytes: [u8; 32] = secret.to_bytes();
 
-            our_ratchet: PublicKey::from(our_sk).to_bytes(),
+        let mut our_pk_bytes: Vec<u8> = PublicKey::from(our_sk).to_bytes().to_vec();
+        our_pk_bytes.extend(secret_bytes);
+        let our_ratchet: [u8; 32] = *blake3::hash(our_pk_bytes.as_slice()).as_bytes();
+
+        let mut their_pk_bytes: Vec<u8> = their_pk.to_bytes().to_vec();
+        their_pk_bytes.extend(secret_bytes);
+        let their_ratchet: [u8; 32] = *blake3::hash(their_pk_bytes.as_slice()).as_bytes();
+
+        Self {
+            secret,
+
+            our_ratchet,
             our_seq_id: 0,
 
-            their_ratchet: their_pk.to_bytes(),
+            their_ratchet,
             their_seq_id: 0,
 
             message_buffer: HashMap::new(),
@@ -62,13 +73,13 @@ impl Session {
         let mut ciphertext = msg.to_vec();
         key.encrypt_in_place(&nonce, assoc_data.as_slice(), &mut ciphertext)?;
 
+        self.our_ratchet = new_ratchet;
+        self.our_seq_id += 1;
+
         let encrypted = Encrypted {
             ciphertext,
             seq_id: self.our_seq_id,
         };
-
-        self.our_ratchet = new_ratchet;
-        self.our_seq_id += 1;
 
         Ok(encrypted)
     }
@@ -142,4 +153,73 @@ fn step_ratchet(
     assoc_data.extend_from_slice(&seq_id.to_le_bytes());
 
     (key, *nonce, new_ratchet, assoc_data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::SigningKey;
+    use x25519_dalek::EphemeralSecret;
+
+    #[test]
+    fn test_setup() {
+        let us = ReusableSecret::random();
+        let us_pk = PublicKey::from(&us);
+
+        let them = ReusableSecret::random();
+        let them_pk = PublicKey::from(&them);
+
+        let s1 = Session::new(&us, &them_pk);
+        let s2 = Session::new(&them, &us_pk);
+
+        assert_eq!(s1.our_seq_id, 0);
+        assert_eq!(s1.their_seq_id, 0);
+        assert_ne!(s1.our_ratchet, s1.their_ratchet);
+
+        assert_eq!(s1.secret.to_bytes(), s2.secret.to_bytes());
+
+        assert_eq!(s1.our_ratchet, s2.their_ratchet);
+        assert_eq!(s1.their_ratchet, s2.our_ratchet);
+
+        assert_eq!(s1.our_seq_id, s2.their_seq_id);
+        assert_eq!(s1.their_seq_id, s2.our_seq_id);
+
+        assert_eq!(s1.message_buffer, s2.message_buffer);
+    }
+
+    #[test]
+    fn test_try_encrypt() {
+        let signer = SigningKey::generate(&mut rand::thread_rng());
+        let our_id = signer.verifying_key();
+
+        let us = ReusableSecret::random();
+        let them = PublicKey::from(&EphemeralSecret::random());
+        let mut s = Session::new(&us, &them);
+
+        let encrypted = s.try_encrypt(&our_id, b"hello world").unwrap();
+
+        assert_ne!(encrypted.ciphertext, b"hello world");
+        assert_eq!(encrypted.seq_id, 1);
+        assert_eq!(s.our_seq_id, 1);
+    }
+
+    #[test]
+    fn test_try_decrypt() {
+        let signer = SigningKey::generate(&mut rand::thread_rng());
+        let alice_id = signer.verifying_key();
+
+        let alice = ReusableSecret::random();
+        let alice_pk = PublicKey::from(&alice);
+
+        let bob = ReusableSecret::random();
+        let bob_pk = PublicKey::from(&bob);
+
+        let mut s1 = Session::new(&alice, &bob_pk);
+        let mut s2 = Session::new(&bob, &alice_pk);
+
+        let encrypted = s1.try_encrypt(&alice_id, b"hello world").unwrap();
+        let decrypted = s2.try_decrypt(&alice_id, encrypted).unwrap();
+
+        assert_eq!(decrypted, b"hello world");
+    }
 }
