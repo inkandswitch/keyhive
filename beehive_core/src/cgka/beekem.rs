@@ -265,11 +265,12 @@ impl BeeKem {
     /// If one or more members of your sibling's resolution have conflicting public keys,
     /// then you will do a nested encryption of the secret using all of the conflicting
     /// public keys ordered lexicographically.
-    pub(crate) fn encrypt_path(
+    pub(crate) fn encrypt_path<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         id: Identifier,
         pk: ShareKey,
         sks: &mut ShareKeyMap,
+        csprng: &mut R,
     ) -> Result<Option<PathChange>, CgkaError> {
         if !self.id_to_leaf_idx.contains_key(&id) {
             return Ok(None);
@@ -302,6 +303,7 @@ impl BeeKem {
             let new_parent_sk = child_sk.ratchet_forward();
             let new_parent_pk = new_parent_sk.share_key();
             self.encrypt_key_for_parent(
+                csprng,
                 child_idx,
                 child_pk,
                 &child_sk,
@@ -415,8 +417,9 @@ impl BeeKem {
         Ok(maybe_secret)
     }
 
-    fn encrypt_key_for_parent(
+    fn encrypt_key_for_parent<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
+        csprng: &mut R,
         child_idx: TreeNodeIndex,
         child_pk: ShareKey,
         child_sk: &ShareSecretKey,
@@ -426,6 +429,7 @@ impl BeeKem {
         debug_assert!(!self.is_root(child_idx));
         let parent_idx = treemath::parent(child_idx);
         let secret_store = self.encrypt_new_secret_store_for_parent(
+            csprng,
             child_idx,
             child_pk,
             child_sk,
@@ -437,8 +441,9 @@ impl BeeKem {
     }
 
     #[allow(clippy::type_complexity)]
-    fn encrypt_new_secret_store_for_parent(
+    fn encrypt_new_secret_store_for_parent<R: rand::CryptoRng + rand::RngCore>(
         &self,
+        csprng: &mut R,
         child_idx: TreeNodeIndex,
         child_pk: ShareKey,
         child_sk: &ShareSecretKey,
@@ -454,7 +459,7 @@ impl BeeKem {
             // Normally you use a DH shared key to encrypt/decrypt the next node up,
             // but if there's a blank sibling subtree, then you generate a key pair
             // just to do DH with when ecrypting the new parent secret.
-            let paired_sk = ShareSecretKey::generate();
+            let paired_sk = ShareSecretKey::generate(csprng);
             let paired_pk = paired_sk.share_key();
             let encrypted_sk = NestedEncrypted::<ShareSecretKey>::try_encrypt(
                 self.doc_id,

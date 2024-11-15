@@ -421,13 +421,14 @@ mod tests {
         [g0, g1, g2, g3]
     }
 
-    fn setup_cyclic_groups<T: ContentRef>(
+    fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         gs: &mut GroupStore<T>,
         alice: Rc<RefCell<Individual>>,
         bob: Rc<RefCell<Individual>>,
+        csprng: &mut R,
     ) -> [Rc<RefCell<Group<T>>>; 10] {
         let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Active::generate(signer).unwrap();
+        let active = Active::generate(signer, csprng).unwrap();
 
         let group0 = gs.generate_group(nonempty![alice.into()]).unwrap();
         let group1 = gs.generate_group(nonempty![bob.into()]).unwrap();
@@ -547,6 +548,8 @@ mod tests {
 
     #[test]
     fn test_transitive_cycles() {
+        let csprng = &mut rand::thread_rng();
+
         let alice = Rc::new(RefCell::new(setup_user()));
         let alice_agent: Agent<String> = alice.dupe().into();
         let alice_id = alice_agent.agent_id();
@@ -557,7 +560,7 @@ mod tests {
 
         let mut gs: GroupStore<String> = GroupStore::new();
 
-        let [g0, ..] = setup_cyclic_groups(&mut gs, alice.dupe(), bob.dupe());
+        let [g0, ..] = setup_cyclic_groups(&mut gs, alice.dupe(), bob.dupe(), csprng);
         let g1_mems = gs.transitive_members(&g0.borrow());
 
         assert_eq!(
@@ -571,6 +574,8 @@ mod tests {
 
     #[test]
     fn test_add_member() {
+        let csprng = &mut rand::thread_rng();
+
         let alice = Rc::new(RefCell::new(setup_user()));
         let alice_agent: Agent<String> = alice.dupe().into();
 
@@ -581,7 +586,7 @@ mod tests {
         let carol_agent: Agent<String> = carol.dupe().into();
 
         let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Rc::new(RefCell::new(Active::generate(signer).unwrap()));
+        let active = Rc::new(RefCell::new(Active::generate(signer, csprng).unwrap()));
         let active_agent: Agent<String> = active.dupe().into();
 
         let mut gs: GroupStore<String> = GroupStore::new();

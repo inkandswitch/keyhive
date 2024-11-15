@@ -48,9 +48,12 @@ pub struct Active {
 }
 
 impl Active {
-    pub fn generate(signer: SigningKey) -> Result<Self, SigningError> {
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(
+        signer: SigningKey,
+        csprng: &mut R,
+    ) -> Result<Self, SigningError> {
         Ok(Self {
-            individual: Individual::generate(&signer)?,
+            individual: Individual::generate(&signer, csprng)?,
             share_key_pairs: BTreeMap::new(),
             signer,
         })
@@ -64,12 +67,19 @@ impl Active {
         AgentId::IndividualId(self.id())
     }
 
-    pub fn rotate_prekey(&mut self, prekey: ShareKey) -> Result<ShareKey, SigningError> {
-        self.individual.rotate_prekey(prekey, &self.signer)
+    pub fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        prekey: ShareKey,
+        csprng: &mut R,
+    ) -> Result<ShareKey, SigningError> {
+        self.individual.rotate_prekey(prekey, &self.signer, csprng)
     }
 
-    pub fn expand_prekeys(&mut self) -> Result<ShareKey, SigningError> {
-        self.individual.expand_prekeys(&self.signer)
+    pub fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        csprng: &mut R,
+    ) -> Result<ShareKey, SigningError> {
+        self.individual.expand_prekeys(&self.signer, csprng)
     }
 
     /// Sign a payload.
@@ -249,8 +259,9 @@ mod tests {
 
     #[test]
     fn test_sign() {
+        let csprng = &mut rand::thread_rng();
         let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Active::generate(signer).unwrap();
+        let active = Active::generate(signer, csprng).unwrap();
         let message = "hello world".as_bytes();
         let signed = active.try_sign(message).unwrap();
 

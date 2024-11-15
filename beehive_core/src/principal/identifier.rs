@@ -13,8 +13,8 @@ pub struct Identifier(pub ed25519_dalek::VerifyingKey);
 
 impl Identifier {
     #[cfg(feature = "test_utils")]
-    pub fn generate() -> Self {
-        ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
+        ed25519_dalek::SigningKey::generate(csprng)
             .verifying_key()
             .into()
     }

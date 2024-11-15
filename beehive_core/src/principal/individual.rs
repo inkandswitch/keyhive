@@ -40,8 +40,11 @@ pub struct Individual {
 }
 
 impl Individual {
-    pub fn generate(signer: &ed25519_dalek::SigningKey) -> Result<Self, SigningError> {
-        let state = PrekeyState::generate(signer, 8)?;
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(
+        signer: &ed25519_dalek::SigningKey,
+        csprng: &mut R,
+    ) -> Result<Self, SigningError> {
+        let state = PrekeyState::generate(signer, 8, csprng)?;
         Ok(Self {
             id: IndividualId(signer.verifying_key().into()),
             prekeys: state.materialize(),
@@ -57,22 +60,24 @@ impl Individual {
         AgentId::IndividualId(self.id)
     }
 
-    pub fn rotate_prekey(
+    pub fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old_key: ShareKey,
         signer: &ed25519_dalek::SigningKey,
+        csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
-        let new_key = self.prekey_state.rotate(old_key, signer)?;
+        let new_key = self.prekey_state.rotate(old_key, signer, csprng)?;
         self.prekeys.remove(&old_key);
         self.prekeys.insert(new_key);
         Ok(new_key)
     }
 
-    pub fn expand_prekeys(
+    pub fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         signer: &ed25519_dalek::SigningKey,
+        csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
-        let new_key = self.prekey_state.expand(signer)?;
+        let new_key = self.prekey_state.expand(signer, csprng)?;
         self.prekeys.insert(new_key);
         Ok(new_key)
     }

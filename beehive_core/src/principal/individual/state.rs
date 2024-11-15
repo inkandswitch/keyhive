@@ -20,14 +20,15 @@ impl PrekeyState {
         }
     }
 
-    pub fn generate(
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(
         signing_key: &ed25519_dalek::SigningKey,
         size: usize,
+        csprng: &mut R,
     ) -> Result<Self, SigningError> {
         let (keypairs, ops) = (0..size).try_fold(
             (HashMap::new(), CaMap::new()),
             |(mut keypairs, mut ops), _| {
-                let secret_key = ShareSecretKey::generate();
+                let secret_key = ShareSecretKey::generate(csprng);
                 let share_key = secret_key.share_key();
 
                 let op = Signed::try_sign(KeyOp::Add(AddKeyOp { share_key }), &signing_key)?;
@@ -41,12 +42,13 @@ impl PrekeyState {
         Ok(Self { ops, keypairs })
     }
 
-    pub fn rotate(
+    pub fn rotate<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old: ShareKey,
         signer: &ed25519_dalek::SigningKey,
+        csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
-        let new_secret = ShareSecretKey::generate();
+        let new_secret = ShareSecretKey::generate(csprng);
         let new = new_secret.share_key();
         let op = Signed::try_sign(KeyOp::Update(ShareKeyOp { old, new }), signer)?;
 
@@ -56,8 +58,12 @@ impl PrekeyState {
         Ok(new)
     }
 
-    pub fn expand(&mut self, signer: &ed25519_dalek::SigningKey) -> Result<ShareKey, SigningError> {
-        let new_secret = ShareSecretKey::generate();
+    pub fn expand<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        signer: &ed25519_dalek::SigningKey,
+        csprng: &mut R,
+    ) -> Result<ShareKey, SigningError> {
+        let new_secret = ShareSecretKey::generate(csprng);
         let new = new_secret.share_key();
         let op = Signed::try_sign(KeyOp::Add(AddKeyOp { share_key: new }), signer)?;
 

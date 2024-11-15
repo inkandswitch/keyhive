@@ -33,8 +33,8 @@ use std::{
 };
 
 /// The main object for a user agent & top-level owned stores.
-#[derive(Debug, Clone)]
-pub struct Context<T: ContentRef> {
+#[derive(Debug)]
+pub struct Context<T: ContentRef, R: rand::CryptoRng + rand::RngCore> {
     /// The [`Active`] user agent.
     pub active: Rc<RefCell<Active>>,
 
@@ -46,9 +46,11 @@ pub struct Context<T: ContentRef> {
 
     /// The [`Document`]s that are known to this agent.
     pub docs: DocumentStore<T>,
+
+    pub csprng: R,
 }
 
-impl<T: ContentRef> Context<T> {
+impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
     pub fn id(&self) -> IndividualId {
         self.active.borrow().id()
     }
@@ -57,12 +59,16 @@ impl<T: ContentRef> Context<T> {
         self.active.borrow().agent_id()
     }
 
-    pub fn generate(signing_key: ed25519_dalek::SigningKey) -> Result<Self, SigningError> {
+    pub fn generate(
+        signing_key: ed25519_dalek::SigningKey,
+        mut csprng: R,
+    ) -> Result<Self, SigningError> {
         Ok(Self {
-            active: Rc::new(RefCell::new(Active::generate(signing_key)?)),
+            active: Rc::new(RefCell::new(Active::generate(signing_key, &mut csprng)?)),
             individuals: Default::default(),
             groups: GroupStore::new(),
             docs: DocumentStore::new(),
+            csprng,
         })
     }
 
@@ -88,11 +94,13 @@ impl<T: ContentRef> Context<T> {
     }
 
     pub fn rotate_prekey(&mut self, prekey: ShareKey) -> Result<ShareKey, SigningError> {
-        self.active.borrow_mut().rotate_prekey(prekey)
+        self.active
+            .borrow_mut()
+            .rotate_prekey(prekey, &mut self.csprng)
     }
 
     pub fn expand_prekeys(&mut self) -> Result<ShareKey, SigningError> {
-        self.active.borrow_mut().expand_prekeys()
+        self.active.borrow_mut().expand_prekeys(&mut self.csprng)
     }
 
     pub fn try_sign<U: Serialize>(&self, data: U) -> Result<Signed<U>, SigningError> {
@@ -244,14 +252,14 @@ impl<T: ContentRef> Context<T> {
     }
 }
 
-impl<T: ContentRef> Verifiable for Context<T> {
+impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Verifiable for Context<T, R> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.active.borrow().verifying_key()
     }
 }
 
-impl<T: ContentRef> From<&Context<T>> for Agent<T> {
-    fn from(context: &Context<T>) -> Self {
+impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> From<&Context<T, R>> for Agent<T> {
+    fn from(context: &Context<T, R>) -> Self {
         context.active.dupe().into()
     }
 }
