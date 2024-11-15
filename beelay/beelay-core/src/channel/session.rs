@@ -201,6 +201,12 @@ mod tests {
         assert_ne!(encrypted.ciphertext, b"hello world");
         assert_eq!(encrypted.seq_id, 1);
         assert_eq!(s.our_seq_id, 1);
+        assert_eq!(s.their_seq_id, 0);
+
+        let reencrypted = s.try_encrypt(&our_id, b"hello again, world").unwrap();
+        assert_eq!(reencrypted.seq_id, 2);
+        assert_eq!(s.our_seq_id, 2);
+        assert_eq!(s.their_seq_id, 0);
     }
 
     #[test]
@@ -221,5 +227,10 @@ mod tests {
         let decrypted = s2.try_decrypt(&alice_id, encrypted).unwrap();
 
         assert_eq!(decrypted, b"hello world");
+
+        let reencrypted = s1.try_encrypt(&alice_id, b"hello again, world").unwrap();
+        let redecrypted = s2.try_decrypt(&alice_id, reencrypted).unwrap();
+
+        assert_eq!(redecrypted, b"hello again, world");
     }
 }
