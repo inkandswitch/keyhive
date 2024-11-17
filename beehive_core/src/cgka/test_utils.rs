@@ -1,7 +1,7 @@
 use super::{error::CgkaError, operation::CgkaOperation, Cgka};
 use crate::{
     crypto::share_key::{ShareKey, ShareSecretKey},
-    principal::{document::id::DocumentId, identifier::Identifier},
+    principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
 };
 use std::{collections::HashMap, mem};
 
@@ -9,14 +9,14 @@ pub type TestContentRef = u32;
 
 #[derive(Debug, Clone)]
 pub struct TestMember {
-    pub id: Identifier,
+    pub id: IndividualId,
     pub pk: ShareKey,
     pub sk: ShareSecretKey,
 }
 
 impl TestMember {
     pub fn generate() -> Self {
-        let id = Identifier::generate();
+        let id = IndividualId(Identifier::generate());
         let sk = ShareSecretKey::generate();
         let pk = sk.share_key();
         Self { id, pk, sk }
@@ -39,7 +39,7 @@ impl TestMemberCgka {
         }
     }
 
-    pub fn id(&self) -> Identifier {
+    pub fn id(&self) -> IndividualId {
         self.m.id
     }
 
@@ -54,8 +54,8 @@ impl TestMemberCgka {
 
 #[derive(Debug, Default, Clone)]
 pub struct TestConcurrentOperations {
-    pub ops: HashMap<Identifier, Vec<CgkaOperation>>,
-    pub remove_ops: HashMap<Identifier, Vec<CgkaOperation>>,
+    pub ops: HashMap<IndividualId, Vec<CgkaOperation>>,
+    pub remove_ops: HashMap<IndividualId, Vec<CgkaOperation>>,
 }
 
 impl TestConcurrentOperations {
@@ -66,7 +66,7 @@ impl TestConcurrentOperations {
         }
     }
 
-    pub fn add(&mut self, member_id: Identifier, op: CgkaOperation) {
+    pub fn add(&mut self, member_id: IndividualId, op: CgkaOperation) {
         match op {
             CgkaOperation::Remove { id, removed_keys } => {
                 self.remove_ops
@@ -80,7 +80,7 @@ impl TestConcurrentOperations {
         }
     }
 
-    pub fn ordered_with_ids(&mut self) -> Vec<(Identifier, CgkaOperation)> {
+    pub fn ordered_with_ids(&mut self) -> Vec<(IndividualId, CgkaOperation)> {
         // TODO: This looks complex but currently doesn't do much except place the
         // removes at the end. Update so that it shuffles but keeps causal order for
         // individual ids.

@@ -97,22 +97,22 @@ impl<T: ContentRef> Document<T> {
 
                     Ok::<Group<T>, DelegationError>(acc)
                 })?;
-        // FIXME: Get the initial tree members and their public keys. Will we have
-        // one member's private key to initialize as Cgka owner or does it need to
-        // be possible to have a Cgka that is not "owned".
-        // FIXME: This id and key pair generation is temporary and just to get things to
-        // compile.
-        let temp_owner_id = Identifier((&doc_signer).into());
-        let temp_share_secret_key = ShareSecretKey::generate();
-        let temp_share_key = temp_share_secret_key.share_key();
+
+        let owner_id = IndividualId(Identifier((&doc_signer).into()));
+        let initial_share_secret_key = ShareSecretKey::generate();
+        let initial_share_key = initial_share_secret_key.share_key();
         let doc_id = DocumentId(group.id());
-        let members = vec![(temp_owner_id, temp_share_key)];
+        // FIXME: Get the initial tree members and a pre-key for each. Right now there's
+        // no path to this list. The Group only has AgentIds, but we need to get the
+        // recursive membership list (e.g. to get all IndividualIds in an AgentId
+        // corresponding to another Group).
+        let members = vec![(owner_id, initial_share_key)];
         let cgka = Cgka::new(
             members,
             doc_id,
-            temp_owner_id,
-            temp_share_key,
-            temp_share_secret_key,
+            owner_id,
+            initial_share_key,
+            initial_share_secret_key,
         )
         .expect("FIXME");
 
@@ -162,12 +162,7 @@ impl<T: ContentRef> Document<T> {
     }
 
     // FIXME: Add error type
-    pub fn pcs_update(
-        &mut self,
-        id: Identifier,
-        pk: ShareKey,
-        sk: ShareSecretKey,
-    ) {
+    pub fn pcs_update(&mut self, id: IndividualId, pk: ShareKey, sk: ShareSecretKey) {
         self.cgka.update(id, pk, sk).expect("FIXME");
     }
 

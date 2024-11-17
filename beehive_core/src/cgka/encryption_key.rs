@@ -6,7 +6,7 @@ use crate::{
         digest::Digest, separable::Separable, share_key::ShareSecretKey, siv::Siv,
         symmetric_key::SymmetricKey,
     },
-    principal::identifier::Identifier,
+    principal::individual::id::IndividualId,
 };
 
 use super::{error::CgkaError, keys::ShareKeyMap, BeeKem};
@@ -19,14 +19,8 @@ pub struct ApplicationSecret<T: ContentRef> {
 }
 
 impl<T: ContentRef> ApplicationSecret<T> {
-    pub fn new(
-        key: SymmetricKey,
-        metadata: ApplicationSecretMetadata<T>,
-    ) -> Self {
-        Self {
-            key,
-            metadata,
-        }
+    pub fn new(key: SymmetricKey, metadata: ApplicationSecretMetadata<T>) -> Self {
+        Self { key, metadata }
     }
 
     pub fn key(&self) -> &SymmetricKey {
@@ -41,7 +35,7 @@ impl<T: ContentRef> ApplicationSecret<T> {
 // TODO: Rename
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub struct ApplicationSecretMetadata<T: ContentRef> {
-    pub writer_id: Identifier,
+    pub writer_id: IndividualId,
     // FIXME: Can we get this elsewhere rather than in this struct?
     pub content_ref: T,
     // FIXME: What should we really use here? Can we get this elsewhere than
@@ -56,7 +50,7 @@ pub struct PcsKey(ShareSecretKey);
 
 impl PcsKey {
     pub(crate) fn new(
-        owner_id: Identifier,
+        owner_id: IndividualId,
         owner_sks: &mut ShareKeyMap,
         tree: &BeeKem,
     ) -> Result<Self, CgkaError> {

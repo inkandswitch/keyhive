@@ -1,9 +1,22 @@
 //! The primary API for the library.
 
 use crate::{
-    access::Access, cgka::encryption_key::ApplicationSecretMetadata, content::reference::ContentRef, crypto::{encrypted::Encrypted, share_key::{ShareKey, ShareSecretKey}, signed::{Signed, SigningError}}, principal::{
-        active::Active, agent::{Agent, AgentId}, document::{id::DocumentId, store::DocumentStore, Document}, group::{operation::delegation::DelegationError, store::GroupStore, Group}, identifier::Identifier, individual::{id::IndividualId, Individual}, membered::Membered, verifiable::Verifiable
-    }
+    access::Access,
+    cgka::encryption_key::ApplicationSecretMetadata,
+    content::reference::ContentRef,
+    crypto::{
+        encrypted::Encrypted,
+        signed::{Signed, SigningError},
+    },
+    principal::{
+        active::Active,
+        agent::{Agent, AgentId},
+        document::{id::DocumentId, store::DocumentStore, Document},
+        group::{operation::delegation::DelegationError, store::GroupStore, Group},
+        individual::{id::IndividualId, Individual},
+        membered::Membered,
+        verifiable::Verifiable,
+    },
 };
 use dupe::Dupe;
 use nonempty::NonEmpty;
@@ -91,7 +104,7 @@ impl<T: ContentRef> Context<T> {
         // FIXME: What type should we use?
         pred_ref: &T,
         content: &[u8],
-    // FIXME: What error return type?
+        // FIXME: What error return type?
     ) -> Encrypted<Vec<u8>> {
         let doc = self.docs.get_mut(&doc_id).expect("FIXME");
         doc.encrypt_content(content_ref, content, pred_ref)
@@ -102,7 +115,7 @@ impl<T: ContentRef> Context<T> {
         doc_id: DocumentId,
         encrypted: &Encrypted<Vec<u8>>,
         metadata: &ApplicationSecretMetadata<T>,
-    // FIXME: What error return type?
+        // FIXME: What error return type?
     ) -> Vec<u8> {
         let doc = self.docs.get_mut(&doc_id).expect("FIXME");
         doc.decrypt_content(encrypted, metadata)

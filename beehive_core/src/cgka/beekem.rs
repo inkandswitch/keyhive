@@ -6,7 +6,7 @@ use crate::{
         encrypted::NestedEncrypted,
         share_key::{ShareKey, ShareSecretKey},
     },
-    principal::{document::id::DocumentId, identifier::Identifier},
+    principal::{document::id::DocumentId, individual::id::IndividualId},
 };
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ pub type InnerNode = SecretStore;
 /// been removed as part of this change.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PathChange {
-    pub leaf_id: Identifier,
+    pub leaf_id: IndividualId,
     pub leaf_idx: u32,
     pub leaf_pk: NodeKey,
     // (u32 inner node index, new inner node)
@@ -76,7 +76,7 @@ pub(crate) struct BeeKem {
     leaves: Vec<Option<LeafNode>>,
     inner_nodes: Vec<Option<InnerNode>>,
     tree_size: TreeSize,
-    id_to_leaf_idx: BTreeMap<Identifier, LeafNodeIndex>,
+    id_to_leaf_idx: BTreeMap<IndividualId, LeafNodeIndex>,
     // The leaf node that was the source of the last path encryption, or None
     // if there is currently no root key.
     current_secret_encrypter_leaf_idx: Option<LeafNodeIndex>,
@@ -87,7 +87,7 @@ impl BeeKem {
     /// Beehive as a whole).
     pub(crate) fn new(
         doc_id: DocumentId,
-        members: Vec<(Identifier, ShareKey)>,
+        members: Vec<(IndividualId, ShareKey)>,
     ) -> Result<Self, CgkaError> {
         let mut tree = Self {
             doc_id,
@@ -105,7 +105,7 @@ impl BeeKem {
         Ok(tree)
     }
 
-    pub(crate) fn node_key_for_id(&self, id: Identifier) -> Result<NodeKey, CgkaError> {
+    pub(crate) fn node_key_for_id(&self, id: IndividualId) -> Result<NodeKey, CgkaError> {
         let idx = self.leaf_index_for_id(id)?;
         self.node_key_for_index((*idx).into())
     }
@@ -142,7 +142,7 @@ impl BeeKem {
         Ok(())
     }
 
-    pub(crate) fn push_leaf(&mut self, id: Identifier, pk: ShareKey) -> Result<u32, CgkaError> {
+    pub(crate) fn push_leaf(&mut self, id: IndividualId, pk: ShareKey) -> Result<u32, CgkaError> {
         self.maybe_grow_tree(self.next_leaf_idx.u32());
         let l_idx = self.next_leaf_idx;
         self.next_leaf_idx += 1;
@@ -153,7 +153,7 @@ impl BeeKem {
         Ok(l_idx.u32())
     }
 
-    pub(crate) fn remove_id(&mut self, id: Identifier) -> Result<Vec<ShareKey>, CgkaError> {
+    pub(crate) fn remove_id(&mut self, id: IndividualId) -> Result<Vec<ShareKey>, CgkaError> {
         if self.member_count() == 1 {
             return Err(CgkaError::RemoveLastMember);
         }
@@ -192,7 +192,7 @@ impl BeeKem {
     /// conflicting keys on a node on the path).
     pub(crate) fn decrypt_tree_secret(
         &self,
-        owner_id: Identifier,
+        owner_id: IndividualId,
         owner_sks: &mut ShareKeyMap,
     ) -> Result<ShareSecretKey, CgkaError> {
         let leaf_idx = *self.leaf_index_for_id(owner_id)?;
@@ -267,7 +267,7 @@ impl BeeKem {
     /// public keys ordered lexicographically.
     pub(crate) fn encrypt_path(
         &mut self,
-        id: Identifier,
+        id: IndividualId,
         pk: ShareKey,
         sks: &mut ShareKeyMap,
     ) -> Result<Option<PathChange>, CgkaError> {
@@ -517,13 +517,13 @@ impl BeeKem {
             .ok_or(CgkaError::TreeIndexOutOfBounds)
     }
 
-    fn leaf_index_for_id(&self, id: Identifier) -> Result<&LeafNodeIndex, CgkaError> {
+    fn leaf_index_for_id(&self, id: IndividualId) -> Result<&LeafNodeIndex, CgkaError> {
         self.id_to_leaf_idx
             .get(&id)
             .ok_or(CgkaError::IdentifierNotFound)
     }
 
-    fn id_for_leaf(&self, idx: LeafNodeIndex) -> Result<Identifier, CgkaError> {
+    fn id_for_leaf(&self, idx: LeafNodeIndex) -> Result<IndividualId, CgkaError> {
         Ok(self
             .leaf(idx)?
             .as_ref()
@@ -546,7 +546,7 @@ impl BeeKem {
     fn insert_leaf_at(
         &mut self,
         idx: LeafNodeIndex,
-        id: Identifier,
+        id: IndividualId,
         pk: NodeKey,
     ) -> Result<(), CgkaError> {
         if idx.usize() >= self.leaves.len() {
@@ -653,6 +653,6 @@ impl BeeKem {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct LeafNode {
-    pub id: Identifier,
+    pub id: IndividualId,
     pub pk: NodeKey,
 }

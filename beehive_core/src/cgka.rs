@@ -19,7 +19,7 @@ use crate::{
         siv::Siv,
         symmetric_key::SymmetricKey,
     },
-    principal::{document::id::DocumentId, identifier::Identifier},
+    principal::{document::id::DocumentId, individual::id::IndividualId},
     util::content_addressed_map::CaMap,
 };
 use beekem::BeeKem;
@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Cgka<T: ContentRef> {
     doc_id: DocumentId,
-    pub owner_id: Identifier,
+    pub owner_id: IndividualId,
     owner_sks: ShareKeyMap,
     tree: BeeKem,
     pcs_keys: CaMap<PcsKey>,
@@ -49,9 +49,9 @@ pub struct Cgka<T: ContentRef> {
 impl<T: ContentRef> Cgka<T> {
     /// We assume members are in causal order.
     pub fn new(
-        members: Vec<(Identifier, ShareKey)>,
+        members: Vec<(IndividualId, ShareKey)>,
         doc_id: DocumentId,
-        owner_id: Identifier,
+        owner_id: IndividualId,
         owner_pk: ShareKey,
         owner_sk: ShareSecretKey,
     ) -> Result<Self, CgkaError> {
@@ -81,7 +81,7 @@ impl<T: ContentRef> Cgka<T> {
 
     pub fn with_new_owner(
         &self,
-        my_id: Identifier,
+        my_id: IndividualId,
         pk: ShareKey,
         sk: ShareSecretKey,
     ) -> Result<Self, CgkaError> {
@@ -198,14 +198,14 @@ impl<T: ContentRef> Cgka<T> {
     }
 
     /// Add member.
-    pub fn add(&mut self, id: Identifier, pk: ShareKey) -> Result<CgkaOperation, CgkaError> {
+    pub fn add(&mut self, id: IndividualId, pk: ShareKey) -> Result<CgkaOperation, CgkaError> {
         let leaf_index = self.tree.push_leaf(id, pk)?;
         let op = CgkaOperation::Add { id, pk, leaf_index };
         Ok(op)
     }
 
     /// Remove member.
-    pub fn remove(&mut self, id: Identifier) -> Result<CgkaOperation, CgkaError> {
+    pub fn remove(&mut self, id: IndividualId) -> Result<CgkaOperation, CgkaError> {
         if self.group_size() == 1 {
             return Err(CgkaError::RemoveLastMember);
         }
@@ -218,7 +218,7 @@ impl<T: ContentRef> Cgka<T> {
     /// Update key pair for this Identifier.
     pub fn update(
         &mut self,
-        id: Identifier,
+        id: IndividualId,
         new_pk: ShareKey,
         new_sk: ShareSecretKey,
     ) -> Result<CgkaOperation, CgkaError> {
