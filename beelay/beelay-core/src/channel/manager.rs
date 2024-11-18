@@ -1,6 +1,7 @@
 //! The high level API for pairwise channels.
 
 use super::{
+    ack::Ack,
     dial::Dial,
     encrypted::Encrypted,
     hang_up::HangUp,
@@ -68,7 +69,7 @@ impl Manager {
         &mut self,
         dial: &Signed<Dial>,
         csprng: &mut R,
-    ) -> Result<(), HandshakeError> {
+    ) -> Result<Signed<Ack>, HandshakeError> {
         dial.verify()
             .map_err(|_| HandshakeError::InvalidSignature)?;
 
@@ -82,7 +83,14 @@ impl Manager {
             Session::new(&old_sk, &dial.payload.introduction_public_key),
         );
 
-        Ok(())
+        Ok(Signed::try_sign(
+            Ack {
+                you: dial.payload.introduction_public_key.clone(),
+                me: PublicKey::from(&old_sk),
+            },
+            &self.signer,
+        )
+        .map_err(|_| HandshakeError::SigningFailure)?)
     }
 
     pub fn leave(&mut self) -> Result<Signed<HangUp>, signature::Error> {
@@ -132,6 +140,9 @@ impl Manager {
 pub enum HandshakeError {
     #[error("Invalid signature")]
     InvalidSignature,
+
+    #[error("Unable to sign Ack")]
+    SigningFailure,
 
     #[error("Duplicate session")]
     DuplicateSession,

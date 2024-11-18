@@ -4,6 +4,7 @@
 //! The manager is responsible for managing your signing key, creating and managing many sessions.
 //! Sessions track for sending and receiving messages, DH key exchange, and ratcheting.
 
+pub mod ack;
 pub mod dial;
 pub mod encrypted;
 pub mod hang_up;

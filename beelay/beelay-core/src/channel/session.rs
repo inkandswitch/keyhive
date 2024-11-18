@@ -76,12 +76,10 @@ impl Session {
         self.our_ratchet = new_ratchet;
         self.our_seq_id += 1;
 
-        let encrypted = Encrypted {
+        Ok(Encrypted {
             ciphertext,
             seq_id: self.our_seq_id,
-        };
-
-        Ok(encrypted)
+        })
     }
 
     pub fn try_decrypt(
@@ -159,54 +157,193 @@ fn step_ratchet(
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
+    use std::{cell::OnceCell, rc::Rc};
     use x25519_dalek::EphemeralSecret;
 
-    #[test]
-    fn test_setup() {
-        let us = ReusableSecret::random();
-        let us_pk = PublicKey::from(&us);
+    mod new {
+        use super::*;
 
-        let them = ReusableSecret::random();
-        let them_pk = PublicKey::from(&them);
+        const FIXTURE: OnceCell<(Rc<Session>, Rc<Session>)> = OnceCell::new();
 
-        let s1 = Session::new(&us, &them_pk);
-        let s2 = Session::new(&them, &us_pk);
+        fn fixie() -> (Rc<Session>, Rc<Session>) {
+            FIXTURE
+                .get_or_init(|| {
+                    let us = ReusableSecret::random();
+                    let us_pk = PublicKey::from(&us);
 
-        assert_eq!(s1.our_seq_id, 0);
-        assert_eq!(s1.their_seq_id, 0);
-        assert_ne!(s1.our_ratchet, s1.their_ratchet);
+                    let them = ReusableSecret::random();
+                    let them_pk = PublicKey::from(&them);
 
-        assert_eq!(s1.secret.to_bytes(), s2.secret.to_bytes());
+                    let ours = Session::new(&us, &them_pk);
+                    let theirs = Session::new(&them, &us_pk);
 
-        assert_eq!(s1.our_ratchet, s2.their_ratchet);
-        assert_eq!(s1.their_ratchet, s2.our_ratchet);
+                    (Rc::new(ours), Rc::new(theirs))
+                })
+                .clone()
+        }
 
-        assert_eq!(s1.our_seq_id, s2.their_seq_id);
-        assert_eq!(s1.their_seq_id, s2.our_seq_id);
+        #[test]
+        fn test_init_our_seq_id() {
+            let (ours, _) = fixie();
+            assert_eq!(ours.our_seq_id, 0);
+        }
 
-        assert_eq!(s1.message_buffer, s2.message_buffer);
+        #[test]
+        fn test_init_their_seq_id() {
+            let (ours, _) = fixie();
+            assert_eq!(ours.their_seq_id, 0);
+        }
+
+        #[test]
+        fn test_ratchets_match() {
+            let (ours, _) = fixie();
+            assert_ne!(ours.our_ratchet, ours.their_ratchet);
+        }
+
+        #[test]
+        fn test_starts_with_different_ratchets() {
+            let (ours, _) = fixie();
+            assert_ne!(ours.our_ratchet, ours.their_ratchet);
+        }
+
+        #[test]
+        fn test_same_channel_secret_on_both() {
+            let (ours, theirs) = fixie();
+            assert_eq!(ours.secret.to_bytes(), theirs.secret.to_bytes());
+        }
+
+        #[test]
+        fn test_agree_on_our_initial_ratchet() {
+            let (ours, theirs) = fixie();
+            assert_eq!(ours.our_ratchet, theirs.their_ratchet);
+        }
+
+        #[test]
+        fn test_agree_on_their_initial_ratchet() {
+            let (ours, theirs) = fixie();
+            assert_eq!(ours.their_ratchet, theirs.our_ratchet);
+        }
+
+        #[test]
+        fn test_agree_on_our_initial_seq_id() {
+            let (ours, theirs) = fixie();
+            assert_eq!(ours.our_seq_id, theirs.their_seq_id);
+        }
+
+        #[test]
+        fn test_agree_on_their_initial_seq_id() {
+            let (ours, theirs) = fixie();
+            assert_eq!(ours.their_seq_id, theirs.our_seq_id);
+        }
+
+        #[test]
+        fn test_same_starting_message_buffer() {
+            let (ours, theirs) = fixie();
+            assert_eq!(ours.message_buffer, theirs.message_buffer);
+        }
     }
 
-    #[test]
-    fn test_try_encrypt() {
-        let signer = SigningKey::generate(&mut rand::thread_rng());
-        let our_id = signer.verifying_key();
+    mod try_encrypt {
+        use super::*;
 
-        let us = ReusableSecret::random();
-        let them = PublicKey::from(&EphemeralSecret::random());
-        let mut s = Session::new(&us, &them);
+        #[derive(Clone)]
+        struct Fixture1 {
+            session: Rc<Session>,
+            encrypted: Rc<Encrypted>,
+        }
 
-        let encrypted = s.try_encrypt(&our_id, b"hello world").unwrap();
+        const FIXTURE1: OnceCell<Fixture1> = OnceCell::new();
 
-        assert_ne!(encrypted.ciphertext, b"hello world");
-        assert_eq!(encrypted.seq_id, 1);
-        assert_eq!(s.our_seq_id, 1);
-        assert_eq!(s.their_seq_id, 0);
+        fn fixie1() -> Fixture1 {
+            FIXTURE1
+                .get_or_init(|| {
+                    let signer = SigningKey::generate(&mut rand::thread_rng());
+                    let our_id = signer.verifying_key();
 
-        let reencrypted = s.try_encrypt(&our_id, b"hello again, world").unwrap();
-        assert_eq!(reencrypted.seq_id, 2);
-        assert_eq!(s.our_seq_id, 2);
-        assert_eq!(s.their_seq_id, 0);
+                    let us = ReusableSecret::random();
+                    let them = PublicKey::from(&EphemeralSecret::random());
+                    let mut s = Session::new(&us, &them);
+
+                    let encrypted = s.try_encrypt(&our_id, b"hello world").unwrap();
+
+                    Fixture1 {
+                        session: Rc::new(s),
+                        encrypted: Rc::new(encrypted),
+                    }
+                })
+                .clone()
+        }
+
+        #[test]
+        fn test_message_is_encrypted() {
+            assert_ne!(fixie1().encrypted.ciphertext, b"hello world");
+        }
+
+        #[test]
+        fn test_encrypted_seq_id_is_correct() {
+            assert_eq!(fixie1().encrypted.seq_id, 1);
+        }
+
+        #[test]
+        fn test_our_seq_id_updates() {
+            assert_eq!(fixie1().session.our_seq_id, 1);
+        }
+
+        #[test]
+        fn test_their_seq_id_is_unchanged() {
+            assert_eq!(fixie1().session.their_seq_id, 0);
+        }
+
+        #[derive(Clone)]
+        struct Fixture2 {
+            session: Rc<Session>,
+            reencrypted: Rc<Encrypted>,
+            key: [u8; 32],
+        }
+        const FIXTURE2: OnceCell<Fixture2> = OnceCell::new();
+
+        fn fixie2() -> Fixture2 {
+            FIXTURE2
+                .get_or_init(|| {
+                    let signer = SigningKey::generate(&mut rand::thread_rng());
+                    let our_id = signer.verifying_key();
+
+                    let us = ReusableSecret::random();
+                    let them = PublicKey::from(&EphemeralSecret::random());
+                    let mut s = Session::new(&us, &them);
+                    s.try_encrypt(&our_id, b"hello world").unwrap();
+                    let key1 = s.our_ratchet.clone();
+
+                    let reencrypted = s.try_encrypt(&our_id, b"hello again, world").unwrap();
+
+                    Fixture2 {
+                        session: Rc::new(s),
+                        reencrypted: Rc::new(reencrypted),
+                        key: key1,
+                    }
+                })
+                .clone()
+        }
+
+        #[test]
+        fn test_key_changes() {
+            assert_ne!(fixie2().key, fixie2().session.our_ratchet);
+        }
+
+        #[test]
+        fn test_next_message_bumps_id() {
+            assert_eq!(fixie2().reencrypted.seq_id, 2);
+        }
+
+        #[test]
+        fn test_our_se_id_updates_after_next_message() {
+            assert_eq!(fixie2().session.our_seq_id, 2);
+        }
+
+        #[test]
+        fn test_their_seq_id_is_unchanged_after_next_message() {
+            assert_eq!(fixie2().session.their_seq_id, 0);
+        }
     }
 
     #[test]
