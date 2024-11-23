@@ -192,9 +192,9 @@ mod tests {
     fn test_simple_add() -> Result<(), CgkaError> {
         let csprng = &mut rand::thread_rng();
         let doc_id = DocumentId::generate(csprng);
-        let members = setup_members(2, csprng);
+        let members = setup_members(2);
         let initial_member_count = members.len();
-        let mut cgka = setup_cgka(doc_id, &members, 0, csprng);
+        let mut cgka = setup_cgka(doc_id, &members, 0);
         assert!(cgka.tree.has_root_key()?);
         let new_m = TestMember::generate(csprng);
         cgka.add(new_m.id, new_m.pk)?;
@@ -207,9 +207,9 @@ mod tests {
     fn test_simple_remove() -> Result<(), CgkaError> {
         let csprng = &mut rand::thread_rng();
         let doc_id = DocumentId::generate(csprng);
-        let members = setup_members(2, csprng);
+        let members = setup_members(2);
         let initial_member_count = members.len();
-        let mut cgka = setup_cgka(doc_id, &members, 0, csprng);
+        let mut cgka = setup_cgka(doc_id, &members, 0);
         assert!(cgka.tree.has_root_key()?);
         cgka.remove(members[1].id)?;
         assert!(!cgka.tree.has_root_key()?);
@@ -221,7 +221,7 @@ mod tests {
     fn test_no_root_key_after_concurrent_updates() -> Result<(), CgkaError> {
         let csprng = &mut rand::thread_rng();
         let doc_id = DocumentId::generate(csprng);
-        let mut cgkas = setup_member_cgkas(doc_id, 7, csprng)?;
+        let mut cgkas = setup_member_cgkas(doc_id, 7)?;
         assert!(cgkas[0].cgka.tree.has_root_key()?);
         let op1 = cgkas[1]
             .update(csprng)?
@@ -270,7 +270,7 @@ mod tests {
     ) -> Result<(), CgkaError> {
         assert!(member_count >= 1);
         let doc_id = DocumentId::generate(csprng);
-        let mut member_cgkas = setup_member_cgkas(doc_id, member_count, csprng)?;
+        let mut member_cgkas = setup_member_cgkas(doc_id, member_count)?;
         let mut initial_cgka = member_cgkas[0].cgka.clone();
         let initial_secret_bytes = initial_cgka.secret()?.to_bytes();
         for m in &mut member_cgkas {
@@ -299,14 +299,14 @@ mod tests {
 
     #[test]
     fn test_update_all_concurrently() -> Result<(), CgkaError> {
-        let csprng = &mut rand::thread_rng();
-        run_tests_for_1_to_32_members(vec![vec![update_all_members(csprng)]], csprng)
+        let mut csprng = rand::thread_rng();
+        run_tests_for_1_to_32_members(vec![vec![update_all_members()]], &mut csprng)
     }
 
     #[test]
     fn test_update_even_concurrently() -> Result<(), CgkaError> {
-        let csprng = &mut rand::thread_rng();
-        run_tests_for_1_to_32_members(vec![vec![update_even_members(csprng)]], csprng)
+        let mut csprng = rand::thread_rng();
+        run_tests_for_1_to_32_members(vec![vec![update_even_members()]], &mut csprng)
     }
 
     #[test]
@@ -329,52 +329,47 @@ mod tests {
 
     #[test]
     fn test_update_then_remove_then_update_even_concurrently() -> Result<(), CgkaError> {
-        let csprng = &mut rand::thread_rng();
+        let mut csprng = rand::thread_rng();
         run_tests_for_1_to_32_members(
             vec![
-                vec![update_all_members(csprng)],
+                vec![update_all_members()],
                 vec![remove_odd_members()],
-                vec![update_even_members(csprng)],
+                vec![update_even_members()],
             ],
-            csprng,
+            &mut csprng,
         )
     }
 
     #[test]
     fn test_update_and_remove_concurrently() -> Result<(), CgkaError> {
-        let csprng = &mut rand::thread_rng();
+        let mut csprng = rand::thread_rng();
         run_tests_for_1_to_32_members(
             vec![vec![
-                update_all_members(csprng),
+                update_all_members(),
                 remove_odd_members(),
-                update_even_members(csprng),
+                update_even_members(),
             ]],
-            csprng,
+            &mut csprng,
         )
     }
 
     #[test]
     fn test_update_and_add_concurrently() -> Result<(), CgkaError> {
-        let csprng = &mut rand::thread_rng();
+        let mut csprng = rand::thread_rng();
         run_tests_for_1_to_32_members(
-            vec![vec![
-                update_all_members(csprng),
-                add_from_all_members(csprng),
-            ]],
-            csprng,
+            vec![vec![update_all_members(), add_from_all_members()]],
+            &mut csprng,
         )
     }
 
     #[test]
     fn test_add_one_concurrently() -> Result<(), CgkaError> {
-        let csprng = &mut rand::thread_rng();
-        run_tests_for_1_to_32_members(vec![vec![add_from_first_member(csprng)]], csprng)
+        run_tests_for_1_to_32_members(vec![vec![add_from_first_member()]], &mut rand::thread_rng())
     }
 
     #[test]
     fn test_all_add_one_concurrently() -> Result<(), CgkaError> {
-        let csprng = &mut rand::thread_rng();
-        run_tests_for_1_to_32_members(vec![vec![add_from_all_members(csprng)]], csprng)
+        run_tests_for_1_to_32_members(vec![vec![add_from_all_members()]], &mut rand::thread_rng())
     }
 
     #[test]
@@ -382,24 +377,25 @@ mod tests {
         run_tests_for_1_to_32_members(
             vec![
                 vec![remove_from_right(1)],
-                vec![add_from_all_members(rand::thread_rng())],
+                vec![add_from_all_members()],
                 vec![remove_odd_members()],
             ],
-            csprng,
+            &mut rand::thread_rng(),
         )
     }
 
     #[test]
     fn test_update_all_then_add_from_all_then_remove_odd_then_update_even_concurrently(
     ) -> Result<(), CgkaError> {
+        let mut csprng = rand::thread_rng();
         run_tests_for_1_to_32_members(
             vec![
-                vec![update_all_members(rand::thread_rng())],
-                vec![add_from_all_members(rand::thread_rng())],
+                vec![update_all_members()],
+                vec![add_from_all_members()],
                 vec![remove_odd_members()],
-                vec![update_even_members(rand::thread_rng())],
+                vec![update_even_members()],
             ],
-            csprng,
+            &mut csprng,
         )
     }
 
@@ -407,25 +403,25 @@ mod tests {
     fn test_a_bunch_of_ops_in_rounds() -> Result<(), CgkaError> {
         run_tests_for_1_to_32_members(
             vec![vec![
-                update_all_members(rand::thread_rng()),
-                add_from_all_members(rand::thread_rng()),
-                add_from_first_member(rand::thread_rng()),
+                update_all_members(),
+                add_from_all_members(),
+                add_from_first_member(),
                 remove_odd_members(),
-                add_from_first_member(rand::thread_rng()),
+                add_from_first_member(),
                 remove_from_right(1),
                 remove_from_left(1),
-                update_even_members(rand::thread_rng()),
-                add_from_first_member(rand::thread_rng()),
-                update_even_members(rand::thread_rng()),
-                add_from_first_member(rand::thread_rng()),
+                update_even_members(),
+                add_from_first_member(),
+                update_even_members(),
+                add_from_first_member(),
                 remove_from_left(2),
                 remove_odd_members(),
-                update_all_members(rand::thread_rng()),
-                add_from_first_member(rand::thread_rng()),
+                update_all_members(),
+                add_from_first_member(),
                 remove_from_right(2),
-                update_even_members(rand::thread_rng()),
+                update_even_members(),
             ]],
-            csprng,
+            &mut rand::thread_rng(),
         )
     }
 }

@@ -242,7 +242,7 @@ mod tests {
     mod id {
         use super::*;
 
-        #[wasm_bindgen_test]
+        #[wasm_bindgen_test(unsupported = test)]
         fn test_length() {
             let bh = setup();
             assert_eq!(bh.id().len(), 32);
@@ -252,7 +252,7 @@ mod tests {
     mod try_sign {
         use super::*;
 
-        #[wasm_bindgen_test]
+        #[wasm_bindgen_test(unsupported = test)]
         fn test_round_trip() {
             let bh = setup();
             let signed = bh.try_sign(vec![1, 2, 3]).unwrap();
