@@ -7,11 +7,8 @@ pub struct JsIdentifier(pub(crate) Identifier);
 
 #[wasm_bindgen(js_class = Identifier)]
 impl JsIdentifier {
-    pub fn new(bytes: js_sys::Uint8Array) -> Result<Self, CannotParseIdentifier> {
-        let vec: [u8; 32] = bytes
-            .to_vec()
-            .try_into()
-            .map_err(|_| CannotParseIdentifier)?;
+    pub fn new(bytes: Vec<u8>) -> Result<Self, CannotParseIdentifier> {
+        let vec: [u8; 32] = bytes.try_into().map_err(|_| CannotParseIdentifier)?;
 
         // NOTE signature::Error is opaque, so we can just ignore the inbuilt error
         let vk =

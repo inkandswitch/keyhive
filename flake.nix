@@ -178,7 +178,7 @@
             "${cargo} test --features='test_utils' && ${cargo} test --features='mermaid_docs,test_utils' --doc";
 
           "test:wasm" = cmd "Run wasm-pack tests on all targets"
-            "test:wasm:node && test:wasm:chrome";
+            "test:wasm:node && test:ts:web";
 
           "test:wasm:node" = cmd "Run wasm-pack tests in Node.js"
             "${wasm-pack} test --node beehive_wasm";
