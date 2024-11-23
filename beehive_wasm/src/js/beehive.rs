@@ -29,7 +29,10 @@ impl JsBeehive {
     #[wasm_bindgen(constructor)]
     pub fn new(signing_key: JsSigningKey) -> Result<JsBeehive, JsSigningError> {
         Ok(JsBeehive {
-            ctx: Context::generate(signing_key.0, rand::thread_rng())?,
+            ctx: Context::generate(
+                ed25519_dalek::SigningKey::from_bytes(&signing_key.0),
+                rand::thread_rng(),
+            )?,
         })
     }
 
@@ -151,7 +154,6 @@ impl JsBeehive {
             })
     }
 
-    // FIXME do automatically every configurable e.g. 24h
     #[wasm_bindgen(js_name = forcePcsUpdate)]
     pub fn force_pcs_update(&mut self, _doc: &JsDocument) -> Result<u8, u8> {
         todo!("waiting on BeeKEM")

@@ -1,13 +1,12 @@
 use super::signed::JsSigned;
 use beehive_core::crypto::signed::{Signed, SigningError};
 use rand::Fill;
-use std::ops::Deref;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = "SigningKey")]
-#[derive(Debug, Clone)] // FIXME also make Copy
-pub struct JsSigningKey(pub(crate) ed25519_dalek::SigningKey);
+#[derive(Debug, Clone, Copy)]
+pub struct JsSigningKey(pub(crate) [u8; 32]);
 
 #[wasm_bindgen(js_class = "SigningKey")]
 impl JsSigningKey {
@@ -18,14 +17,12 @@ impl JsSigningKey {
             .try_into()
             .map_err(|_| CannotParseEd25519SigningKey)?;
 
-        let key = ed25519_dalek::SigningKey::from_bytes(&vec);
-
-        Ok(JsSigningKey(key))
+        Ok(JsSigningKey(vec))
     }
 
     #[wasm_bindgen(getter, js_name = "verifyingKey")]
     pub fn verfiying_key(&self) -> Vec<u8> {
-        self.0.verifying_key().to_bytes().to_vec()
+        self.0.to_vec()
     }
 
     pub fn generate() -> Result<Self, GenSigningKeyError> {
@@ -39,15 +36,10 @@ impl JsSigningKey {
 
     #[wasm_bindgen(js_name = trySign)]
     pub fn try_sign(&self, data: &[u8]) -> Result<JsSigned, JsSigningError> {
-        Ok(JsSigned(Signed::try_sign(data.to_vec(), &self.0)?))
-    }
-}
-
-impl Deref for JsSigningKey {
-    type Target = ed25519_dalek::SigningKey;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+        Ok(JsSigned(Signed::try_sign(
+            data.to_vec(),
+            &ed25519_dalek::SigningKey::from_bytes(&self.0),
+        )?))
     }
 }
 
