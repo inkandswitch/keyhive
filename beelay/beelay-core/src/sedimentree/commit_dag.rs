@@ -35,14 +35,6 @@ struct NodeIdx(usize);
 struct EdgeIdx(usize);
 
 impl CommitDag {
-    fn new() -> Self {
-        CommitDag {
-            nodes: Vec::new(),
-            node_map: HashMap::new(),
-            edges: Vec::new(),
-        }
-    }
-
     pub(crate) fn from_commits<'a, I: Iterator<Item = &'a LooseCommit> + Clone>(
         commits: I,
     ) -> Self {
@@ -75,18 +67,6 @@ impl CommitDag {
             }
         }
         dag
-    }
-
-    fn add_node(&mut self, hash: CommitHash) -> NodeIdx {
-        let new_node_idx = NodeIdx(self.nodes.len());
-        let new_node = Node {
-            hash,
-            parents: None,
-            children: None,
-        };
-        self.nodes.push(new_node);
-        self.node_map.insert(hash, new_node_idx);
-        new_node_idx
     }
 
     fn add_edge(&mut self, source: NodeIdx, target: NodeIdx) {
@@ -198,7 +178,7 @@ impl CommitDag {
                 if level <= super::TOP_STRATA_LEVEL {
                     // We're in a block and we just found a checkpoint, this must be the start hash
                     // for the block we're in. Flush the current block and start a new one.
-                    if let Some((block, mut commits)) = block.take() {
+                    if let Some((block, commits)) = block.take() {
                         for commit in commits {
                             blockless_commits.remove(&commit);
                             commits_to_blocks
@@ -386,6 +366,7 @@ impl CommitDag {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_hashes(&self) -> impl Iterator<Item = CommitHash> + '_ {
         self.nodes.iter().map(|node| node.hash)
     }
@@ -453,28 +434,6 @@ impl<'a> Iterator for Parents<'a> {
             None
         }
     }
-}
-
-mod error {
-    pub enum Error {
-        MissingParent(crate::CommitHash),
-    }
-
-    impl std::fmt::Display for Error {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Error::MissingParent(p) => write!(f, "missing parent: {:?}", p),
-            }
-        }
-    }
-
-    impl std::fmt::Debug for Error {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            std::fmt::Display::fmt(self, f)
-        }
-    }
-
-    impl std::error::Error for Error {}
 }
 
 #[cfg(test)]
@@ -575,17 +534,6 @@ mod tests {
 
         fn node_hash(&self, node: &str) -> CommitHash {
             self.nodes.get(node).unwrap().clone()
-        }
-
-        fn commit(&self, node: &str) -> LooseCommit {
-            let hash = self.node_hash(node);
-            let parents = self.parents.get(&hash).unwrap().clone();
-            let contents = self.commits.get(&hash).unwrap();
-            LooseCommit {
-                blob: contents.clone(),
-                hash,
-                parents,
-            }
         }
 
         fn as_dag(&self) -> CommitDag {

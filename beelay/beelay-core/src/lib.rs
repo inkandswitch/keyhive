@@ -8,8 +8,8 @@ use std::{
 use effects::IncomingResponse;
 use futures::{future::LocalBoxFuture, FutureExt};
 use io::IoResult;
-use messages::{BlobRef, Message, Notification, Request, Response, TreePart, UploadItem};
 pub use messages::{Envelope, Payload};
+use messages::{Message, Request, Response};
 use rand::Rng;
 
 mod blob;
@@ -683,26 +683,6 @@ impl CommitCategory {
 pub struct DocumentHeads(Vec<crate::CommitHash>);
 
 impl DocumentHeads {
-    pub(crate) fn new(heads: Vec<crate::CommitHash>) -> Self {
-        DocumentHeads(heads)
-    }
-
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("DocumentDagHeads", |input| {
-            let (input, heads) = parse::many(input, CommitHash::parse)?;
-            Ok((input, DocumentHeads::new(heads)))
-        })
-    }
-
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        crate::leb128::encode_uleb128(buf, self.0.len() as u64);
-        for head in &self.0 {
-            head.encode(buf);
-        }
-    }
-
     pub fn len(&self) -> usize {
         self.0.len()
     }

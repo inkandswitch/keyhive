@@ -15,16 +15,12 @@ pub(crate) enum Direction {
 #[derive(Clone, Copy)]
 pub(crate) enum Error {
     InvalidDegree = 1,
-    InvalidSize = 2,
-    DecodeFailed = 3,
 }
 
 impl std::fmt::Debug for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::InvalidDegree => f.write_str("InvalidDegree"),
-            Error::InvalidSize => f.write_str("InvalidSize"),
-            Error::DecodeFailed => f.write_str("DecodeFailed"),
         }
     }
 }
@@ -115,13 +111,6 @@ impl<T: Symbol + Copy> Encoder<T> {
             queue: Vec::<SymbolMapping>::new(),
             next_idx: 0,
         };
-    }
-
-    pub(crate) fn reset(&mut self) {
-        self.symbols.clear();
-        self.mappings.clear();
-        self.queue.clear();
-        self.next_idx = 0;
     }
 
     pub(crate) fn add_hashed_symbol_with_mapping(
@@ -231,15 +220,6 @@ impl<T: Symbol + Copy> Decoder<T> {
             decodable: Vec::<i64>::new(),
             num_decoded: 0,
         };
-    }
-
-    pub(crate) fn reset(&mut self) {
-        self.coded.clear();
-        self.local.reset();
-        self.remote.reset();
-        self.window.reset();
-        self.decodable.clear();
-        self.num_decoded = 0;
     }
 
     pub(crate) fn add_symbol(&mut self, sym: &T) {

@@ -48,10 +48,6 @@ impl<R: rand::Rng> State<R> {
         }
     }
 
-    pub(crate) fn log(&mut self) -> &mut subscriptions::Log {
-        &mut self.log
-    }
-
     pub(crate) fn new_notifications(&mut self) -> HashMap<PeerId, Vec<Notification>> {
         self.subscriptions.new_events(&self.log)
     }

@@ -1,6 +1,6 @@
 use crate::{
-    parse, riblt::doc_and_heads::CodedDocAndHeadsSymbol, BlobHash, Commit, CommitCategory,
-    CommitHash, DocumentId, Payload, RequestId, SnapshotId,
+    parse, riblt::doc_and_heads::CodedDocAndHeadsSymbol, BlobHash, CommitCategory, DocumentId,
+    Payload, RequestId, SnapshotId,
 };
 
 use super::{
@@ -151,15 +151,6 @@ fn parse_response(
         ResponseType::Listen => Ok((input, super::Response::Listen)),
     }?;
     Ok((input, Message::Response(request_id, resp)))
-}
-
-fn parse_commit(input: parse::Input) -> Result<(parse::Input<'_>, Commit), parse::ParseError> {
-    input.with_context("Commit", |input| {
-        let (input, parents) = parse::many(input, CommitHash::parse)?;
-        let (input, hash) = CommitHash::parse(input)?;
-        let (input, content) = parse::slice(input)?;
-        Ok((input, Commit::new(parents, content.to_vec(), hash)))
-    })
 }
 
 mod error {

@@ -246,6 +246,7 @@ impl Stratum {
 }
 
 impl StratumMeta {
+    #[cfg(test)]
     pub(crate) fn new(start: CommitHash, end: CommitHash, blob: BlobMeta) -> Self {
         Self { start, end, blob }
     }
@@ -499,7 +500,7 @@ impl SedimentreeSummary {
     }
 }
 
-enum CommitOrStratum {
+pub(crate) enum CommitOrStratum {
     Commit(LooseCommit),
     Stratum(Stratum),
 }
@@ -538,17 +539,6 @@ impl std::fmt::Debug for Sedimentree {
 pub(crate) struct MinimalTreeHash([u8; 32]);
 
 impl MinimalTreeHash {
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        let (input, hash) = parse::arr::<32>(input)?;
-        Ok((input, Self(hash)))
-    }
-
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.0);
-    }
-
     pub(crate) fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -562,8 +552,6 @@ impl From<[u8; 32]> for MinimalTreeHash {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use num::Num;
 
     use super::{Stratum, StratumMeta};

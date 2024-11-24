@@ -5,7 +5,6 @@ use beelay_core::{
     BundleSpec, CommitHash, CommitOrBundle, DocEvent, DocumentId, PeerId, SnapshotId,
     SyncDocResult,
 };
-use rand::Rng;
 
 fn init_logging() {
     let _ = tracing_subscriber::fmt::fmt()
@@ -116,7 +115,7 @@ fn request_from_connected() {
         .beelay(&peer1)
         .add_commits(doc1_id, vec![commit1.clone()]);
 
-    let sync_with_2 = network.beelay(&peer3).sync_doc(doc1_id, peer2.clone());
+    let _sync_with_2 = network.beelay(&peer3).sync_doc(doc1_id, peer2.clone());
     let commits_on_3: HashSet<beelay_core::Commit> = network
         .beelay(&peer3)
         .load_doc(doc1_id)
