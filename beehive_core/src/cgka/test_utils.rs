@@ -257,7 +257,7 @@ pub fn setup_member_cgkas_with_maximum_conflict_keys(
     Ok(member_cgkas)
 }
 
-pub fn setup_member_cgkas_with_all_updated_and_10_adds<R: rand::CryptoRng + rand::RngCore>(
+pub fn setup_member_cgkas_with_all_updated_and_10_adds(
     doc_id: DocumentId,
     member_count: u32,
 ) -> Result<Vec<TestMemberCgka>, CgkaError> {
