@@ -18,7 +18,7 @@ use crate::{
     },
     util::rc::WrappedRc,
 };
-use dupe::{Dupe, OptionDupedExt};
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, collections::HashMap, fmt, rc::Rc};
 
