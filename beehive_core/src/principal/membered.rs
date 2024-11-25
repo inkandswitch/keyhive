@@ -16,11 +16,11 @@ use crate::{
         verifiable::Verifiable,
         verifying_key::VerifyingKey,
     },
-    util::hash_map::HashMap,
+    util::rc::WrappedRc,
 };
 use dupe::{Dupe, OptionDupedExt};
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, fmt, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, fmt, rc::Rc};
 
 /// The union of Agents that have updatable membership
 #[derive(Debug, Clone, Dupe)]
@@ -32,8 +32,8 @@ pub enum Membered<T: ContentRef> {
 impl<T: ContentRef> Membered<T> {
     pub fn get_capability(&self, agent_id: &AgentId) -> Option<Rc<Signed<Delegation<T>>>> {
         match self {
-            Membered::Group(group) => group.borrow().get_capability(agent_id).duped(),
-            Membered::Document(doc) => doc.borrow().get_capabilty(agent_id).duped(),
+            Membered::Group(group) => group.borrow().get_capability(agent_id).dupe(),
+            Membered::Document(doc) => doc.borrow().get_capabilty(agent_id).dupe(),
         }
     }
 
@@ -53,7 +53,7 @@ impl<T: ContentRef> Membered<T> {
         }
     }
 
-    pub fn members(&self) -> HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
+    pub fn members(&self) -> HashMap<AgentId, Vec<WrappedRc<Signed<Delegation<T>>>>> {
         match self {
             Membered::Group(group) => group.borrow().members().clone(),
             Membered::Document(document) => document.borrow().members().clone(),

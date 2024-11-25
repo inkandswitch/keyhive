@@ -10,7 +10,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         encrypted::Encrypted,
-        share_key::ShareKey,
+        share_key::{ShareKey, ShareSecretKey},
         signature::Signature,
         signed::{Signed, SigningError},
         signing_key::SigningKey,
@@ -27,15 +27,16 @@ use crate::{
         },
         membered::Membered,
     },
+    util::hash_map::WrappedHashMap,
 };
 use dupe::Dupe;
 use ed25519_dalek::Signer;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Active {
     /// The signing key of the active agent.
     pub signer: SigningKey,
@@ -44,7 +45,7 @@ pub struct Active {
     // FIXME include timestamp for next PCS update
     /// The encryption "sharing" key pairs that the active agent has.
     /// This includes the secret keys for ECDH.
-    pub share_key_pairs: BTreeMap<ShareKey, x25519_dalek::StaticSecret>,
+    pub share_key_pairs: WrappedHashMap<ShareKey, ShareSecretKey>,
 
     /// The [`Individual`] static identifier.
     pub individual: Individual,
@@ -57,7 +58,7 @@ impl Active {
     ) -> Result<Self, SigningError> {
         Ok(Self {
             individual: Individual::generate(&signer, csprng)?,
-            share_key_pairs: BTreeMap::new(),
+            share_key_pairs: WrappedHashMap::new(),
             signer,
         })
     }
@@ -159,7 +160,10 @@ impl Active {
             .get(&our_pk.1)
             .ok_or(ShareError::MissingYourShareSecretKey)?;
 
-        let key: SymmetricKey = our_sk.diffie_hellman(&recipient_share_pk.1.into()).into();
+        let key: SymmetricKey = our_sk
+            .to_x25519_static_secret()
+            .diffie_hellman(&recipient_share_pk.1.into())
+            .into();
 
         let nonce = Siv::new(&key, &message, doc.doc_id()).map_err(ShareError::SivError)?;
         let mut bytes = message.clone();
@@ -215,17 +219,17 @@ impl Signer<Signature> for Active {
 }
 
 // FIXME test
-impl PartialEq for Active {
-    fn eq(&self, other: &Self) -> bool {
-        self.id() == other.id()
-            && self.signer.to_bytes() == other.signer.to_bytes()
-            && self
-                .share_key_pairs
-                .iter()
-                .zip(other.share_key_pairs.iter())
-                .all(|((pk1, sk1), (pk2, sk2))| pk1 == pk2 && sk1.to_bytes() == sk2.to_bytes())
-    }
-}
+// impl PartialEq for Active {
+//     fn eq(&self, other: &Self) -> bool {
+//         self.id() == other.id()
+//             && self.signer.to_bytes() == other.signer.to_bytes()
+//             && self
+//                 .share_key_pairs
+//                 .iter()
+//                 .zip(other.share_key_pairs.iter())
+//                 .all(|((pk1, sk1), (pk2, sk2))| pk1 == pk2 && sk1.to_bytes() == sk2.to_bytes())
+//     }
+// }
 
 impl Eq for Active {}
 

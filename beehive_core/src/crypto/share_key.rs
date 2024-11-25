@@ -64,6 +64,10 @@ impl ShareSecretKey {
         ))
     }
 
+    pub fn to_x25519_static_secret(&self) -> x25519_dalek::StaticSecret {
+        x25519_dalek::StaticSecret::from(*self)
+    }
+
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0
     }

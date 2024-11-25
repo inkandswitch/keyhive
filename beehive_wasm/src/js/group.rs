@@ -39,8 +39,8 @@ impl JsGroup {
                     .expect("should have at least one member");
 
                 Capability {
-                    who: dlgs.iter().next().unwrap().payload().delegate().clone(),
-                    proof: best.clone(),
+                    who: dlgs.iter().next().unwrap().payload().delegate().dupe(),
+                    proof: best.dupe().0,
                 }
             })
             .collect()

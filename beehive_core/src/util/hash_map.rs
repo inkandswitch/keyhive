@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Eq,
+    collections::hash_map::RandomState,
     hash::{Hash, Hasher},
 };
 
 #[derive(Debug, Clone, Default)]
-pub struct HashMap<K, V>(pub std::collections::HashMap<K, V>);
+pub struct WrappedHashMap<K, V, S = RandomState>(pub std::collections::HashMap<K, V, S>);
 
-impl<K: Hash + Eq, V> HashMap<K, V> {
+impl<K: Hash + Eq, V> WrappedHashMap<K, V, RandomState> {
     pub fn new() -> Self {
         Self(std::collections::HashMap::new())
     }
@@ -62,15 +63,15 @@ impl<K: Hash + Eq, V> HashMap<K, V> {
     }
 }
 
-impl<K: Eq + Hash, V: PartialEq> PartialEq for HashMap<K, V> {
+impl<K: Eq + Hash, V: PartialEq> PartialEq for WrappedHashMap<K, V> {
     fn eq(&self, other: &Self) -> bool {
         self.0.eq(&other.0)
     }
 }
 
-impl<K: Eq + Hash, V: Eq> Eq for HashMap<K, V> {}
+impl<K: Eq + Hash, V: Eq> Eq for WrappedHashMap<K, V> {}
 
-impl<K: Ord + Eq + Hash + Clone, V: Hash> Hash for HashMap<K, V> {
+impl<K: Ord + Eq + Hash + Clone, V: Hash> Hash for WrappedHashMap<K, V> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.into_sorted().iter().for_each(|(k, v)| {
             k.hash(state);
@@ -79,19 +80,21 @@ impl<K: Ord + Eq + Hash + Clone, V: Hash> Hash for HashMap<K, V> {
     }
 }
 
-impl<K: Eq + Hash, V> FromIterator<(K, V)> for HashMap<K, V> {
+impl<K: Eq + Hash, V> FromIterator<(K, V)> for WrappedHashMap<K, V> {
     fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
         Self(iter.into_iter().collect())
     }
 }
 
-impl<K: Serialize, V: Serialize> Serialize for HashMap<K, V> {
+impl<K: Serialize, V: Serialize> Serialize for WrappedHashMap<K, V> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.0.serialize(serializer)
     }
 }
 
-impl<'de, K: Deserialize<'de> + Eq + Hash, V: Deserialize<'de>> Deserialize<'de> for HashMap<K, V> {
+impl<'de, K: Deserialize<'de> + Eq + Hash, V: Deserialize<'de>> Deserialize<'de>
+    for WrappedHashMap<K, V>
+{
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let map = std::collections::HashMap::deserialize(deserializer)?;
         Ok(Self(map))

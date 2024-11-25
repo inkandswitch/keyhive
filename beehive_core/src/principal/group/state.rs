@@ -18,24 +18,24 @@ use crate::{
     principal::{
         agent::Agent, group::operation::delegation::DelegationError, identifier::Identifier,
     },
-    util::content_addressed_map::CaMap,
+    util::{content_addressed_map::CaMap, rc::WrappedRc},
 };
 use dupe::Dupe;
-use serde::{ser::SerializeStruct, Serialize, Serializer};
+use serde::Serialize;
 use std::{
     collections::{BTreeMap, HashSet},
     rc::Rc,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GroupState<T: ContentRef> {
     pub(crate) id: GroupId,
 
-    pub(crate) delegation_heads: HashSet<Rc<Signed<Delegation<T>>>>,
+    pub(crate) delegation_heads: HashSet<WrappedRc<Signed<Delegation<T>>>>,
     pub(crate) delegations: CaMap<Signed<Delegation<T>>>,
     pub delegation_quarantine: CaMap<Signed<StaticDelegation<T>>>,
 
-    pub(crate) revocation_heads: HashSet<Rc<Signed<Revocation<T>>>>,
+    pub(crate) revocation_heads: HashSet<WrappedRc<Signed<Revocation<T>>>>,
     pub(crate) revocations: CaMap<Signed<Revocation<T>>>,
     pub revocation_quarantine: CaMap<Signed<StaticRevocation<T>>>,
 }
@@ -71,10 +71,9 @@ impl<T: ContentRef> GroupState<T> {
                 &signing_key,
             )?;
 
-            let rc = Rc::new(dlg);
-
-            acc.delegations.insert(rc.dupe());
-            acc.delegation_heads.insert(rc);
+            let wrc = WrappedRc::new(dlg);
+            acc.delegations.insert(wrc.dupe().0);
+            acc.delegation_heads.insert(wrc);
 
             Ok(acc)
         })
@@ -88,11 +87,11 @@ impl<T: ContentRef> GroupState<T> {
         self.id
     }
 
-    pub fn delegation_heads(&self) -> &HashSet<Rc<Signed<Delegation<T>>>> {
+    pub fn delegation_heads(&self) -> &HashSet<WrappedRc<Signed<Delegation<T>>>> {
         &self.delegation_heads
     }
 
-    pub fn revocation_heads(&self) -> &HashSet<Rc<Signed<Revocation<T>>>> {
+    pub fn revocation_heads(&self) -> &HashSet<WrappedRc<Signed<Revocation<T>>>> {
         &self.revocation_heads
     }
 
@@ -114,12 +113,12 @@ impl<T: ContentRef> GroupState<T> {
 
         delegation.try_verify()?;
 
-        let rc = Rc::new(delegation);
-        let hash = self.delegations.insert(rc.dupe());
+        let wrc = WrappedRc::new(delegation);
+        let hash = self.delegations.insert(wrc.dupe().0);
 
-        if let Some(proof) = &rc.payload().proof {
+        if let Some(proof) = &wrc.payload().proof {
             if self.delegations.remove_by_value(proof).is_some() {
-                self.delegation_heads.insert(rc);
+                self.delegation_heads.insert(wrc);
             }
         }
 
@@ -208,35 +207,4 @@ pub enum AddError {
 
     #[error("Invalid signature")]
     InvalidSignature(#[from] VerificationError),
-}
-
-// FIXME test
-impl<T: ContentRef> Serialize for GroupState<T> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("GroupState", 6)?;
-
-        state.serialize_field("id", &self.id)?;
-        state.serialize_field(
-            "delegation_heads",
-            &self
-                .delegation_heads
-                .iter()
-                .map(|d| d.as_ref())
-                .collect::<Vec<_>>(),
-        )?;
-        state.serialize_field("delegations", &self.delegations)?;
-        state.serialize_field("delegation_quarantine", &self.delegation_quarantine)?;
-        state.serialize_field(
-            "revocation_heads",
-            &self
-                .revocation_heads
-                .iter()
-                .map(|r| r.as_ref())
-                .collect::<Vec<_>>(),
-        )?;
-        state.serialize_field("revocations", &self.revocations)?;
-        state.serialize_field("revocation_quarantine", &self.revocation_quarantine)?;
-
-        state.end()
-    }
 }

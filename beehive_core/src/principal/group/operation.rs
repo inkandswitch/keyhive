@@ -8,7 +8,7 @@ use crate::{
         document::{id::DocumentId, Document},
         identifier::Identifier,
     },
-    util::content_addressed_map::CaMap,
+    util::{content_addressed_map::CaMap, rc::WrappedRc},
 };
 use delegation::Delegation;
 use revocation::Revocation;
@@ -148,8 +148,8 @@ impl<T: ContentRef> Operation<T> {
     }
 
     pub fn topsort(
-        delegation_heads: &HashSet<Rc<Signed<Delegation<T>>>>,
-        revocation_heads: &HashSet<Rc<Signed<Revocation<T>>>>,
+        delegation_heads: &HashSet<WrappedRc<Signed<Delegation<T>>>>,
+        revocation_heads: &HashSet<WrappedRc<Signed<Revocation<T>>>>,
     ) -> Result<Vec<(Digest<Operation<T>>, Operation<T>)>, AncestorError> {
         let ops_with_ancestors: HashMap<
             Digest<Operation<T>>,
@@ -159,14 +159,14 @@ impl<T: ContentRef> Operation<T> {
             // FIXME use CaMap to keep hashes around
             .map(|dlg| {
                 (
-                    Digest::hash(dlg.as_ref()).coerce(),
-                    (dlg.clone().into(), CaMap::new(), 0),
+                    Digest::hash(dlg.0.as_ref()).coerce(),
+                    (dlg.0.clone().into(), CaMap::new(), 0),
                 )
             })
             .chain(revocation_heads.iter().map(|rev| {
                 (
-                    Digest::hash(rev.as_ref()).coerce(),
-                    (rev.clone().into(), CaMap::new(), 0),
+                    Digest::hash(rev.0.as_ref()).coerce(),
+                    (rev.0.clone().into(), CaMap::new(), 0),
                 )
             }))
             .collect();

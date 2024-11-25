@@ -20,16 +20,16 @@ use crate::{
         verifiable::Verifiable,
         verifying_key::VerifyingKey,
     },
-    util::{content_addressed_map::CaMap, hash_map::HashMap},
+    util::{content_addressed_map::CaMap, hash_map::WrappedHashMap, rc::WrappedRc},
 };
 use dupe::{Dupe, IterDupedExt};
 use id::GroupId;
 use nonempty::NonEmpty;
 use operation::{delegation::Delegation, revocation::Revocation, AncestorError, Operation};
-use serde::{ser::SerializeStruct, Serialize, Serializer};
+use serde::Serialize;
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
 use thiserror::Error;
@@ -39,10 +39,10 @@ use thiserror::Error;
 /// Groups are stateful agents. It is possible the delegate control over them,
 /// and they can be delegated to. This produces transitives lines of authority
 /// through the network of [`Agent`]s.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize)]
 pub struct Group<T: ContentRef> {
     /// The current view of members of a group.
-    pub(crate) members: HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>>,
+    pub(crate) members: WrappedHashMap<AgentId, Vec<WrappedRc<Signed<Delegation<T>>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
     pub(crate) state: state::GroupState<T>,
@@ -70,16 +70,16 @@ impl<T: ContentRef> Group<T> {
                 &group_signer,
             )?;
 
-            let rc = Rc::new(dlg);
-            delegations.insert(rc.dupe());
-            delegation_heads.insert(rc.dupe());
-            members.insert((*parent).agent_id(), vec![rc]);
+            let wrc = WrappedRc::new(dlg);
+            delegations.insert(wrc.dupe().0);
+            delegation_heads.insert(wrc.dupe());
+            members.insert((*parent).agent_id(), vec![wrc]);
 
             Ok::<(), SigningError>(())
         })?;
 
         Ok(Group {
-            members,
+            members: WrappedHashMap(members),
             state: state::GroupState {
                 id: group_id,
 
@@ -106,19 +106,20 @@ impl<T: ContentRef> Group<T> {
         self.group_id().into()
     }
 
-    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
-        &self.members
+    pub fn members(&self) -> &HashMap<AgentId, Vec<WrappedRc<Signed<Delegation<T>>>>> {
+        &self.members.0
     }
 
     pub fn delegations(&self) -> &CaMap<Signed<Delegation<T>>> {
         &self.state.delegations
     }
 
-    pub fn get_capability(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
+    pub fn get_capability(&self, member_id: &AgentId) -> Option<Rc<Signed<Delegation<T>>>> {
         self.members.get(member_id).and_then(|delegations| {
             delegations
                 .iter()
-                .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
+                .max_by(|d1, d2| d1.0.payload().can.cmp(&d2.0.payload().can))
+                .map(|d| d.0.dupe())
         })
     }
 
@@ -148,10 +149,10 @@ impl<T: ContentRef> Group<T> {
 
         match self.members.get_mut(&id) {
             Some(caps) => {
-                caps.push(rc);
+                caps.push(rc.into());
             }
             None => {
-                self.members.insert(id, vec![rc]);
+                self.members.insert(id, vec![rc.into()]);
             }
         }
     }
@@ -224,7 +225,7 @@ impl<T: ContentRef> Group<T> {
             revoke_dlgs.iter().try_fold((), |_, dlg| {
                 let revocation = Signed::try_sign(
                     Revocation {
-                        revoke: dlg.dupe(),
+                        revoke: dlg.0.dupe(),
                         proof: None, // FIXME lookup a valid proof
                         after_content: relevant_docs
                             .iter()
@@ -268,10 +269,10 @@ impl<T: ContentRef> Group<T> {
                         if let Some(mut_dlgs) =
                             self.members.get_mut(&d.payload().delegate.agent_id())
                         {
-                            mut_dlgs.push(d.dupe());
+                            mut_dlgs.push(d.dupe().into());
                         } else {
                             self.members
-                                .insert(d.payload().delegate.agent_id(), vec![d.dupe()]);
+                                .insert(d.payload().delegate.agent_id(), vec![d.dupe().into()]);
                         }
                     }
                     Operation::Revocation(r) => {
@@ -280,7 +281,7 @@ impl<T: ContentRef> Group<T> {
                             .get_mut(&r.payload().revoke.payload().delegate.agent_id())
                         {
                             // FIXME maintain this as a CaMap for easier removals, too
-                            mut_dlgs.retain(|d| *d != r.payload().revoke);
+                            mut_dlgs.retain(|d| d.0 != r.payload().revoke);
                         }
                     }
                 }
@@ -325,21 +326,6 @@ impl<T: ContentRef> Group<T> {
 impl<T: ContentRef> Verifiable for Group<T> {
     fn verifying_key(&self) -> VerifyingKey {
         self.state.verifying_key()
-    }
-}
-
-impl<T: ContentRef> Serialize for Group<T> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let members = self
-            .members
-            .iter()
-            .map(|(k, v)| (k, v.len()))
-            .collect::<HashMap<_, _>>();
-
-        let mut state = serializer.serialize_struct("Group", 2)?;
-        state.serialize_field("members", &members)?;
-        state.serialize_field("state", &self.state)?;
-        state.end()
     }
 }
 
