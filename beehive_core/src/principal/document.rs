@@ -2,7 +2,7 @@ pub mod encryption;
 pub mod id;
 pub mod store;
 
-use super::{individual::id::IndividualId, verifiable::Verifiable};
+use super::{active::Active, individual::id::IndividualId, verifiable::Verifiable};
 use crate::{
     access::Access,
     cgka::{encryption_key::ApplicationSecretMetadata, Cgka},
@@ -99,20 +99,26 @@ impl<T: ContentRef> Document<T> {
                 })?;
 
         let owner_id = IndividualId(Identifier((&doc_signer).into()));
-        let initial_share_secret_key = ShareSecretKey::generate();
-        let initial_share_key = initial_share_secret_key.share_key();
         let doc_id = DocumentId(group.id());
-        // FIXME: Get the initial tree members and a pre-key for each. Right now there's
-        // no path to this list. The Group only has AgentIds, but we need to get the
-        // recursive membership list (e.g. to get all IndividualIds in an AgentId
-        // corresponding to another Group).
-        let members = vec![(owner_id, initial_share_key)];
+        let owner_share_secret_key = ShareSecretKey::generate();
+        let owner_share_key = owner_share_secret_key.share_key();
+        let mut owner_active = Active::generate(doc_signer)?;
+        owner_active.share_key_pairs.insert(owner_share_key, owner_share_secret_key);
+
+        let group_members = group.individual_ids_with_sampled_prekeys();
+        let active_member = (owner_id, owner_share_key);
+        let other_members: Vec<(IndividualId, ShareKey)> = group_members
+            .iter()
+            .filter(|(id, _sk)| **id != owner_id)
+            .map(|(id, pk)| (*id, *pk))
+            .collect();
+        let cgka_members = NonEmpty::from((active_member, other_members));
         let cgka = Cgka::new(
-            members,
+            cgka_members,
             doc_id,
             owner_id,
-            initial_share_key,
-            initial_share_secret_key,
+            owner_share_key,
+            owner_share_secret_key,
         )
         .expect("FIXME");
 

@@ -3,6 +3,7 @@ use crate::{
     crypto::share_key::{ShareKey, ShareSecretKey},
     principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
 };
+use nonempty::{nonempty, NonEmpty};
 use std::{collections::HashMap, mem};
 
 pub type TestContentRef = u32;
@@ -98,10 +99,10 @@ impl TestConcurrentOperations {
     }
 }
 
-pub fn setup_members(member_count: u32) -> Vec<TestMember> {
+pub fn setup_members(member_count: u32) -> NonEmpty<TestMember> {
     assert!(member_count > 0);
-    let mut ms = Vec::new();
-    for _ in 0..member_count {
+    let mut ms = nonempty![TestMember::generate()];
+    for _ in 1..member_count {
         ms.push(TestMember::generate());
     }
     ms
@@ -109,13 +110,15 @@ pub fn setup_members(member_count: u32) -> Vec<TestMember> {
 
 pub fn setup_cgka(
     doc_id: DocumentId,
-    members: &[TestMember],
+    members: &NonEmpty<TestMember>,
     m_idx: usize,
 ) -> Cgka<TestContentRef> {
     let owner = &members[m_idx];
+    let first: (IndividualId, ShareKey) = (members.first().id, members.first().pk);
+    let member_id_pks = NonEmpty::from((first, members.iter().skip(1).map(|p| (p.id, p.pk)).collect()));
 
     Cgka::new(
-        members.iter().map(|p| (p.id, p.pk)).collect(),
+        member_id_pks,
         doc_id,
         owner.id,
         owner.pk,

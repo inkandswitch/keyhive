@@ -87,7 +87,7 @@ impl BeeKem {
     /// Beehive as a whole).
     pub(crate) fn new(
         doc_id: DocumentId,
-        members: Vec<(IndividualId, ShareKey)>,
+        members: NonEmpty<(IndividualId, ShareKey)>,
     ) -> Result<Self, CgkaError> {
         let mut tree = Self {
             doc_id,

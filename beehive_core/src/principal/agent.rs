@@ -6,11 +6,11 @@ use super::{
     individual::{id::IndividualId, Individual},
     verifiable::Verifiable,
 };
-use crate::content::reference::ContentRef;
+use crate::{content::reference::ContentRef, crypto::share_key::ShareKey};
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 /// Immutable union over all agent types.
 ///
@@ -39,6 +39,24 @@ impl<T: ContentRef> Agent<T> {
             Agent::Individual(i) => i.agent_id(),
             Agent::Group(g) => (*g).borrow().agent_id(),
             Agent::Document(d) => d.agent_id(),
+        }
+    }
+
+    // FIXME: Rename
+    pub fn individual_ids_with_sampled_prekeys(&self) -> HashMap<IndividualId, ShareKey> {
+        match self {
+            Agent::Active(a) => {
+                let mut m = HashMap::new();
+                m.insert(a.id(), a.sample_prekey());
+                m
+            }
+            Agent::Individual(i) => {
+                let mut m = HashMap::new();
+                m.insert(i.id(), i.sample_prekey());
+                m
+            }
+            Agent::Group(g) => (*g).borrow().individual_ids_with_sampled_prekeys(),
+            Agent::Document(d) => d.group.individual_ids_with_sampled_prekeys(),
         }
     }
 }

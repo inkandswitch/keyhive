@@ -9,13 +9,13 @@ use super::{
     agent::{Agent, AgentId},
     document::Document,
     identifier::Identifier,
-    individual::Individual,
+    individual::{id::IndividualId, Individual},
     verifiable::Verifiable,
 };
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::signed::{Signed, SigningError},
+    crypto::{share_key::ShareKey, signed::{Signed, SigningError}},
     util::content_addressed_map::CaMap,
 };
 use dupe::{Dupe, IterDupedExt};
@@ -99,6 +99,14 @@ impl<T: ContentRef> Group<T> {
 
     pub fn agent_id(&self) -> AgentId {
         self.group_id().into()
+    }
+
+    pub fn individual_ids_with_sampled_prekeys(&self) -> HashMap<IndividualId, ShareKey> {
+        let mut m = HashMap::new();
+        for delegations in self.members.values() {
+            m.extend(&delegations[0].payload().delegate.individual_ids_with_sampled_prekeys());
+        }
+        m
     }
 
     pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {

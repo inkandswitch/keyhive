@@ -11,7 +11,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         encrypted::Encrypted,
-        share_key::ShareKey,
+        share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
         siv::Siv,
         symmetric_key::SymmetricKey,
@@ -27,6 +27,7 @@ use crate::{
 };
 use dupe::Dupe;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use rand::{Rng, thread_rng};
 use serde::Serialize;
 use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;
@@ -39,7 +40,7 @@ pub struct Active {
 
     /// The encryption "sharing" key pairs that the active agent has.
     /// This includes the secret keys for ECDH.
-    pub share_key_pairs: BTreeMap<ShareKey, x25519_dalek::StaticSecret>, // FIXME generalize to use e.g. KMS
+    pub share_key_pairs: BTreeMap<ShareKey, ShareSecretKey>, // FIXME generalize to use e.g. KMS
 
     pub individual: Individual,
 }
@@ -59,6 +60,13 @@ impl Active {
 
     pub fn agent_id(&self) -> AgentId {
         AgentId::IndividualId(self.id())
+    }
+
+    // FIXME: Temporary measure to retrieve a prekey. Are the share keys actually
+    // prekeys for an Active?
+    pub fn sample_prekey(&self) -> ShareKey {
+        let idx = thread_rng().gen_range(0..self.share_key_pairs.len());
+        *self.share_key_pairs.keys().nth(idx).expect("FIXME")
     }
 
     /// Sign a payload.
@@ -135,7 +143,7 @@ impl Active {
             .get(&our_pk.1)
             .ok_or(ShareError::MissingYourShareSecretKey)?;
 
-        let key: SymmetricKey = our_sk.diffie_hellman(&recipient_share_pk.1.into()).into();
+        let key: SymmetricKey = our_sk.derive_symmetric_key(&recipient_share_pk.1.into());
 
         let nonce =
             Siv::new(&key, message.as_slice(), doc.doc_id()).map_err(ShareError::SivError)?;

@@ -26,6 +26,7 @@ use beekem::BeeKem;
 use encryption_key::{ApplicationSecret, ApplicationSecretMetadata, PcsKey};
 use error::CgkaError;
 use keys::ShareKeyMap;
+use nonempty::NonEmpty;
 use operation::CgkaOperation;
 use serde::{Deserialize, Serialize};
 
@@ -49,7 +50,7 @@ pub struct Cgka<T: ContentRef> {
 impl<T: ContentRef> Cgka<T> {
     /// We assume members are in causal order.
     pub fn new(
-        members: Vec<(IndividualId, ShareKey)>,
+        members: NonEmpty<(IndividualId, ShareKey)>,
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
