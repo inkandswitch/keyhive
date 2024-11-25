@@ -26,6 +26,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     rc::Rc,
 };
+use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GroupState<T: ContentRef> {
@@ -200,7 +201,7 @@ impl<T: ContentRef> Verifiable for GroupState<T> {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum AddError {
     #[error("Invalid subject {0}")]
     InvalidSubject(Identifier),
