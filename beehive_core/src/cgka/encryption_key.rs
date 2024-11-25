@@ -49,7 +49,7 @@ pub struct ApplicationSecretMetadata<T: ContentRef> {
 pub struct PcsKey(ShareSecretKey);
 
 impl PcsKey {
-    pub(crate) fn new(
+    pub(crate) fn derive_from(
         owner_id: IndividualId,
         owner_sks: &mut ShareKeyMap,
         tree: &BeeKem,

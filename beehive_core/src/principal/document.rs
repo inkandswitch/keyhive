@@ -178,14 +178,15 @@ impl<T: ContentRef> Document<T> {
         content: &[u8],
         // FIXME: What should this type really be?
         pred_ref: &T,
-        // FIXME: We should only need to pass in a public and secret key when
-        // doing a PCS update. Note that if the BeeKEM tree does not contain a
-        // root secret (e.g. because of conflict keys), then you need to do an
-        // PCS update before you can encrypt.
-        // One approach would be to assume encrypt_content will only be called
-        // after checking if there is a current root secret. That's what we're doing
-        // right now.
     ) -> Encrypted<Vec<u8>> {
+        // FIXME: We are automatically doing a PCS update if the tree doesn't have a
+        // root secret. That might make sense, but do we need to store this key pair
+        // on our Active member?
+        if !self.cgka.has_pcs_key() {
+            let new_share_secret_key = ShareSecretKey::generate();
+            let new_share_key = new_share_secret_key.share_key();
+            self.cgka.update(self.cgka.owner_id, new_share_key, new_share_secret_key).expect("FIXME");
+        }
         let app_secret = self
             .cgka
             .new_app_secret_for(content_ref, content, pred_ref)

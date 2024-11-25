@@ -75,7 +75,7 @@ impl<T: ContentRef> Cgka<T> {
         };
         cgka.tree
             .encrypt_path(owner_id, owner_pk, &mut cgka.owner_sks)?;
-        let pcs_key = PcsKey::new(cgka.owner_id, &mut cgka.owner_sks, &cgka.tree)?;
+        let pcs_key = PcsKey::derive_from(cgka.owner_id, &mut cgka.owner_sks, &cgka.tree)?;
         cgka.pcs_keys.insert(Rc::new(pcs_key));
         Ok(cgka)
     }
@@ -95,7 +95,7 @@ impl<T: ContentRef> Cgka<T> {
         cgka.owner_sks.insert(pk, sk);
         cgka.pcs_keys = Default::default();
         if self.has_pcs_key() {
-            let pcs_key = PcsKey::new(cgka.owner_id, &mut cgka.owner_sks, &cgka.tree)?;
+            let pcs_key = PcsKey::derive_from(cgka.owner_id, &mut cgka.owner_sks, &cgka.tree)?;
             cgka.pcs_keys.insert(Rc::new(pcs_key));
         }
         cgka.content_to_app_secret = Default::default();
@@ -117,7 +117,7 @@ impl<T: ContentRef> Cgka<T> {
         pred_ref: &T,
     ) -> Result<ApplicationSecret<T>, CgkaError> {
         debug_assert!(self.has_pcs_key());
-        let current_pcs_key = PcsKey::new(self.owner_id, &mut self.owner_sks, &self.tree)?;
+        let current_pcs_key = PcsKey::derive_from(self.owner_id, &mut self.owner_sks, &self.tree)?;
         let pcs_key_hash = Digest::hash(&current_pcs_key);
         if !self.pcs_keys.contains_key(&pcs_key_hash) {
             self.pcs_keys.insert(Rc::new(current_pcs_key));
@@ -165,7 +165,7 @@ impl<T: ContentRef> Cgka<T> {
                 {
                     maybe_pcs_key.expect("is some")
                 } else {
-                    let pcs_key = PcsKey::new(self.owner_id, &mut self.owner_sks, &self.tree)?;
+                    let pcs_key = PcsKey::derive_from(self.owner_id, &mut self.owner_sks, &self.tree)?;
                     if Digest::hash(&pcs_key) == metadata.pcs_key_hash {
                         Rc::new(pcs_key)
                     } else {
@@ -231,10 +231,9 @@ impl<T: ContentRef> Cgka<T> {
             Ok(op)
         } else {
             Err(CgkaError::IdentifierNotFound)
-            // // Currently, if the id is not present, we treat update as a no-op.
+            // // Currently, if the id is not present, we return an error.
             // // This would happen if the id has been removed. But causal ordering
             // // should ensure this never happens for a non-removed id.
-            // Ok(None)
         }
     }
 
