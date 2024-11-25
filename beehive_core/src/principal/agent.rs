@@ -47,16 +47,16 @@ impl<T: ContentRef> Agent<T> {
         match self {
             Agent::Active(a) => {
                 let mut m = HashMap::new();
-                m.insert(a.id(), a.sample_prekey());
+                m.insert(a.borrow().id(), a.borrow().sample_prekey());
                 m
             }
             Agent::Individual(i) => {
                 let mut m = HashMap::new();
-                m.insert(i.id(), i.sample_prekey());
+                m.insert(i.borrow().id(), i.borrow().sample_prekey());
                 m
             }
-            Agent::Group(g) => (*g).borrow().individual_ids_with_sampled_prekeys(),
-            Agent::Document(d) => d.group.individual_ids_with_sampled_prekeys(),
+            Agent::Group(g) => g.borrow().individual_ids_with_sampled_prekeys(),
+            Agent::Document(d) => d.borrow().group.individual_ids_with_sampled_prekeys(),
         }
     }
 }

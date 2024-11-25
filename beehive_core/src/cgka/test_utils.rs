@@ -104,10 +104,10 @@ impl TestConcurrentOperations {
 
 pub fn setup_members(member_count: u32) -> NonEmpty<TestMember> {
     assert!(member_count > 0);
-    let mut ms = nonempty![TestMember::generate()];
+    let mut csprng = rand::thread_rng();
+    let mut ms = nonempty![TestMember::generate(&mut csprng)];
     for _ in 1..member_count {
-        ms.push(TestMember::generate());
-        ms.push(TestMember::generate(&mut rand::thread_rng()));
+        ms.push(TestMember::generate(&mut csprng));
     }
     ms
 }
@@ -159,10 +159,7 @@ pub fn setup_updated_and_synced_member_cgkas(
     for m in members.iter_mut().skip(1) {
         let cgka = member_cgkas[0].cgka.with_new_owner(m.id, m.pk, m.sk)?;
         let mut member_cgka = TestMemberCgka::new(m.clone(), cgka);
-        let maybe_op = member_cgka.update(&mut rand::thread_rng())?;
-        let Some(op) = maybe_op else {
-            return Err(CgkaError::InvalidOperation);
-        };
+        let op = member_cgka.update(&mut rand::thread_rng())?;
         member_cgkas[0].cgka.merge(op)?;
         member_cgkas.push(member_cgka);
     }
@@ -401,9 +398,8 @@ pub fn remove_odd_members() -> Box<TestOperation> {
 pub fn update_all_members() -> Box<TestOperation> {
     Box::new(move |cgkas, _added_members, ops| {
         for m in cgkas.iter_mut() {
-            if let Some(next_op) = m.update(&mut rand::thread_rng())? {
-                ops.add(m.id(), next_op);
-            }
+            let next_op = m.update(&mut rand::thread_rng())?;
+            ops.add(m.id(), next_op);
         }
         Ok(())
     })
@@ -412,12 +408,7 @@ pub fn update_all_members() -> Box<TestOperation> {
 pub fn update_first_member() -> Box<TestOperation> {
     Box::new(move |cgkas, _added_members, ops| {
         let id = cgkas[0].id();
-        ops.add(
-            id,
-            cgkas[0]
-                .update(&mut rand::thread_rng())?
-                .ok_or(CgkaError::InvalidOperation)?,
-        );
+        ops.add(id, cgkas[0].update(&mut rand::thread_rng())?);
         Ok(())
     })
 }
@@ -428,9 +419,8 @@ pub fn update_even_members() -> Box<TestOperation> {
             if idx % 2 != 0 {
                 continue;
             }
-            if let Some(next_op) = m.update(&mut rand::thread_rng())? {
-                ops.add(m.id(), next_op);
-            }
+            let next_op = m.update(&mut rand::thread_rng())?;
+            ops.add(m.id(), next_op);
         }
         Ok(())
     })

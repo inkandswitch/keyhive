@@ -31,15 +31,12 @@ impl<T: ContentRef> DocumentStore<T> {
         self.docs.get(id).cloned()
     }
 
-    pub fn get_mut(&mut self, id: &DocumentId) -> Option<&mut Document<T>> {
-        self.docs.get_mut(id)
-    }
-
-    pub fn generate_document(
+    pub fn generate_document<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         parents: NonEmpty<Agent<T>>,
+        csprng: &mut R,
     ) -> Result<DocumentId, DelegationError> {
-        let new_doc = Document::generate(parents)?;
+        let new_doc = Document::generate(parents, csprng)?;
         let new_doc_id: DocumentId = new_doc.doc_id();
         self.insert(Rc::new(RefCell::new(new_doc)));
         Ok(new_doc_id)

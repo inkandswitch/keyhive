@@ -92,7 +92,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
             head: self.active.dupe().into(),
             tail: coparents,
         };
-        self.docs.generate_document(parents)
+        self.docs.generate_document(parents, &mut self.csprng)
     }
 
     pub fn rotate_prekey(&mut self, prekey: ShareKey) -> Result<ShareKey, SigningError> {
@@ -166,8 +166,9 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
         // FIXME: Do we return app secret metadata? Probably makes sense to add
         // to Encrypted
     ) -> Encrypted<Vec<u8>> {
-        let doc = self.docs.get_mut(&doc_id).expect("FIXME");
-        doc.encrypt_content(content_ref, content, pred_ref)
+        let doc_ref = self.docs.get(&doc_id).expect("FIXME");
+        let mut doc = doc_ref.borrow_mut();
+        doc.encrypt_content(content_ref, content, pred_ref, &mut self.csprng)
     }
 
     pub fn decrypt_content(
@@ -178,8 +179,9 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
         metadata: &ApplicationSecretMetadata<T>,
         // FIXME: What error return type?
     ) -> Vec<u8> {
-        let doc = self.docs.get_mut(&doc_id).expect("FIXME");
-        doc.decrypt_content(encrypted, metadata)
+        let doc_ref = self.docs.get(&doc_id).expect("FIXME");
+        let mut doc = doc_ref.borrow_mut();
+        doc.decrypt_content(encrypted, metadata).clone()
     }
 
     pub fn reachable_docs(&self) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> {

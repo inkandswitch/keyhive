@@ -273,12 +273,13 @@ mod tests {
 
     #[test]
     fn test_root_key_after_update_is_not_leaf_sk() -> Result<(), CgkaError> {
-        let doc_id = DocumentId::generate();
+        let csprng = &mut rand::thread_rng();
+        let doc_id = DocumentId::generate(csprng);
         let members = setup_members(2);
         let mut cgka = setup_cgka(doc_id, &members, 0);
-        let sk = ShareSecretKey::generate();
+        let sk = ShareSecretKey::generate(csprng);
         let pk = sk.share_key();
-        cgka.update(cgka.owner_id, pk, sk.clone())?;
+        cgka.update(cgka.owner_id, pk, sk.clone(), csprng)?;
         assert_ne!(sk, cgka.secret()?);
         Ok(())
     }
@@ -318,13 +319,9 @@ mod tests {
         let doc_id = DocumentId::generate(csprng);
         let mut cgkas = setup_member_cgkas(doc_id, 7)?;
         assert!(cgkas[0].cgka.has_pcs_key());
-        let op1 = cgkas[1]
-            .update(csprng)?
-            .ok_or(CgkaError::InvalidOperation)?;
+        let op1 = cgkas[1].update(csprng)?;
         cgkas[0].cgka.merge(op1)?;
-        let op6 = cgkas[6]
-            .update(csprng)?
-            .ok_or(CgkaError::InvalidOperation)?;
+        let op6 = cgkas[6].update(csprng)?;
         cgkas[0].cgka.merge(op6)?;
         assert!(!cgkas[0].cgka.has_pcs_key());
         Ok(())
@@ -336,9 +333,7 @@ mod tests {
     ) -> Result<(), CgkaError> {
         // One member updates and all merge that in so that the tree has a root secret.
         let m_idx = if member_cgkas.len() > 1 { 1 } else { 0 };
-        let update_op = member_cgkas[m_idx]
-            .update(csprng)?
-            .ok_or(CgkaError::IdentifierNotFound)?;
+        let update_op = member_cgkas[m_idx].update(csprng)?;
         let post_update_secret_bytes = member_cgkas[m_idx].cgka.secret()?.to_bytes();
         for (idx, m) in member_cgkas.iter_mut().enumerate() {
             if idx == m_idx {
