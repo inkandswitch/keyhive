@@ -31,6 +31,10 @@ impl<T: ContentRef> DocumentStore<T> {
         self.docs.get(id)
     }
 
+    pub fn get_mut(&mut self, id: &DocumentId) -> Option<&mut Document<T>> {
+        self.docs.get_mut(id)
+    }
+
     pub fn generate_document(
         &mut self,
         parents: NonEmpty<Agent<T>>,

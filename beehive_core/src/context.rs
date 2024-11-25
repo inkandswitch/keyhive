@@ -2,8 +2,12 @@
 
 use crate::{
     access::Access,
+    cgka::encryption_key::ApplicationSecretMetadata,
     content::reference::ContentRef,
-    crypto::signed::{Signed, SigningError},
+    crypto::{
+        encrypted::Encrypted,
+        signed::{Signed, SigningError},
+    },
     principal::{
         active::Active,
         agent::{Agent, AgentId},
@@ -90,6 +94,32 @@ impl<T: ContentRef> Context<T> {
     ) -> Result<(), SigningError> {
         // FIXME check which docs are reachable from this group and include them automatically
         resource.revoke_member(to_revoke, &self.active.signer, relevant_docs)
+    }
+
+    pub fn encrypt_content(
+        &mut self,
+        doc_id: DocumentId,
+        content_ref: &T,
+        pred_ref: &Vec<T>,
+        content: &[u8],
+        // FIXME: What error return type?
+        // FIXME: Do we return app secret metadata? Probably makes sense to add
+        // to Encrypted
+    ) -> Encrypted<Vec<u8>> {
+        let doc = self.docs.get_mut(&doc_id).expect("FIXME");
+        doc.encrypt_content(content_ref, content, pred_ref)
+    }
+
+    pub fn decrypt_content(
+        &mut self,
+        doc_id: DocumentId,
+        encrypted: &Encrypted<Vec<u8>>,
+        // FIXME: Remove when on Encrypted
+        metadata: &ApplicationSecretMetadata<T>,
+        // FIXME: What error return type?
+    ) -> Vec<u8> {
+        let doc = self.docs.get_mut(&doc_id).expect("FIXME");
+        doc.decrypt_content(encrypted, metadata)
     }
 
     pub fn accessible_docs(&self) -> BTreeMap<DocumentId, (&Document<T>, Access)> {

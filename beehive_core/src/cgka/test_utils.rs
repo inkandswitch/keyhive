@@ -1,20 +1,23 @@
 use super::{error::CgkaError, operation::CgkaOperation, Cgka};
 use crate::{
     crypto::share_key::{ShareKey, ShareSecretKey},
-    principal::{document::id::DocumentId, identifier::Identifier},
+    principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
 };
+use nonempty::{nonempty, NonEmpty};
 use std::{collections::HashMap, mem};
+
+pub type TestContentRef = u32;
 
 #[derive(Debug, Clone)]
 pub struct TestMember {
-    pub id: Identifier,
+    pub id: IndividualId,
     pub pk: ShareKey,
     pub sk: ShareSecretKey,
 }
 
 impl TestMember {
     pub fn generate() -> Self {
-        let id = Identifier::generate();
+        let id = IndividualId(Identifier::generate());
         let sk = ShareSecretKey::generate();
         let pk = sk.share_key();
         Self { id, pk, sk }
@@ -37,11 +40,11 @@ impl TestMemberCgka {
         }
     }
 
-    pub fn id(&self) -> Identifier {
+    pub fn id(&self) -> IndividualId {
         self.m.id
     }
 
-    pub fn update(&mut self) -> Result<Option<CgkaOperation>, CgkaError> {
+    pub fn update(&mut self) -> Result<CgkaOperation, CgkaError> {
         let sk = ShareSecretKey::generate();
         let pk = sk.share_key();
         self.m.pk = pk;
@@ -52,19 +55,19 @@ impl TestMemberCgka {
 
 #[derive(Debug, Default, Clone)]
 pub struct TestConcurrentOperations {
-    pub ops: HashMap<Identifier, Vec<CgkaOperation>>,
-    pub remove_ops: HashMap<Identifier, Vec<CgkaOperation>>,
+    pub ops: HashMap<IndividualId, Vec<CgkaOperation>>,
+    pub remove_ops: HashMap<IndividualId, Vec<CgkaOperation>>,
 }
 
 impl TestConcurrentOperations {
     pub fn new() -> Self {
         Self {
-            ops: HashMap::new(),
-            remove_ops: HashMap::new(),
+            ops: Default::default(),
+            remove_ops: Default::default(),
         }
     }
 
-    pub fn add(&mut self, member_id: Identifier, op: CgkaOperation) {
+    pub fn add(&mut self, member_id: IndividualId, op: CgkaOperation) {
         match op {
             CgkaOperation::Remove { id, removed_keys } => {
                 self.remove_ops
@@ -78,7 +81,7 @@ impl TestConcurrentOperations {
         }
     }
 
-    pub fn ordered_with_ids(&mut self) -> Vec<(Identifier, CgkaOperation)> {
+    pub fn ordered_with_ids(&mut self) -> Vec<(IndividualId, CgkaOperation)> {
         // TODO: This looks complex but currently doesn't do much except place the
         // removes at the end. Update so that it shuffles but keeps causal order for
         // individual ids.
@@ -96,26 +99,25 @@ impl TestConcurrentOperations {
     }
 }
 
-pub fn setup_members(member_count: u32) -> Vec<TestMember> {
+pub fn setup_members(member_count: u32) -> NonEmpty<TestMember> {
     assert!(member_count > 0);
-    let mut ms = Vec::new();
-    for _ in 0..member_count {
+    let mut ms = nonempty![TestMember::generate()];
+    for _ in 1..member_count {
         ms.push(TestMember::generate());
     }
     ms
 }
 
-pub fn setup_cgka(doc_id: DocumentId, members: &[TestMember], m_idx: usize) -> Cgka {
+pub fn setup_cgka(doc_id: DocumentId, members: &NonEmpty<TestMember>, m_idx: usize) -> Cgka {
     let owner = &members[m_idx];
+    let first: (IndividualId, ShareKey) = (members.first().id, members.first().pk);
+    let member_id_pks = NonEmpty::from((
+        first,
+        members.iter().skip(1).map(|p| (p.id, p.pk)).collect(),
+    ));
 
-    Cgka::new(
-        members.iter().map(|p| (p.id, p.pk)).collect(),
-        doc_id,
-        owner.id,
-        owner.pk,
-        owner.sk,
-    )
-    .expect("CGKA construction failed")
+    Cgka::new(member_id_pks, doc_id, owner.id, owner.pk, owner.sk)
+        .expect("CGKA construction failed")
 }
 
 /// Set up cgkas for all members with the same secret, but only the initial member
@@ -146,10 +148,7 @@ pub fn setup_updated_and_synced_member_cgkas(
     for m in members.iter_mut().skip(1) {
         let cgka = member_cgkas[0].cgka.with_new_owner(m.id, m.pk, m.sk)?;
         let mut member_cgka = TestMemberCgka::new(m.clone(), cgka);
-        let maybe_op = member_cgka.update()?;
-        let Some(op) = maybe_op else {
-            return Err(CgkaError::InvalidOperation);
-        };
+        let op = member_cgka.update()?;
         member_cgkas[0].cgka.merge(op)?;
         member_cgkas.push(member_cgka);
     }
@@ -388,9 +387,7 @@ pub fn remove_odd_members() -> Box<TestOperation> {
 pub fn update_all_members() -> Box<TestOperation> {
     Box::new(move |cgkas, _added_members, ops| {
         for m in cgkas.iter_mut() {
-            if let Some(next_op) = m.update()? {
-                ops.add(m.id(), next_op);
-            }
+            ops.add(m.id(), m.update()?);
         }
         Ok(())
     })
@@ -399,7 +396,7 @@ pub fn update_all_members() -> Box<TestOperation> {
 pub fn update_first_member() -> Box<TestOperation> {
     Box::new(move |cgkas, _added_members, ops| {
         let id = cgkas[0].id();
-        ops.add(id, cgkas[0].update()?.ok_or(CgkaError::InvalidOperation)?);
+        ops.add(id, cgkas[0].update()?);
         Ok(())
     })
 }
@@ -410,9 +407,7 @@ pub fn update_even_members() -> Box<TestOperation> {
             if idx % 2 != 0 {
                 continue;
             }
-            if let Some(next_op) = m.update()? {
-                ops.add(m.id(), next_op);
-            }
+            ops.add(m.id(), m.update()?);
         }
         Ok(())
     })
@@ -423,7 +418,7 @@ pub fn update_even_members() -> Box<TestOperation> {
 fn check_same_secret(member_cgkas: &mut Vec<TestMemberCgka>) -> Result<(), CgkaError> {
     let secret_bytes = member_cgkas[0].cgka.secret()?.to_bytes();
     for m in member_cgkas.iter_mut().skip(1) {
-        assert!(m.cgka.tree.has_root_key()?);
+        assert!(m.cgka.has_pcs_key());
         assert_eq!(m.cgka.secret()?.to_bytes(), secret_bytes)
     }
     Ok(())

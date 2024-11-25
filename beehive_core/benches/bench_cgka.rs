@@ -70,9 +70,7 @@ where
         .cgka
         .with_new_owner(paired_cgka.id(), paired_cgka.m.pk, paired_cgka.m.sk.clone())
         .unwrap();
-    let Some(op) = paired_cgka.update().unwrap() else {
-        panic!();
-    };
+    let op = paired_cgka.update().unwrap();
     first_cgka.cgka.merge(op).unwrap();
     (first_cgka, paired_cgka)
 }
@@ -93,9 +91,7 @@ fn apply_100_updates_and_sibling_decrypt(bencher: Bencher, member_count: u32) {
         })
         .bench_local_refs(|(first_cgka, sibling_cgka)| {
             for _ in 0..100 {
-                let Some(op) = first_cgka.update().unwrap() else {
-                    panic!();
-                };
+                let op = first_cgka.update().unwrap();
                 sibling_cgka.cgka.merge(op).unwrap();
                 sibling_cgka.cgka.secret().unwrap();
             }
@@ -118,9 +114,7 @@ fn apply_100_updates_and_distant_member_decrypt(bencher: Bencher, member_count: 
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let Some(op) = first_cgka.update().unwrap() else {
-                    panic!();
-                };
+                let op = first_cgka.update().unwrap();
                 distant_cgka.cgka.merge(op).unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }
@@ -146,9 +140,7 @@ fn apply_100_updates_and_distant_member_decrypt_with_maximum_conflict_keys(
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let Some(op) = first_cgka.update().unwrap() else {
-                    panic!();
-                };
+                let op = first_cgka.update().unwrap();
                 distant_cgka.cgka.merge(op).unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }
@@ -171,9 +163,7 @@ fn apply_100_updates_and_distant_member_decrypt_after_adds(bencher: Bencher, mem
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let Some(op) = first_cgka.update().unwrap() else {
-                    panic!();
-                };
+                let op = first_cgka.update().unwrap();
                 distant_cgka.cgka.merge(op).unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }
@@ -199,9 +189,7 @@ fn apply_100_updates_and_distant_member_decrypt_with_blank_nodes(
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let Some(op) = first_cgka.update().unwrap() else {
-                    panic!();
-                };
+                let op = first_cgka.update().unwrap();
                 distant_cgka.cgka.merge(op).unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }
