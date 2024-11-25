@@ -3,6 +3,7 @@ use super::{
     agent::JsAgent,
     delegation::JsDelegationError,
     document::JsDocument,
+    encrypted::JsEncrypted,
     group::JsGroup,
     identifier::JsIdentifier,
     membered::JsMembered,
@@ -89,9 +90,19 @@ impl JsBeehive {
     }
 
     // NOTE: this is with a fresh doc secret
-    #[wasm_bindgen(js_name = tryEncryptBatch)]
-    pub fn try_encrypt_batch(&mut self, _doc: u8) -> Result<u8, u8> {
-        todo!("waiting on BeeKEM")
+    #[wasm_bindgen(js_name = tryEncryptArchive)]
+    pub fn try_encrypt_archive(
+        &mut self,
+        doc: JsDocument,
+        content_ref: ChangeHash,
+        pred_refs: Vec<ChangeHash>,
+        content: &[u8],
+    ) -> JsEncrypted {
+        // FIXME can fail?
+        let preds: Vec<_> = pred_refs.into_iter().map(|c| c.0).collect();
+        self.ctx
+            .encrypt_content(doc.borrow().doc_id(), &content_ref.0, &preds, content)
+            .into()
     }
 
     #[wasm_bindgen(js_name = tryDecrypt)]

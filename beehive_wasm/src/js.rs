@@ -4,6 +4,7 @@ pub mod beehive;
 pub mod delegation;
 pub mod document;
 pub mod document_id;
+pub mod encrypted;
 pub mod group;
 pub mod group_id;
 pub mod identifier;

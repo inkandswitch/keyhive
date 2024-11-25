@@ -9,7 +9,7 @@ pub mod treemath;
 #[cfg(feature = "test_utils")]
 pub mod test_utils;
 
-use std::{borrow::Borrow, collections::HashMap, rc::Rc};
+use std::{borrow::Borrow, rc::Rc};
 
 use crate::{
     content::reference::ContentRef,
