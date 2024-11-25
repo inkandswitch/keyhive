@@ -1,6 +1,7 @@
 use crate::crypto::{
     share_key::{ShareKey, ShareSecretKey},
     signed::{Signed, SigningError},
+    signing_key::SigningKey,
 };
 use crate::util::content_addressed_map::CaMap;
 use serde::{Deserialize, Serialize};
@@ -21,7 +22,7 @@ impl PrekeyState {
     }
 
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        signing_key: &ed25519_dalek::SigningKey,
+        signing_key: &SigningKey,
         size: usize,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
@@ -45,7 +46,7 @@ impl PrekeyState {
     pub fn rotate<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old: ShareKey,
-        signer: &ed25519_dalek::SigningKey,
+        signer: &SigningKey,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
@@ -60,7 +61,7 @@ impl PrekeyState {
 
     pub fn expand<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
-        signer: &ed25519_dalek::SigningKey,
+        signer: &SigningKey,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);

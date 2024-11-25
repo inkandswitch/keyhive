@@ -1,5 +1,7 @@
-use crate::principal::{identifier::Identifier, membered::MemberedId, verifiable::Verifiable};
-use ed25519_dalek::VerifyingKey;
+use crate::{
+    crypto::{verifiable::Verifiable, verifying_key::VerifyingKey},
+    principal::{identifier::Identifier, membered::MemberedId},
+};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 

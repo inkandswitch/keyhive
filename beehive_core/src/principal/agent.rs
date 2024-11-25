@@ -4,11 +4,12 @@ use super::{
     group::{id::GroupId, Group},
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
-    verifiable::Verifiable,
 };
-use crate::content::reference::ContentRef;
+use crate::{
+    content::reference::ContentRef,
+    crypto::{verifiable::Verifiable, verifying_key::VerifyingKey},
+};
 use dupe::Dupe;
-use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, rc::Rc};
 

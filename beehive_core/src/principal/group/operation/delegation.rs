@@ -85,6 +85,12 @@ impl<T: ContentRef> Signed<Delegation<T>> {
     }
 }
 
+impl<T: ContentRef> Hash for Delegation<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        StaticDelegation::from(self.clone()).hash(state)
+    }
+}
+
 impl<T: ContentRef> Serialize for Delegation<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // FIXME could be a heavy clone since this is used to hash

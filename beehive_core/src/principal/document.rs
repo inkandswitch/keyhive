@@ -1,13 +1,16 @@
 pub mod id;
 pub mod store;
 
-use super::{individual::id::IndividualId, verifiable::Verifiable};
+use super::individual::id::IndividualId;
 use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::{
         share_key::ShareKey,
         signed::{Signed, SigningError},
+        signing_key::SigningKey,
+        verifiable::Verifiable,
+        verifying_key::VerifyingKey,
     },
     principal::{
         agent::{Agent, AgentId},
@@ -22,15 +25,14 @@ use crate::{
         identifier::Identifier,
         individual::Individual,
     },
-    util::content_addressed_map::CaMap,
+    util::{content_addressed_map::CaMap, hash_map::HashMap},
 };
 use dupe::Dupe;
-use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
 use nonempty::NonEmpty;
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     rc::Rc,
 };
 
@@ -68,8 +70,11 @@ impl<T: ContentRef> Document<T> {
         self.group.get_capability(member_id)
     }
 
-    pub fn generate(parents: NonEmpty<Agent<T>>) -> Result<Self, DelegationError> {
-        let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+    pub fn generate<R: rand::RngCore + rand::CryptoRng>(
+        parents: NonEmpty<Agent<T>>,
+        csprng: &mut R,
+    ) -> Result<Self, DelegationError> {
+        let doc_signer = SigningKey::generate(csprng);
 
         parents.iter().try_fold(
             Document {
@@ -121,7 +126,7 @@ impl<T: ContentRef> Document<T> {
     pub fn revoke_member(
         &mut self,
         member_id: AgentId,
-        signing_key: &ed25519_dalek::SigningKey,
+        signing_key: &SigningKey,
         relevant_docs: &[&Rc<RefCell<Document<T>>>],
     ) -> Result<(), SigningError> {
         self.group

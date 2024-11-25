@@ -11,15 +11,16 @@ use crate::{
     crypto::{
         digest::Digest,
         signed::{Signed, VerificationError},
+        signing_key::SigningKey,
+        verifiable::Verifiable,
+        verifying_key::VerifyingKey,
     },
     principal::{
         agent::Agent, group::operation::delegation::DelegationError, identifier::Identifier,
-        verifiable::Verifiable,
     },
     util::content_addressed_map::CaMap,
 };
 use dupe::Dupe;
-use ed25519_dalek::VerifyingKey;
 use serde::{ser::SerializeStruct, Serialize, Serializer};
 use std::{
     collections::{BTreeMap, HashSet},
@@ -42,11 +43,11 @@ pub struct GroupState<T: ContentRef> {
 impl<T: ContentRef> GroupState<T> {
     pub fn generate(parents: Vec<Agent<T>>) -> Result<Self, DelegationError> {
         let mut rng = rand::thread_rng();
-        let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
-        let group_id = signing_key.verifying_key().into();
+        let signing_key: SigningKey = ed25519_dalek::SigningKey::generate(&mut rng).into();
+        let group_id = signing_key.verifying_key();
 
         let group = GroupState {
-            id: GroupId(group_id),
+            id: GroupId(group_id.into()),
 
             delegation_heads: HashSet::new(),
             delegations: CaMap::new(),
@@ -195,7 +196,7 @@ impl<T: ContentRef> From<VerifyingKey> for GroupState<T> {
 }
 
 impl<T: ContentRef> Verifiable for GroupState<T> {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         self.id.0.verifying_key()
     }
 }

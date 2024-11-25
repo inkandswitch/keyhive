@@ -3,9 +3,11 @@
 pub mod id;
 pub mod state;
 
-use super::{agent::AgentId, verifiable::Verifiable};
-use crate::crypto::{digest::Digest, share_key::ShareKey, signed::SigningError};
-use ed25519_dalek::VerifyingKey;
+use super::agent::AgentId;
+use crate::crypto::{
+    digest::Digest, share_key::ShareKey, signed::SigningError, signing_key::SigningKey,
+    verifiable::Verifiable, verifying_key::VerifyingKey,
+};
 use id::IndividualId;
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
@@ -41,7 +43,7 @@ pub struct Individual {
 
 impl Individual {
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        signer: &ed25519_dalek::SigningKey,
+        signer: &SigningKey,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
         let state = PrekeyState::generate(signer, 8, csprng)?;
@@ -63,7 +65,7 @@ impl Individual {
     pub fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old_key: ShareKey,
-        signer: &ed25519_dalek::SigningKey,
+        signer: &SigningKey,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_key = self.prekey_state.rotate(old_key, signer, csprng)?;
@@ -74,7 +76,7 @@ impl Individual {
 
     pub fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
-        signer: &ed25519_dalek::SigningKey,
+        signer: &SigningKey,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_key = self.prekey_state.expand(signer, csprng)?;

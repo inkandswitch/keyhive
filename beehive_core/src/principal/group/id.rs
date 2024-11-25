@@ -1,4 +1,7 @@
-use crate::principal::{identifier::Identifier, verifiable::Verifiable};
+use crate::{
+    crypto::{verifiable::Verifiable, verifying_key::VerifyingKey},
+    principal::identifier::Identifier,
+};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 
@@ -32,7 +35,7 @@ impl From<GroupId> for Identifier {
 }
 
 impl Verifiable for GroupId {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         self.0.into()
     }
 }

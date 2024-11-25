@@ -29,10 +29,7 @@ impl JsBeehive {
     #[wasm_bindgen(constructor)]
     pub fn new(signing_key: JsSigningKey) -> Result<JsBeehive, JsSigningError> {
         Ok(JsBeehive {
-            ctx: Context::generate(
-                ed25519_dalek::SigningKey::from_bytes(&signing_key.0),
-                rand::thread_rng(),
-            )?,
+            ctx: Context::generate(signing_key.0.into(), rand::thread_rng())?,
         })
     }
 
@@ -137,7 +134,7 @@ impl JsBeehive {
         to_revoke: &JsAgent,
         membered: &mut JsMembered,
     ) -> Result<(), JsSigningError> {
-        Ok(self.ctx.revoke_member(to_revoke.agent_id(), membered)?)
+        Ok(self.ctx.revoke_member(to_revoke.0.dupe(), membered)?)
     }
 
     #[wasm_bindgen(js_name = reachableDocs)]

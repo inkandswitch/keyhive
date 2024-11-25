@@ -4,7 +4,6 @@ use super::{
     document::{id::DocumentId, Document},
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
-    verifiable::Verifiable,
 };
 use crate::{
     access::Access,
@@ -12,9 +11,13 @@ use crate::{
     crypto::{
         encrypted::Encrypted,
         share_key::ShareKey,
+        signature::Signature,
         signed::{Signed, SigningError},
+        signing_key::SigningKey,
         siv::Siv,
         symmetric_key::SymmetricKey,
+        verifiable::Verifiable,
+        verifying_key::VerifyingKey,
     },
     principal::{
         agent::{Agent, AgentId},
@@ -26,7 +29,7 @@ use crate::{
     },
 };
 use dupe::Dupe;
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::Signer;
 use serde::Serialize;
 use std::{cell::RefCell, collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;

@@ -6,6 +6,9 @@ use crate::{
     crypto::{
         share_key::ShareKey,
         signed::{Signed, SigningError},
+        signing_key::SigningKey,
+        verifiable::Verifiable,
+        verifying_key::VerifyingKey,
     },
     principal::{
         active::Active,
@@ -20,7 +23,6 @@ use crate::{
         identifier::Identifier,
         individual::{id::IndividualId, Individual},
         membered::Membered,
-        verifiable::Verifiable,
     },
 };
 use dupe::Dupe;
@@ -59,10 +61,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
         self.active.borrow().agent_id()
     }
 
-    pub fn generate(
-        signing_key: ed25519_dalek::SigningKey,
-        mut csprng: R,
-    ) -> Result<Self, SigningError> {
+    pub fn generate(signing_key: SigningKey, mut csprng: R) -> Result<Self, SigningError> {
         Ok(Self {
             active: Rc::new(RefCell::new(Active::generate(signing_key, &mut csprng)?)),
             individuals: Default::default(),
@@ -90,7 +89,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
             head: self.active.dupe().into(),
             tail: coparents,
         };
-        self.docs.generate_document(parents)
+        self.docs.generate_document(parents, &mut self.csprng)
     }
 
     pub fn rotate_prekey(&mut self, prekey: ShareKey) -> Result<ShareKey, SigningError> {
@@ -142,15 +141,19 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
 
     pub fn revoke_member(
         &mut self,
-        to_revoke: AgentId,
+        to_revoke: Agent<T>,
         resource: &mut Membered<T>,
     ) -> Result<(), SigningError> {
-        let relevant_docs = vec![]; // FIXME calculate reachable for revoked or just all known docs
+        let relevant_docs: Vec<&Rc<RefCell<Document<T>>>> = self
+            .docs_reachable_by_agent(to_revoke.dupe())
+            .values()
+            .map(|(doc, _)| *doc)
+            .collect();
 
         resource.revoke_member(
-            to_revoke,
+            to_revoke.agent_id(),
             &self.active.borrow().signer,
-            relevant_docs.as_slice(),
+            &relevant_docs,
         )
     }
 
@@ -253,7 +256,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
 }
 
 impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Verifiable for Context<T, R> {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         self.active.borrow().verifying_key()
     }
 }

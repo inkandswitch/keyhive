@@ -10,13 +10,17 @@ use super::{
     document::Document,
     identifier::Identifier,
     individual::Individual,
-    verifiable::Verifiable,
 };
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::signed::{Signed, SigningError},
-    util::content_addressed_map::CaMap,
+    crypto::{
+        signed::{Signed, SigningError},
+        signing_key::SigningKey,
+        verifiable::Verifiable,
+        verifying_key::VerifyingKey,
+    },
+    util::{content_addressed_map::CaMap, hash_map::HashMap},
 };
 use dupe::{Dupe, IterDupedExt};
 use id::GroupId;
@@ -25,7 +29,7 @@ use operation::{delegation::Delegation, revocation::Revocation, AncestorError, O
 use serde::{ser::SerializeStruct, Serialize, Serializer};
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     rc::Rc,
 };
 use thiserror::Error;
@@ -35,7 +39,7 @@ use thiserror::Error;
 /// Groups are stateful agents. It is possible the delegate control over them,
 /// and they can be delegated to. This produces transitives lines of authority
 /// through the network of [`Agent`]s.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Group<T: ContentRef> {
     /// The current view of members of a group.
     pub(crate) members: HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>>,
@@ -47,7 +51,7 @@ pub struct Group<T: ContentRef> {
 impl<T: ContentRef> Group<T> {
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
     pub fn generate(parents: NonEmpty<Agent<T>>) -> Result<Group<T>, SigningError> {
-        let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+        let group_signer: SigningKey = SigningKey::generate(&mut rand::thread_rng());
         let group_id = GroupId(group_signer.verifying_key().into());
 
         let mut delegations = CaMap::new();
@@ -156,13 +160,13 @@ impl<T: ContentRef> Group<T> {
         &mut self,
         member_to_add: Agent<T>,
         can: Access,
-        signing_key: &ed25519_dalek::SigningKey,
+        signing_key: &SigningKey,
         after_revocations: &[&Rc<Signed<Revocation<T>>>],
         relevant_docs: &[&Rc<RefCell<Document<T>>>],
     ) -> Result<(), AddMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
         let agent: Agent<T> = indie.into();
-        let proof = if self.verifying_key() == signing_key.verifying_key() {
+        let proof = if self.verifying_key() == signing_key.verifying_key().into() {
             None
         } else {
             let p = self
@@ -211,7 +215,7 @@ impl<T: ContentRef> Group<T> {
     pub fn revoke_member(
         &mut self,
         member_to_remove: AgentId,
-        signing_key: &ed25519_dalek::SigningKey,
+        signing_key: &SigningKey,
         relevant_docs: &[&Rc<RefCell<Document<T>>>], // TODO just lookup reachable docs directly
     ) -> Result<(), SigningError> {
         let revocations = &mut self.state.revocations;
@@ -319,18 +323,8 @@ impl<T: ContentRef> Group<T> {
 }
 
 impl<T: ContentRef> Verifiable for Group<T> {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         self.state.verifying_key()
-    }
-}
-
-// FIXME test and consistent order
-impl<T: ContentRef> std::hash::Hash for Group<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        for m in self.members.iter() {
-            m.hash(state);
-        }
-        self.state.hash(state);
     }
 }
 
@@ -371,7 +365,7 @@ mod tests {
     use std::cell::RefCell;
 
     fn setup_user() -> Individual {
-        ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
+        SigningKey::generate(&mut rand::thread_rng())
             .verifying_key()
             .into()
     }

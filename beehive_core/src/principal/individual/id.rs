@@ -1,4 +1,7 @@
-use crate::principal::{identifier::Identifier, verifiable::Verifiable};
+use crate::{
+    crypto::{verifiable::Verifiable, verifying_key::VerifyingKey},
+    principal::identifier::Identifier,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
@@ -34,9 +37,15 @@ impl From<IndividualId> for Identifier {
     }
 }
 
-impl From<ed25519_dalek::VerifyingKey> for IndividualId {
-    fn from(verifying_key: ed25519_dalek::VerifyingKey) -> Self {
+impl From<VerifyingKey> for IndividualId {
+    fn from(verifying_key: VerifyingKey) -> Self {
         IndividualId(verifying_key.into())
+    }
+}
+
+impl From<IndividualId> for VerifyingKey {
+    fn from(individual_id: IndividualId) -> Self {
+        VerifyingKey::from(individual_id.0)
     }
 }
 
@@ -47,7 +56,7 @@ impl std::fmt::Display for IndividualId {
 }
 
 impl Verifiable for IndividualId {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         self.0.verifying_key()
     }
 }

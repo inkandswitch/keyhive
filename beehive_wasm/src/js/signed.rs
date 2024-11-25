@@ -23,6 +23,6 @@ impl JsSigned {
 
     #[wasm_bindgen(getter)]
     pub fn signature(&self) -> Vec<u8> {
-        self.0.signature().to_vec()
+        self.0.signature().as_bytes().to_vec()
     }
 }

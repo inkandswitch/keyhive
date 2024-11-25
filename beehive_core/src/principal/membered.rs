@@ -7,18 +7,23 @@ use super::{
         Group,
     },
     identifier::Identifier,
-    verifiable::Verifiable,
 };
 use crate::{
     content::reference::ContentRef,
-    crypto::signed::{Signed, SigningError},
+    crypto::{
+        signed::{Signed, SigningError},
+        signing_key::SigningKey,
+        verifiable::Verifiable,
+        verifying_key::VerifyingKey,
+    },
+    util::hash_map::HashMap,
 };
 use dupe::{Dupe, OptionDupedExt};
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, collections::HashMap, fmt, rc::Rc};
+use std::{cell::RefCell, fmt, rc::Rc};
 
 /// The union of Agents that have updatable membership
-#[derive(Debug, Clone, Dupe, PartialEq, Eq)]
+#[derive(Debug, Clone, Dupe)]
 pub enum Membered<T: ContentRef> {
     Group(Rc<RefCell<Group<T>>>),
     Document(Rc<RefCell<Document<T>>>),
@@ -67,7 +72,7 @@ impl<T: ContentRef> Membered<T> {
     pub fn revoke_member(
         &mut self,
         member_id: AgentId,
-        signing_key: &ed25519_dalek::SigningKey,
+        signing_key: &SigningKey,
         relevant_docs: &[&Rc<RefCell<Document<T>>>],
     ) -> Result<(), SigningError> {
         match self {
@@ -105,7 +110,7 @@ impl<T: ContentRef> From<Rc<RefCell<Document<T>>>> for Membered<T> {
 }
 
 impl<T: ContentRef> Verifiable for Membered<T> {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         match self {
             Membered::Group(group) => group.borrow().verifying_key(),
             Membered::Document(document) => document.borrow().verifying_key(),
@@ -138,7 +143,7 @@ impl fmt::Display for MemberedId {
 }
 
 impl Verifiable for MemberedId {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         match self {
             MemberedId::GroupId(group_id) => group_id.verifying_key(),
             MemberedId::DocumentId(document_id) => document_id.verifying_key(),

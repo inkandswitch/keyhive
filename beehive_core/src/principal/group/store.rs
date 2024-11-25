@@ -12,7 +12,7 @@ use dupe::{Dupe, IterDupedExt, OptionDupedExt};
 use nonempty::NonEmpty;
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone)]
 pub struct GroupStore<T: ContentRef>(BTreeMap<GroupId, Rc<RefCell<Group<T>>>>);
 
 impl<T: ContentRef> GroupStore<T> {

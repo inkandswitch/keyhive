@@ -1,22 +1,23 @@
 //! The universally unique identifier of an [`Agent`](crate::principal::agentAgent).
 
-use super::verifiable::Verifiable;
+use crate::crypto::{signing_key::SigningKey, verifiable::Verifiable, verifying_key::VerifyingKey};
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 
 /// A unique identifier for an [`Agent`](crate::principal::agentAgent).
 ///
-/// This is a newtype for a [`VerifyingKey`](ed25519_dalek::VerifyingKey).
+/// This is a newtype for a [`VerifyingKey`].
 /// It is used to identify an agent in the system. Since signing keys are only
 /// available to the one agent and not shared, this identifier is provably unique.
-#[derive(Debug, Copy, Serialize, Deserialize)]
-pub struct Identifier(pub ed25519_dalek::VerifyingKey);
+#[derive(
+    Debug, Copy, Dupe, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
+pub struct Identifier(pub VerifyingKey);
 
 impl Identifier {
     #[cfg(feature = "test_utils")]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
-        ed25519_dalek::SigningKey::generate(csprng)
-            .verifying_key()
-            .into()
+        SigningKey::generate(csprng).verifying_key().into()
     }
 
     /// Lower the [`Identifier`] to an owned binary representation.
@@ -34,18 +35,6 @@ impl Identifier {
     }
 }
 
-impl Clone for Identifier {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl std::hash::Hash for Identifier {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.as_bytes().hash(state)
-    }
-}
-
 impl std::fmt::Display for Identifier {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         self.as_slice()
@@ -54,46 +43,32 @@ impl std::fmt::Display for Identifier {
     }
 }
 
-impl PartialEq for Identifier {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_bytes() == other.as_bytes()
-    }
-}
-
-impl Eq for Identifier {}
-
-impl PartialOrd for Identifier {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Identifier {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.as_bytes().cmp(other.as_bytes())
-    }
-}
-
 impl Verifiable for Identifier {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         self.0
+    }
+}
+
+impl From<VerifyingKey> for Identifier {
+    fn from(verifying_key: VerifyingKey) -> Self {
+        Self(verifying_key)
     }
 }
 
 impl From<ed25519_dalek::VerifyingKey> for Identifier {
     fn from(verifying_key: ed25519_dalek::VerifyingKey) -> Self {
-        Self(verifying_key)
+        Self(verifying_key.into())
     }
 }
 
-impl From<Identifier> for ed25519_dalek::VerifyingKey {
+impl From<Identifier> for VerifyingKey {
     fn from(identifier: Identifier) -> Self {
         identifier.0
     }
 }
 
-impl From<ed25519_dalek::SigningKey> for Identifier {
-    fn from(sk: ed25519_dalek::SigningKey) -> Self {
-        sk.verifying_key().into()
+impl From<Identifier> for ed25519_dalek::VerifyingKey {
+    fn from(identifier: Identifier) -> Self {
+        identifier.0.into()
     }
 }
