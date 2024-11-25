@@ -25,7 +25,7 @@ jobs:
       with:
         node-version: 22
     - name: Install dependencies
-      run: cd ./beehive_wasm && npm ci
+      run: cd ./beehive_wasm && npm i
     - name: Install Playwright Browsers
       run: cd ./beehive_wasm && npx playwright install --with-deps
 
