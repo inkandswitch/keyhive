@@ -36,7 +36,7 @@ jobs:
     - name: Test on Wasm
       run: wasm-pack test --node beehive_wasm
     - name: Test in browsers
-      run: wasm-pack build ./beehive_wasm --release --target=web && cd beehive_wasm && pnpm i && pnpm exec playwright
+      run: wasm-pack build ./beehive_wasm --release --target=web && cd ./beehive_wasm && pnpm i && pnpm exec playwright test
     - name: Clippy
       run: cargo clippy
     - name: Compile benches
