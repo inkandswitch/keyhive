@@ -24,11 +24,13 @@ jobs:
     - uses: actions/setup-node@v4
       with:
         node-version: 22
+    - name: Install playwright browsers
+      run: npx playwright install --with-deps
 
-    - name: Build
-      run: cargo build --verbose
     - name: Test in browsers
       run: wasm-pack build ./beehive_wasm --release --target=web && cd ./beehive_wasm && pnpm i && npm install --global http-server && pnpm exec playwright test
+    - name: Build
+      run: cargo build --verbose
     - name: Build with Test Utils
       run: cargo build --verbose --features=test_utils
     - name: Check
