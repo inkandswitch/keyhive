@@ -27,7 +27,7 @@ use crate::{
 };
 use dupe::Dupe;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use rand::{Rng, thread_rng};
+use rand::{thread_rng, Rng};
 use serde::Serialize;
 use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;
@@ -40,7 +40,7 @@ pub struct Active {
 
     /// The encryption "sharing" key pairs that the active agent has.
     /// This includes the secret keys for ECDH.
-    pub share_key_pairs: BTreeMap<ShareKey, ShareSecretKey>, // FIXME generalize to use e.g. KMS
+    pub prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>, // FIXME generalize to use e.g. KMS
 
     pub individual: Individual,
 }
@@ -49,7 +49,7 @@ impl Active {
     pub fn generate(signer: SigningKey) -> Result<Self, SigningError> {
         Ok(Self {
             individual: Individual::generate(&signer)?,
-            share_key_pairs: BTreeMap::new(),
+            prekey_pairs: BTreeMap::new(),
             signer,
         })
     }
@@ -65,8 +65,8 @@ impl Active {
     // FIXME: Temporary measure to retrieve a prekey. Are the share keys actually
     // prekeys for an Active?
     pub fn sample_prekey(&self) -> ShareKey {
-        let idx = thread_rng().gen_range(0..self.share_key_pairs.len());
-        *self.share_key_pairs.keys().nth(idx).expect("FIXME")
+        let idx = thread_rng().gen_range(0..self.prekey_pairs.len());
+        *self.prekey_pairs.keys().nth(idx).expect("FIXME")
     }
 
     /// Sign a payload.
@@ -139,7 +139,7 @@ impl Active {
             .ok_or(ShareError::MissingYourSharePublicKey)?;
 
         let our_sk = self
-            .share_key_pairs
+            .prekey_pairs
             .get(&our_pk.1)
             .ok_or(ShareError::MissingYourShareSecretKey)?;
 
@@ -163,7 +163,7 @@ impl std::fmt::Display for Active {
 impl Debug for Active {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let keypairs_hidden_secret_keys: Vec<(&ShareKey, &str)> = self
-            .share_key_pairs
+            .prekey_pairs
             .keys()
             .map(|pk| (pk, "<SecretKey>"))
             .collect();
@@ -180,7 +180,7 @@ impl std::hash::Hash for Active {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id().hash(state);
         self.signer.to_bytes().hash(state);
-        for pk in self.share_key_pairs.keys() {
+        for pk in self.prekey_pairs.keys() {
             pk.hash(state);
         }
     }
@@ -204,9 +204,9 @@ impl PartialEq for Active {
         self.id() == other.id()
             && self.signer.to_bytes() == other.signer.to_bytes()
             && self
-                .share_key_pairs
+                .prekey_pairs
                 .iter()
-                .zip(other.share_key_pairs.iter())
+                .zip(other.prekey_pairs.iter())
                 .all(|((pk1, sk1), (pk2, sk2))| pk1 == pk2 && sk1.to_bytes() == sk2.to_bytes())
     }
 }

@@ -7,7 +7,7 @@ use super::{agent::AgentId, verifiable::Verifiable};
 use crate::crypto::{digest::Digest, share_key::ShareKey, signed::SigningError};
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
-use rand::{Rng, thread_rng};
+use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
 use std::collections::HashSet;

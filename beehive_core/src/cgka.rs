@@ -37,17 +37,18 @@ use serde::{Deserialize, Serialize};
 /// This Cgka struct provides a protocol-agnostic interface for retrieving the
 /// latest secret, rotating keys, and adding and removing members from the group.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct Cgka<T: ContentRef> {
+pub struct Cgka {
     doc_id: DocumentId,
     pub owner_id: IndividualId,
     owner_sks: ShareKeyMap,
     tree: BeeKem,
+    // TODO: Once we can rebuild the tree to correspond to earlier PcsKeys,
+    // convert this to a cache of some kind with policies.
     pcs_keys: CaMap<PcsKey>,
-    content_to_app_secret: HashMap<T, SymmetricKey>,
 }
 
 /// Constructors
-impl<T: ContentRef> Cgka<T> {
+impl Cgka {
     /// We assume members are in causal order.
     pub fn new(
         members: NonEmpty<(IndividualId, ShareKey)>,
@@ -71,7 +72,6 @@ impl<T: ContentRef> Cgka<T> {
             owner_sks,
             tree,
             pcs_keys: Default::default(),
-            content_to_app_secret: Default::default(),
         };
         cgka.tree
             .encrypt_path(owner_id, owner_pk, &mut cgka.owner_sks)?;
@@ -98,23 +98,21 @@ impl<T: ContentRef> Cgka<T> {
             let pcs_key = PcsKey::derive_from(cgka.owner_id, &mut cgka.owner_sks, &cgka.tree)?;
             cgka.pcs_keys.insert(Rc::new(pcs_key));
         }
-        cgka.content_to_app_secret = Default::default();
         Ok(cgka)
     }
 }
 
 /// Public CGKA operations
-impl<T: ContentRef> Cgka<T> {
+impl Cgka {
     // FIXME: We're currently assuming the caller will check if there is a root
     // secret before calling this method. If there is not, it must do a PCS update
     // first. If we use this strategy, then failing to check and calling when there
     // is no root secret will return an error.
-    pub fn new_app_secret_for(
+    pub fn new_app_secret_for<T: ContentRef>(
         &mut self,
         content_ref: &T,
         content: &[u8],
-        // FIXME: What should we really pass in here?
-        pred_ref: &T,
+        pred_ref: &Vec<T>,
     ) -> Result<ApplicationSecret<T>, CgkaError> {
         debug_assert!(self.has_pcs_key());
         let current_pcs_key = PcsKey::derive_from(self.owner_id, &mut self.owner_sks, &self.tree)?;
@@ -126,64 +124,46 @@ impl<T: ContentRef> Cgka<T> {
             .map_err(|_e| CgkaError::Conversion)?;
         let metadata = ApplicationSecretMetadata {
             writer_id: self.owner_id,
-            content_ref: content_ref.clone(),
-            pred_ref: pred_ref.clone(),
+            content_ref: Digest::hash(content_ref),
+            pred_ref: Digest::hash(pred_ref),
             nonce,
             pcs_key_hash,
         };
-        let app_secret = current_pcs_key.derive_application_secret(content_ref, pred_ref);
-        self.content_to_app_secret
-            .insert(content_ref.clone(), app_secret);
+        let app_secret = current_pcs_key
+            .derive_application_secret(Digest::hash(content_ref), Digest::hash(pred_ref));
         Ok(ApplicationSecret::new(app_secret, metadata))
     }
 
     // TODO: Remove once we move to Rust 2024 and can rewrite with an if let chain.
     #[allow(clippy::unnecessary_unwrap)]
-    pub fn decryption_key_for(
+    pub fn decryption_key_for<T: ContentRef>(
         &mut self,
         metadata: &ApplicationSecretMetadata<T>,
     ) -> Result<Option<SymmetricKey>, CgkaError> {
-        Ok(
-            if self
-                .content_to_app_secret
-                .contains_key(&metadata.content_ref)
-            {
-                Some(
-                    *self
-                        .content_to_app_secret
-                        .get(&metadata.content_ref)
-                        .expect("key to be in map"),
-                )
+        let maybe_pcs_key: Option<Rc<PcsKey>> = self.pcs_keys.get(&metadata.pcs_key_hash).cloned();
+        // TODO: With Rust 2024, we'll be able to use if let chains to rewrite this
+        // in a cleaner way. See https://github.com/rust-lang/rust/pull/132833.
+        let last_key = if maybe_pcs_key.is_some()
+            && Digest::hash(maybe_pcs_key.clone().expect("is some").borrow())
+                == metadata.pcs_key_hash
+        {
+            maybe_pcs_key.expect("is some")
+        } else {
+            let pcs_key = PcsKey::derive_from(self.owner_id, &mut self.owner_sks, &self.tree)?;
+            if Digest::hash(&pcs_key) == metadata.pcs_key_hash {
+                Rc::new(pcs_key)
             } else {
-                let maybe_pcs_key: Option<Rc<PcsKey>> =
-                    self.pcs_keys.get(&metadata.pcs_key_hash).cloned();
-                // TODO: With Rust 2024, we'll be able to use if let chains to rewrite this
-                // in a cleaner way. See https://github.com/rust-lang/rust/pull/132833.
-                let last_key = if maybe_pcs_key.is_some()
-                    && Digest::hash(maybe_pcs_key.clone().expect("is some").borrow())
-                        == metadata.pcs_key_hash
-                {
-                    maybe_pcs_key.expect("is some")
-                } else {
-                    let pcs_key = PcsKey::derive_from(self.owner_id, &mut self.owner_sks, &self.tree)?;
-                    if Digest::hash(&pcs_key) == metadata.pcs_key_hash {
-                        Rc::new(pcs_key)
-                    } else {
-                        // FIXME: Right now it's possible that we never derived a PCS key
-                        // from the update corresponding to the PCS key hash in the metadata.
-                        // For example, we might have applied that update as part of a
-                        // concurrent merge, which left the tree with no root secret.
-                        return Ok(None);
-                    }
-                };
-                self.pcs_keys.insert(last_key.clone());
-                let app_secret =
-                    last_key.derive_application_secret(&metadata.content_ref, &metadata.pred_ref);
-                self.content_to_app_secret
-                    .insert(metadata.content_ref.clone(), app_secret);
-                Some(app_secret)
-            },
-        )
+                // FIXME: Right now it's possible that we never derived a PCS key
+                // from the update corresponding to the PCS key hash in the metadata.
+                // For example, we might have applied that update as part of a
+                // concurrent merge, which left the tree with no root secret.
+                return Ok(None);
+            }
+        };
+        self.pcs_keys.insert(last_key.clone());
+        let app_secret =
+            last_key.derive_application_secret(metadata.content_ref, metadata.pred_ref);
+        Ok(Some(app_secret))
     }
 
     /// Get secret for decryption/encryption. If you are using this for a new

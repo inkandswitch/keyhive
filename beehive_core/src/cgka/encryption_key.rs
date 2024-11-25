@@ -37,10 +37,10 @@ impl<T: ContentRef> ApplicationSecret<T> {
 pub struct ApplicationSecretMetadata<T: ContentRef> {
     pub writer_id: IndividualId,
     // FIXME: Can we get this elsewhere rather than in this struct?
-    pub content_ref: T,
+    pub content_ref: Digest<T>,
     // FIXME: What should we really use here? Can we get this elsewhere than
     // from this struct?
-    pub pred_ref: T,
+    pub pred_ref: Digest<Vec<T>>,
     pub nonce: Siv,
     pub pcs_key_hash: Digest<PcsKey>,
 }
@@ -60,17 +60,13 @@ impl PcsKey {
 
     pub(crate) fn derive_application_secret<T: ContentRef>(
         &self,
-        content_ref: &T,
-        // FIXME: What type should we really use here?
-        pred_ref: &T,
+        content_ref: Digest<T>,
+        pred_ref: Digest<Vec<T>>,
     ) -> SymmetricKey {
         let pcs_hash = Digest::hash(&self.0);
-        let content_ref_hash = Digest::hash(content_ref);
-        let pred_ref_hash = Digest::hash(pred_ref);
         // FIXME: We could also use the writer id instead of the content ref hash.
         let mut app_secret_context =
-            format!("epoch:{pcs_hash}/pred:{pred_ref_hash}/content:{content_ref_hash}")
-                .into_bytes();
+            format!("epoch:{pcs_hash}/pred:{pred_ref}/content:{content_ref}").into_bytes();
         let mut key_material = self.0.clone().as_slice().to_vec();
         key_material.append(&mut app_secret_context);
         let app_secret_bytes = blake3::derive_key(STATIC_CONTEXT, key_material.as_slice());

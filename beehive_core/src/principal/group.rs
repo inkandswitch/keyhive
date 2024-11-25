@@ -15,7 +15,10 @@ use super::{
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::{share_key::ShareKey, signed::{Signed, SigningError}},
+    crypto::{
+        share_key::ShareKey,
+        signed::{Signed, SigningError},
+    },
     util::content_addressed_map::CaMap,
 };
 use dupe::{Dupe, IterDupedExt};
@@ -104,7 +107,12 @@ impl<T: ContentRef> Group<T> {
     pub fn individual_ids_with_sampled_prekeys(&self) -> HashMap<IndividualId, ShareKey> {
         let mut m = HashMap::new();
         for delegations in self.members.values() {
-            m.extend(&delegations[0].payload().delegate.individual_ids_with_sampled_prekeys());
+            m.extend(
+                &delegations[0]
+                    .payload()
+                    .delegate
+                    .individual_ids_with_sampled_prekeys(),
+            );
         }
         m
     }

@@ -44,7 +44,7 @@ pub struct Document<T: ContentRef> {
     pub(crate) content_state: HashSet<T>,
 
     // FIXME: This doesn't work right now because Cgka is not Eq or PartialEq
-    pub(crate) cgka: Cgka<T>,
+    pub(crate) cgka: Cgka,
 }
 
 impl<T: ContentRef> Document<T> {
@@ -98,12 +98,15 @@ impl<T: ContentRef> Document<T> {
                     Ok::<Group<T>, DelegationError>(acc)
                 })?;
 
+        // FIXME: Active in the document
         let owner_id = IndividualId(Identifier((&doc_signer).into()));
         let doc_id = DocumentId(group.id());
         let owner_share_secret_key = ShareSecretKey::generate();
         let owner_share_key = owner_share_secret_key.share_key();
         let mut owner_active = Active::generate(doc_signer)?;
-        owner_active.share_key_pairs.insert(owner_share_key, owner_share_secret_key);
+        owner_active
+            .prekey_pairs
+            .insert(owner_share_key, owner_share_secret_key);
 
         let group_members = group.individual_ids_with_sampled_prekeys();
         let active_member = (owner_id, owner_share_key);
@@ -176,8 +179,7 @@ impl<T: ContentRef> Document<T> {
         &mut self,
         content_ref: &T,
         content: &[u8],
-        // FIXME: What should this type really be?
-        pred_ref: &T,
+        pred_ref: &Vec<T>,
     ) -> Encrypted<Vec<u8>> {
         // FIXME: We are automatically doing a PCS update if the tree doesn't have a
         // root secret. That might make sense, but do we need to store this key pair
@@ -185,7 +187,9 @@ impl<T: ContentRef> Document<T> {
         if !self.cgka.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate();
             let new_share_key = new_share_secret_key.share_key();
-            self.cgka.update(self.cgka.owner_id, new_share_key, new_share_secret_key).expect("FIXME");
+            self.cgka
+                .update(self.cgka.owner_id, new_share_key, new_share_secret_key)
+                .expect("FIXME");
         }
         let app_secret = self
             .cgka
@@ -202,6 +206,7 @@ impl<T: ContentRef> Document<T> {
     pub fn decrypt_content(
         &mut self,
         encrypted_content: &Encrypted<Vec<u8>>,
+        // FIXME: Add to Encrypted
         metadata: &ApplicationSecretMetadata<T>,
     ) -> Vec<u8> {
         let decrypt_key = self

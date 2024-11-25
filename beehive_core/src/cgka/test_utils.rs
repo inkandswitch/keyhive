@@ -27,12 +27,12 @@ impl TestMember {
 #[derive(Clone, Debug)]
 pub struct TestMemberCgka {
     pub m: TestMember,
-    pub cgka: Cgka<TestContentRef>,
+    pub cgka: Cgka,
     pub is_removed: bool,
 }
 
 impl TestMemberCgka {
-    pub fn new(m: TestMember, cgka: Cgka<TestContentRef>) -> Self {
+    pub fn new(m: TestMember, cgka: Cgka) -> Self {
         Self {
             m,
             cgka,
@@ -108,23 +108,16 @@ pub fn setup_members(member_count: u32) -> NonEmpty<TestMember> {
     ms
 }
 
-pub fn setup_cgka(
-    doc_id: DocumentId,
-    members: &NonEmpty<TestMember>,
-    m_idx: usize,
-) -> Cgka<TestContentRef> {
+pub fn setup_cgka(doc_id: DocumentId, members: &NonEmpty<TestMember>, m_idx: usize) -> Cgka {
     let owner = &members[m_idx];
     let first: (IndividualId, ShareKey) = (members.first().id, members.first().pk);
-    let member_id_pks = NonEmpty::from((first, members.iter().skip(1).map(|p| (p.id, p.pk)).collect()));
+    let member_id_pks = NonEmpty::from((
+        first,
+        members.iter().skip(1).map(|p| (p.id, p.pk)).collect(),
+    ));
 
-    Cgka::new(
-        member_id_pks,
-        doc_id,
-        owner.id,
-        owner.pk,
-        owner.sk,
-    )
-    .expect("CGKA construction failed")
+    Cgka::new(member_id_pks, doc_id, owner.id, owner.pk, owner.sk)
+        .expect("CGKA construction failed")
 }
 
 /// Set up cgkas for all members with the same secret, but only the initial member

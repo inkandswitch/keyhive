@@ -100,11 +100,11 @@ impl<T: ContentRef> Context<T> {
         &mut self,
         doc_id: DocumentId,
         content_ref: &T,
-        // FIXME: Do we infer the pred_ref inside Beehive?
-        // FIXME: What type should we use?
-        pred_ref: &T,
+        pred_ref: &Vec<T>,
         content: &[u8],
         // FIXME: What error return type?
+        // FIXME: Do we return app secret metadata? Probably makes sense to add
+        // to Encrypted
     ) -> Encrypted<Vec<u8>> {
         let doc = self.docs.get_mut(&doc_id).expect("FIXME");
         doc.encrypt_content(content_ref, content, pred_ref)
@@ -114,6 +114,7 @@ impl<T: ContentRef> Context<T> {
         &mut self,
         doc_id: DocumentId,
         encrypted: &Encrypted<Vec<u8>>,
+        // FIXME: Remove when on Encrypted
         metadata: &ApplicationSecretMetadata<T>,
         // FIXME: What error return type?
     ) -> Vec<u8> {
