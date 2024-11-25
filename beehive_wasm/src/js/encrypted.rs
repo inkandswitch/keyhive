@@ -10,6 +10,16 @@ impl JsEncrypted {
     pub fn to_bytes(&self) -> Vec<u8> {
         self.0.ciphertext.clone() // FIXME
     }
+
+    #[wasm_bindgen(getter)]
+    pub fn ciphertext(&self) -> Vec<u8> {
+        self.0.ciphertext.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn nonce(&self) -> Vec<u8> {
+        self.0.nonce.as_bytes().to_vec()
+    }
 }
 
 impl From<Encrypted<Vec<u8>>> for JsEncrypted {

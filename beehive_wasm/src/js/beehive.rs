@@ -1,7 +1,9 @@
 use super::{
     access::JsAccess,
     agent::JsAgent,
+    change_hash::JsChangeHash,
     delegation::JsDelegationError,
+    doc_content_refs::DocContentRefs,
     document::JsDocument,
     encrypted::JsEncrypted,
     group::JsGroup,
@@ -10,6 +12,7 @@ use super::{
     share_key::JsShareKey,
     signed::JsSigned,
     signing_key::{JsSigningError, JsSigningKey},
+    summary::Summary,
 };
 use beehive_core::{
     context::Context,
@@ -94,8 +97,8 @@ impl JsBeehive {
     pub fn try_encrypt_archive(
         &mut self,
         doc: JsDocument,
-        content_ref: ChangeHash,
-        pred_refs: Vec<ChangeHash>,
+        content_ref: JsChangeHash,
+        pred_refs: Vec<JsChangeHash>,
         content: &[u8],
     ) -> JsEncrypted {
         // FIXME can fail?
@@ -121,7 +124,7 @@ impl JsBeehive {
         to_add: &JsAgent,
         membered: &mut JsMembered,
         access: JsAccess,
-        after_content: Vec<Refs>,
+        after_content: Vec<DocContentRefs>,
     ) -> Result<(), JsDelegationError> {
         let content_ref_map: BTreeMap<
             DocumentId,
@@ -132,8 +135,8 @@ impl JsBeehive {
         > = after_content
             .into_iter()
             .map(|r| {
-                let hashes = r.change_hashes.into_iter().map(|c| c.0).collect();
-                (r.doc.dupe().borrow().doc_id(), (r.doc.0, hashes))
+                let hashes = r.change_hashes().into_iter().map(|c| c.0).collect();
+                (r.doc().borrow().doc_id(), (r.doc().0, hashes))
             })
             .collect();
 
@@ -185,59 +188,6 @@ impl JsBeehive {
         self.ctx.get_agent(id.0).map(JsAgent)
     }
 }
-
-#[wasm_bindgen]
-pub struct Summary {
-    doc: JsDocument,
-    access: JsAccess,
-}
-
-#[wasm_bindgen]
-impl Summary {
-    #[wasm_bindgen(getter)]
-    pub fn doc(&self) -> JsDocument {
-        self.doc.dupe()
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn access(&self) -> JsAccess {
-        self.access.dupe()
-    }
-}
-
-#[wasm_bindgen]
-pub struct Refs {
-    doc: JsDocument,
-    change_hashes: Vec<ChangeHash>,
-}
-
-#[wasm_bindgen]
-#[derive(Clone, Debug)]
-pub struct ChangeHash(automerge::ChangeHash);
-
-#[wasm_bindgen]
-impl Refs {
-    #[wasm_bindgen(constructor)]
-    pub fn new(doc: JsDocument, change_hashes: Vec<ChangeHash>) -> Result<Refs, String> {
-        Ok(Refs { doc, change_hashes })
-    }
-
-    #[wasm_bindgen(js_name = addChangeHash)]
-    pub fn add_change_hash(&mut self, hash: ChangeHash) {
-        self.change_hashes.push(hash)
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn doc(&self) -> JsDocument {
-        self.doc.dupe()
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn change_hashes(&self) -> Vec<ChangeHash> {
-        self.change_hashes.clone()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

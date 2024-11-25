@@ -167,7 +167,7 @@
             "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'test && test --doc'";
 
           "watch:test:wasm" = cmd "Run all Wasm tests on save"
-            "${cargo} watch --clear --exec 'test beehive_wasm --target=wasm32-unknown-unknown && test --doc --target=wasm32-unknown-unknown'";
+            "${cargo} watch --clear --exec 'test beehive_wasm --target=wasm32-unknown-unknown'";
         };
 
         test = {

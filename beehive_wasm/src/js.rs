@@ -1,7 +1,9 @@
 pub mod access;
 pub mod agent;
 pub mod beehive;
+pub mod change_hash;
 pub mod delegation;
+pub mod doc_content_refs;
 pub mod document;
 pub mod document_id;
 pub mod encrypted;
@@ -12,3 +14,4 @@ pub mod membered;
 pub mod share_key;
 pub mod signed;
 pub mod signing_key;
+pub mod summary;
