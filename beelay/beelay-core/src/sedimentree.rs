@@ -24,7 +24,7 @@ pub(crate) struct SedimentreeSummary {
 }
 
 impl SedimentreeSummary {
-    pub(crate) fn into_remote_diff(&self) -> RemoteDiff {
+    pub(crate) fn as_remote_diff(&self) -> RemoteDiff {
         RemoteDiff {
             remote_strata: self.strata.iter().collect(),
             remote_commits: self.commits.iter().collect(),
@@ -55,22 +55,20 @@ impl std::fmt::Display for Level {
     }
 }
 
-// Flip the ordering so that stratum with a larger number of leading zeros are
-// "lower". This is mainly so that the sedmintree metaphor holds
 impl PartialOrd for Level {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
+// Flip the ordering so that stratum with a larger number of leading zeros are
+// "lower". This is mainly so that the sedimentary rock metaphor holds
 impl Ord for Level {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        if self.0 < other.0 {
-            std::cmp::Ordering::Greater
-        } else if self.0 > other.0 {
-            std::cmp::Ordering::Less
-        } else {
-            std::cmp::Ordering::Equal
+        match self.0.cmp(&other.0) {
+            std::cmp::Ordering::Greater => std::cmp::Ordering::Less,
+            std::cmp::Ordering::Less => std::cmp::Ordering::Greater,
+            std::cmp::Ordering::Equal => std::cmp::Ordering::Equal,
         }
     }
 }
@@ -217,7 +215,7 @@ impl Stratum {
         if self.checkpoints.contains(&other.start) && self.meta.end == other.end {
             return true;
         }
-        return false;
+        false
     }
 
     pub(crate) fn supports_block(&self, block_end: CommitHash) -> bool {
@@ -246,6 +244,7 @@ impl Stratum {
 }
 
 impl StratumMeta {
+    #[cfg(test)]
     pub(crate) fn new(start: CommitHash, end: CommitHash, blob: BlobMeta) -> Self {
         Self { start, end, blob }
     }
@@ -299,7 +298,7 @@ impl Sedimentree {
         for hash in hashes {
             hasher.update(&hash.as_bytes());
         }
-        MinimalTreeHash(hasher.finalize().as_bytes().clone())
+        MinimalTreeHash(*hasher.finalize().as_bytes())
     }
 
     pub(crate) fn add_stratum(&mut self, stratum: Stratum) {
@@ -460,7 +459,7 @@ impl Sedimentree {
         all_bundles
     }
 
-    pub(crate) fn into_local_diff(&self) -> RemoteDiff {
+    pub(crate) fn as_local_diff(&self) -> RemoteDiff {
         RemoteDiff {
             remote_strata: Vec::new(),
             remote_commits: Vec::new(),
@@ -499,7 +498,7 @@ impl SedimentreeSummary {
     }
 }
 
-enum CommitOrStratum {
+pub(crate) enum CommitOrStratum {
     Commit(LooseCommit),
     Stratum(Stratum),
 }
@@ -538,17 +537,6 @@ impl std::fmt::Debug for Sedimentree {
 pub(crate) struct MinimalTreeHash([u8; 32]);
 
 impl MinimalTreeHash {
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        let (input, hash) = parse::arr::<32>(input)?;
-        Ok((input, Self(hash)))
-    }
-
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.0);
-    }
-
     pub(crate) fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -562,8 +550,6 @@ impl From<[u8; 32]> for MinimalTreeHash {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use num::Num;
 
     use super::{Stratum, StratumMeta};
@@ -581,7 +567,7 @@ mod tests {
         let num_digits = (256.0 / (base as f64).log2()).floor() as u64;
 
         let mut num_str = zero_str;
-        num_str.push_str("1");
+        num_str.push('1');
         while num_str.len() < num_digits as usize {
             if unstructured.is_empty() {
                 return Err(arbitrary::Error::NotEnoughData);
@@ -615,6 +601,7 @@ mod tests {
                 let start_hash = hash_with_trailing_zeros(u, 10, 10)?;
                 let lower_end_hash = hash_with_trailing_zeros(u, 10, 10)?;
 
+                #[allow(clippy::enum_variant_names)]
                 #[derive(arbitrary::Arbitrary)]
                 enum HigherLevelType {
                     StartsAtStartEndsAtCheckpoint,
@@ -665,7 +652,7 @@ mod tests {
                  lower_level,
                  higher_level,
              }| {
-                assert!(lower_level.supports(&higher_level));
+                assert!(lower_level.supports(higher_level));
             },
         )
     }

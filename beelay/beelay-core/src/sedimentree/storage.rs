@@ -129,9 +129,7 @@ pub(crate) fn data<R: rand::Rng>(
         async move {
             match item {
                 super::CommitOrStratum::Commit(c) => {
-                    let Some(data) = effects.load(StorageKey::blob(c.blob().hash())).await else {
-                        return None;
-                    };
+                    let data = effects.load(StorageKey::blob(c.blob().hash())).await?;
                     Some(CommitOrBundle::Commit(Commit::new(
                         c.parents().to_vec(),
                         data,
@@ -140,7 +138,7 @@ pub(crate) fn data<R: rand::Rng>(
                 }
                 super::CommitOrStratum::Stratum(s) => {
                     let data = effects.load(StorageKey::blob(s.meta().blob().hash())).await;
-                    let Some(data) = data else { return None };
+                    let data = data?;
                     Some(CommitOrBundle::Bundle(
                         CommitBundle::builder()
                             .start(s.start())
@@ -153,7 +151,7 @@ pub(crate) fn data<R: rand::Rng>(
             }
         }
     });
-    futures::stream::FuturesUnordered::from_iter(items).filter_map(|f| futures::future::ready(f))
+    futures::stream::FuturesUnordered::from_iter(items).filter_map(futures::future::ready)
 }
 
 pub(crate) async fn write_loose_commit<R: rand::Rng>(

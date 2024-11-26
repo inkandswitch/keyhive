@@ -46,7 +46,7 @@ pub enum StoryResult {
     Listen,
 }
 
-pub(super) fn handle_story<'a, R: rand::Rng + 'static>(
+pub(super) fn handle_story<R: rand::Rng + 'static>(
     mut effects: crate::effects::TaskEffects<R>,
     story: super::Story,
 ) -> LocalBoxFuture<'static, StoryResult> {
@@ -104,7 +104,7 @@ pub(crate) async fn sync_linked_docs<R: rand::Rng>(
     root: DocumentId,
     remote_peer: PeerId,
 ) -> SyncDocResult {
-    let our_snapshot = snapshots::Snapshot::load(effects.clone(), root.clone()).await;
+    let our_snapshot = snapshots::Snapshot::load(effects.clone(), root).await;
     sync_docs::sync_root_doc(effects, &our_snapshot, remote_peer).await
 }
 
@@ -210,14 +210,12 @@ async fn load_doc_commits<R: rand::Rng>(
     doc_id: &DocumentId,
     content: CommitCategory,
 ) -> Option<Vec<CommitOrBundle>> {
-    let Some(tree) = sedimentree::storage::load(
+    let tree = sedimentree::storage::load(
         effects.clone(),
         StorageKey::sedimentree_root(doc_id, content),
     )
     .await
-    .map(|t| t.minimize()) else {
-        return None;
-    };
+    .map(|t| t.minimize())?;
     let bundles = tree.strata().map(|s| {
         let effects = effects.clone();
         async move {

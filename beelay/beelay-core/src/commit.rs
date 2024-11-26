@@ -45,7 +45,7 @@ impl From<[u8; 32]> for CommitHash {
 
 impl<'a> From<&'a [u8; 32]> for CommitHash {
     fn from(value: &'a [u8; 32]) -> Self {
-        CommitHash(value.clone())
+        CommitHash(*value)
     }
 }
 

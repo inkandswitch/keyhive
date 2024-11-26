@@ -8,8 +8,8 @@ use super::{
 pub(super) fn encode(payload: &super::Payload) -> Vec<u8> {
     let mut buf = Vec::new();
     match &payload.0 {
-        Message::Request(id, req) => encode_request(&mut buf, *id, &req),
-        Message::Response(id, res) => encode_response(&mut buf, *id, &res),
+        Message::Request(id, req) => encode_request(&mut buf, *id, req),
+        Message::Response(id, res) => encode_response(&mut buf, *id, res),
         Message::Notification(notification) => {
             buf.push(MessageType::Notification.into());
             notification.encode(&mut buf);

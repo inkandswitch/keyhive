@@ -24,7 +24,7 @@ pub(crate) async fn sync_root_doc<R: rand::Rng>(
         their_differing,
         our_differing,
         their_snapshot,
-    } = find_out_of_sync_docs(effects.clone(), &our_snapshot, remote_peer.clone()).await;
+    } = find_out_of_sync_docs(effects.clone(), our_snapshot, remote_peer.clone()).await;
 
     tracing::trace!(?our_differing, ?their_differing, we_have_doc=%our_snapshot.we_have_doc(), "syncing differing docs");
 
@@ -32,7 +32,6 @@ pub(crate) async fn sync_root_doc<R: rand::Rng>(
 
     let syncing = our_differing
         .union(&their_differing)
-        .into_iter()
         .cloned()
         .map(|d| sync_doc(effects.clone(), remote_peer.clone(), d));
     futures::future::join_all(syncing).await;
@@ -58,7 +57,7 @@ async fn find_out_of_sync_docs<R: rand::Rng>(
 ) -> OutOfSync {
     // Make a remote snapshot and stream symbols from it until we have decoded
     let (snapshot_id, first_symbols) = effects
-        .create_snapshot(peer.clone(), local_snapshot.root_doc().clone())
+        .create_snapshot(peer.clone(), *local_snapshot.root_doc())
         .await
         .unwrap();
     let mut local_riblt = riblt::Decoder::<riblt::doc_and_heads::DocAndHeadsSymbol>::new();
@@ -68,7 +67,7 @@ async fn find_out_of_sync_docs<R: rand::Rng>(
     let symbols = futures::stream::iter(first_symbols).chain(
         futures::stream::unfold(effects, move |effects| {
             let effects = effects.clone();
-            let snapshot_id = snapshot_id.clone();
+            let snapshot_id = snapshot_id;
             let peer = peer.clone();
             async move {
                 let symbols = effects
@@ -126,7 +125,7 @@ async fn sync_doc<R: rand::Rng>(
     let sync_content = sync_sedimentree(
         effects.clone(),
         peer.clone(),
-        doc.clone(),
+        doc,
         CommitCategory::Content,
         our_content,
         their_content,
@@ -134,7 +133,7 @@ async fn sync_doc<R: rand::Rng>(
     let sync_index = sync_sedimentree(
         effects.clone(),
         peer.clone(),
-        doc.clone(),
+        doc,
         CommitCategory::Index,
         our_index,
         their_index,
@@ -156,9 +155,9 @@ async fn sync_sedimentree<R: rand::Rng>(
         local_strata,
         local_commits,
     } = match (&local, &remote) {
-        (Some(local), Some(remote)) => local.diff_remote(&remote),
-        (None, Some(remote)) => remote.into_remote_diff(),
-        (Some(local), None) => local.into_local_diff(),
+        (Some(local), Some(remote)) => local.diff_remote(remote),
+        (None, Some(remote)) => remote.as_remote_diff(),
+        (Some(local), None) => local.as_local_diff(),
         (None, None) => return,
     };
 
@@ -214,12 +213,8 @@ async fn sync_sedimentree<R: rand::Rng>(
         let to_upload = local_commits
             .into_iter()
             .cloned()
-            .map(|c| StratumOrCommit::Commit(c))
-            .chain(
-                local_strata
-                    .into_iter()
-                    .map(|s| StratumOrCommit::Stratum(s)),
-            )
+            .map(StratumOrCommit::Commit)
+            .chain(local_strata.into_iter().map(StratumOrCommit::Stratum))
             .map(|item| async {
                 match item {
                     StratumOrCommit::Commit(c) => {

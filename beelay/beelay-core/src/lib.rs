@@ -8,8 +8,8 @@ use std::{
 use effects::IncomingResponse;
 use futures::{future::LocalBoxFuture, FutureExt};
 use io::IoResult;
-use messages::{BlobRef, Message, Notification, Request, Response, TreePart, UploadItem};
 pub use messages::{Envelope, Payload};
+use messages::{Message, Request, Response};
 use rand::Rng;
 
 mod blob;
@@ -322,17 +322,15 @@ impl<R: rand::Rng + 'static> Beelay<R> {
                             event_results.completed_stories.insert(story_id, result);
                             self.stories.remove(&story_id);
                         };
+                    } else if cfg!(debug_assertions) {
+                        panic!("woken task not found");
                     } else {
-                        if cfg!(debug_assertions) {
-                            panic!("woken task not found");
-                        } else {
-                            tracing::error!(?story_id, "woken task not found")
-                        }
+                        tracing::error!(?story_id, "woken task not found")
                     }
                 }
                 Task::NotificationHandler(handle_id) => {
                     if let Some(fut) = self.notification_handlers.get_mut(&handle_id) {
-                        if let std::task::Poll::Ready(_) = fut.poll_unpin(&mut cx) {
+                        if fut.poll_unpin(&mut cx).is_ready() {
                             self.notification_handlers.remove(&handle_id);
                         }
                     }
@@ -683,26 +681,6 @@ impl CommitCategory {
 pub struct DocumentHeads(Vec<crate::CommitHash>);
 
 impl DocumentHeads {
-    pub(crate) fn new(heads: Vec<crate::CommitHash>) -> Self {
-        DocumentHeads(heads)
-    }
-
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("DocumentDagHeads", |input| {
-            let (input, heads) = parse::many(input, CommitHash::parse)?;
-            Ok((input, DocumentHeads::new(heads)))
-        })
-    }
-
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        crate::leb128::encode_uleb128(buf, self.0.len() as u64);
-        for head in &self.0 {
-            head.encode(buf);
-        }
-    }
-
     pub fn len(&self) -> usize {
         self.0.len()
     }
