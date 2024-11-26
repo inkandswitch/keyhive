@@ -2,7 +2,6 @@
 
 use crate::{
     access::Access,
-    cgka::encryption_key::ApplicationSecretMetadata,
     content::reference::ContentRef,
     crypto::{
         encrypted::Encrypted,
@@ -164,25 +163,19 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
         pred_ref: &Vec<T>,
         content: &[u8],
         // FIXME: What error return type?
-        // FIXME: Do we return app secret metadata? Probably makes sense to add
-        // to Encrypted
-    ) -> Encrypted<Vec<u8>> {
-        let doc_ref = self.docs.get(&doc_id).expect("FIXME");
-        let mut doc = doc_ref.borrow_mut();
-        doc.encrypt_content(content_ref, content, pred_ref, &mut self.csprng)
+    ) -> Encrypted<Vec<u8>, T> {
+        let doc = self.docs.get_mut(&doc_id).expect("FIXME");
+        doc.encrypt_content(content_ref, content, pred_ref)
     }
 
     pub fn decrypt_content(
         &mut self,
         doc_id: DocumentId,
-        encrypted: &Encrypted<Vec<u8>>,
-        // FIXME: Remove when on Encrypted
-        metadata: &ApplicationSecretMetadata<T>,
+        encrypted: &Encrypted<Vec<u8>, T>,
         // FIXME: What error return type?
     ) -> Vec<u8> {
-        let doc_ref = self.docs.get(&doc_id).expect("FIXME");
-        let mut doc = doc_ref.borrow_mut();
-        doc.decrypt_content(encrypted, metadata).clone()
+        let doc = self.docs.get_mut(&doc_id).expect("FIXME");
+        doc.decrypt_content(encrypted)
     }
 
     pub fn reachable_docs(&self) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> {

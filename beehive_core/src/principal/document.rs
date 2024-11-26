@@ -5,7 +5,7 @@ pub mod store;
 use super::{active::Active, individual::id::IndividualId, verifiable::Verifiable};
 use crate::{
     access::Access,
-    cgka::{encryption_key::ApplicationSecretMetadata, Cgka},
+    cgka::Cgka,
     content::reference::ContentRef,
     crypto::{
         encrypted::Encrypted,
@@ -197,7 +197,7 @@ impl<T: ContentRef> Document<T> {
         content: &[u8],
         pred_ref: &Vec<T>,
         csprng: &mut R,
-    ) -> Encrypted<Vec<u8>> {
+    ) -> Encrypted<Vec<u8>, T> {
         // FIXME: We are automatically doing a PCS update if the tree doesn't have a
         // root secret. That might make sense, but do we need to store this key pair
         // on our Active member?
@@ -217,23 +217,18 @@ impl<T: ContentRef> Document<T> {
             .cgka
             .new_app_secret_for(content_ref, content, pred_ref)
             .expect("FIXME");
-        let mut ciphertext = content.to_vec();
         app_secret
-            .key()
-            .try_encrypt(app_secret.metadata().nonce, &mut ciphertext)
-            .unwrap();
-        Encrypted::new(app_secret.metadata().nonce, ciphertext)
+            .try_encrypt(content)
+            .expect("FIXME")
     }
 
     pub fn decrypt_content(
         &mut self,
-        encrypted_content: &Encrypted<Vec<u8>>,
-        // FIXME: Add to Encrypted
-        metadata: &ApplicationSecretMetadata<T>,
+        encrypted_content: &Encrypted<Vec<u8>, T>,
     ) -> Vec<u8> {
         let decrypt_key = self
             .cgka
-            .decryption_key_for(&metadata)
+            .decryption_key_for(encrypted_content)
             .expect("FIXME")
             .expect("FIXME");
         let mut plaintext = encrypted_content.ciphertext.clone();
