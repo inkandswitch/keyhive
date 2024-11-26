@@ -101,10 +101,10 @@ impl<T: ContentRef> Context<T> {
         content_ref: &T,
         pred_ref: &Vec<T>,
         content: &[u8],
-        // FIXME: What error return type?
-    ) -> Encrypted<Vec<u8>, T> {
-        let doc = self.docs.get_mut(&doc_id).expect("FIXME");
-        doc.encrypt_content(content_ref, content, pred_ref)
+    // FIXME: What error return type?
+    ) -> Result<Encrypted<Vec<u8>, T>, ContextError> {
+        let doc = self.docs.get_mut(&doc_id).ok_or(ContextError::DocNotFound(doc_id.to_string()))?;
+        Ok(doc.encrypt_content(content_ref, content, pred_ref))
     }
 
     pub fn decrypt_content(
@@ -112,9 +112,9 @@ impl<T: ContentRef> Context<T> {
         doc_id: DocumentId,
         encrypted: &Encrypted<Vec<u8>, T>,
         // FIXME: What error return type?
-    ) -> Vec<u8> {
-        let doc = self.docs.get_mut(&doc_id).expect("FIXME");
-        doc.decrypt_content(encrypted)
+    ) -> Result<Vec<u8>, ContextError> {
+        let doc = self.docs.get_mut(&doc_id).ok_or(ContextError::DocNotFound(doc_id.to_string()))?;
+        Ok(doc.decrypt_content(encrypted))
     }
 
     pub fn accessible_docs(&self) -> BTreeMap<DocumentId, (&Document<T>, Access)> {
@@ -202,4 +202,10 @@ impl<T: ContentRef> From<&Context<T>> for Agent<T> {
     fn from(context: &Context<T>) -> Self {
         context.active.dupe().into()
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ContextError {
+    #[error("Doc {0} not found")]
+    DocNotFound(String),
 }

@@ -138,7 +138,7 @@ impl Cgka {
     pub fn decryption_key_for<T, Cr: ContentRef>(
         &mut self,
         encrypted: &Encrypted<T, Cr>,
-    ) -> Result<Option<SymmetricKey>, CgkaError> {
+    ) -> Result<SymmetricKey, CgkaError> {
         let maybe_pcs_key: Option<Rc<PcsKey>> = self.pcs_keys.get(&encrypted.pcs_key_hash).cloned();
         // TODO: With Rust 2024, we'll be able to use if let chains to rewrite this
         // in a cleaner way. See https://github.com/rust-lang/rust/pull/132833.
@@ -156,13 +156,13 @@ impl Cgka {
                 // from the update corresponding to the PCS key hash in the metadata.
                 // For example, we might have applied that update as part of a
                 // concurrent merge, which left the tree with no root secret.
-                return Ok(None);
+                return Err(CgkaError::UnknownPcsKey);
             }
         };
         self.pcs_keys.insert(last_key.clone());
         let app_secret =
             last_key.derive_application_secret(&encrypted.nonce, &encrypted.content_ref, &encrypted.pred_ref);
-        Ok(Some(app_secret.key()))
+        Ok(app_secret.key())
     }
 
     /// Get secret for decryption/encryption. If you are using this for a new
