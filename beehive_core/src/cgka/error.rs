@@ -50,4 +50,7 @@ pub enum CgkaError {
 
     #[error("Unexpected key conflict")]
     UnexpectedKeyConflict,
+
+    #[error("Unknown PCS key")]
+    UnknownPcsKey,
 }
