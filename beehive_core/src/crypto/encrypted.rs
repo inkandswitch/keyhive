@@ -1,11 +1,9 @@
 //! Ciphertext with public metadata.
 
 use super::{
-    share_key::{ShareKey, ShareSecretKey},
-    siv::Siv,
-    symmetric_key::SymmetricKey,
+    application_secret::PcsKey, digest::Digest, share_key::{ShareKey, ShareSecretKey}, siv::Siv, symmetric_key::SymmetricKey
 };
-use crate::principal::document::id::DocumentId;
+use crate::{content::reference::ContentRef, principal::document::id::DocumentId};
 use nonempty::NonEmpty;
 use serde::{ser::SerializeStruct, Deserialize, Serialize};
 use std::marker::PhantomData;
@@ -15,23 +13,40 @@ use std::marker::PhantomData;
 /// This wraps a ciphertext that includes the [`Siv`] and the type of the data
 /// that was encrypted (or that the plaintext is _expected_ to be).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Encrypted<T> {
+pub struct Encrypted<T, Cr: ContentRef> {
     /// The nonce used to encrypt the data.
     pub nonce: Siv,
 
     /// The encrypted data.
     pub ciphertext: Vec<u8>,
 
+    /// Hash of the PCS key used to derive the application secret for encrypting.
+    pub pcs_key_hash: Digest<PcsKey>,
+    /// The content ref hash used to derive the application secret for encrypting.
+    pub content_ref: Digest<Cr>,
+    /// The predecessor content ref hashes used to derive the application secret
+    /// for encrypting.
+    pub pred_ref: Digest<Vec<Cr>>,
+
     /// The type of the data that was encrypted.
     _plaintext_tag: PhantomData<T>,
 }
 
-impl<T> Encrypted<T> {
+impl<T, Cr: ContentRef> Encrypted<T, Cr> {
     /// Associate a nonce with a ciphertext and assert the plaintext type.
-    pub fn new(nonce: Siv, ciphertext: Vec<u8>) -> Encrypted<T> {
+    pub fn new(
+        nonce: Siv,
+        ciphertext: Vec<u8>,
+        pcs_key_hash: Digest<PcsKey>,
+        content_ref: Digest<Cr>,
+        pred_ref: Digest<Vec<Cr>>,
+    ) -> Encrypted<T, Cr> {
         Encrypted {
             nonce,
             ciphertext,
+            pcs_key_hash,
+            content_ref,
+            pred_ref,
             _plaintext_tag: PhantomData,
         }
     }

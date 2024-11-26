@@ -2,7 +2,6 @@
 
 use crate::{
     access::Access,
-    cgka::encryption_key::ApplicationSecretMetadata,
     content::reference::ContentRef,
     crypto::{
         encrypted::Encrypted,
@@ -103,9 +102,7 @@ impl<T: ContentRef> Context<T> {
         pred_ref: &Vec<T>,
         content: &[u8],
         // FIXME: What error return type?
-        // FIXME: Do we return app secret metadata? Probably makes sense to add
-        // to Encrypted
-    ) -> Encrypted<Vec<u8>> {
+    ) -> Encrypted<Vec<u8>, T> {
         let doc = self.docs.get_mut(&doc_id).expect("FIXME");
         doc.encrypt_content(content_ref, content, pred_ref)
     }
@@ -113,13 +110,11 @@ impl<T: ContentRef> Context<T> {
     pub fn decrypt_content(
         &mut self,
         doc_id: DocumentId,
-        encrypted: &Encrypted<Vec<u8>>,
-        // FIXME: Remove when on Encrypted
-        metadata: &ApplicationSecretMetadata<T>,
+        encrypted: &Encrypted<Vec<u8>, T>,
         // FIXME: What error return type?
     ) -> Vec<u8> {
         let doc = self.docs.get_mut(&doc_id).expect("FIXME");
-        doc.decrypt_content(encrypted, metadata)
+        doc.decrypt_content(encrypted)
     }
 
     pub fn accessible_docs(&self) -> BTreeMap<DocumentId, (&Document<T>, Access)> {

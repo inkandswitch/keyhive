@@ -10,11 +10,8 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::{
-        encrypted::Encrypted,
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
-        siv::Siv,
-        symmetric_key::SymmetricKey,
     },
     principal::{
         agent::{Agent, AgentId},
@@ -122,36 +119,37 @@ impl Active {
         Ok(delegation)
     }
 
-    pub fn encrypt_to<T: ContentRef>(
-        &self,
-        doc: &Document<T>,
-        to: &Individual,
-        mut message: Vec<u8>,
-    ) -> Result<Encrypted<&[u8]>, ShareError> {
-        let recipient_share_pk = doc
-            .reader_keys
-            .get(&to.id())
-            .ok_or_else(|| ShareError::MissingRecipientShareKey(to.id().into()))?;
+    // FIXME: Can we remove this method?
+    // pub fn encrypt_to<T: ContentRef>(
+    //     &self,
+    //     doc: &Document<T>,
+    //     to: &Individual,
+    //     mut message: Vec<u8>,
+    // ) -> Result<Encrypted<&[u8]>, ShareError> {
+    //     let recipient_share_pk = doc
+    //         .reader_keys
+    //         .get(&to.id())
+    //         .ok_or_else(|| ShareError::MissingRecipientShareKey(to.id().into()))?;
 
-        let our_pk = doc
-            .reader_keys
-            .get(&self.id())
-            .ok_or(ShareError::MissingYourSharePublicKey)?;
+    //     let our_pk = doc
+    //         .reader_keys
+    //         .get(&self.id())
+    //         .ok_or(ShareError::MissingYourSharePublicKey)?;
 
-        let our_sk = self
-            .prekey_pairs
-            .get(&our_pk.1)
-            .ok_or(ShareError::MissingYourShareSecretKey)?;
+    //     let our_sk = self
+    //         .prekey_pairs
+    //         .get(&our_pk.1)
+    //         .ok_or(ShareError::MissingYourShareSecretKey)?;
 
-        let key: SymmetricKey = our_sk.derive_symmetric_key(&recipient_share_pk.1.into());
+    //     let key: SymmetricKey = our_sk.derive_symmetric_key(&recipient_share_pk.1.into());
 
-        let nonce =
-            Siv::new(&key, message.as_slice(), doc.doc_id()).map_err(ShareError::SivError)?;
-        key.try_encrypt(nonce, &mut message)
-            .map_err(ShareError::EncryptionFailed)?;
+    //     let nonce =
+    //         Siv::new(&key, message.as_slice(), doc.doc_id()).map_err(ShareError::SivError)?;
+    //     key.try_encrypt(nonce, &mut message)
+    //         .map_err(ShareError::EncryptionFailed)?;
 
-        Ok(Encrypted::new(nonce.into(), message))
-    }
+    //     Ok(Encrypted::new(nonce.into(), message))
+    // }
 }
 
 impl std::fmt::Display for Active {
