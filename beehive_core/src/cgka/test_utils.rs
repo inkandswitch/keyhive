@@ -1,6 +1,7 @@
 use super::{error::CgkaError, operation::CgkaOperation, Cgka};
 use crate::{
     crypto::share_key::{ShareKey, ShareSecretKey},
+    cgka::keys::ShareKeyMap,
     principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
 };
 use nonempty::{nonempty, NonEmpty};
@@ -21,6 +22,12 @@ impl TestMember {
         let sk = ShareSecretKey::generate(csprng);
         let pk = sk.share_key();
         Self { id, pk, sk }
+    }
+
+    pub fn cgka_from(&self, cgka: &Cgka) -> Result<Cgka, CgkaError> {
+        let mut sks = ShareKeyMap::new();
+        sks.insert(self.pk, self.sk);
+        cgka.with_new_owner(self.id, self.pk, sks)
     }
 }
 
@@ -52,28 +59,32 @@ impl TestMemberCgka {
         let pk = sk.share_key();
         self.m.pk = pk;
         self.m.sk = sk;
-        self.cgka.update(self.id(), pk, sk, csprng)
+        self.cgka.update(pk, sk, csprng)
+    }
+
+    pub fn update_cgka_to(&mut self, cgka: &Cgka) -> Result<(), CgkaError> {
+        let sks = self.cgka.owner_sks.clone();
+        self.cgka = cgka.with_new_owner(self.id(), self.m.pk, sks)?;
+        Ok(())
     }
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct TestConcurrentOperations {
     pub ops: HashMap<IndividualId, Vec<CgkaOperation>>,
-    pub remove_ops: HashMap<IndividualId, Vec<CgkaOperation>>,
 }
 
 impl TestConcurrentOperations {
     pub fn new() -> Self {
         Self {
             ops: Default::default(),
-            remove_ops: Default::default(),
         }
     }
 
     pub fn add(&mut self, member_id: IndividualId, op: CgkaOperation) {
         match op {
             CgkaOperation::Remove { id, removed_keys } => {
-                self.remove_ops
+                self.ops
                     .entry(member_id)
                     .or_default()
                     .push(CgkaOperation::Remove { id, removed_keys });
@@ -84,20 +95,13 @@ impl TestConcurrentOperations {
         }
     }
 
-    pub fn ordered_with_ids(&mut self) -> Vec<(IndividualId, CgkaOperation)> {
-        // TODO: This looks complex but currently doesn't do much except place the
-        // removes at the end. Update so that it shuffles but keeps causal order for
-        // individual ids.
+    pub fn ordered(&mut self) -> Vec<CgkaOperation> {
+        // TODO: This doesn't randomly intersperse the operations but just
+        // places them in order of one member's list of concurrent ops after another.
         self.ops
             .iter()
             .flat_map(|(id, ops)| (0..ops.len()).map(|n| (*id, n)).collect::<Vec<_>>())
-            .map(|(id, idx)| (id, self.ops.get(&id).unwrap()[idx].clone()))
-            .chain(
-                &mut self
-                    .remove_ops
-                    .iter()
-                    .flat_map(|(id, ops)| ops.iter().map(|op| (*id, op.clone()))),
-            )
+            .map(|(id, idx)| self.ops.get(&id).unwrap()[idx].clone())
             .collect()
     }
 }
@@ -141,7 +145,7 @@ pub fn setup_member_cgkas(
     let initial_cgka = setup_cgka(doc_id, &members, 0);
     let mut member_cgkas = Vec::new();
     for m in members {
-        let cgka = initial_cgka.with_new_owner(m.id, m.pk, m.sk)?;
+        let cgka = m.cgka_from(&initial_cgka)?;
         member_cgkas.push(TestMemberCgka::new(m.clone(), cgka));
     }
     Ok(member_cgkas)
@@ -157,15 +161,15 @@ pub fn setup_updated_and_synced_member_cgkas(
     let initial_cgka = setup_cgka(doc_id, &members, 0);
     let mut member_cgkas = vec![TestMemberCgka::new(members[0].clone(), initial_cgka)];
     for m in members.iter_mut().skip(1) {
-        let cgka = member_cgkas[0].cgka.with_new_owner(m.id, m.pk, m.sk)?;
+        let cgka = m.cgka_from(&member_cgkas[0].cgka)?;
         let mut member_cgka = TestMemberCgka::new(m.clone(), cgka);
         let op = member_cgka.update(&mut rand::thread_rng())?;
-        member_cgkas[0].cgka.merge(op)?;
+        member_cgkas[0].cgka.merge_concurrent_operations(&vec![op])?;
         member_cgkas.push(member_cgka);
     }
     let base_cgka = member_cgkas[0].cgka.clone();
     for m in member_cgkas.iter_mut().skip(1) {
-        m.cgka = base_cgka.with_new_owner(m.id(), m.m.pk, m.m.sk)?;
+        m.update_cgka_to(&base_cgka)?;
     }
 
     Ok(member_cgkas)
@@ -188,7 +192,7 @@ pub fn apply_test_operations(
     for test_op in test_operations {
         test_op(member_cgkas, &mut added_members, &mut ops)?;
     }
-    let ordered_ops = ops.ordered_with_ids();
+    let ordered_ops = ops.ordered();
 
     match test_merge_strategy {
         TestMergeStrategy::MergeToAllMembers => {
@@ -198,25 +202,21 @@ pub fn apply_test_operations(
                 m.cgka.replace_tree(&starting_cgkas[idx].cgka);
             }
             for m in member_cgkas.iter_mut() {
-                for (_id, op) in &ordered_ops {
-                    m.cgka.merge(op.clone())?;
-                }
+                m.cgka.merge_concurrent_operations(&ordered_ops)?;
             }
         }
         TestMergeStrategy::MergeToOneMemberAndClone => {
             member_cgkas[0].cgka.replace_tree(&starting_cgkas[0].cgka);
-            for (_id, op) in &ordered_ops {
-                member_cgkas[0].cgka.merge(op.clone())?;
-            }
+            member_cgkas[0].cgka.merge_concurrent_operations(&ordered_ops)?;
             let base_cgka = member_cgkas[0].cgka.clone();
             for m in member_cgkas.iter_mut().skip(1) {
-                m.cgka = base_cgka.with_new_owner(m.id(), m.m.pk, m.m.sk)?;
+                m.update_cgka_to(&base_cgka)?;
             }
         }
     }
 
     for m in added_members {
-        let new_m_cgka = member_cgkas[0].cgka.with_new_owner(m.id, m.pk, m.sk)?;
+        let new_m_cgka = m.cgka_from(&member_cgkas[0].cgka)?;
         member_cgkas.push(TestMemberCgka::new(m.clone(), new_m_cgka));
     }
     Ok(())
@@ -260,6 +260,7 @@ pub fn setup_member_cgkas_with_maximum_conflict_keys(
     // but inner nodes outside that path will still contain the maximum possible number
     // of conflict keys.
     apply_test_operations_and_merge(&mut member_cgkas, &[update_first_member()])?;
+
     Ok(member_cgkas)
 }
 
