@@ -103,7 +103,7 @@ impl<T: ContentRef> Operation<T> {
             return Ok((CaMap::new(), 0));
         }
 
-        let mut ancestors = HashMap::new();
+        let mut ancestors: HashMap<Operation<T>, usize> = HashMap::new();
         let mut heads = vec![];
 
         let after_auth = self.after_auth();
