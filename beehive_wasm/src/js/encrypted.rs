@@ -1,8 +1,9 @@
+use super::change_ref::JsChangeRef;
 use beehive_core::crypto::encrypted::Encrypted;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Encrypted)]
-pub struct JsEncrypted(Encrypted<Vec<u8>>);
+pub struct JsEncrypted(Encrypted<Vec<u8>, JsChangeRef>);
 
 #[wasm_bindgen(js_class = Encrypted)]
 impl JsEncrypted {
@@ -22,8 +23,8 @@ impl JsEncrypted {
     }
 }
 
-impl From<Encrypted<Vec<u8>>> for JsEncrypted {
-    fn from(encrypted: Encrypted<Vec<u8>>) -> Self {
+impl From<Encrypted<Vec<u8>, JsChangeRef>> for JsEncrypted {
+    fn from(encrypted: Encrypted<Vec<u8>, JsChangeRef>) -> Self {
         JsEncrypted(encrypted)
     }
 }

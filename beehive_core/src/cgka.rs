@@ -1,5 +1,4 @@
 pub mod beekem;
-pub mod encryption_key;
 pub mod error;
 pub mod keys;
 pub mod operation;
@@ -14,7 +13,9 @@ use std::{borrow::Borrow, rc::Rc};
 use crate::{
     content::reference::ContentRef,
     crypto::{
+        application_secret::{ApplicationSecret, PcsKey},
         digest::Digest,
+        encrypted::Encrypted,
         share_key::{ShareKey, ShareSecretKey},
         siv::Siv,
         symmetric_key::SymmetricKey,
@@ -23,7 +24,6 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use beekem::BeeKem;
-use encryption_key::{ApplicationSecret, ApplicationSecretMetadata, PcsKey};
 use error::CgkaError;
 use keys::ShareKeyMap;
 use nonempty::NonEmpty;
@@ -76,7 +76,7 @@ impl Cgka {
         };
         cgka.tree
             .encrypt_path(owner_id, owner_pk, &mut cgka.owner_sks, csprng)?;
-        let pcs_key = PcsKey::derive_from(cgka.owner_id, &mut cgka.owner_sks, &cgka.tree)?;
+        let pcs_key = cgka.derive_pcs_key()?;
         cgka.pcs_keys.insert(Rc::new(pcs_key));
         Ok(cgka)
     }
@@ -95,75 +95,86 @@ impl Cgka {
         cgka.owner_sks = owner_sks;
         cgka.pcs_keys = Default::default();
         if self.has_pcs_key() {
-            let pcs_key = PcsKey::derive_from(cgka.owner_id, &mut cgka.owner_sks, &cgka.tree)?;
+            let pcs_key = cgka.derive_pcs_key()?;
             cgka.pcs_keys.insert(Rc::new(pcs_key));
         }
         Ok(cgka)
+    }
+
+    fn derive_pcs_key(&mut self) -> Result<PcsKey, CgkaError> {
+        let key = self
+            .tree
+            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)?;
+        Ok(PcsKey::new(key))
     }
 }
 
 /// Public CGKA operations
 impl Cgka {
-    // FIXME: We're currently assuming the caller will check if there is a root
-    // secret before calling this method. If there is not, it must do a PCS update
-    // first. If we use this strategy, then failing to check and calling when there
-    // is no root secret will return an error.
-    pub fn new_app_secret_for<T: ContentRef>(
+    pub fn new_app_secret_for<T: ContentRef, R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         content_ref: &T,
         content: &[u8],
         pred_ref: &Vec<T>,
+        csprng: &mut R,
     ) -> Result<ApplicationSecret<T>, CgkaError> {
-        debug_assert!(self.has_pcs_key());
-        let current_pcs_key = PcsKey::derive_from(self.owner_id, &mut self.owner_sks, &self.tree)?;
+        // If the tree currently has no root key, we generate a new key pair
+        // and use it to perform a PCS update. Note that this means the new leaf
+        // key pair is only known at the Cgka level where it is stored in the
+        // ShareKeyMap.
+        if !self.has_pcs_key() {
+            let new_share_secret_key = ShareSecretKey::generate(csprng);
+            let new_share_key = new_share_secret_key.share_key();
+            self.update(new_share_key, new_share_secret_key, csprng)
+                .expect("FIXME");
+        }
+        let current_pcs_key = self.derive_pcs_key()?;
         let pcs_key_hash = Digest::hash(&current_pcs_key);
         if !self.pcs_keys.contains_key(&pcs_key_hash) {
             self.pcs_keys.insert(Rc::new(current_pcs_key));
         }
         let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id)
             .map_err(|_e| CgkaError::Conversion)?;
-        let metadata = ApplicationSecretMetadata {
-            writer_id: self.owner_id,
-            content_ref: Digest::hash(content_ref),
-            pred_ref: Digest::hash(pred_ref),
-            nonce,
-            pcs_key_hash,
-        };
-        let app_secret = current_pcs_key
-            .derive_application_secret(Digest::hash(content_ref), Digest::hash(pred_ref));
-        Ok(ApplicationSecret::new(app_secret, metadata))
+        Ok(current_pcs_key.derive_application_secret(
+            &nonce,
+            &Digest::hash(content_ref),
+            &Digest::hash(pred_ref),
+        ))
     }
 
     // TODO: Remove once we move to Rust 2024 and can rewrite with an if let chain.
     #[allow(clippy::unnecessary_unwrap)]
-    pub fn decryption_key_for<T: ContentRef>(
+    pub fn decryption_key_for<T, Cr: ContentRef>(
         &mut self,
-        metadata: &ApplicationSecretMetadata<T>,
-    ) -> Result<Option<SymmetricKey>, CgkaError> {
-        let maybe_pcs_key: Option<Rc<PcsKey>> = self.pcs_keys.get(&metadata.pcs_key_hash).cloned();
+        encrypted: &Encrypted<T, Cr>,
+    ) -> Result<SymmetricKey, CgkaError> {
+        let maybe_pcs_key: Option<Rc<PcsKey>> = self.pcs_keys.get(&encrypted.pcs_key_hash).cloned();
         // TODO: With Rust 2024, we'll be able to use if let chains to rewrite this
         // in a cleaner way. See https://github.com/rust-lang/rust/pull/132833.
         let last_key = if maybe_pcs_key.is_some()
             && Digest::hash(maybe_pcs_key.clone().expect("is some").borrow())
-                == metadata.pcs_key_hash
+                == encrypted.pcs_key_hash
         {
             maybe_pcs_key.expect("is some")
         } else {
-            let pcs_key = PcsKey::derive_from(self.owner_id, &mut self.owner_sks, &self.tree)?;
-            if Digest::hash(&pcs_key) == metadata.pcs_key_hash {
+            let pcs_key = self.derive_pcs_key()?;
+            if Digest::hash(&pcs_key) == encrypted.pcs_key_hash {
                 Rc::new(pcs_key)
             } else {
                 // FIXME: Right now it's possible that we never derived a PCS key
                 // from the update corresponding to the PCS key hash in the metadata.
                 // For example, we might have applied that update as part of a
                 // concurrent merge, which left the tree with no root secret.
-                return Ok(None);
+                return Err(CgkaError::UnknownPcsKey);
             }
         };
         self.pcs_keys.insert(last_key.clone());
-        let app_secret =
-            last_key.derive_application_secret(metadata.content_ref, metadata.pred_ref);
-        Ok(Some(app_secret))
+        let app_secret = last_key.derive_application_secret(
+            &encrypted.nonce,
+            &encrypted.content_ref,
+            &encrypted.pred_ref,
+        );
+        Ok(app_secret.key())
     }
 
     /// Get secret for decryption/encryption. If you are using this for a new
@@ -204,11 +215,14 @@ impl Cgka {
         csprng: &mut R,
     ) -> Result<CgkaOperation, CgkaError> {
         self.owner_sks.insert(new_pk, new_sk);
-        let maybe_new_path = self
-            .tree
-            .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
+        let maybe_new_path =
+            self.tree
+                .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
         if let Some(new_path) = maybe_new_path {
-            let op = CgkaOperation::Update { id: self.owner_id, new_path };
+            let op = CgkaOperation::Update {
+                id: self.owner_id,
+                new_path,
+            };
             Ok(op)
         } else {
             Err(CgkaError::IdentifierNotFound)
@@ -356,7 +370,8 @@ mod tests {
             if idx == m_idx {
                 continue;
             }
-            m.cgka.merge_concurrent_operations(&vec![update_op.clone()])?;
+            m.cgka
+                .merge_concurrent_operations(&vec![update_op.clone()])?;
         }
         member_cgkas[m_idx].cgka.secret()?.to_bytes();
         // Compare the result of secret() for all members

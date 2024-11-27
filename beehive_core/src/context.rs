@@ -2,7 +2,6 @@
 
 use crate::{
     access::Access,
-    cgka::encryption_key::ApplicationSecretMetadata,
     content::reference::ContentRef,
     crypto::{
         encrypted::Encrypted,
@@ -12,7 +11,7 @@ use crate::{
     principal::{
         active::Active,
         agent::{Agent, AgentId},
-        document::{id::DocumentId, store::DocumentStore, Document},
+        document::{id::DocumentId, store::DocumentStore, DecryptError, Document, EncryptError},
         group::{
             id::GroupId,
             operation::delegation::{Delegation, DelegationError},
@@ -157,32 +156,25 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
         )
     }
 
-    pub fn encrypt_content(
+    pub fn try_encrypt_content(
         &mut self,
-        doc_id: DocumentId,
+        doc: Rc<RefCell<Document<T>>>,
         content_ref: &T,
         pred_ref: &Vec<T>,
         content: &[u8],
         // FIXME: What error return type?
-        // FIXME: Do we return app secret metadata? Probably makes sense to add
-        // to Encrypted
-    ) -> Encrypted<Vec<u8>> {
-        let doc_ref = self.docs.get(&doc_id).expect("FIXME");
-        let mut doc = doc_ref.borrow_mut();
-        doc.encrypt_content(content_ref, content, pred_ref, &mut self.csprng)
+    ) -> Result<Encrypted<Vec<u8>, T>, EncryptError> {
+        doc.borrow_mut()
+            .try_encrypt_content(content_ref, content, pred_ref, &mut self.csprng)
     }
 
-    pub fn decrypt_content(
+    pub fn try_decrypt_content(
         &mut self,
-        doc_id: DocumentId,
-        encrypted: &Encrypted<Vec<u8>>,
-        // FIXME: Remove when on Encrypted
-        metadata: &ApplicationSecretMetadata<T>,
+        doc: Rc<RefCell<Document<T>>>,
+        encrypted: &Encrypted<Vec<u8>, T>,
         // FIXME: What error return type?
-    ) -> Vec<u8> {
-        let doc_ref = self.docs.get(&doc_id).expect("FIXME");
-        let mut doc = doc_ref.borrow_mut();
-        doc.decrypt_content(encrypted, metadata).clone()
+    ) -> Result<Vec<u8>, DecryptError> {
+        doc.borrow_mut().try_decrypt_content(encrypted)
     }
 
     pub fn reachable_docs(&self) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> {

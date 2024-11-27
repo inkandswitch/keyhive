@@ -17,10 +17,11 @@ use super::{
 };
 use beehive_core::{
     context::Context,
-    principal::document::{id::DocumentId, Document},
+    principal::document::{id::DocumentId, Document, EncryptError},
 };
 use dupe::Dupe;
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Beehive)]
@@ -106,10 +107,11 @@ impl JsBeehive {
         content_ref: JsChangeRef,
         pred_refs: Vec<JsChangeRef>,
         content: &[u8],
-    ) -> JsEncrypted {
-        self.ctx
-            .encrypt_content(doc.borrow().doc_id(), &content_ref, &pred_refs, content)
-            .into()
+    ) -> Result<JsEncrypted, JsEncryptError> {
+        Ok(self
+            .ctx
+            .try_encrypt_content(doc.0, &content_ref, &pred_refs, content)?
+            .into())
     }
 
     #[wasm_bindgen(js_name = tryDecrypt)]
@@ -189,6 +191,12 @@ impl JsBeehive {
         self.ctx.get_agent(id.0).map(JsAgent)
     }
 }
+
+#[wasm_bindgen]
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct JsEncryptError(#[from] pub(crate) EncryptError);
+
 #[cfg(test)]
 mod tests {
     use super::*;

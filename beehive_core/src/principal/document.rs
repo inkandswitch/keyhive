@@ -4,7 +4,7 @@ pub mod store;
 use super::{active::Active, individual::id::IndividualId, verifiable::Verifiable};
 use crate::{
     access::Access,
-    cgka::{encryption_key::ApplicationSecretMetadata, Cgka},
+    cgka::{error::CgkaError, Cgka},
     content::reference::ContentRef,
     crypto::{
         encrypted::Encrypted,
@@ -35,6 +35,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
+use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document<T: ContentRef> {
@@ -190,13 +191,14 @@ impl<T: ContentRef> Document<T> {
         self.cgka.update(pk, sk, csprng).expect("FIXME");
     }
 
-    pub fn encrypt_content<R: rand::RngCore + rand::CryptoRng>(
+    pub fn try_encrypt_content<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         content_ref: &T,
         content: &[u8],
         pred_ref: &Vec<T>,
         csprng: &mut R,
-    ) -> Encrypted<Vec<u8>> {
+        // FIXME: What error return type?
+    ) -> Result<Encrypted<Vec<u8>, T>, EncryptError> {
         // FIXME: We are automatically doing a PCS update if the tree doesn't have a
         // root secret. That might make sense, but do we need to store this key pair
         // on our Active member?
@@ -205,37 +207,55 @@ impl<T: ContentRef> Document<T> {
             let new_share_key = new_share_secret_key.share_key();
             self.cgka
                 .update(new_share_key, new_share_secret_key, csprng)
-                .expect("FIXME");
+                .map_err(EncryptError::UnableToPcsUpdate)?;
         }
         let app_secret = self
             .cgka
-            .new_app_secret_for(content_ref, content, pred_ref)
-            .expect("FIXME");
-        let mut ciphertext = content.to_vec();
+            .new_app_secret_for(content_ref, content, pred_ref, csprng)
+            .map_err(EncryptError::FailedToMakeAppSecret)?;
+
         app_secret
-            .key()
-            .try_encrypt(app_secret.metadata().nonce, &mut ciphertext)
-            .unwrap();
-        Encrypted::new(app_secret.metadata().nonce, ciphertext)
+            .try_encrypt(content)
+            .map_err(EncryptError::EncryptionFailed)
     }
 
-    pub fn decrypt_content(
+    pub fn try_decrypt_content(
         &mut self,
-        encrypted_content: &Encrypted<Vec<u8>>,
-        // FIXME: Add to Encrypted
-        metadata: &ApplicationSecretMetadata<T>,
-    ) -> Vec<u8> {
+        encrypted_content: &Encrypted<Vec<u8>, T>,
+        // FIXME: What error return type?
+    ) -> Result<Vec<u8>, DecryptError> {
         let decrypt_key = self
             .cgka
-            .decryption_key_for(&metadata)
-            .expect("FIXME")
-            .expect("FIXME");
+            .decryption_key_for(encrypted_content)
+            .map_err(|_| DecryptError::KeyNotFound)?;
+
         let mut plaintext = encrypted_content.ciphertext.clone();
         decrypt_key
             .try_decrypt(encrypted_content.nonce, &mut plaintext)
-            .expect("FIXME");
-        plaintext
+            .map_err(DecryptError::DecryptionFailed)?;
+        Ok(plaintext)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum EncryptError {
+    #[error("Encryption failed: {0}")]
+    EncryptionFailed(chacha20poly1305::Error),
+
+    #[error("Unable to PCS update: {0}")]
+    UnableToPcsUpdate(CgkaError),
+
+    #[error("Failed to make app secret: {0}")]
+    FailedToMakeAppSecret(CgkaError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum DecryptError {
+    #[error("Key not found")]
+    KeyNotFound,
+
+    #[error("Decryption error: {0}")]
+    DecryptionFailed(chacha20poly1305::Error),
 }
 
 // FIXME test
