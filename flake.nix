@@ -92,6 +92,7 @@
         ];
 
         cargo = "${pkgs.cargo}/bin/cargo";
+        gzip = "${pkgs.gzip}/bin/gzip";
         node = "${unstable.nodejs_20}/bin/node";
         pnpm = "${unstable.pnpm}/bin/pnpm";
         playwright = "${pnpm} --dir=./beehive_wasm exec playwright";
@@ -105,13 +106,13 @@
             "${cargo} build --release";
 
          "release:wasm:web" = cmd "Build release for wasm32-unknown-unknown with web bindings"
-            "${wasm-pack} build ./beehive_wasm --release --target=web";
+           "${wasm-pack} build ./beehive_wasm --release --target=web && ${gzip} -f ./beehive_wasm/pkg/beehive_wasm_bg.wasm";
 
          "release:wasm:bundler" = cmd "Build release for wasm32-unknown-unknown with bundler bindings"
-            "${wasm-pack} build ./beehive_wasm --release --target=bundler";
+            "${wasm-pack} build ./beehive_wasm --release --target=bundler && ${gzip} -f ./beehive_wasm/pkg/beehive_wasm_bg.wasm";
 
           "release:wasm:nodejs" = cmd "Build release for wasm32-unknown-unknown with Node.js bindgings"
-            "${wasm-pack} build ./beehive_wasm --release --target=nodejs";
+            "${wasm-pack} build ./beehive_wasm --release --target=nodejs && ${gzip} -f ./beehive_wasm/pkg/beehive_wasm_bg.wasm";
         };
 
         build = {
