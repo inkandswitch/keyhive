@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 pub struct Cgka {
     doc_id: DocumentId,
     pub owner_id: IndividualId,
-    owner_sks: ShareKeyMap,
+    pub owner_sks: ShareKeyMap,
     tree: BeeKem,
     // TODO: Once we can rebuild the tree to correspond to earlier PcsKeys,
     // convert this to a cache of some kind with policies.
@@ -85,15 +85,14 @@ impl Cgka {
         &self,
         my_id: IndividualId,
         pk: ShareKey,
-        sk: ShareSecretKey,
+        owner_sks: ShareKeyMap,
     ) -> Result<Self, CgkaError> {
         if !self.tree.node_key_for_id(my_id)?.contains_key(&pk) {
             return Err(CgkaError::ShareKeyNotFound);
         }
         let mut cgka = self.clone();
         cgka.owner_id = my_id;
-        cgka.owner_sks = Default::default();
-        cgka.owner_sks.insert(pk, sk);
+        cgka.owner_sks = owner_sks;
         cgka.pcs_keys = Default::default();
         if self.has_pcs_key() {
             let pcs_key = cgka.derive_pcs_key()?;
@@ -211,18 +210,16 @@ impl Cgka {
     /// Update key pair for this Identifier.
     pub fn update<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
-        id: IndividualId,
         new_pk: ShareKey,
         new_sk: ShareSecretKey,
         csprng: &mut R,
     ) -> Result<CgkaOperation, CgkaError> {
-        debug_assert!(id == self.owner_id);
         self.owner_sks.insert(new_pk, new_sk);
         let maybe_new_path = self
             .tree
-            .encrypt_path(id, new_pk, &mut self.owner_sks, csprng)?;
+            .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
         if let Some(new_path) = maybe_new_path {
-            let op = CgkaOperation::Update { id, new_path };
+            let op = CgkaOperation::Update { id: self.owner_id, new_path };
             Ok(op)
         } else {
             Err(CgkaError::IdentifierNotFound)
@@ -237,30 +234,50 @@ impl Cgka {
         self.tree.member_count()
     }
 
-    /// Merge
-    pub fn merge(&mut self, op: CgkaOperation) -> Result<(), CgkaError> {
+    /// Apply an operation that is an immediate causal successor to the current Cgka
+    /// state.
+    pub fn apply_operation(&mut self, op: &CgkaOperation) -> Result<(), CgkaError> {
         match op {
             CgkaOperation::Add {
                 id,
                 pk,
                 leaf_index: _,
             } => {
-                // TODO: This is the naive approach to merging concurrent adds: grow
-                // the tree if necessary, blank the parent nodes, and lexicographically
-                // sort the leaves.
                 // TODO: Check we don't already have this id in the tree.
-                self.tree.push_leaf(id, pk)?;
-                self.tree.sort_leaves_and_blank_tree()?;
+                self.tree.push_leaf(*id, *pk)?;
             }
             CgkaOperation::Remove {
                 id,
                 removed_keys: _,
             } => {
-                self.remove(id)?;
+                self.tree.remove_id(*id)?;
             }
-            CgkaOperation::Update { id: _, new_path } => {
-                self.tree.apply_path(&new_path)?;
+            CgkaOperation::Update { id, new_path } => {
+                // TODO: We are currently ignoring a missing id here. Causal ordering
+                // should ensure that an update for an id will always come after the
+                // add of that id but might come after a remove. If it came after a
+                // remove, we ignore it.
+                if self.tree.contains_id(*id) {
+                    self.tree.apply_path(new_path)?;
+                }
             }
+        }
+        Ok(())
+    }
+
+    /// Merge
+    pub fn merge_concurrent_operations(&mut self, ops: &[CgkaOperation]) -> Result<(), CgkaError> {
+        let mut includes_add = false;
+        for op in ops {
+            if matches!(op, CgkaOperation::Add { .. }) {
+                includes_add = true;
+            }
+            self.apply_operation(op)?;
+        }
+        // TODO: This is the naive approach to merging concurrent adds: blank the inner
+        // nodes and lexicographically sort the leaves.
+        if includes_add {
+            self.tree.sort_leaves_and_blank_tree()?;
         }
         Ok(())
     }
@@ -290,7 +307,7 @@ mod tests {
         let mut cgka = setup_cgka(doc_id, &members, 0);
         let sk = ShareSecretKey::generate(csprng);
         let pk = sk.share_key();
-        cgka.update(cgka.owner_id, pk, sk.clone(), csprng)?;
+        cgka.update(pk, sk.clone(), csprng)?;
         assert_ne!(sk, cgka.secret()?);
         Ok(())
     }
@@ -331,9 +348,9 @@ mod tests {
         let mut cgkas = setup_member_cgkas(doc_id, 7)?;
         assert!(cgkas[0].cgka.has_pcs_key());
         let op1 = cgkas[1].update(csprng)?;
-        cgkas[0].cgka.merge(op1)?;
+        cgkas[0].cgka.merge_concurrent_operations(&vec![op1])?;
         let op6 = cgkas[6].update(csprng)?;
-        cgkas[0].cgka.merge(op6)?;
+        cgkas[0].cgka.merge_concurrent_operations(&vec![op6])?;
         assert!(!cgkas[0].cgka.has_pcs_key());
         Ok(())
     }
@@ -350,7 +367,7 @@ mod tests {
             if idx == m_idx {
                 continue;
             }
-            m.cgka.merge(update_op.clone())?;
+            m.cgka.merge_concurrent_operations(&vec![update_op.clone()])?;
         }
         member_cgkas[m_idx].cgka.secret()?.to_bytes();
         // Compare the result of secret() for all members

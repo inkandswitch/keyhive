@@ -105,6 +105,10 @@ impl BeeKem {
         Ok(tree)
     }
 
+    pub(crate) fn contains_id(&self, id: IndividualId) -> bool {
+        self.id_to_leaf_idx.contains_key(&id)
+    }
+
     pub(crate) fn node_key_for_id(&self, id: IndividualId) -> Result<NodeKey, CgkaError> {
         let idx = self.leaf_index_for_id(id)?;
         self.node_key_for_index((*idx).into())

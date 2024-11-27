@@ -1,4 +1,3 @@
-pub mod encryption;
 pub mod id;
 pub mod store;
 
@@ -181,15 +180,15 @@ impl<T: ContentRef> Document<T> {
         self.cgka.has_pcs_key()
     }
 
+    // TODO: Should this only be possible for the active member?
     // FIXME: Add error type
     pub fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
-        id: IndividualId,
         pk: ShareKey,
         sk: ShareSecretKey,
         csprng: &mut R,
     ) {
-        self.cgka.update(id, pk, sk, csprng).expect("FIXME");
+        self.cgka.update(pk, sk, csprng).expect("FIXME");
     }
 
     pub fn try_encrypt_content<R: rand::RngCore + rand::CryptoRng>(
@@ -207,12 +206,7 @@ impl<T: ContentRef> Document<T> {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
             self.cgka
-                .update(
-                    self.cgka.owner_id,
-                    new_share_key,
-                    new_share_secret_key,
-                    csprng,
-                )
+                .update(new_share_key, new_share_secret_key, csprng)
                 .map_err(EncryptError::UnableToPcsUpdate)?;
         }
         let app_secret = self
