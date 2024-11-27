@@ -9,7 +9,11 @@ use crate::{
 };
 use dupe::Dupe;
 use nonempty::NonEmpty;
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{
+    cell::{RefCell, RefMut},
+    collections::BTreeMap,
+    rc::Rc,
+};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct DocumentStore<T: ContentRef> {
@@ -29,6 +33,10 @@ impl<T: ContentRef> DocumentStore<T> {
 
     pub fn get(&self, id: &DocumentId) -> Option<Rc<RefCell<Document<T>>>> {
         self.docs.get(id).cloned()
+    }
+
+    pub fn get_mut(&self, id: &DocumentId) -> Option<RefMut<Document<T>>> {
+        self.docs.get(id).map(|d| d.borrow_mut())
     }
 
     pub fn generate_document<R: rand::RngCore + rand::CryptoRng>(

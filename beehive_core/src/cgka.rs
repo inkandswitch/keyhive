@@ -14,7 +14,11 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         application_secret::{ApplicationSecret, PcsKey},
-        digest::Digest, encrypted::Encrypted, share_key::{ShareKey, ShareSecretKey}, siv::Siv, symmetric_key::SymmetricKey
+        digest::Digest,
+        encrypted::Encrypted,
+        share_key::{ShareKey, ShareSecretKey},
+        siv::Siv,
+        symmetric_key::SymmetricKey,
     },
     principal::{document::id::DocumentId, individual::id::IndividualId},
     util::content_addressed_map::CaMap,
@@ -99,28 +103,30 @@ impl Cgka {
     }
 
     fn derive_pcs_key(&mut self) -> Result<PcsKey, CgkaError> {
-        let key = self.tree.decrypt_tree_secret(self.owner_id, &mut self.owner_sks)?;
+        let key = self
+            .tree
+            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)?;
         Ok(PcsKey::new(key))
     }
 }
 
 /// Public CGKA operations
 impl Cgka {
-    pub fn new_app_secret_for<T: ContentRef>(
+    pub fn new_app_secret_for<T: ContentRef, R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         content_ref: &T,
         content: &[u8],
         pred_ref: &Vec<T>,
+        csprng: &mut R,
     ) -> Result<ApplicationSecret<T>, CgkaError> {
         // If the tree currently has no root key, we generate a new key pair
         // and use it to perform a PCS update. Note that this means the new leaf
         // key pair is only known at the Cgka level where it is stored in the
         // ShareKeyMap.
         if !self.has_pcs_key() {
-            let new_share_secret_key = ShareSecretKey::generate();
+            let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
-            self
-                .update(self.owner_id, new_share_key, new_share_secret_key)
+            self.update(self.owner_id, new_share_key, new_share_secret_key, csprng)
                 .expect("FIXME");
         }
         let current_pcs_key = self.derive_pcs_key()?;
@@ -130,8 +136,11 @@ impl Cgka {
         }
         let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id)
             .map_err(|_e| CgkaError::Conversion)?;
-        Ok(current_pcs_key
-            .derive_application_secret(&nonce, &Digest::hash(content_ref), &Digest::hash(pred_ref)))
+        Ok(current_pcs_key.derive_application_secret(
+            &nonce,
+            &Digest::hash(content_ref),
+            &Digest::hash(pred_ref),
+        ))
     }
 
     // TODO: Remove once we move to Rust 2024 and can rewrite with an if let chain.
@@ -161,8 +170,11 @@ impl Cgka {
             }
         };
         self.pcs_keys.insert(last_key.clone());
-        let app_secret =
-            last_key.derive_application_secret(&encrypted.nonce, &encrypted.content_ref, &encrypted.pred_ref);
+        let app_secret = last_key.derive_application_secret(
+            &encrypted.nonce,
+            &encrypted.content_ref,
+            &encrypted.pred_ref,
+        );
         Ok(app_secret.key())
     }
 
