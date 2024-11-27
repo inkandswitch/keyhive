@@ -41,15 +41,6 @@ where
     }
 }
 
-// impl From<Signed<u128>> for Vec<u8> {
-//     fn from(signed: Signed<u128>) -> Self {
-//         let mut bytes = signed.payload.to_be_bytes().to_vec();
-//         bytes.extend(signed.verifier.as_bytes());
-//         bytes.extend(signed.signature.to_bytes());
-//         bytes
-//     }
-// }
-
 impl<T: Clone> Hash for Signed<T>
 where
     Vec<u8>: From<T>,
