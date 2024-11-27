@@ -26,6 +26,18 @@ impl JsAccess {
     }
 }
 
+impl From<JsAccess> for Access {
+    fn from(js_access: JsAccess) -> Self {
+        js_access.0
+    }
+}
+
+impl From<Access> for JsAccess {
+    fn from(access: Access) -> Self {
+        JsAccess(access)
+    }
+}
+
 impl Deref for JsAccess {
     type Target = Access;
 

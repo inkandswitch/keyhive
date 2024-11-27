@@ -49,6 +49,7 @@ pub struct Context<T: ContentRef, R: rand::CryptoRng + rand::RngCore> {
     /// The [`Document`]s that are known to this agent.
     pub docs: DocumentStore<T>,
 
+    /// Cryptographically secure (pseudo)random number generator.
     pub csprng: R,
 }
 

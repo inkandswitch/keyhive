@@ -27,8 +27,16 @@ impl<T: ContentRef> Revocation<T> {
         self.revoke.subject()
     }
 
+    pub fn revoked(&self) -> &Rc<Signed<Delegation<T>>> {
+        &self.revoke
+    }
+
     pub fn revoked_id(&self) -> AgentId {
         self.revoke.payload().delegate.agent_id()
+    }
+
+    pub fn proof(&self) -> Option<Rc<Signed<Delegation<T>>>> {
+        self.proof.dupe()
     }
 
     pub fn after(

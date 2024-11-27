@@ -11,11 +11,11 @@ rust-version.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-automerge = { version = "^0.5", features = ["wasm"] }
 beehive_core = { path = "../beehive_core" }
 dupe = { workspace = true }
 ed25519-dalek = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
 
 rand = { workspace = true }
 getrandom = { version = "0.2", features = ["js"] }

@@ -19,13 +19,13 @@ test.describe("Beehive", async () => {
   test('id', async ({ page }) => {
     const out = await page.evaluate(() => {
       const { Beehive, SigningKey } = window.beehive
-      const key = SigningKey.generate()
-      const vKey = key.verifyingKey
-      const beehive = new Beehive(key)
-      return { id: beehive.id, vKey }
+      const sk = SigningKey.generate()
+      const vk = sk.verifyingKey
+      const beehive = new Beehive(sk)
+      return { id: beehive.id.bytes, vk }
     })
 
-    expect(out.id).toStrictEqual(out.vKey)
+    expect(out.id).toStrictEqual(out.vk)
   })
 
   test.describe('idString', async () => {

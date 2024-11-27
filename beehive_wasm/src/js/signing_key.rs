@@ -21,8 +21,12 @@ impl JsSigningKey {
     }
 
     #[wasm_bindgen(getter, js_name = "verifyingKey")]
-    pub fn verfiying_key(&self) -> Vec<u8> {
-        self.0.to_vec()
+    pub fn verfiying_key(&self) -> Box<[u8]> {
+        Box::new(
+            ed25519_dalek::SigningKey::from_bytes(&self.0)
+                .verifying_key()
+                .to_bytes(),
+        )
     }
 
     pub fn generate() -> Result<Self, GenSigningKeyError> {

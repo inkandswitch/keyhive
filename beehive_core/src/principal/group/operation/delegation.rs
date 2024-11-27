@@ -44,6 +44,10 @@ impl<T: ContentRef> Delegation<T> {
         self.can
     }
 
+    pub fn proof(&self) -> Option<&Rc<Signed<Delegation<T>>>> {
+        self.proof.as_ref()
+    }
+
     pub fn after(
         &self,
     ) -> (

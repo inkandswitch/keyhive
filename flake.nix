@@ -184,7 +184,7 @@
             "${wasm-pack} test --node beehive_wasm";
 
           "test:ts:web" = cmd "Run beehive_wasm Typescript tests in Playwright"
-            "${playwright} test";
+            "build:wasm:web && ${playwright} test";
 
           "test:ts:web:report:latest" = cmd "Open the latest Playwright report"
             "${playwright} show-report";

@@ -1,13 +1,14 @@
 use super::{
     access::JsAccess,
     agent::JsAgent,
-    change_hash::JsChangeHash,
+    change_ref::JsChangeRef,
     delegation::JsDelegationError,
     doc_content_refs::DocContentRefs,
     document::JsDocument,
     encrypted::JsEncrypted,
     group::JsGroup,
     identifier::JsIdentifier,
+    individual_id::JsIndividualId,
     membered::JsMembered,
     share_key::JsShareKey,
     signed::JsSigned,
@@ -25,7 +26,7 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(js_name = Beehive)]
 #[derive(Debug)]
 pub struct JsBeehive {
-    ctx: Context<automerge::ChangeHash, rand::rngs::ThreadRng>,
+    ctx: Context<JsChangeRef, rand::rngs::ThreadRng>,
 }
 
 #[wasm_bindgen(js_class = Beehive)]
@@ -40,9 +41,14 @@ impl JsBeehive {
         })
     }
 
-    #[wasm_bindgen(getter, js_name = id)]
-    pub fn id(&self) -> Vec<u8> {
-        self.ctx.id().as_slice().to_vec()
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> JsIndividualId {
+        self.whoami()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn whoami(&self) -> JsIndividualId {
+        self.ctx.id().into()
     }
 
     #[wasm_bindgen(getter, js_name = idString)]
@@ -97,14 +103,12 @@ impl JsBeehive {
     pub fn try_encrypt_archive(
         &mut self,
         doc: JsDocument,
-        content_ref: JsChangeHash,
-        pred_refs: Vec<JsChangeHash>,
+        content_ref: JsChangeRef,
+        pred_refs: Vec<JsChangeRef>,
         content: &[u8],
     ) -> JsEncrypted {
-        // FIXME can fail?
-        let preds: Vec<_> = pred_refs.into_iter().map(|c| c.0).collect();
         self.ctx
-            .encrypt_content(doc.borrow().doc_id(), &content_ref.0, &preds, content)
+            .encrypt_content(doc.borrow().doc_id(), &content_ref, &pred_refs, content)
             .into()
     }
 
@@ -128,14 +132,11 @@ impl JsBeehive {
     ) -> Result<(), JsDelegationError> {
         let content_ref_map: BTreeMap<
             DocumentId,
-            (
-                Rc<RefCell<Document<automerge::ChangeHash>>>,
-                Vec<automerge::ChangeHash>,
-            ),
+            (Rc<RefCell<Document<JsChangeRef>>>, Vec<JsChangeRef>),
         > = after_content
             .into_iter()
             .map(|r| {
-                let hashes = r.change_hashes().into_iter().map(|c| c.0).collect();
+                let hashes = r.change_hashes().into_iter().collect();
                 (r.doc().borrow().doc_id(), (r.doc().0, hashes))
             })
             .collect();

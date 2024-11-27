@@ -1,18 +1,14 @@
-use super::{access::JsAccess, agent::JsAgent, group_id::JsGroupId, identifier::JsIdentifier};
-use beehive_core::{
-    crypto::signed::Signed,
-    principal::{
-        agent::Agent,
-        group::{operation::delegation::Delegation, Group},
-    },
+use super::{
+    capability::Capability, change_ref::JsChangeRef, group_id::JsGroupId, identifier::JsIdentifier,
 };
+use beehive_core::principal::group::Group;
 use dupe::Dupe;
 use std::{cell::RefCell, rc::Rc};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Group)]
 #[derive(Debug, Clone, Dupe)]
-pub struct JsGroup(pub(crate) Rc<RefCell<Group<automerge::ChangeHash>>>);
+pub struct JsGroup(pub(crate) Rc<RefCell<Group<JsChangeRef>>>);
 
 #[wasm_bindgen(js_class = Group)]
 impl JsGroup {
@@ -44,30 +40,5 @@ impl JsGroup {
                 }
             })
             .collect()
-    }
-}
-
-#[wasm_bindgen]
-#[derive(Debug, Clone, Dupe)]
-pub struct Capability {
-    who: Agent<automerge::ChangeHash>,
-    proof: Rc<Signed<Delegation<automerge::ChangeHash>>>,
-}
-
-#[wasm_bindgen]
-impl Capability {
-    #[wasm_bindgen(getter)]
-    pub fn who(&self) -> JsAgent {
-        JsAgent(self.who.clone())
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn can(&self) -> JsAccess {
-        JsAccess(self.proof.payload().can())
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn proof(&self) -> JsAccess {
-        todo!()
     }
 }
