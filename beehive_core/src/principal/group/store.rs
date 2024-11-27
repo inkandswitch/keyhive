@@ -4,7 +4,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::signed::SigningError,
     principal::{
-        agent::{Agent, AgentId},
+        agent::{id::AgentId, Agent},
         group::Group,
     },
 };

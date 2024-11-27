@@ -1,8 +1,10 @@
-use crate::crypto::{
-    share_key::{ShareKey, ShareSecretKey},
-    signed::{Signed, SigningError},
+use crate::{
+    crypto::{
+        share_key::{ShareKey, ShareSecretKey},
+        signed::{Signed, SigningError},
+    },
+    util::content_addressed_map::CaMap,
 };
-use crate::util::content_addressed_map::CaMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -31,7 +33,7 @@ impl PrekeyState {
                 let secret_key = ShareSecretKey::generate(csprng);
                 let share_key = secret_key.share_key();
 
-                let op = Signed::try_sign(KeyOp::Add(AddKeyOp { share_key }), &signing_key)?;
+                let op = Signed::try_sign(KeyOp::Add(AddKeyOp { share_key }), signing_key)?;
                 ops.insert(op.into());
                 keypairs.insert(share_key, secret_key);
 

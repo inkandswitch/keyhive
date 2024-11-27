@@ -6,7 +6,7 @@ pub mod state;
 pub mod store;
 
 use super::{
-    agent::{Agent, AgentId},
+    agent::{id::AgentId, Agent},
     document::Document,
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
@@ -218,10 +218,11 @@ impl<T: ContentRef> Group<T> {
                     })
                     .collect(),
             },
-            &signing_key,
+            signing_key,
         )?;
 
-        Ok(self.add_delegation(delegation))
+        self.add_delegation(delegation);
+        Ok(())
     }
 
     pub fn revoke_member(
@@ -255,7 +256,7 @@ impl<T: ContentRef> Group<T> {
                             })
                             .collect(),
                     },
-                    &signing_key,
+                    signing_key,
                 )?;
 
                 revocations.insert(Rc::new(revocation));

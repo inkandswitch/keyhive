@@ -154,7 +154,7 @@ impl JsBeehive {
         to_revoke: &JsAgent,
         membered: &mut JsMembered,
     ) -> Result<(), JsSigningError> {
-        Ok(self.ctx.revoke_member(to_revoke.agent_id(), membered)?)
+        Ok(self.ctx.revoke_member(to_revoke.0.agent_id(), membered)?)
     }
 
     #[wasm_bindgen(js_name = reachableDocs)]

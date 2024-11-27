@@ -3,7 +3,7 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     principal::{
-        agent::{Agent, AgentId},
+        agent::{id::AgentId, Agent},
         group::operation::delegation::DelegationError,
     },
 };

@@ -3,7 +3,7 @@
 pub mod id;
 pub mod state;
 
-use super::{agent::AgentId, verifiable::Verifiable};
+use super::{agent::id::AgentId, verifiable::Verifiable};
 use crate::crypto::{digest::Digest, share_key::ShareKey, signed::SigningError};
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;

@@ -5,7 +5,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
     principal::{
-        agent::AgentId,
+        agent::id::AgentId,
         document::{id::DocumentId, Document},
         identifier::Identifier,
     },

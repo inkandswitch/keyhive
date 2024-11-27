@@ -14,7 +14,7 @@ use crate::{
         signed::{Signed, SigningError},
     },
     principal::{
-        agent::{Agent, AgentId},
+        agent::{id::AgentId, Agent},
         group::operation::{
             delegation::{Delegation, DelegationError},
             revocation::Revocation,
