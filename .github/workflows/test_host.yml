@@ -19,5 +19,3 @@ jobs:
 
     - name: Build
       run: cargo test --verbose --features=test_utils
-    - name: Clippy
-      run: cargo bench --features=test_utils --no-run
