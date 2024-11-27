@@ -1,0 +1,23 @@
+name: Test on Host
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-lint-test-audit:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build
+      run: cargo test --verbose --features=test_utils
+    - name: Clippy
+      run: cargo bench --features=test_utils --no-run

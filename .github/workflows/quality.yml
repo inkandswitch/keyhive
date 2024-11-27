@@ -1,4 +1,4 @@
-name: Rust
+name: Code Quality Checks
 
 on:
   push:
@@ -16,11 +16,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Install wasm-pack
-      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - uses: actions/setup-node@v4
-      with:
-        node-version: 22
 
     - name: Build
       run: cargo build --verbose
@@ -28,11 +23,7 @@ jobs:
       run: cargo build --verbose --features=test_utils
     - name: Check
       run: cargo check --verbose --features=test_utils
-    - name: Test on Host
-      run: cargo test --verbose --features=test_utils
     - name: Clippy
       run: cargo clippy
-    - name: Compile benches
-      run: cargo bench --features=test_utils --no-run
     - name: Security vulnerability audit
       run: cargo audit
