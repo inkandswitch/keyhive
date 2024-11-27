@@ -125,7 +125,7 @@ impl Cgka {
         if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
-            self.update(self.owner_id, new_share_key, new_share_secret_key, csprng)
+            self.update(new_share_key, new_share_secret_key, csprng)
                 .expect("FIXME");
         }
         let current_pcs_key = self.derive_pcs_key()?;
@@ -215,11 +215,14 @@ impl Cgka {
         csprng: &mut R,
     ) -> Result<CgkaOperation, CgkaError> {
         self.owner_sks.insert(new_pk, new_sk);
-        let maybe_new_path = self
-            .tree
-            .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
+        let maybe_new_path =
+            self.tree
+                .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
         if let Some(new_path) = maybe_new_path {
-            let op = CgkaOperation::Update { id: self.owner_id, new_path };
+            let op = CgkaOperation::Update {
+                id: self.owner_id,
+                new_path,
+            };
             Ok(op)
         } else {
             Err(CgkaError::IdentifierNotFound)
@@ -367,7 +370,8 @@ mod tests {
             if idx == m_idx {
                 continue;
             }
-            m.cgka.merge_concurrent_operations(&vec![update_op.clone()])?;
+            m.cgka
+                .merge_concurrent_operations(&vec![update_op.clone()])?;
         }
         member_cgkas[m_idx].cgka.secret()?.to_bytes();
         // Compare the result of secret() for all members
