@@ -1,18 +1,48 @@
 //! The high level API for pairwise channels.
+//!
+//! ┌─────────────┐                      ┌─────────────┐
+//! │  Requester  │                      │  Responder  │
+//! └──────┬──────┘                      └──────┬──────┘
+//!        │              ┌──────┐              │
+//!        ├──────────────┤ Dial ├─────────────▶│
+//!        │              └──────┘              │
+//!        │                                    │
+//!        │              ┌───────┐             │
+//!        │◀─────────────┤Connect├─────────────┤
+//!        │              └───────┘             │
+//!        │                                    │
+//!        │           ┌──────────────┐         │
+//!        ├───────────┤CounterConnect├────────▶│
+//!        │           └──────────────┘         │
+//!        │                                    │
+//!        │              ┌───────┐             │
+//!        │◀─────────────┤  Ack  ├─────────────┤
+//!        │              └───────┘             │
+//!        │                                    │
+//! ┌──────┴──────┐                      ┌──────┴──────┐
+//! │  Requester  │                      │  Responder  │
+//! └─────────────┘                      └─────────────┘
 
 use super::{
-    ack::Ack,
-    dial::Dial,
-    encrypted::Encrypted,
-    hang_up::HangUp,
-    session::{DecryptError, Session},
-    signed::Signed,
+    ack::Ack, connect::Connect, counter_connect::CounterConnect, dial::Dial,
+    disconnect::Disconnect, hash::Hash, signed::Signed,
 };
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
-use x25519_dalek::{PublicKey, ReusableSecret};
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Incoming {
+    Connecting(Hash<Signed<Connect>>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Outgoing {
+    Dialled(Hash<Signed<Dial>>),
+    CounterConnecting(Hash<Signed<CounterConnect>>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manager {
     /// The manager's verifying key.
     pub verifier: VerifyingKey,
@@ -20,184 +50,166 @@ pub struct Manager {
     /// The manager's signing key.
     pub signer: SigningKey,
 
-    /// Latest introduction public key.
-    ///
-    /// This value is rotated on each connection attempt.
-    pub introduction_public_key: PublicKey,
+    /// State of current incoming handshakes.
+    pub incoming: HashMap<VerifyingKey, Incoming>,
 
-    /// Latest introduction secret key.
-    ///
-    /// Despite how the type is named, this value is rotated on each connection attempt.
-    pub introduction_secret_key: ReusableSecret,
+    /// State of current outgoing handshakes.
+    pub outgoing: HashMap<VerifyingKey, Outgoing>,
 
-    /// The channels managed by this manager.
-    pub channels: HashMap<VerifyingKey, Session>,
+    /// Peers that have successfully authenticated.
+    pub confirmed: HashSet<VerifyingKey>,
 }
 
 impl Manager {
     pub fn new<R: rand::CryptoRng + rand::RngCore + Clone>(csprng: &mut R) -> Self {
-        let introduction_secret_key = ReusableSecret::random_from_rng(csprng.clone());
         let signer = SigningKey::generate(csprng);
 
         Self {
             verifier: VerifyingKey::from(&signer),
             signer,
-
-            introduction_public_key: PublicKey::from(&introduction_secret_key),
-            introduction_secret_key,
-
-            channels: HashMap::new(),
+            incoming: HashMap::new(),
+            outgoing: HashMap::new(),
+            confirmed: HashSet::new(),
         }
     }
 
-    pub fn dial<R: rand::CryptoRng + rand::RngCore>(
+    pub fn dial<R: rand::CryptoRng + rand::Rng>(
         &mut self,
         to: &VerifyingKey,
         csprng: &mut R,
     ) -> Result<Signed<Dial>, signature::Error> {
-        let old_sk = self.refresh_introduction_key(csprng);
-
-        let dial = Dial {
-            to: *to,
-            introduction_public_key: PublicKey::from(&old_sk),
-        };
-
-        Signed::try_sign(dial, &self.signer)
+        let challenge: u128 = csprng.gen();
+        let signed = Signed::try_sign(Dial { to: *to, challenge }, &self.signer)?;
+        let hash = Hash::hash(&signed);
+        self.outgoing.insert(*to, Outgoing::Dialled(hash));
+        Ok(signed)
     }
 
-    pub fn handshake<R: rand::CryptoRng + rand::RngCore>(
+    pub fn receive_dial(
         &mut self,
         dial: &Signed<Dial>,
-        csprng: &mut R,
-    ) -> Result<Signed<Ack>, HandshakeError> {
-        dial.verify()
-            .map_err(|_| HandshakeError::InvalidSignature)?;
+    ) -> Result<Signed<Connect>, ReceiveDialError> {
+        dial.verify()?;
 
-        if self.channels.contains_key(&dial.verifier) {
-            return Err(HandshakeError::DuplicateSession);
+        if self.incoming.contains_key(&dial.verifier) {
+            return Err(ReceiveDialError::DuplicateHandshake);
         }
 
-        let old_sk = self.refresh_introduction_key(csprng);
-        self.channels.insert(
-            dial.verifier,
-            Session::new(&old_sk, &dial.payload.introduction_public_key),
-        );
+        if self.confirmed.contains(&dial.verifier) {
+            return Err(ReceiveDialError::DuplicateSession);
+        }
 
-        Ok(Signed::try_sign(
-            Ack {
-                you: dial.payload.introduction_public_key.clone(),
-                me: PublicKey::from(&old_sk),
-            },
-            &self.signer,
-        )
-        .map_err(|_| HandshakeError::SigningFailure)?)
+        let d_hash: Hash<Signed<Dial>> = Hash::hash(dial);
+        let signed = Signed::try_sign(Connect(d_hash), &self.signer)?;
+        let s_hash: Hash<Signed<Connect>> = Hash::hash(&signed);
+
+        self.incoming
+            .insert(dial.verifier, Incoming::Connecting(s_hash));
+
+        Ok(signed)
     }
 
-    pub fn leave(&mut self) -> Result<Signed<HangUp>, signature::Error> {
-        Signed::try_sign(HangUp, &self.signer)
-    }
-
-    pub fn remove(&mut self, verifier: &VerifyingKey) -> Option<Session> {
-        self.channels.remove(verifier)
-    }
-
-    pub fn send(&mut self, to: &VerifyingKey, msg: &[u8]) -> Result<Encrypted, SendError> {
-        let channel = self
-            .channels
-            .get_mut(to)
-            .ok_or(SendError::SessionNotFound)?;
-
-        channel
-            .try_encrypt(&self.verifier, msg)
-            .map_err(SendError::EncryptionFailed)
-    }
-
-    pub fn receive(
+    pub fn receive_connect(
         &mut self,
-        from: &VerifyingKey,
-        msg: &Encrypted,
-    ) -> Result<Vec<u8>, ReceiveError> {
-        let channel = self
-            .channels
-            .get_mut(&from)
-            .ok_or(ReceiveError::SessionNotFound)?;
+        connect: &Signed<Connect>,
+    ) -> Result<Signed<CounterConnect>, ReceiveConnectError> {
+        connect.verify()?;
 
-        Ok(channel.try_decrypt(from, msg.clone())?)
+        match self.outgoing.get(&connect.verifier) {
+            Some(Outgoing::Dialled(d)) if d == &connect.payload.0 => {}
+            _ => return Err(ReceiveConnectError::UnknownHandshake),
+        };
+
+        let connect_hash = Hash::hash(connect);
+        let cc: Signed<CounterConnect> =
+            Signed::try_sign(CounterConnect(connect_hash), &self.signer)?;
+        let cc_hash: Hash<Signed<CounterConnect>> = Hash::hash(&cc);
+
+        self.outgoing
+            .insert(connect.verifier, Outgoing::CounterConnecting(cc_hash));
+
+        Ok(cc)
     }
 
-    pub fn refresh_introduction_key<R: rand::CryptoRng + rand::RngCore>(
+    pub fn receive_counter_connect(
         &mut self,
-        csprng: &mut R,
-    ) -> ReusableSecret {
-        let eph_sec = self.introduction_secret_key.clone();
-        self.introduction_secret_key = ReusableSecret::random_from_rng(csprng);
-        self.introduction_public_key = PublicKey::from(&self.introduction_secret_key);
-        eph_sec
+        counter_connect: &Signed<CounterConnect>,
+    ) -> Result<Signed<Ack>, ReceiveConnectError> {
+        counter_connect.verify()?;
+
+        match self.incoming.get(&counter_connect.verifier) {
+            Some(Incoming::Connecting(d)) if d == &counter_connect.payload.0 => {}
+            _ => return Err(ReceiveConnectError::UnknownHandshake),
+        };
+
+        let ack = Signed::try_sign(Ack, &self.signer)?;
+        self.confirmed.insert(counter_connect.verifier);
+
+        Ok(ack)
+    }
+
+    pub fn receive_ack(&mut self, ack: &Signed<Ack>) -> Result<(), ReceiveAckError> {
+        ack.verify()?;
+
+        if self.outgoing.remove(&ack.verifier).is_none() {
+            return Err(ReceiveAckError::UnknownHandshake);
+        }
+
+        self.confirmed.insert(ack.verifier);
+
+        Ok(())
+    }
+
+    pub fn disconnect(
+        &mut self,
+        peer: VerifyingKey,
+    ) -> Result<Signed<Disconnect>, signature::Error> {
+        Signed::try_sign(Disconnect(peer), &self.signer)
+    }
+
+    pub fn receive_disconnect(
+        &mut self,
+        disconnect: &Signed<Disconnect>,
+    ) -> Result<(), signature::Error> {
+        disconnect.verify()?;
+
+        self.outgoing.remove(&disconnect.verifier);
+        self.incoming.remove(&disconnect.verifier);
+        self.confirmed.remove(&disconnect.verifier);
+
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone, Error)]
-pub enum HandshakeError {
+#[derive(Debug, Error)]
+pub enum ReceiveDialError {
     #[error("Invalid signature")]
-    InvalidSignature,
+    InvalidSignature(#[from] signature::Error),
 
-    #[error("Unable to sign Ack")]
-    SigningFailure,
+    #[error("Duplicate handshake")]
+    DuplicateHandshake,
 
     #[error("Duplicate session")]
     DuplicateSession,
 }
 
-#[derive(Debug, Clone, Error)]
-pub enum SendError {
-    #[error("Session not found")]
-    SessionNotFound,
+#[derive(Debug, Error)]
+pub enum ReceiveConnectError {
+    #[error("Invalid signature")]
+    InvalidSignature(#[from] signature::Error),
 
-    #[error("Unable to encrypt message")]
-    EncryptionFailed(chacha20poly1305::Error),
+    #[error("Handshake challenge conflict")]
+    HandshakeChallengeConflict,
+
+    #[error("Unknown handshake")]
+    UnknownHandshake,
 }
 
-#[derive(Debug, Clone, Error)]
-pub enum ReceiveError {
-    #[error("Session not found")]
-    SessionNotFound,
+#[derive(Debug, Error)]
+pub enum ReceiveAckError {
+    #[error("Invalid signature")]
+    InvalidSignature(#[from] signature::Error),
 
-    #[error(transparent)]
-    DecryptionFailed(#[from] DecryptError),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_setup() {
-        let m = Manager::new(&mut rand::thread_rng());
-        assert_eq!(m.channels.len(), 0);
-    }
-
-    #[test]
-    fn test_dial() {
-        let mut m1 = Manager::new(&mut rand::thread_rng());
-        let m2 = Manager::new(&mut rand::thread_rng());
-
-        let intro_key = m1.introduction_public_key.clone();
-        let d = m1.dial(&m2.verifier, &mut rand::thread_rng()).unwrap();
-
-        assert!(d.verify().is_ok());
-        assert_eq!(d.payload.to, m2.verifier);
-        assert_eq!(d.payload.introduction_public_key, intro_key);
-        assert!(m1.channels.is_empty());
-    }
-
-    #[test]
-    fn test_handshake() {
-        let mut m1 = Manager::new(&mut rand::thread_rng());
-        let mut m2 = Manager::new(&mut rand::thread_rng());
-
-        let d = m1.dial(&m2.verifier, &mut rand::thread_rng()).unwrap();
-        m2.handshake(&d, &mut rand::thread_rng()).unwrap();
-
-        assert!(m2.channels.contains_key(&m1.verifier));
-    }
+    #[error("Unknown handshake")]
+    UnknownHandshake,
 }

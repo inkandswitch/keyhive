@@ -21,6 +21,7 @@ serde = { workspace = true }
 blake3 = { workspace = true }
 chacha20poly1305 = { workspace = true }
 ed25519-dalek = { workspace = true }
+rand = { workspace = true }
 signature = { workspace = true }
 x25519-dalek = { workspace = true }
 
@@ -29,6 +30,7 @@ thiserror = { workspace = true }
 
 # Utilities
 dupe = { workspace = true }
+topological-sort =  "0.2"
 nonempty = "0.10.0"
 
 # Testing

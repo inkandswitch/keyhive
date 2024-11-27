@@ -5,10 +5,10 @@
 //! Sessions track for sending and receiving messages, DH key exchange, and ratcheting.
 
 pub mod ack;
+pub mod connect;
+pub mod counter_connect;
 pub mod dial;
-pub mod encrypted;
-pub mod hang_up;
+pub mod disconnect;
+pub mod hash;
 pub mod manager;
-pub mod message;
-pub mod session;
 pub mod signed;

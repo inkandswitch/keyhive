@@ -1,6 +1,8 @@
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use std::hash::{Hash, Hasher};
 
-pub struct Signed<T: Clone>
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Signed<T>
 where
     Vec<u8>: From<T>,
 {
@@ -24,5 +26,37 @@ where
     pub fn verify(&self) -> Result<(), signature::Error> {
         let msg = Vec::<u8>::from(self.payload.clone());
         self.verifier.verify(msg.as_slice(), &self.signature)
+    }
+}
+
+impl<T: Clone> From<Signed<T>> for Vec<u8>
+where
+    Vec<u8>: From<T>,
+{
+    fn from(signed: Signed<T>) -> Self {
+        let mut bytes: Vec<u8> = signed.payload.clone().into();
+        bytes.extend(signed.verifier.as_bytes());
+        bytes.extend(signed.signature.to_bytes());
+        bytes
+    }
+}
+
+// impl From<Signed<u128>> for Vec<u8> {
+//     fn from(signed: Signed<u128>) -> Self {
+//         let mut bytes = signed.payload.to_be_bytes().to_vec();
+//         bytes.extend(signed.verifier.as_bytes());
+//         bytes.extend(signed.signature.to_bytes());
+//         bytes
+//     }
+// }
+
+impl<T: Clone> Hash for Signed<T>
+where
+    Vec<u8>: From<T>,
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Vec::<u8>::from(self.payload.clone()).hash(state);
+        self.verifier.as_bytes().hash(state);
+        self.signature.to_bytes().hash(state);
     }
 }
