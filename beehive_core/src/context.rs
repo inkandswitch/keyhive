@@ -6,13 +6,20 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         encrypted::Encrypted,
+        share_key::ShareKey,
         signed::{Signed, SigningError},
     },
     principal::{
         active::Active,
         agent::{Agent, AgentId},
         document::{id::DocumentId, store::DocumentStore, Document},
-        group::{operation::delegation::DelegationError, store::GroupStore, Group},
+        group::{
+            id::GroupId,
+            operation::delegation::{Delegation, DelegationError},
+            store::GroupStore,
+            Group,
+        },
+        identifier::Identifier,
         individual::{id::IndividualId, Individual},
         membered::Membered,
         verifiable::Verifiable,
@@ -28,28 +35,43 @@ use std::{
 };
 
 /// The main object for a user agent & top-level owned stores.
-#[derive(Debug, Clone)]
-pub struct Context<T: ContentRef> {
+#[derive(Debug)]
+pub struct Context<T: ContentRef, R: rand::CryptoRng + rand::RngCore> {
     /// The [`Active`] user agent.
-    pub active: Rc<Active>,
+    pub active: Rc<RefCell<Active>>,
 
     /// The [`Individual`]s that are known to this agent.
-    pub individuals: BTreeMap<IndividualId, Individual>,
+    pub individuals: BTreeMap<IndividualId, Rc<RefCell<Individual>>>,
 
     /// The [`Group`]s that are known to this agent.
     pub groups: GroupStore<T>,
 
     /// The [`Document`]s that are known to this agent.
     pub docs: DocumentStore<T>,
+
+    /// Cryptographically secure (pseudo)random number generator.
+    pub csprng: R,
 }
 
-impl<T: ContentRef> Context<T> {
-    pub fn generate(signing_key: ed25519_dalek::SigningKey) -> Result<Self, SigningError> {
+impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
+    pub fn id(&self) -> IndividualId {
+        self.active.borrow().id()
+    }
+
+    pub fn agent_id(&self) -> AgentId {
+        self.active.borrow().agent_id()
+    }
+
+    pub fn generate(
+        signing_key: ed25519_dalek::SigningKey,
+        mut csprng: R,
+    ) -> Result<Self, SigningError> {
         Ok(Self {
-            active: Rc::new(Active::generate(signing_key)?),
+            active: Rc::new(RefCell::new(Active::generate(signing_key, &mut csprng)?)),
             individuals: Default::default(),
             groups: GroupStore::new(),
             docs: DocumentStore::new(),
+            csprng,
         })
     }
 
@@ -71,29 +93,68 @@ impl<T: ContentRef> Context<T> {
             head: self.active.dupe().into(),
             tail: coparents,
         };
-        self.docs.generate_document(parents)
+        self.docs.generate_document(parents, &mut self.csprng)
     }
 
-    pub fn id(&self) -> IndividualId {
-        self.active.id()
+    pub fn rotate_prekey(&mut self, prekey: ShareKey) -> Result<ShareKey, SigningError> {
+        self.active
+            .borrow_mut()
+            .rotate_prekey(prekey, &mut self.csprng)
     }
 
-    pub fn agent_id(&self) -> AgentId {
-        self.active.agent_id()
+    pub fn expand_prekeys(&mut self) -> Result<ShareKey, SigningError> {
+        self.active.borrow_mut().expand_prekeys(&mut self.csprng)
     }
 
     pub fn try_sign<U: Serialize>(&self, data: U) -> Result<Signed<U>, SigningError> {
-        self.active.try_sign(data)
+        self.active.borrow().try_sign(data)
+    }
+
+    pub fn register_individual(&mut self, individual: Individual) {
+        self.individuals
+            .insert(individual.id().into(), Rc::new(RefCell::new(individual)));
+    }
+
+    pub fn add_member(
+        &mut self,
+        to_add: Agent<T>,
+        resource: &mut Membered<T>,
+        can: Access,
+        after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+    ) -> Result<(), DelegationError> {
+        let proof = resource
+            .get_capability(&self.active.borrow().agent_id())
+            .ok_or(DelegationError::Escalation)?;
+
+        if can > proof.payload().can {
+            return Err(DelegationError::Escalation);
+        }
+
+        let after_revocations = resource.get_agent_revocations(&to_add);
+
+        let dlg = self.try_sign(Delegation {
+            delegate: to_add,
+            proof: Some(proof),
+            can,
+            after_revocations,
+            after_content,
+        })?;
+
+        Ok(resource.add_member(dlg))
     }
 
     pub fn revoke_member(
         &mut self,
-        to_revoke: &AgentId,
+        to_revoke: AgentId,
         resource: &mut Membered<T>,
-        relevant_docs: &[&Rc<Document<T>>],
     ) -> Result<(), SigningError> {
-        // FIXME check which docs are reachable from this group and include them automatically
-        resource.revoke_member(to_revoke, &self.active.signer, relevant_docs)
+        let relevant_docs = vec![]; // FIXME calculate reachable for revoked or just all known docs
+
+        resource.revoke_member(
+            to_revoke,
+            &self.active.borrow().signer,
+            relevant_docs.as_slice(),
+        )
     }
 
     pub fn encrypt_content(
@@ -106,8 +167,9 @@ impl<T: ContentRef> Context<T> {
         // FIXME: Do we return app secret metadata? Probably makes sense to add
         // to Encrypted
     ) -> Encrypted<Vec<u8>> {
-        let doc = self.docs.get_mut(&doc_id).expect("FIXME");
-        doc.encrypt_content(content_ref, content, pred_ref)
+        let doc_ref = self.docs.get(&doc_id).expect("FIXME");
+        let mut doc = doc_ref.borrow_mut();
+        doc.encrypt_content(content_ref, content, pred_ref, &mut self.csprng)
     }
 
     pub fn decrypt_content(
@@ -118,23 +180,41 @@ impl<T: ContentRef> Context<T> {
         metadata: &ApplicationSecretMetadata<T>,
         // FIXME: What error return type?
     ) -> Vec<u8> {
-        let doc = self.docs.get_mut(&doc_id).expect("FIXME");
-        doc.decrypt_content(encrypted, metadata)
+        let doc_ref = self.docs.get(&doc_id).expect("FIXME");
+        let mut doc = doc_ref.borrow_mut();
+        doc.decrypt_content(encrypted, metadata).clone()
     }
 
-    pub fn accessible_docs(&self) -> BTreeMap<DocumentId, (&Document<T>, Access)> {
+    pub fn reachable_docs(&self) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> {
+        self.docs_reachable_by_agent(self.active.dupe().into())
+    }
+
+    pub fn reachable_members(
+        &self,
+        membered: Membered<T>,
+    ) -> BTreeMap<AgentId, (Agent<T>, Access)> {
+        match membered {
+            Membered::Group(group) => self.groups.transitive_members(&group.borrow()),
+            Membered::Document(doc) => self.docs.transitive_members(&doc.borrow()),
+        }
+    }
+
+    pub fn docs_reachable_by_agent(
+        &self,
+        agent: Agent<T>,
+    ) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> {
         let mut explore: Vec<(Rc<RefCell<Group<T>>>, Access)> = vec![];
-        let mut caps: BTreeMap<DocumentId, (&Document<T>, Access)> = BTreeMap::new();
+        let mut caps: BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> = BTreeMap::new();
         let mut seen: HashSet<AgentId> = HashSet::new();
 
-        let agent_id = self.active.agent_id();
+        let agent_id = agent.agent_id();
 
         for doc in self.docs.docs.values() {
-            seen.insert(doc.agent_id());
+            seen.insert(doc.clone().borrow().agent_id());
 
-            let doc_id = doc.doc_id();
+            let doc_id = doc.borrow().doc_id();
 
-            if let Some(proofs) = doc.members().get(&agent_id) {
+            if let Some(proofs) = doc.borrow().members().get(&agent_id) {
                 for proof in proofs {
                     caps.insert(doc_id, (doc, proof.payload().can));
                 }
@@ -153,13 +233,13 @@ impl<T: ContentRef> Context<T> {
 
         while let Some((group, _access)) = explore.pop() {
             for doc in self.docs.docs.values() {
-                if seen.contains(&doc.agent_id()) {
+                if seen.contains(&doc.borrow().agent_id()) {
                     continue;
                 }
 
-                let doc_id = doc.doc_id();
+                let doc_id = doc.borrow().doc_id();
 
-                if let Some(proofs) = doc.members().get(&agent_id) {
+                if let Some(proofs) = doc.borrow().members().get(&agent_id) {
                     for proof in proofs {
                         caps.insert(doc_id, (doc, proof.payload().can));
                     }
@@ -186,25 +266,31 @@ impl<T: ContentRef> Context<T> {
         caps
     }
 
-    pub fn transitive_members(
-        &self,
-        membered: &Membered<T>,
-    ) -> BTreeMap<AgentId, (Agent<T>, Access)> {
-        match membered {
-            Membered::Group(group) => self.groups.transitive_members(group),
-            Membered::Document(doc) => self.docs.transitive_members(doc),
+    pub fn get_agent(&self, id: Identifier) -> Option<Agent<T>> {
+        if let Some(doc) = self.docs.get(&DocumentId(id)) {
+            return Some(doc.into());
         }
+
+        if let Some(group) = self.groups.get(&GroupId::new(id)) {
+            return Some(group.into());
+        }
+
+        if let Some(indie) = self.individuals.get(&id.into()) {
+            return Some(indie.clone().into());
+        }
+
+        None
     }
 }
 
-impl<T: ContentRef> Verifiable for Context<T> {
+impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Verifiable for Context<T, R> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.active.verifying_key()
+        self.active.borrow().verifying_key()
     }
 }
 
-impl<T: ContentRef> From<&Context<T>> for Agent<T> {
-    fn from(context: &Context<T>) -> Self {
+impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> From<&Context<T, R>> for Agent<T> {
+    fn from(context: &Context<T, R>) -> Self {
         context.active.dupe().into()
     }
 }

@@ -51,6 +51,10 @@ impl Siv {
     pub fn as_xnonce(&self) -> &chacha20poly1305::XNonce {
         chacha20poly1305::XNonce::from_slice(&self.0)
     }
+
+    pub fn as_bytes(&self) -> &[u8; 24] {
+        &self.0
+    }
 }
 
 impl From<Siv> for [u8; 24] {

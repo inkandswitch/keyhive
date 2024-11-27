@@ -11,9 +11,9 @@ pub struct ShareKey(x25519_dalek::PublicKey);
 
 impl ShareKey {
     #[cfg(feature = "test_utils")]
-    pub fn generate() -> Self {
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         Self(x25519_dalek::PublicKey::from(
-            &x25519_dalek::EphemeralSecret::random(),
+            &x25519_dalek::EphemeralSecret::random_from_rng(csprng),
         ))
     }
 
@@ -54,8 +54,8 @@ impl From<x25519_dalek::PublicKey> for ShareKey {
 pub struct ShareSecretKey([u8; 32]);
 
 impl ShareSecretKey {
-    pub fn generate() -> Self {
-        x25519_dalek::StaticSecret::random().into()
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
+        x25519_dalek::StaticSecret::random_from_rng(csprng).into()
     }
 
     pub fn share_key(&self) -> ShareKey {

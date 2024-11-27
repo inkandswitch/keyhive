@@ -12,13 +12,13 @@ use crate::{
 };
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Revocation<T: ContentRef> {
     pub(crate) revoke: Rc<Signed<Delegation<T>>>,
     pub(crate) proof: Option<Rc<Signed<Delegation<T>>>>,
-    pub(crate) after_content: BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)>,
+    pub(crate) after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
 }
 
 impl<T: ContentRef> Revocation<T> {
@@ -27,8 +27,16 @@ impl<T: ContentRef> Revocation<T> {
         self.revoke.subject()
     }
 
+    pub fn revoked(&self) -> &Rc<Signed<Delegation<T>>> {
+        &self.revoke
+    }
+
     pub fn revoked_id(&self) -> AgentId {
         self.revoke.payload().delegate.agent_id()
+    }
+
+    pub fn proof(&self) -> Option<Rc<Signed<Delegation<T>>>> {
+        self.proof.dupe()
     }
 
     pub fn after(
@@ -36,7 +44,7 @@ impl<T: ContentRef> Revocation<T> {
     ) -> (
         Vec<Rc<Signed<Delegation<T>>>>,
         Vec<Rc<Signed<Revocation<T>>>>,
-        &BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)>,
+        &BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
     ) {
         (vec![self.revoke.dupe()], vec![], &self.after_content)
     }

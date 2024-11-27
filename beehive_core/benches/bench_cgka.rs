@@ -23,8 +23,9 @@ fn main() {
     args = [100, 1000]
 )]
 fn create_key_pairs(n: u32) {
+    let mut csprng = rand::thread_rng();
     for _ in 0..n {
-        let s = ShareSecretKey::generate();
+        let s = ShareSecretKey::generate(&mut csprng);
         s.share_key();
     }
 }
@@ -34,16 +35,17 @@ fn create_key_pairs(n: u32) {
     max_time = Duration::from_secs(120),
 )]
 fn encrypt_and_decrypt_log_2_of_members(iters_and_member_count: (u32, u32)) {
-    let doc_id = DocumentId::generate();
+    let mut csprng = rand::thread_rng();
+    let doc_id = DocumentId::generate(&mut csprng);
 
     let (iters, member_count) = iters_and_member_count;
     let path_length = (member_count as f32).log2() as u32 + 1;
     for _ in 0..iters {
         for _ in 0..path_length {
             let secret = StaticSecret::random();
-            let s1 = ShareSecretKey::generate();
+            let s1 = ShareSecretKey::generate(&mut csprng);
             let p1 = s1.share_key();
-            let s2 = ShareSecretKey::generate();
+            let s2 = ShareSecretKey::generate(&mut csprng);
             let p2 = s2.share_key();
             let encrypt_keys = nonempty![p2];
             let decrypt_keys = vec![s2.derive_symmetric_key(&p1)];
@@ -63,6 +65,7 @@ fn setup_group_and_two_primaries<F>(
 where
     F: Fn(u32) -> Result<Vec<TestMemberCgka>, CgkaError>,
 {
+    let mut csprng = rand::thread_rng();
     let cgkas = setup(member_count).unwrap();
     let mut first_cgka = cgkas[0].clone();
     let mut paired_cgka = cgkas[paired_idx].clone();
@@ -70,7 +73,7 @@ where
         .cgka
         .with_new_owner(paired_cgka.id(), paired_cgka.m.pk, paired_cgka.m.sk.clone())
         .unwrap();
-    let op = paired_cgka.update().unwrap();
+    let op = paired_cgka.update(&mut csprng).unwrap();
     first_cgka.cgka.merge(op).unwrap();
     (first_cgka, paired_cgka)
 }
@@ -80,7 +83,8 @@ where
     max_time = Duration::from_secs(120),
 )]
 fn apply_100_updates_and_sibling_decrypt(bencher: Bencher, member_count: u32) {
-    let doc_id = DocumentId::generate();
+    let mut csprng = rand::thread_rng();
+    let doc_id = DocumentId::generate(&mut csprng);
 
     bencher
         .with_inputs(|| {
@@ -91,7 +95,7 @@ fn apply_100_updates_and_sibling_decrypt(bencher: Bencher, member_count: u32) {
         })
         .bench_local_refs(|(first_cgka, sibling_cgka)| {
             for _ in 0..100 {
-                let op = first_cgka.update().unwrap();
+                let op = first_cgka.update(&mut csprng).unwrap();
                 sibling_cgka.cgka.merge(op).unwrap();
                 sibling_cgka.cgka.secret().unwrap();
             }
@@ -103,7 +107,8 @@ fn apply_100_updates_and_sibling_decrypt(bencher: Bencher, member_count: u32) {
     max_time = Duration::from_secs(120),
 )]
 fn apply_100_updates_and_distant_member_decrypt(bencher: Bencher, member_count: u32) {
-    let doc_id = DocumentId::generate();
+    let mut csprng = rand::thread_rng();
+    let doc_id = DocumentId::generate(&mut csprng);
 
     bencher
         .with_inputs(|| {
@@ -114,7 +119,7 @@ fn apply_100_updates_and_distant_member_decrypt(bencher: Bencher, member_count: 
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let op = first_cgka.update().unwrap();
+                let op = first_cgka.update(&mut csprng).unwrap();
                 distant_cgka.cgka.merge(op).unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }
@@ -129,7 +134,8 @@ fn apply_100_updates_and_distant_member_decrypt_with_maximum_conflict_keys(
     bencher: Bencher,
     member_count: u32,
 ) {
-    let doc_id = DocumentId::generate();
+    let mut csprng = rand::thread_rng();
+    let doc_id = DocumentId::generate(&mut csprng);
 
     bencher
         .with_inputs(|| {
@@ -140,7 +146,7 @@ fn apply_100_updates_and_distant_member_decrypt_with_maximum_conflict_keys(
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let op = first_cgka.update().unwrap();
+                let op = first_cgka.update(&mut csprng).unwrap();
                 distant_cgka.cgka.merge(op).unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }
@@ -152,7 +158,8 @@ fn apply_100_updates_and_distant_member_decrypt_with_maximum_conflict_keys(
     max_time = Duration::from_secs(120),
 )]
 fn apply_100_updates_and_distant_member_decrypt_after_adds(bencher: Bencher, member_count: u32) {
-    let doc_id = DocumentId::generate();
+    let mut csprng = rand::thread_rng();
+    let doc_id = DocumentId::generate(&mut csprng);
 
     bencher
         .with_inputs(|| {
@@ -163,7 +170,7 @@ fn apply_100_updates_and_distant_member_decrypt_after_adds(bencher: Bencher, mem
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let op = first_cgka.update().unwrap();
+                let op = first_cgka.update(&mut csprng).unwrap();
                 distant_cgka.cgka.merge(op).unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }
@@ -178,7 +185,8 @@ fn apply_100_updates_and_distant_member_decrypt_with_blank_nodes(
     bencher: Bencher,
     member_count: u32,
 ) {
-    let doc_id = DocumentId::generate();
+    let mut csprng = rand::thread_rng();
+    let doc_id = DocumentId::generate(&mut csprng);
 
     bencher
         .with_inputs(|| {
@@ -189,7 +197,7 @@ fn apply_100_updates_and_distant_member_decrypt_with_blank_nodes(
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let op = first_cgka.update().unwrap();
+                let op = first_cgka.update(&mut csprng).unwrap();
                 distant_cgka.cgka.merge(op).unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }

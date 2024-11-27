@@ -7,8 +7,6 @@ use std::{
     marker::PhantomData,
 };
 
-// FIXME rename Digest to avoid conflict with std:Lhash::hash
-
 /// A [`blake3::Digest`] tagged with which type it is a hash of.
 ///
 /// This makes it easy to trace hash identifiers through the system.
@@ -33,8 +31,7 @@ pub struct Digest<T: Serialize> {
 impl<T: Serialize> Digest<T> {
     /// Digest a value and retain its type as a phantom parameter.
     pub fn hash(preimage: &T) -> Self {
-        let mut bytes = vec![];
-        ciborium::into_writer(preimage, &mut bytes).expect("unable to serialize to bytes");
+        let bytes: Vec<u8> = bincode::serialize(&preimage).expect("unable to serialize to bytes");
 
         Self {
             raw: blake3::hash(bytes.as_slice()),
@@ -54,10 +51,10 @@ impl<T: Serialize> Digest<T> {
     /// ```
     /// # use beehive_core::crypto::digest::Digest;
     /// let hash = Digest::hash(&"hello world!".to_string());
-    /// assert_eq!(hash.trailing_zeros(), 4);
+    /// assert_eq!(hash.trailing_zeros(), 3);
     ///
     /// let another_hash = Digest::hash(&"different!*".to_string());
-    /// assert_eq!(another_hash.trailing_zeros(), 2);
+    /// assert_eq!(another_hash.trailing_zeros(), 5);
     /// ```
     pub fn trailing_zeros(&self) -> u8 {
         let mut count = 0;

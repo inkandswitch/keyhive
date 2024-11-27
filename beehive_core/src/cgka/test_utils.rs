@@ -16,9 +16,9 @@ pub struct TestMember {
 }
 
 impl TestMember {
-    pub fn generate() -> Self {
-        let id = IndividualId(Identifier::generate());
-        let sk = ShareSecretKey::generate();
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
+        let id = IndividualId(Identifier::generate(csprng));
+        let sk = ShareSecretKey::generate(csprng);
         let pk = sk.share_key();
         Self { id, pk, sk }
     }
@@ -44,12 +44,15 @@ impl TestMemberCgka {
         self.m.id
     }
 
-    pub fn update(&mut self) -> Result<CgkaOperation, CgkaError> {
-        let sk = ShareSecretKey::generate();
+    pub fn update<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        csprng: &mut R,
+    ) -> Result<CgkaOperation, CgkaError> {
+        let sk = ShareSecretKey::generate(csprng);
         let pk = sk.share_key();
         self.m.pk = pk;
         self.m.sk = sk;
-        self.cgka.update(self.id(), pk, sk)
+        self.cgka.update(self.id(), pk, sk, csprng)
     }
 }
 
@@ -101,9 +104,10 @@ impl TestConcurrentOperations {
 
 pub fn setup_members(member_count: u32) -> NonEmpty<TestMember> {
     assert!(member_count > 0);
-    let mut ms = nonempty![TestMember::generate()];
+    let mut csprng = rand::thread_rng();
+    let mut ms = nonempty![TestMember::generate(&mut csprng)];
     for _ in 1..member_count {
-        ms.push(TestMember::generate());
+        ms.push(TestMember::generate(&mut csprng));
     }
     ms
 }
@@ -116,8 +120,15 @@ pub fn setup_cgka(doc_id: DocumentId, members: &NonEmpty<TestMember>, m_idx: usi
         members.iter().skip(1).map(|p| (p.id, p.pk)).collect(),
     ));
 
-    Cgka::new(member_id_pks, doc_id, owner.id, owner.pk, owner.sk)
-        .expect("CGKA construction failed")
+    Cgka::new(
+        member_id_pks,
+        doc_id,
+        owner.id,
+        owner.pk,
+        owner.sk,
+        &mut rand::thread_rng(),
+    )
+    .expect("CGKA construction failed")
 }
 
 /// Set up cgkas for all members with the same secret, but only the initial member
@@ -148,7 +159,7 @@ pub fn setup_updated_and_synced_member_cgkas(
     for m in members.iter_mut().skip(1) {
         let cgka = member_cgkas[0].cgka.with_new_owner(m.id, m.pk, m.sk)?;
         let mut member_cgka = TestMemberCgka::new(m.clone(), cgka);
-        let op = member_cgka.update()?;
+        let op = member_cgka.update(&mut rand::thread_rng())?;
         member_cgkas[0].cgka.merge(op)?;
         member_cgkas.push(member_cgka);
     }
@@ -283,7 +294,7 @@ pub type TestOperation = dyn Fn(
 pub fn add_from_all_members() -> Box<TestOperation> {
     Box::new(move |cgkas, added_members, ops| {
         for m in cgkas.iter_mut() {
-            let new_m = TestMember::generate();
+            let new_m = TestMember::generate(&mut rand::thread_rng());
             let op = m.cgka.add(new_m.id, new_m.pk)?;
             ops.add(m.id(), op);
             added_members.push(new_m);
@@ -297,7 +308,7 @@ pub fn add_from_last_n_members(n: usize) -> Box<TestOperation> {
         debug_assert!(n < cgkas.len());
         let skip_count = cgkas.len() - n;
         for m in cgkas.iter_mut().skip(skip_count) {
-            let new_m = TestMember::generate();
+            let new_m = TestMember::generate(&mut rand::thread_rng());
             let op = m.cgka.add(new_m.id, new_m.pk)?;
             ops.add(m.id(), op);
             added_members.push(new_m);
@@ -308,7 +319,7 @@ pub fn add_from_last_n_members(n: usize) -> Box<TestOperation> {
 
 pub fn add_from_first_member() -> Box<TestOperation> {
     Box::new(move |cgkas, added_members, ops| {
-        let new_m = TestMember::generate();
+        let new_m = TestMember::generate(&mut rand::thread_rng());
         let adder = &mut cgkas[0];
         let op = adder.cgka.add(new_m.id, new_m.pk)?;
         ops.add(adder.id(), op);
@@ -387,7 +398,8 @@ pub fn remove_odd_members() -> Box<TestOperation> {
 pub fn update_all_members() -> Box<TestOperation> {
     Box::new(move |cgkas, _added_members, ops| {
         for m in cgkas.iter_mut() {
-            ops.add(m.id(), m.update()?);
+            let next_op = m.update(&mut rand::thread_rng())?;
+            ops.add(m.id(), next_op);
         }
         Ok(())
     })
@@ -396,7 +408,7 @@ pub fn update_all_members() -> Box<TestOperation> {
 pub fn update_first_member() -> Box<TestOperation> {
     Box::new(move |cgkas, _added_members, ops| {
         let id = cgkas[0].id();
-        ops.add(id, cgkas[0].update()?);
+        ops.add(id, cgkas[0].update(&mut rand::thread_rng())?);
         Ok(())
     })
 }
@@ -407,7 +419,8 @@ pub fn update_even_members() -> Box<TestOperation> {
             if idx % 2 != 0 {
                 continue;
             }
-            ops.add(m.id(), m.update()?);
+            let next_op = m.update(&mut rand::thread_rng())?;
+            ops.add(m.id(), next_op);
         }
         Ok(())
     })
@@ -426,7 +439,7 @@ fn check_same_secret(member_cgkas: &mut Vec<TestMemberCgka>) -> Result<(), CgkaE
 
 #[test]
 fn test_setup_member_cgkas() -> Result<(), CgkaError> {
-    let doc_id = DocumentId::generate();
+    let doc_id = DocumentId::generate(&mut rand::thread_rng());
     let member_count = 4;
     let mut member_cgkas = setup_member_cgkas(doc_id, member_count)?;
     assert_eq!(member_cgkas.len(), member_count as usize);
@@ -435,7 +448,7 @@ fn test_setup_member_cgkas() -> Result<(), CgkaError> {
 
 #[test]
 fn test_setup_updated_and_synced_member_cgkas() -> Result<(), CgkaError> {
-    let doc_id = DocumentId::generate();
+    let doc_id = DocumentId::generate(&mut rand::thread_rng());
     let member_count = 4;
     let mut member_cgkas = setup_updated_and_synced_member_cgkas(doc_id, member_count)?;
     assert_eq!(member_cgkas.len(), member_count as usize);
@@ -444,7 +457,7 @@ fn test_setup_updated_and_synced_member_cgkas() -> Result<(), CgkaError> {
 
 #[test]
 fn test_setup_add() -> Result<(), CgkaError> {
-    let doc_id = DocumentId::generate();
+    let doc_id = DocumentId::generate(&mut rand::thread_rng());
     let add_count = 2;
     let member_count = 4;
     let mut member_cgkas = setup_member_cgkas(doc_id, member_count)?;
@@ -459,7 +472,7 @@ fn test_setup_add() -> Result<(), CgkaError> {
 
 #[test]
 fn test_setup_remove() -> Result<(), CgkaError> {
-    let doc_id = DocumentId::generate();
+    let doc_id = DocumentId::generate(&mut rand::thread_rng());
     let remove_count = 2;
     let member_count = 4;
 
@@ -477,7 +490,7 @@ fn test_setup_remove() -> Result<(), CgkaError> {
 
 #[test]
 fn test_setup_update() -> Result<(), CgkaError> {
-    let doc_id = DocumentId::generate();
+    let doc_id = DocumentId::generate(&mut rand::thread_rng());
     let member_count = 4;
     let mut member_cgkas = setup_member_cgkas(doc_id, member_count)?;
     assert_eq!(member_cgkas.len(), member_count as usize);

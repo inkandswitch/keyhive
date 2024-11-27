@@ -17,6 +17,7 @@ use crate::{
         group::{
             operation::{
                 delegation::{Delegation, DelegationError},
+                revocation::Revocation,
                 AncestorError,
             },
             Group,
@@ -31,6 +32,7 @@ use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
 use nonempty::NonEmpty;
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
@@ -72,7 +74,10 @@ impl<T: ContentRef> Document<T> {
         self.group.get_capability(member_id)
     }
 
-    pub fn generate(parents: NonEmpty<Agent<T>>) -> Result<Self, DelegationError> {
+    pub fn generate<R: rand::RngCore + rand::CryptoRng>(
+        parents: NonEmpty<Agent<T>>,
+        csprng: &mut R,
+    ) -> Result<Self, DelegationError> {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
 
         let group =
@@ -101,9 +106,9 @@ impl<T: ContentRef> Document<T> {
         // FIXME: Active in the document
         let owner_id = IndividualId(Identifier((&doc_signer).into()));
         let doc_id = DocumentId(group.id());
-        let owner_share_secret_key = ShareSecretKey::generate();
+        let owner_share_secret_key = ShareSecretKey::generate(csprng);
         let owner_share_key = owner_share_secret_key.share_key();
-        let mut owner_active = Active::generate(doc_signer)?;
+        let mut owner_active = Active::generate(doc_signer, csprng)?;
         owner_active
             .prekey_pairs
             .insert(owner_share_key, owner_share_secret_key);
@@ -122,6 +127,7 @@ impl<T: ContentRef> Document<T> {
             owner_id,
             owner_share_key,
             owner_share_secret_key,
+            csprng,
         )
         .expect("FIXME");
 
@@ -154,12 +160,16 @@ impl<T: ContentRef> Document<T> {
 
     pub fn revoke_member(
         &mut self,
-        member_id: &AgentId,
+        member_id: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<Document<T>>],
+        relevant_docs: &[&Rc<RefCell<Document<T>>>],
     ) -> Result<(), SigningError> {
         self.group
             .revoke_member(member_id, signing_key, relevant_docs)
+    }
+
+    pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
+        self.group.get_agent_revocations(agent)
     }
 
     pub fn materialize(&mut self) -> Result<(), AncestorError> {
@@ -171,24 +181,36 @@ impl<T: ContentRef> Document<T> {
     }
 
     // FIXME: Add error type
-    pub fn pcs_update(&mut self, id: IndividualId, pk: ShareKey, sk: ShareSecretKey) {
-        self.cgka.update(id, pk, sk).expect("FIXME");
+    pub fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
+        &mut self,
+        id: IndividualId,
+        pk: ShareKey,
+        sk: ShareSecretKey,
+        csprng: &mut R,
+    ) {
+        self.cgka.update(id, pk, sk, csprng).expect("FIXME");
     }
 
-    pub fn encrypt_content(
+    pub fn encrypt_content<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         content_ref: &T,
         content: &[u8],
         pred_ref: &Vec<T>,
+        csprng: &mut R,
     ) -> Encrypted<Vec<u8>> {
         // FIXME: We are automatically doing a PCS update if the tree doesn't have a
         // root secret. That might make sense, but do we need to store this key pair
         // on our Active member?
         if !self.cgka.has_pcs_key() {
-            let new_share_secret_key = ShareSecretKey::generate();
+            let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
             self.cgka
-                .update(self.cgka.owner_id, new_share_key, new_share_secret_key)
+                .update(
+                    self.cgka.owner_id,
+                    new_share_key,
+                    new_share_secret_key,
+                    csprng,
+                )
                 .expect("FIXME");
         }
         let app_secret = self

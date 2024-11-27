@@ -14,7 +14,7 @@ use crate::{
 };
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, hash::Hash, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, hash::Hash, rc::Rc};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,7 +24,7 @@ pub struct Delegation<T: ContentRef> {
 
     pub(crate) proof: Option<Rc<Signed<Delegation<T>>>>,
     pub(crate) after_revocations: Vec<Rc<Signed<Revocation<T>>>>,
-    pub(crate) after_content: BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)>,
+    pub(crate) after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
 }
 
 impl<T: ContentRef> Delegation<T> {
@@ -36,12 +36,24 @@ impl<T: ContentRef> Delegation<T> {
         }
     }
 
+    pub fn delegate(&self) -> &Agent<T> {
+        &self.delegate
+    }
+
+    pub fn can(&self) -> Access {
+        self.can
+    }
+
+    pub fn proof(&self) -> Option<&Rc<Signed<Delegation<T>>>> {
+        self.proof.as_ref()
+    }
+
     pub fn after(
         &self,
     ) -> (
         Vec<Rc<Signed<Delegation<T>>>>,
         Vec<Rc<Signed<Revocation<T>>>>,
-        &BTreeMap<DocumentId, (Rc<Document<T>>, Vec<T>)>,
+        &BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
     ) {
         let (dlgs, revs) = self.after_auth();
         (

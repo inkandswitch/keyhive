@@ -4,12 +4,12 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct DocumentId(pub Identifier);
+pub struct DocumentId(pub(crate) Identifier);
 
 impl DocumentId {
     #[cfg(feature = "test_utils")]
-    pub fn generate() -> Self {
-        Self(Identifier::generate())
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
+        Self(Identifier::generate(csprng))
     }
 
     pub fn to_bytes(&self) -> [u8; 32] {
