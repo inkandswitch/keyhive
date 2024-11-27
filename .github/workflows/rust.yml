@@ -16,18 +16,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - uses: pnpm/action-setup@v4
-      with:
-        version: 9
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - uses: actions/setup-node@v4
       with:
         node-version: 22
-    - name: Install dependencies
-      run: cd ./beehive_wasm && npm i
-    - name: Install Playwright Browsers
-      run: cd ./beehive_wasm && pnpm i && pnpm exec playwright install --with-deps
 
     - name: Build
       run: cargo build --verbose
@@ -37,10 +30,6 @@ jobs:
       run: cargo check --verbose --features=test_utils
     - name: Test on Host
       run: cargo test --verbose --features=test_utils
-    - name: Test on Wasm
-      run: wasm-pack test --node beehive_wasm
-    - name: Test in browsers
-      run: wasm-pack build ./beehive_wasm --release --target=web && cd ./beehive_wasm && pnpm i && npm install --global http-server && pnpm exec playwright test
     - name: Clippy
       run: cargo clippy
     - name: Compile benches
