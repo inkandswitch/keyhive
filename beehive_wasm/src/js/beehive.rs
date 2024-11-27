@@ -207,7 +207,7 @@ mod tests {
         #[wasm_bindgen_test(unsupported = test)]
         fn test_length() {
             let bh = setup();
-            assert_eq!(bh.id().to_bytes().len(), 32);
+            assert_eq!(bh.id().bytes().len(), 32);
         }
     }
 
