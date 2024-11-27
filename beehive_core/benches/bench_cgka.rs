@@ -69,12 +69,14 @@ where
     let cgkas = setup(member_count).unwrap();
     let mut first_cgka = cgkas[0].clone();
     let mut paired_cgka = cgkas[paired_idx].clone();
+    let mut sks = paired_cgka.cgka.owner_sks.clone();
+    sks.insert(paired_cgka.m.pk, paired_cgka.m.sk.clone());
     paired_cgka.cgka = first_cgka
         .cgka
-        .with_new_owner(paired_cgka.id(), paired_cgka.m.pk, paired_cgka.m.sk.clone())
+        .with_new_owner(paired_cgka.id(), paired_cgka.m.pk, sks)
         .unwrap();
     let op = paired_cgka.update(&mut csprng).unwrap();
-    first_cgka.cgka.merge(op).unwrap();
+    first_cgka.cgka.merge_concurrent_operations(&vec![op]).unwrap();
     (first_cgka, paired_cgka)
 }
 
@@ -96,7 +98,7 @@ fn apply_100_updates_and_sibling_decrypt(bencher: Bencher, member_count: u32) {
         .bench_local_refs(|(first_cgka, sibling_cgka)| {
             for _ in 0..100 {
                 let op = first_cgka.update(&mut csprng).unwrap();
-                sibling_cgka.cgka.merge(op).unwrap();
+                sibling_cgka.cgka.merge_concurrent_operations(&vec![op]).unwrap();
                 sibling_cgka.cgka.secret().unwrap();
             }
         });
@@ -120,7 +122,7 @@ fn apply_100_updates_and_distant_member_decrypt(bencher: Bencher, member_count: 
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
                 let op = first_cgka.update(&mut csprng).unwrap();
-                distant_cgka.cgka.merge(op).unwrap();
+                distant_cgka.cgka.merge_concurrent_operations(&vec![op]).unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }
         });
@@ -147,7 +149,7 @@ fn apply_100_updates_and_distant_member_decrypt_with_maximum_conflict_keys(
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
                 let op = first_cgka.update(&mut csprng).unwrap();
-                distant_cgka.cgka.merge(op).unwrap();
+                distant_cgka.cgka.merge_concurrent_operations(&vec![op]).unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }
         });
@@ -171,7 +173,7 @@ fn apply_100_updates_and_distant_member_decrypt_after_adds(bencher: Bencher, mem
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
                 let op = first_cgka.update(&mut csprng).unwrap();
-                distant_cgka.cgka.merge(op).unwrap();
+                distant_cgka.cgka.merge_concurrent_operations(&vec![op]).unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }
         });
@@ -198,7 +200,7 @@ fn apply_100_updates_and_distant_member_decrypt_with_blank_nodes(
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
                 let op = first_cgka.update(&mut csprng).unwrap();
-                distant_cgka.cgka.merge(op).unwrap();
+                distant_cgka.cgka.merge_concurrent_operations(&vec![op]).unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }
         });
