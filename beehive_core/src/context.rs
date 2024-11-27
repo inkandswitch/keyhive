@@ -286,9 +286,3 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> From<&Context<T, R>> for
         context.active.dupe().into()
     }
 }
-
-#[derive(Debug, thiserror::Error)]
-pub enum ContextError {
-    #[error("Doc {0} not found")]
-    DocNotFound(String),
-}
