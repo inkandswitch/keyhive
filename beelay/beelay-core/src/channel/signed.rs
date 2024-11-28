@@ -16,10 +16,12 @@ where
     Vec<u8>: From<T>,
 {
     pub fn try_sign(payload: T, signer: &SigningKey) -> Result<Self, signature::Error> {
-        // FIXME put verifyer inside envelope. SAME WITH BEEHIVE
+        let mut to_sign: Vec<u8> = payload.clone().into();
+        to_sign.extend(signer.verifying_key().as_bytes());
+
         Ok(Self {
             verifier: signer.verifying_key(),
-            signature: signer.try_sign(Vec::<u8>::from(payload.clone()).as_slice())?,
+            signature: signer.try_sign(to_sign.as_slice())?,
             payload,
         })
     }

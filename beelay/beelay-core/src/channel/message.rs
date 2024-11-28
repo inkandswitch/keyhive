@@ -10,6 +10,7 @@ pub struct Message {
 impl Message {
     pub fn new(sender: ed25519_dalek::VerifyingKey, secret: &Secret, content: Vec<u8>) -> Self {
         let mut buf = b"/beelay/message/".to_vec();
+        buf.extend_from_slice(sender.to_bytes().as_slice());
         buf.extend_from_slice(content.as_slice());
 
         Self {
@@ -19,10 +20,11 @@ impl Message {
         }
     }
 
-    pub fn is_valid(&self, secret: &[u8; 32]) -> bool {
+    pub fn is_valid(&self, secret: &Secret) -> bool {
         let mut buf = b"/beelay/message/".to_vec();
+        buf.extend_from_slice(self.sender.as_bytes());
         buf.extend_from_slice(self.content.as_slice());
-        self.mac == Mac(*blake3::keyed_hash(&secret, &buf).as_bytes())
+        self.mac == Mac(*blake3::keyed_hash(&secret.0, &buf).as_bytes())
     }
 }
 

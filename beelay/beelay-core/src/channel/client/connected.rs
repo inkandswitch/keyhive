@@ -6,7 +6,7 @@ pub struct Connected {
 }
 
 impl Connected {
-    pub fn new_message(&self, content: Vec<u8>) -> Message {
+    pub fn message(&self, content: Vec<u8>) -> Message {
         Message::new(self.sender, &self.secret, content)
     }
 }

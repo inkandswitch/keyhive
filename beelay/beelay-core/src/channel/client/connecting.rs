@@ -1,5 +1,7 @@
 use super::{
-    super::{connect::Connect, encrypted::DecryptionError, hash::Hash, hello::Hello},
+    super::{
+        connect::Connect, encrypted::DecryptionError, hash::Hash, hello::Hello, signed::Signed,
+    },
     connected::Connected,
 };
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
@@ -24,13 +26,17 @@ impl Connecting {
         }
     }
 
-    pub fn hello(&self) -> Hello {
-        let server_id_hash = Hash::hash(&self.server_id);
-
-        Hello {
-            client_pk: (&self.my_secret_key).into(),
-            server_id_hash,
-        }
+    pub fn hello(
+        &self,
+        signing_key: ed25519_dalek::SigningKey,
+    ) -> Result<Signed<Hello>, signature::Error> {
+        Signed::try_sign(
+            Hello {
+                client_pk: (&self.my_secret_key).into(),
+                server_id_hash: self.server_id_hash(),
+            },
+            &signing_key,
+        )
     }
 
     // NOTE: Intentionally destroyed if fails
@@ -39,19 +45,18 @@ impl Connecting {
             return Err(ReceiveConnectError::InvalidReceiver);
         }
 
+        let server_id_hash = self.server_id_hash();
         let shared_secret = self.my_secret_key.diffie_hellman(&connect.server_pk);
-
-        let mut secret: Vec<u8> = shared_secret.as_bytes().to_vec();
-        secret.extend_from_slice(self.server_id.as_bytes());
-        secret.extend_from_slice(self.my_verifying_key.as_bytes());
-        let secret = secret.as_slice();
 
         let mut nonce_buf = [0u8; 24];
         let mut key_preimage_buf = [0u8; 32];
+
         let mut hasher = blake3::Hasher::new_keyed(shared_secret.as_bytes())
             .update(b"/beelay/handshake/preimages/")
-            .update(secret)
+            .update(server_id_hash.raw.as_bytes())
+            .update(self.my_verifying_key.as_bytes())
             .finalize_xof();
+
         hasher.fill(&mut nonce_buf);
         hasher.fill(&mut key_preimage_buf);
 
@@ -61,13 +66,17 @@ impl Connecting {
         let secret = connect.encrypted_secret.decrypt(
             key,
             XNonce::from_slice(&nonce_buf),
-            Hash::hash(&self.server_id).raw.as_bytes(),
+            server_id_hash.raw.as_bytes(),
         )?;
 
         Ok(Connected {
             secret,
             sender: self.my_verifying_key,
         })
+    }
+
+    fn server_id_hash(&self) -> Hash<String> {
+        Hash::hash(&self.server_id)
     }
 }
 
