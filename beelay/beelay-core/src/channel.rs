@@ -17,37 +17,53 @@ use chacha20poly1305::{AeadInPlace, KeyInit, Tag, XChaCha20Poly1305, XNonce};
 use hash::Hash;
 use signed::Signed;
 
-pub struct ClientConn(x25519_dalek::EphemeralSecret);
+pub struct ClientConn {
+    my_secret_key: x25519_dalek::EphemeralSecret,
+    my_verifying_key: ed25519_dalek::VerifyingKey,
+    server_id: String,
+}
+
 pub struct ClientChannel {
     sender: ed25519_dalek::VerifyingKey,
     secret: [u8; 32],
 }
+
 pub struct ServerConn {
     my_id: String,
     secret_swarm_seed: Seed,
 }
 
 impl ClientConn {
-    pub fn generate<R: rand::RngCore + rand::CryptoRng>(csprng: &mut R) -> Self {
-        Self(x25519_dalek::EphemeralSecret::random_from_rng(csprng))
-    }
-
-    pub fn hello(&self, server_id: String) -> Hello {
-        Hello {
-            client_pk: (&self.0).into(),
-            server_id: Hash::hash(&server_id), // FIXME needs to append our pk?
+    pub fn generate<R: rand::RngCore + rand::CryptoRng>(
+        csprng: &mut R,
+        my_verifying_key: ed25519_dalek::VerifyingKey,
+        server_id: String,
+    ) -> Self {
+        Self {
+            my_secret_key: x25519_dalek::EphemeralSecret::random_from_rng(csprng),
+            my_verifying_key,
+            server_id,
         }
     }
 
-    pub fn receive_connect(&self, connect: Connect) -> Result<ClientChannel, String> {
-        // check client_vk
-        // check server_pk
+    pub fn hello(&self) -> Hello {
+        Hello {
+            client_pk: (&self.my_secret_key).into(),
+            server_id: Hash::hash(&self.server_id), // FIXME needs to append our pk?
+        }
+    }
 
-        let shared_secret = self.0.diffie_hellman(&connect.server_pk);
+    // NOTE: Intentionally destroyed if fails
+    pub fn receive_connect(self, connect: Connect) -> Result<ClientChannel, String> {
+        if connect.client_vk != self.my_verifying_key {
+            return Err("Invalid client_vk".to_string()); // FIXME
+        }
+
+        let shared_secret = self.my_secret_key.diffie_hellman(&connect.server_pk);
 
         let mut secret: Vec<u8> = shared_secret.as_bytes().to_vec();
-        secret.extend_from_slice(hello.payload.server_id.raw.as_bytes());
-        secret.extend_from_slice(hello.verifier.as_bytes());
+        secret.extend_from_slice(self.server_id.as_bytes());
+        secret.extend_from_slice(self.my_verifying_key.as_bytes());
         let secret = secret.as_slice();
 
         let mut nonce_buf = [0u8; 24];
@@ -59,19 +75,22 @@ impl ClientConn {
         hasher.fill(&mut nonce_buf);
         hasher.fill(&mut key_preimage_buf);
 
-        let mut secret = [0u8; 32];
+        let mut secret: [u8; 32] = connect.encrypted_secret;
 
         XChaCha20Poly1305::new_from_slice(&key_preimage_buf)
             .expect("take exactly 32 bytes")
             .decrypt_in_place_detached(
                 XNonce::from_slice(&nonce_buf),
-                self.server_id.raw.as_bytes(), // Associated data
+                Hash::hash(&self.server_id).raw.as_bytes(), // Associated data
                 &mut secret,
                 &connect.tag,
             )
             .expect("FIXME");
 
-        Ok(ClientChannel { secret })
+        Ok(ClientChannel {
+            secret,
+            sender: self.my_verifying_key,
+        })
     }
 }
 
