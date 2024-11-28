@@ -16,6 +16,7 @@ where
     Vec<u8>: From<T>,
 {
     pub fn try_sign(payload: T, signer: &SigningKey) -> Result<Self, signature::Error> {
+        // FIXME put verifyer inside envelope. SAME WITH BEEHIVE
         Ok(Self {
             verifier: signer.verifying_key(),
             signature: signer.try_sign(Vec::<u8>::from(payload.clone()).as_slice())?,
