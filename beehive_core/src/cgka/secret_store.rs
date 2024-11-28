@@ -109,6 +109,14 @@ impl SecretStore {
         Ok(())
     }
 
+    pub fn contains_node_key(&self, node_key: NodeKey) -> bool {
+        node_key.keys().iter().all(|k| self.contains_key(k))
+    }
+
+    pub fn contains_key(&self, key: &ShareKey) -> bool {
+        self.versions.iter().any(|v| v.pk == *key)
+    }
+
     // TODO: Make this more performant.
     fn remove_keys_from(&mut self, removed_keys: &[ShareKey]) -> Result<(), CgkaError> {
         if removed_keys.is_empty() {

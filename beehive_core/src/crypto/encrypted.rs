@@ -1,7 +1,11 @@
 //! Ciphertext with public metadata.
 
 use super::{
-    application_secret::PcsKey, digest::Digest, share_key::{ShareKey, ShareSecretKey}, siv::Siv, symmetric_key::SymmetricKey
+    application_secret::PcsKey,
+    digest::Digest,
+    share_key::{ShareKey, ShareSecretKey},
+    siv::Siv,
+    symmetric_key::SymmetricKey,
 };
 use crate::{content::reference::ContentRef, principal::document::id::DocumentId};
 use nonempty::NonEmpty;

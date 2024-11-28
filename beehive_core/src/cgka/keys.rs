@@ -54,6 +54,15 @@ pub enum NodeKey {
     ConflictKeys(ConflictKeys),
 }
 
+impl NodeKey {
+    pub fn contains_node_key(&self, keys: &NodeKey) -> bool {
+        match self {
+            NodeKey::ShareKey(key) => *keys == NodeKey::ShareKey(*key),
+            NodeKey::ConflictKeys(conflict_keys) => conflict_keys.contains_node_key(&keys),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ConflictKeys {
     pub first: ShareKey,
@@ -68,6 +77,10 @@ impl ConflictKeys {
 
     pub fn contains(&self, key: &ShareKey) -> bool {
         self.first == *key || self.second == *key || self.more.contains(key)
+    }
+
+    pub fn contains_node_key(&self, keys: &NodeKey) -> bool {
+        keys.keys().iter().all(|k| self.contains(k))
     }
 
     #[allow(clippy::len_without_is_empty)]

@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     content::reference::ContentRef,
     crypto::{
-        digest::Digest, encrypted::Encrypted, separable::Separable, share_key::ShareSecretKey, siv::Siv, symmetric_key::SymmetricKey
+        digest::Digest, encrypted::Encrypted, separable::Separable, share_key::ShareSecretKey,
+        siv::Siv, symmetric_key::SymmetricKey,
     },
 };
 
@@ -25,19 +26,32 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
         content_ref: Digest<Cr>,
         pred_ref: Digest<Vec<Cr>>,
     ) -> Self {
-        Self { key, pcs_key_hash, nonce, content_ref, pred_ref }
+        Self {
+            key,
+            pcs_key_hash,
+            nonce,
+            content_ref,
+            pred_ref,
+        }
     }
 
     pub fn key(&self) -> SymmetricKey {
         self.key
     }
 
-    pub fn try_encrypt<T>(&self, plaintext: &[u8]) -> Result<Encrypted<T, Cr>, chacha20poly1305::Error> {
+    pub fn try_encrypt<T>(
+        &self,
+        plaintext: &[u8],
+    ) -> Result<Encrypted<T, Cr>, chacha20poly1305::Error> {
         let mut ciphertext = plaintext.to_vec();
-        self
-            .key
-            .try_encrypt(self.nonce, &mut ciphertext)?;
-        Ok(Encrypted::new(self.nonce, ciphertext, self.pcs_key_hash, self.content_ref, self.pred_ref))
+        self.key.try_encrypt(self.nonce, &mut ciphertext)?;
+        Ok(Encrypted::new(
+            self.nonce,
+            ciphertext,
+            self.pcs_key_hash,
+            self.content_ref,
+            self.pred_ref,
+        ))
     }
 }
 

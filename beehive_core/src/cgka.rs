@@ -296,8 +296,8 @@ mod tests {
     use test_utils::{
         add_from_all_members, add_from_first_member, apply_test_operations_rewind_and_merge_to_all,
         remove_from_left, remove_from_right, remove_odd_members, setup_cgka, setup_member_cgkas,
-        setup_members, update_all_members, update_even_members, TestMember, TestMemberCgka,
-        TestOperation,
+        setup_members, update_added_members, update_all_members, update_even_members, TestMember,
+        TestMemberCgka, TestOperation,
     };
 
     use super::*;
@@ -375,7 +375,7 @@ mod tests {
         }
         member_cgkas[m_idx].cgka.secret()?.to_bytes();
         // Compare the result of secret() for all members
-        for m in member_cgkas.iter_mut().skip(1) {
+        for m in member_cgkas.iter_mut() {
             assert_eq!(m.cgka.secret()?.to_bytes(), post_update_secret_bytes);
         }
         Ok(())
@@ -518,6 +518,22 @@ mod tests {
                 vec![update_even_members()],
             ],
             &mut csprng,
+        )
+    }
+
+    #[test]
+    fn test_all_members_add_and_update_concurrently() -> Result<(), CgkaError> {
+        run_tests_for_1_to_32_members(
+            vec![vec![add_from_all_members(), update_all_members()]],
+            &mut rand::thread_rng(),
+        )
+    }
+
+    #[test]
+    fn test_update_added_members_concurrently() -> Result<(), CgkaError> {
+        run_tests_for_1_to_32_members(
+            vec![vec![add_from_all_members(), update_added_members()]],
+            &mut rand::thread_rng(),
         )
     }
 

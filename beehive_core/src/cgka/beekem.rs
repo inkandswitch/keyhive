@@ -23,8 +23,11 @@ pub struct PathChange {
     pub leaf_id: IndividualId,
     pub leaf_idx: u32,
     pub leaf_pk: NodeKey,
+    pub leaf_sibling_idx: u32,
+    pub leaf_sibling_pk: Option<NodeKey>,
     // (u32 inner node index, new inner node)
     pub path: Vec<(u32, InnerNode)>,
+    pub copath: Vec<(u32, Option<NodeKey>)>,
     pub removed_keys: Vec<ShareKey>,
 }
 
@@ -283,12 +286,21 @@ impl BeeKem {
         if self.id_for_leaf(leaf_idx)? != id {
             return Err(CgkaError::IdentifierNotFound);
         }
-
+        let TreeNodeIndex::Leaf(sibling_idx) = treemath::sibling(leaf_idx.into()) else {
+            return Err(CgkaError::TreeIndexOutOfBounds);
+        };
+        let sibling_pk = self
+            .leaf(sibling_idx)?
+            .as_ref()
+            .map(|s_leaf| s_leaf.pk.clone());
         let mut new_path = PathChange {
             leaf_id: id,
             leaf_idx: leaf_idx.u32(),
             leaf_pk: NodeKey::ShareKey(pk),
-            path: Vec::new(),
+            leaf_sibling_idx: sibling_idx.u32(),
+            leaf_sibling_pk: sibling_pk,
+            path: Default::default(),
+            copath: Default::default(),
             removed_keys: self.node_key_for_id(id)?.keys(),
         };
         self.insert_leaf_at(leaf_idx, id, NodeKey::ShareKey(pk))?;
@@ -323,6 +335,18 @@ impl BeeKem {
                     .ok_or(CgkaError::ShareKeyNotFound)?
                     .clone(),
             ));
+            if !self.is_root(parent_idx.into()) {
+                let TreeNodeIndex::Inner(sibling_idx) = treemath::sibling(parent_idx.into()) else {
+                    return Err(CgkaError::TreeIndexOutOfBounds);
+                };
+                let sibling_node = self.inner_node(sibling_idx)?;
+                new_path.copath.push((
+                    sibling_idx.u32(),
+                    sibling_node
+                        .as_ref()
+                        .map(|secret_store| secret_store.node_key()),
+                ));
+            }
             child_idx = parent_idx.into();
             child_pk = new_parent_pk;
             child_sk = new_parent_sk;
@@ -344,6 +368,7 @@ impl BeeKem {
                 new_path.leaf_pk.clone()
             };
             self.insert_leaf_at(leaf_idx, new_path.leaf_id, new_node_key)?;
+            self.blank_path(treemath::parent(leaf_idx.into()))?;
             return Ok(());
         }
 
@@ -363,6 +388,7 @@ impl BeeKem {
                 self.insert_inner_node_at(current_idx, node.clone())?;
             }
         }
+
         if self.has_root_key() {
             self.current_secret_encrypter_leaf_idx = Some(leaf_idx);
         } else {
@@ -526,7 +552,7 @@ impl BeeKem {
             .ok_or(CgkaError::TreeIndexOutOfBounds)
     }
 
-    fn leaf_index_for_id(&self, id: IndividualId) -> Result<&LeafNodeIndex, CgkaError> {
+    pub(crate) fn leaf_index_for_id(&self, id: IndividualId) -> Result<&LeafNodeIndex, CgkaError> {
         self.id_to_leaf_idx
             .get(&id)
             .ok_or(CgkaError::IdentifierNotFound)
@@ -586,14 +612,14 @@ impl BeeKem {
     }
 
     fn blank_path(&mut self, idx: InnerNodeIndex) -> Result<(), CgkaError> {
-        self.blank_parent(idx)?;
+        self.blank_inner_node(idx)?;
         if self.is_root(idx.into()) {
             return Ok(());
         }
         self.blank_path(treemath::parent(idx.into()))
     }
 
-    fn blank_parent(&mut self, idx: InnerNodeIndex) -> Result<(), CgkaError> {
+    fn blank_inner_node(&mut self, idx: InnerNodeIndex) -> Result<(), CgkaError> {
         if idx.usize() >= self.inner_nodes.len() {
             return Err(CgkaError::TreeIndexOutOfBounds);
         }
@@ -603,10 +629,35 @@ impl BeeKem {
 
     fn is_valid_change(&self, new_path: &PathChange) -> Result<bool, CgkaError> {
         let leaf_idx = self.leaf_index_for_id(new_path.leaf_id)?;
+        // TODO: We can probably apply a path change in some cases where the tree
+        // size has changed, for example if the path and copath of the subtree it
+        // was part of are still preserved. For now, we are blanking the path if
+        // we find the tree size has changed.
         Ok(
             new_path.path.len() == self.path_length_for(LeafNodeIndex::new(new_path.leaf_idx))
-                && leaf_idx.u32() == new_path.leaf_idx,
+                && leaf_idx.u32() == new_path.leaf_idx
+                && self.contains_copath_keys(new_path),
         )
+    }
+
+    fn contains_copath_keys(&self, path: &PathChange) -> bool {
+        if let Some(sibling_leaf_pk) = &path.leaf_sibling_pk {
+            let Ok(Some(s_leaf)) = self.leaf(LeafNodeIndex::new(path.leaf_sibling_idx)) else {
+                return false;
+            };
+            if !s_leaf.pk.contains_node_key(sibling_leaf_pk) {
+                return false;
+            }
+        }
+        path.copath.iter().all(|(idx, maybe_node_key)| {
+            let Some(copath_node_key) = maybe_node_key else {
+                return true;
+            };
+            let Ok(Some(secret_store)) = self.inner_node(InnerNodeIndex::new(*idx)) else {
+                return false;
+            };
+            secret_store.contains_node_key(copath_node_key.clone())
+        })
     }
 
     /// Growing the tree will add a new root and a new subtree, all blank.
