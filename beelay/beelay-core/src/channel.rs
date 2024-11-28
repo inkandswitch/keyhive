@@ -40,5 +40,11 @@ mod tests {
         let received = server.receive_message(client_msg).unwrap();
 
         assert_eq!(received, msg_content);
+
+        let next_msg_content = "Hello, another world!".as_bytes().to_vec();
+        let next_client_msg = client.message(next_msg_content.clone());
+        let next_received = server.receive_message(next_client_msg).unwrap();
+
+        assert_eq!(next_received, next_msg_content);
     }
 }
