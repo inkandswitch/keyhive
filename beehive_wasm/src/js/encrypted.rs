@@ -1,9 +1,11 @@
 use super::change_ref::JsChangeRef;
 use beehive_core::crypto::encrypted::Encrypted;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Encrypted)]
-pub struct JsEncrypted(Encrypted<Vec<u8>, JsChangeRef>);
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct JsEncrypted(pub(crate) Encrypted<Vec<u8>, JsChangeRef>);
 
 #[wasm_bindgen(js_class = Encrypted)]
 impl JsEncrypted {
@@ -20,6 +22,21 @@ impl JsEncrypted {
     #[wasm_bindgen(getter)]
     pub fn nonce(&self) -> Vec<u8> {
         self.0.nonce.as_bytes().to_vec()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn pcs_key_hash(&self) -> Vec<u8> {
+        self.0.pcs_key_hash.raw.as_bytes().to_vec()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn content_ref(&self) -> Vec<u8> {
+        self.0.content_ref.raw.as_bytes().to_vec()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn pred_refs(&self) -> Vec<u8> {
+        self.0.pred_refs.raw.as_bytes().to_vec()
     }
 }
 

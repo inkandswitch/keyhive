@@ -105,14 +105,17 @@ impl<T: ContentRef> Group<T> {
         self.group_id().into()
     }
 
-    pub fn individual_ids_with_sampled_prekeys(&self) -> HashMap<IndividualId, ShareKey> {
+    pub fn pick_individual_prekeys<R: rand::CryptoRng + rand::RngCore>(
+        &self,
+        csprng: &mut R,
+    ) -> HashMap<IndividualId, ShareKey> {
         let mut m = HashMap::new();
         for delegations in self.members.values() {
             m.extend(
                 &delegations[0]
                     .payload()
                     .delegate
-                    .individual_ids_with_sampled_prekeys(),
+                    .pick_individual_prekeys(csprng),
             );
         }
         m

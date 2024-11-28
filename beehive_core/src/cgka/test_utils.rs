@@ -1,7 +1,7 @@
 use super::{error::CgkaError, operation::CgkaOperation, Cgka};
 use crate::{
-    crypto::share_key::{ShareKey, ShareSecretKey},
     cgka::keys::ShareKeyMap,
+    crypto::share_key::{ShareKey, ShareSecretKey},
     principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
 };
 use nonempty::{nonempty, NonEmpty};
@@ -164,7 +164,9 @@ pub fn setup_updated_and_synced_member_cgkas(
         let cgka = m.cgka_from(&member_cgkas[0].cgka)?;
         let mut member_cgka = TestMemberCgka::new(m.clone(), cgka);
         let op = member_cgka.update(&mut rand::thread_rng())?;
-        member_cgkas[0].cgka.merge_concurrent_operations(&vec![op])?;
+        member_cgkas[0]
+            .cgka
+            .merge_concurrent_operations(&vec![op])?;
         member_cgkas.push(member_cgka);
     }
     let base_cgka = member_cgkas[0].cgka.clone();
@@ -207,7 +209,9 @@ pub fn apply_test_operations(
         }
         TestMergeStrategy::MergeToOneMemberAndClone => {
             member_cgkas[0].cgka.replace_tree(&starting_cgkas[0].cgka);
-            member_cgkas[0].cgka.merge_concurrent_operations(&ordered_ops)?;
+            member_cgkas[0]
+                .cgka
+                .merge_concurrent_operations(&ordered_ops)?;
             let base_cgka = member_cgkas[0].cgka.clone();
             for m in member_cgkas.iter_mut().skip(1) {
                 m.update_cgka_to(&base_cgka)?;

@@ -24,7 +24,6 @@ use crate::{
 };
 use dupe::Dupe;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use rand::{thread_rng, Rng};
 use serde::Serialize;
 use std::{cell::RefCell, collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;
@@ -35,10 +34,11 @@ pub struct Active {
     /// The signing key of the active agent.
     pub signer: SigningKey,
 
-    // FIXME generalize to use e.g. KMS
-    // FIXME include timestamp for next PCS update
-    /// The encryption "sharing" key pairs that the active agent has.
-    /// This includes the secret keys for ECDH.
+    // // FIXME generalize to use e.g. KMS
+    // // FIXME include timestamp for next PCS update
+    // /// The encryption "sharing" key pairs that the active agent has.
+    // /// This includes the secret keys for ECDH.
+    // FIXME: Can we remove this since we're using the Individual's map?
     pub prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>, // FIXME generalize to use e.g. KMS
 
     /// The [`Individual`] static identifier.
@@ -65,11 +65,8 @@ impl Active {
         AgentId::IndividualId(self.id())
     }
 
-    // FIXME: Temporary measure to retrieve a prekey. Are the share keys actually
-    // prekeys for an Active?
-    pub fn sample_prekey(&self) -> ShareKey {
-        let idx = thread_rng().gen_range(0..self.prekey_pairs.len());
-        *self.prekey_pairs.keys().nth(idx).expect("FIXME")
+    pub fn pick_prekey<R: rand::CryptoRng + rand::RngCore>(&self, csprng: &mut R) -> ShareKey {
+        self.individual.pick_prekey(csprng)
     }
 
     pub fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(

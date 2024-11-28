@@ -115,7 +115,7 @@ impl Cgka {
         &mut self,
         content_ref: &T,
         content: &[u8],
-        pred_ref: &Vec<T>,
+        pred_refs: &Vec<T>,
         csprng: &mut R,
     ) -> Result<ApplicationSecret<T>, CgkaError> {
         // If the tree currently has no root key, we generate a new key pair
@@ -138,7 +138,7 @@ impl Cgka {
         Ok(current_pcs_key.derive_application_secret(
             &nonce,
             &Digest::hash(content_ref),
-            &Digest::hash(pred_ref),
+            &Digest::hash(pred_refs),
         ))
     }
 
@@ -172,7 +172,7 @@ impl Cgka {
         let app_secret = last_key.derive_application_secret(
             &encrypted.nonce,
             &encrypted.content_ref,
-            &encrypted.pred_ref,
+            &encrypted.pred_refs,
         );
         Ok(app_secret.key())
     }

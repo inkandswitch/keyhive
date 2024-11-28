@@ -7,7 +7,7 @@ use super::{agent::AgentId, verifiable::Verifiable};
 use crate::crypto::{digest::Digest, share_key::ShareKey, signed::SigningError};
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
-use rand::{thread_rng, Rng};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
 use std::collections::HashSet;
@@ -62,8 +62,8 @@ impl Individual {
     }
 
     // FIXME: Temporary measure to retrieve a prekey
-    pub fn sample_prekey(&self) -> ShareKey {
-        let idx = thread_rng().gen_range(0..self.prekeys.len());
+    pub fn pick_prekey<R: rand::CryptoRng + rand::RngCore>(&self, csprng: &mut R) -> ShareKey {
+        let idx = csprng.gen_range(0..self.prekeys.len());
         *self.prekeys.iter().nth(idx).expect("FIXME")
     }
 
