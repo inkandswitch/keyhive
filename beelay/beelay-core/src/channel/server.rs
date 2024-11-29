@@ -7,15 +7,33 @@ use thiserror::Error;
 
 pub struct Server {
     my_id: String,
-    secret_swarm_seed: Seed,
+    current_secret_swarm_seed: Seed,
+    prior_secret_swarm_seed: Seed,
 }
 
 impl Server {
-    pub fn new(my_id: String, secret_swarm_seed: Seed) -> Self {
+    pub fn new(
+        my_id: String,
+        current_secret_swarm_seed: Seed,
+        prior_secret_swarm_seed: Seed,
+    ) -> Self {
         Self {
             my_id,
-            secret_swarm_seed,
+            current_secret_swarm_seed,
+            prior_secret_swarm_seed,
         }
+    }
+
+    pub fn generate<R: rand::RngCore + rand::CryptoRng>(csprng: &mut R, id: String) -> Self {
+        let current_secret_swarm_seed = Seed::generate(csprng);
+        let prior_secret_swarm_seed = Seed::generate(csprng);
+
+        Self::new(id, current_secret_swarm_seed, prior_secret_swarm_seed)
+    }
+
+    pub fn update_key(&mut self, new_current_secret_swarm_seed: Seed) {
+        self.prior_secret_swarm_seed = self.current_secret_swarm_seed;
+        self.current_secret_swarm_seed = new_current_secret_swarm_seed;
     }
 
     pub fn receive_hello<R: rand::RngCore + rand::CryptoRng>(
@@ -44,7 +62,7 @@ impl Server {
         hasher.fill(&mut nonce_buf);
         hasher.fill(&mut key_preimage_buf);
 
-        let secret = self.get_secret(hello.verifier);
+        let secret = self.get_current_secret(hello.verifier);
 
         let key = XChaCha20Poly1305::new_from_slice(&key_preimage_buf)
             .expect("we're passing it exactly 32 bytes");
@@ -65,17 +83,23 @@ impl Server {
     }
 
     pub fn receive_message(&self, message: Message) -> Result<Vec<u8>, InvalidMacError> {
-        let secret = self.get_secret(message.sender);
-
-        if !message.is_valid(&secret) {
-            return Err(InvalidMacError);
+        if message.is_valid(&self.get_current_secret(message.sender))
+            || message.is_valid(&self.get_prior_secret(message.sender))
+        {
+            Ok(message.content)
+        } else {
+            Err(InvalidMacError)
         }
-
-        Ok(message.content)
     }
 
-    fn get_secret(&self, client_pk: ed25519_dalek::VerifyingKey) -> Secret {
-        let mut secret_preimage = self.secret_swarm_seed.0.to_vec();
+    fn get_current_secret(&self, client_pk: ed25519_dalek::VerifyingKey) -> Secret {
+        let mut secret_preimage = self.current_secret_swarm_seed.0.to_vec();
+        secret_preimage.extend_from_slice(client_pk.as_bytes());
+        blake3::derive_key(&"/beelay/handshake/secret/", &secret_preimage).into()
+    }
+
+    fn get_prior_secret(&self, client_pk: ed25519_dalek::VerifyingKey) -> Secret {
+        let mut secret_preimage = self.prior_secret_swarm_seed.0.to_vec();
         secret_preimage.extend_from_slice(client_pk.as_bytes());
         blake3::derive_key(&"/beelay/handshake/secret/", &secret_preimage).into()
     }

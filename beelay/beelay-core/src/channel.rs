@@ -16,7 +16,6 @@ pub mod signed;
 mod tests {
     use super::*;
     use client::connecting::Connecting;
-    use seed::Seed;
     use server::Server;
 
     #[test]
@@ -24,12 +23,14 @@ mod tests {
         let mut csprng = rand::thread_rng();
 
         let server_id = "My Awesome Server".to_string();
-        let seed = Seed::generate(&mut csprng);
-        let server = Server::new(server_id.clone(), seed);
+        let server = Server::generate(&mut csprng, server_id.clone());
 
         let client_signer = ed25519_dalek::SigningKey::generate(&mut csprng);
-        let client_verifier = ed25519_dalek::VerifyingKey::from(&client_signer);
-        let connecting_client = Connecting::generate(&mut csprng, client_verifier, server_id);
+        let connecting_client = Connecting::generate(
+            &mut csprng,
+            ed25519_dalek::VerifyingKey::from(&client_signer),
+            server_id,
+        );
 
         let hello = connecting_client.hello(client_signer).unwrap();
         let connect = server.receive_hello(hello, &mut csprng).unwrap();
