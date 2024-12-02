@@ -264,14 +264,16 @@ mod tests {
             let content = vec![1, 2, 3, 4];
             let pred_refs = vec![JsChangeRef::new(vec![10, 11, 12])];
             let content_ref = JsChangeRef::new(vec![13, 14, 15]);
-            let encrypted = bh.try_encrypt(doc.clone(), content_ref.clone(), pred_refs, &content)?;
+            let encrypted =
+                bh.try_encrypt(doc.clone(), content_ref.clone(), pred_refs, &content)?;
             let decrypted = bh.try_decrypt(doc.clone(), encrypted)?;
             assert_eq!(content, decrypted);
             bh.force_pcs_update(&doc)?;
             let content_2 = vec![5, 6, 7, 8, 9];
             let content_ref_2 = JsChangeRef::new(vec![16, 17, 18]);
             let pred_refs_2 = vec![content_ref];
-            let encrypted_2 = bh.try_encrypt(doc.clone(), content_ref_2, pred_refs_2, &content_2)?;
+            let encrypted_2 =
+                bh.try_encrypt(doc.clone(), content_ref_2, pred_refs_2, &content_2)?;
             let decrypted_2 = bh.try_decrypt(doc.clone(), encrypted_2)?;
             assert_eq!(content_2, decrypted_2);
             Ok(())

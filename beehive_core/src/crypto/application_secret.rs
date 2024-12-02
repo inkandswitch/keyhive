@@ -78,7 +78,7 @@ impl PcsKey {
         let symmetric_key = SymmetricKey::derive_from_bytes(&app_secret_bytes);
         ApplicationSecret::new(
             symmetric_key,
-            Digest::hash(&self),
+            Digest::hash(self),
             *nonce,
             *content_ref,
             *pred_refs,
