@@ -31,6 +31,7 @@ mod sedimentree;
 mod snapshots;
 mod subscriptions;
 pub use snapshots::SnapshotId;
+pub mod channel;
 mod notification_handler;
 pub(crate) mod riblt;
 mod sync_docs;
