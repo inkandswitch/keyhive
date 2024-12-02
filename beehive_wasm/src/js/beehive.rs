@@ -17,7 +17,7 @@ use super::{
 };
 use beehive_core::{
     context::Context,
-    principal::document::{id::DocumentId, Document, EncryptError},
+    principal::document::{id::DocumentId, DecryptError, Document, EncryptError},
 };
 use dupe::Dupe;
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
@@ -95,8 +95,17 @@ impl JsBeehive {
     }
 
     #[wasm_bindgen(js_name = tryEncrypt)]
-    pub fn try_encrypt(&mut self, _doc: u8) -> Result<u8, u8> {
-        todo!("waiting on BeeKEM")
+    pub fn try_encrypt(
+        &mut self,
+        doc: JsDocument,
+        content_ref: JsChangeRef,
+        pred_refs: Vec<JsChangeRef>,
+        content: &[u8],
+    ) -> Result<JsEncrypted, JsEncryptError> {
+        Ok(self
+            .ctx
+            .try_encrypt_content(doc.0, &content_ref, &pred_refs, content)?
+            .into())
     }
 
     // NOTE: this is with a fresh doc secret
@@ -115,8 +124,12 @@ impl JsBeehive {
     }
 
     #[wasm_bindgen(js_name = tryDecrypt)]
-    pub fn try_decrypt(&self, _doc: u8) -> Result<u8, u8> {
-        todo!("waiting on BeeKEM")
+    pub fn try_decrypt(
+        &mut self,
+        doc: JsDocument,
+        encrypted: JsEncrypted,
+    ) -> Result<Vec<u8>, JsDecryptError> {
+        Ok(self.ctx.try_decrypt_content(doc.0, &encrypted.0)?)
     }
 
     #[wasm_bindgen(js_name = tryReceive)]
@@ -172,8 +185,9 @@ impl JsBeehive {
     }
 
     #[wasm_bindgen(js_name = forcePcsUpdate)]
-    pub fn force_pcs_update(&mut self, _doc: &JsDocument) -> Result<u8, u8> {
-        todo!("waiting on BeeKEM")
+    pub fn force_pcs_update(&mut self, doc: &JsDocument) -> Result<(), JsEncryptError> {
+        self.ctx.force_pcs_update(doc.0.clone())?;
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = rotatePrekey)]
@@ -196,6 +210,11 @@ impl JsBeehive {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct JsEncryptError(#[from] pub(crate) EncryptError);
+
+#[wasm_bindgen]
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct JsDecryptError(#[from] pub(crate) DecryptError);
 
 #[cfg(test)]
 mod tests {
@@ -227,6 +246,35 @@ mod tests {
             let bh = setup();
             let signed = bh.try_sign(vec![1, 2, 3]).unwrap();
             assert!(signed.verify());
+        }
+    }
+
+    mod try_encrypt_decrypt {
+        use super::*;
+        use beehive_core::principal::agent::Agent;
+        use std::error::Error;
+
+        #[wasm_bindgen_test(unsupported = test)]
+        fn test_encrypt_decrypt() -> Result<(), Box<dyn Error>> {
+            let mut bh = setup();
+            let active = bh.ctx.active.clone();
+            active.borrow_mut().expand_prekeys(&mut bh.ctx.csprng)?;
+            let agent = JsAgent(Agent::Active(active));
+            let doc = bh.generate_doc(vec![agent])?;
+            let content = vec![1, 2, 3, 4];
+            let pred_refs = vec![JsChangeRef::new(vec![10, 11, 12])];
+            let content_ref = JsChangeRef::new(vec![13, 14, 15]);
+            let encrypted = bh.try_encrypt(doc.clone(), content_ref.clone(), pred_refs, &content)?;
+            let decrypted = bh.try_decrypt(doc.clone(), encrypted)?;
+            assert_eq!(content, decrypted);
+            bh.force_pcs_update(&doc)?;
+            let content_2 = vec![5, 6, 7, 8, 9];
+            let content_ref_2 = JsChangeRef::new(vec![16, 17, 18]);
+            let pred_refs_2 = vec![content_ref];
+            let encrypted_2 = bh.try_encrypt(doc.clone(), content_ref_2, pred_refs_2, &content_2)?;
+            let decrypted_2 = bh.try_decrypt(doc.clone(), encrypted_2)?;
+            assert_eq!(content_2, decrypted_2);
+            Ok(())
         }
     }
 }

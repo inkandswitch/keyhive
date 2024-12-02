@@ -79,7 +79,6 @@ impl<T: ContentRef> Document<T> {
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-
         let group =
             parents
                 .iter()
@@ -113,7 +112,7 @@ impl<T: ContentRef> Document<T> {
             .prekey_pairs
             .insert(owner_share_key, owner_share_secret_key);
 
-        let group_members = group.individual_ids_with_sampled_prekeys();
+        let group_members = group.pick_individual_prekeys(csprng);
         let active_member = (owner_id, owner_share_key);
         let other_members: Vec<(IndividualId, ShareKey)> = group_members
             .iter()
@@ -180,22 +179,23 @@ impl<T: ContentRef> Document<T> {
         self.cgka.has_pcs_key()
     }
 
-    // TODO: Should this only be possible for the active member?
-    // FIXME: Add error type
     pub fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
-        pk: ShareKey,
-        sk: ShareSecretKey,
         csprng: &mut R,
-    ) {
-        self.cgka.update(pk, sk, csprng).expect("FIXME");
+    ) -> Result<(), EncryptError> {
+        let new_share_secret_key = ShareSecretKey::generate(csprng);
+        let new_share_key = new_share_secret_key.share_key();
+        self.cgka
+            .update(new_share_key, new_share_secret_key, csprng)
+            .map_err(EncryptError::UnableToPcsUpdate)?;
+        Ok(())
     }
 
     pub fn try_encrypt_content<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         content_ref: &T,
         content: &[u8],
-        pred_ref: &Vec<T>,
+        pred_refs: &Vec<T>,
         csprng: &mut R,
         // FIXME: What error return type?
     ) -> Result<Encrypted<Vec<u8>, T>, EncryptError> {
@@ -203,15 +203,11 @@ impl<T: ContentRef> Document<T> {
         // root secret. That might make sense, but do we need to store this key pair
         // on our Active member?
         if !self.cgka.has_pcs_key() {
-            let new_share_secret_key = ShareSecretKey::generate(csprng);
-            let new_share_key = new_share_secret_key.share_key();
-            self.cgka
-                .update(new_share_key, new_share_secret_key, csprng)
-                .map_err(EncryptError::UnableToPcsUpdate)?;
+            self.pcs_update(csprng)?;
         }
         let app_secret = self
             .cgka
-            .new_app_secret_for(content_ref, content, pred_ref, csprng)
+            .new_app_secret_for(content_ref, content, pred_refs, csprng)
             .map_err(EncryptError::FailedToMakeAppSecret)?;
 
         app_secret

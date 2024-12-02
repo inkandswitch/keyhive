@@ -1,7 +1,11 @@
 //! Ciphertext with public metadata.
 
 use super::{
-    application_secret::PcsKey, digest::Digest, share_key::{ShareKey, ShareSecretKey}, siv::Siv, symmetric_key::SymmetricKey
+    application_secret::PcsKey,
+    digest::Digest,
+    share_key::{ShareKey, ShareSecretKey},
+    siv::Siv,
+    symmetric_key::SymmetricKey,
 };
 use crate::{content::reference::ContentRef, principal::document::id::DocumentId};
 use nonempty::NonEmpty;
@@ -26,7 +30,7 @@ pub struct Encrypted<T, Cr: ContentRef> {
     pub content_ref: Digest<Cr>,
     /// The predecessor content ref hashes used to derive the application secret
     /// for encrypting.
-    pub pred_ref: Digest<Vec<Cr>>,
+    pub pred_refs: Digest<Vec<Cr>>,
 
     /// The type of the data that was encrypted.
     _plaintext_tag: PhantomData<T>,
@@ -39,14 +43,14 @@ impl<T, Cr: ContentRef> Encrypted<T, Cr> {
         ciphertext: Vec<u8>,
         pcs_key_hash: Digest<PcsKey>,
         content_ref: Digest<Cr>,
-        pred_ref: Digest<Vec<Cr>>,
+        pred_refs: Digest<Vec<Cr>>,
     ) -> Encrypted<T, Cr> {
         Encrypted {
             nonce,
             ciphertext,
             pcs_key_hash,
             content_ref,
-            pred_ref,
+            pred_refs,
             _plaintext_tag: PhantomData,
         }
     }

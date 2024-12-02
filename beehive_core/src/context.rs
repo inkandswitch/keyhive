@@ -160,21 +160,23 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
         &mut self,
         doc: Rc<RefCell<Document<T>>>,
         content_ref: &T,
-        pred_ref: &Vec<T>,
+        pred_refs: &Vec<T>,
         content: &[u8],
-        // FIXME: What error return type?
     ) -> Result<Encrypted<Vec<u8>, T>, EncryptError> {
         doc.borrow_mut()
-            .try_encrypt_content(content_ref, content, pred_ref, &mut self.csprng)
+            .try_encrypt_content(content_ref, content, pred_refs, &mut self.csprng)
     }
 
     pub fn try_decrypt_content(
         &mut self,
         doc: Rc<RefCell<Document<T>>>,
         encrypted: &Encrypted<Vec<u8>, T>,
-        // FIXME: What error return type?
     ) -> Result<Vec<u8>, DecryptError> {
         doc.borrow_mut().try_decrypt_content(encrypted)
+    }
+
+    pub fn force_pcs_update(&mut self, doc: Rc<RefCell<Document<T>>>) -> Result<(), EncryptError> {
+        doc.borrow_mut().pcs_update(&mut self.csprng)
     }
 
     pub fn reachable_docs(&self) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> {

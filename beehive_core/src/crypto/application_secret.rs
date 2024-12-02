@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     content::reference::ContentRef,
     crypto::{
-        digest::Digest, encrypted::Encrypted, separable::Separable, share_key::ShareSecretKey, siv::Siv, symmetric_key::SymmetricKey
+        digest::Digest, encrypted::Encrypted, separable::Separable, share_key::ShareSecretKey,
+        siv::Siv, symmetric_key::SymmetricKey,
     },
 };
 
@@ -14,7 +15,7 @@ pub struct ApplicationSecret<Cr: ContentRef> {
     pcs_key_hash: Digest<PcsKey>,
     nonce: Siv,
     content_ref: Digest<Cr>,
-    pred_ref: Digest<Vec<Cr>>,
+    pred_refs: Digest<Vec<Cr>>,
 }
 
 impl<Cr: ContentRef> ApplicationSecret<Cr> {
@@ -23,21 +24,34 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
         pcs_key_hash: Digest<PcsKey>,
         nonce: Siv,
         content_ref: Digest<Cr>,
-        pred_ref: Digest<Vec<Cr>>,
+        pred_refs: Digest<Vec<Cr>>,
     ) -> Self {
-        Self { key, pcs_key_hash, nonce, content_ref, pred_ref }
+        Self {
+            key,
+            pcs_key_hash,
+            nonce,
+            content_ref,
+            pred_refs,
+        }
     }
 
     pub fn key(&self) -> SymmetricKey {
         self.key
     }
 
-    pub fn try_encrypt<T>(&self, plaintext: &[u8]) -> Result<Encrypted<T, Cr>, chacha20poly1305::Error> {
+    pub fn try_encrypt<T>(
+        &self,
+        plaintext: &[u8],
+    ) -> Result<Encrypted<T, Cr>, chacha20poly1305::Error> {
         let mut ciphertext = plaintext.to_vec();
-        self
-            .key
-            .try_encrypt(self.nonce, &mut ciphertext)?;
-        Ok(Encrypted::new(self.nonce, ciphertext, self.pcs_key_hash, self.content_ref, self.pred_ref))
+        self.key.try_encrypt(self.nonce, &mut ciphertext)?;
+        Ok(Encrypted::new(
+            self.nonce,
+            ciphertext,
+            self.pcs_key_hash,
+            self.content_ref,
+            self.pred_refs,
+        ))
     }
 }
 
@@ -53,11 +67,11 @@ impl PcsKey {
         &self,
         nonce: &Siv,
         content_ref: &Digest<Cr>,
-        pred_ref: &Digest<Vec<Cr>>,
+        pred_refs: &Digest<Vec<Cr>>,
     ) -> ApplicationSecret<Cr> {
         let pcs_hash = Digest::hash(&self.0);
         let mut app_secret_context =
-            format!("epoch:{pcs_hash}/pred:{pred_ref}/content:{content_ref}").into_bytes();
+            format!("epoch:{pcs_hash}/pred:{pred_refs}/content:{content_ref}").into_bytes();
         let mut key_material = self.0.clone().as_slice().to_vec();
         key_material.append(&mut app_secret_context);
         let app_secret_bytes = blake3::derive_key(STATIC_CONTEXT, key_material.as_slice());
@@ -67,7 +81,7 @@ impl PcsKey {
             Digest::hash(&self),
             *nonce,
             *content_ref,
-            *pred_ref,
+            *pred_refs,
         )
     }
 }
