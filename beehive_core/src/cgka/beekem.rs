@@ -283,12 +283,11 @@ impl BeeKem {
         if self.id_for_leaf(leaf_idx)? != id {
             return Err(CgkaError::IdentifierNotFound);
         }
-
         let mut new_path = PathChange {
             leaf_id: id,
             leaf_idx: leaf_idx.u32(),
             leaf_pk: NodeKey::ShareKey(pk),
-            path: Vec::new(),
+            path: Default::default(),
             removed_keys: self.node_key_for_id(id)?.keys(),
         };
         self.insert_leaf_at(leaf_idx, id, NodeKey::ShareKey(pk))?;
@@ -344,6 +343,7 @@ impl BeeKem {
                 new_path.leaf_pk.clone()
             };
             self.insert_leaf_at(leaf_idx, new_path.leaf_id, new_node_key)?;
+            self.blank_path(treemath::parent(leaf_idx.into()))?;
             return Ok(());
         }
 
@@ -363,6 +363,7 @@ impl BeeKem {
                 self.insert_inner_node_at(current_idx, node.clone())?;
             }
         }
+
         if self.has_root_key() {
             self.current_secret_encrypter_leaf_idx = Some(leaf_idx);
         } else {
@@ -526,7 +527,7 @@ impl BeeKem {
             .ok_or(CgkaError::TreeIndexOutOfBounds)
     }
 
-    fn leaf_index_for_id(&self, id: IndividualId) -> Result<&LeafNodeIndex, CgkaError> {
+    pub(crate) fn leaf_index_for_id(&self, id: IndividualId) -> Result<&LeafNodeIndex, CgkaError> {
         self.id_to_leaf_idx
             .get(&id)
             .ok_or(CgkaError::IdentifierNotFound)
@@ -586,14 +587,14 @@ impl BeeKem {
     }
 
     fn blank_path(&mut self, idx: InnerNodeIndex) -> Result<(), CgkaError> {
-        self.blank_parent(idx)?;
+        self.blank_inner_node(idx)?;
         if self.is_root(idx.into()) {
             return Ok(());
         }
         self.blank_path(treemath::parent(idx.into()))
     }
 
-    fn blank_parent(&mut self, idx: InnerNodeIndex) -> Result<(), CgkaError> {
+    fn blank_inner_node(&mut self, idx: InnerNodeIndex) -> Result<(), CgkaError> {
         if idx.usize() >= self.inner_nodes.len() {
             return Err(CgkaError::TreeIndexOutOfBounds);
         }
@@ -603,6 +604,10 @@ impl BeeKem {
 
     fn is_valid_change(&self, new_path: &PathChange) -> Result<bool, CgkaError> {
         let leaf_idx = self.leaf_index_for_id(new_path.leaf_id)?;
+        // TODO: We can probably apply a path change in some cases where the tree
+        // size has changed, for example if the path and copath of the subtree it
+        // was part of are still preserved. For now, we are blanking the path if
+        // we find the tree size has changed.
         Ok(
             new_path.path.len() == self.path_length_for(LeafNodeIndex::new(new_path.leaf_idx))
                 && leaf_idx.u32() == new_path.leaf_idx,
