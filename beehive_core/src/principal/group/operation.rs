@@ -3,16 +3,20 @@ pub mod revocation;
 
 use crate::{
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed},
+    crypto::{
+        digest::Digest,
+        signed::{Signed, VerificationError},
+    },
     principal::{
         document::{id::DocumentId, Document},
         identifier::Identifier,
+        verifiable::Verifiable,
     },
     util::content_addressed_map::CaMap,
 };
-use delegation::Delegation;
-use revocation::Revocation;
-use serde::Serialize;
+use delegation::{Delegation, StaticDelegation};
+use revocation::{Revocation, StaticRevocation};
+use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
     cmp::Ordering,
@@ -238,9 +242,33 @@ impl<T: ContentRef> From<Rc<Signed<Revocation<T>>>> for Operation<T> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum StaticOperation<T: ContentRef> {
+    Delegation(Signed<StaticDelegation<T>>),
+    Revocation(Signed<StaticRevocation<T>>),
+}
+
+impl<T: ContentRef> StaticOperation<T> {
+    pub fn try_verify(&self) -> Result<(), VerificationError> {
+        match self {
+            StaticOperation::Delegation(delegation) => delegation.try_verify(),
+            StaticOperation::Revocation(revocation) => revocation.try_verify(),
+        }
+    }
+}
+
+impl<T: ContentRef> Verifiable for StaticOperation<T> {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        match self {
+            StaticOperation::Delegation(signed) => *signed.verifying_key(),
+            StaticOperation::Revocation(signed) => *signed.verifying_key(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Error)]
 pub enum AncestorError {
-    // #[error("Operation history is unrooted")]
+    // FIXME #[error("Operation history is unrooted")]
     // Unrooted,
     #[error("Mismatched subject: {0}")]
     MismatchedSubject(Identifier),

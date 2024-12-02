@@ -17,7 +17,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         share_key::ShareKey,
-        signed::{Signed, SigningError},
+        signed::{Signed, SigningError, VerificationError},
     },
     util::content_addressed_map::CaMap,
 };
@@ -84,11 +84,9 @@ impl<T: ContentRef> Group<T> {
 
                 delegation_heads,
                 delegations,
-                delegation_quarantine: CaMap::new(),
 
                 revocation_heads: HashSet::new(),
                 revocations: CaMap::new(),
-                revocation_quarantine: CaMap::new(),
             },
         })
     }
@@ -151,11 +149,14 @@ impl<T: ContentRef> Group<T> {
             .collect()
     }
 
-    pub fn add_delegation(&mut self, signed_delegation: Signed<Delegation<T>>) {
-        // FIXME check subject, signature, find dependencies or quarantine
-        // ...look at the quarantine and see if any of them depend on this one
-        // ...etc etc
-        // FIXME check that delegation is authorized
+    pub fn add_delegation(
+        &mut self,
+        signed_delegation: Signed<Delegation<T>>,
+    ) -> Result<(), AddDelegationError> {
+        signed_delegation.try_verify()?;
+        if signed_delegation.subject() != self.group_id().into() {
+            return Err(AddDelegationError::InvalidSubject);
+        }
 
         let id = signed_delegation.payload().delegate.agent_id();
         let rc = Rc::new(signed_delegation);
@@ -169,6 +170,8 @@ impl<T: ContentRef> Group<T> {
                 self.members.insert(id, vec![rc]);
             }
         }
+
+        Ok(())
     }
 
     pub fn add_member(
@@ -176,8 +179,8 @@ impl<T: ContentRef> Group<T> {
         member_to_add: Agent<T>,
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
-        after_revocations: &[&Rc<Signed<Revocation<T>>>],
-        relevant_docs: &[&Rc<RefCell<Document<T>>>],
+        after_revocations: &[Rc<Signed<Revocation<T>>>],
+        relevant_docs: &[Rc<RefCell<Document<T>>>],
     ) -> Result<(), AddMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
         let agent: Agent<T> = indie.into();
@@ -203,7 +206,7 @@ impl<T: ContentRef> Group<T> {
                 delegate: member_to_add,
                 can,
                 proof,
-                after_revocations: after_revocations.iter().duped().duped().collect(),
+                after_revocations: after_revocations.iter().duped().collect(),
                 after_content: relevant_docs
                     .iter()
                     .map(|d| {
@@ -224,7 +227,7 @@ impl<T: ContentRef> Group<T> {
             &signing_key,
         )?;
 
-        Ok(self.add_delegation(delegation))
+        Ok(self.add_delegation(delegation)?)
     }
 
     pub fn revoke_member(
@@ -378,6 +381,18 @@ pub enum AddMemberError {
 
     #[error("Access escalation. Wanted {wanted}, only have {have}.")]
     AccessEscalation { wanted: Access, have: Access },
+
+    #[error(transparent)]
+    AddDelegationError(#[from] AddDelegationError),
+}
+
+#[derive(Debug, Error)]
+pub enum AddDelegationError {
+    #[error(transparent)]
+    VerificationError(#[from] VerificationError),
+
+    #[error("Invalid subject")]
+    InvalidSubject,
 }
 
 #[cfg(test)]

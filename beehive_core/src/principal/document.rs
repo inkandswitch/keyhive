@@ -19,7 +19,7 @@ use crate::{
                 revocation::Revocation,
                 AncestorError,
             },
-            Group,
+            AddMemberError, Group,
         },
         identifier::Identifier,
         individual::Individual,
@@ -43,7 +43,7 @@ pub struct Document<T: ContentRef> {
     pub(crate) reader_keys: HashMap<IndividualId, (Rc<Individual>, ShareKey)>,
 
     pub(crate) content_heads: HashSet<T>,
-    pub(crate) content_state: HashSet<T>,
+    pub(crate) content_state: HashSet<T>, // FIXME needed?
 
     // FIXME: This doesn't work right now because Cgka is not Eq or PartialEq
     pub(crate) cgka: Cgka,
@@ -136,22 +136,21 @@ impl<T: ContentRef> Document<T> {
         })
     }
 
-    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<T>>) {
-        // FIXME check subject, signature, find dependencies or quarantine
-        // ...look at the quarantine and see if any of them depend on this one
-        // ...etc etc
-        // FIXME check that delegation is authorized
-        let id = signed_delegation.payload().delegate.agent_id();
-        let rc = Rc::new(signed_delegation);
-
-        match self.group.members.get_mut(&id) {
-            Some(caps) => {
-                caps.push(rc);
-            }
-            None => {
-                self.group.members.insert(id, vec![rc]);
-            }
-        }
+    pub fn add_member(
+        &mut self,
+        member_to_add: Agent<T>,
+        can: Access,
+        signing_key: &ed25519_dalek::SigningKey,
+        after_revocations: &[Rc<Signed<Revocation<T>>>],
+        relevant_docs: &[Rc<RefCell<Document<T>>>],
+    ) -> Result<(), AddMemberError> {
+        self.group.add_member(
+            member_to_add,
+            can,
+            signing_key,
+            after_revocations,
+            relevant_docs,
+        )
     }
 
     pub fn revoke_member(

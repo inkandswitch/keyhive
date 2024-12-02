@@ -4,21 +4,29 @@ use super::{
     group::{
         id::GroupId,
         operation::{delegation::Delegation, revocation::Revocation},
-        Group,
+        AddMemberError, Group,
     },
     identifier::Identifier,
     verifiable::Verifiable,
 };
 use crate::{
+    access::Access,
     content::reference::ContentRef,
     crypto::signed::{Signed, SigningError},
 };
 use dupe::{Dupe, OptionDupedExt};
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, collections::HashMap, fmt, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    fmt,
+    rc::Rc,
+};
+
+// FIXME renmae resource?
 
 /// The union of Agents that have updatable membership
-#[derive(Debug, Clone, Dupe, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Membered<T: ContentRef> {
     Group(Rc<RefCell<Group<T>>>),
     Document(Rc<RefCell<Document<T>>>),
@@ -55,12 +63,47 @@ impl<T: ContentRef> Membered<T> {
         }
     }
 
-    pub fn add_member(&mut self, delegation: Signed<Delegation<T>>) {
+    pub fn delegation_heads(&self) -> HashSet<Rc<Signed<Delegation<T>>>> {
         match self {
-            Membered::Group(group) => {
-                group.borrow_mut().add_delegation(delegation);
+            Membered::Group(group) => group.borrow().state.delegation_heads().clone(),
+            Membered::Document(document) => {
+                document.borrow().group.state.delegation_heads().clone()
             }
-            Membered::Document(document) => document.borrow_mut().add_member(delegation),
+        }
+    }
+
+    pub fn revocation_heads(&self) -> HashSet<Rc<Signed<Revocation<T>>>> {
+        match self {
+            Membered::Group(group) => group.borrow().state.revocation_heads().clone(),
+            Membered::Document(document) => {
+                document.borrow().group.state.revocation_heads().clone()
+            }
+        }
+    }
+
+    pub fn add_member(
+        &mut self,
+        member_to_add: Agent<T>,
+        can: Access,
+        signing_key: &ed25519_dalek::SigningKey,
+        after_revocations: &[Rc<Signed<Revocation<T>>>],
+        relevant_docs: &[Rc<RefCell<Document<T>>>],
+    ) -> Result<(), AddMemberError> {
+        match self {
+            Membered::Group(group) => group.borrow_mut().add_member(
+                member_to_add,
+                can,
+                signing_key,
+                after_revocations,
+                relevant_docs,
+            ),
+            Membered::Document(document) => document.borrow_mut().add_member(
+                member_to_add,
+                can,
+                signing_key,
+                after_revocations,
+                relevant_docs,
+            ),
         }
     }
 
@@ -109,6 +152,15 @@ impl<T: ContentRef> Verifiable for Membered<T> {
         match self {
             Membered::Group(group) => group.borrow().verifying_key(),
             Membered::Document(document) => document.borrow().verifying_key(),
+        }
+    }
+}
+
+impl<T: ContentRef> Dupe for Membered<T> {
+    fn dupe(&self) -> Self {
+        match self {
+            Membered::Group(group) => Membered::Group(group.dupe()),
+            Membered::Document(document) => Membered::Document(document.dupe()),
         }
     }
 }

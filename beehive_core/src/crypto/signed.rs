@@ -1,6 +1,6 @@
 //! Wrap data in signatures.
 
-use crate::principal::identifier::Identifier;
+use crate::principal::{identifier::Identifier, verifiable::Verifiable};
 use ed25519_dalek::{Signer, Verifier};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -107,6 +107,12 @@ impl<T: Serialize> Hash for Signed<T> {
 
         let encoded: Vec<u8> = bincode::serialize(&self.payload).expect("serialization failed");
         encoded.hash(state);
+    }
+}
+
+impl<T: Serialize> Verifiable for Signed<T> {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.verifying_key
     }
 }
 

@@ -4,6 +4,7 @@ use super::{
     group::{id::GroupId, Group},
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
+    membered::Membered,
     verifiable::Verifiable,
 };
 use crate::{content::reference::ContentRef, crypto::share_key::ShareKey};
@@ -119,6 +120,15 @@ impl<T: ContentRef> From<Document<T>> for Agent<T> {
 impl<T: ContentRef> From<Rc<RefCell<Document<T>>>> for Agent<T> {
     fn from(d: Rc<RefCell<Document<T>>>) -> Self {
         Agent::Document(d)
+    }
+}
+
+impl<T: ContentRef> From<Membered<T>> for Agent<T> {
+    fn from(m: Membered<T>) -> Self {
+        match m {
+            Membered::Group(g) => g.into(),
+            Membered::Document(d) => d.into(),
+        }
     }
 }
 

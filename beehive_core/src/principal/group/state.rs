@@ -1,9 +1,6 @@
 use super::{
     id::GroupId,
-    operation::{
-        delegation::{Delegation, StaticDelegation},
-        revocation::{Revocation, StaticRevocation},
-    },
+    operation::{delegation::Delegation, revocation::Revocation},
 };
 use crate::{
     access::Access,
@@ -32,11 +29,9 @@ pub struct GroupState<T: ContentRef> {
 
     pub(crate) delegation_heads: HashSet<Rc<Signed<Delegation<T>>>>,
     pub(crate) delegations: CaMap<Signed<Delegation<T>>>,
-    pub delegation_quarantine: CaMap<Signed<StaticDelegation<T>>>,
 
     pub(crate) revocation_heads: HashSet<Rc<Signed<Revocation<T>>>>,
     pub(crate) revocations: CaMap<Signed<Revocation<T>>>,
-    pub revocation_quarantine: CaMap<Signed<StaticRevocation<T>>>,
 }
 
 impl<T: ContentRef> GroupState<T> {
@@ -50,11 +45,9 @@ impl<T: ContentRef> GroupState<T> {
 
             delegation_heads: HashSet::new(),
             delegations: CaMap::new(),
-            delegation_quarantine: CaMap::new(),
 
             revocation_heads: HashSet::new(),
             revocations: CaMap::new(),
-            revocation_quarantine: CaMap::new(),
         };
 
         parents.iter().try_fold(group, |mut acc, parent| {
@@ -167,14 +160,12 @@ impl<T: ContentRef> std::hash::Hash for GroupState<T> {
         }
 
         self.delegations.hash(state);
-        self.delegation_quarantine.hash(state);
 
         for rh in self.revocation_heads.iter() {
             rh.hash(state);
         }
 
         self.revocations.hash(state);
-        self.revocation_quarantine.hash(state);
     }
 }
 
@@ -185,11 +176,9 @@ impl<T: ContentRef> From<VerifyingKey> for GroupState<T> {
 
             delegation_heads: HashSet::new(),
             delegations: CaMap::new(),
-            delegation_quarantine: CaMap::new(),
 
             revocation_heads: HashSet::new(),
             revocations: CaMap::new(),
-            revocation_quarantine: CaMap::new(),
         }
     }
 }
@@ -224,7 +213,6 @@ impl<T: ContentRef> Serialize for GroupState<T> {
                 .collect::<Vec<_>>(),
         )?;
         state.serialize_field("delegations", &self.delegations)?;
-        state.serialize_field("delegation_quarantine", &self.delegation_quarantine)?;
         state.serialize_field(
             "revocation_heads",
             &self
@@ -234,7 +222,6 @@ impl<T: ContentRef> Serialize for GroupState<T> {
                 .collect::<Vec<_>>(),
         )?;
         state.serialize_field("revocations", &self.revocations)?;
-        state.serialize_field("revocation_quarantine", &self.revocation_quarantine)?;
 
         state.end()
     }

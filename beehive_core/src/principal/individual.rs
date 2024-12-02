@@ -53,6 +53,14 @@ impl Individual {
         })
     }
 
+    pub fn new(id: IndividualId) -> Self {
+        Self {
+            id,
+            prekeys: HashSet::new(),
+            prekey_state: PrekeyState::new(),
+        }
+    }
+
     pub fn id(&self) -> IndividualId {
         self.id
     }

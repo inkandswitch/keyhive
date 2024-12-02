@@ -14,16 +14,21 @@ use crate::{
         document::{id::DocumentId, store::DocumentStore, DecryptError, Document, EncryptError},
         group::{
             id::GroupId,
-            operation::delegation::{Delegation, DelegationError},
+            operation::{
+                delegation::{Delegation, DelegationError},
+                StaticOperation,
+            },
             store::GroupStore,
-            Group,
+            AddMemberError, Group,
         },
         identifier::Identifier,
         individual::{id::IndividualId, Individual},
         membered::Membered,
         verifiable::Verifiable,
     },
+    util::content_addressed_map::CaMap,
 };
+use arraydeque::{behavior::Wrapping, ArrayDeque};
 use dupe::Dupe;
 use nonempty::NonEmpty;
 use serde::Serialize;
@@ -35,7 +40,7 @@ use std::{
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Debug)]
-pub struct Context<T: ContentRef, R: rand::CryptoRng + rand::RngCore> {
+pub struct Context<T: ContentRef, R: rand::CryptoRng + rand::RngCore, const CAP: usize = 1024> {
     /// The [`Active`] user agent.
     pub active: Rc<RefCell<Active>>,
 
@@ -48,11 +53,16 @@ pub struct Context<T: ContentRef, R: rand::CryptoRng + rand::RngCore> {
     /// The [`Document`]s that are known to this agent.
     pub docs: DocumentStore<T>,
 
+    /// Ops that have a valid signature but we can't apply yet
+    pub op_quarantine: CaMap<StaticOperation<T>>,
+
+    pub op_quarantine_from_unknown_individuals: ArrayDeque<StaticOperation<T>, CAP, Wrapping>,
+
     /// Cryptographically secure (pseudo)random number generator.
     pub csprng: R,
 }
 
-impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
+impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore, const CAP: usize> Context<T, R, CAP> {
     pub fn id(&self) -> IndividualId {
         self.active.borrow().id()
     }
@@ -70,6 +80,8 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
             individuals: Default::default(),
             groups: GroupStore::new(),
             docs: DocumentStore::new(),
+            op_quarantine: CaMap::new(),
+            op_quarantine_from_unknown_individuals: ArrayDeque::new(),
             csprng,
         })
     }
@@ -119,27 +131,23 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
         to_add: Agent<T>,
         resource: &mut Membered<T>,
         can: Access,
-        after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
-    ) -> Result<(), DelegationError> {
-        let proof = resource
-            .get_capability(&self.active.borrow().agent_id())
-            .ok_or(DelegationError::Escalation)?;
+    ) -> Result<(), AddMemberError> {
+        let membered_docs: Vec<Rc<RefCell<Document<T>>>> = self
+            .docs_reachable_by_agent(resource.dupe().into())
+            .values()
+            .map(|(doc, _)| (*doc).dupe())
+            .collect();
 
-        if can > proof.payload().can {
-            return Err(DelegationError::Escalation);
-        }
+        let res = resource.dupe();
+        let after_revocations = res.get_agent_revocations(&to_add);
 
-        let after_revocations = resource.get_agent_revocations(&to_add);
-
-        let dlg = self.try_sign(Delegation {
-            delegate: to_add,
-            proof: Some(proof),
+        resource.add_member(
+            to_add,
             can,
-            after_revocations,
-            after_content,
-        })?;
-
-        Ok(resource.add_member(dlg))
+            &self.active.borrow().signer,
+            after_revocations.as_slice(),
+            membered_docs.as_slice(),
+        )
     }
 
     pub fn revoke_member(
@@ -275,16 +283,91 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
 
         None
     }
+
+    pub fn receive_operation(&mut self, op: StaticOperation<T>) -> Result<(), ()> {
+        op.try_verify().expect("FIXME");
+
+        if !self.individuals.contains_key(&op.verifying_key().into()) {
+            // Don't talk to strangers
+            // FIXME Maybe keep a LRU of yet-to-be-authorized keys?
+            return Err(());
+        }
+
+        match op {
+            StaticOperation::Delegation(signed_static_dlg) => {
+                let sdlg = signed_static_dlg.payload();
+                // FIXME move to Agent? Or another method on Context?
+                let delegate: Agent<T> = self
+                    .individuals
+                    .get(&IndividualId(sdlg.delegate))
+                    .map(|i_rc| (*i_rc).into())
+                    .or_else(|| {
+                        self.groups
+                            .get(&GroupId(sdlg.delegate))
+                            .map(|group_rc| Agent::<T>::from(group_rc))
+                    })
+                    .or_else(|| {
+                        self.docs
+                            .get(&DocumentId(sdlg.delegate))
+                            .map(|doc_rc| Agent::<T>::from(doc_rc))
+                    })
+                    .unwrap_or_else(|| {
+                        let id = IndividualId(sdlg.delegate);
+                        let indie = Rc::new(RefCell::new(Individual::new(id)));
+                        self.individuals.insert(id, indie.dupe());
+                        Agent::<T>::from(indie)
+                    });
+
+                match sdlg.proof {
+                    None => {
+                        let subject_id = op.verifying_key().into();
+                        if let Some(group_rc) = self.groups.get(&GroupId(subject_id)) {
+                            let dlg = Delegation {
+                                can: sdlg.can,
+                                proof: None,
+                                delegate,
+                                after_revocations: vec![],      // FIXME
+                                after_content: BTreeMap::new(), // FIXME
+                            };
+                            // FIXME
+                            group_rc.borrow_mut().add_delegation(sdlg);
+                        } else {
+                            if let Some(doc_rc) = self.docs.get(&DocumentId(subject_id)) {
+                                //
+                            } else {
+                                // FIXME initiate doc or group!
+                            }
+                        }
+                    }
+                    Some(proof) => {
+                        // see if any doc or group has the proof and hand off to them to complete
+                    }
+                }
+            }
+            StaticOperation::Revocation(signed_static_rev) => {
+                let static_rev = signed_static_rev.payload();
+                // search for static_rev.revoke
+            }
+        }
+
+        // FIXME check that the user is even allowed to apply this change before storing? let signer = op.verifying_key();
+
+        Ok(())
+    }
 }
 
-impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Verifiable for Context<T, R> {
+impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore, const CAP: usize> Verifiable
+    for Context<T, R, CAP>
+{
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.active.borrow().verifying_key()
     }
 }
 
-impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> From<&Context<T, R>> for Agent<T> {
-    fn from(context: &Context<T, R>) -> Self {
+impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore, const CAP: usize> From<&Context<T, R, CAP>>
+    for Agent<T>
+{
+    fn from(context: &Context<T, R, CAP>) -> Self {
         context.active.dupe().into()
     }
 }

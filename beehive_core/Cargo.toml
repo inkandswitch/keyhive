@@ -29,6 +29,7 @@ x25519-dalek = { workspace = true }
 thiserror = { workspace = true }
 
 # Utilities
+arraydeque = "0.5.1"
 dupe = { workspace = true }
 topological-sort =  "0.2"
 nonempty = "0.10.0"
