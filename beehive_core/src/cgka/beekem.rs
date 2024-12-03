@@ -3,6 +3,7 @@ use super::{
 };
 use crate::{
     crypto::{
+        application_secret::PcsKey,
         encrypted::NestedEncrypted,
         share_key::{ShareKey, ShareSecretKey},
     },
@@ -18,7 +19,7 @@ pub type InnerNode = SecretStore;
 /// A PathChange represents an update along a path from a leaf to the root.
 /// This includes both the new public keys for each node and the keys that have
 /// been removed as part of this change.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PathChange {
     pub leaf_id: IndividualId,
     pub leaf_idx: u32,
@@ -87,26 +88,21 @@ impl BeeKem {
     /// Beehive as a whole).
     pub(crate) fn new(
         doc_id: DocumentId,
-        members: NonEmpty<(IndividualId, ShareKey)>,
+        initial_member_id: IndividualId,
+        initial_member_pk: ShareKey,
     ) -> Result<Self, CgkaError> {
         let mut tree = Self {
             doc_id,
             next_leaf_idx: LeafNodeIndex::new(0),
             leaves: Vec::new(),
             inner_nodes: Vec::new(),
-            tree_size: TreeSize::from_leaf_count(members.len() as u32),
+            tree_size: TreeSize::from_leaf_count(1),
             id_to_leaf_idx: BTreeMap::new(),
             current_secret_encrypter_leaf_idx: None,
         };
         tree.grow_tree_to_size();
-        for (id, pk) in members {
-            tree.push_leaf(id, pk)?;
-        }
+        tree.push_leaf(initial_member_id, initial_member_pk)?;
         Ok(tree)
-    }
-
-    pub(crate) fn contains_id(&self, id: IndividualId) -> bool {
-        self.id_to_leaf_idx.contains_key(&id)
     }
 
     pub(crate) fn node_key_for_id(&self, id: IndividualId) -> Result<NodeKey, CgkaError> {
@@ -146,6 +142,7 @@ impl BeeKem {
         Ok(())
     }
 
+    // TODO: If id already exists, add ShareKey to node key for that id's leaf
     pub(crate) fn push_leaf(&mut self, id: IndividualId, pk: ShareKey) -> Result<u32, CgkaError> {
         self.maybe_grow_tree(self.next_leaf_idx.u32());
         let l_idx = self.next_leaf_idx;
@@ -171,13 +168,11 @@ impl BeeKem {
         self.blank_leaf_and_path(*l_idx)?;
         self.id_to_leaf_idx.remove(&id);
         self.current_secret_encrypter_leaf_idx = None;
-        // TODO: Once we move past the naive "blank the tree and sort leaves"
-        // approach to tree structure changes, we can consider optimizations like this.
-        // // "Collect" any contiguous tombstones at the end of the leaves Vec
-        // while self.leaf(self.next_leaf_idx - 1)?.is_none() {
-        //     self.blank_path(treemath::parent((self.next_leaf_idx - 1).into()))?;
-        //     self.next_leaf_idx -= 1;
-        // }
+        // Collect any contiguous "tombstones" at the end of the leaves Vec
+        while self.leaf(self.next_leaf_idx - 1)?.is_none() {
+            self.blank_path(treemath::parent((self.next_leaf_idx - 1).into()))?;
+            self.next_leaf_idx -= 1;
+        }
         Ok(removed_keys)
     }
 
@@ -275,7 +270,7 @@ impl BeeKem {
         pk: ShareKey,
         sks: &mut ShareKeyMap,
         csprng: &mut R,
-    ) -> Result<Option<PathChange>, CgkaError> {
+    ) -> Result<Option<(PcsKey, PathChange)>, CgkaError> {
         if !self.id_to_leaf_idx.contains_key(&id) {
             return Ok(None);
         }
@@ -298,6 +293,7 @@ impl BeeKem {
         // key for each ancestor up to the root.
         let mut child_pk = pk;
         let mut child_sk = *sks.get(&pk).ok_or(CgkaError::SecretKeyNotFound)?;
+        let leaf_sk = child_sk;
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
             if let Some(store) = self.inner_node(parent_idx)? {
@@ -328,12 +324,16 @@ impl BeeKem {
             parent_idx = treemath::parent(child_idx);
         }
         self.current_secret_encrypter_leaf_idx = Some(leaf_idx);
-        Ok(Some(new_path))
+        let pcs_key = (leaf_sk.ratchet_n_forward(self.path_length_for(leaf_idx))).into();
+        Ok(Some((pcs_key, new_path)))
     }
 
     /// Applies a PathChange representing new public and encrypted secret keys for each
     /// node on a path.
     pub(crate) fn apply_path(&mut self, new_path: &PathChange) -> Result<(), CgkaError> {
+        if !self.id_to_leaf_idx.contains_key(&new_path.leaf_id) {
+            return Ok(());
+        }
         let leaf_idx = *self.leaf_index_for_id(new_path.leaf_id)?;
         if !self.is_valid_change(new_path)? {
             // A structural change has occurred so we can't apply the whole path.

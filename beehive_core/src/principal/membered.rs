@@ -55,12 +55,18 @@ impl<T: ContentRef> Membered<T> {
         }
     }
 
-    pub fn add_member(&mut self, delegation: Signed<Delegation<T>>) {
+    pub fn add_member<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        delegation: Signed<Delegation<T>>,
+        csprng: &mut R,
+    ) {
         match self {
             Membered::Group(group) => {
                 group.borrow_mut().add_delegation(delegation);
             }
-            Membered::Document(document) => document.borrow_mut().add_member(delegation),
+            Membered::Document(document) => {
+                document.borrow_mut().add_member(delegation, csprng);
+            }
         }
     }
 

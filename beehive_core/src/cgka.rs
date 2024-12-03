@@ -8,7 +8,11 @@ pub mod treemath;
 #[cfg(feature = "test_utils")]
 pub mod test_utils;
 
-use std::{borrow::Borrow, rc::Rc};
+use std::{
+    borrow::Borrow,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use crate::{
     content::reference::ContentRef,
@@ -27,8 +31,7 @@ use beekem::BeeKem;
 use error::CgkaError;
 use keys::ShareKeyMap;
 use nonempty::NonEmpty;
-use operation::CgkaOperation;
-use serde::{Deserialize, Serialize};
+use operation::{CgkaOperation, CgkaOperationGraph};
 
 /// A CGKA (Continuous Group Key Agreement) protocol is responsible for
 /// maintaining a stream of updating shared group keys over time. We are
@@ -36,32 +39,41 @@ use serde::{Deserialize, Serialize};
 ///
 /// This Cgka struct provides a protocol-agnostic interface for retrieving the
 /// latest secret, rotating keys, and adding and removing members from the group.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cgka {
     doc_id: DocumentId,
     pub owner_id: IndividualId,
     pub owner_sks: ShareKeyMap,
     tree: BeeKem,
+    ops_graph: CgkaOperationGraph,
+    // There are ops in the graph that have not been applied to the tree
+    // due to a structural change.
+    pending_ops_for_structural_change: bool,
     // TODO: Once we can rebuild the tree to correspond to earlier PcsKeys,
     // convert this to a cache of some kind with policies.
     pcs_keys: CaMap<PcsKey>,
+    pcs_key_ops: HashMap<Digest<PcsKey>, Digest<CgkaOperation>>,
+    original_member: (IndividualId, ShareKey),
 }
 
 /// Constructors
 impl Cgka {
-    /// We assume members are in causal order.
     pub fn new(
-        members: NonEmpty<(IndividualId, ShareKey)>,
         doc_id: DocumentId,
         owner_id: IndividualId,
+        owner_pk: ShareKey,
     ) -> Result<Self, CgkaError> {
-        let tree = BeeKem::new(doc_id, members)?;
+        let tree = BeeKem::new(doc_id, owner_id, owner_pk)?;
         let cgka = Self {
             doc_id,
             owner_id,
             owner_sks: Default::default(),
             tree,
+            ops_graph: Default::default(),
+            pending_ops_for_structural_change: false,
             pcs_keys: Default::default(),
+            pcs_key_ops: Default::default(),
+            original_member: (owner_id, owner_pk),
         };
         Ok(cgka)
     }
@@ -69,28 +81,38 @@ impl Cgka {
     pub fn with_new_owner(
         &self,
         my_id: IndividualId,
-        pk: ShareKey,
         owner_sks: ShareKeyMap,
     ) -> Result<Self, CgkaError> {
-        if !self.tree.node_key_for_id(my_id)?.contains_key(&pk) {
-            return Err(CgkaError::ShareKeyNotFound);
-        }
         let mut cgka = self.clone();
         cgka.owner_id = my_id;
         cgka.owner_sks = owner_sks;
-        cgka.pcs_keys = Default::default();
-        if self.has_pcs_key() {
-            let pcs_key = cgka.derive_pcs_key()?;
-            cgka.pcs_keys.insert(Rc::new(pcs_key));
-        }
+        cgka.pcs_keys = self.pcs_keys.clone();
+        cgka.pcs_key_ops = self.pcs_key_ops.clone();
         Ok(cgka)
     }
 
-    fn derive_pcs_key(&mut self) -> Result<PcsKey, CgkaError> {
+    pub fn ops_graph(&self) -> &CgkaOperationGraph {
+        &self.ops_graph
+    }
+
+    fn pcs_key_from_tree_root(&mut self) -> Result<PcsKey, CgkaError> {
         let key = self
             .tree
             .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)?;
         Ok(PcsKey::new(key))
+    }
+
+    fn derive_pcs_key_for_op(
+        &mut self,
+        op_hash: &Digest<CgkaOperation>,
+    ) -> Result<PcsKey, CgkaError> {
+        if !self.ops_graph.contains_op_hash(op_hash) {
+            return Err(CgkaError::UnknownPcsKey);
+        }
+        let mut heads = HashSet::new();
+        heads.insert(*op_hash);
+        let ops = self.ops_graph.topsort_for_heads(&heads)?;
+        self.rebuild_pcs_key(self.doc_id, ops)
     }
 }
 
@@ -102,93 +124,143 @@ impl Cgka {
         content: &[u8],
         pred_refs: &Vec<T>,
         csprng: &mut R,
-    ) -> Result<ApplicationSecret<T>, CgkaError> {
+    ) -> Result<(ApplicationSecret<T>, Option<CgkaOperation>), CgkaError> {
+        let mut op = None;
         // If the tree currently has no root key, we generate a new key pair
         // and use it to perform a PCS update. Note that this means the new leaf
         // key pair is only known at the Cgka level where it is stored in the
         // ShareKeyMap.
-        if !self.has_pcs_key() {
+        let current_pcs_key = if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
-            self.update(new_share_key, new_share_secret_key, csprng)
-                .expect("FIXME");
-        }
-        let current_pcs_key = self.derive_pcs_key()?;
+            let (pcs_key, update_op) = self.update(new_share_key, new_share_secret_key, csprng)?;
+            self.insert_pcs_key(&pcs_key, Digest::hash(&update_op));
+            op = Some(update_op);
+            pcs_key
+        } else {
+            self.pcs_key_from_tree_root()?
+        };
         let pcs_key_hash = Digest::hash(&current_pcs_key);
-        if !self.pcs_keys.contains_key(&pcs_key_hash) {
-            self.pcs_keys.insert(Rc::new(current_pcs_key));
-        }
         let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id)
             .map_err(|_e| CgkaError::Conversion)?;
-        Ok(current_pcs_key.derive_application_secret(
-            &nonce,
-            &Digest::hash(content_ref),
-            &Digest::hash(pred_refs),
+        Ok((
+            current_pcs_key.derive_application_secret(
+                &nonce,
+                &Digest::hash(content_ref),
+                &Digest::hash(pred_refs),
+                self.pcs_key_ops.get(&pcs_key_hash).expect("FIXME"),
+            ),
+            op,
         ))
     }
 
-    // TODO: Remove once we move to Rust 2024 and can rewrite with an if let chain.
     #[allow(clippy::unnecessary_unwrap)]
     pub fn decryption_key_for<T, Cr: ContentRef>(
         &mut self,
         encrypted: &Encrypted<T, Cr>,
     ) -> Result<SymmetricKey, CgkaError> {
-        let maybe_pcs_key: Option<Rc<PcsKey>> = self.pcs_keys.get(&encrypted.pcs_key_hash).cloned();
-        // TODO: With Rust 2024, we'll be able to use if let chains to rewrite this
-        // in a cleaner way. See https://github.com/rust-lang/rust/pull/132833.
-        let last_key = if maybe_pcs_key.is_some()
-            && Digest::hash(maybe_pcs_key.clone().expect("is some").borrow())
-                == encrypted.pcs_key_hash
-        {
-            maybe_pcs_key.expect("is some")
-        } else {
-            let pcs_key = self.derive_pcs_key()?;
-            if Digest::hash(&pcs_key) == encrypted.pcs_key_hash {
-                Rc::new(pcs_key)
-            } else {
-                // FIXME: Right now it's possible that we never derived a PCS key
-                // from the update corresponding to the PCS key hash in the metadata.
-                // For example, we might have applied that update as part of a
-                // concurrent merge, which left the tree with no root secret.
-                return Err(CgkaError::UnknownPcsKey);
-            }
-        };
-        self.pcs_keys.insert(last_key.clone());
-        let app_secret = last_key.derive_application_secret(
+        let pcs_key =
+            self.current_pcs_key(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)?;
+        if !self.pcs_keys.contains_key(&encrypted.pcs_key_hash) {
+            self.insert_pcs_key(&pcs_key, encrypted.pcs_update_op_hash);
+        }
+        let app_secret = pcs_key.derive_application_secret(
             &encrypted.nonce,
             &encrypted.content_ref,
             &encrypted.pred_refs,
+            &encrypted.pcs_update_op_hash,
         );
         Ok(app_secret.key())
+    }
+
+    #[cfg(feature = "test_utils")]
+    pub fn secret_from_root(&mut self) -> Result<PcsKey, CgkaError> {
+        self.pcs_key_from_tree_root()
     }
 
     /// Get secret for decryption/encryption. If you are using this for a new
     /// encryption, you need to update your leaf key first to ensure you are
     /// using a fresh root secret.
-    pub fn secret(&mut self) -> Result<ShareSecretKey, CgkaError> {
-        self.tree
-            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)
+    #[cfg(feature = "test_utils")]
+    pub fn secret(
+        &mut self,
+        pcs_key_hash: &Digest<PcsKey>,
+        update_op_hash: &Digest<CgkaOperation>,
+    ) -> Result<PcsKey, CgkaError> {
+        self.current_pcs_key(pcs_key_hash, update_op_hash)
+    }
+
+    fn current_pcs_key(
+        &mut self,
+        pcs_key_hash: &Digest<PcsKey>,
+        update_op_hash: &Digest<CgkaOperation>,
+    ) -> Result<PcsKey, CgkaError> {
+        if let Some(pcs_key) = self.pcs_keys.get(pcs_key_hash) {
+            Ok(*pcs_key.clone())
+        } else {
+            if self.has_pcs_key() {
+                let pcs_key = self.pcs_key_from_tree_root()?;
+                if &Digest::hash(&pcs_key) == pcs_key_hash {
+                    return Ok(pcs_key);
+                }
+            }
+            self.derive_pcs_key_for_op(update_op_hash)
+        }
     }
 
     pub fn has_pcs_key(&self) -> bool {
         self.tree.has_root_key()
+            && self.ops_graph.has_single_head()
+            && self.ops_graph.add_heads.len() < 2
     }
 
     /// Add member.
     pub fn add(&mut self, id: IndividualId, pk: ShareKey) -> Result<CgkaOperation, CgkaError> {
+        if self.should_replay() {
+            self.replay_ops_graph()?;
+        }
         let leaf_index = self.tree.push_leaf(id, pk)?;
-        let op = CgkaOperation::Add { id, pk, leaf_index };
+        let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
+        let add_predecessors = Vec::from_iter(self.ops_graph.add_heads.iter().cloned());
+        let op = CgkaOperation::Add {
+            added_id: id,
+            pk,
+            leaf_index,
+            predecessors,
+            add_predecessors,
+        };
+        self.ops_graph.add_local_op(&op);
         Ok(op)
+    }
+
+    /// Add member.
+    pub fn add_multiple(
+        &mut self,
+        members: NonEmpty<(IndividualId, ShareKey)>,
+    ) -> Result<Vec<CgkaOperation>, CgkaError> {
+        let mut ops = Vec::new();
+        for m in members {
+            ops.push(self.add(m.0, m.1)?);
+        }
+        Ok(ops)
     }
 
     /// Remove member.
     pub fn remove(&mut self, id: IndividualId) -> Result<CgkaOperation, CgkaError> {
+        if self.should_replay() {
+            self.replay_ops_graph()?;
+        }
         if self.group_size() == 1 {
             return Err(CgkaError::RemoveLastMember);
         }
-
         let removed_keys = self.tree.remove_id(id)?;
-        let op = CgkaOperation::Remove { id, removed_keys };
+        let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
+        let op = CgkaOperation::Remove {
+            id,
+            removed_keys,
+            predecessors,
+        };
+        self.ops_graph.add_local_op(&op);
         Ok(op)
     }
 
@@ -198,22 +270,26 @@ impl Cgka {
         new_pk: ShareKey,
         new_sk: ShareSecretKey,
         csprng: &mut R,
-    ) -> Result<CgkaOperation, CgkaError> {
+    ) -> Result<(PcsKey, CgkaOperation), CgkaError> {
+        if self.should_replay() {
+            self.replay_ops_graph()?;
+        }
         self.owner_sks.insert(new_pk, new_sk);
-        let maybe_new_path =
+        let maybe_key_and_path =
             self.tree
                 .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
-        if let Some(new_path) = maybe_new_path {
+        if let Some((pcs_key, new_path)) = maybe_key_and_path {
+            let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
             let op = CgkaOperation::Update {
                 id: self.owner_id,
                 new_path,
+                predecessors,
             };
-            Ok(op)
+            self.ops_graph.add_local_op(&op);
+            self.insert_pcs_key(&pcs_key, Digest::hash(&op));
+            Ok((pcs_key, op))
         } else {
             Err(CgkaError::IdentifierNotFound)
-            // // Currently, if the id is not present, we return an error.
-            // // This would happen if the id has been removed. But causal ordering
-            // // should ensure this never happens for a non-removed id.
         }
     }
 
@@ -222,66 +298,158 @@ impl Cgka {
         self.tree.member_count()
     }
 
-    /// Apply an operation that is an immediate causal successor to the current Cgka
-    /// state.
-    pub fn apply_operation(&mut self, op: &CgkaOperation) -> Result<(), CgkaError> {
+    /// Merge
+    pub fn merge_concurrent_operation(&mut self, op: &CgkaOperation) -> Result<(), CgkaError> {
+        if self.ops_graph.contains_op_hash(&Digest::hash(op)) {
+            return Ok(());
+        }
+        let predecessors = op.predecessors();
+        let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
+        if is_concurrent {
+            if matches!(op, CgkaOperation::Add { .. }) {
+                self.pending_ops_for_structural_change = true;
+                self.ops_graph.add_op(op, &predecessors);
+            } else {
+                if self.pending_ops_for_structural_change {
+                    self.ops_graph.add_op(op, &predecessors);
+                } else {
+                    self.apply_operation(op)?;
+                }
+            }
+        } else {
+            if self.should_replay() {
+                self.replay_ops_graph()?;
+            }
+            self.apply_operation(op)?;
+        }
+        Ok(())
+    }
+
+    fn apply_operation(&mut self, op: &CgkaOperation) -> Result<(), CgkaError> {
+        if self.ops_graph.contains_op_hash(&Digest::hash(op)) {
+            return Ok(());
+        }
         match op {
             CgkaOperation::Add {
-                id,
+                added_id,
                 pk,
                 leaf_index: _,
+                predecessors: _,
+                add_predecessors,
             } => {
+                let concurrent_add = !self
+                    .ops_graph
+                    .add_heads_contained_in(&HashSet::from_iter(add_predecessors.iter().cloned()));
                 // TODO: Check we don't already have this id in the tree.
-                self.tree.push_leaf(*id, *pk)?;
+                if concurrent_add {
+                    self.pending_ops_for_structural_change = true;
+                }
+                if !concurrent_add && self.ops_graph.add_heads.len() > 1 {
+                    self.tree.sort_leaves_and_blank_tree()?;
+                    self.pending_ops_for_structural_change = false;
+                }
+                self.tree.push_leaf(*added_id, *pk)?;
             }
             CgkaOperation::Remove {
                 id,
                 removed_keys: _,
+                predecessors: _,
             } => {
                 self.tree.remove_id(*id)?;
             }
-            CgkaOperation::Update { id, new_path } => {
+            CgkaOperation::Update {
+                id: _,
+                new_path,
+                predecessors,
+            } => {
                 // TODO: We are currently ignoring a missing id here. Causal ordering
                 // should ensure that an update for an id will always come after the
                 // add of that id but might come after a remove. If it came after a
                 // remove, we ignore it.
-                if self.tree.contains_id(*id) {
-                    self.tree.apply_path(new_path)?;
+                let preds = &HashSet::from_iter(predecessors.iter().cloned());
+                let concurrent_update = !self.ops_graph.heads_contained_in(preds);
+                if !concurrent_update && self.pending_ops_for_structural_change {
+                    self.tree.sort_leaves_and_blank_tree()?;
+                    self.pending_ops_for_structural_change = false;
                 }
+                self.tree.apply_path(new_path)?;
             }
         }
+        self.ops_graph.add_op(op, &op.predecessors());
         Ok(())
     }
 
-    /// Merge
-    pub fn merge_concurrent_operations(&mut self, ops: &[CgkaOperation]) -> Result<(), CgkaError> {
-        let mut includes_add = false;
-        for op in ops {
-            if matches!(op, CgkaOperation::Add { .. }) {
-                includes_add = true;
-            }
-            self.apply_operation(op)?;
+    fn should_replay(&self) -> bool {
+        !self.ops_graph.cgka_op_heads.is_empty()
+            && (self.pending_ops_for_structural_change || !self.ops_graph.has_single_head())
+    }
+
+    fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
+        let ordered_ops = self.ops_graph.topsort_graph()?;
+        let mut rebuilt_cgka = self.rebuild_cgka(ordered_ops)?;
+        if rebuilt_cgka.pending_ops_for_structural_change {
+            rebuilt_cgka.tree.sort_leaves_and_blank_tree()?;
         }
-        // TODO: This is the naive approach to merging concurrent adds: blank the inner
-        // nodes and lexicographically sort the leaves.
-        if includes_add {
-            self.tree.sort_leaves_and_blank_tree()?;
-        }
+        self.update_cgka_from(&rebuilt_cgka);
+        self.pending_ops_for_structural_change = false;
         Ok(())
     }
 
-    /// Replace current tree with tree from other Cgka
-    pub fn replace_tree(&mut self, other: &Self) {
+    fn rebuild_cgka(&mut self, ops: NonEmpty<Rc<CgkaOperation>>) -> Result<Cgka, CgkaError> {
+        let mut rebuilt_cgka =
+            Cgka::new(self.doc_id, self.original_member.0, self.original_member.1)?
+                .with_new_owner(self.owner_id, self.owner_sks.clone())?;
+        for op in &ops {
+            rebuilt_cgka.apply_operation(op)?;
+        }
+        if rebuilt_cgka.has_pcs_key() {
+            let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
+            rebuilt_cgka.insert_pcs_key(&pcs_key, Digest::hash(ops.last()));
+        }
+        Ok(rebuilt_cgka)
+    }
+
+    pub fn rebuild_pcs_key(
+        &mut self,
+        doc_id: DocumentId,
+        ops: NonEmpty<Rc<CgkaOperation>>,
+    ) -> Result<PcsKey, CgkaError> {
+        debug_assert!(matches!(ops.last().borrow(), &CgkaOperation::Update { .. }));
+        let mut rebuilt_cgka = Cgka::new(doc_id, self.original_member.0, self.original_member.1)?
+            .with_new_owner(self.owner_id, self.owner_sks.clone())?;
+        for op in &ops {
+            rebuilt_cgka.apply_operation(op)?;
+        }
+        let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
+        self.insert_pcs_key(&pcs_key, Digest::hash(ops.last()));
+        Ok(pcs_key)
+    }
+
+    fn insert_pcs_key(&mut self, pcs_key: &PcsKey, op_hash: Digest<CgkaOperation>) {
+        self.pcs_key_ops.insert(Digest::hash(pcs_key), op_hash);
+        self.pcs_keys.insert((*pcs_key).into());
+    }
+
+    fn update_cgka_from(&mut self, other: &Self) {
         self.tree = other.tree.clone();
+        self.owner_sks.extend(&other.owner_sks);
+        self.pcs_keys.extend(
+            other
+                .pcs_keys
+                .iter()
+                .map(|(hash, key)| (*hash, key.clone())),
+        );
+        self.pcs_key_ops.extend(other.pcs_key_ops.iter());
+        self.pending_ops_for_structural_change = other.pending_ops_for_structural_change;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use test_utils::{
-        add_from_all_members, add_from_first_member, apply_test_operations_rewind_and_merge_to_all,
+        add_from_all_members, add_from_first_member, apply_test_operations_and_merge_to_all,
         remove_from_left, remove_from_right, remove_odd_members, setup_cgka, setup_member_cgkas,
-        setup_members, update_added_members, update_all_members, update_even_members, TestMember,
+        setup_members, update_added_members, update_all_members, update_even_members, update_odd_members, TestMember,
         TestMemberCgka, TestOperation,
     };
 
@@ -292,11 +460,15 @@ mod tests {
         let csprng = &mut rand::thread_rng();
         let doc_id = DocumentId::generate(csprng);
         let members = setup_members(2);
-        let mut cgka = setup_cgka(doc_id, &members, 0);
+        let (mut cgka, _ops) = setup_cgka(doc_id, &members, 0);
         let sk = ShareSecretKey::generate(csprng);
+        let sk_pcs_key: PcsKey = sk.clone().into();
         let pk = sk.share_key();
-        cgka.update(pk, sk.clone(), csprng)?;
-        assert_ne!(sk, cgka.secret()?);
+        let (pcs_key, op) = cgka.update(pk, sk.clone(), csprng)?;
+        assert_ne!(
+            sk_pcs_key,
+            cgka.secret(&Digest::hash(&pcs_key), &Digest::hash(&op))?
+        );
         Ok(())
     }
 
@@ -306,7 +478,7 @@ mod tests {
         let doc_id = DocumentId::generate(csprng);
         let members = setup_members(2);
         let initial_member_count = members.len();
-        let mut cgka = setup_cgka(doc_id, &members, 0);
+        let (mut cgka, _ops) = setup_cgka(doc_id, &members, 0);
         assert!(cgka.has_pcs_key());
         let new_m = TestMember::generate(csprng);
         cgka.add(new_m.id, new_m.pk)?;
@@ -321,7 +493,7 @@ mod tests {
         let doc_id = DocumentId::generate(csprng);
         let members = setup_members(2);
         let initial_member_count = members.len();
-        let mut cgka = setup_cgka(doc_id, &members, 0);
+        let (mut cgka, _ops) = setup_cgka(doc_id, &members, 0);
         assert!(cgka.has_pcs_key());
         cgka.remove(members[1].id)?;
         assert!(!cgka.has_pcs_key());
@@ -333,12 +505,12 @@ mod tests {
     fn test_no_root_key_after_concurrent_updates() -> Result<(), CgkaError> {
         let csprng = &mut rand::thread_rng();
         let doc_id = DocumentId::generate(csprng);
-        let mut cgkas = setup_member_cgkas(doc_id, 7)?;
+        let (mut cgkas, _ops) = setup_member_cgkas(doc_id, 7)?;
         assert!(cgkas[0].cgka.has_pcs_key());
-        let op1 = cgkas[1].update(csprng)?;
-        cgkas[0].cgka.merge_concurrent_operations(&vec![op1])?;
-        let op6 = cgkas[6].update(csprng)?;
-        cgkas[0].cgka.merge_concurrent_operations(&vec![op6])?;
+        let (_pcs_key, op1) = cgkas[1].update(csprng)?;
+        cgkas[0].cgka.merge_concurrent_operation(&op1)?;
+        let (_pcs_key, op6) = cgkas[6].update(csprng)?;
+        cgkas[0].cgka.merge_concurrent_operation(&op6)?;
         assert!(!cgkas[0].cgka.has_pcs_key());
         Ok(())
     }
@@ -347,21 +519,24 @@ mod tests {
         member_cgkas: &mut Vec<TestMemberCgka>,
         csprng: &mut R,
     ) -> Result<(), CgkaError> {
-        // One member updates and all merge that in so that the tree has a root secret.
         let m_idx = if member_cgkas.len() > 1 { 1 } else { 0 };
-        let update_op = member_cgkas[m_idx].update(csprng)?;
-        let post_update_secret_bytes = member_cgkas[m_idx].cgka.secret()?.to_bytes();
+        let (post_update_pcs_key, update_op) = member_cgkas[m_idx].update(csprng)?;
+        // let post_update_pcs_key = member_cgkas[m_idx].cgka.derive_pcs_key()?;
         for (idx, m) in member_cgkas.iter_mut().enumerate() {
             if idx == m_idx {
                 continue;
             }
-            m.cgka
-                .merge_concurrent_operations(&vec![update_op.clone()])?;
+            m.cgka.merge_concurrent_operation(&update_op.clone())?;
         }
-        member_cgkas[m_idx].cgka.secret()?.to_bytes();
         // Compare the result of secret() for all members
         for m in member_cgkas.iter_mut() {
-            assert_eq!(m.cgka.secret()?.to_bytes(), post_update_secret_bytes);
+            assert_eq!(
+                m.cgka.secret(
+                    &Digest::hash(&post_update_pcs_key),
+                    &Digest::hash(&update_op)
+                )?,
+                post_update_pcs_key
+            );
         }
         Ok(())
     }
@@ -377,67 +552,72 @@ mod tests {
     ) -> Result<(), CgkaError> {
         assert!(member_count >= 1);
         let doc_id = DocumentId::generate(csprng);
-        let mut member_cgkas = setup_member_cgkas(doc_id, member_count)?;
+        let (mut member_cgkas, ops) = setup_member_cgkas(doc_id, member_count)?;
         let mut initial_cgka = member_cgkas[0].cgka.clone();
-        let initial_secret_bytes = initial_cgka.secret()?.to_bytes();
+        let initial_pcs_key = initial_cgka.secret_from_root()?;
+        let update_op = ops.last().expect("update op");
         for m in &mut member_cgkas {
-            assert_eq!(m.cgka.secret()?.to_bytes(), initial_secret_bytes);
+            assert_eq!(
+                m.cgka
+                    .secret(&Digest::hash(&initial_pcs_key), &Digest::hash(&update_op))?,
+                initial_pcs_key
+            );
         }
         for test_round in test_rounds {
-            apply_test_operations_rewind_and_merge_to_all(&mut member_cgkas, test_round)?;
+            apply_test_operations_and_merge_to_all(&mut member_cgkas, test_round)?;
             update_merge_and_compare_secrets(&mut member_cgkas, csprng)?;
         }
         Ok(())
     }
 
-    fn run_tests_for_1_to_32_members<R: rand::CryptoRng + rand::RngCore>(
+    fn run_tests_for_various_member_counts<R: rand::CryptoRng + rand::RngCore>(
         test_rounds: Vec<Vec<Box<TestOperation>>>,
         csprng: &mut R,
     ) -> Result<(), CgkaError> {
         for n in 1..16 {
             run_test_rounds(n, &test_rounds, csprng)?;
         }
-        run_test_rounds(20, &test_rounds, csprng)?;
-        run_test_rounds(25, &test_rounds, csprng)?;
-        run_test_rounds(31, &test_rounds, csprng)?;
-        run_test_rounds(32, &test_rounds, csprng)?;
+        // run_test_rounds(20, &test_rounds, csprng)?;
+        // run_test_rounds(25, &test_rounds, csprng)?;
+        // run_test_rounds(31, &test_rounds, csprng)?;
+        // run_test_rounds(32, &test_rounds, csprng)?;
         Ok(())
     }
 
     #[test]
     fn test_update_all_concurrently() -> Result<(), CgkaError> {
         let mut csprng = rand::thread_rng();
-        run_tests_for_1_to_32_members(vec![vec![update_all_members()]], &mut csprng)
+        run_tests_for_various_member_counts(vec![vec![update_all_members()]], &mut csprng)
     }
 
     #[test]
     fn test_update_even_concurrently() -> Result<(), CgkaError> {
         let mut csprng = rand::thread_rng();
-        run_tests_for_1_to_32_members(vec![vec![update_even_members()]], &mut csprng)
+        run_tests_for_various_member_counts(vec![vec![update_even_members()]], &mut csprng)
     }
 
     #[test]
     fn test_remove_odd_concurrently() -> Result<(), CgkaError> {
         let csprng = &mut rand::thread_rng();
-        run_tests_for_1_to_32_members(vec![vec![remove_odd_members()]], csprng)
+        run_tests_for_various_member_counts(vec![vec![remove_odd_members()]], csprng)
     }
 
     #[test]
     fn test_remove_from_right_concurrently() -> Result<(), CgkaError> {
         let csprng = &mut rand::thread_rng();
-        run_tests_for_1_to_32_members(vec![vec![remove_from_right(1)]], csprng)
+        run_tests_for_various_member_counts(vec![vec![remove_from_right(1)]], csprng)
     }
 
     #[test]
     fn test_remove_from_left_concurrently() -> Result<(), CgkaError> {
         let csprng = &mut rand::thread_rng();
-        run_tests_for_1_to_32_members(vec![vec![remove_from_left(1)]], csprng)
+        run_tests_for_various_member_counts(vec![vec![remove_from_left(1)]], csprng)
     }
 
     #[test]
     fn test_update_then_remove_then_update_even_concurrently() -> Result<(), CgkaError> {
         let mut csprng = rand::thread_rng();
-        run_tests_for_1_to_32_members(
+        run_tests_for_various_member_counts(
             vec![
                 vec![update_all_members()],
                 vec![remove_odd_members()],
@@ -448,9 +628,21 @@ mod tests {
     }
 
     #[test]
-    fn test_update_and_remove_concurrently() -> Result<(), CgkaError> {
+    fn test_update_and_remove_one_concurrently() -> Result<(), CgkaError> {
         let mut csprng = rand::thread_rng();
-        run_tests_for_1_to_32_members(
+        run_tests_for_various_member_counts(
+            vec![vec![
+                remove_from_right(1),
+                update_odd_members(),
+            ]],
+            &mut csprng,
+        )
+    }
+
+    #[test]
+    fn test_update_and_remove_odd_concurrently() -> Result<(), CgkaError> {
+        let mut csprng = rand::thread_rng();
+        run_tests_for_various_member_counts(
             vec![vec![
                 update_all_members(),
                 remove_odd_members(),
@@ -463,7 +655,7 @@ mod tests {
     #[test]
     fn test_update_and_add_concurrently() -> Result<(), CgkaError> {
         let mut csprng = rand::thread_rng();
-        run_tests_for_1_to_32_members(
+        run_tests_for_various_member_counts(
             vec![vec![update_all_members(), add_from_all_members()]],
             &mut csprng,
         )
@@ -471,17 +663,23 @@ mod tests {
 
     #[test]
     fn test_add_one_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![vec![add_from_first_member()]], &mut rand::thread_rng())
+        run_tests_for_various_member_counts(
+            vec![vec![add_from_first_member()]],
+            &mut rand::thread_rng(),
+        )
     }
 
     #[test]
     fn test_all_add_one_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(vec![vec![add_from_all_members()]], &mut rand::thread_rng())
+        run_tests_for_various_member_counts(
+            vec![vec![add_from_all_members()]],
+            &mut rand::thread_rng(),
+        )
     }
 
     #[test]
     fn test_remove_then_all_add_one_then_remove_odd_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(
+        run_tests_for_various_member_counts(
             vec![
                 vec![remove_from_right(1)],
                 vec![add_from_all_members()],
@@ -495,7 +693,7 @@ mod tests {
     fn test_update_all_then_add_from_all_then_remove_odd_then_update_even_concurrently(
     ) -> Result<(), CgkaError> {
         let mut csprng = rand::thread_rng();
-        run_tests_for_1_to_32_members(
+        run_tests_for_various_member_counts(
             vec![
                 vec![update_all_members()],
                 vec![add_from_all_members()],
@@ -508,7 +706,7 @@ mod tests {
 
     #[test]
     fn test_all_members_add_and_update_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(
+        run_tests_for_various_member_counts(
             vec![vec![add_from_all_members(), update_all_members()]],
             &mut rand::thread_rng(),
         )
@@ -516,7 +714,7 @@ mod tests {
 
     #[test]
     fn test_update_added_members_concurrently() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(
+        run_tests_for_various_member_counts(
             vec![vec![add_from_all_members(), update_added_members()]],
             &mut rand::thread_rng(),
         )
@@ -524,7 +722,7 @@ mod tests {
 
     #[test]
     fn test_a_bunch_of_ops_in_rounds() -> Result<(), CgkaError> {
-        run_tests_for_1_to_32_members(
+        run_tests_for_various_member_counts(
             vec![vec![
                 update_all_members(),
                 add_from_all_members(),

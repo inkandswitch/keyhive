@@ -105,6 +105,14 @@ impl<T: ContentRef> Group<T> {
         self.group_id().into()
     }
 
+    pub fn individual_ids(&self) -> HashSet<IndividualId> {
+        let mut ids = HashSet::new();
+        for delegations in self.members.values() {
+            ids.extend(&delegations[0].payload().delegate.individual_ids())
+        }
+        ids
+    }
+
     pub fn pick_individual_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &self,
         csprng: &mut R,

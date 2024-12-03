@@ -61,7 +61,6 @@ impl Individual {
         AgentId::IndividualId(self.id)
     }
 
-    // FIXME: Temporary measure to retrieve a prekey
     pub fn pick_prekey<R: rand::CryptoRng + rand::RngCore>(&self, csprng: &mut R) -> ShareKey {
         let idx = csprng.gen_range(0..self.prekeys.len());
         *self.prekeys.iter().nth(idx).expect("FIXME")
