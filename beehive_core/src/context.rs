@@ -163,8 +163,14 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<Encrypted<Vec<u8>, T>, EncryptError> {
-        doc.borrow_mut()
-            .try_encrypt_content(content_ref, content, pred_refs, &mut self.csprng)
+        let (encrypted, _maybe_update_op) = doc.borrow_mut().try_encrypt_content(
+            content_ref,
+            content,
+            pred_refs,
+            &mut self.csprng,
+        )?;
+        // FIXME: We need to handle the optional op as well
+        Ok(encrypted)
     }
 
     pub fn try_decrypt_content(

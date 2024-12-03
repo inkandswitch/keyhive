@@ -73,13 +73,10 @@ where
     sks.insert(paired_cgka.m.pk, paired_cgka.m.sk.clone());
     paired_cgka.cgka = first_cgka
         .cgka
-        .with_new_owner(paired_cgka.id(), paired_cgka.m.pk, sks)
+        .with_new_owner(paired_cgka.id(), sks)
         .unwrap();
-    let op = paired_cgka.update(&mut csprng).unwrap();
-    first_cgka
-        .cgka
-        .merge_concurrent_operations(&vec![op])
-        .unwrap();
+    let (_pcs_key, op) = paired_cgka.update(&mut csprng).unwrap();
+    first_cgka.cgka.merge_concurrent_operation(&op).unwrap();
     (first_cgka, paired_cgka)
 }
 
@@ -95,17 +92,14 @@ fn apply_100_updates_and_sibling_decrypt(bencher: Bencher, member_count: u32) {
         .with_inputs(|| {
             let paired_idx = 1;
             setup_group_and_two_primaries(member_count, paired_idx, |x| {
-                setup_updated_and_synced_member_cgkas(doc_id, x)
+                setup_updated_and_synced_member_cgkas(doc_id, x).map(|(ms, _ops)| ms)
             })
         })
         .bench_local_refs(|(first_cgka, sibling_cgka)| {
             for _ in 0..100 {
-                let op = first_cgka.update(&mut csprng).unwrap();
-                sibling_cgka
-                    .cgka
-                    .merge_concurrent_operations(&vec![op])
-                    .unwrap();
-                sibling_cgka.cgka.secret().unwrap();
+                let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
+                sibling_cgka.cgka.merge_concurrent_operation(&op).unwrap();
+                sibling_cgka.cgka.secret_from_root().unwrap();
             }
         });
 }
@@ -122,17 +116,14 @@ fn apply_100_updates_and_distant_member_decrypt(bencher: Bencher, member_count: 
         .with_inputs(|| {
             let paired_idx = member_count as usize - 1;
             setup_group_and_two_primaries(member_count, paired_idx, |x| {
-                setup_updated_and_synced_member_cgkas(doc_id, x)
+                setup_updated_and_synced_member_cgkas(doc_id, x).map(|(ms, _ops)| ms)
             })
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let op = first_cgka.update(&mut csprng).unwrap();
-                distant_cgka
-                    .cgka
-                    .merge_concurrent_operations(&vec![op])
-                    .unwrap();
-                distant_cgka.cgka.secret().unwrap();
+                let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
+                distant_cgka.cgka.merge_concurrent_operation(&op).unwrap();
+                distant_cgka.cgka.secret_from_root().unwrap();
             }
         });
 }
@@ -157,12 +148,9 @@ fn apply_100_updates_and_distant_member_decrypt_with_maximum_conflict_keys(
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let op = first_cgka.update(&mut csprng).unwrap();
-                distant_cgka
-                    .cgka
-                    .merge_concurrent_operations(&vec![op])
-                    .unwrap();
-                distant_cgka.cgka.secret().unwrap();
+                let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
+                distant_cgka.cgka.merge_concurrent_operation(&op).unwrap();
+                distant_cgka.cgka.secret_from_root().unwrap();
             }
         });
 }
@@ -184,12 +172,9 @@ fn apply_100_updates_and_distant_member_decrypt_after_adds(bencher: Bencher, mem
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let op = first_cgka.update(&mut csprng).unwrap();
-                distant_cgka
-                    .cgka
-                    .merge_concurrent_operations(&vec![op])
-                    .unwrap();
-                distant_cgka.cgka.secret().unwrap();
+                let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
+                distant_cgka.cgka.merge_concurrent_operation(&op).unwrap();
+                distant_cgka.cgka.secret_from_root().unwrap();
             }
         });
 }
@@ -209,17 +194,14 @@ fn apply_100_updates_and_distant_member_decrypt_with_blank_nodes(
         .with_inputs(|| {
             let paired_idx = member_count as usize - 1;
             setup_group_and_two_primaries(member_count, paired_idx, |x| {
-                setup_member_cgkas(doc_id, x)
+                setup_member_cgkas(doc_id, x).map(|(ms, _ops)| ms)
             })
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let op = first_cgka.update(&mut csprng).unwrap();
-                distant_cgka
-                    .cgka
-                    .merge_concurrent_operations(&vec![op])
-                    .unwrap();
-                distant_cgka.cgka.secret().unwrap();
+                let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
+                distant_cgka.cgka.merge_concurrent_operation(&op).unwrap();
+                distant_cgka.cgka.secret_from_root().unwrap();
             }
         });
 }

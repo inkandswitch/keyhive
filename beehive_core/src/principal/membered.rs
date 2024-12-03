@@ -60,7 +60,9 @@ impl<T: ContentRef> Membered<T> {
             Membered::Group(group) => {
                 group.borrow_mut().add_delegation(delegation);
             }
-            Membered::Document(document) => document.borrow_mut().add_member(delegation),
+            Membered::Document(document) => {
+                document.borrow_mut().add_member(delegation);
+            }
         }
     }
 
