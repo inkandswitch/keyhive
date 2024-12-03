@@ -50,34 +50,19 @@ pub struct Cgka {
 /// Constructors
 impl Cgka {
     /// We assume members are in causal order.
-    pub fn new<R: rand::CryptoRng + rand::RngCore>(
+    pub fn new(
         members: NonEmpty<(IndividualId, ShareKey)>,
         doc_id: DocumentId,
         owner_id: IndividualId,
-        owner_pk: ShareKey,
-        owner_sk: ShareSecretKey,
-        csprng: &mut R,
     ) -> Result<Self, CgkaError> {
-        if !members
-            .iter()
-            .any(|(id, pk)| *id == owner_id && *pk == owner_pk)
-        {
-            return Err(CgkaError::OwnerIdentifierNotFound);
-        }
         let tree = BeeKem::new(doc_id, members)?;
-        let mut owner_sks = ShareKeyMap::new();
-        owner_sks.insert(owner_pk, owner_sk);
-        let mut cgka = Self {
+        let cgka = Self {
             doc_id,
             owner_id,
-            owner_sks,
+            owner_sks: Default::default(),
             tree,
             pcs_keys: Default::default(),
         };
-        cgka.tree
-            .encrypt_path(owner_id, owner_pk, &mut cgka.owner_sks, csprng)?;
-        let pcs_key = cgka.derive_pcs_key()?;
-        cgka.pcs_keys.insert(Rc::new(pcs_key));
         Ok(cgka)
     }
 

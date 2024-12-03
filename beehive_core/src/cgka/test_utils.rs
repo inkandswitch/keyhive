@@ -159,15 +159,15 @@ pub fn setup_cgka(doc_id: DocumentId, members: &NonEmpty<TestMember>, m_idx: usi
         members.iter().skip(1).map(|p| (p.id, p.pk)).collect(),
     ));
 
-    Cgka::new(
-        member_id_pks,
-        doc_id,
-        owner.id,
-        owner.pk,
-        owner.sk,
-        &mut rand::thread_rng(),
-    )
-    .expect("CGKA construction failed")
+    let mut owner_sks = ShareKeyMap::new();
+    owner_sks.insert(owner.pk, owner.sk);
+    let mut cgka = Cgka::new(member_id_pks, doc_id, owner.id)
+        .expect("CGKA construction failed")
+        .with_new_owner(owner.id, owner.pk, owner_sks)
+        .expect("CGKA construction failed");
+    cgka.update(owner.pk, owner.sk, &mut rand::thread_rng())
+        .expect("CGKA update to succeed");
+    cgka
 }
 
 /// Set up cgkas for all members with the same secret, but only the initial member

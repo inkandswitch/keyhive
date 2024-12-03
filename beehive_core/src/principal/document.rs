@@ -4,7 +4,7 @@ pub mod store;
 use super::{active::Active, individual::id::IndividualId, verifiable::Verifiable};
 use crate::{
     access::Access,
-    cgka::{error::CgkaError, Cgka},
+    cgka::{error::CgkaError, keys::ShareKeyMap, Cgka},
     content::reference::ContentRef,
     crypto::{
         encrypted::Encrypted,
@@ -120,15 +120,12 @@ impl<T: ContentRef> Document<T> {
             .map(|(id, pk)| (*id, *pk))
             .collect();
         let cgka_members = NonEmpty::from((active_member, other_members));
-        let cgka = Cgka::new(
-            cgka_members,
-            doc_id,
-            owner_id,
-            owner_share_key,
-            owner_share_secret_key,
-            csprng,
-        )
-        .expect("FIXME");
+        let mut owner_sks = ShareKeyMap::new();
+        owner_sks.insert(owner_share_key, owner_share_secret_key);
+        let cgka = Cgka::new(cgka_members, doc_id, owner_id)
+            .expect("FIXME")
+            .with_new_owner(owner_id, owner_share_key, owner_sks)
+            .expect("FIXME");
 
         Ok(Document {
             group,
