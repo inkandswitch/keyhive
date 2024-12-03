@@ -13,7 +13,7 @@ use std::{
     collections::{BTreeMap, HashSet},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct SecretStore {
     /// Invariant: Public keys are in lexicographic order.
     /// Every encrypted secret key (and hence version) corresponds to a single public key.
@@ -132,7 +132,7 @@ impl SecretStore {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Hash, Deserialize, Serialize)]
 pub(crate) struct SecretStoreVersion {
     /// Every encrypted secret key (and hence version) corresponds to a single public key.
     pub(crate) pk: ShareKey,

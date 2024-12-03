@@ -176,6 +176,9 @@ impl<T: ContentRef> Operation<T> {
             topological_sort::TopologicalSort::new();
 
         for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
+            if seen.contains(digest) {
+                continue
+            }
             seen.insert(digest);
 
             for (other_digest, other_op) in op_ancestors.iter() {

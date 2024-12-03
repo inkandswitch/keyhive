@@ -4,12 +4,10 @@ pub mod store;
 use super::{active::Active, individual::id::IndividualId, verifiable::Verifiable};
 use crate::{
     access::Access,
-    cgka::{error::CgkaError, keys::ShareKeyMap, Cgka},
+    cgka::{error::CgkaError, keys::ShareKeyMap, operation::{CgkaOperation, CgkaOperationPredecessors}, Cgka},
     content::reference::ContentRef,
     crypto::{
-        encrypted::Encrypted,
-        share_key::{ShareKey, ShareSecretKey},
-        signed::{Signed, SigningError},
+        digest::Digest, encrypted::Encrypted, share_key::{ShareKey, ShareSecretKey}, signed::{Signed, SigningError}
     },
     principal::{
         agent::{Agent, AgentId},
@@ -45,8 +43,11 @@ pub struct Document<T: ContentRef> {
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
 
-    // FIXME: This doesn't work right now because Cgka is not Eq or PartialEq
     pub(crate) cgka: Cgka,
+    // FIXME
+    pub(crate) cgka_ops: CaMap<CgkaOperation>,
+    // FIXME
+    pub(crate) cgka_ops_predecessors: HashMap<Digest<CgkaOperation>, CgkaOperationPredecessors<T>>,
 }
 
 impl<T: ContentRef> Document<T> {
@@ -122,10 +123,16 @@ impl<T: ContentRef> Document<T> {
         let cgka_members = NonEmpty::from((active_member, other_members));
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_share_key, owner_share_secret_key);
-        let cgka = Cgka::new(cgka_members, doc_id, owner_id)
+        let mut cgka = Cgka::new(cgka_members, doc_id, owner_id)
             .expect("FIXME")
             .with_new_owner(owner_id, owner_share_key, owner_sks)
             .expect("FIXME");
+        let initial_op = cgka.update(owner_share_key, owner_share_secret_key, csprng)
+            .expect("FIXME");
+        let mut cgka_ops_predecessors = HashMap::new();
+        cgka_ops_predecessors.insert(Digest::hash(&initial_op), Default::default());
+        let mut cgka_ops = CaMap::new();
+        cgka_ops.insert(Rc::new(initial_op));
 
         Ok(Document {
             group,
@@ -133,25 +140,37 @@ impl<T: ContentRef> Document<T> {
             content_state: Default::default(),
             content_heads: Default::default(),
             cgka,
+            cgka_ops,
+            cgka_ops_predecessors,
         })
     }
 
-    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<T>>) {
+    pub fn add_member<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        signed_delegation: Signed<Delegation<T>>,
+        csprng: &mut R,
+    ) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
         // FIXME check that delegation is authorized
-        let id = signed_delegation.payload().delegate.agent_id();
+        let agent_id = signed_delegation.payload().delegate.agent_id();
         let rc = Rc::new(signed_delegation);
 
-        match self.group.members.get_mut(&id) {
+        match self.group.members.get_mut(&agent_id) {
             Some(caps) => {
-                caps.push(rc);
+                caps.push(rc.clone());
             }
             None => {
-                self.group.members.insert(id, vec![rc]);
+                self.group.members.insert(agent_id, vec![rc.clone()]);
             }
         }
+        // FIXME: Get individual ids/pre_keys for transitive members of added agent
+        for (id, pre_key) in rc.clone().payload().delegate.pick_individual_prekeys(csprng) {
+            // FIXME: We'll need Cgka to check for duplicate add ids
+            self.cgka.add(id, pre_key).expect("FIXME");
+        }
+        // FIXME: This delegation needs to be predecessor to next pcs update CgkaOperation
     }
 
     pub fn revoke_member(
@@ -160,9 +179,20 @@ impl<T: ContentRef> Document<T> {
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<RefCell<Document<T>>>],
     ) -> Result<(), SigningError> {
+        // FIXME: We need to check if this has revoked the last member in our group?
+        // for delegations in self.group.members.get(&member_id) {
+        //     for delegation in delegations.flatmap(|d| {
+        //         d.payload().individual_ids()
+        //     }) {
+        //         // FIXME: We'll need Cgka to check for duplicate remove ids
+        //         self.cgka.remove(id).expect("FIXME");
+        //     }
+        // }
+        // FIXME: This revocation needs to be predecessor to next pcs update CgkaOperation
+
         self.group
             .revoke_member(member_id, signing_key, relevant_docs)
-    }
+        }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
         self.group.get_agent_revocations(agent)

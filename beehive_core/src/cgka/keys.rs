@@ -48,13 +48,13 @@ impl ShareKeyMap {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub enum NodeKey {
     ShareKey(ShareKey),
     ConflictKeys(ConflictKeys),
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct ConflictKeys {
     pub first: ShareKey,
     pub second: ShareKey,

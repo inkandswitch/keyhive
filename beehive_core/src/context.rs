@@ -139,7 +139,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
             after_content,
         })?;
 
-        Ok(resource.add_member(dlg))
+        Ok(resource.add_member(dlg, &mut self.csprng))
     }
 
     pub fn revoke_member(

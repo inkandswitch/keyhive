@@ -10,7 +10,7 @@ use crate::{content::reference::ContentRef, crypto::share_key::ShareKey};
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::{HashMap, HashSet}, rc::Rc};
 
 /// Immutable union over all agent types.
 ///
@@ -39,6 +39,23 @@ impl<T: ContentRef> Agent<T> {
             Agent::Individual(i) => i.borrow().agent_id(),
             Agent::Group(g) => (*g).borrow().agent_id(),
             Agent::Document(d) => d.borrow().agent_id(),
+        }
+    }
+
+    pub fn individual_ids(&self) -> HashSet<IndividualId> {
+        match self {
+            Agent::Active(a) => {
+                let mut ids = HashSet::new();
+                ids.insert(a.borrow().id());
+                ids
+            },
+            Agent::Individual(i) => {
+                let mut ids = HashSet::new();
+                ids.insert(i.borrow().id());
+                ids
+            },
+            Agent::Group(g) => g.borrow().individual_ids(),
+            Agent::Document(d) => d.borrow().group.individual_ids(),
         }
     }
 

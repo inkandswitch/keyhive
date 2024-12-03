@@ -18,7 +18,7 @@ pub type InnerNode = SecretStore;
 /// A PathChange represents an update along a path from a leaf to the root.
 /// This includes both the new public keys for each node and the keys that have
 /// been removed as part of this change.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PathChange {
     pub leaf_id: IndividualId,
     pub leaf_idx: u32,

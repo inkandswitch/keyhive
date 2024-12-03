@@ -1,8 +1,10 @@
+use std::{collections::HashSet, rc::Rc};
+
 use super::beekem::PathChange;
-use crate::{crypto::share_key::ShareKey, principal::individual::id::IndividualId};
+use crate::{content::reference::ContentRef, crypto::{digest::Digest, share_key::ShareKey, signed::Signed}, principal::{group::operation::{delegation::Delegation, revocation::Revocation}, individual::id::IndividualId}};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
 pub enum CgkaOperation {
     Add {
         id: IndividualId,
@@ -17,4 +19,27 @@ pub enum CgkaOperation {
         id: IndividualId,
         new_path: PathChange,
     },
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CgkaOperationPredecessors<T: ContentRef> {
+    update_preds: HashSet<Digest<CgkaOperation>>,
+    delegation_preds: HashSet<Rc<Signed<Delegation<T>>>>,
+    revocation_preds: HashSet<Rc<Signed<Revocation<T>>>>,
+}
+
+impl<T: ContentRef> CgkaOperationPredecessors<T> {
+    pub fn new() -> Self {
+        Self {
+            update_preds: Default::default(),
+            delegation_preds: Default::default(),
+            revocation_preds: Default::default(),
+        }
+    }
+}
+
+impl<T: ContentRef> Default for CgkaOperationPredecessors<T> {
+    fn default() -> Self {
+        CgkaOperationPredecessors::new()
+    }
 }
