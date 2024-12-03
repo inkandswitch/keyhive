@@ -15,7 +15,8 @@ use crate::{
         group::{
             id::GroupId,
             operation::{
-                delegation::{Delegation, DelegationError},
+                delegation::{Delegation, DelegationError, StaticDelegation},
+                revocation::{Revocation, StaticRevocation},
                 StaticOperation,
             },
             store::GroupStore,
@@ -284,71 +285,154 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore, const CAP: usize> Contex
         None
     }
 
-    pub fn receive_operation(&mut self, op: StaticOperation<T>) -> Result<(), ()> {
-        op.try_verify().expect("FIXME");
+    pub fn get_or_init_agent(&mut self, id: Identifier) -> Agent<T> {
+        self.get_agent(id).unwrap_or_else(|| {
+            let indie_id = id.into();
+            let indie = Individual::new(indie_id);
+            self.register_individual(indie);
+            self.individuals.get(&indie_id).unwrap().clone().into()
+        })
+    }
 
-        if !self.individuals.contains_key(&op.verifying_key().into()) {
+    pub fn get_or_init_doc(&mut self, doc_id: DocumentId) -> Rc<RefCell<Document<T>>> {
+        self.docs.get(&doc_id).unwrap_or_else(|| {
+            let rc_doc = Rc::new(RefCell::new(Document::new(doc_id)));
+            self.docs.insert(rc_doc.dupe());
+            rc_doc
+        })
+    }
+
+    pub fn receive_operation(&mut self, op: StaticOperation<T>) -> Result<(), ()> {
+        match op {
+            StaticOperation::Delegation(signed_static_dlg) => {
+                self.receive_delegation(signed_static_dlg)
+            }
+            StaticOperation::Revocation(signed_static_rev) => {
+                self.receive_revocation(signed_static_rev)
+            }
+        }
+    }
+
+    pub fn receive_delegation(
+        &mut self,
+        signed_static_dlg: Signed<StaticDelegation<T>>,
+    ) -> Result<(), ()> {
+        signed_static_dlg.try_verify().expect("FIXME");
+
+        let signer_id = (*signed_static_dlg.verifying_key()).into();
+
+        if !self.individuals.contains_key(&signer_id) {
             // Don't talk to strangers
             // FIXME Maybe keep a LRU of yet-to-be-authorized keys?
             return Err(());
         }
 
-        match op {
-            StaticOperation::Delegation(signed_static_dlg) => {
-                let sdlg = signed_static_dlg.payload();
-                // FIXME move to Agent? Or another method on Context?
-                let delegate: Agent<T> = self
-                    .individuals
-                    .get(&IndividualId(sdlg.delegate))
-                    .map(|i_rc| (*i_rc).into())
-                    .or_else(|| {
-                        self.groups
-                            .get(&GroupId(sdlg.delegate))
-                            .map(|group_rc| Agent::<T>::from(group_rc))
-                    })
-                    .or_else(|| {
-                        self.docs
-                            .get(&DocumentId(sdlg.delegate))
-                            .map(|doc_rc| Agent::<T>::from(doc_rc))
-                    })
-                    .unwrap_or_else(|| {
-                        let id = IndividualId(sdlg.delegate);
-                        let indie = Rc::new(RefCell::new(Individual::new(id)));
-                        self.individuals.insert(id, indie.dupe());
-                        Agent::<T>::from(indie)
-                    });
+        let sdlg = signed_static_dlg.payload();
+        let delegate = self.get_or_init_agent(sdlg.delegate.into());
 
-                match sdlg.proof {
-                    None => {
-                        let subject_id = op.verifying_key().into();
-                        if let Some(group_rc) = self.groups.get(&GroupId(subject_id)) {
-                            let dlg = Delegation {
-                                can: sdlg.can,
-                                proof: None,
-                                delegate,
-                                after_revocations: vec![],      // FIXME
-                                after_content: BTreeMap::new(), // FIXME
-                            };
-                            // FIXME
-                            group_rc.borrow_mut().add_delegation(sdlg);
-                        } else {
-                            if let Some(doc_rc) = self.docs.get(&DocumentId(subject_id)) {
-                                //
-                            } else {
-                                // FIXME initiate doc or group!
-                            }
-                        }
-                    }
-                    Some(proof) => {
-                        // see if any doc or group has the proof and hand off to them to complete
+        match sdlg.proof {
+            None => {
+                if let Some(group_rc) = self.groups.get(&GroupId(signer_id.into())) {
+                    // FIXME move to Delegation
+                    let after_revocations = sdlg
+                        .after_revocations
+                        .iter()
+                        .map(|digest| {
+                            group_rc
+                                .borrow()
+                                .state
+                                .revocations
+                                .get(&digest.coerce())
+                                .expect("FIXME") // FIXME bail with nice err
+                                .dupe()
+                        })
+                        .collect();
+
+                    let after_content = sdlg
+                        .after_content
+                        .iter()
+                        .map(|(doc_id, refs)| {
+                            (*doc_id, (self.get_or_init_doc(*doc_id), refs.clone()))
+                        })
+                        .collect();
+
+                    let dlg = Delegation {
+                        can: sdlg.can,
+                        proof: None,
+                        delegate,
+                        after_revocations,
+                        after_content,
+                    };
+
+                    let signed = signed_static_dlg.map(|_| dlg);
+                    group_rc.borrow_mut().add_delegation(signed);
+                } else {
+                    if let Some(doc_rc) = self.docs.get(&DocumentId(signer_id.into())) {
+                        // FIXME same as above
+                    } else {
+                        // FIXME initiate doc or group! then same as above
                     }
                 }
             }
-            StaticOperation::Revocation(signed_static_rev) => {
-                let static_rev = signed_static_rev.payload();
-                // search for static_rev.revoke
+            Some(proof_digest) => {
+                // see if any doc or group has the proof and hand off to them to complete
+                let mut subject: Option<Membered<T>> = None;
+
+                for (_group_id, group_rc) in self.groups.iter() {
+                    if let Some(proof_dlg) =
+                        group_rc.borrow().delegations().get(&proof_digest.coerce())
+                    {
+                        subject = Some(group_rc.dupe().into());
+                        break;
+                    }
+                }
+
+                if subject.is_none() {
+                    for (_doc_id, doc_rc) in self.docs.docs.iter() {
+                        if let Some(proof_dlg) =
+                            doc_rc.borrow().delegations().get(&proof_digest.coerce())
+                        {
+                            subject = Some(doc_rc.dupe().into());
+                            break;
+                        }
+                    }
+                }
+
+                if subject.is_none() {
+                    panic!("FIXME");
+                }
+
+                subject.add_delegation();
+                subject.rebuild();
             }
         }
+
+        // FIXME Rebuild materialization
+
+        // FIXME check that the user is even allowed to apply this change before storing? let signer = op.verifying_key();
+
+        Ok(())
+    }
+
+    pub fn receive_revocation(
+        &mut self,
+        signed_static_rev: Signed<StaticRevocation<T>>,
+    ) -> Result<(), ()> {
+        signed_static_rev.try_verify().expect("FIXME");
+
+        if !self
+            .individuals
+            .contains_key(&signed_static_rev.verifying_key().into())
+        {
+            // Don't talk to strangers
+            // FIXME Maybe keep a LRU of yet-to-be-authorized keys?
+            return Err(());
+        }
+
+        let subject_id = signed_static_rev.verifying_key().into();
+
+        let srev = signed_static_rev.payload();
+        let delegate = self.get_or_init_agent(srev.revoke.into());
 
         // FIXME check that the user is even allowed to apply this change before storing? let signer = op.verifying_key();
 

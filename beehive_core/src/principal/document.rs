@@ -14,6 +14,7 @@ use crate::{
     principal::{
         agent::{Agent, AgentId},
         group::{
+            id::GroupId,
             operation::{
                 delegation::{Delegation, DelegationError},
                 revocation::Revocation,
@@ -72,6 +73,18 @@ impl<T: ContentRef> Document<T> {
 
     pub fn get_capabilty(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
         self.group.get_capability(member_id)
+    }
+
+    pub fn new(doc_id: DocumentId) -> Document<T> {
+        let group = Group::new(GroupId(doc_id.0));
+
+        Document {
+            group,
+            reader_keys: Default::default(),
+            content_heads: Default::default(),
+            content_state: Default::default(),
+            cgka, // FIXME
+        }
     }
 
     pub fn generate<R: rand::RngCore + rand::CryptoRng>(

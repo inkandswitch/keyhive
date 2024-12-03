@@ -54,7 +54,7 @@ impl<T: Serialize> Signed<T> {
         Ok(self.verifying_key.verify(buf.as_slice(), &self.signature)?)
     }
 
-    pub fn map<U: Serialize, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
+    pub(crate) fn map<U: Serialize, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
         Signed {
             payload: f(self.payload),
             verifying_key: self.verifying_key,

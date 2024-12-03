@@ -91,6 +91,19 @@ impl<T: ContentRef> Group<T> {
         })
     }
 
+    pub fn new(group_id: GroupId) -> Group<T> {
+        Group {
+            members: HashMap::new(),
+            state: state::GroupState {
+                id: group_id,
+                delegation_heads: HashSet::new(),
+                delegations: CaMap::new(),
+                revocation_heads: HashSet::new(),
+                revocations: CaMap::new(),
+            },
+        }
+    }
+
     pub fn id(&self) -> Identifier {
         self.group_id().into()
     }
