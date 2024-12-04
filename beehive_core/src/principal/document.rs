@@ -30,7 +30,7 @@ use crate::{
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
-use nonempty::NonEmpty;
+use nonempty::{nonempty, NonEmpty};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
@@ -75,15 +75,26 @@ impl<T: ContentRef> Document<T> {
         self.group.get_capability(member_id)
     }
 
-    pub fn new(doc_id: DocumentId) -> Document<T> {
-        let group = Group::new(GroupId(doc_id.0));
+    pub fn new(
+        doc_id: DocumentId,
+        viewer_id: IndividualId,
+        root_delegation: Signed<Delegation<T>>,
+    ) -> Document<T> {
+        if root_delegation.payload().proof.is_some() {
+            panic!("Initial delegation should not have a proof");
+        }
+
+        let member = root_delegation.payload().delegate.dupe();
+
+        let mut group = Group::new(GroupId(doc_id.0));
+        group.add_delegation(root_delegation);
 
         Document {
             group,
             reader_keys: Default::default(),
             content_heads: Default::default(),
             content_state: Default::default(),
-            cgka, // FIXME
+            cgka: Cgka::new(nonempty![member], doc_id, viewer_id).expect("FIXME"),
         }
     }
 
