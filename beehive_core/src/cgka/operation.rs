@@ -1,7 +1,14 @@
 use std::{collections::HashSet, rc::Rc};
 
 use super::beekem::PathChange;
-use crate::{content::reference::ContentRef, crypto::{digest::Digest, share_key::ShareKey, signed::Signed}, principal::{group::operation::{delegation::Delegation, revocation::Revocation}, individual::id::IndividualId}};
+use crate::{
+    content::reference::ContentRef,
+    crypto::{digest::Digest, share_key::ShareKey, signed::Signed},
+    principal::{
+        group::operation::{delegation::Delegation, revocation::Revocation},
+        individual::id::IndividualId,
+    },
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]

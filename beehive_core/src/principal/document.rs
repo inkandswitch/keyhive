@@ -1,13 +1,24 @@
 pub mod id;
 pub mod store;
 
-use super::{active::Active, group::operation::Operation, individual::id::IndividualId, verifiable::Verifiable};
+use super::{
+    active::Active, group::operation::Operation, individual::id::IndividualId,
+    verifiable::Verifiable,
+};
 use crate::{
     access::Access,
-    cgka::{error::CgkaError, keys::ShareKeyMap, operation::{CgkaOperation, CgkaOperationPredecessors}, Cgka},
+    cgka::{
+        error::CgkaError,
+        keys::ShareKeyMap,
+        operation::{CgkaOperation, CgkaOperationPredecessors},
+        Cgka,
+    },
     content::reference::ContentRef,
     crypto::{
-        digest::Digest, encrypted::Encrypted, share_key::{ShareKey, ShareSecretKey}, signed::{Signed, SigningError}
+        digest::Digest,
+        encrypted::Encrypted,
+        share_key::{ShareKey, ShareSecretKey},
+        signed::{Signed, SigningError},
     },
     principal::{
         agent::{Agent, AgentId},
@@ -28,13 +39,13 @@ use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
 use nonempty::NonEmpty;
-use topological_sort::TopologicalSort;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     rc::Rc,
 };
 use thiserror::Error;
+use topological_sort::TopologicalSort;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document<T: ContentRef> {
@@ -133,7 +144,8 @@ impl<T: ContentRef> Document<T> {
             .expect("FIXME")
             .with_new_owner(owner_id, owner_share_key, owner_sks)
             .expect("FIXME");
-        let initial_op = cgka.update(owner_share_key, owner_share_secret_key, csprng)
+        let initial_op = cgka
+            .update(owner_share_key, owner_share_secret_key, csprng)
             .expect("FIXME");
         let initial_op_hash = Digest::hash(&initial_op);
         let mut cgka_ops_predecessors = HashMap::new();
@@ -180,11 +192,17 @@ impl<T: ContentRef> Document<T> {
             }
         }
         // FIXME: Get individual ids/pre_keys for transitive members of added agent
-        for (id, pre_key) in rc.clone().payload().delegate.pick_individual_prekeys(csprng) {
+        for (id, pre_key) in rc
+            .clone()
+            .payload()
+            .delegate
+            .pick_individual_prekeys(csprng)
+        {
             // FIXME: We'll need Cgka to check for duplicate add ids
             let op = self.cgka.add(id, pre_key).expect("FIXME");
             let op_hash = Digest::hash(&op);
-            self.membership_op_to_cgka_op.insert(Digest::hash(&rc.clone().into()), op_hash);
+            self.membership_op_to_cgka_op
+                .insert(Digest::hash(&rc.clone().into()), op_hash);
             self.cgka_ops.insert(op.into());
             // FIXME: Update heads and predecessors
         }
@@ -210,7 +228,7 @@ impl<T: ContentRef> Document<T> {
 
         self.group
             .revoke_member(member_id, signing_key, relevant_docs)
-        }
+    }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
         self.group.get_agent_revocations(agent)
@@ -282,12 +300,19 @@ impl<T: ContentRef> Document<T> {
         let ops = self
             .cgka_ops_for_update_head(pcs_update_head)
             .iter()
-            .map(|hash| Rc::unwrap_or_clone(self.cgka_ops.get(hash).expect("hash to be present").clone()))
+            .map(|hash| {
+                Rc::unwrap_or_clone(self.cgka_ops.get(hash).expect("hash to be present").clone())
+            })
             .collect::<Vec<CgkaOperation>>();
-        self.cgka.rebuild_pcs_key(self.doc_id(), ops).expect("FIXME");
+        self.cgka
+            .rebuild_pcs_key(self.doc_id(), ops)
+            .expect("FIXME");
     }
 
-    fn cgka_ops_for_update_head(&self, update_head: Digest<CgkaOperation>) -> Vec<Digest<CgkaOperation>> {
+    fn cgka_ops_for_update_head(
+        &self,
+        update_head: Digest<CgkaOperation>,
+    ) -> Vec<Digest<CgkaOperation>> {
         // Topsort membership ops and updates separately.
         // To build total order, take updates until one has a dependency on a
         // membership op. Then take membership ops until all those dependencies are
@@ -305,8 +330,8 @@ impl<T: ContentRef> Document<T> {
         while let Some(op_hash) = update_frontier.pop_front() {
             let preds = self.cgka_ops_predecessors.get(&op_hash).expect("FIXME");
             for update_pred in &preds.update_preds {
-                dependencies.add_dependency(update_pred.clone(), op_hash.clone());
-                update_frontier.push_back(update_pred.clone());
+                dependencies.add_dependency(*update_pred, op_hash);
+                update_frontier.push_back(*update_pred);
             }
             delegation_heads.extend(preds.delegation_preds.clone());
             revocation_heads.extend(preds.revocation_preds.clone());
@@ -314,11 +339,14 @@ impl<T: ContentRef> Document<T> {
         for hash in dependencies.pop_all() {
             ordered_update_hashes.push(hash);
         }
-        let ordered_membership_ops = Operation::topsort(&delegation_heads, &revocation_heads).expect("FIXME");
+        let ordered_membership_ops =
+            Operation::topsort(&delegation_heads, &revocation_heads).expect("FIXME");
 
         let mut update_idx = 0;
         let mut membership_idx = 0;
-        while update_idx < ordered_update_hashes.len() && membership_idx < ordered_membership_ops.len() {
+        while update_idx < ordered_update_hashes.len()
+            && membership_idx < ordered_membership_ops.len()
+        {
             if update_idx < ordered_update_hashes.len() {
                 let update = ordered_update_hashes[update_idx];
                 let preds = self.cgka_ops_predecessors.get(&update).expect("FIXME");
@@ -327,11 +355,16 @@ impl<T: ContentRef> Document<T> {
                     let mut revocation_preds = preds.revocation_preds.clone();
                     while !(delegation_preds.is_empty() && revocation_preds.is_empty()) {
                         let (member_op_hash, member_op) = &ordered_membership_ops[membership_idx];
-                        op_hashes.push(*self.membership_op_to_cgka_op.get(&member_op_hash).expect("FIXME"));
+                        op_hashes.push(
+                            *self
+                                .membership_op_to_cgka_op
+                                .get(member_op_hash)
+                                .expect("FIXME"),
+                        );
                         match member_op {
                             Operation::Delegation(d) => {
                                 delegation_preds.remove(d);
-                            },
+                            }
                             Operation::Revocation(r) => {
                                 revocation_preds.remove(r);
                             }
@@ -344,7 +377,12 @@ impl<T: ContentRef> Document<T> {
             } else {
                 while membership_idx < ordered_membership_ops.len() {
                     let (member_op_hash, _member_op) = &ordered_membership_ops[membership_idx];
-                    op_hashes.push(*self.membership_op_to_cgka_op.get(&member_op_hash).expect("FIXME"));
+                    op_hashes.push(
+                        *self
+                            .membership_op_to_cgka_op
+                            .get(member_op_hash)
+                            .expect("FIXME"),
+                    );
                     membership_idx += 1;
                 }
             }
@@ -357,7 +395,6 @@ impl<T: ContentRef> Document<T> {
     // pub(crate) cgka_ops: CaMap<CgkaOperation>,
     // pub(crate) cgka_ops_predecessors: HashMap<Digest<CgkaOperation>, CgkaOperationPredecessors<T>>,
     // pub(crate) cgka_op_heads: HashSet<Digest<CgkaOperation>>,
-
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

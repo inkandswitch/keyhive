@@ -177,7 +177,7 @@ impl<T: ContentRef> Operation<T> {
 
         for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
             if seen.contains(digest) {
-                continue
+                continue;
             }
             seen.insert(digest);
 

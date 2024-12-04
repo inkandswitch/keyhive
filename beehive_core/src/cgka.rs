@@ -273,13 +273,16 @@ impl Cgka {
         Ok(())
     }
 
-    pub fn rebuild_pcs_key(&mut self, doc_id: DocumentId, ops: Vec<CgkaOperation>) -> Result<(), CgkaError> {
-        let mut rebuilt_cgka = Cgka::new(
-            &self.original_members,
-            doc_id,
-            self.owner_id,
-        ).expect("FIXME");
-        rebuilt_cgka.merge_concurrent_operations(&ops).expect("FIXME");
+    pub fn rebuild_pcs_key(
+        &mut self,
+        doc_id: DocumentId,
+        ops: Vec<CgkaOperation>,
+    ) -> Result<(), CgkaError> {
+        let mut rebuilt_cgka =
+            Cgka::new(&self.original_members, doc_id, self.owner_id).expect("FIXME");
+        rebuilt_cgka
+            .merge_concurrent_operations(&ops)
+            .expect("FIXME");
         self.pcs_keys.insert(rebuilt_cgka.derive_pcs_key()?.into());
         Ok(())
     }
