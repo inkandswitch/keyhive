@@ -1,13 +1,13 @@
-use std::{collections::HashSet, rc::Rc};
+use std::{collections::{HashMap, HashSet}, rc::Rc};
 
 use super::beekem::PathChange;
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, share_key::ShareKey, signed::Signed},
     principal::{
-        group::operation::{delegation::Delegation, revocation::Revocation},
+        group::operation::{delegation::Delegation, revocation::Revocation, Operation},
         individual::id::IndividualId,
-    },
+    }, util::content_addressed_map::CaMap,
 };
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +26,43 @@ pub enum CgkaOperation {
         id: IndividualId,
         new_path: PathChange,
     },
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CgkaOperationGraph<T: ContentRef> {
+    // FIXME
+    pub cgka_ops: CaMap<CgkaOperation>,
+    // FIXME
+    pub cgka_ops_predecessors: HashMap<Digest<CgkaOperation>, CgkaOperationPredecessors<T>>,
+    pub cgka_op_heads: HashSet<Digest<CgkaOperation>>,
+    pub membership_op_to_cgka_op: HashMap<Digest<Operation<T>>, Digest<CgkaOperation>>,
+}
+
+impl<T: ContentRef> CgkaOperationGraph<T> {
+    pub fn new() -> Self {
+        Self {
+            cgka_ops: Default::default(),
+            cgka_ops_predecessors: Default::default(),
+            cgka_op_heads: Default::default(),
+            membership_op_to_cgka_op: Default::default(),
+        }
+    }
+
+    pub fn add_op(&mut self, op: &CgkaOperation) {
+        let op_hash = Digest::hash(&op);
+        self.cgka_ops_predecessors.insert(op_hash, Default::default());
+        self.cgka_ops.insert(op.into());
+        // FIXME: Figure out heads
+        self.cgka_op_heads.insert(op_hash);
+    }
+
+    pub fn predecessors_for(&self, op_hash: Digest<CgkaOperation>) -> Option<&CgkaOperationPredecessors<T>> {
+        self.cgka_ops_predecessors.get(&op_hash)
+    }
+
+    pub fn get_cgka_op_for_membership_op(&self, membership_op: &Digest<Operation<T>) -> Option<&Digest<CgkaOperation>> {
+        self.membership_op_to_cgka_op.get(membership_op)
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

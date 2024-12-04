@@ -10,7 +10,7 @@ use crate::{
     cgka::{
         error::CgkaError,
         keys::ShareKeyMap,
-        operation::{CgkaOperation, CgkaOperationPredecessors},
+        operation::{CgkaOperation, CgkaOperationGraph, CgkaOperationPredecessors},
         Cgka,
     },
     content::reference::ContentRef,
@@ -56,15 +56,7 @@ pub struct Document<T: ContentRef> {
     pub(crate) content_state: HashSet<T>,
 
     pub(crate) cgka: Cgka,
-    // FIXME
-    pub(crate) cgka_ops: CaMap<CgkaOperation>,
-    // FIXME
-    pub(crate) cgka_ops_predecessors: HashMap<Digest<CgkaOperation>, CgkaOperationPredecessors<T>>,
-    pub(crate) cgka_op_heads: HashSet<Digest<CgkaOperation>>,
-    pub(crate) membership_op_to_cgka_op: HashMap<Digest<Operation<T>>, Digest<CgkaOperation>>,
-    // FIXME
-    // pub(crate) delegation_op_to_cgka_op: HashMap<Digest<Rc<Signed<Delegation<T>>>, Digest<CgkaOperation>>,
-    // pub(crate) revocation_op_to_cgka_op: HashMap<Digest<Rc<Signed<Revocation<T>>>, Digest<CgkaOperation>>,
+    pub(crate) cgka_ops_graph: CgkaOperationGraph<T>,
 }
 
 impl<T: ContentRef> Document<T> {
@@ -147,13 +139,16 @@ impl<T: ContentRef> Document<T> {
         let initial_op = cgka
             .update(owner_share_key, owner_share_secret_key, csprng)
             .expect("FIXME");
-        let initial_op_hash = Digest::hash(&initial_op);
-        let mut cgka_ops_predecessors = HashMap::new();
-        cgka_ops_predecessors.insert(initial_op_hash, Default::default());
-        let mut cgka_ops = CaMap::new();
-        cgka_ops.insert(initial_op.into());
-        let mut cgka_op_heads = HashSet::new();
-        cgka_op_heads.insert(initial_op_hash);
+        // let initial_op_hash = Digest::hash(&initial_op);
+        let mut cgka_ops_graph = CgkaOperationGraph::new();
+        cgka_ops_graph.add_op(&initial_op);
+
+        // let mut cgka_ops_predecessors = HashMap::new();
+        // cgka_ops_predecessors.insert(initial_op_hash, Default::default());
+        // let mut cgka_ops = CaMap::new();
+        // cgka_ops.insert(initial_op.into());
+        // let mut cgka_op_heads = HashSet::new();
+        // cgka_op_heads.insert(initial_op_hash);
 
         Ok(Document {
             group,
@@ -161,13 +156,7 @@ impl<T: ContentRef> Document<T> {
             content_state: Default::default(),
             content_heads: Default::default(),
             cgka,
-            cgka_ops,
-            cgka_ops_predecessors,
-            cgka_op_heads,
-            membership_op_to_cgka_op: Default::default(),
-            // FIXME
-            // delegation_op_to_cgka_op: Default::default(),
-            // revocation_op_to_cgka_op: Default::default(),
+            cgka_ops_graph,
         })
     }
 
@@ -204,7 +193,9 @@ impl<T: ContentRef> Document<T> {
             self.membership_op_to_cgka_op
                 .insert(Digest::hash(&rc.clone().into()), op_hash);
             self.cgka_ops.insert(op.into());
-            // FIXME: Update heads and predecessors
+            self.membership_op_to_cgka_op.insert(rc.clone().into(), op_hash);
+            // FIXME
+            // self.cgka_op_heads
         }
         // FIXME: This delegation needs to be predecessor to next pcs update CgkaOperation
     }
@@ -248,7 +239,7 @@ impl<T: ContentRef> Document<T> {
     ) -> Result<(), EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
-        self.cgka
+        let op = self.cgka
             .update(new_share_key, new_share_secret_key, csprng)
             .map_err(EncryptError::UnableToPcsUpdate)?;
         Ok(())
@@ -349,7 +340,7 @@ impl<T: ContentRef> Document<T> {
         {
             if update_idx < ordered_update_hashes.len() {
                 let update = ordered_update_hashes[update_idx];
-                let preds = self.cgka_ops_predecessors.get(&update).expect("FIXME");
+                let preds = self.cgka_ops_graph.predecessors_for(&update).expect("FIXME");
                 if preds.depends_on_membership_ops() {
                     let mut delegation_preds = preds.delegation_preds.clone();
                     let mut revocation_preds = preds.revocation_preds.clone();
@@ -357,8 +348,8 @@ impl<T: ContentRef> Document<T> {
                         let (member_op_hash, member_op) = &ordered_membership_ops[membership_idx];
                         op_hashes.push(
                             *self
-                                .membership_op_to_cgka_op
-                                .get(member_op_hash)
+                                .cgka_ops_graph
+                                .get_cgka_op_for_membership_op(member_op_hash)
                                 .expect("FIXME"),
                         );
                         match member_op {
@@ -379,8 +370,8 @@ impl<T: ContentRef> Document<T> {
                     let (member_op_hash, _member_op) = &ordered_membership_ops[membership_idx];
                     op_hashes.push(
                         *self
-                            .membership_op_to_cgka_op
-                            .get(member_op_hash)
+                            .cgka_ops_graph
+                            .get_cgka_op_for_membership_op(member_op_hash)
                             .expect("FIXME"),
                     );
                     membership_idx += 1;
