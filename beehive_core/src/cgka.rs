@@ -28,7 +28,6 @@ use error::CgkaError;
 use keys::ShareKeyMap;
 use nonempty::NonEmpty;
 use operation::CgkaOperation;
-use serde::{Deserialize, Serialize};
 
 /// A CGKA (Continuous Group Key Agreement) protocol is responsible for
 /// maintaining a stream of updating shared group keys over time. We are
@@ -36,7 +35,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// This Cgka struct provides a protocol-agnostic interface for retrieving the
 /// latest secret, rotating keys, and adding and removing members from the group.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cgka {
     doc_id: DocumentId,
     pub owner_id: IndividualId,
@@ -45,13 +44,16 @@ pub struct Cgka {
     // TODO: Once we can rebuild the tree to correspond to earlier PcsKeys,
     // convert this to a cache of some kind with policies.
     pcs_keys: CaMap<PcsKey>,
+    // FIXME: Is there a better way to keep track of this? Does it make more
+    // sense to create an initial stream of add operations?
+    original_members: NonEmpty<(IndividualId, ShareKey)>,
 }
 
 /// Constructors
 impl Cgka {
     /// We assume members are in causal order.
     pub fn new(
-        members: NonEmpty<(IndividualId, ShareKey)>,
+        members: &NonEmpty<(IndividualId, ShareKey)>,
         doc_id: DocumentId,
         owner_id: IndividualId,
     ) -> Result<Self, CgkaError> {
@@ -62,6 +64,7 @@ impl Cgka {
             owner_sks: Default::default(),
             tree,
             pcs_keys: Default::default(),
+            original_members: members.clone(),
         };
         Ok(cgka)
     }
@@ -267,6 +270,17 @@ impl Cgka {
         if includes_add {
             self.tree.sort_leaves_and_blank_tree()?;
         }
+        Ok(())
+    }
+
+    pub fn rebuild_pcs_key(&mut self, doc_id: DocumentId, ops: Vec<CgkaOperation>) -> Result<(), CgkaError> {
+        let mut rebuilt_cgka = Cgka::new(
+            &self.original_members,
+            doc_id,
+            self.owner_id,
+        ).expect("FIXME");
+        rebuilt_cgka.merge_concurrent_operations(&ops).expect("FIXME");
+        self.pcs_keys.insert(rebuilt_cgka.derive_pcs_key()?.into());
         Ok(())
     }
 

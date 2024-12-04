@@ -161,7 +161,7 @@ pub fn setup_cgka(doc_id: DocumentId, members: &NonEmpty<TestMember>, m_idx: usi
 
     let mut owner_sks = ShareKeyMap::new();
     owner_sks.insert(owner.pk, owner.sk);
-    let mut cgka = Cgka::new(member_id_pks, doc_id, owner.id)
+    let mut cgka = Cgka::new(&member_id_pks, doc_id, owner.id)
         .expect("CGKA construction failed")
         .with_new_owner(owner.id, owner.pk, owner_sks)
         .expect("CGKA construction failed");

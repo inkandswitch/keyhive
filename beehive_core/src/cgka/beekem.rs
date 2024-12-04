@@ -87,7 +87,7 @@ impl BeeKem {
     /// Beehive as a whole).
     pub(crate) fn new(
         doc_id: DocumentId,
-        members: NonEmpty<(IndividualId, ShareKey)>,
+        members: &NonEmpty<(IndividualId, ShareKey)>,
     ) -> Result<Self, CgkaError> {
         let mut tree = Self {
             doc_id,
@@ -100,7 +100,7 @@ impl BeeKem {
         };
         tree.grow_tree_to_size();
         for (id, pk) in members {
-            tree.push_leaf(id, pk)?;
+            tree.push_leaf(*id, *pk)?;
         }
         Ok(tree)
     }

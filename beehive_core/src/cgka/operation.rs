@@ -23,9 +23,9 @@ pub enum CgkaOperation {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CgkaOperationPredecessors<T: ContentRef> {
-    update_preds: HashSet<Digest<CgkaOperation>>,
-    delegation_preds: HashSet<Rc<Signed<Delegation<T>>>>,
-    revocation_preds: HashSet<Rc<Signed<Revocation<T>>>>,
+    pub update_preds: HashSet<Digest<CgkaOperation>>,
+    pub delegation_preds: HashSet<Rc<Signed<Delegation<T>>>>,
+    pub revocation_preds: HashSet<Rc<Signed<Revocation<T>>>>,
 }
 
 impl<T: ContentRef> CgkaOperationPredecessors<T> {
@@ -35,6 +35,10 @@ impl<T: ContentRef> CgkaOperationPredecessors<T> {
             delegation_preds: Default::default(),
             revocation_preds: Default::default(),
         }
+    }
+
+    pub fn depends_on_membership_ops(&self) -> bool {
+        !(self.delegation_preds.is_empty() && self.revocation_preds.is_empty())
     }
 }
 
