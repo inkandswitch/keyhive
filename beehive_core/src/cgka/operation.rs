@@ -11,6 +11,12 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+pub struct CgkaOperationWithPreds {
+    pub op: CgkaOperation,
+    pub preds: HashSet<Digest<CgkaOperation>>,
+}
+
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
 pub enum CgkaOperation {
     Add {
@@ -83,8 +89,8 @@ impl<T: ContentRef> CgkaOperationGraph<T> {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CgkaOperationPredecessors<T: ContentRef> {
     pub update_preds: HashSet<Digest<CgkaOperation>>,
-    pub delegation_preds: HashSet<Rc<Signed<Delegation<T>>>>,
-    pub revocation_preds: HashSet<Rc<Signed<Revocation<T>>>>,
+    pub delegation_preds: HashSet<Digest<Signed<Delegation<T>>>>,
+    pub revocation_preds: HashSet<Digest<Signed<Revocation<T>>>>,
 }
 
 impl<T: ContentRef> CgkaOperationPredecessors<T> {

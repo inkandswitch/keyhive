@@ -10,7 +10,7 @@ use crate::{
     cgka::{
         error::CgkaError,
         keys::ShareKeyMap,
-        operation::{CgkaOperation, CgkaOperationGraph, CgkaOperationPredecessors},
+        operation::{CgkaOperation, CgkaOperationGraph},
         Cgka,
     },
     content::reference::ContentRef,
@@ -308,8 +308,8 @@ impl<T: ContentRef> Document<T> {
         let mut op_hashes = Vec::new();
         let mut dependencies = TopologicalSort::<Digest<CgkaOperation>>::new();
         let mut ordered_update_hashes = Vec::new();
-        let mut delegation_heads = HashSet::new();
-        let mut revocation_heads = HashSet::new();
+        let mut delegation_head_hashes = HashSet::new();
+        let mut revocation_head_hashes = HashSet::new();
 
         let mut update_frontier = VecDeque::new();
         update_frontier.push_back(update_head);
@@ -322,12 +322,16 @@ impl<T: ContentRef> Document<T> {
                 dependencies.add_dependency(*update_pred, op_hash);
                 update_frontier.push_back(*update_pred);
             }
-            delegation_heads.extend(preds.delegation_preds.clone());
-            revocation_heads.extend(preds.revocation_preds.clone());
+            delegation_head_hashes.extend(preds.delegation_preds.clone());
+            revocation_head_hashes.extend(preds.revocation_preds.clone());
         }
         for hash in dependencies.pop_all() {
             ordered_update_hashes.push(hash);
         }
+        // FIXME: Convert heads (hashes) to actual operations from GroupState and
+        // then pass into topsort()
+        let delegation_heads = Default::default(); // FIXME: derive from delegation_head_hashes
+        let revocation_heads = Default::default(); // FIXME: derive from revocation_head_hashes
         let ordered_membership_ops =
             Operation::topsort(&delegation_heads, &revocation_heads).expect("FIXME");
 
@@ -352,10 +356,10 @@ impl<T: ContentRef> Document<T> {
                         );
                         match member_op {
                             Operation::Delegation(d) => {
-                                delegation_preds.remove(d);
+                                delegation_preds.remove(&Digest::hash(&d));
                             }
                             Operation::Revocation(r) => {
-                                revocation_preds.remove(r);
+                                revocation_preds.remove(&Digest::hash(&r));
                             }
                         }
                         membership_idx += 1;
