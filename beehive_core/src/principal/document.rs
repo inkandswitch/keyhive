@@ -189,13 +189,7 @@ impl<T: ContentRef> Document<T> {
         {
             // FIXME: We'll need Cgka to check for duplicate add ids
             let op = self.cgka.add(id, pre_key).expect("FIXME");
-            let op_hash = Digest::hash(&op);
-            self.membership_op_to_cgka_op
-                .insert(Digest::hash(&rc.clone().into()), op_hash);
-            self.cgka_ops.insert(op.into());
-            self.membership_op_to_cgka_op.insert(rc.clone().into(), op_hash);
-            // FIXME
-            // self.cgka_op_heads
+            self.cgka_ops_graph.add_membership_op(rc.clone().into(), &op);
         }
         // FIXME: This delegation needs to be predecessor to next pcs update CgkaOperation
     }
@@ -242,6 +236,7 @@ impl<T: ContentRef> Document<T> {
         let op = self.cgka
             .update(new_share_key, new_share_secret_key, csprng)
             .map_err(EncryptError::UnableToPcsUpdate)?;
+        self.cgka_ops_graph.add_op(&op);
         Ok(())
     }
 
@@ -292,7 +287,7 @@ impl<T: ContentRef> Document<T> {
             .cgka_ops_for_update_head(pcs_update_head)
             .iter()
             .map(|hash| {
-                Rc::unwrap_or_clone(self.cgka_ops.get(hash).expect("hash to be present").clone())
+                Rc::unwrap_or_clone(self.cgka_ops_graph.get_cgka_op(hash).expect("hash to be present").clone())
             })
             .collect::<Vec<CgkaOperation>>();
         self.cgka
@@ -319,7 +314,10 @@ impl<T: ContentRef> Document<T> {
         let mut update_frontier = VecDeque::new();
         update_frontier.push_back(update_head);
         while let Some(op_hash) = update_frontier.pop_front() {
-            let preds = self.cgka_ops_predecessors.get(&op_hash).expect("FIXME");
+            let preds = self
+                .cgka_ops_graph
+                .predecessors_for(&op_hash)
+                .expect("FIXME");
             for update_pred in &preds.update_preds {
                 dependencies.add_dependency(*update_pred, op_hash);
                 update_frontier.push_back(*update_pred);
