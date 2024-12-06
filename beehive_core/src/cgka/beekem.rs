@@ -3,8 +3,7 @@ use super::{
 };
 use crate::{
     crypto::{
-        encrypted::NestedEncrypted,
-        share_key::{ShareKey, ShareSecretKey},
+        application_secret::PcsKey, encrypted::NestedEncrypted, share_key::{ShareKey, ShareSecretKey}
     },
     principal::{document::id::DocumentId, individual::id::IndividualId},
 };
@@ -275,7 +274,7 @@ impl BeeKem {
         pk: ShareKey,
         sks: &mut ShareKeyMap,
         csprng: &mut R,
-    ) -> Result<Option<PathChange>, CgkaError> {
+    ) -> Result<Option<(PcsKey, PathChange)>, CgkaError> {
         if !self.id_to_leaf_idx.contains_key(&id) {
             return Ok(None);
         }
@@ -298,6 +297,7 @@ impl BeeKem {
         // key for each ancestor up to the root.
         let mut child_pk = pk;
         let mut child_sk = *sks.get(&pk).ok_or(CgkaError::SecretKeyNotFound)?;
+        let leaf_sk = child_sk.clone();
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
             if let Some(store) = self.inner_node(parent_idx)? {
@@ -328,7 +328,10 @@ impl BeeKem {
             parent_idx = treemath::parent(child_idx);
         }
         self.current_secret_encrypter_leaf_idx = Some(leaf_idx);
-        Ok(Some(new_path))
+        // FIXME: Bring this back
+        // let pcs_key = (leaf_sk.ratchet_n_forward(self.path_length_for(leaf_idx))).into();
+        let pcs_key = self.decrypt_tree_secret(id, sks)?.into();
+        Ok(Some((pcs_key, new_path)))
     }
 
     /// Applies a PathChange representing new public and encrypted secret keys for each

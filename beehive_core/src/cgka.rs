@@ -8,7 +8,7 @@ pub mod treemath;
 #[cfg(feature = "test_utils")]
 pub mod test_utils;
 
-use std::{borrow::Borrow, rc::Rc};
+use std::{borrow::Borrow, collections::HashMap, rc::Rc};
 
 use crate::{
     content::reference::ContentRef,
@@ -43,7 +43,9 @@ pub struct Cgka {
     tree: BeeKem,
     // TODO: Once we can rebuild the tree to correspond to earlier PcsKeys,
     // convert this to a cache of some kind with policies.
+    // FIXME
     pcs_keys: CaMap<PcsKey>,
+    pcs_key_ops: HashMap<Digest<PcsKey>, Digest<CgkaOperation>>,
     // FIXME: Is there a better way to keep track of this? Does it make more
     // sense to create an initial stream of add operations?
     original_members: NonEmpty<(IndividualId, ShareKey)>,
@@ -64,6 +66,7 @@ impl Cgka {
             owner_sks: Default::default(),
             tree,
             pcs_keys: Default::default(),
+            pcs_key_ops: Default::default(),
             original_members: members.clone(),
         };
         Ok(cgka)
@@ -81,11 +84,13 @@ impl Cgka {
         let mut cgka = self.clone();
         cgka.owner_id = my_id;
         cgka.owner_sks = owner_sks;
+        // FIXME: Should these copy over the old keys?
         cgka.pcs_keys = Default::default();
-        if self.has_pcs_key() {
-            let pcs_key = cgka.derive_pcs_key()?;
-            cgka.pcs_keys.insert(Rc::new(pcs_key));
-        }
+        cgka.pcs_key_ops = Default::default();
+        // if self.has_pcs_key() {
+        //     let pcs_key = cgka.derive_pcs_key()?;
+        //     cgka.pcs_keys.insert(Rc::new(pcs_key));
+        // }
         Ok(cgka)
     }
 
@@ -110,23 +115,31 @@ impl Cgka {
         // and use it to perform a PCS update. Note that this means the new leaf
         // key pair is only known at the Cgka level where it is stored in the
         // ShareKeyMap.
-        if !self.has_pcs_key() {
+        let current_pcs_key = if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
-            self.update(new_share_key, new_share_secret_key, csprng)
+            let op = self.update(new_share_key, new_share_secret_key, csprng)
                 .expect("FIXME");
-        }
-        let current_pcs_key = self.derive_pcs_key()?;
+            let pcs_key = self.derive_pcs_key()?;
+            self.pcs_key_ops.insert(Digest::hash(&pcs_key), Digest::hash(&op));
+            self.pcs_keys.insert(pcs_key.into());
+            pcs_key
+        } else {
+            self.derive_pcs_key()?
+        };
         let pcs_key_hash = Digest::hash(&current_pcs_key);
-        if !self.pcs_keys.contains_key(&pcs_key_hash) {
-            self.pcs_keys.insert(Rc::new(current_pcs_key));
-        }
+        // FIXME: Right now we're ensuring that whenever the tree has a pcs key,
+        // we derive and store it.
+        // if !self.pcs_keys.contains_key(&pcs_key_hash) {
+        //     self.pcs_keys.insert(current_pcs_key.into());
+        // }
         let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id)
             .map_err(|_e| CgkaError::Conversion)?;
         Ok(current_pcs_key.derive_application_secret(
             &nonce,
             &Digest::hash(content_ref),
             &Digest::hash(pred_refs),
+            &self.pcs_key_ops.get(&pcs_key_hash).expect("FIXME"),
         ))
     }
 
@@ -157,10 +170,12 @@ impl Cgka {
             }
         };
         self.pcs_keys.insert(last_key.clone());
+        self.pcs_key_ops.insert(Digest::hash(&last_key.borrow()), encrypted.pcs_update_op_hash);
         let app_secret = last_key.derive_application_secret(
             &encrypted.nonce,
             &encrypted.content_ref,
             &encrypted.pred_refs,
+            &encrypted.pcs_update_op_hash,
         );
         Ok(app_secret.key())
     }
@@ -203,14 +218,16 @@ impl Cgka {
         csprng: &mut R,
     ) -> Result<CgkaOperation, CgkaError> {
         self.owner_sks.insert(new_pk, new_sk);
-        let maybe_new_path =
+        let maybe_key_and_path =
             self.tree
                 .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
-        if let Some(new_path) = maybe_new_path {
+        if let Some((pcs_key, new_path)) = maybe_key_and_path {
             let op = CgkaOperation::Update {
                 id: self.owner_id,
                 new_path,
             };
+            self.pcs_key_ops.insert(Digest::hash(&pcs_key), Digest::hash(&op));
+            self.pcs_keys.insert(pcs_key.into());
             Ok(op)
         } else {
             Err(CgkaError::IdentifierNotFound)
@@ -228,6 +245,7 @@ impl Cgka {
     /// Apply an operation that is an immediate causal successor to the current Cgka
     /// state.
     pub fn apply_operation(&mut self, op: &CgkaOperation) -> Result<(), CgkaError> {
+        let op_hash = Digest::hash(op);
         match op {
             CgkaOperation::Add {
                 id,
@@ -250,6 +268,12 @@ impl Cgka {
                 // remove, we ignore it.
                 if self.tree.contains_id(*id) {
                     self.tree.apply_path(new_path)?;
+                    // FIXME: This causes concurrency tests to fail
+                    // if self.has_pcs_key() {
+                    //     let pcs_key = self.derive_pcs_key()?;
+                    //     self.pcs_key_ops.insert(Digest::hash(&pcs_key), op_hash);
+                    //     self.pcs_keys.insert(pcs_key.into());
+                    // }
                 }
             }
         }
@@ -276,14 +300,18 @@ impl Cgka {
     pub fn rebuild_pcs_key(
         &mut self,
         doc_id: DocumentId,
-        ops: Vec<CgkaOperation>,
+        ops: NonEmpty<CgkaOperation>,
     ) -> Result<(), CgkaError> {
+        debug_assert!(matches!(ops.last(), CgkaOperation::Update{..}));
         let mut rebuilt_cgka =
             Cgka::new(&self.original_members, doc_id, self.owner_id).expect("FIXME");
+        // FIXME: Remove cloned()
         rebuilt_cgka
-            .merge_concurrent_operations(&ops)
+            .merge_concurrent_operations(&ops.iter().cloned().collect::<Vec<_>>())
             .expect("FIXME");
-        self.pcs_keys.insert(rebuilt_cgka.derive_pcs_key()?.into());
+        let pcs_key = rebuilt_cgka.derive_pcs_key()?;
+        self.pcs_key_ops.insert(Digest::hash(&pcs_key), Digest::hash(&ops.last()));
+        self.pcs_keys.insert(pcs_key.into());
         Ok(())
     }
 

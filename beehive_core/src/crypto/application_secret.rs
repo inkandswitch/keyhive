@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    content::reference::ContentRef,
-    crypto::{
+    cgka::operation::CgkaOperation, content::reference::ContentRef, crypto::{
         digest::Digest, encrypted::Encrypted, separable::Separable, share_key::ShareSecretKey,
         siv::Siv, symmetric_key::SymmetricKey,
-    },
+    }
 };
 
 const STATIC_CONTEXT: &str = "/automerge/beehive/beekem/app_secret/";
@@ -13,6 +12,7 @@ const STATIC_CONTEXT: &str = "/automerge/beehive/beekem/app_secret/";
 pub struct ApplicationSecret<Cr: ContentRef> {
     key: SymmetricKey,
     pcs_key_hash: Digest<PcsKey>,
+    pcs_update_op_hash: Digest<CgkaOperation>,
     nonce: Siv,
     content_ref: Digest<Cr>,
     pred_refs: Digest<Vec<Cr>>,
@@ -22,6 +22,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
     pub fn new(
         key: SymmetricKey,
         pcs_key_hash: Digest<PcsKey>,
+        pcs_update_op_hash: Digest<CgkaOperation>,
         nonce: Siv,
         content_ref: Digest<Cr>,
         pred_refs: Digest<Vec<Cr>>,
@@ -29,6 +30,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
         Self {
             key,
             pcs_key_hash,
+            pcs_update_op_hash,
             nonce,
             content_ref,
             pred_refs,
@@ -49,6 +51,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
             self.nonce,
             ciphertext,
             self.pcs_key_hash,
+            self.pcs_update_op_hash,
             self.content_ref,
             self.pred_refs,
         ))
@@ -68,6 +71,7 @@ impl PcsKey {
         nonce: &Siv,
         content_ref: &Digest<Cr>,
         pred_refs: &Digest<Vec<Cr>>,
+        pcs_update_op_hash: &Digest<CgkaOperation>,
     ) -> ApplicationSecret<Cr> {
         let pcs_hash = Digest::hash(&self.0);
         let mut app_secret_context =
@@ -79,10 +83,17 @@ impl PcsKey {
         ApplicationSecret::new(
             symmetric_key,
             Digest::hash(self),
+            *pcs_update_op_hash,
             *nonce,
             *content_ref,
             *pred_refs,
         )
+    }
+}
+
+impl From<ShareSecretKey> for PcsKey {
+    fn from(share_secret_key: ShareSecretKey) -> PcsKey {
+        PcsKey(share_secret_key)
     }
 }
 

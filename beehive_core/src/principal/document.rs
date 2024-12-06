@@ -38,7 +38,7 @@ use crate::{
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
-use nonempty::NonEmpty;
+use nonempty::{nonempty, NonEmpty};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
@@ -283,16 +283,24 @@ impl<T: ContentRef> Document<T> {
 
     // // FIXME: Where should this logic go?
     pub fn rebuild_pcs_key(&mut self, pcs_update_head: Digest<CgkaOperation>) {
-        let ops = self
+        let mut ops = self
             .cgka_ops_for_update_head(pcs_update_head)
             .iter()
             .map(|hash| {
                 Rc::unwrap_or_clone(self.cgka_ops_graph.get_cgka_op(hash).expect("hash to be present").clone())
             })
             .collect::<Vec<CgkaOperation>>();
-        self.cgka
-            .rebuild_pcs_key(self.doc_id(), ops)
-            .expect("FIXME");
+        if ops.is_empty() {
+            panic!("FIXME");
+        } else {
+            let head = ops.first().expect("FIXME").clone();
+            let tail = ops.iter().skip(1).cloned().collect::<Vec<_>>();
+            let nonempty_ops = NonEmpty { head, tail };
+            self.cgka
+                .rebuild_pcs_key(self.doc_id(), nonempty_ops)
+                .expect("FIXME");
+        }
+
     }
 
     fn cgka_ops_for_update_head(
