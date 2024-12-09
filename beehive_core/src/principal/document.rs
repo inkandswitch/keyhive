@@ -283,7 +283,7 @@ impl<T: ContentRef> Document<T> {
 
     // // FIXME: Where should this logic go?
     pub fn rebuild_pcs_key(&mut self, pcs_update_head: Digest<CgkaOperation>) {
-        let mut ops = self
+        let ops = self
             .cgka_ops_for_update_head(pcs_update_head)
             .iter()
             .map(|hash| {

@@ -176,6 +176,7 @@ impl<T: ContentRef> Operation<T> {
             topological_sort::TopologicalSort::new();
 
         for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
+            // FIXME: ??
             if seen.contains(digest) {
                 continue;
             }
