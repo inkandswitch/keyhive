@@ -126,12 +126,10 @@ impl Cgka {
         let current_pcs_key = if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
-            let op = self
-                .update(new_share_key, new_share_secret_key, csprng)
+            let op = self.update(new_share_key, new_share_secret_key, csprng)
                 .expect("FIXME");
             let pcs_key = self.derive_pcs_key()?;
-            self.pcs_key_ops
-                .insert(Digest::hash(&pcs_key), Digest::hash(&op));
+            self.pcs_key_ops.insert(Digest::hash(&pcs_key), Digest::hash(&op));
             self.pcs_keys.insert(pcs_key.into());
             pcs_key
         } else {
@@ -180,10 +178,7 @@ impl Cgka {
             }
         };
         self.pcs_keys.insert(last_key.clone());
-        self.pcs_key_ops.insert(
-            Digest::hash(&last_key.borrow()),
-            encrypted.pcs_update_op_hash,
-        );
+        self.pcs_key_ops.insert(Digest::hash(&last_key.borrow()), encrypted.pcs_update_op_hash);
         let app_secret = last_key.derive_application_secret(
             &encrypted.nonce,
             &encrypted.content_ref,
@@ -209,12 +204,7 @@ impl Cgka {
     pub fn add(&mut self, id: IndividualId, pk: ShareKey) -> Result<CgkaOperation, CgkaError> {
         let leaf_index = self.tree.push_leaf(id, pk)?;
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
-        let op = CgkaOperation::Add {
-            added_id: id,
-            pk,
-            leaf_index,
-            predecessors,
-        };
+        let op = CgkaOperation::Add { added_id: id, pk, leaf_index, predecessors };
         self.ops_graph.add_local_op(&op);
         Ok(op)
     }
@@ -227,11 +217,7 @@ impl Cgka {
 
         let removed_keys = self.tree.remove_id(id)?;
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
-        let op = CgkaOperation::Remove {
-            id,
-            removed_keys,
-            predecessors,
-        };
+        let op = CgkaOperation::Remove { id, removed_keys, predecessors };
         self.ops_graph.add_local_op(&op);
         Ok(op)
     }
@@ -255,8 +241,7 @@ impl Cgka {
                 predecessors,
             };
             self.ops_graph.add_local_op(&op);
-            self.pcs_key_ops
-                .insert(Digest::hash(&pcs_key), Digest::hash(&op));
+            self.pcs_key_ops.insert(Digest::hash(&pcs_key), Digest::hash(&op));
             self.pcs_keys.insert(pcs_key.into());
             Ok(op)
         } else {
@@ -296,9 +281,9 @@ impl Cgka {
         }
         // TODO: This is the naive approach to merging concurrent adds: blank the inner
         // nodes and lexicographically sort the leaves.
-        // if blank_before_next_add {
-        //     self.tree.sort_leaves_and_blank_tree()?;
-        // }
+        if blank_before_next_add {
+            self.tree.sort_leaves_and_blank_tree()?;
+        }
         Ok(())
     }
 
@@ -320,11 +305,7 @@ impl Cgka {
             } => {
                 self.tree.remove_id(*id)?;
             }
-            CgkaOperation::Update {
-                id,
-                new_path,
-                predecessors: _,
-            } => {
+            CgkaOperation::Update { id, new_path, predecessors: _ } => {
                 // TODO: We are currently ignoring a missing id here. Causal ordering
                 // should ensure that an update for an id will always come after the
                 // add of that id but might come after a remove. If it came after a
@@ -342,7 +323,7 @@ impl Cgka {
         doc_id: DocumentId,
         ops: NonEmpty<CgkaOperation>,
     ) -> Result<(), CgkaError> {
-        debug_assert!(matches!(ops.last(), CgkaOperation::Update { .. }));
+        debug_assert!(matches!(ops.last(), CgkaOperation::Update{..}));
         let mut rebuilt_cgka =
             Cgka::new(&self.original_members, doc_id, self.owner_id).expect("FIXME");
         // FIXME: Remove cloned()
@@ -350,8 +331,7 @@ impl Cgka {
             .merge_concurrent_operations(&ops.iter().cloned().collect::<Vec<_>>())
             .expect("FIXME");
         let pcs_key = rebuilt_cgka.derive_pcs_key()?;
-        self.pcs_key_ops
-            .insert(Digest::hash(&pcs_key), Digest::hash(&ops.last()));
+        self.pcs_key_ops.insert(Digest::hash(&pcs_key), Digest::hash(&ops.last()));
         self.pcs_keys.insert(pcs_key.into());
         Ok(())
     }
