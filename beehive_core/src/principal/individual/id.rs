@@ -40,6 +40,12 @@ impl From<ed25519_dalek::VerifyingKey> for IndividualId {
     }
 }
 
+impl From<&ed25519_dalek::VerifyingKey> for IndividualId {
+    fn from(verifying_key: &ed25519_dalek::VerifyingKey) -> Self {
+        IndividualId((*verifying_key).into())
+    }
+}
+
 impl std::fmt::Display for IndividualId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)

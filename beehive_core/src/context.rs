@@ -57,7 +57,7 @@ pub struct Context<T: ContentRef, R: rand::CryptoRng + rand::RngCore, const CAP:
     /// Ops that have a valid signature but we can't apply yet
     pub op_quarantine: CaMap<StaticOperation<T>>,
 
-    pub op_quarantine_from_unknown_individuals: ArrayDeque<StaticOperation<T>, CAP, Wrapping>,
+    pub op_quarantine_from_strangers: ArrayDeque<StaticOperation<T>, CAP, Wrapping>,
 
     /// Cryptographically secure (pseudo)random number generator.
     pub csprng: R,
@@ -82,7 +82,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore, const CAP: usize> Contex
             groups: GroupStore::new(),
             docs: DocumentStore::new(),
             op_quarantine: CaMap::new(),
-            op_quarantine_from_unknown_individuals: ArrayDeque::new(),
+            op_quarantine_from_strangers: ArrayDeque::new(),
             csprng,
         })
     }
@@ -296,7 +296,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore, const CAP: usize> Contex
 
     pub fn get_or_init_doc(&mut self, doc_id: DocumentId) -> Rc<RefCell<Document<T>>> {
         self.docs.get(&doc_id).unwrap_or_else(|| {
-            let rc_doc = Rc::new(RefCell::new(Document::new(doc_id)));
+            let rc_doc = Rc::new(RefCell::new(Document::new(doc_id, self.id(), todo!())));
             self.docs.insert(rc_doc.dupe());
             rc_doc
         })
