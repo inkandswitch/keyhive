@@ -3,7 +3,9 @@ use super::{
 };
 use crate::{
     crypto::{
-        application_secret::PcsKey, encrypted::NestedEncrypted, share_key::{ShareKey, ShareSecretKey}
+        application_secret::PcsKey,
+        encrypted::NestedEncrypted,
+        share_key::{ShareKey, ShareSecretKey},
     },
     principal::{document::id::DocumentId, individual::id::IndividualId},
 };
@@ -145,6 +147,7 @@ impl BeeKem {
         Ok(())
     }
 
+    // TODO: If id already exists, add ShareKey to node key for that id's leaf
     pub(crate) fn push_leaf(&mut self, id: IndividualId, pk: ShareKey) -> Result<u32, CgkaError> {
         self.maybe_grow_tree(self.next_leaf_idx.u32());
         let l_idx = self.next_leaf_idx;
@@ -297,7 +300,6 @@ impl BeeKem {
         // key for each ancestor up to the root.
         let mut child_pk = pk;
         let mut child_sk = *sks.get(&pk).ok_or(CgkaError::SecretKeyNotFound)?;
-        let leaf_sk = child_sk.clone();
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
             if let Some(store) = self.inner_node(parent_idx)? {

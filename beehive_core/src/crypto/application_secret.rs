@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cgka::operation::CgkaOperation, content::reference::ContentRef, crypto::{
+    cgka::operation::CgkaOperation,
+    content::reference::ContentRef,
+    crypto::{
         digest::Digest, encrypted::Encrypted, separable::Separable, share_key::ShareSecretKey,
         siv::Siv, symmetric_key::SymmetricKey,
-    }
+    },
 };
 
 const STATIC_CONTEXT: &str = "/automerge/beehive/beekem/app_secret/";

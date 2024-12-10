@@ -38,7 +38,7 @@ use crate::{
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
-use nonempty::{nonempty, NonEmpty};
+use nonempty::NonEmpty;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
@@ -56,7 +56,10 @@ pub struct Document<T: ContentRef> {
     pub(crate) content_state: HashSet<T>,
 
     pub(crate) cgka: Cgka,
-    pub(crate) cgka_ops_graph: CgkaOperationGraph<T>,
+    pub(crate) cgka_op_to_membership_op: HashMap<Digest<CgkaOperation>, Operation<T>>,
+    pub(crate) membership_op_to_cgka_op: HashMap<Operation<T>, Digest<CgkaOperation>>,
+    // FIXME
+    // pub(crate) cgka_ops_graph: CgkaOperationGraph<T>,
 }
 
 impl<T: ContentRef> Document<T> {
@@ -112,7 +115,6 @@ impl<T: ContentRef> Document<T> {
                     Ok::<Group<T>, DelegationError>(acc)
                 })?;
 
-        // FIXME: Active in the document
         let owner_id = IndividualId(Identifier((&doc_signer).into()));
         let doc_id = DocumentId(group.id());
         let owner_share_secret_key = ShareSecretKey::generate(csprng);
@@ -141,7 +143,7 @@ impl<T: ContentRef> Document<T> {
             .expect("FIXME");
         // let initial_op_hash = Digest::hash(&initial_op);
         let mut cgka_ops_graph = CgkaOperationGraph::new();
-        cgka_ops_graph.add_op(&initial_op);
+        cgka_ops_graph.add_local_op(&initial_op);
 
         // let mut cgka_ops_predecessors = HashMap::new();
         // cgka_ops_predecessors.insert(initial_op_hash, Default::default());
@@ -156,7 +158,8 @@ impl<T: ContentRef> Document<T> {
             content_state: Default::default(),
             content_heads: Default::default(),
             cgka,
-            cgka_ops_graph,
+            cgka_op_to_membership_op: Default::default(),
+            membership_op_to_cgka_op: Default::default(),
         })
     }
 
@@ -189,9 +192,11 @@ impl<T: ContentRef> Document<T> {
         {
             // FIXME: We'll need Cgka to check for duplicate add ids
             let op = self.cgka.add(id, pre_key).expect("FIXME");
-            self.cgka_ops_graph.add_membership_op(rc.clone().into(), &op);
+            self.cgka_op_to_membership_op
+                .insert(Digest::hash(&op), rc.clone().into());
+            self.membership_op_to_cgka_op
+                .insert(rc.clone().into(), Digest::hash(&op));
         }
-        // FIXME: This delegation needs to be predecessor to next pcs update CgkaOperation
     }
 
     pub fn revoke_member(
@@ -233,10 +238,9 @@ impl<T: ContentRef> Document<T> {
     ) -> Result<(), EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
-        let op = self.cgka
+        self.cgka
             .update(new_share_key, new_share_secret_key, csprng)
             .map_err(EncryptError::UnableToPcsUpdate)?;
-        self.cgka_ops_graph.add_op(&op);
         Ok(())
     }
 
@@ -287,7 +291,13 @@ impl<T: ContentRef> Document<T> {
             .cgka_ops_for_update_head(pcs_update_head)
             .iter()
             .map(|hash| {
-                Rc::unwrap_or_clone(self.cgka_ops_graph.get_cgka_op(hash).expect("hash to be present").clone())
+                Rc::unwrap_or_clone(
+                    self.cgka
+                        .ops_graph()
+                        .get_cgka_op(hash)
+                        .expect("hash to be present")
+                        .clone(),
+                )
             })
             .collect::<Vec<CgkaOperation>>();
         if ops.is_empty() {
@@ -300,7 +310,6 @@ impl<T: ContentRef> Document<T> {
                 .rebuild_pcs_key(self.doc_id(), nonempty_ops)
                 .expect("FIXME");
         }
-
     }
 
     fn cgka_ops_for_update_head(
@@ -316,30 +325,40 @@ impl<T: ContentRef> Document<T> {
         let mut op_hashes = Vec::new();
         let mut dependencies = TopologicalSort::<Digest<CgkaOperation>>::new();
         let mut ordered_update_hashes = Vec::new();
-        let mut delegation_head_hashes = HashSet::new();
-        let mut revocation_head_hashes = HashSet::new();
+        let mut membership_op_head_hashes = HashSet::new();
 
         let mut update_frontier = VecDeque::new();
         update_frontier.push_back(update_head);
         while let Some(op_hash) = update_frontier.pop_front() {
             let preds = self
-                .cgka_ops_graph
+                .cgka
+                .ops_graph()
                 .predecessors_for(&op_hash)
                 .expect("FIXME");
             for update_pred in &preds.update_preds {
                 dependencies.add_dependency(*update_pred, op_hash);
                 update_frontier.push_back(*update_pred);
             }
-            delegation_head_hashes.extend(preds.delegation_preds.clone());
-            revocation_head_hashes.extend(preds.revocation_preds.clone());
+            membership_op_head_hashes.extend(preds.membership_preds.clone());
         }
         for hash in dependencies.pop_all() {
             ordered_update_hashes.push(hash);
         }
-        // FIXME: Convert heads (hashes) to actual operations from GroupState and
-        // then pass into topsort()
-        let delegation_heads = Default::default(); // FIXME: derive from delegation_head_hashes
-        let revocation_heads = Default::default(); // FIXME: derive from revocation_head_hashes
+
+        let (delegation_heads, revocation_heads) = membership_op_head_hashes
+            .iter()
+            .map(|cgka_hash| {
+                self.cgka_op_to_membership_op
+                    .get(cgka_hash)
+                    .expect("hash to be in set")
+            })
+            .fold((HashSet::new(), HashSet::new()), |mut acc, op| {
+                match op {
+                    Operation::Delegation(d) => acc.0.insert(d.clone()),
+                    Operation::Revocation(r) => acc.1.insert(r.clone()),
+                };
+                acc
+            });
         let ordered_membership_ops =
             Operation::topsort(&delegation_heads, &revocation_heads).expect("FIXME");
 
@@ -350,44 +369,54 @@ impl<T: ContentRef> Document<T> {
         {
             if update_idx < ordered_update_hashes.len() {
                 let update = ordered_update_hashes[update_idx];
-                let preds = self.cgka_ops_graph.predecessors_for(&update).expect("FIXME");
-                if preds.depends_on_membership_ops() {
-                    let mut delegation_preds = preds.delegation_preds.clone();
-                    let mut revocation_preds = preds.revocation_preds.clone();
-                    while !(delegation_preds.is_empty() && revocation_preds.is_empty()) {
-                        let (member_op_hash, member_op) = &ordered_membership_ops[membership_idx];
-                        op_hashes.push(
-                            *self
-                                .cgka_ops_graph
-                                .get_cgka_op_for_membership_op(member_op_hash)
-                                .expect("FIXME"),
-                        );
-                        match member_op {
-                            Operation::Delegation(d) => {
-                                delegation_preds.remove(&Digest::hash(&d));
-                            }
-                            Operation::Revocation(r) => {
-                                revocation_preds.remove(&Digest::hash(&r));
-                            }
-                        }
-                        membership_idx += 1;
-                    }
+                let preds = self
+                    .cgka
+                    .ops_graph()
+                    .predecessors_for(&update)
+                    .expect("FIXME");
+                let mut membership_preds = preds
+                    .membership_preds
+                    .iter()
+                    .cloned()
+                    .map(|cgka_op| {
+                        self.cgka_op_to_membership_op
+                            .get(&cgka_op)
+                            .expect("known op to be in map")
+                    })
+                    .collect::<HashSet<_>>();
+                // FIXME: We assume we will see all preds. This should be guaranteed by
+                // causal delivery but this could lead to an infinite loop as written.
+                // Do we actually remove old operations in such a way in the Beehive
+                // CRDT in such a way that this will never terminate for outdated predecessors?
+                while !membership_preds.is_empty() {
+                    let (_member_op_hash, member_op) = &ordered_membership_ops[membership_idx];
+                    op_hashes.push(*self.membership_op_to_cgka_op.get(member_op).expect("FIXME"));
+                    membership_preds.remove(member_op);
+                    membership_idx += 1;
                 }
                 op_hashes.push(update);
                 update_idx += 1;
             } else {
                 while membership_idx < ordered_membership_ops.len() {
-                    let (member_op_hash, _member_op) = &ordered_membership_ops[membership_idx];
-                    op_hashes.push(
-                        *self
-                            .cgka_ops_graph
-                            .get_cgka_op_for_membership_op(member_op_hash)
-                            .expect("FIXME"),
-                    );
+                    let (_member_op_hash, member_op) = &ordered_membership_ops[membership_idx];
+                    op_hashes.push(*self.membership_op_to_cgka_op.get(member_op).expect("FIXME"));
                     membership_idx += 1;
                 }
             }
         }
+
+        // FIXME
+        // let mut heads = HashSet::new();
+        // for hash in op_hashes {
+        //     let op = self.cgka_ops_graph.get_cgka_op(&hash).expect("op to be in graph");
+        //     if matches!(op, CgkaOperation::Add { .. }) {
+        //         if self.cgka_ops_graph.predecessors_for(&hash);
+        //         for d in preds.deleg {
+        //             heads.remove(h);
+        //         }
+        //         heads.insert(self.cgka_ops_graph.get_membership_op_for_cgka_op(&hash));
+        //     }
+        // }
 
         op_hashes
     }

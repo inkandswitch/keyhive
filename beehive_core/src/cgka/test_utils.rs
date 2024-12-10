@@ -116,8 +116,8 @@ impl TestConcurrentOperations {
             let (m_id, ref mut next_member_ops) = &mut member_ops[idx];
             if let Some(next_op) = next_member_ops.pop_back() {
                 if removed_ids.contains(m_id) {
-                    if let CgkaOperation::Add { id, .. } = next_op {
-                        cancelled_adds.insert(id);
+                    if let CgkaOperation::Add { added_id, .. } = next_op {
+                        cancelled_adds.insert(added_id);
                     }
                 } else {
                     if let CgkaOperation::Remove { id, .. } = next_op {

@@ -7,7 +7,10 @@ use super::{
     siv::Siv,
     symmetric_key::SymmetricKey,
 };
-use crate::{cgka::operation::CgkaOperation, content::reference::ContentRef, principal::document::id::DocumentId};
+use crate::{
+    cgka::operation::CgkaOperation, content::reference::ContentRef,
+    principal::document::id::DocumentId,
+};
 use nonempty::NonEmpty;
 use serde::{ser::SerializeStruct, Deserialize, Serialize};
 use std::marker::PhantomData;
