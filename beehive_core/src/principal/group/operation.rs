@@ -112,20 +112,22 @@ impl<T: ContentRef> Operation<T> {
             heads.push((op.dupe(), 0));
         }
 
-        while let Some(head) = heads.pop() {
-            let (op, longest_known_path) = head;
+        while let Some((op, longest_known_path)) = heads.pop() {
+            if op.subject() != self.subject() {
+                return Err(AncestorError::MismatchedSubject(op.subject()));
+            }
 
             match ancestors.get(&op) {
-                None => ancestors.insert(op, longest_known_path + 1),
-                Some(&count) if count > longest_known_path + 1 => continue,
-                _ => {
-                    if op.subject() != self.subject() {
-                        return Err(AncestorError::MismatchedSubject(op.subject()));
-                    }
-
+                None => {
                     for parent_op in after_auth.iter() {
                         heads.push((parent_op.dupe(), longest_known_path + 1));
                     }
+
+                    ancestors.insert(op, longest_known_path + 1)
+                }
+                Some(&count) if count > longest_known_path + 1 => continue,
+                _ => {
+                    // FIXME only tracks heads, not longest path!
 
                     ancestors.insert(op, longest_known_path + 1)
                 }
@@ -196,13 +198,15 @@ impl<T: ContentRef> Operation<T> {
                 let other_ancestor_set: HashSet<&Operation<T>> =
                     other_ancestors.values().map(|op| op.as_ref()).collect();
 
-                if ancestor_set.is_subset(&other_ancestor_set) {
+                if other_ancestor_set.contains(op) || ancestor_set.is_subset(&other_ancestor_set) {
                     leftovers.remove(other_op);
                     adjacencies.add_dependency((*other_digest, other_op.as_ref()), (*digest, op));
                     continue;
                 }
 
-                if ancestor_set.is_superset(&other_ancestor_set) {
+                if ancestor_set.contains(other_op.as_ref())
+                    || ancestor_set.is_superset(&other_ancestor_set)
+                {
                     leftovers.remove(op);
                     adjacencies.add_dependency((*digest, op), (*other_digest, other_op.as_ref()));
                     continue;
@@ -573,6 +577,30 @@ mod tests {
             let erin_sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
             let erin: Individual = erin_sk.verifying_key().into();
 
+            /*
+                     ┌────────┐
+                     │ Remove │
+                ┌────│  Dan   │──────┐
+                │    └────────┘      │
+                │         ║          │
+                ▼         ║          ▼
+            ┌───────┐     ║      ┌───────┐  ┌────────┐
+            │ Erin  │     ║      │  Dan  │  │ Remove │
+            └───────┘     ║      └───────┘  │ Carol  │══╗
+                │         ║          │      └────────┘  ║
+                │         ║          │           │      ║
+                │         ▼          ▼           │      ║
+                │     ┌───────┐  ┌───────┐       │      ║
+                └────▶│  Bob  │  │ Carol │◀──────┘      ║
+                      └───────┘  └───────┘              ║
+                          │          │                  ║
+                          │          │                  ║
+                          │          ▼                  ║
+                          │      ┌───────┐              ║
+                          └─────▶│ Alice │◀═════════════╝
+                                 └───────┘
+            */
+
             let alice_dlg: Rc<Signed<Delegation<String>>> = Rc::new(
                 Signed::try_sign(
                     Delegation {
@@ -669,37 +697,30 @@ mod tests {
 
             let rev_carol_op: Operation<String> = alice_revokes_carol.dupe().into();
             let rev_carol_hash = Digest::hash(&rev_carol_op);
-            dbg!(&rev_carol_hash);
 
             let rev_dan_op: Operation<String> = bob_revokes_dan.dupe().into();
             let rev_dan_hash = Digest::hash(&rev_dan_op);
-            dbg!(&rev_dan_hash);
 
             let dlg_heads = HashSet::from_iter([erin_dlg.dupe()]);
             let rev_heads =
                 HashSet::from_iter([alice_revokes_carol.dupe(), bob_revokes_dan.dupe()]);
 
-            let mut observed = Operation::topsort(&dlg_heads, &rev_heads).unwrap();
+            let observed = Operation::topsort(&dlg_heads, &rev_heads).unwrap();
 
             let alice_op: Operation<String> = alice_dlg.clone().into();
             let alice_hash = Digest::hash(&alice_op);
-            dbg!(alice_hash);
 
             let bob_op: Operation<String> = bob_dlg.clone().into();
             let bob_hash = Digest::hash(&bob_op);
-            dbg!(bob_hash);
 
             let carol_op: Operation<String> = carol_dlg.clone().into();
             let carol_hash = Digest::hash(&carol_op);
-            dbg!(carol_hash);
 
             let dan_op: Operation<String> = dan_dlg.clone().into();
             let dan_hash = Digest::hash(&dan_op);
-            dbg!(dan_hash);
 
             let erin_op: Operation<String> = erin_dlg.clone().into();
             let erin_hash = Digest::hash(&erin_op);
-            dbg!(erin_hash);
 
             let mut bob_and_revoke_carol = vec![
                 (bob_hash, bob_op.clone()),
@@ -756,10 +777,16 @@ mod tests {
 
             // Remember: the order is reversed from what you'd expect because
             // the main interface is `next` or `pop`
+            // Since we need to account for concurrency, some will be ordered by their hash,
+            // which is difficult to account for in a test with random signing keys. Instead of
+            // asserting some specific order, we just assert that the relationships are correct.
             assert!(pos_alice > pos_bob);
             assert!(pos_alice > pos_carol);
             assert!(pos_alice > pos_erin);
+            assert!(pos_alice > pos_rev_carol);
+            assert!(pos_alice > pos_rev_dan);
             assert!(pos_bob > pos_erin);
+            assert!(pos_bob > pos_rev_dan);
             assert!(pos_carol > pos_dan);
             assert!(pos_carol > pos_rev_carol);
             assert!(pos_carol > pos_rev_dan);
