@@ -272,7 +272,7 @@ impl<T: ContentRef> Group<T> {
         // FIXME check that you can actually do this with tiebreaking, seniroity etc etc
     }
 
-    pub fn materialize(&mut self) -> Result<(), AncestorError> {
+    pub fn materialize(&mut self) -> Result<(), AncestorError<T>> {
         Ok(
             for (_, op) in
                 Operation::topsort(&self.state.delegation_heads, &self.state.revocation_heads)?

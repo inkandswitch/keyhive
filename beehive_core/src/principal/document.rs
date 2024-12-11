@@ -168,7 +168,7 @@ impl<T: ContentRef> Document<T> {
         self.group.get_agent_revocations(agent)
     }
 
-    pub fn materialize(&mut self) -> Result<(), AncestorError> {
+    pub fn materialize(&mut self) -> Result<(), AncestorError<T>> {
         self.group.materialize()
     }
 

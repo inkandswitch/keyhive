@@ -46,7 +46,12 @@ impl<T: ContentRef> Revocation<T> {
         Vec<Rc<Signed<Revocation<T>>>>,
         &BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
     ) {
-        (vec![self.revoke.dupe()], vec![], &self.after_content)
+        let mut dlgs = vec![self.revoke.dupe()];
+        if let Some(dlg) = &self.proof {
+            dlgs.push(dlg.clone());
+        }
+
+        (dlgs, vec![], &self.after_content)
     }
 }
 
