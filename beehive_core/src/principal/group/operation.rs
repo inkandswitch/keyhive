@@ -570,7 +570,7 @@ mod tests {
             let dlg_heads = HashSet::from_iter([dan_dlg.dupe()]);
             let rev_heads = HashSet::new();
 
-            let mut observed = Operation::topsort(&dlg_heads, &rev_heads);
+            let observed = Operation::topsort(&dlg_heads, &rev_heads);
 
             let alice_op: Operation<String> = alice_dlg.into();
             let alice_hash = Digest::hash(&alice_op);
@@ -585,10 +585,7 @@ mod tests {
             let c = (carol_hash, carol_op.clone());
             let d = (dan_hash, dan_op.clone());
 
-            assert_eq!(observed.pop(), Some(a));
-            assert_eq!(observed.pop(), Some(c));
-            assert_eq!(observed.pop(), Some(d));
-            assert_eq!(observed.pop(), None);
+            assert_eq!(observed, vec![d, c, a]);
         }
 
         #[test]
