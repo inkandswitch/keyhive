@@ -21,7 +21,6 @@ use std::{
     hash::Hash,
     rc::Rc,
 };
-use thiserror::Error;
 use topological_sort::TopologicalSort;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Dupe)]
@@ -99,9 +98,9 @@ impl<T: ContentRef> Operation<T> {
         }
     }
 
-    pub fn ancestors(&self) -> Result<(CaMap<Operation<T>>, usize), AncestorError<T>> {
+    pub fn ancestors(&self) -> (CaMap<Operation<T>>, usize) {
         if self.is_root() {
-            return Ok((CaMap::new(), 1));
+            return (CaMap::new(), 1);
         }
 
         let mut ancestors = HashMap::new();
@@ -113,10 +112,6 @@ impl<T: ContentRef> Operation<T> {
         }
 
         while let Some((op, longest_known_path)) = heads.pop() {
-            if op.subject() != self.subject() {
-                return Err(AncestorError::MismatchedSubject(op.subject()));
-            }
-
             match ancestors.get(&op) {
                 None => {
                     for parent_op in op.after_auth().iter() {
@@ -130,7 +125,7 @@ impl<T: ContentRef> Operation<T> {
             };
         }
 
-        Ok(ancestors.into_iter().fold(
+        ancestors.into_iter().fold(
             (CaMap::new(), 0),
             |(mut acc_set, acc_count), (op, count)| {
                 acc_set.insert(Rc::new(op.clone()));
@@ -141,13 +136,13 @@ impl<T: ContentRef> Operation<T> {
                     (acc_set, acc_count)
                 }
             },
-        ))
+        )
     }
 
     pub fn topsort(
         delegation_heads: &HashSet<Rc<Signed<Delegation<T>>>>,
         revocation_heads: &HashSet<Rc<Signed<Revocation<T>>>>,
-    ) -> Result<Vec<(Digest<Operation<T>>, Operation<T>)>, AncestorError<T>> {
+    ) -> Vec<(Digest<Operation<T>>, Operation<T>)> {
         // NOTE: BTreeMap to get deterministic order
         let mut ops_with_ancestors: BTreeMap<
             Digest<Operation<T>>,
@@ -170,7 +165,7 @@ impl<T: ContentRef> Operation<T> {
         }
 
         while let Some(op) = explore.pop() {
-            let (ancestors, longest_path) = op.ancestors()?;
+            let (ancestors, longest_path) = op.ancestors();
 
             for ancestor in ancestors.values() {
                 explore.push(ancestor.as_ref().clone());
@@ -266,7 +261,7 @@ impl<T: ContentRef> Operation<T> {
         }
 
         history.extend(dependencies);
-        Ok(history)
+        history
     }
 }
 
@@ -280,15 +275,6 @@ impl<T: ContentRef> From<Rc<Signed<Revocation<T>>>> for Operation<T> {
     fn from(revocation: Rc<Signed<Revocation<T>>>) -> Self {
         Operation::Revocation(revocation)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Error)]
-pub enum AncestorError<T: ContentRef> {
-    #[error("Mismatched subject: {0}")]
-    MismatchedSubject(Identifier),
-
-    #[error("Dependency not available: {0}")]
-    DependencyNotAvailable(Digest<Operation<T>>),
 }
 
 #[cfg(test)]
@@ -486,7 +472,7 @@ mod tests {
         #[test]
         fn test_singleton() {
             let alice_dlg = add_alice();
-            let (ancestors, longest) = Operation::from(alice_dlg).ancestors().unwrap();
+            let (ancestors, longest) = Operation::from(alice_dlg).ancestors();
             assert!(ancestors.is_empty());
             assert_eq!(longest, 1);
         }
@@ -494,7 +480,7 @@ mod tests {
         #[test]
         fn test_two_direct() {
             let bob_dlg = add_bob();
-            let (ancestors, longest) = Operation::from(bob_dlg).ancestors().unwrap();
+            let (ancestors, longest) = Operation::from(bob_dlg).ancestors();
             assert_eq!(ancestors.len(), 1);
             assert_eq!(longest, 2);
         }
@@ -504,8 +490,8 @@ mod tests {
             let bob_dlg = add_bob();
             let carol_dlg = add_carol();
 
-            let (bob_ancestors, bob_longest) = Operation::from(bob_dlg).ancestors().unwrap();
-            let (carol_ancestors, carol_longest) = Operation::from(carol_dlg).ancestors().unwrap();
+            let (bob_ancestors, bob_longest) = Operation::from(bob_dlg).ancestors();
+            let (carol_ancestors, carol_longest) = Operation::from(carol_dlg).ancestors();
 
             assert_eq!(bob_ancestors.len(), carol_ancestors.len());
             assert_eq!(bob_longest, carol_longest);
@@ -514,7 +500,7 @@ mod tests {
         #[test]
         fn test_longer() {
             let erin_dlg = add_erin();
-            let (ancestors, longest) = Operation::from(erin_dlg).ancestors().unwrap();
+            let (ancestors, longest) = Operation::from(erin_dlg).ancestors();
             assert_eq!(ancestors.len(), 2);
             assert_eq!(longest, 2);
         }
@@ -522,7 +508,7 @@ mod tests {
         #[test]
         fn test_revocation() {
             let rev = remove_carol();
-            let (ancestors, longest) = Operation::from(rev).ancestors().unwrap();
+            let (ancestors, longest) = Operation::from(rev).ancestors();
             assert_eq!(ancestors.len(), 2);
             assert_eq!(longest, 2);
         }
@@ -537,7 +523,7 @@ mod tests {
             let revs = HashSet::new();
 
             let observed = Operation::<String>::topsort(&dlgs, &revs);
-            assert_eq!(observed, Ok(vec![]));
+            assert_eq!(observed, vec![]);
         }
 
         #[test]
@@ -550,7 +536,7 @@ mod tests {
             let observed = Operation::topsort(&dlgs, &revs);
             let expected = dlg.into();
 
-            assert_eq!(observed, Ok(vec![(Digest::hash(&expected), expected)]));
+            assert_eq!(observed, vec![(Digest::hash(&expected), expected)]);
         }
 
         #[test]
@@ -571,21 +557,20 @@ mod tests {
                 (Digest::hash(&alice_op), alice_op),
             ];
 
-            assert_eq!(observed.clone().unwrap().len(), 2);
-            assert_eq!(observed, Ok(expected));
+            assert_eq!(observed.len(), 2);
+            assert_eq!(observed, expected);
         }
 
         #[test]
         fn test_longer_delegation_chain() {
             let alice_dlg = add_alice();
-            let bob_dlg = add_bob();
             let carol_dlg = add_carol();
             let dan_dlg = add_dan();
 
             let dlg_heads = HashSet::from_iter([dan_dlg.dupe()]);
             let rev_heads = HashSet::new();
 
-            let mut observed = Operation::topsort(&dlg_heads, &rev_heads).unwrap();
+            let mut observed = Operation::topsort(&dlg_heads, &rev_heads);
 
             let alice_op: Operation<String> = alice_dlg.into();
             let alice_hash = Digest::hash(&alice_op);
@@ -629,7 +614,7 @@ mod tests {
             let dlgs = HashSet::new();
             let revs = HashSet::from_iter([alice_revokes_bob.dupe()]);
 
-            let mut observed = Operation::topsort(&dlgs, &revs).unwrap();
+            let mut observed = Operation::topsort(&dlgs, &revs);
 
             let alice_op: Operation<String> = alice_dlg.into();
             let alice_hash = Digest::hash(&alice_op);
@@ -671,7 +656,7 @@ mod tests {
             let rev_heads =
                 HashSet::from_iter([alice_revokes_carol.dupe(), bob_revokes_dan.dupe()]);
 
-            let observed = Operation::topsort(&dlg_heads, &rev_heads).unwrap();
+            let observed = Operation::topsort(&dlg_heads, &rev_heads);
 
             let alice_op: Operation<String> = alice_dlg.clone().into();
             let alice_hash = Digest::hash(&alice_op);
