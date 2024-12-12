@@ -101,7 +101,7 @@ impl<T: ContentRef> Operation<T> {
 
     pub fn ancestors(&self) -> Result<(CaMap<Operation<T>>, usize), AncestorError<T>> {
         if self.is_root() {
-            return Ok((CaMap::new(), 0));
+            return Ok((CaMap::new(), 1));
         }
 
         let mut ancestors = HashMap::new();
@@ -109,7 +109,7 @@ impl<T: ContentRef> Operation<T> {
 
         let after_auth = self.after_auth();
         for op in after_auth.iter() {
-            heads.push((op.dupe(), 0));
+            heads.push((op.clone(), 1));
         }
 
         while let Some((op, longest_known_path)) = heads.pop() {
@@ -119,18 +119,14 @@ impl<T: ContentRef> Operation<T> {
 
             match ancestors.get(&op) {
                 None => {
-                    for parent_op in after_auth.iter() {
-                        heads.push((parent_op.dupe(), longest_known_path + 1));
+                    for parent_op in op.after_auth().iter() {
+                        heads.push((parent_op.clone(), longest_known_path));
                     }
 
                     ancestors.insert(op, longest_known_path + 1)
                 }
                 Some(&count) if count > longest_known_path + 1 => continue,
-                _ => {
-                    // FIXME only tracks heads, not longest path!
-
-                    ancestors.insert(op, longest_known_path + 1)
-                }
+                _ => ancestors.insert(op, longest_known_path + 1),
             };
         }
 
@@ -300,12 +296,242 @@ pub enum AncestorError<T: ContentRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{access::Access, principal::individual::Individual};
+    use dupe::Dupe;
+    use std::rc::Rc;
+
+    use std::sync::LazyLock;
+
+    static GROUP_SK: LazyLock<ed25519_dalek::SigningKey> =
+        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+
+    static ALICE_SK: LazyLock<ed25519_dalek::SigningKey> =
+        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+
+    static BOB_SK: LazyLock<ed25519_dalek::SigningKey> =
+        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+
+    static CAROL_SK: LazyLock<ed25519_dalek::SigningKey> =
+        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+
+    static DAN_SK: LazyLock<ed25519_dalek::SigningKey> =
+        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+
+    static ERIN_SK: LazyLock<ed25519_dalek::SigningKey> =
+        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+
+    /*
+             ┌────────┐
+             │ Remove │
+        ┌────│  Dan   │──────┐
+        │    └────────┘      │
+        │         ║          │
+        ▼         ║          ▼
+    ┌───────┐     ║      ┌───────┐  ┌────────┐
+    │ Erin  │     ║      │  Dan  │  │ Remove │
+    └───────┘     ║      └───────┘  │ Carol  │══╗
+        │         ║          │      └────────┘  ║
+        │         ║          │           │      ║
+        │         ▼          ▼           │      ║
+        │     ┌───────┐  ┌───────┐       │      ║
+        └────▶│  Bob  │  │ Carol │◀──────┘      ║
+              └───────┘  └───────┘              ║
+                  │          │                  ║
+                  │          │                  ║
+                  │          ▼                  ║
+                  │      ┌───────┐              ║
+                  └─────▶│ Alice │◀═════════════╝
+                         └───────┘
+                             │
+                             │
+                             ▼
+                         ┌───────┐
+                         │ Group │
+                         └───────┘
+    */
+
+    fn add_alice() -> Rc<Signed<Delegation<String>>> {
+        let alice: Individual = fixture(&ALICE_SK).verifying_key().into();
+        let group_sk = LazyLock::force(&GROUP_SK).clone();
+
+        Rc::new(
+            Signed::try_sign(
+                Delegation {
+                    delegate: alice.into(),
+                    can: Access::Admin,
+                    proof: None,
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                },
+                &group_sk,
+            )
+            .unwrap(),
+        )
+        .dupe()
+    }
+
+    fn add_bob() -> Rc<Signed<Delegation<String>>> {
+        let alice_sk = fixture(&ALICE_SK).clone();
+        let bob: Individual = fixture(&BOB_SK).verifying_key().into();
+
+        Rc::new(
+            Signed::try_sign(
+                Delegation {
+                    delegate: bob.into(),
+                    can: Access::Write,
+                    proof: Some(add_alice().into()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                },
+                &alice_sk,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn add_carol() -> Rc<Signed<Delegation<String>>> {
+        let alice_sk = fixture(&ALICE_SK).clone();
+        let carol: Individual = fixture(&CAROL_SK).verifying_key().into();
+
+        Rc::new(
+            Signed::try_sign(
+                Delegation {
+                    delegate: carol.into(),
+                    can: Access::Write,
+                    proof: Some(add_alice().into()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                },
+                &alice_sk,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn add_dan() -> Rc<Signed<Delegation<String>>> {
+        let carol_sk = fixture(&CAROL_SK).clone();
+        let dan: Individual = fixture(&DAN_SK).verifying_key().into();
+
+        Rc::new(
+            Signed::try_sign(
+                Delegation {
+                    delegate: dan.into(),
+                    can: Access::Write,
+                    proof: Some(add_carol().into()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                },
+                &carol_sk,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn add_erin() -> Rc<Signed<Delegation<String>>> {
+        let bob_sk = fixture(&BOB_SK).clone();
+        let erin: Individual = fixture(&ERIN_SK).verifying_key().into();
+
+        Rc::new(
+            Signed::try_sign(
+                Delegation {
+                    delegate: erin.into(),
+                    can: Access::Write,
+                    proof: Some(add_bob().into()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                },
+                &bob_sk,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn remove_carol() -> Rc<Signed<Revocation<String>>> {
+        let alice_sk = fixture(&ALICE_SK).clone();
+
+        Rc::new(
+            Signed::try_sign(
+                Revocation {
+                    revoke: add_carol(),
+                    proof: Some(add_alice()),
+                    after_content: BTreeMap::new(),
+                },
+                &alice_sk,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn remove_dan() -> Rc<Signed<Revocation<String>>> {
+        let bob_sk = fixture(&BOB_SK).clone();
+
+        Rc::new(
+            Signed::try_sign(
+                Revocation {
+                    revoke: add_dan(),
+                    proof: Some(add_bob().into()),
+                    after_content: BTreeMap::new(),
+                },
+                &bob_sk,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn fixture<T>(from: &LazyLock<T>) -> &T {
+        LazyLock::force(&from)
+    }
+
+    mod ancestors {
+        use super::*;
+
+        #[test]
+        fn test_singleton() {
+            let alice_dlg = add_alice();
+            let (ancestors, longest) = Operation::from(alice_dlg).ancestors().unwrap();
+            assert!(ancestors.is_empty());
+            assert_eq!(longest, 1);
+        }
+
+        #[test]
+        fn test_two_direct() {
+            let bob_dlg = add_bob();
+            let (ancestors, longest) = Operation::from(bob_dlg).ancestors().unwrap();
+            assert_eq!(ancestors.len(), 1);
+            assert_eq!(longest, 2);
+        }
+
+        #[test]
+        fn test_concurrent() {
+            let bob_dlg = add_bob();
+            let carol_dlg = add_carol();
+
+            let (bob_ancestors, bob_longest) = Operation::from(bob_dlg).ancestors().unwrap();
+            let (carol_ancestors, carol_longest) = Operation::from(carol_dlg).ancestors().unwrap();
+
+            assert_eq!(bob_ancestors.len(), carol_ancestors.len());
+            assert_eq!(bob_longest, carol_longest);
+        }
+
+        #[test]
+        fn test_longer() {
+            let erin_dlg = add_erin();
+            let (ancestors, longest) = Operation::from(erin_dlg).ancestors().unwrap();
+            assert_eq!(ancestors.len(), 2);
+            assert_eq!(longest, 2);
+        }
+
+        #[test]
+        fn test_revocation() {
+            let rev = remove_carol();
+            let (ancestors, longest) = Operation::from(rev).ancestors().unwrap();
+            assert_eq!(ancestors.len(), 2);
+            assert_eq!(longest, 2);
+        }
+    }
 
     mod topsort {
         use super::*;
-        use crate::{access::Access, principal::individual::Individual};
-        use dupe::Dupe;
-        use std::rc::Rc;
 
         #[test]
         fn test_empty() {
@@ -318,25 +544,7 @@ mod tests {
 
         #[test]
         fn test_one_delegation() {
-            let alice: Individual = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
-                .verifying_key()
-                .into();
-
-            let sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-
-            let dlg: Rc<Signed<Delegation<String>>> = Rc::new(
-                Signed::try_sign(
-                    Delegation {
-                        delegate: alice.into(),
-                        can: Access::Write,
-                        proof: None,
-                        after_content: BTreeMap::new(),
-                        after_revocations: vec![],
-                    },
-                    &sk,
-                )
-                .unwrap(),
-            );
+            let dlg = add_alice();
 
             let dlgs = HashSet::from_iter([dlg.dupe()]);
             let revs = HashSet::new();
@@ -349,42 +557,9 @@ mod tests {
 
         #[test]
         fn test_delegation_sequence() {
-            let root_sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+            let alice_dlg = add_alice();
+            let bob_dlg = add_bob();
 
-            let alice_sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-            let alice: Individual = alice_sk.verifying_key().into();
-
-            let bob: Individual = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
-                .verifying_key()
-                .into();
-
-            let alice_dlg: Rc<Signed<Delegation<String>>> = Rc::new(
-                Signed::try_sign(
-                    Delegation {
-                        delegate: alice.into(),
-                        can: Access::Write,
-                        proof: None,
-                        after_content: BTreeMap::new(),
-                        after_revocations: vec![],
-                    },
-                    &root_sk,
-                )
-                .unwrap(),
-            );
-
-            let bob_dlg: Rc<Signed<Delegation<String>>> = Rc::new(
-                Signed::try_sign(
-                    Delegation {
-                        delegate: bob.into(),
-                        can: Access::Write,
-                        proof: Some(alice_dlg.dupe().into()),
-                        after_content: BTreeMap::new(),
-                        after_revocations: vec![],
-                    },
-                    &alice_sk,
-                )
-                .unwrap(),
-            );
             let dlg_heads = HashSet::from_iter([bob_dlg.dupe()]);
             let rev_heads = HashSet::new();
 
@@ -404,61 +579,12 @@ mod tests {
 
         #[test]
         fn test_longer_delegation_chain() {
-            let root_sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+            let alice_dlg = add_alice();
+            let bob_dlg = add_bob();
+            let carol_dlg = add_carol();
+            let dan_dlg = add_dan();
 
-            let alice_sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-            let alice: Individual = alice_sk.verifying_key().into();
-
-            let bob_sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-            let bob: Individual = bob_sk.verifying_key().into();
-
-            let carol: Individual = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
-                .verifying_key()
-                .into();
-
-            let alice_dlg: Rc<Signed<Delegation<String>>> = Rc::new(
-                Signed::try_sign(
-                    Delegation {
-                        delegate: alice.into(),
-                        can: Access::Write,
-                        proof: None,
-                        after_content: BTreeMap::new(),
-                        after_revocations: vec![],
-                    },
-                    &root_sk,
-                )
-                .unwrap(),
-            );
-
-            let bob_dlg: Rc<Signed<Delegation<String>>> = Rc::new(
-                Signed::try_sign(
-                    Delegation {
-                        delegate: bob.into(),
-                        can: Access::Write,
-                        proof: Some(alice_dlg.dupe().into()),
-                        after_content: BTreeMap::new(),
-                        after_revocations: vec![],
-                    },
-                    &alice_sk,
-                )
-                .unwrap(),
-            );
-
-            let carol_dlg: Rc<Signed<Delegation<String>>> = Rc::new(
-                Signed::try_sign(
-                    Delegation {
-                        delegate: carol.into(),
-                        can: Access::Read,
-                        proof: Some(bob_dlg.dupe().into()),
-                        after_content: BTreeMap::new(),
-                        after_revocations: vec![],
-                    },
-                    &bob_sk,
-                )
-                .unwrap(),
-            );
-
-            let dlg_heads = HashSet::from_iter([carol_dlg.dupe()]);
+            let dlg_heads = HashSet::from_iter([dan_dlg.dupe()]);
             let rev_heads = HashSet::new();
 
             let mut observed = Operation::topsort(&dlg_heads, &rev_heads).unwrap();
@@ -466,60 +592,27 @@ mod tests {
             let alice_op: Operation<String> = alice_dlg.into();
             let alice_hash = Digest::hash(&alice_op);
 
-            let bob_op: Operation<String> = bob_dlg.into();
-            let bob_hash = Digest::hash(&bob_op);
-
             let carol_op: Operation<String> = carol_dlg.into();
             let carol_hash = Digest::hash(&carol_op);
 
+            let dan_op: Operation<String> = dan_dlg.into();
+            let dan_hash = Digest::hash(&dan_op);
+
             let a = (alice_hash, alice_op.clone());
-            let b = (bob_hash, bob_op.clone());
             let c = (carol_hash, carol_op.clone());
+            let d = (dan_hash, dan_op.clone());
 
             assert_eq!(observed.pop(), Some(a));
-            assert_eq!(observed.pop(), Some(b));
             assert_eq!(observed.pop(), Some(c));
+            assert_eq!(observed.pop(), Some(d));
             assert_eq!(observed.pop(), None);
         }
 
         #[test]
         fn test_one_revocation() {
-            let root_sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-
-            let alice_sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-            let alice: Individual = alice_sk.verifying_key().into();
-
-            let bob: Individual = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
-                .verifying_key()
-                .into();
-
-            let alice_dlg: Rc<Signed<Delegation<String>>> = Rc::new(
-                Signed::try_sign(
-                    Delegation {
-                        delegate: alice.into(),
-                        can: Access::Write,
-                        proof: None,
-                        after_content: BTreeMap::new(),
-                        after_revocations: vec![],
-                    },
-                    &root_sk,
-                )
-                .unwrap(),
-            );
-
-            let bob_dlg: Rc<Signed<Delegation<String>>> = Rc::new(
-                Signed::try_sign(
-                    Delegation {
-                        delegate: bob.into(),
-                        can: Access::Write,
-                        proof: Some(alice_dlg.dupe().into()),
-                        after_content: BTreeMap::new(),
-                        after_revocations: vec![],
-                    },
-                    &alice_sk,
-                )
-                .unwrap(),
-            );
+            let alice_sk = fixture(&ALICE_SK).clone();
+            let alice_dlg = add_alice();
+            let bob_dlg = add_bob();
 
             let alice_revokes_bob = Rc::new(
                 Signed::try_sign(
@@ -560,140 +653,15 @@ mod tests {
 
         #[test]
         fn test_many_revocations() {
-            let root_sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+            let alice_dlg = add_alice();
+            let bob_dlg = add_bob();
 
-            let alice_sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-            let alice: Individual = alice_sk.verifying_key().into();
+            let carol_dlg = add_carol();
+            let dan_dlg = add_dan();
+            let erin_dlg = add_erin();
 
-            let bob_sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-            let bob: Individual = bob_sk.verifying_key().into();
-
-            let carol_sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-            let carol: Individual = carol_sk.verifying_key().into();
-
-            let dan_sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-            let dan: Individual = dan_sk.verifying_key().into();
-
-            let erin_sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-            let erin: Individual = erin_sk.verifying_key().into();
-
-            /*
-                     ┌────────┐
-                     │ Remove │
-                ┌────│  Dan   │──────┐
-                │    └────────┘      │
-                │         ║          │
-                ▼         ║          ▼
-            ┌───────┐     ║      ┌───────┐  ┌────────┐
-            │ Erin  │     ║      │  Dan  │  │ Remove │
-            └───────┘     ║      └───────┘  │ Carol  │══╗
-                │         ║          │      └────────┘  ║
-                │         ║          │           │      ║
-                │         ▼          ▼           │      ║
-                │     ┌───────┐  ┌───────┐       │      ║
-                └────▶│  Bob  │  │ Carol │◀──────┘      ║
-                      └───────┘  └───────┘              ║
-                          │          │                  ║
-                          │          │                  ║
-                          │          ▼                  ║
-                          │      ┌───────┐              ║
-                          └─────▶│ Alice │◀═════════════╝
-                                 └───────┘
-            */
-
-            let alice_dlg: Rc<Signed<Delegation<String>>> = Rc::new(
-                Signed::try_sign(
-                    Delegation {
-                        delegate: alice.into(),
-                        can: Access::Admin,
-                        proof: None,
-                        after_content: BTreeMap::new(),
-                        after_revocations: vec![],
-                    },
-                    &root_sk,
-                )
-                .unwrap(),
-            );
-
-            let bob_dlg: Rc<Signed<Delegation<String>>> = Rc::new(
-                Signed::try_sign(
-                    Delegation {
-                        delegate: bob.into(),
-                        can: Access::Write,
-                        proof: Some(alice_dlg.dupe()),
-                        after_content: BTreeMap::new(),
-                        after_revocations: vec![],
-                    },
-                    &alice_sk,
-                )
-                .unwrap(),
-            );
-
-            let carol_dlg: Rc<Signed<Delegation<String>>> = Rc::new(
-                Signed::try_sign(
-                    Delegation {
-                        delegate: carol.into(),
-                        can: Access::Write,
-                        proof: Some(alice_dlg.dupe()),
-                        after_content: BTreeMap::new(),
-                        after_revocations: vec![],
-                    },
-                    &alice_sk,
-                )
-                .unwrap(),
-            );
-
-            let dan_dlg: Rc<Signed<Delegation<String>>> = Rc::new(
-                Signed::try_sign(
-                    Delegation {
-                        delegate: dan.into(),
-                        can: Access::Write,
-                        proof: Some(carol_dlg.dupe()),
-                        after_content: BTreeMap::new(),
-                        after_revocations: vec![],
-                    },
-                    &carol_sk,
-                )
-                .unwrap(),
-            );
-
-            let erin_dlg: Rc<Signed<Delegation<String>>> = Rc::new(
-                Signed::try_sign(
-                    Delegation {
-                        delegate: erin.into(),
-                        can: Access::Write,
-                        proof: Some(bob_dlg.dupe()),
-                        after_content: BTreeMap::new(),
-                        after_revocations: vec![],
-                    },
-                    &bob_sk,
-                )
-                .unwrap(),
-            );
-
-            let alice_revokes_carol = Rc::new(
-                Signed::try_sign(
-                    Revocation {
-                        revoke: carol_dlg.dupe(),
-                        proof: Some(alice_dlg.dupe()),
-                        after_content: BTreeMap::new(),
-                    },
-                    &alice_sk,
-                )
-                .unwrap(),
-            );
-
-            let bob_revokes_dan = Rc::new(
-                Signed::try_sign(
-                    Revocation {
-                        revoke: dan_dlg.dupe(),
-                        proof: Some(bob_dlg.dupe()),
-                        after_content: BTreeMap::new(),
-                    },
-                    &bob_sk,
-                )
-                .unwrap(),
-            );
+            let alice_revokes_carol = remove_carol();
+            let bob_revokes_dan = remove_dan();
 
             let rev_carol_op: Operation<String> = alice_revokes_carol.dupe().into();
             let rev_carol_hash = Digest::hash(&rev_carol_op);
