@@ -242,8 +242,6 @@ impl<T: ContentRef> Operation<T> {
                     }
                     continue;
                 }
-
-                leftovers.insert(op.clone());
             }
         }
 
