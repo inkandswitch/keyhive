@@ -1,5 +1,5 @@
 use super::{
-    error::CgkaError, keys::NodeKey, keys::ShareKeyMap, secret_store::SecretStore, treemath,
+    error::CgkaError, keys::{NodeKey, ShareKeyMap}, secret_store::SecretStore, tombstone::CgkaTombstoneId, treemath
 };
 use crate::{
     crypto::{
@@ -11,22 +11,23 @@ use crate::{
 };
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use treemath::{InnerNodeIndex, LeafNodeIndex, TreeNodeIndex, TreeSize};
-
-pub type InnerNode = SecretStore;
 
 /// A PathChange represents an update along a path from a leaf to the root.
 /// This includes both the new public keys for each node and the keys that have
 /// been removed as part of this change.
-#[derive(Debug, Clone, Hash, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct PathChange {
     pub leaf_id: IndividualId,
     pub leaf_idx: u32,
     pub leaf_pk: NodeKey,
+    pub leaf_sibling_idx: u32,
+    pub leaf_sibling_pk: Option<NodeKey>,
     // (u32 inner node index, new inner node)
-    pub path: Vec<(u32, InnerNode)>,
+    pub path: Vec<(u32, SecretStore)>,
     pub removed_keys: Vec<ShareKey>,
+    pub removed_tombstones: Vec<CgkaTombstoneId>,
 }
 
 /// BeeKEM is our variant of the [TreeKEM] protocol (used in [MLS]) and inspired by
@@ -70,12 +71,12 @@ pub struct PathChange {
 /// [Causal TreeKEM]: https://mattweidner.com/assets/pdf/acs-dissertation.pdf
 /// [MLS]: https://messaginglayersecurity.rocks/
 /// [TreeKEM]: https://inria.hal.science/hal-02425247/file/treekem+(1).pdf
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BeeKem {
     doc_id: DocumentId,
     next_leaf_idx: LeafNodeIndex,
     leaves: Vec<Option<LeafNode>>,
-    inner_nodes: Vec<Option<InnerNode>>,
+    inner_nodes: Vec<InnerNode>,
     tree_size: TreeSize,
     id_to_leaf_idx: BTreeMap<IndividualId, LeafNodeIndex>,
     // The leaf node that was the source of the last path encryption, or None
@@ -101,7 +102,10 @@ impl BeeKem {
         };
         tree.grow_tree_to_size();
         for (id, pk) in members {
-            tree.push_leaf(*id, *pk)?;
+            // FIXME: Don't generate tombstone here
+            let tombstone_id = CgkaTombstoneId::generate(&mut rand::thread_rng());
+            println!("\nGenerating tombstone id for BeeKEM::new(): {:?}", tombstone_id);
+            tree.push_leaf(*id, *pk, tombstone_id)?;
         }
         Ok(tree)
     }
@@ -115,7 +119,7 @@ impl BeeKem {
         self.node_key_for_index((*idx).into())
     }
 
-    pub(crate) fn sort_leaves_and_blank_tree(&mut self) -> Result<(), CgkaError> {
+    pub(crate) fn sort_leaves_and_blank_tree(&mut self, tombstone_id: CgkaTombstoneId) -> Result<(), CgkaError> {
         let mut flattened: Vec<&LeafNode> = self.leaves.iter().flatten().collect();
         flattened.sort_by(|a, b| a.id.cmp(&b.id));
         // TODO: We could choose to shrink the tree at this point if the leaf count
@@ -131,46 +135,49 @@ impl BeeKem {
                     .insert(l.id, LeafNodeIndex::new(idx as u32));
             }
         }
-        self.inner_nodes = vec![None; self.inner_nodes.len()];
+        for node in &mut self.inner_nodes {
+            node.blank(tombstone_id);
+        }
         self.grow_tree_to_size();
         self.current_secret_encrypter_leaf_idx = None;
         Ok(())
     }
 
-    pub(crate) fn blank_leaf_and_path(&mut self, idx: LeafNodeIndex) -> Result<(), CgkaError> {
+    pub(crate) fn blank_leaf_and_path(&mut self, idx: LeafNodeIndex, tombstone_id: CgkaTombstoneId) -> Result<(), CgkaError> {
         if idx.usize() >= self.leaves.len() {
             return Err(CgkaError::TreeIndexOutOfBounds);
         }
         self.leaves[idx.usize()] = None;
-        self.blank_path(treemath::parent(idx.into()))?;
+        self.blank_path(treemath::parent(idx.into()), tombstone_id)?;
         self.current_secret_encrypter_leaf_idx = None;
         Ok(())
     }
 
     // TODO: If id already exists, add ShareKey to node key for that id's leaf
-    pub(crate) fn push_leaf(&mut self, id: IndividualId, pk: ShareKey) -> Result<u32, CgkaError> {
+    pub(crate) fn push_leaf(&mut self, id: IndividualId, pk: ShareKey, tombstone_id: CgkaTombstoneId) -> Result<u32, CgkaError> {
         self.maybe_grow_tree(self.next_leaf_idx.u32());
         let l_idx = self.next_leaf_idx;
         self.next_leaf_idx += 1;
         self.insert_leaf_at(l_idx, id, NodeKey::ShareKey(pk))?;
         self.id_to_leaf_idx.insert(id, l_idx);
-        self.blank_path(treemath::parent(l_idx.into()))?;
+        self.blank_path(treemath::parent(l_idx.into()), tombstone_id)?;
         self.current_secret_encrypter_leaf_idx = None;
         Ok(l_idx.u32())
     }
 
-    pub(crate) fn remove_id(&mut self, id: IndividualId) -> Result<Vec<ShareKey>, CgkaError> {
+    pub(crate) fn remove_id(&mut self, id: IndividualId, tombstone_id: CgkaTombstoneId) -> Result<Vec<ShareKey>, CgkaError> {
         if self.member_count() == 1 {
             return Err(CgkaError::RemoveLastMember);
         }
         let l_idx = self.leaf_index_for_id(id)?;
         let mut removed_keys = Vec::new();
         for idx in treemath::direct_path((*l_idx).into(), self.tree_size) {
-            if let Some(store) = self.inner_node(idx)? {
-                removed_keys.append(&mut store.node_key().keys());
+            let store = self.inner_node(idx)?;
+            if let Some(node_key) = store.node_key() {
+                removed_keys.append(&mut node_key.keys());
             }
         }
-        self.blank_leaf_and_path(*l_idx)?;
+        self.blank_leaf_and_path(*l_idx, tombstone_id)?;
         self.id_to_leaf_idx.remove(&id);
         self.current_secret_encrypter_leaf_idx = None;
         // TODO: Once we move past the naive "blank the tree and sort leaves"
@@ -206,9 +213,7 @@ impl BeeKem {
             .leaf(leaf_idx)?
             .as_ref()
             .ok_or(CgkaError::OwnerIdentifierNotFound)?;
-        if !self.has_root_key() {
-            return Err(CgkaError::NoRootKey);
-        }
+
         if self.is_blank(leaf_idx.into())? {
             return Err(CgkaError::OwnerIdentifierNotFound);
         }
@@ -281,16 +286,27 @@ impl BeeKem {
         if !self.id_to_leaf_idx.contains_key(&id) {
             return Ok(None);
         }
+        let mut removed_tombstones = HashSet::new();
         let leaf_idx = *self.leaf_index_for_id(id)?;
         if self.id_for_leaf(leaf_idx)? != id {
             return Err(CgkaError::IdentifierNotFound);
         }
+        let TreeNodeIndex::Leaf(sibling_idx) = treemath::sibling(leaf_idx.into()) else {
+            return Err(CgkaError::TreeIndexOutOfBounds);
+        };
+        let sibling_pk = self
+            .leaf(sibling_idx)?
+            .as_ref()
+            .map(|s_leaf| s_leaf.pk.clone());
         let mut new_path = PathChange {
             leaf_id: id,
             leaf_idx: leaf_idx.u32(),
             leaf_pk: NodeKey::ShareKey(pk),
+            leaf_sibling_idx: sibling_idx.u32(),
+            leaf_sibling_pk: sibling_pk,
             path: Default::default(),
             removed_keys: self.node_key_for_id(id)?.keys(),
+            removed_tombstones: Default::default(),
         };
         self.insert_leaf_at(leaf_idx, id, NodeKey::ShareKey(pk))?;
         let mut child_idx: TreeNodeIndex = leaf_idx.into();
@@ -302,9 +318,11 @@ impl BeeKem {
         let mut child_sk = *sks.get(&pk).ok_or(CgkaError::SecretKeyNotFound)?;
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
-            if let Some(store) = self.inner_node(parent_idx)? {
-                new_path.removed_keys.append(&mut store.node_key().keys());
+            let store = self.inner_node(parent_idx)?;
+            if let Some(node_key) = store.node_key() {
+                new_path.removed_keys.append(&mut node_key.keys());
             }
+            removed_tombstones.extend(store.tombstones().clone());
             let new_parent_sk = child_sk.ratchet_forward();
             let new_parent_pk = new_parent_sk.share_key();
             self.encrypt_key_for_parent(
@@ -320,8 +338,7 @@ impl BeeKem {
             new_path.path.push((
                 parent_idx.u32(),
                 self.inner_node(parent_idx)?
-                    .as_ref()
-                    .ok_or(CgkaError::ShareKeyNotFound)?
+                    .secret_store()
                     .clone(),
             ));
             child_idx = parent_idx.into();
@@ -329,6 +346,7 @@ impl BeeKem {
             child_sk = new_parent_sk;
             parent_idx = treemath::parent(child_idx);
         }
+        new_path.removed_tombstones = Vec::from_iter(removed_tombstones.iter().cloned());
         self.current_secret_encrypter_leaf_idx = Some(leaf_idx);
         // FIXME: Bring this back
         // let pcs_key = (leaf_sk.ratchet_n_forward(self.path_length_for(leaf_idx))).into();
@@ -338,7 +356,7 @@ impl BeeKem {
 
     /// Applies a PathChange representing new public and encrypted secret keys for each
     /// node on a path.
-    pub(crate) fn apply_path(&mut self, new_path: &PathChange) -> Result<(), CgkaError> {
+    pub(crate) fn apply_path(&mut self, new_path: &PathChange, tombstone_id: CgkaTombstoneId) -> Result<(), CgkaError> {
         let leaf_idx = *self.leaf_index_for_id(new_path.leaf_id)?;
         if !self.is_valid_change(new_path)? {
             // A structural change has occurred so we can't apply the whole path.
@@ -348,7 +366,7 @@ impl BeeKem {
                 new_path.leaf_pk.clone()
             };
             self.insert_leaf_at(leaf_idx, new_path.leaf_id, new_node_key)?;
-            self.blank_path(treemath::parent(leaf_idx.into()))?;
+            self.blank_path(treemath::parent(leaf_idx.into()), tombstone_id)?;
             return Ok(());
         }
 
@@ -360,13 +378,12 @@ impl BeeKem {
             old_leaf.pk.merge(&new_leaf_pk, &new_path.removed_keys),
         )?;
 
-        for (idx, node) in &new_path.path {
-            let current_idx = InnerNodeIndex::new(*idx);
-            if let Some(current_node) = self.inner_node_mut(current_idx)? {
-                current_node.merge(node, &new_path.removed_keys)?;
-            } else {
-                self.insert_inner_node_at(current_idx, node.clone())?;
-            }
+        let removed_tombstones = HashSet::from_iter(new_path.removed_tombstones.iter().copied());
+        for (node_idx, node) in new_path.path.iter() {
+            let current_idx = InnerNodeIndex::new(*node_idx);
+            self
+                .inner_node_mut(current_idx)?
+                .merge(node, &new_path.removed_keys, &removed_tombstones)?;
         }
 
         if self.has_root_key() {
@@ -378,19 +395,13 @@ impl BeeKem {
     }
 
     pub(crate) fn has_root_key(&self) -> bool {
-        let root_idx: TreeNodeIndex = treemath::root(self.tree_size);
-        let TreeNodeIndex::Inner(p_idx) = root_idx else {
+        let TreeNodeIndex::Inner(r_idx) = treemath::root(self.tree_size) else {
             panic!("BeeKEM should always have a root node.")
         };
-        if let Some(r) = self
-            .inner_node(p_idx)
+        self
+            .inner_node(r_idx)
             .expect("root node index to be in tree")
-        {
-            // A root with a public key conflict does not have a decryption secret
-            !r.has_conflict()
-        } else {
-            false
-        }
+            .has_single_key()
     }
 
     /// Returns the secret if there is a single parent public key.
@@ -407,11 +418,12 @@ impl BeeKem {
         let parent_idx = treemath::parent(child_idx);
         debug_assert!(!self.is_blank(parent_idx.into())?);
         let parent = self
-            .inner_node(parent_idx)?
-            .as_ref()
-            .ok_or(CgkaError::TreeIndexOutOfBounds)?;
+            .inner_node(parent_idx)?;
+        let Some(parent_node_key) = parent.node_key() else {
+            return Err(CgkaError::ShareKeyNotFound);
+        };
 
-        let maybe_secret = match parent.node_key() {
+        let maybe_secret = match parent_node_key {
             NodeKey::ConflictKeys(_) => {
                 // If we haven't decrypted all secrets for a conflict node, we need to do
                 // that before continuing.
@@ -507,7 +519,7 @@ impl BeeKem {
             }
         };
 
-        Ok(SecretStore::new(new_parent_pk, child_pk, secret_map))
+        Ok(SecretStore::from_keys(new_parent_pk, child_pk, secret_map))
     }
 
     fn node_key_for_index(&self, idx: TreeNodeIndex) -> Result<NodeKey, CgkaError> {
@@ -520,9 +532,8 @@ impl BeeKem {
                 .clone(),
             TreeNodeIndex::Inner(i_idx) => self
                 .inner_node(i_idx)?
-                .as_ref()
+                .node_key()
                 .ok_or(CgkaError::ShareKeyNotFound)?
-                .node_key(),
         })
     }
 
@@ -546,13 +557,13 @@ impl BeeKem {
             .id)
     }
 
-    fn inner_node(&self, idx: InnerNodeIndex) -> Result<&Option<InnerNode>, CgkaError> {
+    fn inner_node(&self, idx: InnerNodeIndex) -> Result<&InnerNode, CgkaError> {
         self.inner_nodes
             .get(idx.usize())
             .ok_or(CgkaError::TreeIndexOutOfBounds)
     }
 
-    fn inner_node_mut(&mut self, idx: InnerNodeIndex) -> Result<&mut Option<InnerNode>, CgkaError> {
+    fn inner_node_mut(&mut self, idx: InnerNodeIndex) -> Result<&mut InnerNode, CgkaError> {
         self.inner_nodes
             .get_mut(idx.usize())
             .ok_or(CgkaError::TreeIndexOutOfBounds)
@@ -580,42 +591,53 @@ impl BeeKem {
         if idx.usize() >= self.inner_nodes.len() {
             return Err(CgkaError::TreeIndexOutOfBounds);
         }
-        self.inner_nodes[idx.usize()] = Some(secret_store);
+        self.inner_nodes[idx.usize()] = secret_store.into();
         Ok(())
     }
 
     fn is_blank(&self, idx: TreeNodeIndex) -> Result<bool, CgkaError> {
         Ok(match idx {
             TreeNodeIndex::Leaf(l_idx) => self.leaf(l_idx)?.is_none(),
-            TreeNodeIndex::Inner(p_idx) => self.inner_node(p_idx)?.is_none(),
+            TreeNodeIndex::Inner(p_idx) => !self.inner_node(p_idx)?.has_keys(),
         })
     }
 
-    fn blank_path(&mut self, idx: InnerNodeIndex) -> Result<(), CgkaError> {
-        self.blank_inner_node(idx)?;
+    fn blank_path(&mut self, idx: InnerNodeIndex, tombstone_id: CgkaTombstoneId) -> Result<(), CgkaError> {
+        self.blank_inner_node(idx, tombstone_id)?;
         if self.is_root(idx.into()) {
             return Ok(());
         }
-        self.blank_path(treemath::parent(idx.into()))
+        self.blank_path(treemath::parent(idx.into()), tombstone_id)
     }
 
-    fn blank_inner_node(&mut self, idx: InnerNodeIndex) -> Result<(), CgkaError> {
+    fn blank_inner_node(&mut self, idx: InnerNodeIndex, tombstone_id: CgkaTombstoneId) -> Result<(), CgkaError> {
         if idx.usize() >= self.inner_nodes.len() {
             return Err(CgkaError::TreeIndexOutOfBounds);
         }
-        self.inner_nodes[idx.usize()] = None;
+        self.inner_nodes[idx.usize()].blank(tombstone_id);
         Ok(())
     }
 
     fn is_valid_change(&self, new_path: &PathChange) -> Result<bool, CgkaError> {
         let leaf_idx = self.leaf_index_for_id(new_path.leaf_id)?;
+        let TreeNodeIndex::Leaf(sibling_idx) = treemath::sibling((*leaf_idx).into()) else {
+            return Err(CgkaError::TreeIndexOutOfBounds);
+        };
+        if let Some(copath_sibling_node_key) = &new_path.leaf_sibling_pk {
+            let contained = if let Some(current_sibling_node) = self.leaf(sibling_idx)? {
+                current_sibling_node.pk.contains_node_key(&copath_sibling_node_key)
+            } else {
+                false
+            };
+            if !contained { return Ok(false) }
+        }
         // TODO: We can probably apply a path change in some cases where the tree
         // size has changed, for example if the path and copath of the subtree it
         // was part of are still preserved. For now, we are blanking the path if
         // we find the tree size has changed.
         Ok(
             new_path.path.len() == self.path_length_for(LeafNodeIndex::new(new_path.leaf_idx))
-                && leaf_idx.u32() == new_path.leaf_idx,
+                && leaf_idx.u32() == new_path.leaf_idx
         )
     }
 
@@ -632,7 +654,7 @@ impl BeeKem {
         self.leaves
             .resize(self.tree_size.leaf_count() as usize, None);
         self.inner_nodes
-            .resize(self.tree_size.inner_node_count() as usize, None);
+            .resize_with(self.tree_size.inner_node_count() as usize, Default::default);
     }
 
     fn is_root(&self, idx: TreeNodeIndex) -> bool {
@@ -656,7 +678,7 @@ impl BeeKem {
                 }
             }
             TreeNodeIndex::Inner(p_idx) => {
-                if self.inner_node(p_idx)?.is_some() {
+                if self.inner_node(p_idx)?.has_keys() {
                     acc.push(p_idx.into());
                 } else {
                     let left_idx = treemath::left(p_idx);
@@ -674,4 +696,91 @@ impl BeeKem {
 pub struct LeafNode {
     pub id: IndividualId,
     pub pk: NodeKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InnerNode {
+    secret_store: SecretStore,
+    tombstones: HashSet<CgkaTombstoneId>,
+}
+
+impl InnerNode {
+    pub fn secret_store(&self) -> &SecretStore {
+        &self.secret_store
+    }
+
+    pub fn tombstones(&self) -> &HashSet<CgkaTombstoneId> {
+        &self.tombstones
+    }
+
+    pub fn has_single_key(&self) -> bool {
+        self.secret_store.has_single_key() && self.tombstones.is_empty()
+    }
+
+    pub fn has_keys(&self) -> bool {
+        self.secret_store.has_keys() && self.tombstones.is_empty()
+    }
+
+    pub fn has_conflict(&self) -> bool {
+        self.secret_store.has_conflict()
+    }
+
+    pub fn node_key(&self) -> Option<NodeKey> {
+        self.secret_store.node_key()
+    }
+
+    pub fn decrypt_secret(
+        &self,
+        child_node_key: &NodeKey,
+        child_sks: &mut ShareKeyMap,
+        seen_idxs: &[TreeNodeIndex],
+    ) -> Result<ShareSecretKey, CgkaError> {
+        self.secret_store.decrypt_secret(child_node_key, child_sks, seen_idxs)
+    }
+
+    pub fn decrypt_undecrypted_secrets(
+        &self,
+        child_node_key: &NodeKey,
+        child_sks: &mut ShareKeyMap,
+        seen_idxs: &[TreeNodeIndex],
+    ) -> Result<(), CgkaError> {
+        self.secret_store.decrypt_undecrypted_secrets(child_node_key, child_sks, seen_idxs)
+    }
+
+    pub fn merge(
+        &mut self,
+        other: &SecretStore,
+        removed_keys: &[ShareKey],
+        removed_tombstones: &HashSet<CgkaTombstoneId>,
+    ) -> Result<(), CgkaError> {
+        self.remove_tombstones(removed_tombstones);
+
+        self.secret_store.merge(other, removed_keys)
+    }
+
+    pub fn blank(&mut self, tombstone_id: CgkaTombstoneId) {
+        self.tombstones.insert(tombstone_id);
+    }
+
+    fn remove_tombstones(&mut self, removed_tombstones: &HashSet<CgkaTombstoneId>) {
+        self.tombstones = self.tombstones.difference(removed_tombstones).cloned().collect();
+    }
+}
+
+impl Default for InnerNode {
+    fn default() -> Self {
+        Self {
+            secret_store: Default::default(),
+            tombstones: Default::default(),
+        }
+    }
+}
+
+impl From<SecretStore> for InnerNode {
+    fn from(secret_store: SecretStore) -> Self {
+        Self {
+            secret_store,
+            tombstones: Default::default(),
+        }
+    }
 }

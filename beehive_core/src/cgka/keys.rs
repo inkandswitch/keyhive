@@ -70,6 +70,10 @@ impl ConflictKeys {
         self.first == *key || self.second == *key || self.more.contains(key)
     }
 
+    pub fn contains_node_key(&self, keys: &NodeKey) -> bool {
+        keys.keys().iter().all(|k| self.contains(k))
+    }
+
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         2 + self.more.len()
@@ -116,6 +120,13 @@ impl NodeKey {
         match self {
             Self::ShareKey(pk) => key == pk,
             Self::ConflictKeys(keys) => keys.contains(key),
+        }
+    }
+
+    pub fn contains_node_key(&self, keys: &NodeKey) -> bool {
+        match self {
+            NodeKey::ShareKey(key) => *keys == NodeKey::ShareKey(*key),
+            NodeKey::ConflictKeys(conflict_keys) => conflict_keys.contains_node_key(&keys)
         }
     }
 

@@ -78,7 +78,7 @@ where
     let op = paired_cgka.update(&mut csprng).unwrap();
     first_cgka
         .cgka
-        .merge_concurrent_operations(&vec![op])
+        .merge_concurrent_operation(&op)
         .unwrap();
     (first_cgka, paired_cgka)
 }
@@ -103,7 +103,7 @@ fn apply_100_updates_and_sibling_decrypt(bencher: Bencher, member_count: u32) {
                 let op = first_cgka.update(&mut csprng).unwrap();
                 sibling_cgka
                     .cgka
-                    .merge_concurrent_operations(&vec![op])
+                    .merge_concurrent_operation(&op)
                     .unwrap();
                 sibling_cgka.cgka.secret().unwrap();
             }
@@ -130,7 +130,7 @@ fn apply_100_updates_and_distant_member_decrypt(bencher: Bencher, member_count: 
                 let op = first_cgka.update(&mut csprng).unwrap();
                 distant_cgka
                     .cgka
-                    .merge_concurrent_operations(&vec![op])
+                    .merge_concurrent_operation(&op)
                     .unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }
@@ -160,7 +160,7 @@ fn apply_100_updates_and_distant_member_decrypt_with_maximum_conflict_keys(
                 let op = first_cgka.update(&mut csprng).unwrap();
                 distant_cgka
                     .cgka
-                    .merge_concurrent_operations(&vec![op])
+                    .merge_concurrent_operation(&op)
                     .unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }
@@ -187,7 +187,7 @@ fn apply_100_updates_and_distant_member_decrypt_after_adds(bencher: Bencher, mem
                 let op = first_cgka.update(&mut csprng).unwrap();
                 distant_cgka
                     .cgka
-                    .merge_concurrent_operations(&vec![op])
+                    .merge_concurrent_operation(&op)
                     .unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }
@@ -217,7 +217,7 @@ fn apply_100_updates_and_distant_member_decrypt_with_blank_nodes(
                 let op = first_cgka.update(&mut csprng).unwrap();
                 distant_cgka
                     .cgka
-                    .merge_concurrent_operations(&vec![op])
+                    .merge_concurrent_operation(&op)
                     .unwrap();
                 distant_cgka.cgka.secret().unwrap();
             }

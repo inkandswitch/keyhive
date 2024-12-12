@@ -191,7 +191,7 @@ impl<T: ContentRef> Document<T> {
             .pick_individual_prekeys(csprng)
         {
             // FIXME: We'll need Cgka to check for duplicate add ids
-            let op = self.cgka.add(id, pre_key).expect("FIXME");
+            let op = self.cgka.add(id, pre_key, csprng).expect("FIXME");
             self.cgka_op_to_membership_op
                 .insert(Digest::hash(&op), rc.clone().into());
             self.membership_op_to_cgka_op
@@ -211,7 +211,7 @@ impl<T: ContentRef> Document<T> {
         //         d.payload().individual_ids()
         //     }) {
         //         // FIXME: We'll need Cgka to check for duplicate remove ids
-        //         self.cgka.remove(id).expect("FIXME");
+        //         self.cgka.remove(id, csprng).expect("FIXME");
         //     }
         // }
         // FIXME: This revocation needs to be predecessor to next pcs update CgkaOperation

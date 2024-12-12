@@ -1,9 +1,9 @@
 use std::{
+    borrow::Borrow,
     collections::{HashMap, HashSet},
     rc::Rc,
 };
-
-use super::beekem::PathChange;
+use super::{beekem::PathChange, tombstone::CgkaTombstoneId};
 use crate::{
     crypto::{digest::Digest, share_key::ShareKey},
     principal::individual::id::IndividualId,
@@ -24,16 +24,19 @@ pub enum CgkaOperation {
         pk: ShareKey,
         leaf_index: u32,
         predecessors: Vec<Digest<CgkaOperation>>,
+        tombstone_id: CgkaTombstoneId,
     },
     Remove {
         id: IndividualId,
         removed_keys: Vec<ShareKey>,
         predecessors: Vec<Digest<CgkaOperation>>,
+        tombstone_id: CgkaTombstoneId,
     },
     Update {
         id: IndividualId,
         new_path: PathChange,
         predecessors: Vec<Digest<CgkaOperation>>,
+        tombstone_id: CgkaTombstoneId,
     },
 }
 
@@ -62,9 +65,6 @@ pub struct CgkaOperationGraph {
     pub cgka_ops: CaMap<CgkaOperation>,
     pub cgka_ops_predecessors: HashMap<Digest<CgkaOperation>, CgkaOperationPredecessors>,
     pub cgka_op_heads: HashSet<Digest<CgkaOperation>>,
-    // FIXME
-    // pub membership_op_to_cgka_op: HashMap<Operation<T>, Digest<CgkaOperation>>,
-    // pub cgka_op_to_membership_op: HashMap<Digest<CgkaOperation>, Operation<T>>,
 }
 
 impl CgkaOperationGraph {
@@ -73,9 +73,6 @@ impl CgkaOperationGraph {
             cgka_ops: Default::default(),
             cgka_ops_predecessors: Default::default(),
             cgka_op_heads: Default::default(),
-            // FIXME
-            // membership_op_to_cgka_op: Default::default(),
-            // cgka_op_to_membership_op: Default::default(),
         }
     }
 
@@ -108,46 +105,26 @@ impl CgkaOperationGraph {
             }
             self.cgka_op_heads.clear();
         };
+        println!("\nInserting head: {:?}", op_hash);
         self.cgka_op_heads.insert(op_hash);
+        println!("--- CURRENT HEADS: {:?}", self.cgka_op_heads);
         self.cgka_ops_predecessors.insert(op_hash, op_predecessors);
     }
 
-    pub fn contains_current_heads(&self, heads: &HashSet<Digest<CgkaOperation>>) -> bool {
-        self.cgka_op_heads.is_subset(heads)
+    pub fn heads_contained_in(&self, heads: &HashSet<Digest<CgkaOperation>>) -> bool {
+        println!("\nheads_contained_in");
+        println!("local heads: {:?}", self.cgka_op_heads);
+        println!("other heads: {:?}\n", heads);
+
+        let mut local_add_heads = self.cgka_op_heads.clone();
+        local_add_heads.retain(|h| self.is_add_op(h));
+        local_add_heads.is_subset(&heads)
     }
 
-    // FIXME
-    // pub fn add_local_membership_op(&mut self, membership_op: Operation<T>, cgka_op: &CgkaOperation) {
-    //     self.add_membership_op_and_update_heads(membership_op, cgka_op, None);
-    // }
-
-    // pub fn add_membership_op(&mut self, membership_op: Operation<T>, cgka_op: &CgkaOperation, external_heads: &HashSet<Operation<T>>) {
-    //     self.add_membership_op_and_update_heads(membership_op, cgka_op, Some(external_heads));
-    // }
-
-    // // FIXME: We need to account for heads
-    // fn add_membership_op_and_update_heads(&mut self, membership_op: Operation<T>, cgka_op: &CgkaOperation, external_heads: Option<&HashSet<Operation<T>>>) {
-    //     let cgka_op_hash = Digest::hash(cgka_op);
-    //     self.membership_op_to_cgka_op
-    //         .insert(membership_op.clone(), cgka_op_hash);
-    //     self.cgka_ops.insert(cgka_op.clone().into());
-    //     self.membership_op_to_cgka_op.insert(membership_op.clone(), cgka_op_hash);
-    //     self.cgka_op_to_membership_op.insert(cgka_op_hash, membership_op.clone().into());
-    //     let mut op_predecessors = CgkaOperationPredecessors::new();
-    //     if let Some(heads) = external_heads {
-    //         for h in heads {
-    //             op_predecessors.preds.insert(*self.membership_op_to_cgka_op.get(h).expect("predecessor hash to be present"));
-    //             self.cgka_op_heads.remove(self.membership_op_to_cgka_op.get(&membership_op).expect("predecessors to be present"));
-    //         }
-    //     } else {
-    //         for h in &self.cgka_op_heads {
-    //             op_predecessors.preds.insert(*h);
-    //         }
-    //         self.cgka_op_heads.clear();
-    //     };
-    //     self.cgka_op_heads.insert(cgka_op_hash);
-    //     self.cgka_ops_predecessors.insert(cgka_op_hash, op_predecessors);
-    // }
+    fn is_add_op(&self, hash: &Digest<CgkaOperation>) -> bool {
+        let op = self.cgka_ops.get(&hash).expect("op to be in history");
+        matches!(op.borrow(), &CgkaOperation::Add { .. })
+    }
 
     pub fn predecessors_for(
         &self,
@@ -159,14 +136,6 @@ impl CgkaOperationGraph {
     pub fn get_cgka_op(&self, op_hash: &Digest<CgkaOperation>) -> Option<&Rc<CgkaOperation>> {
         self.cgka_ops.get(op_hash)
     }
-
-    // FIXME
-    // pub fn get_cgka_op_for_membership_op(&self, membership_op: &Operation<T>) -> Option<&Digest<CgkaOperation>> {
-    //     self.membership_op_to_cgka_op.get(membership_op)
-    // }
-    // pub fn get_membership_op_for_cgka_op(&self, cgka_op: &Digest<CgkaOperation>) -> Option<&Operation<T>> {
-    //     self.cgka_op_to_membership_op.get(cgka_op)
-    // }
 }
 
 impl Default for CgkaOperationGraph {
@@ -179,10 +148,6 @@ impl Default for CgkaOperationGraph {
 pub struct CgkaOperationPredecessors {
     pub update_preds: HashSet<Digest<CgkaOperation>>,
     pub membership_preds: HashSet<Digest<CgkaOperation>>,
-    // FIXME: Get rid of these and possibly this whole struct. We'll look up
-    // the membership op hashes using the CgkaOperation hashes.
-    // pub delegation_preds: HashSet<Digest<Signed<Delegation<T>>>>,
-    // pub revocation_preds: HashSet<Digest<Signed<Revocation<T>>>>,
 }
 
 impl CgkaOperationPredecessors {
@@ -190,8 +155,6 @@ impl CgkaOperationPredecessors {
         Self {
             update_preds: Default::default(),
             membership_preds: Default::default(),
-            // delegation_preds: Default::default(),
-            // revocation_preds: Default::default(),
         }
     }
 }

@@ -3,6 +3,7 @@ pub mod error;
 pub mod keys;
 pub mod operation;
 pub mod secret_store;
+pub mod tombstone;
 pub mod treemath;
 
 #[cfg(feature = "test_utils")]
@@ -28,6 +29,7 @@ use error::CgkaError;
 use keys::ShareKeyMap;
 use nonempty::NonEmpty;
 use operation::{CgkaOperation, CgkaOperationGraph};
+use tombstone::CgkaTombstoneId;
 
 /// A CGKA (Continuous Group Key Agreement) protocol is responsible for
 /// maintaining a stream of updating shared group keys over time. We are
@@ -136,11 +138,6 @@ impl Cgka {
             self.derive_pcs_key()?
         };
         let pcs_key_hash = Digest::hash(&current_pcs_key);
-        // FIXME: Right now we're ensuring that whenever the tree has a pcs key,
-        // we derive and store it.
-        // if !self.pcs_keys.contains_key(&pcs_key_hash) {
-        //     self.pcs_keys.insert(current_pcs_key.into());
-        // }
         let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id)
             .map_err(|_e| CgkaError::Conversion)?;
         Ok(current_pcs_key.derive_application_secret(
@@ -201,23 +198,27 @@ impl Cgka {
     }
 
     /// Add member.
-    pub fn add(&mut self, id: IndividualId, pk: ShareKey) -> Result<CgkaOperation, CgkaError> {
-        let leaf_index = self.tree.push_leaf(id, pk)?;
+    pub fn add<R: rand::RngCore + rand::CryptoRng>(&mut self, id: IndividualId, pk: ShareKey, csprng: &mut R) -> Result<CgkaOperation, CgkaError> {
+        let tombstone_id = CgkaTombstoneId::generate(csprng);
+        println!("\nGenerating tombstone id for Cgka::add(): {:?}", tombstone_id);
+        let leaf_index = self.tree.push_leaf(id, pk, tombstone_id)?;
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
-        let op = CgkaOperation::Add { added_id: id, pk, leaf_index, predecessors };
+        let op = CgkaOperation::Add { added_id: id, pk, leaf_index, predecessors, tombstone_id };
         self.ops_graph.add_local_op(&op);
         Ok(op)
     }
 
     /// Remove member.
-    pub fn remove(&mut self, id: IndividualId) -> Result<CgkaOperation, CgkaError> {
+    pub fn remove<R: rand::RngCore + rand::CryptoRng>(&mut self, id: IndividualId, csprng: &mut R) -> Result<CgkaOperation, CgkaError> {
         if self.group_size() == 1 {
             return Err(CgkaError::RemoveLastMember);
         }
 
-        let removed_keys = self.tree.remove_id(id)?;
+        let tombstone_id = CgkaTombstoneId::generate(csprng);
+        println!("\nGenerating tombstone id for Cgka::remove(): {:?}", tombstone_id);
+        let removed_keys = self.tree.remove_id(id, tombstone_id)?;
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
-        let op = CgkaOperation::Remove { id, removed_keys, predecessors };
+        let op = CgkaOperation::Remove { id, removed_keys, predecessors, tombstone_id };
         self.ops_graph.add_local_op(&op);
         Ok(op)
     }
@@ -235,10 +236,13 @@ impl Cgka {
                 .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
         if let Some((pcs_key, new_path)) = maybe_key_and_path {
             let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
+            let tombstone_id = CgkaTombstoneId::generate(csprng);
+            println!("\nGenerating tombstone id for Cgka::update(): {:?}", tombstone_id);
             let op = CgkaOperation::Update {
                 id: self.owner_id,
                 new_path,
                 predecessors,
+                tombstone_id,
             };
             self.ops_graph.add_local_op(&op);
             self.pcs_key_ops.insert(Digest::hash(&pcs_key), Digest::hash(&op));
@@ -258,31 +262,18 @@ impl Cgka {
     }
 
     /// Merge
-    pub fn merge_concurrent_operations(&mut self, ops: &[CgkaOperation]) -> Result<(), CgkaError> {
-        // FIXME: For each add, check if it contains our heads. If it does, then
-        // just apply it and keep going. If it doesn't, then mark that before the next
-        // add (or at the end if there are no more), do the sort and blank.
-        let mut blank_before_next_add = false;
-        for op in ops {
-            let predecessors = op.predecessors();
-            self.ops_graph.add_op(&op, &predecessors);
-
-            if matches!(op, CgkaOperation::Add { .. }) {
-                if self.ops_graph.contains_current_heads(&predecessors) {
-                    if blank_before_next_add {
-                        self.tree.sort_leaves_and_blank_tree()?;
-                        blank_before_next_add = false;
-                    }
-                } else {
-                    blank_before_next_add = true;
-                }
+    pub fn merge_concurrent_operation(&mut self, op: &CgkaOperation) -> Result<(), CgkaError> {
+        let predecessors = op.predecessors();
+        let mut sort_tombstone = None;
+        if let CgkaOperation::Add { tombstone_id, .. } = op {
+            if !self.ops_graph.heads_contained_in(&predecessors) {
+                sort_tombstone = Some(tombstone_id);
             }
-            self.apply_operation(op)?;
         }
-        // TODO: This is the naive approach to merging concurrent adds: blank the inner
-        // nodes and lexicographically sort the leaves.
-        if blank_before_next_add {
-            self.tree.sort_leaves_and_blank_tree()?;
+        self.apply_operation(op)?;
+        self.ops_graph.add_op(&op, &predecessors);
+        if let Some(tombstone_id) = sort_tombstone {
+            self.tree.sort_leaves_and_blank_tree(*tombstone_id)?;
         }
         Ok(())
     }
@@ -294,24 +285,26 @@ impl Cgka {
                 pk,
                 leaf_index: _,
                 predecessors: _,
+                tombstone_id,
             } => {
                 // TODO: Check we don't already have this id in the tree.
-                self.tree.push_leaf(*added_id, *pk)?;
+                self.tree.push_leaf(*added_id, *pk, *tombstone_id)?;
             }
             CgkaOperation::Remove {
                 id,
                 removed_keys: _,
                 predecessors: _,
+                tombstone_id,
             } => {
-                self.tree.remove_id(*id)?;
+                self.tree.remove_id(*id, *tombstone_id)?;
             }
-            CgkaOperation::Update { id, new_path, predecessors: _ } => {
+            CgkaOperation::Update { id, new_path, predecessors: _, tombstone_id } => {
                 // TODO: We are currently ignoring a missing id here. Causal ordering
                 // should ensure that an update for an id will always come after the
                 // add of that id but might come after a remove. If it came after a
                 // remove, we ignore it.
                 if self.tree.contains_id(*id) {
-                    self.tree.apply_path(new_path)?;
+                    self.tree.apply_path(new_path, *tombstone_id)?;
                 }
             }
         }
@@ -327,18 +320,24 @@ impl Cgka {
         let mut rebuilt_cgka =
             Cgka::new(&self.original_members, doc_id, self.owner_id).expect("FIXME");
         // FIXME: Remove cloned()
-        rebuilt_cgka
-            .merge_concurrent_operations(&ops.iter().cloned().collect::<Vec<_>>())
-            .expect("FIXME");
+        for op in &ops {
+            rebuilt_cgka.merge_concurrent_operation(&op)?;
+        }
+        // FIXME
+        // rebuilt_cgka
+        //     .merge_concurrent_operations(&ops.iter().cloned().collect::<Vec<_>>())
+        //     .expect("FIXME");
         let pcs_key = rebuilt_cgka.derive_pcs_key()?;
         self.pcs_key_ops.insert(Digest::hash(&pcs_key), Digest::hash(&ops.last()));
         self.pcs_keys.insert(pcs_key.into());
         Ok(())
     }
 
+    // FIXME: When replacing tree, we also need to rewind the ops graph!
     /// Replace current tree with tree from other Cgka
     pub fn replace_tree(&mut self, other: &Self) {
         self.tree = other.tree.clone();
+        self.ops_graph = other.ops_graph.clone();
     }
 }
 
@@ -375,7 +374,7 @@ mod tests {
         let mut cgka = setup_cgka(doc_id, &members, 0);
         assert!(cgka.has_pcs_key());
         let new_m = TestMember::generate(csprng);
-        cgka.add(new_m.id, new_m.pk)?;
+        cgka.add(new_m.id, new_m.pk, csprng)?;
         assert!(!cgka.has_pcs_key());
         assert_eq!(cgka.tree.member_count(), initial_member_count as u32 + 1);
         Ok(())
@@ -389,7 +388,7 @@ mod tests {
         let initial_member_count = members.len();
         let mut cgka = setup_cgka(doc_id, &members, 0);
         assert!(cgka.has_pcs_key());
-        cgka.remove(members[1].id)?;
+        cgka.remove(members[1].id, csprng)?;
         assert!(!cgka.has_pcs_key());
         assert_eq!(cgka.group_size(), initial_member_count as u32 - 1);
         Ok(())
@@ -402,9 +401,9 @@ mod tests {
         let mut cgkas = setup_member_cgkas(doc_id, 7)?;
         assert!(cgkas[0].cgka.has_pcs_key());
         let op1 = cgkas[1].update(csprng)?;
-        cgkas[0].cgka.merge_concurrent_operations(&vec![op1])?;
+        cgkas[0].cgka.merge_concurrent_operation(&op1)?;
         let op6 = cgkas[6].update(csprng)?;
-        cgkas[0].cgka.merge_concurrent_operations(&vec![op6])?;
+        cgkas[0].cgka.merge_concurrent_operation(&op6)?;
         assert!(!cgkas[0].cgka.has_pcs_key());
         Ok(())
     }
@@ -416,17 +415,22 @@ mod tests {
         // One member updates and all merge that in so that the tree has a root secret.
         let m_idx = if member_cgkas.len() > 1 { 1 } else { 0 };
         let update_op = member_cgkas[m_idx].update(csprng)?;
+        println!("\n\nupdate_op: {:?}\n", update_op);
         let post_update_secret_bytes = member_cgkas[m_idx].cgka.secret()?.to_bytes();
         for (idx, m) in member_cgkas.iter_mut().enumerate() {
             if idx == m_idx {
                 continue;
             }
+            println!("-- merge in overwrite update for idx {idx}");
             m.cgka
-                .merge_concurrent_operations(&vec![update_op.clone()])?;
+                .merge_concurrent_operation(&update_op)?;
         }
         member_cgkas[m_idx].cgka.secret()?.to_bytes();
         // Compare the result of secret() for all members
-        for m in member_cgkas.iter_mut() {
+        // FIXME
+        // for m in member_cgkas.iter_mut() {
+        for (idx, m) in member_cgkas.iter_mut().enumerate() {
+            println!("-- Checking secret for idx {idx}");
             assert_eq!(m.cgka.secret()?.to_bytes(), post_update_secret_bytes);
         }
         Ok(())
@@ -450,7 +454,13 @@ mod tests {
             assert_eq!(m.cgka.secret()?.to_bytes(), initial_secret_bytes);
         }
         for test_round in test_rounds {
+            println!("*******************");
+            println!("apply_test_operations_rewind_and_merge_to_all");
+            println!("*******************");
             apply_test_operations_rewind_and_merge_to_all(&mut member_cgkas, test_round)?;
+            println!("*******************");
+            println!("update_merge_and_compare_secrets");
+            println!("*******************");
             update_merge_and_compare_secrets(&mut member_cgkas, csprng)?;
         }
         Ok(())
@@ -461,6 +471,7 @@ mod tests {
         csprng: &mut R,
     ) -> Result<(), CgkaError> {
         for n in 1..16 {
+            println!("\n\n\n\n*** N = {n} ***\n\n");
             run_test_rounds(n, &test_rounds, csprng)?;
         }
         run_test_rounds(20, &test_rounds, csprng)?;

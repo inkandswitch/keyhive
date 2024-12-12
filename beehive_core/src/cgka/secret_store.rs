@@ -1,11 +1,8 @@
 use super::{
-    error::CgkaError,
-    keys::{ConflictKeys, NodeKey, ShareKeyMap},
-    treemath::TreeNodeIndex,
+    error::CgkaError, keys::{ConflictKeys, NodeKey, ShareKeyMap}, treemath::TreeNodeIndex
 };
 use crate::crypto::{
-    encrypted::NestedEncrypted,
-    share_key::{ShareKey, ShareSecretKey},
+    encrypted::NestedEncrypted, share_key::{ShareKey, ShareSecretKey}
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -22,7 +19,13 @@ pub struct SecretStore {
 }
 
 impl SecretStore {
-    pub fn new(
+    pub fn new() -> Self {
+        Self {
+            versions: Default::default(),
+        }
+    }
+
+    pub fn from_keys(
         pk: ShareKey,
         encrypter_pk: ShareKey,
         sk: BTreeMap<TreeNodeIndex, NestedEncrypted<ShareSecretKey>>,
@@ -37,12 +40,23 @@ impl SecretStore {
         }
     }
 
+    pub fn has_single_key(&self) -> bool {
+        self.versions.len() == 1
+    }
+
+    pub fn has_keys(&self) -> bool {
+        !self.versions.is_empty()
+    }
+
     pub fn has_conflict(&self) -> bool {
         self.versions.len() > 1
     }
 
-    pub fn node_key(&self) -> NodeKey {
-        if self.versions.len() == 1 {
+    pub fn node_key(&self) -> Option<NodeKey> {
+        if !self.has_keys() {
+            return None;
+        }
+        Some(if self.versions.len() == 1 {
             NodeKey::ShareKey(self.versions[0].pk)
         } else {
             match self
@@ -67,7 +81,7 @@ impl SecretStore {
                 }
                 .into(),
             }
-        }
+        })
     }
 
     pub fn decrypt_secret(
@@ -78,6 +92,9 @@ impl SecretStore {
     ) -> Result<ShareSecretKey, CgkaError> {
         if self.has_conflict() {
             return Err(CgkaError::UnexpectedKeyConflict);
+        }
+        if !self.has_keys() {
+            return Err(CgkaError::ShareKeyNotFound);
         }
         self.versions[0].decrypt_secret(child_node_key, child_sks, seen_idxs)
     }
@@ -129,6 +146,12 @@ impl SecretStore {
 
     fn sort_keys(&mut self) {
         self.versions.sort();
+    }
+}
+
+impl Default for SecretStore {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
