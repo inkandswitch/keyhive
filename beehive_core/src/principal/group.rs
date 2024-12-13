@@ -24,7 +24,7 @@ use crate::{
 use dupe::{Dupe, IterDupedExt};
 use id::GroupId;
 use nonempty::NonEmpty;
-use operation::{delegation::Delegation, revocation::Revocation, AncestorError, Operation};
+use operation::{delegation::Delegation, revocation::Revocation, Operation};
 use serde::{ser::SerializeStruct, Serialize, Serializer};
 use std::{
     cell::RefCell,
@@ -272,35 +272,30 @@ impl<T: ContentRef> Group<T> {
         // FIXME check that you can actually do this with tiebreaking, seniroity etc etc
     }
 
-    pub fn materialize(&mut self) -> Result<(), AncestorError> {
-        Ok(
-            for (_, op) in
-                Operation::topsort(&self.state.delegation_heads, &self.state.revocation_heads)?
-                    .iter()
-            {
-                match op {
-                    Operation::Delegation(d) => {
-                        if let Some(mut_dlgs) =
-                            self.members.get_mut(&d.payload().delegate.agent_id())
-                        {
-                            mut_dlgs.push(d.dupe());
-                        } else {
-                            self.members
-                                .insert(d.payload().delegate.agent_id(), vec![d.dupe()]);
-                        }
-                    }
-                    Operation::Revocation(r) => {
-                        if let Some(mut_dlgs) = self
-                            .members
-                            .get_mut(&r.payload().revoke.payload().delegate.agent_id())
-                        {
-                            // FIXME maintain this as a CaMap for easier removals, too
-                            mut_dlgs.retain(|d| *d != r.payload().revoke);
-                        }
+    pub fn materialize(&mut self) {
+        for (_, op) in
+            Operation::topsort(&self.state.delegation_heads, &self.state.revocation_heads).iter()
+        {
+            match op {
+                Operation::Delegation(d) => {
+                    if let Some(mut_dlgs) = self.members.get_mut(&d.payload().delegate.agent_id()) {
+                        mut_dlgs.push(d.dupe());
+                    } else {
+                        self.members
+                            .insert(d.payload().delegate.agent_id(), vec![d.dupe()]);
                     }
                 }
-            },
-        )
+                Operation::Revocation(r) => {
+                    if let Some(mut_dlgs) = self
+                        .members
+                        .get_mut(&r.payload().revoke.payload().delegate.agent_id())
+                    {
+                        // FIXME maintain this as a CaMap for easier removals, too
+                        mut_dlgs.retain(|d| *d != r.payload().revoke);
+                    }
+                }
+            }
+        }
     }
 
     pub fn add_revocation(

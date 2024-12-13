@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// This is a newtype for a [`VerifyingKey`](ed25519_dalek::VerifyingKey).
 /// It is used to identify an agent in the system. Since signing keys are only
 /// available to the one agent and not shared, this identifier is provably unique.
-#[derive(Debug, Copy, Serialize, Deserialize)]
+#[derive(Copy, Serialize, Deserialize)]
 pub struct Identifier(pub ed25519_dalek::VerifyingKey);
 
 impl Identifier {
@@ -48,9 +48,17 @@ impl std::hash::Hash for Identifier {
 
 impl std::fmt::Display for Identifier {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "0x")?;
+
         self.as_slice()
             .iter()
-            .fold(Ok(()), |_, byte| write!(f, "{:#x}", byte))
+            .fold(Ok(()), |_, byte| write!(f, "{:x}", byte))
+    }
+}
+
+impl std::fmt::Debug for Identifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Identifier({})", self)
     }
 }
 
