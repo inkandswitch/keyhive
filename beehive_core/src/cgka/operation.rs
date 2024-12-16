@@ -1,15 +1,17 @@
-use std::{
-    borrow::Borrow,
-    collections::{HashMap, HashSet},
-    rc::Rc,
-};
-use super::{beekem::PathChange, tombstone::CgkaTombstoneId};
+use super::{beekem::PathChange, error::CgkaError, tombstone::CgkaTombstoneId};
 use crate::{
     crypto::{digest::Digest, share_key::ShareKey},
     principal::individual::id::IndividualId,
     util::content_addressed_map::CaMap,
 };
+use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
+use std::{
+    borrow::Borrow,
+    collections::{HashMap, HashSet, VecDeque},
+    rc::Rc,
+};
+use topological_sort::TopologicalSort;
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 pub struct CgkaOperationWithPreds {
@@ -24,6 +26,7 @@ pub enum CgkaOperation {
         pk: ShareKey,
         leaf_index: u32,
         predecessors: Vec<Digest<CgkaOperation>>,
+        add_predecessors: Vec<Digest<CgkaOperation>>,
         tombstone_id: CgkaTombstoneId,
     },
     Remove {
@@ -54,6 +57,15 @@ impl CgkaOperation {
             }
         }
     }
+
+    // FIXME
+    pub fn name(&self) -> &str {
+        match self {
+            CgkaOperation::Add { .. } => "Op::Add",
+            CgkaOperation::Remove { .. } => "Op::Remove",
+            CgkaOperation::Update { .. } => "Op::Update",
+        }
+    }
 }
 
 // FIXME: Docs
@@ -65,6 +77,7 @@ pub struct CgkaOperationGraph {
     pub cgka_ops: CaMap<CgkaOperation>,
     pub cgka_ops_predecessors: HashMap<Digest<CgkaOperation>, CgkaOperationPredecessors>,
     pub cgka_op_heads: HashSet<Digest<CgkaOperation>>,
+    pub add_heads: HashSet<Digest<CgkaOperation>>,
 }
 
 impl CgkaOperationGraph {
@@ -73,7 +86,12 @@ impl CgkaOperationGraph {
             cgka_ops: Default::default(),
             cgka_ops_predecessors: Default::default(),
             cgka_op_heads: Default::default(),
+            add_heads: Default::default(),
         }
+    }
+
+    pub fn contains_op_hash(&self, op_hash: &Digest<CgkaOperation>) -> bool {
+        self.cgka_ops.contains_key(op_hash)
     }
 
     // FIXME: We need to account for heads
@@ -94,31 +112,43 @@ impl CgkaOperationGraph {
         let op_hash = Digest::hash(op);
         let mut op_predecessors = CgkaOperationPredecessors::new();
         self.cgka_ops.insert(op.clone().into());
+        let is_add = self.is_add_op(&op_hash);
         if let Some(heads) = external_heads {
             for h in heads {
                 op_predecessors.update_preds.insert(*h);
                 self.cgka_op_heads.remove(&h);
+                if is_add {
+                    self.add_heads.remove(&h);
+                }
             }
         } else {
             for h in &self.cgka_op_heads {
                 op_predecessors.update_preds.insert(*h);
             }
             self.cgka_op_heads.clear();
+            if is_add {
+                self.add_heads.clear();
+            }
         };
-        println!("\nInserting head: {:?}", op_hash);
+        // println!("\nInserting head: {:?}", op_hash);
         self.cgka_op_heads.insert(op_hash);
-        println!("--- CURRENT HEADS: {:?}", self.cgka_op_heads);
+        if self.is_add_op(&op_hash) {
+            self.add_heads.insert(op_hash);
+        }
+        // println!("--- CURRENT HEADS: {:?}", self.cgka_op_heads);
         self.cgka_ops_predecessors.insert(op_hash, op_predecessors);
     }
 
     pub fn heads_contained_in(&self, heads: &HashSet<Digest<CgkaOperation>>) -> bool {
         println!("\nheads_contained_in");
-        println!("local heads: {:?}", self.cgka_op_heads);
-        println!("other heads: {:?}\n", heads);
+        println!("     local heads: {:?}", self.cgka_op_heads);
+        println!("merging op heads: {:?}\n", heads);
+        println!(" local_add heads: {:?}\n", self.add_heads);
+        self.cgka_op_heads.is_subset(&heads)
+    }
 
-        let mut local_add_heads = self.cgka_op_heads.clone();
-        local_add_heads.retain(|h| self.is_add_op(h));
-        local_add_heads.is_subset(&heads)
+    pub fn add_heads_contained_in(&self, heads: &HashSet<Digest<CgkaOperation>>) -> bool {
+        self.add_heads.is_subset(&heads)
     }
 
     fn is_add_op(&self, hash: &Digest<CgkaOperation>) -> bool {
@@ -135,6 +165,37 @@ impl CgkaOperationGraph {
 
     pub fn get_cgka_op(&self, op_hash: &Digest<CgkaOperation>) -> Option<&Rc<CgkaOperation>> {
         self.cgka_ops.get(op_hash)
+    }
+
+    pub fn topsort_for_op(
+        &self,
+        starting_op_hash: &Digest<CgkaOperation>,
+    ) -> Result<NonEmpty<Rc<CgkaOperation>>, CgkaError> {
+        let mut op_hashes = Vec::new();
+        let mut dependencies = TopologicalSort::<Digest<CgkaOperation>>::new();
+        let mut frontier = VecDeque::new();
+        frontier.push_back(starting_op_hash);
+        while let Some(op_hash) = frontier.pop_front() {
+            let preds = self
+                .predecessors_for(op_hash)
+                .ok_or(CgkaError::OperationNotFound)?;
+            for update_pred in &preds.update_preds {
+                dependencies.add_dependency(*update_pred, *op_hash);
+                frontier.push_back(update_pred);
+            }
+        }
+        while !dependencies.is_empty() {
+            let mut next_set = dependencies.pop_all();
+            next_set.sort();
+            for hash in next_set {
+                op_hashes.push(self.cgka_ops.get(&hash).ok_or(CgkaError::OperationNotFound)?.clone());
+            }
+        }
+        if op_hashes.is_empty() {
+            op_hashes.push(self.cgka_ops.get(starting_op_hash).ok_or(CgkaError::OperationNotFound)?.clone());
+        }
+        println!("\n\n");
+        Ok(NonEmpty::from_vec(op_hashes).expect("to have at least one op hash"))
     }
 }
 

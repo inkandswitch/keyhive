@@ -2,11 +2,15 @@
 //!
 //! [ECDH]: https://wikipedia.org/wiki/Elliptic-curve_Diffie%E2%80%93Hellman
 
+use std::fmt;
+
 use super::{separable::Separable, symmetric_key::SymmetricKey};
 use serde::{Deserialize, Serialize};
 
 /// Newtype around [x25519_dalek::PublicKey].
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+// FIXME
+// #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShareKey(x25519_dalek::PublicKey);
 
 impl ShareKey {
@@ -23,6 +27,17 @@ impl ShareKey {
 
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
+    }
+}
+
+// FIXME
+impl fmt::Debug for ShareKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ShareKey({:?})",
+            self.0.as_bytes().iter().take(4).collect::<Vec<_>>()
+        )
     }
 }
 
@@ -50,7 +65,9 @@ impl From<x25519_dalek::PublicKey> for ShareKey {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+// FIXME
+// #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ShareSecretKey([u8; 32]);
 
 impl ShareSecretKey {
@@ -99,6 +116,17 @@ impl ShareSecretKey {
 
     pub(crate) fn force_from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
+    }
+}
+
+// FIXME
+impl fmt::Debug for ShareSecretKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ShareSecretKey({:?})",
+            self.0.iter().take(4).collect::<Vec<_>>()
+        )
     }
 }
 

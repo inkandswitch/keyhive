@@ -131,19 +131,34 @@ impl<T: ContentRef> Document<T> {
             .filter(|(id, _sk)| **id != owner_id)
             .map(|(id, pk)| (*id, *pk))
             .collect();
-        let cgka_members = NonEmpty::from((active_member, other_members));
+        // FIXME remove
+        // let cgka_members = NonEmpty::from((active_member, other_members));
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_share_key, owner_share_secret_key);
-        let mut cgka = Cgka::new(&cgka_members, doc_id, owner_id)
+        let mut cgka = Cgka::new(doc_id, owner_id, owner_share_key)
             .expect("FIXME")
-            .with_new_owner(owner_id, owner_share_key, owner_sks)
+            .with_new_owner(owner_id, owner_sks)
             .expect("FIXME");
-        let initial_op = cgka
+        let mut ops: Vec<CgkaOperation> = Vec::new();
+        if other_members.len() > 1 {
+            ops.extend(
+                cgka.add_multiple(
+                    NonEmpty::from_vec(other_members).expect("there to be multiple other members"),
+                    csprng,
+                )
+                .expect("FIXME")
+                .iter()
+                .cloned(),
+            );
+        }
+        let (_pcs_key, update_op) = cgka
             .update(owner_share_key, owner_share_secret_key, csprng)
             .expect("FIXME");
-        // let initial_op_hash = Digest::hash(&initial_op);
+        ops.push(update_op);
         let mut cgka_ops_graph = CgkaOperationGraph::new();
-        cgka_ops_graph.add_local_op(&initial_op);
+        for op in ops {
+            cgka_ops_graph.add_local_op(&op);
+        }
 
         // let mut cgka_ops_predecessors = HashMap::new();
         // cgka_ops_predecessors.insert(initial_op_hash, Default::default());
@@ -250,28 +265,29 @@ impl<T: ContentRef> Document<T> {
         content: &[u8],
         pred_refs: &Vec<T>,
         csprng: &mut R,
-        // FIXME: What error return type?
-    ) -> Result<Encrypted<Vec<u8>, T>, EncryptError> {
+    ) -> Result<(Encrypted<Vec<u8>, T>, Option<CgkaOperation>), EncryptError> {
         // FIXME: We are automatically doing a PCS update if the tree doesn't have a
         // root secret. That might make sense, but do we need to store this key pair
         // on our Active member?
         if !self.cgka.has_pcs_key() {
             self.pcs_update(csprng)?;
         }
-        let app_secret = self
+        let (app_secret, maybe_update_op) = self
             .cgka
             .new_app_secret_for(content_ref, content, pred_refs, csprng)
             .map_err(EncryptError::FailedToMakeAppSecret)?;
 
-        app_secret
-            .try_encrypt(content)
-            .map_err(EncryptError::EncryptionFailed)
+        Ok((
+            app_secret
+                .try_encrypt(content)
+                .map_err(EncryptError::EncryptionFailed)?,
+            maybe_update_op,
+        ))
     }
 
     pub fn try_decrypt_content(
         &mut self,
         encrypted_content: &Encrypted<Vec<u8>, T>,
-        // FIXME: What error return type?
     ) -> Result<Vec<u8>, DecryptError> {
         let decrypt_key = self
             .cgka
@@ -286,31 +302,31 @@ impl<T: ContentRef> Document<T> {
     }
 
     // // FIXME: Where should this logic go?
-    pub fn rebuild_pcs_key(&mut self, pcs_update_head: Digest<CgkaOperation>) {
-        let ops = self
-            .cgka_ops_for_update_head(pcs_update_head)
-            .iter()
-            .map(|hash| {
-                Rc::unwrap_or_clone(
-                    self.cgka
-                        .ops_graph()
-                        .get_cgka_op(hash)
-                        .expect("hash to be present")
-                        .clone(),
-                )
-            })
-            .collect::<Vec<CgkaOperation>>();
-        if ops.is_empty() {
-            panic!("FIXME");
-        } else {
-            let head = ops.first().expect("FIXME").clone();
-            let tail = ops.iter().skip(1).cloned().collect::<Vec<_>>();
-            let nonempty_ops = NonEmpty { head, tail };
-            self.cgka
-                .rebuild_pcs_key(self.doc_id(), nonempty_ops)
-                .expect("FIXME");
-        }
-    }
+    // pub fn rebuild_pcs_key(&mut self, pcs_update_head: Digest<CgkaOperation>) {
+    //     let ops = self
+    //         .cgka_ops_for_update_head(pcs_update_head)
+    //         .iter()
+    //         .map(|hash| {
+    //             Rc::unwrap_or_clone(
+    //                 self.cgka
+    //                     .ops_graph()
+    //                     .get_cgka_op(hash)
+    //                     .expect("hash to be present")
+    //                     .clone(),
+    //             )
+    //         })
+    //         .collect::<Vec<CgkaOperation>>();
+    //     if ops.is_empty() {
+    //         panic!("FIXME");
+    //     } else {
+    //         let head = ops.first().expect("FIXME").clone();
+    //         let tail = ops.iter().skip(1).cloned().collect::<Vec<_>>();
+    //         let nonempty_ops = NonEmpty { head, tail };
+    //         self.cgka
+    //             .rebuild_pcs_key(self.doc_id(), nonempty_ops)
+    //             .expect("FIXME");
+    //     }
+    // }
 
     fn cgka_ops_for_update_head(
         &self,

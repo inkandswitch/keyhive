@@ -2,15 +2,18 @@ use crate::crypto::{
     encrypted::NestedEncrypted,
     share_key::{ShareKey, ShareSecretKey},
 };
+use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
 use super::error::CgkaError;
 
 /// A ShareSecretKeyMap is used to store the secret keys for all of the public keys
 /// on your path that you have encountered so far (either because you added them
 /// to your path as part of an update or decrypted them when decrypting your path).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+// FIXME
+// #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ShareKeyMap(BTreeMap<ShareKey, ShareSecretKey>);
 
 impl ShareKeyMap {
@@ -38,13 +41,28 @@ impl ShareKeyMap {
     ) -> Result<Vec<u8>, CgkaError> {
         let mut decrypt_keys = Vec::new();
         for (pk, _) in &encrypted.layers {
+            println!(
+                "-- decrypt_nested_sibling_encryption lookup secret key for pk {:?} in secret map {:?}",
+                pk, self
+            );
             let sk = self.get(pk).ok_or(CgkaError::SecretKeyNotFound)?;
+            println!(
+                "-- -- FOUND secret key for pk {:?}",
+                pk
+            );
             let key = sk.derive_symmetric_key(&encrypter_pk);
             decrypt_keys.push(key);
         }
         encrypted
             .try_sibling_decrypt(&decrypt_keys)
             .map_err(|e| CgkaError::Decryption(e.to_string()))
+    }
+}
+
+// FIXME
+impl fmt::Debug for ShareKeyMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ShareKeyMap(pks:{:?})", self.0.keys())
     }
 }
 
@@ -83,6 +101,21 @@ impl ConflictKeys {
         std::iter::once(&self.first)
             .chain(std::iter::once(&self.second))
             .chain(self.more.iter())
+    }
+}
+
+impl From<&NonEmpty<ShareKey>> for NodeKey {
+    fn from(keys: &NonEmpty<ShareKey>) -> Self {
+        if keys.len() == 1 {
+            NodeKey::ShareKey(keys[0])
+        } else {
+            ConflictKeys {
+                first: keys[0],
+                second: keys[1],
+                more: keys.iter().skip(2).copied().collect::<Vec<_>>(),
+            }
+            .into()
+        }
     }
 }
 
@@ -126,7 +159,7 @@ impl NodeKey {
     pub fn contains_node_key(&self, keys: &NodeKey) -> bool {
         match self {
             NodeKey::ShareKey(key) => *keys == NodeKey::ShareKey(*key),
-            NodeKey::ConflictKeys(conflict_keys) => conflict_keys.contains_node_key(&keys)
+            NodeKey::ConflictKeys(conflict_keys) => conflict_keys.contains_node_key(&keys),
         }
     }
 

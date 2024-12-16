@@ -1,0 +1,8 @@
+#!/bin/bash
+
+$@
+while [ $? -eq 0 ]; do
+    $@
+done
+
+#while cargo test --features test_utils cgka::tests::test_update_and_add_concurrently -- --exact; do ;; done

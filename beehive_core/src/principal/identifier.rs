@@ -1,5 +1,7 @@
 //! The universally unique identifier of an [`Agent`](crate::principal::agentAgent).
 
+use std::fmt;
+
 use super::verifiable::Verifiable;
 use serde::{Deserialize, Serialize};
 
@@ -8,7 +10,9 @@ use serde::{Deserialize, Serialize};
 /// This is a newtype for a [`VerifyingKey`](ed25519_dalek::VerifyingKey).
 /// It is used to identify an agent in the system. Since signing keys are only
 /// available to the one agent and not shared, this identifier is provably unique.
-#[derive(Debug, Copy, Serialize, Deserialize)]
+#[derive(Copy, Serialize, Deserialize)]
+// FIXME
+// #[derive(Debug, Copy, Serialize, Deserialize)]
 pub struct Identifier(pub ed25519_dalek::VerifyingKey);
 
 impl Identifier {
@@ -31,6 +35,17 @@ impl Identifier {
 
     pub fn as_slice(&self) -> &[u8] {
         self.0.as_bytes()
+    }
+}
+
+// FIXME
+impl fmt::Debug for Identifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Identifier({:?})",
+            self.0.as_bytes().iter().take(4).collect::<Vec<_>>()
+        )
     }
 }
 

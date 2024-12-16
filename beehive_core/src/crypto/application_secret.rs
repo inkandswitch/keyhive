@@ -61,7 +61,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-pub struct PcsKey(ShareSecretKey);
+pub struct PcsKey(pub ShareSecretKey);
 
 impl PcsKey {
     pub fn new(share_secret_key: ShareSecretKey) -> Self {
