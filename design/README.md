@@ -16,7 +16,7 @@ This project uses similar techniques to E2EE messaging, but collaborative docume
 
 Beehive itself is made of two parts: mutation control with a [capabilities][caps] and read control with [encryption-at-rest][DARE]. Both interact directly with compression and data sync since more access to CRDT graph metadata makes sync more efficient but access control seeks to protect as much data as possible. To this end, we designed Beelay (the Beehive Relay) which syncs E2EE chunks. We include special provisions in the protocol for relays and sync servers which can store (but not read) E2EE content, yet needs to efficiently send diffs to authorized clients.
 
-![](./assets/causal-encryption.png)
+<img src="./assets/causal-encryption.png" style="width:500px" />
 
 For Beehive, we have developed a CRDT-focused variant of certificate capabilities (cert cap) that includes some of the statefulness of [object capabilities][ocap] (OCAP). We are calling this category "convergent capabilities" (concap). It would be possible to express the same semantics in certificate capabilities, but with significantly (often exponential) more certificates to enable our desired revocation semantics, which is contraindicated by our real world requirement to keep Automerge documents as small as possible. Concap gets closer to OCAP's simple authority graph model, but without the fail-stop semantics of object capabilities (since Automerge needs partition tolerance, the opposite of OCAP's [fail-stop]). One way of thinking about this is like how certificate capabilities act like a simulation of a capability network; convergent capabilities extend this to include more of the network by maintaining a stateful view. You can think of this as "a CRDT for capabilities". Beyond mutation control, this stateful view also is helpful for other parts of the system like continuous group key agreement (described later).
 
@@ -25,8 +25,10 @@ Upon receipt of an CRDT update/patch, we check the associated capability. Since 
 Our encryption-at-rest layer is made of two parts: causal encryption, and continuous group key agreement (CGKA). Causal encryption is straightforward: instead of needing to re-derive keys for any chunk, we include the keys to causal predecessors. This is related to systems like [Cryptree]: it allows access to a document at a point in time. Because of how op-based CRDTs work, we must give up forward secrecy[^fs] (FS), but retain the ability to remove access (PCS) to future updates with the CGKA.
 
 
-![](./assets/fs-vs-pcs.png)
-> FS vs PCS, adapted from [Cohn-Gordon et al][PCS]
+<figure>
+  <img src="./assets/fs-vs-pcs.png" style="width:500px" />
+  <figcaption>FS vs PCS, adapted from <a href="https://eprint.iacr.org/2016/221.pdf">Cohn-Gordon et al</a></figcaption>
+</figure>
 
 For CGKA, we have developed a concurrent variant of [TreeKEM] (which underlies [MLS]). TreeKEM itself requires strict linearizability, and thus does not work in weaker consistency models. Several proposals have been made to add concurrency to TreeKEM, but they either increase communication cost exponentially, or depend on less common cryptographic primitives (such as commutative asymmetric keys). We have found a way to implement a causal variant of TreeKEM with widely-supported cryptography ([X25519] & [ChaCha]). There should be no issues replacing X25519 and ChaCha as the state of the art evolves (e.g. [PQC]), with the only restriction being that the new algorithms must support asymmetric key exchange. We believe this flexibility to be a major future-looking advantage of our approach. Our capability system drives the CGKA: it determines who's ECDH keys have read (decryption) access and should be included in the CGKA —  something not possible with standard certificate capabilities alone.
 
