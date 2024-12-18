@@ -11,6 +11,7 @@ CRDT
 CRDTs
 ChaCha
 ChaCha's
+Cohn-Gordon
 Crypto
 Cryptree
 DCGKA
@@ -29,6 +30,7 @@ MiCKey
 Nonces
 OCAP's
 OCap
+OpenPGP
 PKI
 PN
 PQC
@@ -64,6 +66,7 @@ delegator
 edgenames
 encrypter
 encryptment
+et al
 expede
 fs
 img
