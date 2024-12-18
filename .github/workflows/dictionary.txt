@@ -43,6 +43,7 @@ TODO
 TreeKEM
 WebCrypto
 XChaCha
+al
 auth
 authN
 authZ
@@ -66,7 +67,7 @@ delegator
 edgenames
 encrypter
 encryptment
-et al
+et
 expede
 fs
 img
