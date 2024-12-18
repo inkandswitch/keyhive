@@ -18,7 +18,7 @@ Beehive itself is made of two parts: mutation control with a [capabilities][caps
 
 ![](./assets/causal-encryption.png)
 
-For Beehive, we have developed a CRDT-focused variant of certificate capabilities (cert cap) that includes some of the statefulness of [object capabilities][ocap] (OCAP). We are calling this category "convergent capabilities" (concap). It would be possible to express the same semantics in certificate capabilities, but with significantly (often exponential) more certificates to enable our desired revocation semantics, which is contraindicated by our real world requirement to keep Automerge documents as small as possible. Concap gets closer to ocap's simple authority graph model, but without the fail-stop semantics of object capabilities (since Automerge needs partition tolerance, the opposite of OCAP's [fail-stop]). One way of thinking about this is like how certificate capabilities act like a simulation of a capability network; convergent capabilities extend this to include more of the network by maintaining a stateful view. You can think of this as "a CRDT for capabilities". Beyond mutation control, this stateful view also is helpful for other parts of the system like continuous group key agreement (described later).
+For Beehive, we have developed a CRDT-focused variant of certificate capabilities (cert cap) that includes some of the statefulness of [object capabilities][ocap] (OCAP). We are calling this category "convergent capabilities" (concap). It would be possible to express the same semantics in certificate capabilities, but with significantly (often exponential) more certificates to enable our desired revocation semantics, which is contraindicated by our real world requirement to keep Automerge documents as small as possible. Concap gets closer to OCAP's simple authority graph model, but without the fail-stop semantics of object capabilities (since Automerge needs partition tolerance, the opposite of OCAP's [fail-stop]). One way of thinking about this is like how certificate capabilities act like a simulation of a capability network; convergent capabilities extend this to include more of the network by maintaining a stateful view. You can think of this as "a CRDT for capabilities". Beyond mutation control, this stateful view also is helpful for other parts of the system like continuous group key agreement (described later).
 
 Upon receipt of an CRDT update/patch, we check the associated capability. Since we have causal delivery, the capability system needs to be aware of the data's causal history. Data from a source that is later discovered to have been revoked cannot simply be [tombstoned][tombstone], because revocation cascades can revoke the revoker. We have instead developed a visibility index for operations: they need to stay available to retain causality, but depending on the auth graph may or may not materialize.
 
@@ -34,7 +34,7 @@ The underlying data and auth layers are CRDTs, so they don't depend on sessions 
 
 <!-- Footnotes -->
 
-[^fs]: Forward serecy is the restrion of access to historical data.
+[^fs]: Forward secrecy is the restricton of access to historical data. ![](./assets/fs-vs-pcs.png)
 
 <!-- External Links -->
 
