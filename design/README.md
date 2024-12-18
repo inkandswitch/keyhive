@@ -16,7 +16,7 @@ This project uses similar techniques to E2EE messaging, but collaborative docume
 
 Beehive itself is made of two parts: mutation control with a [capabilities][caps] and read control with [encryption-at-rest][DARE]. Both interact directly with compression and data sync since more access to CRDT graph metadata makes sync more efficient but access control seeks to protect as much data as possible. To this end, we designed Beelay (the Beehive Relay) which syncs E2EE chunks. We include special provisions in the protocol for relays and sync servers which can store (but not read) E2EE content, yet needs to efficiently send diffs to authorized clients.
 
-![](./assets/caual-encryption.png)
+![](./assets/causal-encryption.png)
 
 For Beehive, we have developed a CRDT-focused variant of certificate capabilities (cert cap) that includes some of the statefulness of [object capabilities][ocap] (OCAP). We are calling this category "convergent capabilities" (concap). It would be possible to express the same semantics in certificate capabilities, but with significantly (often exponential) more certificates to enable our desired revocation semantics, which is contraindicated by our real world requirement to keep Automerge documents as small as possible. Concap gets closer to ocap's simple authority graph model, but without the fail-stop semantics of object capabilities (since Automerge needs partition tolerance, the opposite of OCAP's [fail-stop]). One way of thinking about this is like how certificate capabilities act like a simulation of a capability network; convergent capabilities extend this to include more of the network by maintaining a stateful view. You can think of this as "a CRDT for capabilities". Beyond mutation control, this stateful view also is helpful for other parts of the system like continuous group key agreement (described later).
 
@@ -56,7 +56,7 @@ The underlying data and auth layers are CRDTs, so they don't depend on sessions 
 [TreeKEM]: https://inria.hal.science/hal-02425247/file/treekem+(1).pdf
 [X25519]: https://datatracker.ietf.org/doc/html/rfc8410
 [PQC]: https://en.wikipedia.org/wiki/Post-quantum_cryptography
-[auth n vs a]: https://www.okta.com/identity-101/authentication-vs-authorization/
+[auth n vs z]: https://www.okta.com/identity-101/authentication-vs-authorization/
 [caps]: https://en.wikipedia.org/wiki/Capability-based_security
 [edgenames]: https://spritelyproject.org/news/petname-systems.html#:~:text=Edgenames
 [fail-stop]: https://en.wikipedia.org/wiki/Fail-stop
