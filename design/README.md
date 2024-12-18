@@ -24,6 +24,8 @@ Upon receipt of an CRDT update/patch, we check the associated capability. Since 
 
 Our encryption-at-rest layer is made of two parts: causal encryption, and continuous group key agreement (CGKA). Causal encryption is straightforward: instead of needing to re-derive keys for any chunk, we include the keys to causal predecessors. This is related to systems like [Cryptree]: it allows access to a document at a point in time. Because of how op-based CRDTs work, we must give up forward secrecy[^fs], but retain the ability to remove access to future updates with the CGKA.
 
+![](./assets/fs-vs-pcs.png)
+
 For CGKA, we have developed a concurrent variant of [TreeKEM] (which underlies [MLS]). TreeKEM itself requires strict linearizability, and thus does not work in weaker consistency models. Several proposals have been made to add concurrency to TreeKEM, but they either increase communication cost exponentially, or depend on less common cryptographic primitives (such as commutative asymmetric keys). We have found a way to implement a causal variant of TreeKEM with widely-supported cryptography ([X25519] & [ChaCha]). There should be no issues replacing X25519 and ChaCha as the state of the art evolves (e.g. [PQC]), with the only restriction being that the new algorithms must support asymmetric key exchange. We believe this flexibility to be a major future-looking advantage of our approach. Our capability system drives the CGKA: it determines who's ECDH keys have read (decryption) access and should be included in the CGKA —  something not possible with standard certificate capabilities alone.
 
 For our sync system (Beelay), application-level requests are stateless and run over [TLS] or [mTLS]. The statelessness is useful for those that need to scale horizontally. We do not require IP addresses by default. The only requirement is that patches eventually get from one machine to another, so P2P, sync servers, sneakernets, and carrier pigeon are all feasible in this model. All data is E2EE, but all cryptography is eventually breakable. To mitigate this in a defense-in-depth strategy, we do require that a requester prove that they have the capability to pull data from other replicas, which is managed under the capability system that we describe elsewhere.
@@ -34,7 +36,7 @@ The underlying data and auth layers are CRDTs, so they don't depend on sessions 
 
 <!-- Footnotes -->
 
-[^fs]: Forward secrecy is the restricton of access to historical data. ![](./assets/fs-vs-pcs.png)
+[^fs]: Forward secrecy is the restricton of access to historical data. 
 
 <!-- External Links -->
 
