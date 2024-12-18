@@ -11,7 +11,6 @@ CRDT
 CRDTs
 ChaCha
 ChaCha's
-ChaCha's
 Crypto
 Cryptree
 DCGKA
@@ -24,6 +23,7 @@ FIXME
 HChaCha
 Invariants
 Keyoxide
+MLS
 Memoization
 MiCKey
 Nonces
@@ -69,6 +69,7 @@ fs
 img
 invariant
 invariants
+linearizability
 lookups
 mTLS
 mixnet
@@ -86,7 +87,6 @@ revoker
 sneakernets
 stateful
 statefulness
-subgraph
 subgraph
 subsumptions
 subtype

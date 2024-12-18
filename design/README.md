@@ -40,7 +40,7 @@ The underlying data and auth layers are CRDTs, so they don't depend on sessions 
 
 <!-- Footnotes -->
 
-[^fs]: Forward secrecy is the restricton of access to historical data. 
+[^fs]: Forward secrecy is the restriction of access to historical data. 
 
 <!-- External Links -->
 
