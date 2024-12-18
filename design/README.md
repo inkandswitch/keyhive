@@ -25,10 +25,7 @@ Upon receipt of an CRDT update/patch, we check the associated capability. Since 
 Our encryption-at-rest layer is made of two parts: causal encryption, and continuous group key agreement (CGKA). Causal encryption is straightforward: instead of needing to re-derive keys for any chunk, we include the keys to causal predecessors. This is related to systems like [Cryptree]: it allows access to a document at a point in time. Because of how op-based CRDTs work, we must give up forward secrecy[^fs] (FS), but retain the ability to remove access (PCS) to future updates with the CGKA.
 
 
-<figure>
-<img="./assets/fs-vs-pcs.png" />
-<figcaption>FS vs PCS, adapted from [Cohn-Gordon et al][PCS]</figcaption>
-</figure>
+<figure><img="./assets/fs-vs-pcs.png" /><figcaption>FS vs PCS, adapted from [Cohn-Gordon et al][PCS]</figcaption></figure>
 
 
 For CGKA, we have developed a concurrent variant of [TreeKEM] (which underlies [MLS]). TreeKEM itself requires strict linearizability, and thus does not work in weaker consistency models. Several proposals have been made to add concurrency to TreeKEM, but they either increase communication cost exponentially, or depend on less common cryptographic primitives (such as commutative asymmetric keys). We have found a way to implement a causal variant of TreeKEM with widely-supported cryptography ([X25519] & [ChaCha]). There should be no issues replacing X25519 and ChaCha as the state of the art evolves (e.g. [PQC]), with the only restriction being that the new algorithms must support asymmetric key exchange. We believe this flexibility to be a major future-looking advantage of our approach. Our capability system drives the CGKA: it determines who's ECDH keys have read (decryption) access and should be included in the CGKA —  something not possible with standard certificate capabilities alone.
