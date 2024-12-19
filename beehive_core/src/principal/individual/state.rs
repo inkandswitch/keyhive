@@ -1,8 +1,10 @@
-use crate::crypto::{
-    share_key::{ShareKey, ShareSecretKey},
-    signed::{Signed, SigningError},
+use crate::{
+    crypto::{
+        share_key::{ShareKey, ShareSecretKey},
+        signed::{Signed, SigningError},
+    },
+    util::content_addressed_map::CaMap,
 };
-use crate::util::content_addressed_map::CaMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -108,6 +110,18 @@ impl std::hash::Hash for PrekeyState {
 pub enum KeyOp {
     Add(AddKeyOp),
     Update(ShareKeyOp),
+}
+
+impl From<AddKeyOp> for KeyOp {
+    fn from(op: AddKeyOp) -> Self {
+        Self::Add(op)
+    }
+}
+
+impl From<ShareKeyOp> for KeyOp {
+    fn from(op: ShareKeyOp) -> Self {
+        Self::Update(op)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
