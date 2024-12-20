@@ -1,3 +1,4 @@
+use super::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp};
 use crate::{
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
@@ -27,7 +28,7 @@ impl PrekeyState {
             let secret_key = ShareSecretKey::generate(csprng);
             let share_key = secret_key.share_key();
 
-            let op = Signed::try_sign(KeyOp::Add(AddKeyOp { share_key }), &signing_key)?;
+            let op = Signed::try_sign(KeyOp::add(share_key), &signing_key)?;
             ops.insert(op.into());
 
             Ok::<_, SigningError>(ops)
@@ -44,7 +45,7 @@ impl PrekeyState {
     ) -> Result<ShareKey, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
         let new = new_secret.share_key();
-        let op = Signed::try_sign(KeyOp::Update(ShareKeyOp { old, new }), signer)?;
+        let op = Signed::try_sign(KeyOp::rotate(old, new), signer)?;
 
         self.ops.insert(op.into());
 
@@ -58,7 +59,7 @@ impl PrekeyState {
     ) -> Result<ShareKey, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
         let new = new_secret.share_key();
-        let op = Signed::try_sign(KeyOp::Add(AddKeyOp { share_key: new }), signer)?;
+        let op = Signed::try_sign(KeyOp::add(new), signer)?;
 
         self.ops.insert(op.into());
 
@@ -71,10 +72,10 @@ impl PrekeyState {
 
         for signed in self.ops.values() {
             match signed.payload() {
-                KeyOp::Add(AddKeyOp { share_key, .. }) => {
+                KeyOp::Add(AddKeyOp { share_key }) => {
                     keys.insert(*share_key);
                 }
-                KeyOp::Update(ShareKeyOp { old, new }) => {
+                KeyOp::Rotate(RotateKeyOp { old, new }) => {
                     to_drop.push(old);
                     keys.insert(*new);
                 }
@@ -87,21 +88,4 @@ impl PrekeyState {
 
         keys
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum KeyOp {
-    Add(AddKeyOp),
-    Update(ShareKeyOp),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct AddKeyOp {
-    pub share_key: ShareKey,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ShareKeyOp {
-    pub old: ShareKey,
-    pub new: ShareKey,
 }

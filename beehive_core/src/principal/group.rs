@@ -7,7 +7,7 @@ pub mod store;
 
 use super::{
     agent::{Agent, AgentId},
-    document::Document,
+    document::{id::DocumentId, Document},
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
     verifiable::Verifiable,
@@ -105,17 +105,14 @@ impl<T: ContentRef> Group<T> {
         self.group_id().into()
     }
 
-    pub fn pick_individual_prekeys<R: rand::CryptoRng + rand::RngCore>(
-        &self,
-        csprng: &mut R,
-    ) -> HashMap<IndividualId, ShareKey> {
+    pub fn pick_individual_prekeys(&self, doc_id: DocumentId) -> HashMap<IndividualId, ShareKey> {
         let mut m = HashMap::new();
         for delegations in self.members.values() {
             m.extend(
                 &delegations[0]
                     .payload()
                     .delegate
-                    .pick_individual_prekeys(csprng),
+                    .pick_individual_prekeys(doc_id),
             );
         }
         m

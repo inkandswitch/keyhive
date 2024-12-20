@@ -65,8 +65,8 @@ impl Active {
         AgentId::IndividualId(self.id())
     }
 
-    pub fn pick_prekey<R: rand::CryptoRng + rand::RngCore>(&self, csprng: &mut R) -> ShareKey {
-        self.individual.pick_prekey(csprng)
+    pub fn pick_prekey(&self, doc_id: DocumentId) -> ShareKey {
+        self.individual.pick_prekey(doc_id)
     }
 
     pub fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(

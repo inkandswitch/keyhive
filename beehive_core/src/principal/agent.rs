@@ -42,23 +42,20 @@ impl<T: ContentRef> Agent<T> {
         }
     }
 
-    pub fn pick_individual_prekeys<R: rand::CryptoRng + rand::RngCore>(
-        &self,
-        csprng: &mut R,
-    ) -> HashMap<IndividualId, ShareKey> {
+    pub fn pick_individual_prekeys(&self, doc_id: DocumentId) -> HashMap<IndividualId, ShareKey> {
         match self {
             Agent::Active(a) => {
                 let mut m = HashMap::new();
-                m.insert(a.borrow().id(), a.borrow().pick_prekey(csprng));
+                m.insert(a.borrow().id(), a.borrow().pick_prekey(doc_id));
                 m
             }
             Agent::Individual(i) => {
                 let mut m = HashMap::new();
-                m.insert(i.borrow().id(), i.borrow().pick_prekey(csprng));
+                m.insert(i.borrow().id(), i.borrow().pick_prekey(doc_id));
                 m
             }
-            Agent::Group(g) => g.borrow().pick_individual_prekeys(csprng),
-            Agent::Document(d) => d.borrow().group.pick_individual_prekeys(csprng),
+            Agent::Group(g) => g.borrow().pick_individual_prekeys(doc_id),
+            Agent::Document(d) => d.borrow().group.pick_individual_prekeys(doc_id),
         }
     }
 }

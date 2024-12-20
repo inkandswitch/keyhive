@@ -111,7 +111,7 @@ impl<T: ContentRef> Document<T> {
             .prekey_pairs
             .insert(owner_share_key, owner_share_secret_key);
 
-        let group_members = group.pick_individual_prekeys(csprng);
+        let group_members = group.pick_individual_prekeys(doc_id);
         let active_member = (owner_id, owner_share_key);
         let other_members: Vec<(IndividualId, ShareKey)> = group_members
             .iter()

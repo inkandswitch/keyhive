@@ -1,13 +1,13 @@
 //! A single user agent.
 
 pub mod id;
+pub mod op;
 pub mod state;
 
-use super::{agent::AgentId, verifiable::Verifiable};
-use crate::crypto::{digest::Digest, share_key::ShareKey, signed::SigningError};
+use super::{agent::AgentId, document::id::DocumentId, verifiable::Verifiable};
+use crate::crypto::{share_key::ShareKey, signed::SigningError};
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
 use std::collections::HashSet;
@@ -15,13 +15,14 @@ use std::collections::HashSet;
 /// Single agents with no internal membership.
 ///
 /// `Individual`s can be thought of as the terminal agents. They represent
-/// keys that may sign ops, be delegated capabilties to [`Document`]s and [`Group`]s.
+/// keys that may sign ops, be delegated capabilties to
+/// [`Document`][super::document::Document]s and [`Group`][super::group::Group]s.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Individual {
     /// The public key identifier.
     pub id: IndividualId,
 
-    /// [`ShaerKey`] pre-keys.
+    /// [`ShareKey`] pre-keys.
     ///
     /// Prekeys are used to invite this `Individual` to [`Document`] read access trees.
     /// The core idea is that the invited `Individual` is offline, but needs to be added to
@@ -34,6 +35,8 @@ pub struct Individual {
     /// the compromise of one prekey affecting the security of other [`Document`]s. Since we operate
     /// in a fully concurrent context with causal consistency, we cannot guarantee that a prekey will
     /// not be reused in multiple [`Document`]s, but we can tune the probability of this happening.
+    ///
+    /// [`Document`]: super::document::Document
     pub prekeys: HashSet<ShareKey>,
 
     /// The state used to materialize `prekeys`.
@@ -61,10 +64,18 @@ impl Individual {
         AgentId::IndividualId(self.id)
     }
 
-    // FIXME: Temporary measure to retrieve a prekey
-    pub fn pick_prekey<R: rand::CryptoRng + rand::RngCore>(&self, csprng: &mut R) -> ShareKey {
-        let idx = csprng.gen_range(0..self.prekeys.len());
-        *self.prekeys.iter().nth(idx).expect("FIXME")
+    pub fn pick_prekey(&self, doc_id: DocumentId) -> ShareKey {
+        let mut bytes: Vec<u8> = self.id.to_bytes().to_vec();
+        bytes.extend_from_slice(&doc_id.to_bytes());
+
+        let prekeys_len = self.prekeys.len();
+        let idx = pseudorandom_in_range(bytes.as_slice(), prekeys_len);
+
+        *self
+            .prekeys
+            .iter()
+            .nth(idx)
+            .expect("index in pre-checked bounds to exist")
     }
 
     pub fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
@@ -110,26 +121,6 @@ impl From<VerifyingKey> for Individual {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct IndividualOp {
-    pub verifier: VerifyingKey,
-    pub op: ReadKeyOp,
-    pub pred: HashSet<Digest<Individual>>,
-}
-
-// FIXME move to each Doc
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ReadKeyOp {
-    Add(AddReadKey),
-    Remove(VerifyingKey),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AddReadKey {
-    pub group: VerifyingKey,
-    pub key: x25519_dalek::PublicKey,
-}
-
 impl PartialOrd for Individual {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -148,16 +139,127 @@ impl Verifiable for Individual {
     }
 }
 
+fn clamp(bytes: [u8; 8], offset_bits: u8) -> usize {
+    usize::from_be(
+        usize::from_be_bytes(bytes)
+            .checked_shl(offset_bits as u32)
+            .unwrap_or(0),
+    )
+}
+
+fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
+    let digits: u8 = max
+        .checked_ilog2()
+        .unwrap_or(0)
+        .try_into()
+        .expect("usize has at most 64 bits (< 256)");
+
+    let shiftsize: u8 = 64 - digits;
+
+    let mut hash_stream = blake3::Hasher::new().update(&seed).finalize_xof();
+    let mut buf = [0; 8]; // usize max
+    let mut idx = None;
+
+    // NOTE this strategy looks odd at first, but it's an established way to
+    // avoid the biases that you get when sampling a (P)RNG and using a modulous
+    // to clamp to a range. Because the range (idx in our case) is likely not
+    // the same size as the RNG, a modulous will bias towards the lower end of the range.
+    // We use resampling here instead is a way to avoid this bias.
+    //
+    // Naively reampling from `usize` would be very inefficient when the
+    // range is small because it's so unlikely to get a random number in that range.
+    // to fix this, we first truncate the random number to the closest power of 2,
+    // which gives us a >=50% chance of getting a number in the range.
+    while idx.is_none() {
+        hash_stream.fill(&mut buf);
+        let raw_idx: usize = clamp(buf, shiftsize);
+        if raw_idx <= max {
+            idx = Some(raw_idx)
+        }
+    }
+
+    idx.expect("index to be Some due to the check above")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // FIXME proptest
 
     #[test]
     fn test_to_bytes() {
         let id = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()).verifying_key();
         let individual: Individual = id.into();
         assert_eq!(individual.id.to_bytes(), id.to_bytes());
+    }
+
+    #[test]
+    fn test_clamp_sequence() {
+        let a = clamp([0xFF; 8], 0);
+        let b = clamp([0xFF; 8], 1);
+        let c = clamp([0xFF; 8], 8);
+        let d = clamp([0xFF; 8], 16);
+        let e = clamp([0xFF; 8], 32);
+        let f = clamp([0xFF; 8], 48);
+        let g = clamp([0xFF; 8], 64);
+
+        assert_eq!(a, usize::MAX);
+        assert!(a > b);
+        assert!(b > c);
+        assert!(c > d);
+        assert!(d > e);
+        assert!(e > f);
+        assert!(f > g);
+        assert_eq!(g, 0);
+    }
+
+    #[test]
+    fn test_clamp_keeps_in_range() {
+        let x = clamp([0xFF; 8], 48);
+        assert!(x <= 2usize.pow(64 - 48));
+        assert_eq!(x, 65535);
+    }
+
+    #[test]
+    fn test_clamp_keeps_in_range_2() {
+        let buf: [u8; 8] = rand::random();
+        let x = clamp(buf, 48);
+        assert!(x <= 2usize.pow(64 - 48));
+    }
+
+    #[test]
+    fn test_pseudorandom_in_range() {
+        let arr = 0..39; // Not byte aligned
+        let seed: [u8; 32] = rand::random();
+        let index = pseudorandom_in_range(&seed, arr.len());
+        assert!(index < arr.len());
+    }
+
+    #[test]
+    fn test_pseudorandom_generates_random_values() {
+        let arr = 0..39; // Not byte aligned
+
+        let seed1: [u8; 32] = [0u8; 32];
+        let seed2: [u8; 32] = [1u8; 32];
+        let seed3: [u8; 32] = [2u8; 32];
+
+        let index1 = pseudorandom_in_range(&seed1, arr.len());
+        let index2 = pseudorandom_in_range(&seed2, arr.len());
+        let index3 = pseudorandom_in_range(&seed3, arr.len());
+
+        assert_ne!(index1, index2);
+        assert_ne!(index1, index3);
+        assert_ne!(index2, index3);
+    }
+
+    #[test]
+    fn test_pseudorandom_generates_stays_in_range() {
+        let seed1: [u8; 32] = rand::random();
+        let seed2: [u8; 32] = rand::random();
+
+        let index1 = pseudorandom_in_range(&seed1, 0);
+        let index2 = pseudorandom_in_range(&seed2, 0);
+
+        assert_eq!(index1, 0);
+        assert_eq!(index1, index2);
     }
 }
