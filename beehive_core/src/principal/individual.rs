@@ -5,7 +5,13 @@ pub mod op;
 pub mod state;
 
 use super::{agent::AgentId, document::id::DocumentId, verifiable::Verifiable};
-use crate::crypto::{share_key::ShareKey, signed::SigningError};
+use crate::{
+    crypto::{
+        share_key::ShareKey,
+        signed::{Signed, SigningError},
+    },
+    error::missing_dependency::MissingDependency,
+};
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
 use serde::{Deserialize, Serialize};
@@ -54,6 +60,15 @@ impl Individual {
             prekeys: state.materialize(),
             prekey_state: state,
         })
+    }
+
+    pub fn receive_prekey_op(
+        &mut self,
+        op: Signed<op::KeyOp>,
+    ) -> Result<(), MissingDependency<ShareKey>> {
+        self.prekey_state.receive_op(op)?;
+        self.prekeys = self.prekey_state.materialize();
+        Ok(())
     }
 
     pub fn id(&self) -> IndividualId {

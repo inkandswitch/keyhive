@@ -26,6 +26,17 @@ impl ShareKey {
     }
 }
 
+impl std::fmt::Display for ShareKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "0x")?;
+
+        self.0
+            .as_bytes()
+            .iter()
+            .fold(Ok(()), |_, byte| write!(f, "{:x}", byte))
+    }
+}
+
 impl PartialOrd for ShareKey {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))

@@ -4,10 +4,11 @@ use crate::{
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
     },
+    error::missing_dependency::MissingDependency,
     util::content_addressed_map::CaMap,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::{collections::HashSet, rc::Rc};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PrekeyState {
@@ -35,6 +36,30 @@ impl PrekeyState {
         })?;
 
         Ok(Self { ops })
+    }
+
+    pub fn receive_op(&mut self, op: Signed<KeyOp>) -> Result<(), MissingDependency<ShareKey>> {
+        match op.payload() {
+            KeyOp::Add(_) => {
+                self.ops.insert(Rc::new(op));
+            }
+            KeyOp::Rotate(RotateKeyOp { old, .. }) => {
+                if self.contains_key(old) {
+                    self.ops.insert(Rc::new(op));
+                } else {
+                    return Err(MissingDependency(*old));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn contains_key(&self, key: &ShareKey) -> bool {
+        self.ops.values().any(|signed| match signed.payload() {
+            KeyOp::Add(AddKeyOp { share_key }) => share_key == key,
+            KeyOp::Rotate(RotateKeyOp { new, .. }) => new == key,
+        })
     }
 
     pub fn rotate<R: rand::CryptoRng + rand::RngCore>(
