@@ -26,14 +26,15 @@ impl ShareKey {
     }
 }
 
+impl std::fmt::LowerHex for ShareKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::util::hex::bytes_as_hex(self.0.as_bytes().iter(), f)
+    }
+}
+
 impl std::fmt::Display for ShareKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "0x")?;
-
-        self.0
-            .as_bytes()
-            .iter()
-            .fold(Ok(()), |_, byte| write!(f, "{:x}", byte))
+        write!(f, "{:#x}", self)
     }
 }
 
