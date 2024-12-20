@@ -140,11 +140,11 @@ impl Verifiable for Individual {
 }
 
 fn clamp(bytes: [u8; 8], offset_bits: u8) -> usize {
-    usize::from_be(
-        usize::from_be_bytes(bytes)
-            .checked_shl(offset_bits as u32)
-            .unwrap_or(0),
-    )
+    let bound = u64::from_be_bytes(bytes)
+        .checked_shl(offset_bits as u32)
+        .unwrap_or(0);
+
+    usize::from_be(bound as usize)
 }
 
 fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
