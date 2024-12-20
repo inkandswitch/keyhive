@@ -1,10 +1,7 @@
 use super::{
     active::Active,
     identifier::Identifier,
-    individual::{
-        state::{AddKeyOp, PrekeyState},
-        Individual,
-    },
+    individual::{op::KeyOp, state::PrekeyState, Individual},
     verifiable::Verifiable,
 };
 use crate::{
@@ -15,7 +12,7 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use dupe::Dupe;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 /// A well-known agent that can be used by anyone. ⚠ USE WITH CAUTION ⚠
 ///
@@ -44,21 +41,14 @@ impl Public {
     }
 
     pub fn individual(&self) -> Individual {
-        let op = Signed::try_sign(
-            AddKeyOp {
-                share_key: self.share_key(),
-            }
-            .into(),
-            &self.signing_key(),
-        )
-        .expect("signature with well-known key should work");
+        let op = Signed::try_sign(KeyOp::add(self.share_key()), &self.signing_key())
+            .expect("signature with well-known key should work");
 
         Individual {
             id: self.verifying_key().into(),
             prekeys: HashSet::from_iter([self.share_key()]),
             prekey_state: PrekeyState {
                 ops: CaMap::from_iter([op]),
-                keypairs: HashMap::from_iter([(self.share_key(), self.share_secret_key())]),
             },
         }
     }
