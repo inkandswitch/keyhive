@@ -7,4 +7,5 @@ pub mod group;
 pub mod identifier;
 pub mod individual;
 pub mod membered;
+pub mod public;
 pub mod verifiable;
