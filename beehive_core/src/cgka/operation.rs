@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     borrow::Borrow,
     collections::{HashMap, HashSet, VecDeque},
+    mem,
     rc::Rc,
 };
 use topological_sort::TopologicalSort;
@@ -30,6 +31,7 @@ pub enum CgkaOperation {
     },
     Remove {
         id: IndividualId,
+        leaf_idx: u32,
         removed_keys: Vec<ShareKey>,
         predecessors: Vec<Digest<CgkaOperation>>,
     },
@@ -152,22 +154,25 @@ impl CgkaOperationGraph {
         self.cgka_ops.get(op_hash)
     }
 
-    pub fn topsort_graph(&self) -> Result<NonEmpty<Rc<CgkaOperation>>, CgkaError> {
+    pub fn topsort_graph(&self) -> Result<NonEmpty<NonEmpty<Rc<CgkaOperation>>>, CgkaError> {
         self.topsort_for_heads(&self.cgka_op_heads)
     }
 
     pub fn topsort_for_heads(
         &self,
         heads: &HashSet<Digest<CgkaOperation>>,
-    ) -> Result<NonEmpty<Rc<CgkaOperation>>, CgkaError> {
+    ) -> Result<NonEmpty<NonEmpty<Rc<CgkaOperation>>>, CgkaError> {
         debug_assert!(heads.iter().all(|head| self.cgka_ops.contains_key(head)));
         let mut op_hashes = Vec::new();
         let mut dependencies = TopologicalSort::<Digest<CgkaOperation>>::new();
+        let mut successors: HashMap<Digest<CgkaOperation>, HashSet<Digest<CgkaOperation>>> =
+            HashMap::new();
         let mut frontier = VecDeque::new();
         let mut seen = HashSet::new();
         for head in heads {
             frontier.push_back(*head);
             seen.insert(head);
+            successors.insert(*head, Default::default());
         }
         while let Some(op_hash) = frontier.pop_front() {
             let preds = self
@@ -175,6 +180,10 @@ impl CgkaOperationGraph {
                 .ok_or(CgkaError::OperationNotFound)?;
             for update_pred in preds {
                 dependencies.add_dependency(*update_pred, op_hash);
+                successors
+                    .entry(*update_pred)
+                    .or_default()
+                    .insert(op_hash);
                 if seen.contains(update_pred) {
                     continue;
                 }
@@ -182,20 +191,71 @@ impl CgkaOperationGraph {
                 frontier.push_back(*update_pred);
             }
         }
+        let mut epoch_heads = HashSet::new();
+        let mut next_epoch: Vec<Rc<CgkaOperation>> = Vec::new();
         while !dependencies.is_empty() {
             let mut next_set = dependencies.pop_all();
             next_set.sort();
+            for hash in &next_set {
+                epoch_heads.insert(*hash);
+                if successors
+                    .get(hash)
+                    .expect("hash to be present")
+                    .is_empty()
+                {
+                    successors
+                        .get_mut(hash)
+                        .expect("hash to be present")
+                        .insert(*hash);
+                }
+            }
+            for hash in &next_set {
+                for h in &epoch_heads {
+                    if hash == h {
+                        continue;
+                    }
+                    successors.get_mut(h).expect("head to exist").remove(hash);
+                }
+            }
+            epoch_heads = epoch_heads
+                .iter()
+                .filter(|h| !successors.get_mut(h).expect("head to exist").is_empty())
+                .copied()
+                .collect::<HashSet<_>>();
+            let should_end_epoch = epoch_heads.len() <= 1;
+            if should_end_epoch {
+                let mut next = Vec::new();
+                mem::swap(&mut next_epoch, &mut next);
+                if !next.is_empty() {
+                    op_hashes
+                        .push(NonEmpty::from_vec(next).expect("there to be at least one hash"));
+                }
+            }
             for hash in next_set {
-                op_hashes.push(
+                next_epoch.push(
                     self.cgka_ops
                         .get(&hash)
                         .ok_or(CgkaError::OperationNotFound)?
                         .clone(),
                 );
             }
+            if should_end_epoch {
+                let mut next = Vec::new();
+                mem::swap(&mut next_epoch, &mut next);
+                if !next.is_empty() {
+                    op_hashes
+                        .push(NonEmpty::from_vec(next).expect("there to be at least one hash"));
+                }
+            }
+        }
+
+        if !next_epoch.is_empty() {
+            op_hashes.push(
+                NonEmpty::from_vec(next_epoch.clone()).expect("there to be at least one hash"),
+            );
         }
         if op_hashes.is_empty() {
-            op_hashes.extend(
+            next_epoch.extend(
                 heads
                     .iter()
                     .map(|hash| {
@@ -207,6 +267,7 @@ impl CgkaOperationGraph {
                     })
                     .collect::<Vec<_>>(),
             );
+            op_hashes.push(NonEmpty::from_vec(next_epoch).expect("to have at least one op hash"));
         }
         Ok(NonEmpty::from_vec(op_hashes).expect("to have at least one op hash"))
     }

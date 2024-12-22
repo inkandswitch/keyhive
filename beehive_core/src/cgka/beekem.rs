@@ -11,7 +11,7 @@ use crate::{
 };
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use treemath::{InnerNodeIndex, LeafNodeIndex, TreeNodeIndex, TreeSize};
 
 pub type InnerNode = SecretStore;
@@ -101,7 +101,7 @@ impl BeeKem {
             current_secret_encrypter_leaf_idx: None,
         };
         tree.grow_tree_to_size();
-        tree.push_leaf(initial_member_id, initial_member_pk)?;
+        tree.push_leaf(initial_member_id, initial_member_pk.into())?;
         Ok(tree)
     }
 
@@ -110,25 +110,31 @@ impl BeeKem {
         self.node_key_for_index((*idx).into())
     }
 
-    pub(crate) fn sort_leaves_and_blank_tree(&mut self) -> Result<(), CgkaError> {
-        let mut flattened: Vec<&LeafNode> = self.leaves.iter().flatten().collect();
-        flattened.sort_by(|a, b| a.id.cmp(&b.id));
-        // TODO: We could choose to shrink the tree at this point if the leaf count
-        // has reduced by more than half.
-        self.leaves = flattened
-            .iter()
-            .map(|l| Some((*l).clone()))
-            .collect::<Vec<Option<LeafNode>>>();
-        self.id_to_leaf_idx.clear();
-        for (idx, leaf) in self.leaves.iter().enumerate() {
-            if let Some(l) = leaf {
-                self.id_to_leaf_idx
-                    .insert(l.id, LeafNodeIndex::new(idx as u32));
+    pub(crate) fn sort_leaves_for_added_ids(
+        &mut self,
+        mut added_ids: HashSet<IndividualId>,
+        removed_ids: HashSet<(IndividualId, u32)>,
+    ) -> Result<(), CgkaError> {
+        let mut leaves_to_sort = Vec::new();
+        for (id, idx) in removed_ids {
+            let leaf_idx = LeafNodeIndex::new(idx);
+            added_ids.remove(&id);
+            if self.leaf(leaf_idx)?.is_none() {
+                self.blank_leaf_and_path(leaf_idx)?;
             }
         }
-        self.inner_nodes = vec![None; self.inner_nodes.len()];
-        self.grow_tree_to_size();
-        self.current_secret_encrypter_leaf_idx = None;
+        while !added_ids.is_empty() && self.next_leaf_idx.u32() > 0 {
+            if let Some(next_leaf) = self.leaf(self.next_leaf_idx - 1)?.clone() {
+                added_ids.remove(&next_leaf.id);
+                leaves_to_sort.push(next_leaf);
+            }
+            self.next_leaf_idx -= 1;
+            self.blank_leaf_and_path(self.next_leaf_idx)?;
+        }
+        leaves_to_sort.sort_by(|a, b| a.id.cmp(&b.id));
+        for leaf in leaves_to_sort {
+            self.push_leaf(leaf.id, leaf.pk.clone())?;
+        }
         Ok(())
     }
 
@@ -143,29 +149,32 @@ impl BeeKem {
     }
 
     // TODO: If id already exists, add ShareKey to node key for that id's leaf
-    pub(crate) fn push_leaf(&mut self, id: IndividualId, pk: ShareKey) -> Result<u32, CgkaError> {
+    pub(crate) fn push_leaf(&mut self, id: IndividualId, pk: NodeKey) -> Result<u32, CgkaError> {
         self.maybe_grow_tree(self.next_leaf_idx.u32());
         let l_idx = self.next_leaf_idx;
         self.next_leaf_idx += 1;
-        self.insert_leaf_at(l_idx, id, NodeKey::ShareKey(pk))?;
+        self.insert_leaf_at(l_idx, id, pk)?;
         self.id_to_leaf_idx.insert(id, l_idx);
         self.blank_path(treemath::parent(l_idx.into()))?;
         self.current_secret_encrypter_leaf_idx = None;
         Ok(l_idx.u32())
     }
 
-    pub(crate) fn remove_id(&mut self, id: IndividualId) -> Result<Vec<ShareKey>, CgkaError> {
+    pub(crate) fn remove_id(
+        &mut self,
+        id: IndividualId,
+    ) -> Result<(u32, Vec<ShareKey>), CgkaError> {
         if self.member_count() == 1 {
             return Err(CgkaError::RemoveLastMember);
         }
-        let l_idx = self.leaf_index_for_id(id)?;
+        let l_idx = *self.leaf_index_for_id(id)?;
         let mut removed_keys = Vec::new();
-        for idx in treemath::direct_path((*l_idx).into(), self.tree_size) {
+        for idx in treemath::direct_path((l_idx).into(), self.tree_size) {
             if let Some(store) = self.inner_node(idx)? {
                 removed_keys.append(&mut store.node_key().keys());
             }
         }
-        self.blank_leaf_and_path(*l_idx)?;
+        self.blank_leaf_and_path(l_idx)?;
         self.id_to_leaf_idx.remove(&id);
         self.current_secret_encrypter_leaf_idx = None;
         // Collect any contiguous "tombstones" at the end of the leaves Vec
@@ -173,7 +182,7 @@ impl BeeKem {
             self.blank_path(treemath::parent((self.next_leaf_idx - 1).into()))?;
             self.next_leaf_idx -= 1;
         }
-        Ok(removed_keys)
+        Ok((l_idx.u32(), removed_keys))
     }
 
     pub(crate) fn member_count(&self) -> u32 {

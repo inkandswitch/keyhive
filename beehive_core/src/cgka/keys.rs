@@ -58,6 +58,12 @@ pub enum NodeKey {
     ConflictKeys(ConflictKeys),
 }
 
+impl From<ShareKey> for NodeKey {
+    fn from(item: ShareKey) -> Self {
+        NodeKey::ShareKey(item)
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct ConflictKeys {
     pub first: ShareKey,
