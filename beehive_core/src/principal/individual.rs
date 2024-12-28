@@ -66,7 +66,7 @@ impl Individual {
         &mut self,
         op: Signed<op::KeyOp>,
     ) -> Result<(), MissingDependency<ShareKey>> {
-        self.prekey_state.receive_op(op)?;
+        self.prekey_state.insert_op(op)?;
         self.prekeys = self.prekey_state.materialize();
         Ok(())
     }
@@ -99,7 +99,7 @@ impl Individual {
         signer: &ed25519_dalek::SigningKey,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
-        let new_key = self.prekey_state.rotate(old_key, signer, csprng)?;
+        let new_key = self.prekey_state.rotate_gen(old_key, signer, csprng)?;
         self.prekeys.remove(&old_key);
         self.prekeys.insert(new_key);
         Ok(new_key)
