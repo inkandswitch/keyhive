@@ -3,7 +3,7 @@
 use super::{
     document::{id::DocumentId, Document},
     identifier::Identifier,
-    individual::{id::IndividualId, Individual},
+    individual::{id::IndividualId, op::KeyOp, Individual},
     verifiable::Verifiable,
 };
 use crate::{
@@ -41,7 +41,7 @@ pub struct Active {
     // FIXME: Can we remove this since we're using the Individual's map?
     pub prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>, // FIXME generalize to use e.g. KMS
 
-    /// The [`Individual`] static identifier.
+    /// The [`Individual`] representation (how others see this agent).
     pub individual: Individual,
 }
 
@@ -50,9 +50,25 @@ impl Active {
         signer: SigningKey,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
+        let mut individual = Individual::new(signer.verifying_key().into());
+        let mut prekey_pairs = BTreeMap::new();
+
+        (0..7).try_for_each(|_| {
+            let sk = ShareSecretKey::generate(csprng);
+            let pk = sk.share_key();
+            let op = Signed::try_sign(KeyOp::add(pk), &signer)?;
+
+            prekey_pairs.insert(pk, sk);
+            individual
+                .receive_prekey_op(op)
+                .expect("insertion of fresh prekey by the correct signer should work");
+
+            Ok::<(), SigningError>(())
+        })?;
+
         Ok(Self {
-            individual: Individual::generate(&signer, csprng)?,
-            prekey_pairs: BTreeMap::new(),
+            individual,
+            prekey_pairs,
             signer,
         })
     }

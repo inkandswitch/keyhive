@@ -3,14 +3,16 @@
 //! [ECDH]: https://wikipedia.org/wiki/Elliptic-curve_Diffie%E2%80%93Hellman
 
 use super::{separable::Separable, symmetric_key::SymmetricKey};
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Newtype around [x25519_dalek::PublicKey].
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShareKey(x25519_dalek::PublicKey);
 
 impl ShareKey {
-    #[cfg(feature = "test_utils")]
+    #[cfg(any(test, feature = "test_utils"))]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         Self(x25519_dalek::PublicKey::from(
             &x25519_dalek::EphemeralSecret::random_from_rng(csprng),
@@ -23,6 +25,30 @@ impl ShareKey {
 
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
+    }
+}
+
+impl Dupe for ShareKey {
+    fn dupe(&self) -> Self {
+        Self(self.0)
+    }
+}
+
+impl fmt::LowerHex for ShareKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        crate::util::hex::bytes_as_hex(self.0.as_bytes().iter(), f)
+    }
+}
+
+impl fmt::Display for ShareKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:#x}", self)
+    }
+}
+
+impl fmt::Debug for ShareKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
     }
 }
 

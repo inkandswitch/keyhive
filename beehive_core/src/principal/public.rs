@@ -4,12 +4,9 @@ use super::{
     individual::{op::KeyOp, state::PrekeyState, Individual},
     verifiable::Verifiable,
 };
-use crate::{
-    crypto::{
-        share_key::{ShareKey, ShareSecretKey},
-        signed::Signed,
-    },
-    util::content_addressed_map::CaMap,
+use crate::crypto::{
+    share_key::{ShareKey, ShareSecretKey},
+    signed::Signed,
 };
 use dupe::Dupe;
 use std::collections::{BTreeMap, HashSet};
@@ -47,9 +44,8 @@ impl Public {
         Individual {
             id: self.verifying_key().into(),
             prekeys: HashSet::from_iter([self.share_key()]),
-            prekey_state: PrekeyState {
-                ops: CaMap::from_iter([op]),
-            },
+            prekey_state: PrekeyState::from_iter([op])
+                .expect("well-known prekey op should be valid"),
         }
     }
 

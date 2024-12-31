@@ -14,5 +14,6 @@ pub mod cgka;
 pub mod content;
 pub mod context;
 pub mod crypto;
+pub mod error;
 pub mod principal;
 pub mod util;

@@ -1,6 +1,7 @@
 //! Wrap data in signatures.
 
 use crate::principal::identifier::Identifier;
+use dupe::Dupe;
 use ed25519_dalek::{Signer, Verifier};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -95,6 +96,16 @@ impl<T: Serialize + Ord> Ord for Signed<T> {
                 unequal => unequal,
             },
             unequal => unequal,
+        }
+    }
+}
+
+impl<T: Dupe + Serialize> Dupe for Signed<T> {
+    fn dupe(&self) -> Self {
+        Signed {
+            payload: self.payload.dupe(),
+            verifying_key: self.verifying_key,
+            signature: self.signature,
         }
     }
 }

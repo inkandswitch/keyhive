@@ -46,13 +46,15 @@ impl std::hash::Hash for Identifier {
     }
 }
 
+impl std::fmt::LowerHex for Identifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        crate::util::hex::bytes_as_hex(self.0.as_bytes().iter(), f)
+    }
+}
+
 impl std::fmt::Display for Identifier {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "0x")?;
-
-        self.as_slice()
-            .iter()
-            .fold(Ok(()), |_, byte| write!(f, "{:x}", byte))
+        write!(f, "{:#x}", self)
     }
 }
 

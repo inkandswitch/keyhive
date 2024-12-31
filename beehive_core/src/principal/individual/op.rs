@@ -4,6 +4,7 @@ pub mod add_key;
 pub mod rotate_key;
 
 use crate::crypto::share_key::ShareKey;
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 
 /// Operations for updating prekeys.
@@ -11,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// Note that the number of keys only ever increases.
 /// This prevents the case where all keys are remved and the user is unable to be
 /// added to a [`Cgka`][crate::cgka::Cgka].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KeyOp {
     /// Add a new key.
     Add(add_key::AddKeyOp),
@@ -27,5 +28,12 @@ impl KeyOp {
 
     pub fn rotate(old: ShareKey, new: ShareKey) -> Self {
         KeyOp::Rotate(rotate_key::RotateKeyOp { old, new })
+    }
+
+    pub fn new_share_key(&self) -> ShareKey {
+        match self {
+            KeyOp::Add(op) => op.share_key,
+            KeyOp::Rotate(op) => op.new,
+        }
     }
 }
