@@ -101,10 +101,13 @@ impl Individual {
             .expect("index in pre-checked bounds to exist")
     }
 
-    pub(crate) fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
+    pub(crate) fn rotate_prekey<
+        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
+        R: rand::CryptoRng + rand::RngCore,
+    >(
         &mut self,
         old_key: ShareKey,
-        signer: &ed25519_dalek::SigningKey,
+        signer: &S,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_key = self.prekey_state.rotate_gen(old_key, signer, csprng)?;
@@ -113,9 +116,12 @@ impl Individual {
         Ok(new_key)
     }
 
-    pub(crate) fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
+    pub(crate) fn expand_prekeys<
+        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
+        R: rand::CryptoRng + rand::RngCore,
+    >(
         &mut self,
-        signer: &ed25519_dalek::SigningKey,
+        signer: &S,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_key = self.prekey_state.expand(signer, csprng)?;

@@ -10,6 +10,7 @@ use crate::{
         agent::{Agent, AgentId},
         document::{id::DocumentId, Document},
         identifier::Identifier,
+        verifiable::Verifiable,
     },
 };
 use dupe::Dupe;
@@ -18,16 +19,21 @@ use std::{cell::RefCell, collections::BTreeMap, hash::Hash, rc::Rc};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Delegation<T: ContentRef> {
-    pub(crate) delegate: Agent<T>,
+pub struct Delegation<
+    T: ContentRef,
+    S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
+> {
+    pub(crate) delegate: Agent<T, S>,
     pub(crate) can: Access,
 
-    pub(crate) proof: Option<Rc<Signed<Delegation<T>>>>,
-    pub(crate) after_revocations: Vec<Rc<Signed<Revocation<T>>>>,
-    pub(crate) after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+    pub(crate) proof: Option<Rc<Signed<Delegation<T, S>>>>,
+    pub(crate) after_revocations: Vec<Rc<Signed<Revocation<T, S>>>>,
+    pub(crate) after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T, S>>>, Vec<T>)>,
 }
 
-impl<T: ContentRef> Delegation<T> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
+    Delegation<T, S>
+{
     pub fn subject(&self, issuer: AgentId) -> Identifier {
         if let Some(proof) = &self.proof {
             proof.subject()
@@ -36,7 +42,7 @@ impl<T: ContentRef> Delegation<T> {
         }
     }
 
-    pub fn delegate(&self) -> &Agent<T> {
+    pub fn delegate(&self) -> &Agent<T, S> {
         &self.delegate
     }
 
@@ -44,16 +50,16 @@ impl<T: ContentRef> Delegation<T> {
         self.can
     }
 
-    pub fn proof(&self) -> Option<&Rc<Signed<Delegation<T>>>> {
+    pub fn proof(&self) -> Option<&Rc<Signed<Delegation<T, S>>>> {
         self.proof.as_ref()
     }
 
     pub fn after(
         &self,
     ) -> (
-        Vec<Rc<Signed<Delegation<T>>>>,
-        Vec<Rc<Signed<Revocation<T>>>>,
-        &BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+        Vec<Rc<Signed<Delegation<T, S>>>>,
+        Vec<Rc<Signed<Revocation<T, S>>>>,
+        &BTreeMap<DocumentId, (Rc<RefCell<Document<T, S>>>, Vec<T>)>,
     ) {
         let (dlgs, revs) = self.after_auth();
         (
@@ -66,8 +72,8 @@ impl<T: ContentRef> Delegation<T> {
     pub fn after_auth(
         &self,
     ) -> (
-        Option<Rc<Signed<Delegation<T>>>>,
-        &[Rc<Signed<Revocation<T>>>],
+        Option<Rc<Signed<Delegation<T, S>>>>,
+        &[Rc<Signed<Revocation<T, S>>>],
     ) {
         (self.proof.dupe(), &self.after_revocations)
     }
@@ -77,7 +83,9 @@ impl<T: ContentRef> Delegation<T> {
     }
 }
 
-impl<T: ContentRef> Signed<Delegation<T>> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
+    Signed<Delegation<T, S>>
+{
     pub fn subject(&self) -> Identifier {
         let mut head = self;
 
@@ -89,8 +97,10 @@ impl<T: ContentRef> Signed<Delegation<T>> {
     }
 }
 
-impl<T: ContentRef> Serialize for Delegation<T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Serialize
+    for Delegation<T, S>
+{
+    fn serialize<Ser: serde::Serializer>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error> {
         // FIXME could be a heavy clone since this is used to hash
         // FIXME ...ooooor use the hash of teh static delehation as an ID... probably this actually
         StaticDelegation::from(self.clone()).serialize(serializer)
@@ -108,8 +118,10 @@ pub struct StaticDelegation<T: ContentRef> {
     pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<T: ContentRef> From<Delegation<T>> for StaticDelegation<T> {
-    fn from(delegation: Delegation<T>) -> Self {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
+    From<Delegation<T, S>> for StaticDelegation<T>
+{
+    fn from(delegation: Delegation<T, S>) -> Self {
         Self {
             can: delegation.can,
             proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).coerce()),

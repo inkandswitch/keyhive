@@ -35,24 +35,33 @@ use std::{
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Debug)]
-pub struct Context<T: ContentRef, R: rand::CryptoRng + rand::RngCore> {
+pub struct Context<
+    T: ContentRef,
+    S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
+    R: rand::CryptoRng + rand::RngCore,
+> {
     /// The [`Active`] user agent.
-    pub active: Rc<RefCell<Active>>,
+    pub active: Rc<RefCell<Active<S>>>,
 
     /// The [`Individual`]s that are known to this agent.
     pub individuals: BTreeMap<IndividualId, Rc<RefCell<Individual>>>,
 
     /// The [`Group`]s that are known to this agent.
-    pub groups: GroupStore<T>,
+    pub groups: GroupStore<T, S>,
 
     /// The [`Document`]s that are known to this agent.
-    pub docs: DocumentStore<T>,
+    pub docs: DocumentStore<T, S>,
 
     /// Cryptographically secure (pseudo)random number generator.
     pub csprng: R,
 }
 
-impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
+impl<
+        T: ContentRef,
+        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
+        R: rand::CryptoRng + rand::RngCore,
+    > Context<T, S, R>
+{
     pub fn id(&self) -> IndividualId {
         self.active.borrow().id()
     }
@@ -61,10 +70,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
         self.active.borrow().agent_id()
     }
 
-    pub fn generate(
-        signing_key: ed25519_dalek::SigningKey,
-        mut csprng: R,
-    ) -> Result<Self, SigningError> {
+    pub fn generate(signing_key: S, mut csprng: R) -> Result<Self, SigningError> {
         Ok(Self {
             active: Rc::new(RefCell::new(Active::generate(signing_key, &mut csprng)?)),
             individuals: Default::default(),
@@ -76,8 +82,8 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
 
     pub fn generate_group(
         &mut self,
-        coparents: Vec<Agent<T>>,
-    ) -> Result<Rc<RefCell<Group<T>>>, SigningError> {
+        coparents: Vec<Agent<T, S>>,
+    ) -> Result<Rc<RefCell<Group<T, S>>>, SigningError> {
         self.groups.generate_group(NonEmpty {
             head: self.active.dupe().into(),
             tail: coparents,
@@ -86,7 +92,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
 
     pub fn generate_doc(
         &mut self,
-        coparents: Vec<Agent<T>>,
+        coparents: Vec<Agent<T, S>>,
     ) -> Result<DocumentId, DelegationError> {
         let parents = NonEmpty {
             head: self.active.dupe().into(),
@@ -116,10 +122,10 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
 
     pub fn add_member(
         &mut self,
-        to_add: Agent<T>,
-        resource: &mut Membered<T>,
+        to_add: Agent<T, S>,
+        resource: &mut Membered<T, S>,
         can: Access,
-        after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+        after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T, S>>>, Vec<T>)>,
     ) -> Result<(), DelegationError> {
         let proof = resource
             .get_capability(&self.active.borrow().agent_id())
@@ -145,7 +151,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
     pub fn revoke_member(
         &mut self,
         to_revoke: AgentId,
-        resource: &mut Membered<T>,
+        resource: &mut Membered<T, S>,
     ) -> Result<(), SigningError> {
         let relevant_docs = vec![]; // FIXME calculate reachable for revoked or just all known docs
 
@@ -158,7 +164,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
 
     pub fn try_encrypt_content(
         &mut self,
-        doc: Rc<RefCell<Document<T>>>,
+        doc: Rc<RefCell<Document<T, S>>>,
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
@@ -175,24 +181,27 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
 
     pub fn try_decrypt_content(
         &mut self,
-        doc: Rc<RefCell<Document<T>>>,
+        doc: Rc<RefCell<Document<T, S>>>,
         encrypted: &Encrypted<Vec<u8>, T>,
     ) -> Result<Vec<u8>, DecryptError> {
         doc.borrow_mut().try_decrypt_content(encrypted)
     }
 
-    pub fn force_pcs_update(&mut self, doc: Rc<RefCell<Document<T>>>) -> Result<(), EncryptError> {
+    pub fn force_pcs_update(
+        &mut self,
+        doc: Rc<RefCell<Document<T, S>>>,
+    ) -> Result<(), EncryptError> {
         doc.borrow_mut().pcs_update(&mut self.csprng)
     }
 
-    pub fn reachable_docs(&self) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> {
+    pub fn reachable_docs(&self) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T, S>>>, Access)> {
         self.docs_reachable_by_agent(self.active.dupe().into())
     }
 
     pub fn reachable_members(
         &self,
-        membered: Membered<T>,
-    ) -> BTreeMap<AgentId, (Agent<T>, Access)> {
+        membered: Membered<T, S>,
+    ) -> BTreeMap<AgentId, (Agent<T, S>, Access)> {
         match membered {
             Membered::Group(group) => self.groups.transitive_members(&group.borrow()),
             Membered::Document(doc) => self.docs.transitive_members(&doc.borrow()),
@@ -201,10 +210,11 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
 
     pub fn docs_reachable_by_agent(
         &self,
-        agent: Agent<T>,
-    ) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> {
-        let mut explore: Vec<(Rc<RefCell<Group<T>>>, Access)> = vec![];
-        let mut caps: BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> = BTreeMap::new();
+        agent: Agent<T, S>,
+    ) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T, S>>>, Access)> {
+        let mut explore: Vec<(Rc<RefCell<Group<T, S>>>, Access)> = vec![];
+        let mut caps: BTreeMap<DocumentId, (&Rc<RefCell<Document<T, S>>>, Access)> =
+            BTreeMap::new();
         let mut seen: HashSet<AgentId> = HashSet::new();
 
         let agent_id = agent.agent_id();
@@ -266,7 +276,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
         caps
     }
 
-    pub fn get_agent(&self, id: Identifier) -> Option<Agent<T>> {
+    pub fn get_agent(&self, id: Identifier) -> Option<Agent<T, S>> {
         if let Some(doc) = self.docs.get(&DocumentId(id)) {
             return Some(doc.into());
         }
@@ -283,14 +293,24 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
     }
 }
 
-impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Verifiable for Context<T, R> {
+impl<
+        T: ContentRef,
+        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
+        R: rand::CryptoRng + rand::RngCore,
+    > Verifiable for Context<T, S, R>
+{
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.active.borrow().verifying_key()
     }
 }
 
-impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> From<&Context<T, R>> for Agent<T> {
-    fn from(context: &Context<T, R>) -> Self {
+impl<
+        T: ContentRef,
+        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
+        R: rand::CryptoRng + rand::RngCore,
+    > From<&Context<T, S, R>> for Agent<T, S>
+{
+    fn from(context: &Context<T, S, R>) -> Self {
         context.active.dupe().into()
     }
 }

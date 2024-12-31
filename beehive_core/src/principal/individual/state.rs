@@ -5,6 +5,7 @@ use crate::{
         signed::{Signed, SigningError, VerificationError},
     },
     error::missing_dependency::MissingDependency,
+    principal::verifiable::Verifiable,
     util::content_addressed_map::CaMap,
 };
 use serde::{Deserialize, Serialize};
@@ -117,11 +118,11 @@ impl PrekeyState {
     }
 
     /// Rotate a [`ShareKey`] in the [`PrekeyState`].
-    pub(crate) fn rotate(
+    pub(crate) fn rotate<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>(
         &mut self,
         old: ShareKey,
         new: ShareKey,
-        signer: &ed25519_dalek::SigningKey,
+        signer: &S,
     ) -> Result<ShareKey, SigningError> {
         let op = Signed::try_sign(KeyOp::rotate(old, new), signer)?;
         self.ops.insert(op.into());
@@ -129,10 +130,13 @@ impl PrekeyState {
     }
 
     /// Rotate a [`ShareKey`] in the [`PrekeyState`] with a randomly-generated [`ShareSecretKey`].
-    pub(crate) fn rotate_gen<R: rand::CryptoRng + rand::RngCore>(
+    pub(crate) fn rotate_gen<
+        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
+        R: rand::CryptoRng + rand::RngCore,
+    >(
         &mut self,
         old: ShareKey,
-        signer: &ed25519_dalek::SigningKey,
+        signer: &S,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
@@ -140,9 +144,12 @@ impl PrekeyState {
     }
 
     /// Expand the [`PrekeyState`] with a new, randomly-generated [`ShareSecretKey`].
-    pub(crate) fn expand<R: rand::CryptoRng + rand::RngCore>(
+    pub(crate) fn expand<
+        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
+        R: rand::CryptoRng + rand::RngCore,
+    >(
         &mut self,
-        signer: &ed25519_dalek::SigningKey,
+        signer: &S,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);

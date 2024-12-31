@@ -7,6 +7,7 @@ use crate::{
     principal::{
         document::{id::DocumentId, Document},
         identifier::Identifier,
+        verifiable::Verifiable,
     },
     util::content_addressed_map::CaMap,
 };
@@ -24,13 +25,17 @@ use std::{
 use topological_sort::TopologicalSort;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Dupe)]
-pub enum Operation<T: ContentRef> {
-    Delegation(Rc<Signed<Delegation<T>>>),
-    Revocation(Rc<Signed<Revocation<T>>>),
+pub enum Operation<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> {
+    Delegation(Rc<Signed<Delegation<T, S>>>),
+    Revocation(Rc<Signed<Revocation<T, S>>>),
 }
 
-impl<T: ContentRef + Serialize> Serialize for Operation<T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+impl<
+        T: ContentRef + Serialize,
+        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
+    > Serialize for Operation<T, S>
+{
+    fn serialize<Ser: serde::Serializer>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error> {
         match self {
             Operation::Delegation(delegation) => delegation.serialize(serializer),
             Operation::Revocation(revocation) => revocation.serialize(serializer),
@@ -38,7 +43,9 @@ impl<T: ContentRef + Serialize> Serialize for Operation<T> {
     }
 }
 
-impl<T: ContentRef> Operation<T> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
+    Operation<T, S>
+{
     pub fn subject(&self) -> Identifier {
         match self {
             Operation::Delegation(delegation) => delegation.subject(),
@@ -57,7 +64,7 @@ impl<T: ContentRef> Operation<T> {
         !self.is_delegation()
     }
 
-    pub fn after_auth(&self) -> Vec<Operation<T>> {
+    pub fn after_auth(&self) -> Vec<Operation<T, S>> {
         let (dlgs, revs, _) = self.after();
         dlgs.into_iter()
             .map(|d| d.into())
@@ -68,9 +75,9 @@ impl<T: ContentRef> Operation<T> {
     pub fn after(
         &self,
     ) -> (
-        Vec<Rc<Signed<Delegation<T>>>>,
-        Vec<Rc<Signed<Revocation<T>>>>,
-        &BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+        Vec<Rc<Signed<Delegation<T, S>>>>,
+        Vec<Rc<Signed<Revocation<T, S>>>>,
+        &BTreeMap<DocumentId, (Rc<RefCell<Document<T, S>>>, Vec<T>)>,
     ) {
         match self {
             Operation::Delegation(delegation) => {
@@ -84,7 +91,7 @@ impl<T: ContentRef> Operation<T> {
         }
     }
 
-    pub fn after_content(&self) -> &BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)> {
+    pub fn after_content(&self) -> &BTreeMap<DocumentId, (Rc<RefCell<Document<T, S>>>, Vec<T>)> {
         match self {
             Operation::Delegation(delegation) => &delegation.payload().after_content,
             Operation::Revocation(revocation) => &revocation.payload().after_content,
@@ -98,7 +105,7 @@ impl<T: ContentRef> Operation<T> {
         }
     }
 
-    pub fn ancestors(&self) -> (CaMap<Operation<T>>, usize) {
+    pub fn ancestors(&self) -> (CaMap<Operation<T, S>>, usize) {
         if self.is_root() {
             return (CaMap::new(), 1);
         }
@@ -140,26 +147,26 @@ impl<T: ContentRef> Operation<T> {
     }
 
     pub fn topsort(
-        delegation_heads: &HashSet<Rc<Signed<Delegation<T>>>>,
-        revocation_heads: &HashSet<Rc<Signed<Revocation<T>>>>,
-    ) -> Vec<(Digest<Operation<T>>, Operation<T>)> {
+        delegation_heads: &HashSet<Rc<Signed<Delegation<T, S>>>>,
+        revocation_heads: &HashSet<Rc<Signed<Revocation<T, S>>>>,
+    ) -> Vec<(Digest<Operation<T, S>>, Operation<T, S>)> {
         // NOTE: BTreeMap to get deterministic order
         let mut ops_with_ancestors: BTreeMap<
-            Digest<Operation<T>>,
-            (Operation<T>, CaMap<Operation<T>>, usize),
+            Digest<Operation<T, S>>,
+            (Operation<T, S>, CaMap<Operation<T, S>>, usize),
         > = BTreeMap::new();
 
-        let mut leftovers: HashSet<Operation<T>> = HashSet::new();
-        let mut explore: Vec<Operation<T>> = vec![];
+        let mut leftovers: HashSet<Operation<T, S>> = HashSet::new();
+        let mut explore: Vec<Operation<T, S>> = vec![];
 
         for dlg in delegation_heads.iter() {
-            let op: Operation<T> = dlg.dupe().into();
+            let op: Operation<T, S> = dlg.dupe().into();
             leftovers.insert(op.clone());
             explore.push(op);
         }
 
         for rev in revocation_heads.iter() {
-            let op: Operation<T> = rev.dupe().into();
+            let op: Operation<T, S> = rev.dupe().into();
             leftovers.insert(op.clone());
             explore.push(op);
         }
@@ -174,7 +181,7 @@ impl<T: ContentRef> Operation<T> {
             ops_with_ancestors.insert(Digest::hash(&op), (op, ancestors, longest_path));
         }
 
-        let mut adjacencies: TopologicalSort<(Digest<Operation<T>>, &Operation<T>)> =
+        let mut adjacencies: TopologicalSort<(Digest<Operation<T, S>>, &Operation<T, S>)> =
             topological_sort::TopologicalSort::new();
 
         for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
@@ -183,10 +190,10 @@ impl<T: ContentRef> Operation<T> {
                     .get(&other_digest.coerce())
                     .expect("values that we just put there to be there");
 
-                let ancestor_set: HashSet<&Operation<T>> =
+                let ancestor_set: HashSet<&Operation<T, S>> =
                     op_ancestors.values().map(|op| op.as_ref()).collect();
 
-                let other_ancestor_set: HashSet<&Operation<T>> =
+                let other_ancestor_set: HashSet<&Operation<T, S>> =
                     other_ancestors.values().map(|op| op.as_ref()).collect();
 
                 if other_ancestor_set.contains(op) || ancestor_set.is_subset(&other_ancestor_set) {
@@ -265,14 +272,18 @@ impl<T: ContentRef> Operation<T> {
     }
 }
 
-impl<T: ContentRef> From<Rc<Signed<Delegation<T>>>> for Operation<T> {
-    fn from(delegation: Rc<Signed<Delegation<T>>>) -> Self {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
+    From<Rc<Signed<Delegation<T, S>>>> for Operation<T, S>
+{
+    fn from(delegation: Rc<Signed<Delegation<T, S>>>) -> Self {
         Operation::Delegation(delegation)
     }
 }
 
-impl<T: ContentRef> From<Rc<Signed<Revocation<T>>>> for Operation<T> {
-    fn from(revocation: Rc<Signed<Revocation<T>>>) -> Self {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
+    From<Rc<Signed<Revocation<T, S>>>> for Operation<T, S>
+{
+    fn from(revocation: Rc<Signed<Revocation<T, S>>>) -> Self {
         Operation::Revocation(revocation)
     }
 }

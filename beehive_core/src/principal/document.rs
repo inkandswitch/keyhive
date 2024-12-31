@@ -36,15 +36,18 @@ use std::{
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Document<T: ContentRef> {
-    pub(crate) group: Group<T>,
+pub struct Document<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
+{
+    pub(crate) group: Group<T, S>,
     pub(crate) reader_keys: HashMap<IndividualId, (Rc<Individual>, ShareKey)>,
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
     pub(crate) cgka: Cgka,
 }
 
-impl<T: ContentRef> Document<T> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
+    Document<T, S>
+{
     pub fn id(&self) -> Identifier {
         self.group.id()
     }
@@ -57,20 +60,20 @@ impl<T: ContentRef> Document<T> {
         self.doc_id().into()
     }
 
-    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
+    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T, S>>>>> {
         self.group.members()
     }
 
-    pub fn delegations(&self) -> &CaMap<Signed<Delegation<T>>> {
+    pub fn delegations(&self) -> &CaMap<Signed<Delegation<T, S>>> {
         self.group.delegations()
     }
 
-    pub fn get_capabilty(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
+    pub fn get_capabilty(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T, S>>>> {
         self.group.get_capability(member_id)
     }
 
     pub fn generate<R: rand::RngCore + rand::CryptoRng>(
-        parents: NonEmpty<Agent<T>>,
+        parents: NonEmpty<Agent<T, S>>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
@@ -92,7 +95,8 @@ impl<T: ContentRef> Document<T> {
                     acc.state.delegations.insert(rc.dupe());
                     acc.state.delegation_heads.insert(rc.dupe());
                     acc.members.insert(parent.agent_id(), vec![rc]);
-                    Ok::<Group<T>, DelegationError>(acc)
+
+                    Ok::<Group<T, S>, DelegationError>(acc)
                 })?;
         let owner_id = IndividualId(Identifier((&doc_signer).into()));
         let doc_id = DocumentId(group.id());
@@ -136,7 +140,10 @@ impl<T: ContentRef> Document<T> {
         })
     }
 
-    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<T>>) -> Vec<CgkaOperation> {
+    pub fn add_member(
+        &mut self,
+        signed_delegation: Signed<Delegation<T, S>>,
+    ) -> Vec<CgkaOperation> {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
@@ -170,7 +177,7 @@ impl<T: ContentRef> Document<T> {
         &mut self,
         member_id: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<RefCell<Document<T>>>],
+        relevant_docs: &[&Rc<RefCell<Document<T, S>>>],
     ) -> Result<(), SigningError> {
         // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
         // FIXME: We need to check if this has revoked the last member in our group?
@@ -188,7 +195,7 @@ impl<T: ContentRef> Document<T> {
             .revoke_member(member_id, signing_key, relevant_docs)
     }
 
-    pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
+    pub fn get_agent_revocations(&self, agent: &Agent<T, S>) -> Vec<Rc<Signed<Revocation<T, S>>>> {
         self.group.get_agent_revocations(agent)
     }
 
@@ -265,7 +272,9 @@ pub enum DecryptError {
 }
 
 // FIXME test
-impl<T: ContentRef> std::hash::Hash for Document<T> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> std::hash::Hash
+    for Document<T, S>
+{
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.group.hash(state);
         for key in self.reader_keys.keys() {
@@ -277,7 +286,9 @@ impl<T: ContentRef> std::hash::Hash for Document<T> {
     }
 }
 
-impl<T: ContentRef> Verifiable for Document<T> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Verifiable
+    for Document<T, S>
+{
     fn verifying_key(&self) -> VerifyingKey {
         self.group.verifying_key()
     }

@@ -19,13 +19,15 @@ use std::{cell::RefCell, collections::HashMap, fmt, rc::Rc};
 
 /// The union of Agents that have updatable membership
 #[derive(Debug, Clone, Dupe, PartialEq, Eq)]
-pub enum Membered<T: ContentRef> {
-    Group(Rc<RefCell<Group<T>>>),
-    Document(Rc<RefCell<Document<T>>>),
+pub enum Membered<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> {
+    Group(Rc<RefCell<Group<T, S>>>),
+    Document(Rc<RefCell<Document<T, S>>>),
 }
 
-impl<T: ContentRef> Membered<T> {
-    pub fn get_capability(&self, agent_id: &AgentId) -> Option<Rc<Signed<Delegation<T>>>> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
+    Membered<T, S>
+{
+    pub fn get_capability(&self, agent_id: &AgentId) -> Option<Rc<Signed<Delegation<T, S>>>> {
         match self {
             Membered::Group(group) => group.borrow().get_capability(agent_id).duped(),
             Membered::Document(doc) => doc.borrow().get_capabilty(agent_id).duped(),
@@ -48,14 +50,14 @@ impl<T: ContentRef> Membered<T> {
         }
     }
 
-    pub fn members(&self) -> HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
+    pub fn members(&self) -> HashMap<AgentId, Vec<Rc<Signed<Delegation<T, S>>>>> {
         match self {
             Membered::Group(group) => group.borrow().members().clone(),
             Membered::Document(document) => document.borrow().members().clone(),
         }
     }
 
-    pub fn add_member(&mut self, delegation: Signed<Delegation<T>>) {
+    pub fn add_member(&mut self, delegation: Signed<Delegation<T, S>>) {
         match self {
             Membered::Group(group) => {
                 group.borrow_mut().add_delegation(delegation);
@@ -69,8 +71,8 @@ impl<T: ContentRef> Membered<T> {
     pub fn revoke_member(
         &mut self,
         member_id: AgentId,
-        signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<RefCell<Document<T>>>],
+        signing_key: &S,
+        relevant_docs: &[&Rc<RefCell<Document<T, S>>>],
     ) -> Result<(), SigningError> {
         match self {
             Membered::Group(group) => {
@@ -86,7 +88,7 @@ impl<T: ContentRef> Membered<T> {
         }
     }
 
-    pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
+    pub fn get_agent_revocations(&self, agent: &Agent<T, S>) -> Vec<Rc<Signed<Revocation<T, S>>>> {
         match self {
             Membered::Group(group) => group.borrow().get_agent_revocations(agent),
             Membered::Document(document) => document.borrow().get_agent_revocations(agent),
@@ -94,19 +96,25 @@ impl<T: ContentRef> Membered<T> {
     }
 }
 
-impl<T: ContentRef> From<Rc<RefCell<Group<T>>>> for Membered<T> {
-    fn from(group: Rc<RefCell<Group<T>>>) -> Self {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
+    From<Rc<RefCell<Group<T, S>>>> for Membered<T, S>
+{
+    fn from(group: Rc<RefCell<Group<T, S>>>) -> Self {
         Membered::Group(group)
     }
 }
 
-impl<T: ContentRef> From<Rc<RefCell<Document<T>>>> for Membered<T> {
-    fn from(document: Rc<RefCell<Document<T>>>) -> Self {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
+    From<Rc<RefCell<Document<T, S>>>> for Membered<T, S>
+{
+    fn from(document: Rc<RefCell<Document<T, S>>>) -> Self {
         Membered::Document(document)
     }
 }
 
-impl<T: ContentRef> Verifiable for Membered<T> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Verifiable
+    for Membered<T, S>
+{
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         match self {
             Membered::Group(group) => group.borrow().verifying_key(),

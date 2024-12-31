@@ -1,9 +1,15 @@
 //! The current user agent (which can sign and encrypt).
 
 use super::{
+    agent::{Agent, AgentId},
     document::{id::DocumentId, Document},
+    group::operation::{
+        delegation::{Delegation, DelegationError},
+        revocation::Revocation,
+    },
     identifier::Identifier,
     individual::{id::IndividualId, op::KeyOp, Individual},
+    membered::Membered,
     verifiable::Verifiable,
 };
 use crate::{
@@ -13,26 +19,18 @@ use crate::{
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
     },
-    principal::{
-        agent::{Agent, AgentId},
-        group::operation::{
-            delegation::{Delegation, DelegationError},
-            revocation::Revocation,
-        },
-        membered::Membered,
-    },
 };
 use dupe::Dupe;
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use serde::Serialize;
 use std::{cell::RefCell, collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
 #[derive(Clone, Serialize)]
-pub struct Active {
+pub struct Active<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> {
     /// The signing key of the active agent.
-    pub signer: SigningKey,
+    pub signer: S,
 
     // // FIXME generalize to use e.g. KMS
     // // FIXME include timestamp for next PCS update
@@ -45,9 +43,9 @@ pub struct Active {
     pub individual: Individual,
 }
 
-impl Active {
+impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Active<S> {
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        signer: SigningKey,
+        signer: S,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
         let mut individual = Individual::new(signer.verifying_key().into());
@@ -107,9 +105,9 @@ impl Active {
 
     pub fn get_capability<T: ContentRef>(
         &self,
-        subject: Membered<T>,
+        subject: Membered<T, S>,
         min: Access,
-    ) -> Option<Rc<Signed<Delegation<T>>>> {
+    ) -> Option<Rc<Signed<Delegation<T, S>>>> {
         subject.get_capability(&self.agent_id()).and_then(|cap| {
             if cap.payload().can >= min {
                 Some(cap)
@@ -122,12 +120,12 @@ impl Active {
     // FIXME replace with delegate_to
     pub fn make_delegation<T: ContentRef>(
         &self,
-        subject: Membered<T>,
+        subject: Membered<T, S>,
         attenuate: Access,
-        delegate: Agent<T>,
-        after_revocations: Vec<Rc<Signed<Revocation<T>>>>,
-        after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
-    ) -> Result<Signed<Delegation<T>>, ActiveDelegationError> {
+        delegate: Agent<T, S>,
+        after_revocations: Vec<Rc<Signed<Revocation<T, S>>>>,
+        after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T, S>>>, Vec<T>)>,
+    ) -> Result<Signed<Delegation<T, S>>, ActiveDelegationError> {
         let proof = self
             .get_capability(subject, attenuate)
             .ok_or(ActiveDelegationError::CannotFindProof)?;
@@ -154,13 +152,15 @@ impl Active {
     }
 }
 
-impl std::fmt::Display for Active {
+impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> std::fmt::Display
+    for Active<S>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.id(), f)
     }
 }
 
-impl Debug for Active {
+impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Debug for Active<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let keypairs_hidden_secret_keys: Vec<(&ShareKey, &str)> = self
             .prekey_pairs
@@ -176,7 +176,9 @@ impl Debug for Active {
     }
 }
 
-impl std::hash::Hash for Active {
+impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> std::hash::Hash
+    for Active<S>
+{
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id().hash(state);
         self.signer.to_bytes().hash(state);
@@ -186,23 +188,27 @@ impl std::hash::Hash for Active {
     }
 }
 
-impl Verifiable for Active {
+impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Verifiable for Active<S> {
     fn verifying_key(&self) -> VerifyingKey {
         self.signer.verifying_key()
     }
 }
 
-impl Signer<Signature> for Active {
+impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Signer<Signature>
+    for Active<S>
+{
     fn try_sign(&self, message: &[u8]) -> Result<Signature, signature::Error> {
         self.signer.try_sign(message)
     }
 }
 
 // FIXME test
-impl PartialEq for Active {
+impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable + PartialEq> PartialEq
+    for Active<S>
+{
     fn eq(&self, other: &Self) -> bool {
         self.id() == other.id()
-            && self.signer.to_bytes() == other.signer.to_bytes()
+            && self.signer == other.signer
             && self
                 .prekey_pairs
                 .iter()
@@ -211,7 +217,7 @@ impl PartialEq for Active {
     }
 }
 
-impl Eq for Active {}
+impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable + Eq> Eq for Active<S> {}
 
 #[derive(Debug, Error)]
 pub enum ShareError {

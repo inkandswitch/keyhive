@@ -1,6 +1,6 @@
 //! Wrap data in signatures.
 
-use crate::principal::identifier::Identifier;
+use crate::principal::{identifier::Identifier, verifiable::Verifiable};
 use dupe::Dupe;
 use ed25519_dalek::{Signer, Verifier};
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,10 @@ pub struct Signed<T: Serialize> {
 }
 
 impl<T: Serialize> Signed<T> {
-    pub fn try_sign(payload: T, signer: &ed25519_dalek::SigningKey) -> Result<Self, SigningError> {
+    pub fn try_sign<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>(
+        payload: T,
+        signer: &S,
+    ) -> Result<Self, SigningError> {
         let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
 
         Ok(Signed {

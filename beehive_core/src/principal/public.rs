@@ -49,9 +49,15 @@ impl Public {
         }
     }
 
-    pub fn active(&self) -> Active {
+    pub fn active<
+        S: ed25519_dalek::Signer<ed25519_dalek::Signature>
+            + Verifiable
+            + From<ed25519_dalek::SigningKey>,
+    >(
+        &self,
+    ) -> Active<S> {
         Active {
-            signer: self.signing_key(),
+            signer: S::from(self.signing_key()),
             prekey_pairs: BTreeMap::from_iter([(self.share_key(), self.share_secret_key())]),
             individual: self.individual(),
         }

@@ -27,20 +27,25 @@ use std::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GroupState<T: ContentRef> {
+pub struct GroupState<
+    T: ContentRef,
+    S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
+> {
     pub(crate) id: GroupId,
 
-    pub(crate) delegation_heads: HashSet<Rc<Signed<Delegation<T>>>>,
-    pub(crate) delegations: CaMap<Signed<Delegation<T>>>,
+    pub(crate) delegation_heads: HashSet<Rc<Signed<Delegation<T, S>>>>,
+    pub(crate) delegations: CaMap<Signed<Delegation<T, S>>>,
     pub delegation_quarantine: CaMap<Signed<StaticDelegation<T>>>,
 
-    pub(crate) revocation_heads: HashSet<Rc<Signed<Revocation<T>>>>,
-    pub(crate) revocations: CaMap<Signed<Revocation<T>>>,
+    pub(crate) revocation_heads: HashSet<Rc<Signed<Revocation<T, S>>>>,
+    pub(crate) revocations: CaMap<Signed<Revocation<T, S>>>,
     pub revocation_quarantine: CaMap<Signed<StaticRevocation<T>>>,
 }
 
-impl<T: ContentRef> GroupState<T> {
-    pub fn generate(parents: Vec<Agent<T>>) -> Result<Self, DelegationError> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
+    GroupState<T, S>
+{
+    pub fn generate(parents: Vec<Agent<T, S>>) -> Result<Self, DelegationError> {
         let mut rng = rand::thread_rng();
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
         let group_id = signing_key.verifying_key().into();
@@ -87,26 +92,26 @@ impl<T: ContentRef> GroupState<T> {
         self.id
     }
 
-    pub fn delegation_heads(&self) -> &HashSet<Rc<Signed<Delegation<T>>>> {
+    pub fn delegation_heads(&self) -> &HashSet<Rc<Signed<Delegation<T, S>>>> {
         &self.delegation_heads
     }
 
-    pub fn revocation_heads(&self) -> &HashSet<Rc<Signed<Revocation<T>>>> {
+    pub fn revocation_heads(&self) -> &HashSet<Rc<Signed<Revocation<T, S>>>> {
         &self.revocation_heads
     }
 
-    pub fn delegations(&self) -> &CaMap<Signed<Delegation<T>>> {
+    pub fn delegations(&self) -> &CaMap<Signed<Delegation<T, S>>> {
         &self.delegations
     }
 
-    pub fn revocations(&self) -> &CaMap<Signed<Revocation<T>>> {
+    pub fn revocations(&self) -> &CaMap<Signed<Revocation<T, S>>> {
         &self.revocations
     }
 
     pub fn add_delegation(
         &mut self,
-        delegation: Signed<Delegation<T>>,
-    ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
+        delegation: Signed<Delegation<T, S>>,
+    ) -> Result<Digest<Signed<Delegation<T, S>>>, AddError> {
         if delegation.subject() != self.id.into() {
             return Err(AddError::InvalidSubject(delegation.subject()));
         }
@@ -125,7 +130,7 @@ impl<T: ContentRef> GroupState<T> {
         Ok(hash)
     }
 
-    pub fn add_revocation(&mut self, revocation: Signed<Revocation<T>>) -> Result<(), AddError> {
+    pub fn add_revocation(&mut self, revocation: Signed<Revocation<T, S>>) -> Result<(), AddError> {
         if revocation.subject() != self.id.into() {
             return Err(AddError::InvalidSubject(revocation.subject()));
         }
@@ -140,7 +145,7 @@ impl<T: ContentRef> GroupState<T> {
         Ok(())
     }
 
-    pub fn delegations_for(&self, agent: Agent<T>) -> Vec<&Rc<Signed<Delegation<T>>>> {
+    pub fn delegations_for(&self, agent: Agent<T, S>) -> Vec<&Rc<Signed<Delegation<T, S>>>> {
         self.delegations
             .iter()
             .filter_map(|(_, delegation)| {
@@ -158,7 +163,9 @@ impl<T: ContentRef> GroupState<T> {
     }
 }
 
-impl<T: ContentRef> std::hash::Hash for GroupState<T> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> std::hash::Hash
+    for GroupState<T, S>
+{
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
 
@@ -178,7 +185,9 @@ impl<T: ContentRef> std::hash::Hash for GroupState<T> {
     }
 }
 
-impl<T: ContentRef> From<VerifyingKey> for GroupState<T> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
+    From<VerifyingKey> for GroupState<T, S>
+{
     fn from(verifier: VerifyingKey) -> Self {
         GroupState {
             id: GroupId(verifier.into()),
@@ -194,7 +203,9 @@ impl<T: ContentRef> From<VerifyingKey> for GroupState<T> {
     }
 }
 
-impl<T: ContentRef> Verifiable for GroupState<T> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Verifiable
+    for GroupState<T, S>
+{
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.id.0.verifying_key()
     }
@@ -210,8 +221,10 @@ pub enum AddError {
 }
 
 // FIXME test
-impl<T: ContentRef> Serialize for GroupState<T> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Serialize
+    for GroupState<T, S>
+{
+    fn serialize<Ser: Serializer>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error> {
         let mut state = serializer.serialize_struct("GroupState", 6)?;
 
         state.serialize_field("id", &self.id)?;

@@ -39,17 +39,17 @@ use thiserror::Error;
 /// and they can be delegated to. This produces transitives lines of authority
 /// through the network of [`Agent`]s.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Group<T: ContentRef> {
+pub struct Group<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> {
     /// The current view of members of a group.
-    pub(crate) members: HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>>,
+    pub(crate) members: HashMap<AgentId, Vec<Rc<Signed<Delegation<T, S>>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
-    pub(crate) state: state::GroupState<T>,
+    pub(crate) state: state::GroupState<T, S>,
 }
 
-impl<T: ContentRef> Group<T> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Group<T, S> {
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
-    pub fn generate(parents: NonEmpty<Agent<T>>) -> Result<Group<T>, SigningError> {
+    pub fn generate(parents: NonEmpty<Agent<T, S>>) -> Result<Group<T, S>, SigningError> {
         let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let group_id = GroupId(group_signer.verifying_key().into());
 
@@ -126,15 +126,15 @@ impl<T: ContentRef> Group<T> {
         m
     }
 
-    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
+    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T, S>>>>> {
         &self.members
     }
 
-    pub fn delegations(&self) -> &CaMap<Signed<Delegation<T>>> {
+    pub fn delegations(&self) -> &CaMap<Signed<Delegation<T, S>>> {
         &self.state.delegations
     }
 
-    pub fn get_capability(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
+    pub fn get_capability(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T, S>>>> {
         self.members.get(member_id).and_then(|delegations| {
             delegations
                 .iter()
@@ -142,7 +142,7 @@ impl<T: ContentRef> Group<T> {
         })
     }
 
-    pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
+    pub fn get_agent_revocations(&self, agent: &Agent<T, S>) -> Vec<Rc<Signed<Revocation<T, S>>>> {
         self.state
             .revocations
             .iter()
@@ -156,7 +156,7 @@ impl<T: ContentRef> Group<T> {
             .collect()
     }
 
-    pub fn add_delegation(&mut self, signed_delegation: Signed<Delegation<T>>) {
+    pub fn add_delegation(&mut self, signed_delegation: Signed<Delegation<T, S>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
@@ -178,14 +178,14 @@ impl<T: ContentRef> Group<T> {
 
     pub fn add_member(
         &mut self,
-        member_to_add: Agent<T>,
+        member_to_add: Agent<T, S>,
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
-        after_revocations: &[&Rc<Signed<Revocation<T>>>],
-        relevant_docs: &[&Rc<RefCell<Document<T>>>],
+        after_revocations: &[&Rc<Signed<Revocation<T, S>>>],
+        relevant_docs: &[&Rc<RefCell<Document<T, S>>>],
     ) -> Result<(), AddMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
-        let agent: Agent<T> = indie.into();
+        let agent: Agent<T, S> = indie.into();
         let proof = if self.verifying_key() == signing_key.verifying_key() {
             None
         } else {
@@ -236,7 +236,7 @@ impl<T: ContentRef> Group<T> {
         &mut self,
         member_to_remove: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<RefCell<Document<T>>>], // TODO just lookup reachable docs directly
+        relevant_docs: &[&Rc<RefCell<Document<T, S>>>], // TODO just lookup reachable docs directly
     ) -> Result<(), SigningError> {
         let revocations = &mut self.state.revocations;
 
@@ -305,7 +305,7 @@ impl<T: ContentRef> Group<T> {
 
     pub fn add_revocation(
         &mut self,
-        signed_revocation: Signed<Revocation<T>>,
+        signed_revocation: Signed<Revocation<T, S>>,
     ) -> Result<(), state::AddError> {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
@@ -337,14 +337,18 @@ impl<T: ContentRef> Group<T> {
     // }
 }
 
-impl<T: ContentRef> Verifiable for Group<T> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Verifiable
+    for Group<T, S>
+{
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }
 }
 
 // FIXME test and consistent order
-impl<T: ContentRef> std::hash::Hash for Group<T> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> std::hash::Hash
+    for Group<T, S>
+{
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         for m in self.members.iter() {
             m.hash(state);
@@ -353,8 +357,10 @@ impl<T: ContentRef> std::hash::Hash for Group<T> {
     }
 }
 
-impl<T: ContentRef> Serialize for Group<T> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Serialize
+    for Group<T, S>
+{
+    fn serialize<Ser: Serializer>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error> {
         let members = self
             .members
             .iter()
@@ -395,11 +401,14 @@ mod tests {
             .into()
     }
 
-    fn setup_groups<T: ContentRef>(
-        store: &mut GroupStore<T>,
+    fn setup_groups<
+        T: ContentRef,
+        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
+    >(
+        store: &mut GroupStore<T, S>,
         alice: Rc<RefCell<Individual>>,
         bob: Rc<RefCell<Individual>>,
-    ) -> [Rc<RefCell<Group<T>>>; 4] {
+    ) -> [Rc<RefCell<Group<T, S>>>; 4] {
         /*              ┌───────────┐        ┌───────────┐
                         │           │        │           │
         ╔══════════════▶│   Alice   │        │    Bob    │

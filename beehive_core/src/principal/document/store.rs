@@ -5,6 +5,7 @@ use crate::{
     principal::{
         agent::{Agent, AgentId},
         group::operation::delegation::DelegationError,
+        verifiable::Verifiable,
     },
 };
 use dupe::Dupe;
@@ -16,32 +17,37 @@ use std::{
 };
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct DocumentStore<T: ContentRef> {
-    pub docs: BTreeMap<DocumentId, Rc<RefCell<Document<T>>>>,
+pub struct DocumentStore<
+    T: ContentRef,
+    S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
+> {
+    pub docs: BTreeMap<DocumentId, Rc<RefCell<Document<T, S>>>>,
 }
 
-impl<T: ContentRef> DocumentStore<T> {
+impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
+    DocumentStore<T, S>
+{
     pub fn new() -> Self {
         Self {
             docs: BTreeMap::new(),
         }
     }
 
-    pub fn insert(&mut self, doc: Rc<RefCell<Document<T>>>) {
+    pub fn insert(&mut self, doc: Rc<RefCell<Document<T, S>>>) {
         self.docs.insert(doc.clone().borrow().doc_id(), doc);
     }
 
-    pub fn get(&self, id: &DocumentId) -> Option<Rc<RefCell<Document<T>>>> {
+    pub fn get(&self, id: &DocumentId) -> Option<Rc<RefCell<Document<T, S>>>> {
         self.docs.get(id).cloned()
     }
 
-    pub fn get_mut(&self, id: &DocumentId) -> Option<RefMut<Document<T>>> {
+    pub fn get_mut(&self, id: &DocumentId) -> Option<RefMut<Document<T, S>>> {
         self.docs.get(id).map(|d| d.borrow_mut())
     }
 
     pub fn generate_document<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
-        parents: NonEmpty<Agent<T>>,
+        parents: NonEmpty<Agent<T, S>>,
         csprng: &mut R,
     ) -> Result<DocumentId, DelegationError> {
         let new_doc = Document::generate(parents, csprng)?;
@@ -50,14 +56,20 @@ impl<T: ContentRef> DocumentStore<T> {
         Ok(new_doc_id)
     }
 
-    pub fn transitive_members(&self, doc: &Document<T>) -> BTreeMap<AgentId, (Agent<T>, Access)> {
-        struct GroupAccess<U: ContentRef> {
-            agent: Agent<U>,
+    pub fn transitive_members(
+        &self,
+        doc: &Document<T, S>,
+    ) -> BTreeMap<AgentId, (Agent<T, S>, Access)> {
+        struct GroupAccess<
+            U: ContentRef,
+            Z: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
+        > {
+            agent: Agent<U, Z>,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess<T>> = vec![];
+        let mut explore: Vec<GroupAccess<T, S>> = vec![];
 
         for dlgs in doc.group.members.values() {
             for delegation in dlgs {
@@ -69,7 +81,7 @@ impl<T: ContentRef> DocumentStore<T> {
             }
         }
 
-        let mut caps: BTreeMap<AgentId, (Agent<T>, Access)> = BTreeMap::new();
+        let mut caps: BTreeMap<AgentId, (Agent<T, S>, Access)> = BTreeMap::new();
 
         while let Some(GroupAccess {
             agent: member,
