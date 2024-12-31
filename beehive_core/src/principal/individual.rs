@@ -5,18 +5,16 @@ pub mod op;
 pub mod state;
 
 use super::{agent::AgentId, document::id::DocumentId, verifiable::Verifiable};
-use crate::{
-    crypto::{
-        share_key::ShareKey,
-        signed::{Signed, SigningError},
-    },
-    error::missing_dependency::MissingDependency,
+use crate::crypto::{
+    share_key::ShareKey,
+    signed::{Signed, SigningError},
 };
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
 use std::collections::HashSet;
+use thiserror::Error;
 
 /// Single agents with no internal membership.
 ///
@@ -26,7 +24,7 @@ use std::collections::HashSet;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Individual {
     /// The public key identifier.
-    pub id: IndividualId,
+    pub(crate) id: IndividualId,
 
     /// [`ShareKey`] pre-keys.
     ///
@@ -43,13 +41,22 @@ pub struct Individual {
     /// not be reused in multiple [`Document`]s, but we can tune the probability of this happening.
     ///
     /// [`Document`]: super::document::Document
-    pub prekeys: HashSet<ShareKey>,
+    pub(crate) prekeys: HashSet<ShareKey>,
 
     /// The state used to materialize `prekeys`.
-    pub prekey_state: PrekeyState,
+    pub(crate) prekey_state: PrekeyState,
 }
 
 impl Individual {
+    pub fn new(id: IndividualId) -> Self {
+        Self {
+            id,
+            prekeys: HashSet::new(),
+            prekey_state: PrekeyState::new(),
+        }
+    }
+
+    #[cfg(feature = "test_utils")]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
         signer: &ed25519_dalek::SigningKey,
         csprng: &mut R,
@@ -62,21 +69,22 @@ impl Individual {
         })
     }
 
-    pub fn receive_prekey_op(
-        &mut self,
-        op: Signed<op::KeyOp>,
-    ) -> Result<(), MissingDependency<ShareKey>> {
-        self.prekey_state.insert_op(op)?;
-        self.prekeys = self.prekey_state.materialize();
-        Ok(())
-    }
-
     pub fn id(&self) -> IndividualId {
         self.id
     }
 
     pub fn agent_id(&self) -> AgentId {
         AgentId::IndividualId(self.id)
+    }
+
+    pub fn receive_prekey_op(&mut self, op: Signed<op::KeyOp>) -> Result<(), ReceivePrekeyOpError> {
+        if *op.verifying_key() != self.id.verifying_key() {
+            return Err(ReceivePrekeyOpError::IncorrectSigner);
+        }
+
+        self.prekey_state.insert_op(op)?;
+        self.prekeys = self.prekey_state.materialize();
+        Ok(())
     }
 
     pub fn pick_prekey(&self, doc_id: DocumentId) -> ShareKey {
@@ -93,7 +101,7 @@ impl Individual {
             .expect("index in pre-checked bounds to exist")
     }
 
-    pub fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
+    pub(crate) fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old_key: ShareKey,
         signer: &ed25519_dalek::SigningKey,
@@ -105,7 +113,7 @@ impl Individual {
         Ok(new_key)
     }
 
-    pub fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
+    pub(crate) fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         signer: &ed25519_dalek::SigningKey,
         csprng: &mut R,
@@ -152,6 +160,15 @@ impl Verifiable for Individual {
     fn verifying_key(&self) -> VerifyingKey {
         self.id.verifying_key()
     }
+}
+
+#[derive(Debug, Error)]
+pub enum ReceivePrekeyOpError {
+    #[error("The op was not signed by the expected individual.")]
+    IncorrectSigner,
+
+    #[error(transparent)]
+    NewOpError(#[from] state::NewOpError),
 }
 
 fn clamp(bytes: [u8; 8], offset_bits: u8) -> usize {
