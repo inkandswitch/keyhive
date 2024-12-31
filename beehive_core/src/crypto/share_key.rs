@@ -5,9 +5,10 @@
 use super::{separable::Separable, symmetric_key::SymmetricKey};
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Newtype around [x25519_dalek::PublicKey].
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShareKey(x25519_dalek::PublicKey);
 
 impl ShareKey {
@@ -33,15 +34,21 @@ impl Dupe for ShareKey {
     }
 }
 
-impl std::fmt::LowerHex for ShareKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::LowerHex for ShareKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         crate::util::hex::bytes_as_hex(self.0.as_bytes().iter(), f)
     }
 }
 
-impl std::fmt::Display for ShareKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ShareKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:#x}", self)
+    }
+}
+
+impl fmt::Debug for ShareKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
     }
 }
 
