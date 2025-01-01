@@ -3,11 +3,10 @@ pub mod revocation;
 
 use crate::{
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed},
+    crypto::{digest::Digest, signed::Signed, signer::ed_signer::EdSigner},
     principal::{
         document::{id::DocumentId, Document},
         identifier::Identifier,
-        verifiable::Verifiable,
     },
     util::content_addressed_map::CaMap,
 };
@@ -25,16 +24,12 @@ use std::{
 use topological_sort::TopologicalSort;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Dupe)]
-pub enum Operation<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> {
+pub enum Operation<T: ContentRef, S: EdSigner> {
     Delegation(Rc<Signed<Delegation<T, S>>>),
     Revocation(Rc<Signed<Revocation<T, S>>>),
 }
 
-impl<
-        T: ContentRef + Serialize,
-        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
-    > Serialize for Operation<T, S>
-{
+impl<T: ContentRef + Serialize, S: EdSigner> Serialize for Operation<T, S> {
     fn serialize<Ser: serde::Serializer>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error> {
         match self {
             Operation::Delegation(delegation) => delegation.serialize(serializer),
@@ -43,9 +38,7 @@ impl<
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    Operation<T, S>
-{
+impl<T: ContentRef, S: EdSigner> Operation<T, S> {
     pub fn subject(&self) -> Identifier {
         match self {
             Operation::Delegation(delegation) => delegation.subject(),
@@ -272,17 +265,13 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<Rc<Signed<Delegation<T, S>>>> for Operation<T, S>
-{
+impl<T: ContentRef, S: EdSigner> From<Rc<Signed<Delegation<T, S>>>> for Operation<T, S> {
     fn from(delegation: Rc<Signed<Delegation<T, S>>>) -> Self {
         Operation::Delegation(delegation)
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<Rc<Signed<Revocation<T, S>>>> for Operation<T, S>
-{
+impl<T: ContentRef, S: EdSigner> From<Rc<Signed<Revocation<T, S>>>> for Operation<T, S> {
     fn from(revocation: Rc<Signed<Revocation<T, S>>>) -> Self {
         Operation::Revocation(revocation)
     }

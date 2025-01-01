@@ -1,11 +1,11 @@
-use super::change_ref::JsChangeRef;
+use super::{change_ref::JsChangeRef, signer::JsSigner};
 use beehive_core::principal::agent::Agent;
 use std::ops::Deref;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Agent)]
 #[derive(Debug, Clone)]
-pub struct JsAgent(pub(crate) Agent<JsChangeRef>);
+pub struct JsAgent(pub(crate) Agent<JsChangeRef, JsSigner>);
 
 #[wasm_bindgen(js_class = Agent)]
 impl JsAgent {
@@ -46,20 +46,20 @@ impl JsAgent {
     }
 }
 
-impl From<Agent<JsChangeRef>> for JsAgent {
-    fn from(agent: Agent<JsChangeRef>) -> Self {
+impl From<Agent<JsChangeRef, JsSigner>> for JsAgent {
+    fn from(agent: Agent<JsChangeRef, JsSigner>) -> Self {
         JsAgent(agent)
     }
 }
 
-impl From<JsAgent> for Agent<JsChangeRef> {
+impl From<JsAgent> for Agent<JsChangeRef, JsSigner> {
     fn from(agent: JsAgent) -> Self {
         agent.0
     }
 }
 
 impl Deref for JsAgent {
-    type Target = Agent<JsChangeRef>;
+    type Target = Agent<JsChangeRef, JsSigner>;
 
     fn deref(&self) -> &Self::Target {
         &self.0

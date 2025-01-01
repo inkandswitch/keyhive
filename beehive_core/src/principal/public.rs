@@ -7,6 +7,7 @@ use super::{
 use crate::crypto::{
     share_key::{ShareKey, ShareSecretKey},
     signed::Signed,
+    signer::ed_signer::EdSigner,
 };
 use dupe::Dupe;
 use std::collections::{BTreeMap, HashSet};
@@ -37,8 +38,8 @@ impl Public {
         self.share_secret_key().share_key()
     }
 
-    pub fn individual(&self) -> Individual {
-        let op = Signed::try_sign(KeyOp::add(self.share_key()), &self.signing_key())
+    pub fn individual<S: EdSigner>(&self) -> Individual {
+        let op = Signed::try_sign(KeyOp::add(self.share_key()), &S::from(self.signing_key()))
             .expect("signature with well-known key should work");
 
         Individual {
@@ -49,17 +50,11 @@ impl Public {
         }
     }
 
-    pub fn active<
-        S: ed25519_dalek::Signer<ed25519_dalek::Signature>
-            + Verifiable
-            + From<ed25519_dalek::SigningKey>,
-    >(
-        &self,
-    ) -> Active<S> {
+    pub fn active<S: EdSigner>(&self) -> Active<S> {
         Active {
             signer: S::from(self.signing_key()),
             prekey_pairs: BTreeMap::from_iter([(self.share_key(), self.share_secret_key())]),
-            individual: self.individual(),
+            individual: self.individual::<S>(),
         }
     }
 }

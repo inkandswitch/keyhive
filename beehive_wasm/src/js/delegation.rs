@@ -1,6 +1,6 @@
 use super::{
     access::JsAccess, after::After, agent::JsAgent, change_ref::JsChangeRef,
-    signed_delegation::JsSignedDelegation,
+    signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use beehive_core::principal::group::operation::delegation::{Delegation, DelegationError};
 use dupe::Dupe;
@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Delegation)]
 #[derive(Debug, Clone)]
-pub struct JsDelegation(pub(crate) Delegation<JsChangeRef>);
+pub struct JsDelegation(pub(crate) Delegation<JsChangeRef, JsSigner>);
 
 #[wasm_bindgen(js_class = Delegation)]
 impl JsDelegation {
@@ -41,13 +41,13 @@ impl JsDelegation {
     }
 }
 
-impl From<Delegation<JsChangeRef>> for JsDelegation {
-    fn from(delegation: Delegation<JsChangeRef>) -> Self {
+impl From<Delegation<JsChangeRef, JsSigner>> for JsDelegation {
+    fn from(delegation: Delegation<JsChangeRef, JsSigner>) -> Self {
         JsDelegation(delegation)
     }
 }
 
-impl From<JsDelegation> for Delegation<JsChangeRef> {
+impl From<JsDelegation> for Delegation<JsChangeRef, JsSigner> {
     fn from(delegation: JsDelegation) -> Self {
         delegation.0
     }

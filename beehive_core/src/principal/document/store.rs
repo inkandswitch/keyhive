@@ -2,10 +2,10 @@ use super::{id::DocumentId, Document};
 use crate::{
     access::Access,
     content::reference::ContentRef,
+    crypto::signer::ed_signer::EdSigner,
     principal::{
         agent::{Agent, AgentId},
         group::operation::delegation::DelegationError,
-        verifiable::Verifiable,
     },
 };
 use dupe::Dupe;
@@ -17,16 +17,11 @@ use std::{
 };
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct DocumentStore<
-    T: ContentRef,
-    S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
-> {
+pub struct DocumentStore<T: ContentRef, S: EdSigner> {
     pub docs: BTreeMap<DocumentId, Rc<RefCell<Document<T, S>>>>,
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    DocumentStore<T, S>
-{
+impl<T: ContentRef, S: EdSigner> DocumentStore<T, S> {
     pub fn new() -> Self {
         Self {
             docs: BTreeMap::new(),
@@ -60,10 +55,7 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
         &self,
         doc: &Document<T, S>,
     ) -> BTreeMap<AgentId, (Agent<T, S>, Access)> {
-        struct GroupAccess<
-            U: ContentRef,
-            Z: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
-        > {
+        struct GroupAccess<U: ContentRef, Z: EdSigner> {
             agent: Agent<U, Z>,
             agent_access: Access,
             parent_access: Access,

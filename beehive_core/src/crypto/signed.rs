@@ -2,7 +2,7 @@
 
 use crate::principal::{identifier::Identifier, verifiable::Verifiable};
 use dupe::Dupe;
-use ed25519_dalek::{Signer, Verifier};
+use ed25519_dalek::Verifier;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,

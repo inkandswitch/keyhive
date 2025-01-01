@@ -4,6 +4,8 @@ use rand::Fill;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
+// FIXME move this to signer
+
 #[wasm_bindgen(js_name = "SigningKey")]
 #[derive(Debug, Clone, Copy)]
 pub struct JsSigningKey(pub(crate) [u8; 32]);
@@ -40,10 +42,7 @@ impl JsSigningKey {
 
     #[wasm_bindgen(js_name = trySign)]
     pub fn try_sign(&self, data: &[u8]) -> Result<JsSigned, JsSigningError> {
-        Ok(JsSigned(Signed::try_sign(
-            data.to_vec(),
-            &ed25519_dalek::SigningKey::from_bytes(&self.0),
-        )?))
+        Ok(JsSigned(self.signer.try_seal(data.to_vec())?))
     }
 }
 

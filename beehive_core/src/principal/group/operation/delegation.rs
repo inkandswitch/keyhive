@@ -5,12 +5,12 @@ use crate::{
     crypto::{
         digest::Digest,
         signed::{Signed, SigningError},
+        signer::ed_signer::EdSigner,
     },
     principal::{
         agent::{Agent, AgentId},
         document::{id::DocumentId, Document},
         identifier::Identifier,
-        verifiable::Verifiable,
     },
 };
 use dupe::Dupe;
@@ -19,10 +19,7 @@ use std::{cell::RefCell, collections::BTreeMap, hash::Hash, rc::Rc};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Delegation<
-    T: ContentRef,
-    S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
-> {
+pub struct Delegation<T: ContentRef, S: EdSigner> {
     pub(crate) delegate: Agent<T, S>,
     pub(crate) can: Access,
 
@@ -31,9 +28,7 @@ pub struct Delegation<
     pub(crate) after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T, S>>>, Vec<T>)>,
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    Delegation<T, S>
-{
+impl<T: ContentRef, S: EdSigner> Delegation<T, S> {
     pub fn subject(&self, issuer: AgentId) -> Identifier {
         if let Some(proof) = &self.proof {
             proof.subject()
@@ -83,9 +78,7 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    Signed<Delegation<T, S>>
-{
+impl<T: ContentRef, S: EdSigner> Signed<Delegation<T, S>> {
     pub fn subject(&self) -> Identifier {
         let mut head = self;
 
@@ -97,9 +90,7 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Serialize
-    for Delegation<T, S>
-{
+impl<T: ContentRef, S: EdSigner> Serialize for Delegation<T, S> {
     fn serialize<Ser: serde::Serializer>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error> {
         // FIXME could be a heavy clone since this is used to hash
         // FIXME ...ooooor use the hash of teh static delehation as an ID... probably this actually
@@ -118,9 +109,7 @@ pub struct StaticDelegation<T: ContentRef> {
     pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<Delegation<T, S>> for StaticDelegation<T>
-{
+impl<T: ContentRef, S: EdSigner> From<Delegation<T, S>> for StaticDelegation<T> {
     fn from(delegation: Delegation<T, S>) -> Self {
         Self {
             can: delegation.can,

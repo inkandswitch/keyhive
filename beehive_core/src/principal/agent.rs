@@ -6,7 +6,10 @@ use super::{
     individual::{id::IndividualId, Individual},
     verifiable::Verifiable,
 };
-use crate::{content::reference::ContentRef, crypto::share_key::ShareKey};
+use crate::{
+    content::reference::ContentRef,
+    crypto::{share_key::ShareKey, signer::ed_signer::EdSigner},
+};
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
@@ -20,14 +23,14 @@ use std::{
 ///
 /// This type is very lightweight to clone, since it only contains immutable references to the actual agents.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Agent<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> {
+pub enum Agent<T: ContentRef, S: EdSigner> {
     Active(Rc<RefCell<Active<S>>>),
     Individual(Rc<RefCell<Individual>>),
     Group(Rc<RefCell<Group<T, S>>>),
     Document(Rc<RefCell<Document<T, S>>>),
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Agent<T, S> {
+impl<T: ContentRef, S: EdSigner> Agent<T, S> {
     pub fn id(&self) -> Identifier {
         match self {
             Agent::Active(a) => a.borrow().id().into(),
@@ -81,9 +84,7 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable + Dupe> Dupe
-    for Agent<T, S>
-{
+impl<T: ContentRef, S: EdSigner> Dupe for Agent<T, S> {
     fn dupe(&self) -> Self {
         match self {
             Agent::Active(a) => Agent::Active(a.dupe()),
@@ -94,73 +95,55 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> From<Active<S>>
-    for Agent<T, S>
-{
+impl<T: ContentRef, S: EdSigner> From<Active<S>> for Agent<T, S> {
     fn from(a: Active<S>) -> Self {
         Agent::Active(Rc::new(RefCell::new(a)))
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<Rc<RefCell<Active<S>>>> for Agent<T, S>
-{
+impl<T: ContentRef, S: EdSigner> From<Rc<RefCell<Active<S>>>> for Agent<T, S> {
     fn from(a: Rc<RefCell<Active<S>>>) -> Self {
         Agent::Active(a)
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<Individual> for Agent<T, S>
-{
+impl<T: ContentRef, S: EdSigner> From<Individual> for Agent<T, S> {
     fn from(i: Individual) -> Self {
         Agent::Individual(Rc::new(RefCell::new(i)))
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<Rc<RefCell<Individual>>> for Agent<T, S>
-{
+impl<T: ContentRef, S: EdSigner> From<Rc<RefCell<Individual>>> for Agent<T, S> {
     fn from(i: Rc<RefCell<Individual>>) -> Self {
         Agent::Individual(i)
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<Group<T, S>> for Agent<T, S>
-{
+impl<T: ContentRef, S: EdSigner> From<Group<T, S>> for Agent<T, S> {
     fn from(g: Group<T, S>) -> Self {
         Agent::Group(Rc::new(RefCell::new(g)))
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<Rc<RefCell<Group<T, S>>>> for Agent<T, S>
-{
+impl<T: ContentRef, S: EdSigner> From<Rc<RefCell<Group<T, S>>>> for Agent<T, S> {
     fn from(g: Rc<RefCell<Group<T, S>>>) -> Self {
         Agent::Group(g)
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<Document<T, S>> for Agent<T, S>
-{
+impl<T: ContentRef, S: EdSigner> From<Document<T, S>> for Agent<T, S> {
     fn from(d: Document<T, S>) -> Self {
         Agent::Document(Rc::new(RefCell::new(d)))
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<Rc<RefCell<Document<T, S>>>> for Agent<T, S>
-{
+impl<T: ContentRef, S: EdSigner> From<Rc<RefCell<Document<T, S>>>> for Agent<T, S> {
     fn from(d: Rc<RefCell<Document<T, S>>>) -> Self {
         Agent::Document(d)
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Verifiable
-    for Agent<T, S>
-{
+impl<T: ContentRef, S: EdSigner> Verifiable for Agent<T, S> {
     fn verifying_key(&self) -> VerifyingKey {
         match self {
             Agent::Active(a) => a.borrow().verifying_key(),
@@ -199,17 +182,13 @@ impl AgentId {
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<Agent<T, S>> for AgentId
-{
+impl<T: ContentRef, S: EdSigner> From<Agent<T, S>> for AgentId {
     fn from(a: Agent<T, S>) -> Self {
         a.agent_id()
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<&Agent<T, S>> for AgentId
-{
+impl<T: ContentRef, S: EdSigner> From<&Agent<T, S>> for AgentId {
     fn from(a: &Agent<T, S>) -> Self {
         a.agent_id()
     }

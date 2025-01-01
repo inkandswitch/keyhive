@@ -3,6 +3,7 @@ use crate::{
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError, VerificationError},
+        signer::ed_signer::EdSigner,
     },
     error::missing_dependency::MissingDependency,
     principal::verifiable::Verifiable,
@@ -65,8 +66,8 @@ impl PrekeyState {
     /// # Errors
     ///
     /// Returns a [`SigningError`] if the operation could not be signed.
-    pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        signing_key: &ed25519_dalek::SigningKey,
+    pub fn generate<S: EdSigner, R: rand::CryptoRng + rand::RngCore>(
+        signing_key: &S,
         size: usize,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
@@ -74,7 +75,7 @@ impl PrekeyState {
             let secret_key = ShareSecretKey::generate(csprng);
             let share_key = secret_key.share_key();
 
-            let op = Signed::try_sign(KeyOp::add(share_key), &signing_key)?;
+            let op = signing_key.try_seal(KeyOp::add(share_key))?;
             ops.insert(op.into());
 
             Ok::<_, SigningError>(ops)

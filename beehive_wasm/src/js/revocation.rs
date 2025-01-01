@@ -1,6 +1,6 @@
 use super::{
     after::After, change_ref::JsChangeRef, identifier::JsIdentifier,
-    signed_delegation::JsSignedDelegation,
+    signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use beehive_core::principal::group::operation::revocation::Revocation;
 use dupe::Dupe;
@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Revocation)]
 #[derive(Debug, Clone)]
-pub struct JsRevocation(pub(crate) Revocation<JsChangeRef>);
+pub struct JsRevocation(pub(crate) Revocation<JsChangeRef, JsSigner>);
 
 #[wasm_bindgen(js_class = Revocation)]
 impl JsRevocation {
@@ -40,13 +40,13 @@ impl JsRevocation {
     }
 }
 
-impl From<Revocation<JsChangeRef>> for JsRevocation {
-    fn from(delegation: Revocation<JsChangeRef>) -> Self {
+impl From<Revocation<JsChangeRef, JsSigner>> for JsRevocation {
+    fn from(delegation: Revocation<JsChangeRef, JsSigner>) -> Self {
         JsRevocation(delegation)
     }
 }
 
-impl From<JsRevocation> for Revocation<JsChangeRef> {
+impl From<JsRevocation> for Revocation<JsChangeRef, JsSigner> {
     fn from(delegation: JsRevocation) -> Self {
         delegation.0
     }

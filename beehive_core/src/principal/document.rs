@@ -9,6 +9,7 @@ use crate::{
         encrypted::Encrypted,
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
+        signer::{ed_signer::EdSigner, memory::MemorySigner},
     },
     principal::{
         agent::{Agent, AgentId},
@@ -36,8 +37,7 @@ use std::{
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Document<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-{
+pub struct Document<T: ContentRef, S: EdSigner> {
     pub(crate) group: Group<T, S>,
     pub(crate) reader_keys: HashMap<IndividualId, (Rc<Individual>, ShareKey)>,
     pub(crate) content_heads: HashSet<T>,
@@ -45,9 +45,7 @@ pub struct Document<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signa
     pub(crate) cgka: Cgka,
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    Document<T, S>
-{
+impl<T: ContentRef, S: EdSigner> Document<T, S> {
     pub fn id(&self) -> Identifier {
         self.group.id()
     }
@@ -76,29 +74,30 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
         parents: NonEmpty<Agent<T, S>>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
-        let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let group =
-            parents
-                .iter()
-                .try_fold(Group::generate(parents.clone())?, |mut acc, parent| {
-                    let dlg = Signed::try_sign(
-                        Delegation {
-                            delegate: parent.dupe(),
-                            can: Access::Admin,
-                            proof: None,
-                            after_revocations: vec![],
-                            after_content: BTreeMap::new(),
-                        },
-                        &doc_signer,
-                    )?;
-                    let rc = Rc::new(dlg);
-                    acc.state.delegations.insert(rc.dupe());
-                    acc.state.delegation_heads.insert(rc.dupe());
-                    acc.members.insert(parent.agent_id(), vec![rc]);
+        let doc_signer: MemorySigner = ed25519_dalek::SigningKey::generate(csprng).into();
 
-                    Ok::<Group<T, S>, DelegationError>(acc)
+        let group = parents.iter().try_fold(
+            Group::generate(csprng, parents.clone())?,
+            |mut acc, parent| {
+                let dlg = doc_signer.try_seal(Delegation {
+                    delegate: parent.dupe(),
+                    can: Access::Admin,
+                    proof: None,
+                    after_revocations: vec![],
+                    after_content: BTreeMap::new(),
                 })?;
-        let owner_id = IndividualId(Identifier((&doc_signer).into()));
+
+                let rc = Rc::new(dlg);
+                acc.state.delegations.insert(rc.dupe());
+                acc.state.delegation_heads.insert(rc.dupe());
+                acc.members.insert(parent.agent_id(), vec![rc]);
+
+                Ok::<Group<T, S>, DelegationError>(acc)
+            },
+        )?;
+
+        // FIXME: Active in the document
+        let owner_id = IndividualId(Identifier(doc_signer.verifying_key()));
         let doc_id = DocumentId(group.id());
         let owner_share_secret_key = ShareSecretKey::generate(csprng);
         let owner_share_key = owner_share_secret_key.share_key();
@@ -176,7 +175,7 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
     pub fn revoke_member(
         &mut self,
         member_id: AgentId,
-        signing_key: &ed25519_dalek::SigningKey,
+        signing_key: &S,
         relevant_docs: &[&Rc<RefCell<Document<T, S>>>],
     ) -> Result<(), SigningError> {
         // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
@@ -272,9 +271,7 @@ pub enum DecryptError {
 }
 
 // FIXME test
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> std::hash::Hash
-    for Document<T, S>
-{
+impl<T: ContentRef, S: EdSigner> std::hash::Hash for Document<T, S> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.group.hash(state);
         for key in self.reader_keys.keys() {
@@ -286,9 +283,7 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Verifiable
-    for Document<T, S>
-{
+impl<T: ContentRef, S: EdSigner> Verifiable for Document<T, S> {
     fn verifying_key(&self) -> VerifyingKey {
         self.group.verifying_key()
     }

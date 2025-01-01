@@ -3,12 +3,11 @@
 use super::delegation::{Delegation, StaticDelegation};
 use crate::{
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed},
+    crypto::{digest::Digest, signed::Signed, signer::ed_signer::EdSigner},
     principal::{
         agent::AgentId,
         document::{id::DocumentId, Document},
         identifier::Identifier,
-        verifiable::Verifiable,
     },
 };
 use dupe::Dupe;
@@ -16,18 +15,13 @@ use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Revocation<
-    T: ContentRef,
-    S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
-> {
+pub struct Revocation<T: ContentRef, S: EdSigner> {
     pub(crate) revoke: Rc<Signed<Delegation<T, S>>>,
     pub(crate) proof: Option<Rc<Signed<Delegation<T, S>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T, S>>>, Vec<T>)>,
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    Revocation<T, S>
-{
+impl<T: ContentRef, S: EdSigner> Revocation<T, S> {
     // FIXME MemberedId
     pub fn subject(&self) -> Identifier {
         self.revoke.subject()
@@ -61,17 +55,13 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    Signed<Revocation<T, S>>
-{
+impl<T: ContentRef, S: EdSigner> Signed<Revocation<T, S>> {
     pub fn subject(&self) -> Identifier {
         self.payload().subject()
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> std::hash::Hash
-    for Revocation<T, S>
-{
+impl<T: ContentRef, S: EdSigner> std::hash::Hash for Revocation<T, S> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.revoke.hash(state);
         self.proof.hash(state);
@@ -85,9 +75,7 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Serialize
-    for Revocation<T, S>
-{
+impl<T: ContentRef, S: EdSigner> Serialize for Revocation<T, S> {
     fn serialize<Ser: serde::Serializer>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error> {
         StaticRevocation::from(self.clone()).serialize(serializer)
     }
@@ -105,9 +93,7 @@ pub struct StaticRevocation<T: ContentRef> {
     pub after_content: BTreeMap<Identifier, Vec<T>>,
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<Revocation<T, S>> for StaticRevocation<T>
-{
+impl<T: ContentRef, S: EdSigner> From<Revocation<T, S>> for StaticRevocation<T> {
     fn from(revocation: Revocation<T, S>) -> Self {
         Self {
             revoke: Digest::hash(revocation.revoke.as_ref()).coerce(),

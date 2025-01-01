@@ -1,5 +1,6 @@
 use super::{
     capability::Capability, change_ref::JsChangeRef, group_id::JsGroupId, identifier::JsIdentifier,
+    signer::JsSigner,
 };
 use beehive_core::principal::group::Group;
 use dupe::Dupe;
@@ -8,7 +9,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Group)]
 #[derive(Debug, Clone, Dupe)]
-pub struct JsGroup(pub(crate) Rc<RefCell<Group<JsChangeRef>>>);
+pub struct JsGroup(pub(crate) Rc<RefCell<Group<JsChangeRef, JsSigner>>>);
 
 #[wasm_bindgen(js_class = Group)]
 impl JsGroup {

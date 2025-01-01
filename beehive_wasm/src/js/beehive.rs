@@ -1,18 +1,8 @@
 use super::{
-    access::JsAccess,
-    agent::JsAgent,
-    change_ref::JsChangeRef,
-    delegation::JsDelegationError,
-    doc_content_refs::DocContentRefs,
-    document::JsDocument,
-    encrypted::JsEncrypted,
-    group::JsGroup,
-    identifier::JsIdentifier,
-    individual_id::JsIndividualId,
-    membered::JsMembered,
-    share_key::JsShareKey,
-    signed::JsSigned,
-    signing_key::{JsSigningError, JsSigningKey},
+    access::JsAccess, agent::JsAgent, change_ref::JsChangeRef, delegation::JsDelegationError,
+    doc_content_refs::DocContentRefs, document::JsDocument, encrypted::JsEncrypted, group::JsGroup,
+    identifier::JsIdentifier, individual_id::JsIndividualId, membered::JsMembered,
+    share_key::JsShareKey, signed::JsSigned, signer::JsSigner, signing_key::JsSigningError,
     summary::Summary,
 };
 use beehive_core::{
@@ -27,18 +17,15 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(js_name = Beehive)]
 #[derive(Debug)]
 pub struct JsBeehive {
-    ctx: Context<JsChangeRef, rand::rngs::ThreadRng>,
+    ctx: Context<JsChangeRef, JsSigner, rand::rngs::ThreadRng>,
 }
 
 #[wasm_bindgen(js_class = Beehive)]
 impl JsBeehive {
     #[wasm_bindgen(constructor)]
-    pub fn new(signing_key: JsSigningKey) -> Result<JsBeehive, JsSigningError> {
+    pub fn new(signing_key: JsSigner) -> Result<JsBeehive, JsSigningError> {
         Ok(JsBeehive {
-            ctx: Context::generate(
-                ed25519_dalek::SigningKey::from_bytes(&signing_key.0),
-                rand::thread_rng(),
-            )?,
+            ctx: Context::generate(signing_key, rand::thread_rng())?,
         })
     }
 
@@ -147,7 +134,10 @@ impl JsBeehive {
     ) -> Result<(), JsDelegationError> {
         let content_ref_map: BTreeMap<
             DocumentId,
-            (Rc<RefCell<Document<JsChangeRef>>>, Vec<JsChangeRef>),
+            (
+                Rc<RefCell<Document<JsChangeRef, JsSigner>>>,
+                Vec<JsChangeRef>,
+            ),
         > = after_content
             .into_iter()
             .map(|r| {

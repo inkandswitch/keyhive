@@ -18,6 +18,7 @@ use crate::{
     crypto::{
         share_key::ShareKey,
         signed::{Signed, SigningError},
+        signer::{ed_signer::EdSigner, memory::MemorySigner},
     },
     util::content_addressed_map::CaMap,
 };
@@ -39,7 +40,7 @@ use thiserror::Error;
 /// and they can be delegated to. This produces transitives lines of authority
 /// through the network of [`Agent`]s.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Group<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> {
+pub struct Group<T: ContentRef, S: EdSigner> {
     /// The current view of members of a group.
     pub(crate) members: HashMap<AgentId, Vec<Rc<Signed<Delegation<T, S>>>>>,
 
@@ -47,10 +48,13 @@ pub struct Group<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signatur
     pub(crate) state: state::GroupState<T, S>,
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Group<T, S> {
+impl<T: ContentRef, S: EdSigner> Group<T, S> {
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
-    pub fn generate(parents: NonEmpty<Agent<T, S>>) -> Result<Group<T, S>, SigningError> {
-        let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(
+        csprng: &mut R,
+        parents: NonEmpty<Agent<T, S>>,
+    ) -> Result<Group<T, S>, SigningError> {
+        let group_signer = MemorySigner::generate(csprng);
         let group_id = GroupId(group_signer.verifying_key().into());
 
         let mut delegations = CaMap::new();
@@ -180,13 +184,13 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
         &mut self,
         member_to_add: Agent<T, S>,
         can: Access,
-        signing_key: &ed25519_dalek::SigningKey,
+        signer: &S,
         after_revocations: &[&Rc<Signed<Revocation<T, S>>>],
         relevant_docs: &[&Rc<RefCell<Document<T, S>>>],
     ) -> Result<(), AddMemberError> {
-        let indie: Individual = signing_key.verifying_key().into();
+        let indie: Individual = signer.verifying_key().into();
         let agent: Agent<T, S> = indie.into();
-        let proof = if self.verifying_key() == signing_key.verifying_key() {
+        let proof = if self.verifying_key() == signer.verifying_key() {
             None
         } else {
             let p = self
@@ -203,31 +207,28 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
             Some(p.dupe())
         };
 
-        let delegation = Signed::try_sign(
-            Delegation {
-                delegate: member_to_add,
-                can,
-                proof,
-                after_revocations: after_revocations.iter().duped().duped().collect(),
-                after_content: relevant_docs
-                    .iter()
-                    .map(|d| {
+        let delegation = signer.try_seal(Delegation {
+            delegate: member_to_add,
+            can,
+            proof,
+            after_revocations: after_revocations.iter().duped().duped().collect(),
+            after_content: relevant_docs
+                .iter()
+                .map(|d| {
+                    (
+                        d.borrow().doc_id(),
                         (
-                            d.borrow().doc_id(),
-                            (
-                                (*d).dupe(),
-                                d.borrow()
-                                    .content_heads
-                                    .iter()
-                                    .map(|c| (*c).clone())
-                                    .collect(),
-                            ),
-                        )
-                    })
-                    .collect(),
-            },
-            &signing_key,
-        )?;
+                            (*d).dupe(),
+                            d.borrow()
+                                .content_heads
+                                .iter()
+                                .map(|c| (*c).clone())
+                                .collect(),
+                        ),
+                    )
+                })
+                .collect(),
+        })?;
 
         Ok(self.add_delegation(delegation))
     }
@@ -235,36 +236,33 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
     pub fn revoke_member(
         &mut self,
         member_to_remove: AgentId,
-        signing_key: &ed25519_dalek::SigningKey,
+        signing_key: &S,
         relevant_docs: &[&Rc<RefCell<Document<T, S>>>], // TODO just lookup reachable docs directly
     ) -> Result<(), SigningError> {
         let revocations = &mut self.state.revocations;
 
         if let Some(revoke_dlgs) = self.members.remove(&member_to_remove) {
             revoke_dlgs.iter().try_fold((), |_, dlg| {
-                let revocation = Signed::try_sign(
-                    Revocation {
-                        revoke: dlg.dupe(),
-                        proof: None, // FIXME lookup a valid proof
-                        after_content: relevant_docs
-                            .iter()
-                            .map(|d| {
+                let revocation = signing_key.try_seal(Revocation {
+                    revoke: dlg.dupe(),
+                    proof: None, // FIXME lookup a valid proof
+                    after_content: relevant_docs
+                        .iter()
+                        .map(|d| {
+                            (
+                                d.borrow().doc_id(),
                                 (
-                                    d.borrow().doc_id(),
-                                    (
-                                        (*d).dupe(),
-                                        (*d).borrow()
-                                            .content_heads
-                                            .iter()
-                                            .map(|c| (*c).clone())
-                                            .collect(),
-                                    ),
-                                )
-                            })
-                            .collect(),
-                    },
-                    &signing_key,
-                )?;
+                                    (*d).dupe(),
+                                    (*d).borrow()
+                                        .content_heads
+                                        .iter()
+                                        .map(|c| (*c).clone())
+                                        .collect(),
+                                ),
+                            )
+                        })
+                        .collect(),
+                })?;
 
                 revocations.insert(Rc::new(revocation));
 
@@ -337,18 +335,14 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
     // }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Verifiable
-    for Group<T, S>
-{
+impl<T: ContentRef, S: EdSigner> Verifiable for Group<T, S> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }
 }
 
 // FIXME test and consistent order
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> std::hash::Hash
-    for Group<T, S>
-{
+impl<T: ContentRef, S: EdSigner> std::hash::Hash for Group<T, S> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         for m in self.members.iter() {
             m.hash(state);
@@ -357,9 +351,7 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Serialize
-    for Group<T, S>
-{
+impl<T: ContentRef, S: EdSigner> Serialize for Group<T, S> {
     fn serialize<Ser: Serializer>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error> {
         let members = self
             .members

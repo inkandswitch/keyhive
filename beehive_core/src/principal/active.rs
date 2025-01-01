@@ -18,6 +18,7 @@ use crate::{
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
+        signer::ed_signer::EdSigner,
     },
 };
 use dupe::Dupe;
@@ -27,8 +28,8 @@ use std::{cell::RefCell, collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
-#[derive(Clone, Serialize)]
-pub struct Active<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> {
+#[derive(Clone, Serialize, PartialEq, Eq)]
+pub struct Active<S: EdSigner> {
     /// The signing key of the active agent.
     pub signer: S,
 
@@ -43,7 +44,7 @@ pub struct Active<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiabl
     pub individual: Individual,
 }
 
-impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Active<S> {
+impl<S: EdSigner> Active<S> {
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
         signer: S,
         csprng: &mut R,
@@ -152,15 +153,13 @@ impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Active<S> 
     }
 }
 
-impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> std::fmt::Display
-    for Active<S>
-{
+impl<S: EdSigner> std::fmt::Display for Active<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.id(), f)
     }
 }
 
-impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Debug for Active<S> {
+impl<S: EdSigner> Debug for Active<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let keypairs_hidden_secret_keys: Vec<(&ShareKey, &str)> = self
             .prekey_pairs
@@ -176,48 +175,27 @@ impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Debug for 
     }
 }
 
-impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> std::hash::Hash
-    for Active<S>
-{
+impl<S: EdSigner> std::hash::Hash for Active<S> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id().hash(state);
-        self.signer.to_bytes().hash(state);
+        self.signer.verifying_key().to_bytes().hash(state);
         for pk in self.prekey_pairs.keys() {
             pk.hash(state);
         }
     }
 }
 
-impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Verifiable for Active<S> {
+impl<S: EdSigner> Verifiable for Active<S> {
     fn verifying_key(&self) -> VerifyingKey {
         self.signer.verifying_key()
     }
 }
 
-impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Signer<Signature>
-    for Active<S>
-{
+impl<S: EdSigner> Signer<Signature> for Active<S> {
     fn try_sign(&self, message: &[u8]) -> Result<Signature, signature::Error> {
         self.signer.try_sign(message)
     }
 }
-
-// FIXME test
-impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable + PartialEq> PartialEq
-    for Active<S>
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.id() == other.id()
-            && self.signer == other.signer
-            && self
-                .prekey_pairs
-                .iter()
-                .zip(other.prekey_pairs.iter())
-                .all(|((pk1, sk1), (pk2, sk2))| pk1 == pk2 && sk1.to_bytes() == sk2.to_bytes())
-    }
-}
-
-impl<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable + Eq> Eq for Active<S> {}
 
 #[derive(Debug, Error)]
 pub enum ShareError {

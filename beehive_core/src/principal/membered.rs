@@ -11,7 +11,10 @@ use super::{
 };
 use crate::{
     content::reference::ContentRef,
-    crypto::signed::{Signed, SigningError},
+    crypto::{
+        signed::{Signed, SigningError},
+        signer::ed_signer::EdSigner,
+    },
 };
 use dupe::{Dupe, OptionDupedExt};
 use serde::{Deserialize, Serialize};
@@ -19,14 +22,12 @@ use std::{cell::RefCell, collections::HashMap, fmt, rc::Rc};
 
 /// The union of Agents that have updatable membership
 #[derive(Debug, Clone, Dupe, PartialEq, Eq)]
-pub enum Membered<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> {
+pub enum Membered<T: ContentRef, S: EdSigner> {
     Group(Rc<RefCell<Group<T, S>>>),
     Document(Rc<RefCell<Document<T, S>>>),
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    Membered<T, S>
-{
+impl<T: ContentRef, S: EdSigner> Membered<T, S> {
     pub fn get_capability(&self, agent_id: &AgentId) -> Option<Rc<Signed<Delegation<T, S>>>> {
         match self {
             Membered::Group(group) => group.borrow().get_capability(agent_id).duped(),
@@ -96,25 +97,19 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<Rc<RefCell<Group<T, S>>>> for Membered<T, S>
-{
+impl<T: ContentRef, S: EdSigner> From<Rc<RefCell<Group<T, S>>>> for Membered<T, S> {
     fn from(group: Rc<RefCell<Group<T, S>>>) -> Self {
         Membered::Group(group)
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    From<Rc<RefCell<Document<T, S>>>> for Membered<T, S>
-{
+impl<T: ContentRef, S: EdSigner> From<Rc<RefCell<Document<T, S>>>> for Membered<T, S> {
     fn from(document: Rc<RefCell<Document<T, S>>>) -> Self {
         Membered::Document(document)
     }
 }
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable> Verifiable
-    for Membered<T, S>
-{
+impl<T: ContentRef, S: EdSigner> Verifiable for Membered<T, S> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         match self {
             Membered::Group(group) => group.borrow().verifying_key(),

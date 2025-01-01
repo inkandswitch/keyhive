@@ -1,6 +1,6 @@
 use super::{
     access::JsAccess, agent::JsAgent, change_ref::JsChangeRef,
-    signed_delegation::JsSignedDelegation,
+    signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use beehive_core::{
     crypto::signed::Signed,
@@ -13,8 +13,8 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 #[derive(Debug, Clone, Dupe)]
 pub struct Capability {
-    pub(crate) who: Agent<JsChangeRef>,
-    pub(crate) proof: Rc<Signed<Delegation<JsChangeRef>>>,
+    pub(crate) who: Agent<JsChangeRef, JsSigner>,
+    pub(crate) proof: Rc<Signed<Delegation<JsChangeRef, JsSigner>>>,
 }
 
 #[wasm_bindgen]

@@ -2,11 +2,10 @@ use super::id::GroupId;
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::signed::SigningError,
+    crypto::{signed::SigningError, signer::ed_signer::EdSigner},
     principal::{
         agent::{Agent, AgentId},
         group::Group,
-        verifiable::Verifiable,
     },
 };
 use dupe::{Dupe, IterDupedExt, OptionDupedExt};
@@ -14,14 +13,9 @@ use nonempty::NonEmpty;
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct GroupStore<
-    T: ContentRef,
-    S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
->(BTreeMap<GroupId, Rc<RefCell<Group<T, S>>>>);
+pub struct GroupStore<T: ContentRef, S: EdSigner>(BTreeMap<GroupId, Rc<RefCell<Group<T, S>>>>);
 
-impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>
-    GroupStore<T, S>
-{
+impl<T: ContentRef, S: EdSigner> GroupStore<T, S> {
     pub fn new() -> Self {
         GroupStore(BTreeMap::new())
     }
@@ -31,11 +25,12 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
         self.0.insert(id, group);
     }
 
-    pub fn generate_group(
+    pub fn generate_group<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
+        csprng: &mut R,
         parents: NonEmpty<Agent<T, S>>,
     ) -> Result<Rc<RefCell<Group<T, S>>>, SigningError> {
-        let new_group: Group<T, S> = Group::generate(parents)?;
+        let new_group: Group<T, S> = Group::generate(csprng, parents)?;
         let rc = Rc::new(RefCell::new(new_group));
         self.insert(rc.dupe());
         Ok(rc)
@@ -57,10 +52,7 @@ impl<T: ContentRef, S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifia
         &self,
         group: &Group<T, S>,
     ) -> BTreeMap<AgentId, (Agent<T, S>, Access)> {
-        struct GroupAccess<
-            U: ContentRef,
-            Z: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
-        > {
+        struct GroupAccess<U: ContentRef, Z: EdSigner> {
             agent: Agent<U, Z>,
             agent_access: Access,
             parent_access: Access,

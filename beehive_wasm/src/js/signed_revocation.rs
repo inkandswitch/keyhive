@@ -1,9 +1,9 @@
-use super::{change_ref::JsChangeRef, revocation::JsRevocation};
+use super::{change_ref::JsChangeRef, revocation::JsRevocation, signer::JsSigner};
 use beehive_core::{crypto::signed::Signed, principal::group::operation::revocation::Revocation};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = SignedRevocation)]
-pub struct JsSignedRevocation(pub(crate) Signed<Revocation<JsChangeRef>>);
+pub struct JsSignedRevocation(pub(crate) Signed<Revocation<JsChangeRef, JsSigner>>);
 
 #[wasm_bindgen(js_class = SignedRevocation)]
 impl JsSignedRevocation {
@@ -27,13 +27,13 @@ impl JsSignedRevocation {
     }
 }
 
-impl From<Signed<Revocation<JsChangeRef>>> for JsSignedRevocation {
-    fn from(signed: Signed<Revocation<JsChangeRef>>) -> Self {
+impl From<Signed<Revocation<JsChangeRef, JsSigner>>> for JsSignedRevocation {
+    fn from(signed: Signed<Revocation<JsChangeRef, JsSigner>>) -> Self {
         Self(signed)
     }
 }
 
-impl From<JsSignedRevocation> for Signed<Revocation<JsChangeRef>> {
+impl From<JsSignedRevocation> for Signed<Revocation<JsChangeRef, JsSigner>> {
     fn from(js_signed: JsSignedRevocation) -> Self {
         js_signed.0
     }

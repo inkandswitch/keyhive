@@ -2,7 +2,7 @@ use wasm_bindgen::prelude::*;
 
 use super::{
     change_ref::JsChangeRef, doc_content_refs::DocContentRefs, document::JsDocument,
-    signed_delegation::JsSignedDelegation, signed_revocation::JsSignedRevocation,
+    signed_delegation::JsSignedDelegation, signed_revocation::JsSignedRevocation, signer::JsSigner,
 };
 use beehive_core::{
     crypto::signed::Signed,
@@ -17,10 +17,15 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
 pub struct After {
-    pub(crate) delegations: Vec<Rc<Signed<Delegation<JsChangeRef>>>>,
-    pub(crate) revocations: Vec<Rc<Signed<Revocation<JsChangeRef>>>>,
-    pub(crate) content:
-        BTreeMap<DocumentId, (Rc<RefCell<Document<JsChangeRef>>>, Vec<JsChangeRef>)>,
+    pub(crate) delegations: Vec<Rc<Signed<Delegation<JsChangeRef, JsSigner>>>>,
+    pub(crate) revocations: Vec<Rc<Signed<Revocation<JsChangeRef, JsSigner>>>>,
+    pub(crate) content: BTreeMap<
+        DocumentId,
+        (
+            Rc<RefCell<Document<JsChangeRef, JsSigner>>>,
+            Vec<JsChangeRef>,
+        ),
+    >,
 }
 
 #[wasm_bindgen]

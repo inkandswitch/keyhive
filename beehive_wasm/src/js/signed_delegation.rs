@@ -1,9 +1,9 @@
-use super::{change_ref::JsChangeRef, delegation::JsDelegation};
+use super::{change_ref::JsChangeRef, delegation::JsDelegation, signer::JsSigner};
 use beehive_core::{crypto::signed::Signed, principal::group::operation::delegation::Delegation};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = SignedDelegation)]
-pub struct JsSignedDelegation(pub(crate) Signed<Delegation<JsChangeRef>>);
+pub struct JsSignedDelegation(pub(crate) Signed<Delegation<JsChangeRef, JsSigner>>);
 
 #[wasm_bindgen(js_class = SignedDelegation)]
 impl JsSignedDelegation {
@@ -27,13 +27,13 @@ impl JsSignedDelegation {
     }
 }
 
-impl From<Signed<Delegation<JsChangeRef>>> for JsSignedDelegation {
-    fn from(signed: Signed<Delegation<JsChangeRef>>) -> Self {
+impl From<Signed<Delegation<JsChangeRef, JsSigner>>> for JsSignedDelegation {
+    fn from(signed: Signed<Delegation<JsChangeRef, JsSigner>>) -> Self {
         Self(signed)
     }
 }
 
-impl From<JsSignedDelegation> for Signed<Delegation<JsChangeRef>> {
+impl From<JsSignedDelegation> for Signed<Delegation<JsChangeRef, JsSigner>> {
     fn from(js_signed: JsSignedDelegation) -> Self {
         js_signed.0
     }

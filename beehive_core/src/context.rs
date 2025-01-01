@@ -7,6 +7,7 @@ use crate::{
         encrypted::Encrypted,
         share_key::ShareKey,
         signed::{Signed, SigningError},
+        signer::ed_signer::EdSigner,
     },
     principal::{
         active::Active,
@@ -35,11 +36,7 @@ use std::{
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Debug)]
-pub struct Context<
-    T: ContentRef,
-    S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
-    R: rand::CryptoRng + rand::RngCore,
-> {
+pub struct Context<T: ContentRef, S: EdSigner, R: rand::CryptoRng + rand::RngCore> {
     /// The [`Active`] user agent.
     pub active: Rc<RefCell<Active<S>>>,
 
@@ -56,12 +53,7 @@ pub struct Context<
     pub csprng: R,
 }
 
-impl<
-        T: ContentRef,
-        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
-        R: rand::CryptoRng + rand::RngCore,
-    > Context<T, S, R>
-{
+impl<T: ContentRef, S: EdSigner, R: rand::CryptoRng + rand::RngCore> Context<T, S, R> {
     pub fn id(&self) -> IndividualId {
         self.active.borrow().id()
     }
@@ -84,10 +76,13 @@ impl<
         &mut self,
         coparents: Vec<Agent<T, S>>,
     ) -> Result<Rc<RefCell<Group<T, S>>>, SigningError> {
-        self.groups.generate_group(NonEmpty {
-            head: self.active.dupe().into(),
-            tail: coparents,
-        })
+        self.groups.generate_group(
+            &mut self.csprng,
+            NonEmpty {
+                head: self.active.dupe().into(),
+                tail: coparents,
+            },
+        )
     }
 
     pub fn generate_doc(
@@ -293,22 +288,16 @@ impl<
     }
 }
 
-impl<
-        T: ContentRef,
-        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
-        R: rand::CryptoRng + rand::RngCore,
-    > Verifiable for Context<T, S, R>
+impl<T: ContentRef, S: EdSigner, R: rand::CryptoRng + rand::RngCore> Verifiable
+    for Context<T, S, R>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.active.borrow().verifying_key()
     }
 }
 
-impl<
-        T: ContentRef,
-        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
-        R: rand::CryptoRng + rand::RngCore,
-    > From<&Context<T, S, R>> for Agent<T, S>
+impl<T: ContentRef, S: EdSigner, R: rand::CryptoRng + rand::RngCore> From<&Context<T, S, R>>
+    for Agent<T, S>
 {
     fn from(context: &Context<T, S, R>) -> Self {
         context.active.dupe().into()
