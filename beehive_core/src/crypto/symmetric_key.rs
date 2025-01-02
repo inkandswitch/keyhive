@@ -11,16 +11,16 @@ use x25519_dalek::SharedSecret;
 ///
 /// ```
 /// # use beehive_core::{
-/// #     crypto::{siv::Siv, symmetric_key::SymmetricKey},
+/// #     crypto::{siv::Siv, signer::memory::MemorySigner, symmetric_key::SymmetricKey},
 /// #     principal::{agent::Agent, document::Document, individual::Individual},
 /// # };
 /// # use std::{cell::RefCell, rc::Rc};
 /// # use nonempty::nonempty;
 /// let mut plaintext = b"hello world";
 /// let mut csprng = rand::thread_rng();
-/// let mut sk = ed25519_dalek::SigningKey::generate(&mut csprng);
+/// let mut sk = MemorySigner::generate(&mut csprng);
 /// let user = Individual::generate(&mut sk, &mut rand::thread_rng()).unwrap();
-/// let user_agent: Agent<String> = Rc::new(RefCell::new(user)).into();
+/// let user_agent: Agent<String, MemorySigner> = Rc::new(RefCell::new(user)).into();
 /// let doc = Document::generate(nonempty![user_agent], &mut csprng).unwrap();
 ///
 /// let key = SymmetricKey::generate(&mut csprng);
