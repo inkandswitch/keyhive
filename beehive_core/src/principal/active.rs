@@ -226,13 +226,15 @@ pub enum ActiveDelegationError {
 
 #[cfg(test)]
 mod tests {
+    use crate::crypto::signer::memory::MemorySigner;
+
     use super::*;
 
     #[test]
     fn test_sign() {
-        let csprng = &mut rand::thread_rng();
-        let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Active::generate(signer, csprng).unwrap();
+        let mut csprng = rand::thread_rng();
+        let signer = MemorySigner::generate(&mut csprng);
+        let active = Active::generate(signer, &mut csprng).unwrap();
         let message = "hello world".as_bytes();
         let signed = active.try_sign(message).unwrap();
 

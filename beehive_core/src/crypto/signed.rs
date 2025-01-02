@@ -1,6 +1,7 @@
 //! Wrap data in signatures.
 
-use crate::principal::{identifier::Identifier, verifiable::Verifiable};
+use super::signer::ed_signer::EdSigner;
+use crate::principal::identifier::Identifier;
 use dupe::Dupe;
 use ed25519_dalek::Verifier;
 use serde::{Deserialize, Serialize};
@@ -24,10 +25,7 @@ pub struct Signed<T: Serialize> {
 }
 
 impl<T: Serialize> Signed<T> {
-    pub fn try_sign<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>(
-        payload: T,
-        signer: &S,
-    ) -> Result<Self, SigningError> {
+    pub fn try_sign<S: EdSigner>(payload: T, signer: &S) -> Result<Self, SigningError> {
         let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
 
         Ok(Signed {
@@ -145,26 +143,25 @@ pub enum SigningError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{crypto::signer::memory::MemorySigner, principal::verifiable::Verifiable};
 
     #[test]
     fn test_round_trip() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+        let sk = MemorySigner::generate(&mut rand::thread_rng());
         let signed = Signed::try_sign(vec![1, 2, 3], &sk).unwrap();
         assert!(signed.try_verify().is_ok());
     }
 
-    // #[wasm_bindgen_test]
-    // fn test_verify_counterexample() {
-    //     let key1 = SigningKey::generate().unwrap();
-    //     let good_signed = key1.try_sign(vec![1, 2, 3].as_slice()).unwrap();
+    #[test]
+    fn test_verify_counterexample() {
+        let data = vec![1, 2, 3];
 
-    //     let key1 = SigningKey::generate().unwrap();
-    //     let bad_signed = Signed {
-    //         data: good_signed.0.data.clone(),
-    //         signature: good_signed.0.signature.clone(),
-    //         public_key: key2.0.verify_key().clone(),
-    //     };
+        let key1 = MemorySigner::generate(&mut rand::thread_rng());
+        let key2 = MemorySigner::generate(&mut rand::thread_rng());
 
-    //     assert_eq!(bad_signed.verify(), false);
-    // }
+        let mut signed: Signed<_> = key1.try_seal(data.as_slice()).unwrap();
+        signed.verifying_key = key2.verifying_key();
+
+        assert!(signed.try_verify().is_err())
+    }
 }

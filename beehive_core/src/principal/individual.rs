@@ -8,6 +8,7 @@ use super::{agent::AgentId, document::id::DocumentId, verifiable::Verifiable};
 use crate::crypto::{
     share_key::ShareKey,
     signed::{Signed, SigningError},
+    signer::ed_signer::EdSigner,
 };
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
@@ -57,8 +58,8 @@ impl Individual {
     }
 
     #[cfg(feature = "test_utils")]
-    pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        signer: &ed25519_dalek::SigningKey,
+    pub fn generate<R: rand::CryptoRng + rand::RngCore, S: EdSigner>(
+        signer: &S,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
         let state = PrekeyState::generate(signer, 8, csprng)?;
@@ -101,10 +102,7 @@ impl Individual {
             .expect("index in pre-checked bounds to exist")
     }
 
-    pub(crate) fn rotate_prekey<
-        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
-        R: rand::CryptoRng + rand::RngCore,
-    >(
+    pub(crate) fn rotate_prekey<S: EdSigner, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old_key: ShareKey,
         signer: &S,
@@ -116,10 +114,7 @@ impl Individual {
         Ok(new_key)
     }
 
-    pub(crate) fn expand_prekeys<
-        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
-        R: rand::CryptoRng + rand::RngCore,
-    >(
+    pub(crate) fn expand_prekeys<S: EdSigner, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         signer: &S,
         csprng: &mut R,

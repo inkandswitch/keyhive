@@ -280,29 +280,31 @@ impl<T: ContentRef, S: EdSigner> From<Rc<Signed<Revocation<T, S>>>> for Operatio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{access::Access, principal::individual::Individual};
+    use crate::{
+        access::Access,
+        crypto::signer::memory::MemorySigner,
+        principal::{individual::Individual, verifiable::Verifiable},
+    };
     use dupe::Dupe;
-    use std::rc::Rc;
+    use std::{rc::Rc, sync::LazyLock};
 
-    use std::sync::LazyLock;
+    static GROUP_SK: LazyLock<MemorySigner> =
+        LazyLock::new(|| MemorySigner::generate(&mut rand::thread_rng()));
 
-    static GROUP_SK: LazyLock<ed25519_dalek::SigningKey> =
-        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+    static ALICE_SK: LazyLock<MemorySigner> =
+        LazyLock::new(|| MemorySigner::generate(&mut rand::thread_rng()));
 
-    static ALICE_SK: LazyLock<ed25519_dalek::SigningKey> =
-        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+    static BOB_SK: LazyLock<MemorySigner> =
+        LazyLock::new(|| MemorySigner::generate(&mut rand::thread_rng()));
 
-    static BOB_SK: LazyLock<ed25519_dalek::SigningKey> =
-        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+    static CAROL_SK: LazyLock<MemorySigner> =
+        LazyLock::new(|| MemorySigner::generate(&mut rand::thread_rng()));
 
-    static CAROL_SK: LazyLock<ed25519_dalek::SigningKey> =
-        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+    static DAN_SK: LazyLock<MemorySigner> =
+        LazyLock::new(|| MemorySigner::generate(&mut rand::thread_rng()));
 
-    static DAN_SK: LazyLock<ed25519_dalek::SigningKey> =
-        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
-
-    static ERIN_SK: LazyLock<ed25519_dalek::SigningKey> =
-        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+    static ERIN_SK: LazyLock<MemorySigner> =
+        LazyLock::new(|| MemorySigner::generate(&mut rand::thread_rng()));
 
     /*
              ┌────────┐
@@ -334,27 +336,25 @@ mod tests {
                          └───────┘
     */
 
-    fn add_alice() -> Rc<Signed<Delegation<String>>> {
+    fn add_alice() -> Rc<Signed<Delegation<String, MemorySigner>>> {
         let alice: Individual = fixture(&ALICE_SK).verifying_key().into();
         let group_sk = LazyLock::force(&GROUP_SK).clone();
 
         Rc::new(
-            Signed::try_sign(
-                Delegation {
+            group_sk
+                .try_seal(Delegation {
                     delegate: alice.into(),
                     can: Access::Admin,
                     proof: None,
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
-                },
-                &group_sk,
-            )
-            .unwrap(),
+                })
+                .unwrap(),
         )
         .dupe()
     }
 
-    fn add_bob() -> Rc<Signed<Delegation<String>>> {
+    fn add_bob() -> Rc<Signed<Delegation<String, MemorySigner>>> {
         let alice_sk = fixture(&ALICE_SK).clone();
         let bob: Individual = fixture(&BOB_SK).verifying_key().into();
 
@@ -373,7 +373,7 @@ mod tests {
         )
     }
 
-    fn add_carol() -> Rc<Signed<Delegation<String>>> {
+    fn add_carol() -> Rc<Signed<Delegation<String, MemorySigner>>> {
         let alice_sk = fixture(&ALICE_SK).clone();
         let carol: Individual = fixture(&CAROL_SK).verifying_key().into();
 
@@ -392,7 +392,7 @@ mod tests {
         )
     }
 
-    fn add_dan() -> Rc<Signed<Delegation<String>>> {
+    fn add_dan() -> Rc<Signed<Delegation<String, MemorySigner>>> {
         let carol_sk = fixture(&CAROL_SK).clone();
         let dan: Individual = fixture(&DAN_SK).verifying_key().into();
 
@@ -411,7 +411,7 @@ mod tests {
         )
     }
 
-    fn add_erin() -> Rc<Signed<Delegation<String>>> {
+    fn add_erin() -> Rc<Signed<Delegation<String, MemorySigner>>> {
         let bob_sk = fixture(&BOB_SK).clone();
         let erin: Individual = fixture(&ERIN_SK).verifying_key().into();
 
@@ -430,7 +430,7 @@ mod tests {
         )
     }
 
-    fn remove_carol() -> Rc<Signed<Revocation<String>>> {
+    fn remove_carol() -> Rc<Signed<Revocation<String, MemorySigner>>> {
         let alice_sk = fixture(&ALICE_SK).clone();
 
         Rc::new(
@@ -446,7 +446,7 @@ mod tests {
         )
     }
 
-    fn remove_dan() -> Rc<Signed<Revocation<String>>> {
+    fn remove_dan() -> Rc<Signed<Revocation<String, MemorySigner>>> {
         let bob_sk = fixture(&BOB_SK).clone();
 
         Rc::new(
@@ -522,7 +522,7 @@ mod tests {
             let dlgs = HashSet::new();
             let revs = HashSet::new();
 
-            let observed = Operation::<String>::topsort(&dlgs, &revs);
+            let observed = Operation::<String, MemorySigner>::topsort(&dlgs, &revs);
             assert_eq!(observed, vec![]);
         }
 
@@ -572,13 +572,13 @@ mod tests {
 
             let observed = Operation::topsort(&dlg_heads, &rev_heads);
 
-            let alice_op: Operation<String> = alice_dlg.into();
+            let alice_op: Operation<String, MemorySigner> = alice_dlg.into();
             let alice_hash = Digest::hash(&alice_op);
 
-            let carol_op: Operation<String> = carol_dlg.into();
+            let carol_op: Operation<String, MemorySigner> = carol_dlg.into();
             let carol_hash = Digest::hash(&carol_op);
 
-            let dan_op: Operation<String> = dan_dlg.into();
+            let dan_op: Operation<String, MemorySigner> = dan_dlg.into();
             let dan_hash = Digest::hash(&dan_op);
 
             let a = (alice_hash, alice_op.clone());
@@ -605,7 +605,7 @@ mod tests {
                 )
                 .unwrap(),
             );
-            let rev_op: Operation<String> = alice_revokes_bob.dupe().into();
+            let rev_op: Operation<String, MemorySigner> = alice_revokes_bob.dupe().into();
             let rev_hash = Digest::hash(&rev_op);
 
             let dlgs = HashSet::new();
@@ -613,10 +613,10 @@ mod tests {
 
             let mut observed = Operation::topsort(&dlgs, &revs);
 
-            let alice_op: Operation<String> = alice_dlg.into();
+            let alice_op: Operation<String, MemorySigner> = alice_dlg.into();
             let alice_hash = Digest::hash(&alice_op);
 
-            let bob_op: Operation<String> = bob_dlg.into();
+            let bob_op: Operation<String, MemorySigner> = bob_dlg.into();
             let bob_hash = Digest::hash(&bob_op);
 
             let a = (alice_hash, alice_op.clone());
@@ -643,10 +643,10 @@ mod tests {
             let alice_revokes_carol = remove_carol();
             let bob_revokes_dan = remove_dan();
 
-            let rev_carol_op: Operation<String> = alice_revokes_carol.dupe().into();
+            let rev_carol_op: Operation<String, MemorySigner> = alice_revokes_carol.dupe().into();
             let rev_carol_hash = Digest::hash(&rev_carol_op);
 
-            let rev_dan_op: Operation<String> = bob_revokes_dan.dupe().into();
+            let rev_dan_op: Operation<String, MemorySigner> = bob_revokes_dan.dupe().into();
             let rev_dan_hash = Digest::hash(&rev_dan_op);
 
             let dlg_heads = HashSet::from_iter([erin_dlg.dupe()]);
@@ -655,19 +655,19 @@ mod tests {
 
             let observed = Operation::topsort(&dlg_heads, &rev_heads);
 
-            let alice_op: Operation<String> = alice_dlg.clone().into();
+            let alice_op: Operation<String, MemorySigner> = alice_dlg.clone().into();
             let alice_hash = Digest::hash(&alice_op);
 
-            let bob_op: Operation<String> = bob_dlg.clone().into();
+            let bob_op: Operation<String, MemorySigner> = bob_dlg.clone().into();
             let bob_hash = Digest::hash(&bob_op);
 
-            let carol_op: Operation<String> = carol_dlg.clone().into();
+            let carol_op: Operation<String, MemorySigner> = carol_dlg.clone().into();
             let carol_hash = Digest::hash(&carol_op);
 
-            let dan_op: Operation<String> = dan_dlg.clone().into();
+            let dan_op: Operation<String, MemorySigner> = dan_dlg.clone().into();
             let dan_hash = Digest::hash(&dan_op);
 
-            let erin_op: Operation<String> = erin_dlg.clone().into();
+            let erin_op: Operation<String, MemorySigner> = erin_dlg.clone().into();
             let erin_hash = Digest::hash(&erin_op);
 
             let mut bob_and_revoke_carol = vec![

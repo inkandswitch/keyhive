@@ -6,7 +6,6 @@ use crate::{
         signer::ed_signer::EdSigner,
     },
     error::missing_dependency::MissingDependency,
-    principal::verifiable::Verifiable,
     util::content_addressed_map::CaMap,
 };
 use serde::{Deserialize, Serialize};
@@ -119,22 +118,19 @@ impl PrekeyState {
     }
 
     /// Rotate a [`ShareKey`] in the [`PrekeyState`].
-    pub(crate) fn rotate<S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable>(
+    pub(crate) fn rotate<S: EdSigner>(
         &mut self,
         old: ShareKey,
         new: ShareKey,
         signer: &S,
     ) -> Result<ShareKey, SigningError> {
-        let op = Signed::try_sign(KeyOp::rotate(old, new), signer)?;
+        let op = signer.try_seal(KeyOp::rotate(old, new))?;
         self.ops.insert(op.into());
         Ok(new)
     }
 
     /// Rotate a [`ShareKey`] in the [`PrekeyState`] with a randomly-generated [`ShareSecretKey`].
-    pub(crate) fn rotate_gen<
-        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
-        R: rand::CryptoRng + rand::RngCore,
-    >(
+    pub(crate) fn rotate_gen<S: EdSigner, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old: ShareKey,
         signer: &S,
@@ -145,17 +141,14 @@ impl PrekeyState {
     }
 
     /// Expand the [`PrekeyState`] with a new, randomly-generated [`ShareSecretKey`].
-    pub(crate) fn expand<
-        S: ed25519_dalek::Signer<ed25519_dalek::Signature> + Verifiable,
-        R: rand::CryptoRng + rand::RngCore,
-    >(
+    pub(crate) fn expand<S: EdSigner, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         signer: &S,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
         let new = new_secret.share_key();
-        let op = Signed::try_sign(KeyOp::add(new), signer)?;
+        let op = signer.try_seal(KeyOp::add(new))?;
 
         self.ops.insert(op.into());
 
@@ -199,6 +192,7 @@ pub enum NewOpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::signer::memory::MemorySigner;
     use dupe::Dupe;
 
     #[test]
@@ -228,7 +222,7 @@ mod tests {
         let mut state = PrekeyState::new();
 
         let mut rando = rand::thread_rng();
-        let signing_key = ed25519_dalek::SigningKey::generate(&mut rando);
+        let signer = MemorySigner::generate(&mut rando);
 
         let share_key_1 = ShareKey::generate(&mut rando);
         let share_key_2 = ShareKey::generate(&mut rando);
@@ -236,13 +230,19 @@ mod tests {
         let share_key_4 = ShareKey::generate(&mut rando);
         let share_key_5 = ShareKey::generate(&mut rando);
 
-        let op1 = Signed::try_sign(KeyOp::add(share_key_1), &signing_key).unwrap();
-        let op2 = Signed::try_sign(KeyOp::add(share_key_2), &signing_key).unwrap();
+        let op1 = signer.try_seal(KeyOp::add(share_key_1)).unwrap();
+        let op2 = signer.try_seal(KeyOp::add(share_key_2)).unwrap();
 
-        let op3 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_3), &signing_key).unwrap();
-        let op4 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_4), &signing_key).unwrap();
+        let op3 = signer
+            .try_seal(KeyOp::rotate(share_key_1, share_key_3))
+            .unwrap();
+        let op4 = signer
+            .try_seal(KeyOp::rotate(share_key_1, share_key_4))
+            .unwrap();
 
-        let op5 = Signed::try_sign(KeyOp::rotate(share_key_4, share_key_5), &signing_key).unwrap();
+        let op5 = signer
+            .try_seal(KeyOp::rotate(share_key_4, share_key_5))
+            .unwrap();
 
         state.insert_op(op1).unwrap();
         state.insert_op(op2).unwrap();
@@ -284,7 +284,7 @@ mod tests {
         let mut state = PrekeyState::new();
 
         let mut rando = rand::thread_rng();
-        let signing_key = ed25519_dalek::SigningKey::generate(&mut rando);
+        let signer = MemorySigner::generate(&mut rando);
 
         let share_key_1 = ShareKey::generate(&mut rando);
         let share_key_2 = ShareKey::generate(&mut rando);
@@ -292,14 +292,20 @@ mod tests {
         let share_key_4 = ShareKey::generate(&mut rando);
         let share_key_5 = ShareKey::generate(&mut rando);
 
-        let op1 = Signed::try_sign(KeyOp::add(share_key_1), &signing_key).unwrap();
-        let op2 = Signed::try_sign(KeyOp::add(share_key_2), &signing_key).unwrap();
+        let op1 = signer.try_seal(KeyOp::add(share_key_1)).unwrap();
+        let op2 = signer.try_seal(KeyOp::add(share_key_2)).unwrap();
 
-        let op3 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_3), &signing_key).unwrap();
-        let op4 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_4), &signing_key).unwrap();
+        let op3 = signer
+            .try_seal(KeyOp::rotate(share_key_1, share_key_3))
+            .unwrap();
+        let op4 = signer
+            .try_seal(KeyOp::rotate(share_key_1, share_key_4))
+            .unwrap();
 
-        //                                       vvvvvvvvvvv
-        let op5 = Signed::try_sign(KeyOp::rotate(share_key_4, share_key_5), &signing_key).unwrap();
+        let op5 = signer
+            //                      vvvvvvvvvvv
+            .try_seal(KeyOp::rotate(share_key_4, share_key_5))
+            .unwrap();
 
         state.insert_op(op1.dupe()).unwrap();
         state.insert_op(op2.dupe()).unwrap();
