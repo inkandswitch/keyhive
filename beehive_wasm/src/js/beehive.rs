@@ -1,8 +1,18 @@
 use super::{
-    access::JsAccess, agent::JsAgent, change_ref::JsChangeRef, delegation::JsDelegationError,
-    doc_content_refs::DocContentRefs, document::JsDocument, encrypted::JsEncrypted, group::JsGroup,
-    identifier::JsIdentifier, individual_id::JsIndividualId, membered::JsMembered,
-    share_key::JsShareKey, signed::JsSigned, signer::JsSigner, signing_key::JsSigningError,
+    access::JsAccess,
+    agent::JsAgent,
+    change_ref::JsChangeRef,
+    delegation::JsDelegationError,
+    doc_content_refs::DocContentRefs,
+    document::JsDocument,
+    encrypted::JsEncrypted,
+    group::JsGroup,
+    identifier::JsIdentifier,
+    individual_id::JsIndividualId,
+    membered::JsMembered,
+    share_key::JsShareKey,
+    signed::JsSigned,
+    signer::{JsSigner, JsSigningError},
     summary::Summary,
 };
 use beehive_core::{
@@ -214,8 +224,8 @@ mod tests {
     #[cfg(feature = "browser_test")]
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-    fn setup() -> JsBeehive {
-        JsBeehive::new(JsSigningKey::generate().unwrap()).unwrap()
+    fn setup() -> Result<JsBeehive, JsSigningError> {
+        JsBeehive::new(JsSigner::generate_in_memory())
     }
 
     mod id {
@@ -223,7 +233,7 @@ mod tests {
 
         #[wasm_bindgen_test(unsupported = test)]
         fn test_length() {
-            let bh = setup();
+            let bh = setup().unwrap();
             assert_eq!(bh.id().bytes().len(), 32);
         }
     }
@@ -233,7 +243,7 @@ mod tests {
 
         #[wasm_bindgen_test(unsupported = test)]
         fn test_round_trip() {
-            let bh = setup();
+            let bh = setup().unwrap();
             let signed = bh.try_sign(vec![1, 2, 3]).unwrap();
             assert!(signed.verify());
         }
@@ -246,7 +256,7 @@ mod tests {
 
         #[wasm_bindgen_test(unsupported = test)]
         fn test_encrypt_decrypt() -> Result<(), Box<dyn Error>> {
-            let mut bh = setup();
+            let mut bh = setup().unwrap();
             let active = bh.ctx.active.clone();
             active.borrow_mut().expand_prekeys(&mut bh.ctx.csprng)?;
             let agent = JsAgent(Agent::Active(active));

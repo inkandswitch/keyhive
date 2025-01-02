@@ -20,5 +20,4 @@ pub mod signed;
 pub mod signed_delegation;
 pub mod signed_revocation;
 pub mod signer;
-pub mod signing_key;
 pub mod summary;

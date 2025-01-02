@@ -9,8 +9,8 @@ test.beforeEach(async ({ page }) => {
 test.describe("Beehive", async () => {
   test('constructor', async ({ page }) => {
     const out = await page.evaluate(() => {
-      const { Beehive, SigningKey } = window.beehive
-      return { beehive: new Beehive(SigningKey.generate()) }
+      const { Beehive, Signer } = window.beehive
+      return { beehive: new Beehive(Signer.generateInMemory()) }
     })
 
     expect(out.beehive).toBeDefined()
@@ -18,8 +18,8 @@ test.describe("Beehive", async () => {
 
   test('id', async ({ page }) => {
     const out = await page.evaluate(() => {
-      const { Beehive, SigningKey } = window.beehive
-      const sk = SigningKey.generate()
+      const { Beehive, Signer } = window.beehive
+      const sk = Signer.generateInMemory()
       const vk = sk.verifyingKey
       const beehive = new Beehive(sk)
       return { id: beehive.id.bytes, vk }
@@ -30,8 +30,8 @@ test.describe("Beehive", async () => {
 
   test.describe('idString', async () => {
     const scenario = () => {
-      const { Beehive, SigningKey } = window.beehive
-      const key = SigningKey.generate()
+      const { Beehive, Signer } = window.beehive
+      const key = Signer.generateInMemory()
       const vKey = key.verifyingKey
       const beehive = new Beehive(key)
       return { idString: beehive.idString, vKey }
@@ -50,8 +50,8 @@ test.describe("Beehive", async () => {
 
   test.describe('generateGroup', async () => {
     const scenario = () => {
-      const { Beehive, SigningKey } = window.beehive
-      const beehive = new Beehive(SigningKey.generate())
+      const { Beehive, Signer } = window.beehive
+      const beehive = new Beehive(Signer.generateInMemory())
 
       const group = beehive.generateGroup([])
       const { groupId, members } = group

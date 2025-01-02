@@ -11,8 +11,8 @@ test.beforeEach(async ({ page }) => {
 test.describe("Signed", async () => {
   test('verify', async ({ page }) => {
     const out = await page.evaluate((input) => {
-      const { SigningKey } = window.beehive
-      const key = SigningKey.generate()
+      const { Signer } = window.beehive
+      const key = Signer.generateInMemory()
       const signed = key.trySign(new Uint8Array(input.toSign))
       const { payload, verifyingKey, signature } = signed
       const verified = signed.verify()
@@ -24,8 +24,8 @@ test.describe("Signed", async () => {
 
   test('payload', async ({ page }) => {
     const out = await page.evaluate((input) => {
-      const { SigningKey } = window.beehive
-      const key = SigningKey.generate()
+      const { Signer } = window.beehive
+      const key = Signer.generateInMemory()
       const signed = key.trySign(new Uint8Array(input.toSign))
       return { payload: signed.payload }
     }, { toSign })
@@ -35,8 +35,8 @@ test.describe("Signed", async () => {
 
   test('signature', async ({ page }) => {
     const out = await page.evaluate((input) => {
-      const { SigningKey } = window.beehive
-      const key = SigningKey.generate()
+      const { Signer } = window.beehive
+      const key = Signer.generateInMemory()
       const signed = key.trySign(new Uint8Array(input.toSign))
       return { signature: signed.signature }
     }, { toSign })
