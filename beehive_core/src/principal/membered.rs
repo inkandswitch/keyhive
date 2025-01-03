@@ -81,7 +81,8 @@ impl<T: ContentRef> Membered<T> {
             Membered::Document(document) => {
                 document
                     .borrow_mut()
-                    .revoke_member(member_id, signing_key, relevant_docs)
+                    .revoke_member(member_id, signing_key, relevant_docs)?;
+                Ok(())
             }
         }
     }

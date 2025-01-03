@@ -171,21 +171,23 @@ impl<T: ContentRef> Document<T> {
         member_id: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<RefCell<Document<T>>>],
-    ) -> Result<(), SigningError> {
+    ) -> Result<Vec<CgkaOperation>, SigningError> {
         // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
         // FIXME: We need to check if this has revoked the last member in our group?
-        // let mut ops = Vec::new();
-        // for delegations in self.group.members.get(&member_id) {
-        //     for delegation in delegations.flatmap(|d| {
-        //         d.payload().individual_ids()
-        //     }) {
-        //         // FIXME: We'll need Cgka to check for duplicate remove ids
-        //         let op = self.cgka.remove(id, csprng).expect("FIXME");
-        //         ops.push(op);
-        //     }
-        // }
+        let mut ops = Vec::new();
+        if let Some(delegations) = self.group.members.get(&member_id) {
+            for id in delegations.iter().flat_map(|d| {
+                d.payload().delegate.individual_ids()
+            }) {
+                let op = self.cgka.remove(id).expect("FIXME");
+                ops.push(op);
+            }
+        }
         self.group
-            .revoke_member(member_id, signing_key, relevant_docs)
+            .revoke_member(member_id, signing_key, relevant_docs)?;
+        // FIXME: We don't currently do anything with these ops, but need to share them
+        // across the network.
+        Ok(ops)
     }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
