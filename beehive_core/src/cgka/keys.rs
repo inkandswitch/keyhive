@@ -46,15 +46,19 @@ impl ShareKeyMap {
             .try_sibling_decrypt(&decrypt_keys)
             .map_err(|e| CgkaError::Decryption(e.to_string()))
     }
+
+    pub fn extend(&mut self, other: &ShareKeyMap) {
+        self.0.extend(other.0.iter());
+    }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub enum NodeKey {
     ShareKey(ShareKey),
     ConflictKeys(ConflictKeys),
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct ConflictKeys {
     pub first: ShareKey,
     pub second: ShareKey,

@@ -7,7 +7,10 @@ use super::{
     siv::Siv,
     symmetric_key::SymmetricKey,
 };
-use crate::{content::reference::ContentRef, principal::document::id::DocumentId};
+use crate::{
+    cgka::operation::CgkaOperation, content::reference::ContentRef,
+    principal::document::id::DocumentId,
+};
 use nonempty::NonEmpty;
 use serde::{ser::SerializeStruct, Deserialize, Serialize};
 use std::marker::PhantomData;
@@ -26,6 +29,8 @@ pub struct Encrypted<T, Cr: ContentRef> {
 
     /// Hash of the PCS key used to derive the application secret for encrypting.
     pub pcs_key_hash: Digest<PcsKey>,
+    /// Hash of the PCS update operation corresponding to the PCS key
+    pub pcs_update_op_hash: Digest<CgkaOperation>,
     /// The content ref hash used to derive the application secret for encrypting.
     pub content_ref: Digest<Cr>,
     /// The predecessor content ref hashes used to derive the application secret
@@ -42,6 +47,7 @@ impl<T, Cr: ContentRef> Encrypted<T, Cr> {
         nonce: Siv,
         ciphertext: Vec<u8>,
         pcs_key_hash: Digest<PcsKey>,
+        pcs_update_op_hash: Digest<CgkaOperation>,
         content_ref: Digest<Cr>,
         pred_refs: Digest<Vec<Cr>>,
     ) -> Encrypted<T, Cr> {
@@ -49,6 +55,7 @@ impl<T, Cr: ContentRef> Encrypted<T, Cr> {
             nonce,
             ciphertext,
             pcs_key_hash,
+            pcs_update_op_hash,
             content_ref,
             pred_refs,
             _plaintext_tag: PhantomData,

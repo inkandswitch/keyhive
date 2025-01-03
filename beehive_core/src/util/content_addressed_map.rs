@@ -126,3 +126,12 @@ impl<'de, T: Serialize + Deserialize<'de>> Deserialize<'de> for CaMap<T> {
         Ok(Self(rcs))
     }
 }
+
+impl<T: Serialize> Extend<(Digest<T>, Rc<T>)> for CaMap<T> {
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = (Digest<T>, Rc<T>)>,
+    {
+        self.0.extend(iter);
+    }
+}
