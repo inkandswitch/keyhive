@@ -577,10 +577,6 @@ mod tests {
         for n in 1..16 {
             run_test_rounds(n, &test_rounds, csprng)?;
         }
-        // run_test_rounds(20, &test_rounds, csprng)?;
-        // run_test_rounds(25, &test_rounds, csprng)?;
-        // run_test_rounds(31, &test_rounds, csprng)?;
-        // run_test_rounds(32, &test_rounds, csprng)?;
         Ok(())
     }
 
