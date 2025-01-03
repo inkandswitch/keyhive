@@ -2,7 +2,7 @@
   description = "beehive";
 
   inputs = {
-    nixpkgs.url = "nixpkgs/nixos-24.05";
+    nixpkgs.url = "nixpkgs/nixos-24.11";
     nixos-unstable.url = "nixpkgs/nixos-unstable-small";
 
     command-utils.url = "github:expede/nix-command-utils";
@@ -226,7 +226,6 @@
 
           nativeBuildInputs = with pkgs;
             [
-              (pkgs.hiPrio pkgs.rust-bin.nightly.latest.rustfmt)
               command_menu
               direnv
               http-server
@@ -243,7 +242,7 @@
             ++ cargo-installs
             ++ lib.optionals stdenv.isDarwin darwin-installs;
 
-          shellHook = ''
+         shellHook = ''
             export RUSTC_WRAPPER="${pkgs.sccache}/bin/sccache"
             unset SOURCE_DATE_EPOCH
           ''
