@@ -129,9 +129,9 @@ impl<T: ContentRef> Document<T> {
         ops.push(update_op);
         Ok(Document {
             group,
-            reader_keys: Default::default(), // FIXME
-            content_state: Default::default(),
-            content_heads: Default::default(),
+            reader_keys: HashMap::new(), // FIXME
+            content_state: HashSet::new(),
+            content_heads: HashSet::new(),
             cgka,
         })
     }
@@ -176,9 +176,10 @@ impl<T: ContentRef> Document<T> {
         // FIXME: We need to check if this has revoked the last member in our group?
         let mut ops = Vec::new();
         if let Some(delegations) = self.group.members.get(&member_id) {
-            for id in delegations.iter().flat_map(|d| {
-                d.payload().delegate.individual_ids()
-            }) {
+            for id in delegations
+                .iter()
+                .flat_map(|d| d.payload().delegate.individual_ids())
+            {
                 let op = self.cgka.remove(id).expect("FIXME");
                 ops.push(op);
             }

@@ -363,7 +363,7 @@ mod tests {
                 Delegation {
                     delegate: bob.into(),
                     can: Access::Write,
-                    proof: Some(add_alice().into()),
+                    proof: Some(add_alice()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
                 },
@@ -382,7 +382,7 @@ mod tests {
                 Delegation {
                     delegate: carol.into(),
                     can: Access::Write,
-                    proof: Some(add_alice().into()),
+                    proof: Some(add_alice()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
                 },
@@ -401,7 +401,7 @@ mod tests {
                 Delegation {
                     delegate: dan.into(),
                     can: Access::Write,
-                    proof: Some(add_carol().into()),
+                    proof: Some(add_carol()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
                 },
@@ -420,7 +420,7 @@ mod tests {
                 Delegation {
                     delegate: erin.into(),
                     can: Access::Write,
-                    proof: Some(add_bob().into()),
+                    proof: Some(add_bob()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
                 },
@@ -453,7 +453,7 @@ mod tests {
             Signed::try_sign(
                 Revocation {
                     revoke: add_dan(),
-                    proof: Some(add_bob().into()),
+                    proof: Some(add_bob()),
                     after_content: BTreeMap::new(),
                 },
                 &bob_sk,
@@ -463,7 +463,7 @@ mod tests {
     }
 
     fn fixture<T>(from: &LazyLock<T>) -> &T {
-        LazyLock::force(&from)
+        LazyLock::force(from)
     }
 
     mod ancestors {
@@ -598,7 +598,7 @@ mod tests {
                 Signed::try_sign(
                     Revocation {
                         revoke: bob_dlg.dupe(),
-                        proof: Some(alice_dlg.dupe().into()),
+                        proof: Some(alice_dlg.dupe()),
                         after_content: BTreeMap::new(),
                     },
                     &alice_sk,
@@ -670,16 +670,16 @@ mod tests {
             let erin_op: Operation<String> = erin_dlg.clone().into();
             let erin_hash = Digest::hash(&erin_op);
 
-            let mut bob_and_revoke_carol = vec![
+            let mut bob_and_revoke_carol = [
                 (bob_hash, bob_op.clone()),
                 (rev_carol_hash, rev_carol_op.clone()),
             ];
             bob_and_revoke_carol.sort_by_key(|(hash, _)| *hash);
 
-            let mut dan_and_erin = vec![(dan_hash, dan_op.clone()), (erin_hash, erin_op.clone())];
+            let mut dan_and_erin = [(dan_hash, dan_op.clone()), (erin_hash, erin_op.clone())];
             dan_and_erin.sort_by_key(|(hash, _)| *hash);
 
-            let mut revs = vec![(rev_dan_hash, rev_dan_op.clone())];
+            let mut revs = [(rev_dan_hash, rev_dan_op.clone())];
             revs.sort_by_key(|(hash, _)| *hash);
 
             assert_eq!(observed.clone().len(), 7);

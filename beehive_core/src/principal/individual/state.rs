@@ -73,7 +73,7 @@ impl PrekeyState {
             let secret_key = ShareSecretKey::generate(csprng);
             let share_key = secret_key.share_key();
 
-            let op = Signed::try_sign(KeyOp::add(share_key), &signing_key)?;
+            let op = Signed::try_sign(KeyOp::add(share_key), signing_key)?;
             ops.insert(op.into());
 
             Ok::<_, SigningError>(ops)

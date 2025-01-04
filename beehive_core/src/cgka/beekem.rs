@@ -37,16 +37,18 @@ pub struct PathChange {
 /// ensuring that a passive adversary needs all of the historical secret keys at
 /// one of the leaves in order to read the latest secret after a merge.
 ///
-/// Leaf nodes represent group members. Each member has a fixed Identifier as well as a
-/// public key that is rotated over time. Each non-leaf node stores one or more public
-/// keys and a secret used for (deriving a shared key for) decrypting its parent.
+/// Leaf nodes represent group members. Each member has a fixed identifier as well
+/// as a public key that is rotated over time. Each inner node stores one or more
+/// public keys and an encrypted secret used for (deriving a shared key for) decrypting
+/// its parent.
 ///
 /// During a key rotation, a leaf will update its public key and then encrypt its path
 /// to the root. For each parent it attempts to encrypt, it will encounter one of a few
 /// cases:
 /// * In the "normal" case, the child's sibling will have a single public key and a
-///   corresponding secret key. That secret is encrypted by the child using the pk of
-///   its sibling for Diffie Hellman (DH).
+///   corresponding secret key. The child uses the public key of its sibling to derive
+///   a shared Diffie Hellman (DH) secret. It then uses this shared DH secret to
+///   encrypt the new parent secret.
 /// * In case of a blank sibling, the encrypting child encrypts the secret for each of
 ///   the nodes in its sibling's resolution (which is the set of the highest non-blank
 ///   descendents of the sibling). This means a separate DH per node in that resolution.
@@ -55,17 +57,16 @@ pub struct PathChange {
 ///   the encrypter must use the nested encryption method for encrypting the new secret
 ///   for the parent. It does DH using the child's secret key with each of its sibling's
 ///   (sorted) public keys to create a nested encryption.
-/// * * An encrypter will always have one public key because it overwrites conflicts on
-///     its path as it ascends the tree.
+/// * * Encryption of a parent of a conflict node will always result in one public key
+///     and one corresponding secret key for that parent. This is because the encrypter
+///     overwrites conflicts on its path as it ascends the tree.
 /// * * A node with multiple public keys will also have multiple corresponding encrypted
 ///     secret keys. On decryption, any leaf with a conflict node on its path will need
 ///     all those secret keys to do the nested decryption of the conflict node's parent.
-/// * * Encryption of a parent of a conflict node will always result in one public key
-///     and one corresponding secret key for that parent.
 /// * * When starting a decryption, you pass in your map of public keys to decrypted
-///     secret keys. If you hit new public keys on the way up, you add the decrypted
-///     secret keys to that map. This map allows you to always look up secret keys for
-///     nested decryptions.
+///     secret keys. If you hit new public keys on the way up, you add the corresponding
+///     decrypted secret keys to that map. This map allows you to always look up secret
+///     keys for nested decryptions.
 ///
 /// [Causal TreeKEM]: https://mattweidner.com/assets/pdf/acs-dissertation.pdf
 /// [MLS]: https://messaginglayersecurity.rocks/
@@ -73,19 +74,18 @@ pub struct PathChange {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct BeeKem {
     doc_id: DocumentId,
+    /// The next [`LeafNodeIndex`] available for adding a new member.
     next_leaf_idx: LeafNodeIndex,
     leaves: Vec<Option<LeafNode>>,
     inner_nodes: Vec<Option<InnerNode>>,
     tree_size: TreeSize,
     id_to_leaf_idx: BTreeMap<IndividualId, LeafNodeIndex>,
-    // The leaf node that was the source of the last path encryption, or None
-    // if there is currently no root key.
+    /// The leaf node that was the source of the last path encryption, or [`None`]
+    /// if there is currently no root key.
     current_secret_encrypter_leaf_idx: Option<LeafNodeIndex>,
 }
 
 impl BeeKem {
-    /// We assume members are added in causal order (a property guaranteed by
-    /// Beehive as a whole).
     pub(crate) fn new(
         doc_id: DocumentId,
         initial_member_id: IndividualId,
@@ -110,6 +110,12 @@ impl BeeKem {
         self.node_key_for_index((*idx).into())
     }
 
+    /// For concurrent membership changes, we need to ensure that removed paths
+    /// are blanked and concurrently added member leaves are sorted (and their
+    /// paths blanked) after any other concurrent operations were applied.
+    ///
+    /// Sorting concurrently added leaves deterministically resolves add conflicts
+    /// (e.g., if two members concurrently add distinct members to the same leaf).
     pub(crate) fn sort_leaves_and_blank_paths_for_concurrent_membership_changes(
         &mut self,
         mut added_ids: HashSet<IndividualId>,
@@ -138,6 +144,8 @@ impl BeeKem {
         Ok(())
     }
 
+    /// Blank the leaf at the provided [`LeafNodeIndex`] as well as its path
+    /// to the root.
     pub(crate) fn blank_leaf_and_path(&mut self, idx: LeafNodeIndex) -> Result<(), CgkaError> {
         if idx.usize() >= self.leaves.len() {
             return Err(CgkaError::TreeIndexOutOfBounds);
@@ -148,7 +156,8 @@ impl BeeKem {
         Ok(())
     }
 
-    // TODO: If id already exists, add ShareKey to node key for that id's leaf
+    /// Add a new leaf to the first available [`LeafNodeIndex`] on the right and
+    /// blank that leaf's path to the root.
     pub(crate) fn push_leaf(&mut self, id: IndividualId, pk: NodeKey) -> Result<u32, CgkaError> {
         self.maybe_grow_tree(self.next_leaf_idx.u32());
         let l_idx = self.next_leaf_idx;
@@ -160,6 +169,8 @@ impl BeeKem {
         Ok(l_idx.u32())
     }
 
+    /// Remove data for the provided [`IndividualId`] and blank its leaf's
+    /// path to the root.
     pub(crate) fn remove_id(
         &mut self,
         id: IndividualId,
@@ -185,15 +196,18 @@ impl BeeKem {
         Ok((l_idx.u32(), removed_keys))
     }
 
+    /// The count of members currently in the tree.
     pub(crate) fn member_count(&self) -> u32 {
         self.id_to_leaf_idx.len() as u32
     }
 
-    /// Starting from the owner's leaf, move up the tree toward the root (i.e. along the
+    /// Decrypt the current tree secret.
+    ///
+    /// Starting from the owner's leaf, move up the tree toward the root (i.e., along the
     /// leaf's path). As you look at each parent node along the way, if the node is not
     /// blank, look up your child idx in the parent's secret store. Derive Diffie Hellman
-    /// shared keys using the public keys stored in the secret store and use those shared keys to
-    /// decrypt the secret key stored there.
+    /// shared keys using the public keys stored in the secret store and use those shared
+    /// keys to decrypt the secret key stored there.
     ///
     /// Hold on to each idx you've seen along the way, since ancestors might have been
     /// encrypted for any of these descendents (in cases like a blank node or
@@ -258,7 +272,10 @@ impl BeeKem {
         last_secret_decrypted.ok_or(CgkaError::NoRootKey)
     }
 
-    /// Starting from the owner's leaf, move up the tree toward the root (i.e. along the
+    /// Rotate key and encrypt new secrets along the provided [`IndividualId`]'s path.
+    /// This will result in a new root key for the tree.
+    ///
+    /// Starting from the owner's leaf, move up the tree toward the root (i.e., along the
     /// leaf's path). As you look at each parent node along the way, you need to populate
     /// it with a public key and a map from sibling subtree public keys to a newly generated
     /// secret key encrypted pairwise with each node in the sibling resolution (in the
@@ -291,7 +308,7 @@ impl BeeKem {
             leaf_id: id,
             leaf_idx: leaf_idx.u32(),
             leaf_pk: NodeKey::ShareKey(pk),
-            path: Default::default(),
+            path: Vec::new(),
             removed_keys: self.node_key_for_id(id)?.keys(),
         };
         self.insert_leaf_at(leaf_idx, id, NodeKey::ShareKey(pk))?;
@@ -337,7 +354,7 @@ impl BeeKem {
         Ok(Some((pcs_key, new_path)))
     }
 
-    /// Applies a PathChange representing new public and encrypted secret keys for each
+    /// Applies a [`PathChange`] representing new public and encrypted secret keys for each
     /// node on a path.
     pub(crate) fn apply_path(&mut self, new_path: &PathChange) -> Result<(), CgkaError> {
         if !self.id_to_leaf_idx.contains_key(&new_path.leaf_id) {
@@ -381,6 +398,7 @@ impl BeeKem {
         Ok(())
     }
 
+    /// Whether the tree currently has a root key.
     pub(crate) fn has_root_key(&self) -> bool {
         let root_idx: TreeNodeIndex = treemath::root(self.tree_size);
         let TreeNodeIndex::Inner(p_idx) = root_idx else {
@@ -397,9 +415,11 @@ impl BeeKem {
         }
     }
 
+    /// Decrypt parent node's [`ShareSecretKey`].
+    ///
     /// Returns the secret if there is a single parent public key.
-    /// In either case, adds the public key/decrypted secret key pair/s to the
-    /// secret key map.
+    /// In either case, adds any public key/decrypted secret key pair/s
+    /// it encounters to the secret key map.
     fn decrypt_parent_key(
         &self,
         child_idx: TreeNodeIndex,
@@ -434,6 +454,7 @@ impl BeeKem {
         Ok(maybe_secret)
     }
 
+    /// Encrypt new secret for parent node.
     fn encrypt_key_for_parent<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: &mut R,
@@ -457,6 +478,11 @@ impl BeeKem {
         Ok(())
     }
 
+    /// Build a new [`SecretStore`] for parent node.
+    ///
+    /// Encrypt the new parent [`ShareSecretKey`] for each member of your sibling
+    /// node's resolution. These are then stored in the new [`SecretStore`], indexed
+    /// by member of that resolution.
     #[allow(clippy::type_complexity)]
     fn encrypt_new_secret_store_for_parent<R: rand::CryptoRng + rand::RngCore>(
         &self,
@@ -611,6 +637,8 @@ impl BeeKem {
         Ok(())
     }
 
+    /// Whether the [`PathChange`] still makes sense given the state of the tree
+    /// we are attempting to merge it into.
     fn is_valid_change(&self, new_path: &PathChange) -> Result<bool, CgkaError> {
         let leaf_idx = self.leaf_index_for_id(new_path.leaf_id)?;
         // TODO: We can probably apply a path change in some cases where the tree

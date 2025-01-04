@@ -10,14 +10,27 @@ use std::{
     borrow::Borrow,
     collections::{HashMap, HashSet, VecDeque},
     mem,
+    ops::Deref,
     rc::Rc,
 };
 use topological_sort::TopologicalSort;
 
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-pub struct CgkaOperationWithPreds {
-    pub op: CgkaOperation,
-    pub preds: HashSet<Digest<CgkaOperation>>,
+/// An ordered [`NonEmpty`] of concurrent [`CgkaOperation`]s.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct CgkaEpoch(NonEmpty<Rc<CgkaOperation>>);
+
+impl From<NonEmpty<Rc<CgkaOperation>>> for CgkaEpoch {
+    fn from(item: NonEmpty<Rc<CgkaOperation>>) -> Self {
+        CgkaEpoch(item)
+    }
+}
+
+impl Deref for CgkaEpoch {
+    type Target = NonEmpty<Rc<CgkaOperation>>;
+
+    fn deref(&self) -> &NonEmpty<Rc<CgkaOperation>> {
+        &self.0
+    }
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
@@ -43,7 +56,8 @@ pub enum CgkaOperation {
 }
 
 impl CgkaOperation {
-    pub fn predecessors(&self) -> HashSet<Digest<CgkaOperation>> {
+    /// The zero or more immediate causal predecessors of this operation.
+    pub(crate) fn predecessors(&self) -> HashSet<Digest<CgkaOperation>> {
         match self {
             CgkaOperation::Add { predecessors, .. } => {
                 HashSet::from_iter(predecessors.iter().cloned())
@@ -58,40 +72,48 @@ impl CgkaOperation {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct CgkaOperationGraph {
-    pub cgka_ops: CaMap<CgkaOperation>,
-    pub cgka_ops_predecessors: HashMap<Digest<CgkaOperation>, HashSet<Digest<CgkaOperation>>>,
-    pub cgka_op_heads: HashSet<Digest<CgkaOperation>>,
-    pub add_heads: HashSet<Digest<CgkaOperation>>,
+/// Causal graph of [`CgkaOperation`]s.
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub(crate) struct CgkaOperationGraph {
+    pub(crate) cgka_ops: CaMap<CgkaOperation>,
+    pub(crate) cgka_ops_predecessors:
+        HashMap<Digest<CgkaOperation>, HashSet<Digest<CgkaOperation>>>,
+    pub(crate) cgka_op_heads: HashSet<Digest<CgkaOperation>>,
+    pub(crate) add_heads: HashSet<Digest<CgkaOperation>>,
 }
 
 impl CgkaOperationGraph {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            cgka_ops: Default::default(),
-            cgka_ops_predecessors: Default::default(),
-            cgka_op_heads: Default::default(),
-            add_heads: Default::default(),
+            cgka_ops: CaMap::new(),
+            cgka_ops_predecessors: HashMap::new(),
+            cgka_op_heads: HashSet::new(),
+            add_heads: HashSet::new(),
         }
     }
 
-    pub fn contains_op_hash(&self, op_hash: &Digest<CgkaOperation>) -> bool {
+    pub(crate) fn contains_op_hash(&self, op_hash: &Digest<CgkaOperation>) -> bool {
         self.cgka_ops.contains_key(op_hash)
     }
 
-    pub fn has_single_head(&self) -> bool {
+    /// Whether the causal graph has a single head. More than one head indicates
+    /// unresolved merges of concurrent operations.
+    pub(crate) fn has_single_head(&self) -> bool {
         self.cgka_op_heads.len() == 1
     }
 
-    pub fn add_local_op(&mut self, op: &CgkaOperation) {
+    /// Add an operation that was created locally to the graph.
+    pub(crate) fn add_local_op(&mut self, op: &CgkaOperation) {
         self.add_op_and_update_heads(op, None);
     }
 
-    pub fn add_op(&mut self, op: &CgkaOperation, heads: &HashSet<Digest<CgkaOperation>>) {
+    /// Add an operation to the graph.
+    pub(crate) fn add_op(&mut self, op: &CgkaOperation, heads: &HashSet<Digest<CgkaOperation>>) {
         self.add_op_and_update_heads(op, Some(heads));
     }
 
+    /// Add an operation to the graph, add new heads, and remove any heads that
+    /// were replaced by causal successors.
     fn add_op_and_update_heads(
         &mut self,
         op: &CgkaOperation,
@@ -130,12 +152,8 @@ impl CgkaOperationGraph {
         self.cgka_ops_predecessors.insert(op_hash, op_predecessors);
     }
 
-    pub fn heads_contained_in(&self, heads: &HashSet<Digest<CgkaOperation>>) -> bool {
+    pub(crate) fn heads_contained_in(&self, heads: &HashSet<Digest<CgkaOperation>>) -> bool {
         self.cgka_op_heads.is_subset(heads)
-    }
-
-    pub fn add_heads_contained_in(&self, heads: &HashSet<Digest<CgkaOperation>>) -> bool {
-        self.add_heads.is_subset(heads)
     }
 
     fn is_add_op(&self, hash: &Digest<CgkaOperation>) -> bool {
@@ -143,28 +161,25 @@ impl CgkaOperationGraph {
         matches!(op.borrow(), &CgkaOperation::Add { .. })
     }
 
-    pub fn predecessors_for(
+    pub(crate) fn predecessors_for(
         &self,
         op_hash: &Digest<CgkaOperation>,
     ) -> Option<&HashSet<Digest<CgkaOperation>>> {
         self.cgka_ops_predecessors.get(op_hash)
     }
 
-    pub fn get_cgka_op(&self, op_hash: &Digest<CgkaOperation>) -> Option<&Rc<CgkaOperation>> {
-        self.cgka_ops.get(op_hash)
-    }
-
-    pub fn topsort_graph(&self) -> Result<NonEmpty<NonEmpty<Rc<CgkaOperation>>>, CgkaError> {
+    /// Topsort all operation in the graph.
+    pub(crate) fn topsort_graph(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
         self.topsort_for_heads(&self.cgka_op_heads)
     }
 
-    /// Topsort all ancestor ops for the provided heads. These are grouped by "epoch",
-    /// which in this context means sets of ops that were concurrent. Each epoch set
-    /// is returned (ordered) in a distinct, consecutive `NonEmpty`.
-    pub fn topsort_for_heads(
+    /// Topsort all ancestor operations for the provided heads. These are grouped by
+    /// "epoch", which in this context means sets of ops that were concurrent. Each
+    /// epoch set is then ordered and placed into a distinct [`CgkaEpoch`].
+    pub(crate) fn topsort_for_heads(
         &self,
         heads: &HashSet<Digest<CgkaOperation>>,
-    ) -> Result<NonEmpty<NonEmpty<Rc<CgkaOperation>>>, CgkaError> {
+    ) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
         debug_assert!(heads.iter().all(|head| self.cgka_ops.contains_key(head)));
         let mut op_hashes = Vec::new();
         let mut dependencies = TopologicalSort::<Digest<CgkaOperation>>::new();
@@ -175,7 +190,7 @@ impl CgkaOperationGraph {
         for head in heads {
             frontier.push_back(*head);
             seen.insert(head);
-            successors.insert(*head, Default::default());
+            successors.insert(*head, HashSet::new());
         }
         // Populate dependencies and successors with all ancestors of the initial heads.
         while let Some(op_hash) = frontier.pop_front() {
@@ -184,10 +199,7 @@ impl CgkaOperationGraph {
                 .ok_or(CgkaError::OperationNotFound)?;
             for update_pred in preds {
                 dependencies.add_dependency(*update_pred, op_hash);
-                successors
-                    .entry(*update_pred)
-                    .or_default()
-                    .insert(op_hash);
+                successors.entry(*update_pred).or_default().insert(op_hash);
                 if seen.contains(update_pred) {
                     continue;
                 }
@@ -197,18 +209,21 @@ impl CgkaOperationGraph {
         }
 
         if dependencies.is_empty() {
-            let single_epoch =
-                heads
-                    .iter()
-                    .map(|hash| {
-                        self.cgka_ops
-                            .get(hash)
-                            .ok_or(CgkaError::OperationNotFound)
-                            .expect("head to be present")
-                            .clone()
-                    })
-                    .collect::<Vec<_>>();
-            op_hashes.push(NonEmpty::from_vec(single_epoch).expect("to have at least one op hash"));
+            let single_epoch = heads
+                .iter()
+                .map(|hash| {
+                    self.cgka_ops
+                        .get(hash)
+                        .ok_or(CgkaError::OperationNotFound)
+                        .expect("head to be present")
+                        .clone()
+                })
+                .collect::<Vec<_>>();
+            op_hashes.push(
+                NonEmpty::from_vec(single_epoch)
+                    .expect("to have at least one op hash")
+                    .into(),
+            );
             return Ok(NonEmpty::from_vec(op_hashes).expect("to have at least one op hash"));
         }
 
@@ -221,11 +236,7 @@ impl CgkaOperationGraph {
             next_set.sort();
             for hash in &next_set {
                 epoch_heads.insert(*hash);
-                if successors
-                    .get(hash)
-                    .expect("hash to be present")
-                    .is_empty()
-                {
+                if successors.get(hash).expect("hash to be present").is_empty() {
                     // For terminal hashes, we insert the hash itself as its successor.
                     // Terminal hashes will all be included in the final epoch.
                     successors
@@ -254,8 +265,11 @@ impl CgkaOperationGraph {
                 let mut next = Vec::new();
                 mem::swap(&mut next_epoch, &mut next);
                 if !next.is_empty() {
-                    op_hashes
-                        .push(NonEmpty::from_vec(next).expect("there to be at least one hash"));
+                    op_hashes.push(
+                        NonEmpty::from_vec(next)
+                            .expect("there to be at least one hash")
+                            .into(),
+                    );
                 }
             }
             for hash in next_set {
@@ -270,8 +284,11 @@ impl CgkaOperationGraph {
                 let mut next = Vec::new();
                 mem::swap(&mut next_epoch, &mut next);
                 if !next.is_empty() {
-                    op_hashes
-                        .push(NonEmpty::from_vec(next).expect("there to be at least one hash"));
+                    op_hashes.push(
+                        NonEmpty::from_vec(next)
+                            .expect("there to be at least one hash")
+                            .into(),
+                    );
                 }
             }
         }
@@ -281,16 +298,12 @@ impl CgkaOperationGraph {
             // it will be added as the last epoch above. If there is more than one member,
             // it will be added here.
             op_hashes.push(
-                NonEmpty::from_vec(next_epoch.clone()).expect("there to be at least one hash"),
+                NonEmpty::from_vec(next_epoch.clone())
+                    .expect("there to be at least one hash")
+                    .into(),
             );
         }
 
         Ok(NonEmpty::from_vec(op_hashes).expect("to have at least one op hash"))
-    }
-}
-
-impl Default for CgkaOperationGraph {
-    fn default() -> Self {
-        Self::new()
     }
 }

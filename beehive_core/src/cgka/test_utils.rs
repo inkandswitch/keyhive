@@ -84,8 +84,8 @@ pub struct TestConcurrentOperations {
 impl TestConcurrentOperations {
     pub fn new() -> Self {
         Self {
-            ops: Default::default(),
-            added_member_ops: Default::default(),
+            ops: HashMap::new(),
+            added_member_ops: HashMap::new(),
         }
     }
 

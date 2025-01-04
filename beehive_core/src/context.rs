@@ -67,7 +67,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
     ) -> Result<Self, SigningError> {
         Ok(Self {
             active: Rc::new(RefCell::new(Active::generate(signing_key, &mut csprng)?)),
-            individuals: Default::default(),
+            individuals: BTreeMap::new(),
             groups: GroupStore::new(),
             docs: DocumentStore::new(),
             csprng,
@@ -111,7 +111,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
 
     pub fn register_individual(&mut self, individual: Individual) {
         self.individuals
-            .insert(individual.id().into(), Rc::new(RefCell::new(individual)));
+            .insert(individual.id(), Rc::new(RefCell::new(individual)));
     }
 
     pub fn add_member(
@@ -139,7 +139,8 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Context<T, R> {
             after_content,
         })?;
 
-        Ok(resource.add_member(dlg))
+        resource.add_member(dlg);
+        Ok(())
     }
 
     pub fn revoke_member(

@@ -41,10 +41,8 @@ impl<T: ContentRef> Membered<T> {
 
     pub fn membered_id(&self) -> MemberedId {
         match self {
-            Membered::Group(group) => MemberedId::GroupId(group.borrow().group_id().into()),
-            Membered::Document(document) => {
-                MemberedId::DocumentId(document.borrow().doc_id().into())
-            }
+            Membered::Group(group) => MemberedId::GroupId(group.borrow().group_id()),
+            Membered::Document(document) => MemberedId::DocumentId(document.borrow().doc_id()),
         }
     }
 

@@ -8,6 +8,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 const STATIC_CONTEXT: &str = "/automerge/beehive/beekem/app_secret/";
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ApplicationSecret<Cr: ContentRef> {
     key: SymmetricKey,
@@ -17,6 +18,7 @@ pub struct ApplicationSecret<Cr: ContentRef> {
     content_ref: Digest<Cr>,
     pred_refs: Digest<Vec<Cr>>,
 }
+
 impl<Cr: ContentRef> ApplicationSecret<Cr> {
     pub fn new(
         key: SymmetricKey,
@@ -35,9 +37,11 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
             pred_refs,
         }
     }
+
     pub fn key(&self) -> SymmetricKey {
         self.key
     }
+
     pub fn try_encrypt<T>(
         &self,
         plaintext: &[u8],
@@ -62,6 +66,7 @@ impl PcsKey {
     pub fn new(share_secret_key: ShareSecretKey) -> Self {
         Self(share_secret_key)
     }
+
     pub(crate) fn derive_application_secret<Cr: ContentRef>(
         &self,
         nonce: &Siv,
@@ -86,11 +91,13 @@ impl PcsKey {
         )
     }
 }
+
 impl From<ShareSecretKey> for PcsKey {
     fn from(share_secret_key: ShareSecretKey) -> PcsKey {
         PcsKey(share_secret_key)
     }
 }
+
 impl From<PcsKey> for SymmetricKey {
     fn from(pcs_key: PcsKey) -> SymmetricKey {
         SymmetricKey::derive_from_bytes(pcs_key.0.as_slice())
