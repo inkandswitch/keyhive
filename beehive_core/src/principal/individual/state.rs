@@ -121,9 +121,9 @@ impl PrekeyState {
         &mut self,
         old: ShareKey,
         new: ShareKey,
-        signer: &ed25519_dalek::SigningKey,
+        signing_key: &ed25519_dalek::SigningKey,
     ) -> Result<ShareKey, SigningError> {
-        let op = Signed::try_sign(KeyOp::rotate(old, new), signer)?;
+        let op = Signed::try_sign(KeyOp::rotate(old, new), signing_key)?;
         self.ops.insert(op.into());
         Ok(new)
     }
@@ -142,15 +142,13 @@ impl PrekeyState {
     /// Expand the [`PrekeyState`] with a new, randomly-generated [`ShareSecretKey`].
     pub(crate) fn expand<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
-        signer: &ed25519_dalek::SigningKey,
+        signing_key: &ed25519_dalek::SigningKey,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
         let new = new_secret.share_key();
-        let op = Signed::try_sign(KeyOp::add(new), signer)?;
-
+        let op = Signed::try_sign(KeyOp::add(new), signing_key)?;
         self.ops.insert(op.into());
-
         Ok(new)
     }
 
@@ -220,7 +218,7 @@ mod tests {
         let mut state = PrekeyState::new();
 
         let mut rando = rand::thread_rng();
-        let signing_key = ed25519_dalek::SigningKey::generate(&mut rando);
+        let signer = ed25519_dalek::SigningKey::generate(&mut rando);
 
         let share_key_1 = ShareKey::generate(&mut rando);
         let share_key_2 = ShareKey::generate(&mut rando);
@@ -228,13 +226,13 @@ mod tests {
         let share_key_4 = ShareKey::generate(&mut rando);
         let share_key_5 = ShareKey::generate(&mut rando);
 
-        let op1 = Signed::try_sign(KeyOp::add(share_key_1), &signing_key).unwrap();
-        let op2 = Signed::try_sign(KeyOp::add(share_key_2), &signing_key).unwrap();
+        let op1 = Signed::try_sign(KeyOp::add(share_key_1), &signer).unwrap();
+        let op2 = Signed::try_sign(KeyOp::add(share_key_2), &signer).unwrap();
 
-        let op3 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_3), &signing_key).unwrap();
-        let op4 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_4), &signing_key).unwrap();
+        let op3 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_3), &signer).unwrap();
+        let op4 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_4), &signer).unwrap();
 
-        let op5 = Signed::try_sign(KeyOp::rotate(share_key_4, share_key_5), &signing_key).unwrap();
+        let op5 = Signed::try_sign(KeyOp::rotate(share_key_4, share_key_5), &signer).unwrap();
 
         state.insert_op(op1).unwrap();
         state.insert_op(op2).unwrap();
@@ -276,7 +274,7 @@ mod tests {
         let mut state = PrekeyState::new();
 
         let mut rando = rand::thread_rng();
-        let signing_key = ed25519_dalek::SigningKey::generate(&mut rando);
+        let signer = ed25519_dalek::SigningKey::generate(&mut rando);
 
         let share_key_1 = ShareKey::generate(&mut rando);
         let share_key_2 = ShareKey::generate(&mut rando);
@@ -284,14 +282,14 @@ mod tests {
         let share_key_4 = ShareKey::generate(&mut rando);
         let share_key_5 = ShareKey::generate(&mut rando);
 
-        let op1 = Signed::try_sign(KeyOp::add(share_key_1), &signing_key).unwrap();
-        let op2 = Signed::try_sign(KeyOp::add(share_key_2), &signing_key).unwrap();
+        let op1 = Signed::try_sign(KeyOp::add(share_key_1), &signer).unwrap();
+        let op2 = Signed::try_sign(KeyOp::add(share_key_2), &signer).unwrap();
 
-        let op3 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_3), &signing_key).unwrap();
-        let op4 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_4), &signing_key).unwrap();
+        let op3 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_3), &signer).unwrap();
+        let op4 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_4), &signer).unwrap();
 
         //                                       vvvvvvvvvvv
-        let op5 = Signed::try_sign(KeyOp::rotate(share_key_4, share_key_5), &signing_key).unwrap();
+        let op5 = Signed::try_sign(KeyOp::rotate(share_key_4, share_key_5), &signer).unwrap();
 
         state.insert_op(op1.dupe()).unwrap();
         state.insert_op(op2.dupe()).unwrap();

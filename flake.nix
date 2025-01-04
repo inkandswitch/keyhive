@@ -39,7 +39,7 @@
           config.allowUnfree = true;
         };
 
-        rustVersion = "1.80.1";
+        rustVersion = "1.83.0";
 
         rust-toolchain = pkgs.rust-bin.stable.${rustVersion}.default.override {
           extensions = [
@@ -166,9 +166,6 @@
 
           "watch:test:host" = cmd "Run all host tests on save"
             "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'test && test --doc'";
-
-          "watch:test:wasm" = cmd "Run all Wasm tests on save"
-            "${cargo} watch --clear --exec 'test beehive_wasm --target=wasm32-unknown-unknown'";
         };
 
         test = {

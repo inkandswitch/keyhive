@@ -1,7 +1,7 @@
 //! The current user agent (which can sign and encrypt).
 
 use super::{
-    document::{id::DocumentId, Document},
+    document::id::DocumentId,
     identifier::Identifier,
     individual::{id::IndividualId, op::KeyOp, Individual},
     verifiable::Verifiable,
@@ -14,7 +14,7 @@ use crate::{
         signed::{Signed, SigningError},
     },
     principal::{
-        agent::{Agent, AgentId},
+        agent::{id::AgentId, Agent},
         group::operation::{
             delegation::{Delegation, DelegationError},
             revocation::Revocation,
@@ -22,41 +22,42 @@ use crate::{
         membered::Membered,
     },
 };
+use derivative::Derivative;
 use dupe::Dupe;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::Serialize;
-use std::{cell::RefCell, collections::BTreeMap, fmt::Debug, rc::Rc};
+use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
-#[derive(Clone, Serialize)]
+#[derive(Clone, Derivative, Serialize)]
+#[derivative(Hash)]
 pub struct Active {
     /// The signing key of the active agent.
-    pub signer: SigningKey,
+    #[derivative(Hash(hash_with = "crate::util::hasher::signing_key"))]
+    pub(crate) signing_key: ed25519_dalek::SigningKey,
 
-    // // FIXME generalize to use e.g. KMS
-    // // FIXME include timestamp for next PCS update
-    // /// The encryption "sharing" key pairs that the active agent has.
-    // /// This includes the secret keys for ECDH.
-    // FIXME: Can we remove this since we're using the Individual's map?
-    pub prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>, // FIXME generalize to use e.g. KMS
+    // FIXME generalize to use e.g. KMS
+    #[derivative(Hash(hash_with = "crate::util::hasher::keys"))]
+    pub(crate) prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>,
 
     /// The [`Individual`] representation (how others see this agent).
-    pub individual: Individual,
+    pub(crate) individual: Individual, // FIXME NOPE! THis is an Agent<T> now
 }
 
 impl Active {
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        signer: SigningKey,
+        signing_key: SigningKey,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
-        let mut individual = Individual::new(signer.verifying_key().into());
+        let mut individual = Individual::new(signing_key.verifying_key().into());
+
         let mut prekey_pairs = BTreeMap::new();
 
         (0..7).try_for_each(|_| {
             let sk = ShareSecretKey::generate(csprng);
             let pk = sk.share_key();
-            let op = Signed::try_sign(KeyOp::add(pk), &signer)?;
+            let op = Signed::try_sign(KeyOp::add(pk), &signing_key)?;
 
             prekey_pairs.insert(pk, sk);
             individual
@@ -69,7 +70,7 @@ impl Active {
         Ok(Self {
             individual,
             prekey_pairs,
-            signer,
+            signing_key,
         })
     }
 
@@ -90,19 +91,20 @@ impl Active {
         prekey: ShareKey,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
-        self.individual.rotate_prekey(prekey, &self.signer, csprng)
+        self.individual
+            .rotate_prekey(prekey, &self.signing_key, csprng)
     }
 
     pub fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
-        self.individual.expand_prekeys(&self.signer, csprng)
+        self.individual.expand_prekeys(&self.signing_key, csprng)
     }
 
     /// Sign a payload.
     pub fn try_sign<U: Serialize>(&self, payload: U) -> Result<Signed<U>, SigningError> {
-        Signed::<U>::try_sign(payload, &self.signer)
+        Signed::<U>::try_sign(payload, &self.signing_key)
     }
 
     pub fn get_capability<T: ContentRef>(
@@ -126,7 +128,7 @@ impl Active {
         attenuate: Access,
         delegate: Agent<T>,
         after_revocations: Vec<Rc<Signed<Revocation<T>>>>,
-        after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+        after_content: BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<Signed<Delegation<T>>, ActiveDelegationError> {
         let proof = self
             .get_capability(subject, attenuate)
@@ -176,25 +178,15 @@ impl Debug for Active {
     }
 }
 
-impl std::hash::Hash for Active {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id().hash(state);
-        self.signer.to_bytes().hash(state);
-        for pk in self.prekey_pairs.keys() {
-            pk.hash(state);
-        }
-    }
-}
-
 impl Verifiable for Active {
     fn verifying_key(&self) -> VerifyingKey {
-        self.signer.verifying_key()
+        self.signing_key.verifying_key()
     }
 }
 
 impl Signer<Signature> for Active {
     fn try_sign(&self, message: &[u8]) -> Result<Signature, signature::Error> {
-        self.signer.try_sign(message)
+        self.signing_key.try_sign(message)
     }
 }
 
@@ -202,7 +194,7 @@ impl Signer<Signature> for Active {
 impl PartialEq for Active {
     fn eq(&self, other: &Self) -> bool {
         self.id() == other.id()
-            && self.signer.to_bytes() == other.signer.to_bytes()
+            && self.signing_key.to_bytes() == other.signing_key.to_bytes()
             && self
                 .prekey_pairs
                 .iter()

@@ -1,9 +1,12 @@
 use crate::principal::{identifier::Identifier, verifiable::Verifiable};
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 
 /// A group identifier.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Copy, Clone, Dupe, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct GroupId(pub(crate) Identifier);
 
 impl GroupId {

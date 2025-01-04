@@ -6,8 +6,8 @@ use std::{collections::BTreeMap, rc::Rc};
 ///
 /// Since all operations are referenced by their hash,
 /// a map that indexes by the same cryptographic hash is convenient.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CaMap<T: Serialize>(BTreeMap<Digest<T>, Rc<T>>);
+#[derive(Debug, Clone, PartialEq, Eq, Ord, Hash)]
+pub struct CaMap<T: Serialize>(pub(crate) BTreeMap<Digest<T>, Rc<T>>);
 
 impl<T: Serialize> CaMap<T> {
     /// Create an empty [`CaMap`].
@@ -56,10 +56,20 @@ impl<T: Serialize> CaMap<T> {
         self.0.iter()
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_iter_direct(elements: impl IntoIterator<Item = Rc<T>>) -> Self {
+        let mut cam = CaMap::new();
+        for rc in elements.into_iter() {
+            cam.0.insert(Digest::hash(rc.as_ref()), rc);
+        }
+        cam
+    }
+
     pub fn keys(&self) -> std::collections::btree_map::Keys<'_, Digest<T>, Rc<T>> {
         self.0.keys()
     }
     pub fn values(&self) -> std::collections::btree_map::Values<'_, Digest<T>, Rc<T>> {
+        // Sorted because BTreeMap
         self.0.values()
     }
 
@@ -108,6 +118,15 @@ impl<T: Serialize> FromIterator<T> for CaMap<T> {
                 .map(|preimage| (Digest::hash(&preimage), Rc::new(preimage)))
                 .collect(),
         )
+    }
+}
+
+impl<T: Serialize + PartialOrd> PartialOrd for CaMap<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.0
+            .keys()
+            .collect::<Vec<_>>()
+            .partial_cmp(&other.0.keys().collect::<Vec<_>>())
     }
 }
 

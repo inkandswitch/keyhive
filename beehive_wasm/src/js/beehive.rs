@@ -1,5 +1,6 @@
 use super::{
     access::JsAccess,
+    add_member_error::JsAddMemberError,
     agent::JsAgent,
     change_ref::JsChangeRef,
     delegation::JsDelegationError,
@@ -10,36 +11,35 @@ use super::{
     identifier::JsIdentifier,
     individual_id::JsIndividualId,
     membered::JsMembered,
+    revoke_member_error::JsRevokeMemberError,
     share_key::JsShareKey,
     signed::JsSigned,
+    signed_delegation::JsSignedDelegation,
+    signed_revocation::JsSignedRevocation,
     signing_key::{JsSigningError, JsSigningKey},
     summary::Summary,
 };
 use beehive_core::{
-    context::Context,
-    principal::document::{id::DocumentId, DecryptError, Document, EncryptError},
+    beehive::Beehive,
+    principal::document::{id::DocumentId, DecryptError, EncryptError},
 };
 use dupe::Dupe;
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::collections::BTreeMap;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Beehive)]
 #[derive(Debug)]
-pub struct JsBeehive {
-    ctx: Context<JsChangeRef, rand::rngs::ThreadRng>,
-}
+pub struct JsBeehive(Beehive<JsChangeRef, rand::rngs::ThreadRng>);
 
 #[wasm_bindgen(js_class = Beehive)]
 impl JsBeehive {
     #[wasm_bindgen(constructor)]
     pub fn new(signing_key: JsSigningKey) -> Result<JsBeehive, JsSigningError> {
-        Ok(JsBeehive {
-            ctx: Context::generate(
-                ed25519_dalek::SigningKey::from_bytes(&signing_key.0),
-                rand::thread_rng(),
-            )?,
-        })
+        Ok(JsBeehive(Beehive::generate(
+            ed25519_dalek::SigningKey::from_bytes(&signing_key.0),
+            rand::thread_rng(),
+        )?))
     }
 
     #[wasm_bindgen(getter)]
@@ -49,12 +49,12 @@ impl JsBeehive {
 
     #[wasm_bindgen(getter)]
     pub fn whoami(&self) -> JsIndividualId {
-        self.ctx.id().into()
+        self.0.id().into()
     }
 
     #[wasm_bindgen(getter, js_name = idString)]
     pub fn id_string(&self) -> String {
-        self.ctx
+        self.0
             .id()
             .as_slice()
             .iter()
@@ -67,7 +67,7 @@ impl JsBeehive {
     #[wasm_bindgen(js_name = generateGroup)]
     pub fn generate_group(&mut self, coparents: Vec<JsAgent>) -> Result<JsGroup, JsSigningError> {
         Ok(self
-            .ctx
+            .0
             .generate_group(
                 coparents
                     .into_iter()
@@ -82,16 +82,16 @@ impl JsBeehive {
         &mut self,
         coparents: Vec<JsAgent>,
     ) -> Result<JsDocument, JsDelegationError> {
-        let doc_id = self
-            .ctx
+        let doc = self
+            .0
             .generate_doc(coparents.into_iter().map(|a| a.0).collect::<Vec<_>>())?;
 
-        Ok(JsDocument(self.ctx.docs.get(&doc_id).unwrap()))
+        Ok(JsDocument(doc))
     }
 
     #[wasm_bindgen(js_name = trySign)]
     pub fn try_sign(&self, data: Vec<u8>) -> Result<JsSigned, JsSigningError> {
-        Ok(self.ctx.try_sign(data).map(JsSigned)?)
+        Ok(self.0.try_sign(data).map(JsSigned)?)
     }
 
     #[wasm_bindgen(js_name = tryEncrypt)]
@@ -103,7 +103,7 @@ impl JsBeehive {
         content: &[u8],
     ) -> Result<JsEncrypted, JsEncryptError> {
         Ok(self
-            .ctx
+            .0
             .try_encrypt_content(doc.0, &content_ref, &pred_refs, content)?
             .into())
     }
@@ -118,7 +118,7 @@ impl JsBeehive {
         content: &[u8],
     ) -> Result<JsEncrypted, JsEncryptError> {
         Ok(self
-            .ctx
+            .0
             .try_encrypt_content(doc.0, &content_ref, &pred_refs, content)?
             .into())
     }
@@ -129,7 +129,7 @@ impl JsBeehive {
         doc: JsDocument,
         encrypted: JsEncrypted,
     ) -> Result<Vec<u8>, JsDecryptError> {
-        Ok(self.ctx.try_decrypt_content(doc.0, &encrypted.0)?)
+        Ok(self.0.try_decrypt_content(doc.0, &encrypted.0)?)
     }
 
     #[wasm_bindgen(js_name = tryReceive)]
@@ -144,21 +144,20 @@ impl JsBeehive {
         membered: &mut JsMembered,
         access: JsAccess,
         after_content: Vec<DocContentRefs>,
-    ) -> Result<(), JsDelegationError> {
-        let content_ref_map: BTreeMap<
-            DocumentId,
-            (Rc<RefCell<Document<JsChangeRef>>>, Vec<JsChangeRef>),
-        > = after_content
+    ) -> Result<JsSignedDelegation, JsAddMemberError> {
+        let content_ref_map: BTreeMap<DocumentId, Vec<JsChangeRef>> = after_content
             .into_iter()
             .map(|r| {
                 let hashes = r.change_hashes().into_iter().collect();
-                (r.doc().borrow().doc_id(), (r.doc().0, hashes))
+                (r.doc_id().0, hashes)
             })
             .collect();
 
-        Ok(self
-            .ctx
-            .add_member(to_add.0.dupe(), membered, *access, content_ref_map)?)
+        let dlg = self
+            .0
+            .add_member(to_add.0.dupe(), membered, *access, content_ref_map)?;
+
+        Ok(dlg.into())
     }
 
     #[wasm_bindgen(js_name = revokeMember)]
@@ -166,13 +165,14 @@ impl JsBeehive {
         &mut self,
         to_revoke: &JsAgent,
         membered: &mut JsMembered,
-    ) -> Result<(), JsSigningError> {
-        Ok(self.ctx.revoke_member(to_revoke.agent_id(), membered)?)
+    ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
+        let revs = self.0.revoke_member(to_revoke.agent_id(), membered)?;
+        Ok(revs.into_iter().map(|r| JsSignedRevocation(r)).collect())
     }
 
     #[wasm_bindgen(js_name = reachableDocs)]
     pub fn reachable_docs(&self) -> Vec<Summary> {
-        self.ctx
+        self.0
             .reachable_docs()
             .into_values()
             .fold(Vec::new(), |mut acc, (doc, access)| {
@@ -186,23 +186,23 @@ impl JsBeehive {
 
     #[wasm_bindgen(js_name = forcePcsUpdate)]
     pub fn force_pcs_update(&mut self, doc: &JsDocument) -> Result<(), JsEncryptError> {
-        self.ctx.force_pcs_update(doc.0.clone())?;
+        self.0.force_pcs_update(doc.0.clone())?;
         Ok(())
     }
 
     #[wasm_bindgen(js_name = rotatePrekey)]
     pub fn rotate_prekey(&mut self, prekey: JsShareKey) -> Result<JsShareKey, JsSigningError> {
-        Ok(self.ctx.rotate_prekey(prekey.0).map(JsShareKey)?)
+        Ok(self.0.rotate_prekey(prekey.0).map(JsShareKey)?)
     }
 
     #[wasm_bindgen(js_name = expandPrekeys)]
     pub fn expand_prekeys(&mut self) -> Result<JsShareKey, JsSigningError> {
-        Ok(self.ctx.expand_prekeys().map(JsShareKey)?)
+        Ok(self.0.expand_prekeys().map(JsShareKey)?)
     }
 
     #[wasm_bindgen(js_name = getAgent)]
     pub fn get_agent(&self, id: JsIdentifier) -> Option<JsAgent> {
-        self.ctx.get_agent(id.0).map(JsAgent)
+        self.0.get_agent(id.0).map(JsAgent)
     }
 }
 
@@ -257,8 +257,8 @@ mod tests {
         #[wasm_bindgen_test(unsupported = test)]
         fn test_encrypt_decrypt() -> Result<(), Box<dyn Error>> {
             let mut bh = setup();
-            let active = bh.ctx.active.clone();
-            active.borrow_mut().expand_prekeys(&mut bh.ctx.csprng)?;
+            let active = bh.0.active().clone();
+            bh.expand_prekeys().unwrap();
             let agent = JsAgent(Agent::Active(active));
             let doc = bh.generate_doc(vec![agent])?;
             let content = vec![1, 2, 3, 4];

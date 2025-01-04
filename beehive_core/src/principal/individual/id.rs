@@ -1,7 +1,10 @@
 use crate::principal::{identifier::Identifier, verifiable::Verifiable};
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[derive(
+    Debug, Copy, Dupe, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
+)]
 pub struct IndividualId(pub Identifier);
 
 impl IndividualId {
@@ -37,6 +40,12 @@ impl From<IndividualId> for Identifier {
 impl From<ed25519_dalek::VerifyingKey> for IndividualId {
     fn from(verifying_key: ed25519_dalek::VerifyingKey) -> Self {
         IndividualId(verifying_key.into())
+    }
+}
+
+impl From<&ed25519_dalek::VerifyingKey> for IndividualId {
+    fn from(verifying_key: &ed25519_dalek::VerifyingKey) -> Self {
+        IndividualId((*verifying_key).into())
     }
 }
 

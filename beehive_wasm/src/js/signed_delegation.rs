@@ -1,9 +1,13 @@
 use super::{change_ref::JsChangeRef, delegation::JsDelegation};
-use beehive_core::{crypto::signed::Signed, principal::group::operation::delegation::Delegation};
+use beehive_core::{
+    crypto::signed::Signed,
+    principal::{group::operation::delegation::Delegation, verifiable::Verifiable},
+};
+use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = SignedDelegation)]
-pub struct JsSignedDelegation(pub(crate) Signed<Delegation<JsChangeRef>>);
+pub struct JsSignedDelegation(pub(crate) Rc<Signed<Delegation<JsChangeRef>>>);
 
 #[wasm_bindgen(js_class = SignedDelegation)]
 impl JsSignedDelegation {
@@ -27,13 +31,13 @@ impl JsSignedDelegation {
     }
 }
 
-impl From<Signed<Delegation<JsChangeRef>>> for JsSignedDelegation {
-    fn from(signed: Signed<Delegation<JsChangeRef>>) -> Self {
+impl From<Rc<Signed<Delegation<JsChangeRef>>>> for JsSignedDelegation {
+    fn from(signed: Rc<Signed<Delegation<JsChangeRef>>>) -> Self {
         Self(signed)
     }
 }
 
-impl From<JsSignedDelegation> for Signed<Delegation<JsChangeRef>> {
+impl From<JsSignedDelegation> for Rc<Signed<Delegation<JsChangeRef>>> {
     fn from(js_signed: JsSignedDelegation) -> Self {
         js_signed.0
     }

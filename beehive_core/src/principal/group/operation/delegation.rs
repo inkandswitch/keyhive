@@ -7,14 +7,14 @@ use crate::{
         signed::{Signed, SigningError},
     },
     principal::{
-        agent::{Agent, AgentId},
-        document::{id::DocumentId, Document},
+        agent::{id::AgentId, Agent},
+        document::id::DocumentId,
         identifier::Identifier,
     },
 };
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, collections::BTreeMap, hash::Hash, rc::Rc};
+use std::{collections::BTreeMap, hash::Hash, rc::Rc};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,7 +24,7 @@ pub struct Delegation<T: ContentRef> {
 
     pub(crate) proof: Option<Rc<Signed<Delegation<T>>>>,
     pub(crate) after_revocations: Vec<Rc<Signed<Revocation<T>>>>,
-    pub(crate) after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+    pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
 impl<T: ContentRef> Delegation<T> {
@@ -53,7 +53,7 @@ impl<T: ContentRef> Delegation<T> {
     ) -> (
         Vec<Rc<Signed<Delegation<T>>>>,
         Vec<Rc<Signed<Revocation<T>>>>,
-        &BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+        &BTreeMap<DocumentId, Vec<T>>,
     ) {
         let (dlgs, revs) = self.after_auth();
         (
@@ -75,6 +75,46 @@ impl<T: ContentRef> Delegation<T> {
     pub fn is_root(&self) -> bool {
         self.proof.is_none()
     }
+
+    pub fn proof_lineage(&self) -> Vec<Rc<Signed<Delegation<T>>>> {
+        let mut lineage = vec![];
+        let mut head = self;
+
+        while let Some(proof) = &head.proof {
+            lineage.push(proof.dupe());
+            head = proof.payload();
+        }
+
+        lineage
+    }
+
+    pub fn is_descendant_of(&self, maybe_ancestor: &Signed<Delegation<T>>) -> bool {
+        let mut head = self;
+
+        while let Some(proof) = &head.proof {
+            if proof.as_ref() == maybe_ancestor {
+                return true;
+            }
+
+            head = proof.payload();
+        }
+
+        false
+    }
+
+    pub fn is_ancestor_of(&self, maybe_descendant: &Signed<Delegation<T>>) -> bool {
+        let mut head = maybe_descendant.payload();
+
+        while let Some(proof) = &head.proof {
+            if proof.as_ref().payload() == self {
+                return true;
+            }
+
+            head = proof.payload();
+        }
+
+        false
+    }
 }
 
 impl<T: ContentRef> Signed<Delegation<T>> {
@@ -91,8 +131,6 @@ impl<T: ContentRef> Signed<Delegation<T>> {
 
 impl<T: ContentRef> Serialize for Delegation<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // FIXME could be a heavy clone since this is used to hash
-        // FIXME ...ooooor use the hash of teh static delehation as an ID... probably this actually
         StaticDelegation::from(self.clone()).serialize(serializer)
     }
 }
@@ -112,18 +150,14 @@ impl<T: ContentRef> From<Delegation<T>> for StaticDelegation<T> {
     fn from(delegation: Delegation<T>) -> Self {
         Self {
             can: delegation.can,
-            proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).coerce()),
+            proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).into()),
             delegate: delegation.delegate.id(),
             after_revocations: delegation
                 .after_revocations
                 .iter()
-                .map(|revocation| Digest::hash(revocation.as_ref()).coerce()) // FIXME remove coerce, add specific fincton for op <-> del
+                .map(|revocation| Digest::hash(revocation.as_ref()).into())
                 .collect(),
-            after_content: delegation
-                .after_content
-                .into_iter()
-                .map(|(doc_id, (_, content))| (doc_id, content))
-                .collect(),
+            after_content: delegation.after_content,
         }
     }
 }

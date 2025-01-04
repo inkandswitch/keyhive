@@ -1,21 +1,26 @@
+pub mod id;
+
 use super::{
-    agent::{Agent, AgentId},
+    agent::{id::AgentId, Agent},
     document::{id::DocumentId, Document},
     group::{
-        id::GroupId,
+        error::AddError,
         operation::{delegation::Delegation, revocation::Revocation},
-        Group,
+        Group, RevokeMemberError,
     },
-    identifier::Identifier,
     verifiable::Verifiable,
 };
 use crate::{
     content::reference::ContentRef,
-    crypto::signed::{Signed, SigningError},
+    crypto::{digest::Digest, signed::Signed},
 };
 use dupe::{Dupe, OptionDupedExt};
-use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, collections::HashMap, fmt, rc::Rc};
+use id::MemberedId;
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashMap},
+    rc::Rc,
+};
 
 /// The union of Agents that have updatable membership
 #[derive(Debug, Clone, Dupe, PartialEq, Eq)]
@@ -53,23 +58,12 @@ impl<T: ContentRef> Membered<T> {
         }
     }
 
-    pub fn add_member(&mut self, delegation: Signed<Delegation<T>>) {
-        match self {
-            Membered::Group(group) => {
-                group.borrow_mut().add_delegation(delegation);
-            }
-            Membered::Document(document) => {
-                document.borrow_mut().add_member(delegation);
-            }
-        }
-    }
-
     pub fn revoke_member(
         &mut self,
         member_id: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<RefCell<Document<T>>>],
-    ) -> Result<(), SigningError> {
+        relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
+    ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
         match self {
             Membered::Group(group) => {
                 group
@@ -89,6 +83,18 @@ impl<T: ContentRef> Membered<T> {
         match self {
             Membered::Group(group) => group.borrow().get_agent_revocations(agent),
             Membered::Document(document) => document.borrow().get_agent_revocations(agent),
+        }
+    }
+
+    pub fn receive_delegation(
+        &self,
+        delegation: Rc<Signed<Delegation<T>>>,
+    ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
+        match self {
+            Membered::Group(group) => Ok(group.borrow_mut().receive_delegation(delegation)?),
+            Membered::Document(document) => {
+                Ok(document.borrow_mut().receive_delegation(delegation)?)
+            }
         }
     }
 }
@@ -111,53 +117,5 @@ impl<T: ContentRef> Verifiable for Membered<T> {
             Membered::Group(group) => group.borrow().verifying_key(),
             Membered::Document(document) => document.borrow().verifying_key(),
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum MemberedId {
-    GroupId(GroupId),
-    DocumentId(DocumentId),
-}
-
-impl MemberedId {
-    pub fn to_bytes(&self) -> [u8; 32] {
-        match self {
-            MemberedId::GroupId(group_id) => group_id.to_bytes(),
-            MemberedId::DocumentId(document_id) => document_id.to_bytes(),
-        }
-    }
-}
-
-impl fmt::Display for MemberedId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            MemberedId::GroupId(group_id) => group_id.fmt(f),
-            MemberedId::DocumentId(document_id) => document_id.fmt(f),
-        }
-    }
-}
-
-impl Verifiable for MemberedId {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        match self {
-            MemberedId::GroupId(group_id) => group_id.verifying_key(),
-            MemberedId::DocumentId(document_id) => document_id.verifying_key(),
-        }
-    }
-}
-
-impl From<MemberedId> for Identifier {
-    fn from(membered_id: MemberedId) -> Self {
-        match membered_id {
-            MemberedId::GroupId(group_id) => group_id.into(),
-            MemberedId::DocumentId(document_id) => document_id.into(),
-        }
-    }
-}
-
-impl From<GroupId> for MemberedId {
-    fn from(group_id: GroupId) -> Self {
-        MemberedId::GroupId(group_id)
     }
 }

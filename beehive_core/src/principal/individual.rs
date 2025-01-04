@@ -4,7 +4,7 @@ pub mod id;
 pub mod op;
 pub mod state;
 
-use super::{agent::AgentId, document::id::DocumentId, verifiable::Verifiable};
+use super::{agent::id::AgentId, document::id::DocumentId, verifiable::Verifiable};
 use crate::crypto::{
     share_key::ShareKey,
     signed::{Signed, SigningError},
@@ -78,7 +78,7 @@ impl Individual {
     }
 
     pub fn receive_prekey_op(&mut self, op: Signed<op::KeyOp>) -> Result<(), ReceivePrekeyOpError> {
-        if *op.verifying_key() != self.id.verifying_key() {
+        if op.verifying_key() != self.id.verifying_key() {
             return Err(ReceivePrekeyOpError::IncorrectSigner);
         }
 

@@ -1,5 +1,5 @@
-use super::signed::JsSigned;
 use beehive_core::crypto::signed::{Signed, SigningError};
+use super::signed::JsSigned;
 use rand::Fill;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
