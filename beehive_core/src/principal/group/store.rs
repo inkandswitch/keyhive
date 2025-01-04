@@ -2,11 +2,15 @@ use super::id::GroupId;
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::signed::SigningError,
+    crypto::signed::{Signed, SigningError},
     principal::{
         agent::{Agent, AgentId},
-        group::Group,
+        group::{
+            operation::{delegation::Delegation, revocation::Revocation},
+            Group,
+        },
     },
+    util::content_addressed_map::CaMap,
 };
 use dupe::{Dupe, IterDupedExt, OptionDupedExt};
 use nonempty::NonEmpty;
@@ -25,11 +29,14 @@ impl<T: ContentRef> GroupStore<T> {
         self.0.insert(id, group);
     }
 
-    pub fn generate_group(
+    pub fn generate_group<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         parents: NonEmpty<Agent<T>>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+        csprng: &mut R,
     ) -> Result<Rc<RefCell<Group<T>>>, SigningError> {
-        let new_group: Group<T> = Group::generate(parents)?;
+        let new_group: Group<T> = Group::generate(parents, delegations, revocations, csprng)?;
         let rc = Rc::new(RefCell::new(new_group));
         self.insert(rc.dupe());
         Ok(rc)

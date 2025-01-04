@@ -30,6 +30,10 @@ impl<T: Serialize> CaMap<T> {
         key
     }
 
+    pub fn own(&mut self, value: T) -> Digest<T> {
+        self.insert(Rc::new(value))
+    }
+
     /// Remove an element from the map by its [`Digest`].
     pub fn remove_by_hash(&mut self, hash: &Digest<T>) -> Option<Rc<T>> {
         self.0.remove(hash)

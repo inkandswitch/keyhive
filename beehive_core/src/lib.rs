@@ -3,16 +3,16 @@
     missing_debug_implementations,
     future_incompatible,
     let_underscore,
-//     missing_docs,
+//     FIXME missing_docs,
     rust_2021_compatibility,
     nonstandard_style
 )]
 #![deny(unreachable_pub)]
 
 pub mod access;
+pub mod beehive;
 pub mod cgka;
 pub mod content;
-pub mod context;
 pub mod crypto;
 pub mod error;
 pub mod principal;

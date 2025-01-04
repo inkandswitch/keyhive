@@ -43,11 +43,11 @@ impl<T: ContentRef> DocumentStore<T> {
         &mut self,
         parents: NonEmpty<Agent<T>>,
         csprng: &mut R,
-    ) -> Result<DocumentId, DelegationError> {
+    ) -> Result<Rc<RefCell<Document<T>>>, DelegationError> {
         let new_doc = Document::generate(parents, csprng)?;
-        let new_doc_id: DocumentId = new_doc.doc_id();
-        self.insert(Rc::new(RefCell::new(new_doc)));
-        Ok(new_doc_id)
+        let rc_ref = Rc::new(RefCell::new(new_doc));
+        self.insert(rc_ref.dupe());
+        Ok(rc_ref)
     }
 
     pub fn transitive_members(&self, doc: &Document<T>) -> BTreeMap<AgentId, (Agent<T>, Access)> {

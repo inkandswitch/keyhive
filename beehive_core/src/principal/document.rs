@@ -1,5 +1,6 @@
 pub mod id;
 pub mod store;
+
 use super::{individual::id::IndividualId, verifiable::Verifiable};
 use crate::{
     access::Access,
@@ -61,6 +62,10 @@ impl<T: ContentRef> Document<T> {
         self.group.members()
     }
 
+    pub fn delegation_heads(&self) -> &HashSet<Rc<Signed<Delegation<T>>>> {
+        self.group.delegation_heads()
+    }
+
     pub fn delegations(&self) -> &CaMap<Signed<Delegation<T>>> {
         self.group.delegations()
     }
@@ -74,26 +79,25 @@ impl<T: ContentRef> Document<T> {
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let group =
-            parents
-                .iter()
-                .try_fold(Group::generate(parents.clone())?, |mut acc, parent| {
-                    let dlg = Signed::try_sign(
-                        Delegation {
-                            delegate: parent.dupe(),
-                            can: Access::Admin,
-                            proof: None,
-                            after_revocations: vec![],
-                            after_content: BTreeMap::new(),
-                        },
-                        &doc_signer,
-                    )?;
-                    let rc = Rc::new(dlg);
-                    acc.state.delegations.insert(rc.dupe());
-                    acc.state.delegation_heads.insert(rc.dupe());
-                    acc.members.insert(parent.agent_id(), vec![rc]);
-                    Ok::<Group<T>, DelegationError>(acc)
-                })?;
+        let group = parents.iter().try_fold(
+            Group::generate(parents.clone(), csprng)?,
+            |mut acc, parent| {
+                let dlg = Signed::try_sign(
+                    Delegation {
+                        delegate: parent.dupe(),
+                        can: Access::Admin,
+                        proof: None,
+                        after_revocations: vec![],
+                        after_content: BTreeMap::new(),
+                    },
+                    &doc_signer,
+                )?;
+                let rc = Rc::new(dlg);
+                acc.state.delegation_heads.insert(rc.dupe());
+                acc.members.insert(parent.agent_id(), vec![rc]);
+                Ok::<Group<T>, DelegationError>(acc)
+            },
+        )?;
         let owner_id = IndividualId(Identifier((&doc_signer).into()));
         let doc_id = DocumentId(group.id());
         let owner_share_secret_key = ShareSecretKey::generate(csprng);

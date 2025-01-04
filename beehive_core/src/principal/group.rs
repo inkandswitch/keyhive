@@ -48,13 +48,28 @@ pub struct Group<T: ContentRef> {
 }
 
 impl<T: ContentRef> Group<T> {
+    pub fn new(
+        head: Signed<Delegation<T>>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+    ) -> Self {
+        let state = state::GroupState::new(head, delegations, revocations);
+        let members = state.materialize();
+
+        Self { members, state }
+    }
+
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
-    pub fn generate(parents: NonEmpty<Agent<T>>) -> Result<Group<T>, SigningError> {
-        let group_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(
+        parents: NonEmpty<Agent<T>>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+        csprng: &mut R,
+    ) -> Result<Group<T>, SigningError> {
+        let group_signer = ed25519_dalek::SigningKey::generate(csprng);
         let group_id = GroupId(group_signer.verifying_key().into());
 
-        let mut delegations = CaMap::new();
-        let mut delegation_heads = HashSet::new();
+        let mut delegation_heads = CaMap::new();
         let mut members = HashMap::new();
 
         parents.iter().try_fold((), |_, parent| {
@@ -70,7 +85,7 @@ impl<T: ContentRef> Group<T> {
             )?;
 
             let rc = Rc::new(dlg);
-            delegations.insert(rc.dupe());
+            delegations.borrow_mut().insert(rc.dupe());
             delegation_heads.insert(rc.dupe());
             members.insert((*parent).agent_id(), vec![rc]);
 
@@ -84,11 +99,9 @@ impl<T: ContentRef> Group<T> {
 
                 delegation_heads,
                 delegations,
-                delegation_quarantine: CaMap::new(),
 
-                revocation_heads: HashSet::new(),
-                revocations: CaMap::new(),
-                revocation_quarantine: CaMap::new(),
+                revocation_heads: CaMap::new(),
+                revocations,
             },
         })
     }
@@ -128,6 +141,10 @@ impl<T: ContentRef> Group<T> {
 
     pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
         &self.members
+    }
+
+    pub fn delegation_heads(&self) -> &HashSet<Rc<Signed<Delegation<T>>>> {
+        &self.state.delegation_heads
     }
 
     pub fn delegations(&self) -> &CaMap<Signed<Delegation<T>>> {
@@ -174,6 +191,8 @@ impl<T: ContentRef> Group<T> {
                 self.members.insert(id, vec![rc]);
             }
         }
+
+        self.rebuild()
     }
 
     pub fn add_member(
@@ -277,7 +296,7 @@ impl<T: ContentRef> Group<T> {
         // FIXME check that you can actually do this with tiebreaking, seniroity etc etc
     }
 
-    pub fn materialize(&mut self) {
+    pub fn rebuild(&mut self) {
         for (_, op) in
             Operation::topsort(&self.state.delegation_heads, &self.state.revocation_heads).iter()
         {

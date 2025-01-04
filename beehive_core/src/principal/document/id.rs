@@ -1,4 +1,4 @@
-use crate::principal::{identifier::Identifier, membered::MemberedId, verifiable::Verifiable};
+use crate::principal::{identifier::Identifier, membered::id::MemberedId, verifiable::Verifiable};
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};

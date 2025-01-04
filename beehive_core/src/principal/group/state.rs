@@ -1,9 +1,6 @@
 use super::{
     id::GroupId,
-    operation::{
-        delegation::{Delegation, StaticDelegation},
-        revocation::{Revocation, StaticRevocation},
-    },
+    operation::{delegation::Delegation, revocation::Revocation},
 };
 use crate::{
     access::Access,
@@ -22,6 +19,7 @@ use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use serde::{ser::SerializeStruct, Serialize, Serializer};
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, HashSet},
     rc::Rc,
 };
@@ -30,31 +28,77 @@ use std::{
 pub struct GroupState<T: ContentRef> {
     pub(crate) id: GroupId,
 
-    pub(crate) delegation_heads: HashSet<Rc<Signed<Delegation<T>>>>,
-    pub(crate) delegations: CaMap<Signed<Delegation<T>>>,
-    pub delegation_quarantine: CaMap<Signed<StaticDelegation<T>>>,
+    pub(crate) delegation_heads: CaMap<Signed<Delegation<T>>>,
+    pub(crate) delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
 
-    pub(crate) revocation_heads: HashSet<Rc<Signed<Revocation<T>>>>,
-    pub(crate) revocations: CaMap<Signed<Revocation<T>>>,
-    pub revocation_quarantine: CaMap<Signed<StaticRevocation<T>>>,
+    pub(crate) revocation_heads: CaMap<Signed<Revocation<T>>>,
+    pub(crate) revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
 }
 
 impl<T: ContentRef> GroupState<T> {
-    pub fn generate(parents: Vec<Agent<T>>) -> Result<Self, DelegationError> {
-        let mut rng = rand::thread_rng();
+    pub fn new(
+        delegation_head: Signed<Delegation<T>>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+    ) -> Self {
+        let id = GroupId(delegation_head.verifying_key().into());
+        let rc = Rc::new(delegation_head);
+        let mut heads = vec![rc.dupe()];
+
+        while let Some(head) = heads.pop() {
+            if delegations.borrow().contains_value(head.as_ref()) {
+                continue;
+            }
+
+            let mut dlg_store_mut = delegations.borrow_mut();
+            dlg_store_mut.insert(head.dupe());
+
+            for dlg in head.payload().proof_lineage() {
+                dlg_store_mut.insert(dlg.dupe());
+
+                for rev in dlg.payload().after_revocations.as_slice() {
+                    revocations.borrow_mut().insert(rev.dupe());
+
+                    if let Some(proof) = &rev.payload().proof {
+                        heads.push(proof.dupe());
+                    }
+                }
+            }
+        }
+
+        let mut delegation_heads = CaMap::new();
+        delegation_heads.insert(rc);
+
+        Self {
+            id,
+
+            delegation_heads,
+            delegations,
+
+            // NOTE revocation_heads are guaranteed to be blank at this stage
+            // because they can only come before the delegation passed in.
+            revocation_heads: CaMap::new(),
+            revocations,
+        }
+    }
+
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(
+        parents: Vec<Agent<T>>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+        csprng: &mut R,
+    ) -> Result<Self, DelegationError> {
         let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
         let group_id = signing_key.verifying_key().into();
 
         let group = GroupState {
             id: GroupId(group_id),
 
-            delegation_heads: HashSet::new(),
-            delegations: CaMap::new(),
-            delegation_quarantine: CaMap::new(),
+            delegation_heads: CaMap::new(),
+            delegations,
 
-            revocation_heads: HashSet::new(),
-            revocations: CaMap::new(),
-            revocation_quarantine: CaMap::new(),
+            revocation_heads: CaMap::new(),
+            revocations,
         };
 
         parents.iter().try_fold(group, |mut acc, parent| {
@@ -70,11 +114,7 @@ impl<T: ContentRef> GroupState<T> {
                 &signing_key,
             )?;
 
-            let rc = Rc::new(dlg);
-
-            acc.delegations.insert(rc.dupe());
-            acc.delegation_heads.insert(rc);
-
+            acc.delegation_heads.insert(Rc::new(dlg));
             Ok(acc)
         })
     }
@@ -87,11 +127,11 @@ impl<T: ContentRef> GroupState<T> {
         self.id
     }
 
-    pub fn delegation_heads(&self) -> &HashSet<Rc<Signed<Delegation<T>>>> {
+    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<T>>> {
         &self.delegation_heads
     }
 
-    pub fn revocation_heads(&self) -> &HashSet<Rc<Signed<Revocation<T>>>> {
+    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<T>>> {
         &self.revocation_heads
     }
 
@@ -107,21 +147,21 @@ impl<T: ContentRef> GroupState<T> {
         &mut self,
         delegation: Signed<Delegation<T>>,
     ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
-        if delegation.subject() != self.id.into() {
+        delegation.try_verify()?;
+        if *delegation.verifying_key() != self.id.0.verifying_key() {
             return Err(AddError::InvalidSubject(delegation.subject()));
         }
 
-        delegation.try_verify()?;
-
         let rc = Rc::new(delegation);
-        let hash = self.delegations.insert(rc.dupe());
 
-        if let Some(proof) = &rc.payload().proof {
-            if self.delegations.remove_by_value(proof).is_some() {
-                self.delegation_heads.insert(rc);
+        for (head_digest, head) in self.delegation_heads.clone().iter() {
+            if head.payload().is_ancestor_of(&rc) {
+                self.delegation_heads.insert(rc.dupe());
+                self.delegation_heads.remove_by_hash(head_digest);
             }
         }
 
+        let hash = self.delegations.borrow_mut().insert(rc);
         Ok(hash)
     }
 
@@ -130,18 +170,16 @@ impl<T: ContentRef> GroupState<T> {
             return Err(AddError::InvalidSubject(revocation.subject()));
         }
 
+        todo!("FIXME");
+
         revocation.try_verify()?;
-
-        // FIXME also check if this op needs to go into the quarantine/buffer
-
-        // FIXME retrun &ref
-        self.revocations.insert(Rc::new(revocation));
-
+        self.revocation_heads.own(revocation);
+        // FIXME check that this is actually a head
         Ok(())
     }
 
     pub fn delegations_for(&self, agent: Agent<T>) -> Vec<&Rc<Signed<Delegation<T>>>> {
-        self.delegations
+        self.delegations()
             .iter()
             .filter_map(|(_, delegation)| {
                 if delegation.payload().delegate == agent {
@@ -223,7 +261,6 @@ impl<T: ContentRef> Serialize for GroupState<T> {
                 .map(|d| d.as_ref())
                 .collect::<Vec<_>>(),
         )?;
-        state.serialize_field("delegations", &self.delegations)?;
         state.serialize_field("delegation_quarantine", &self.delegation_quarantine)?;
         state.serialize_field(
             "revocation_heads",
@@ -233,7 +270,6 @@ impl<T: ContentRef> Serialize for GroupState<T> {
                 .map(|r| r.as_ref())
                 .collect::<Vec<_>>(),
         )?;
-        state.serialize_field("revocations", &self.revocations)?;
         state.serialize_field("revocation_quarantine", &self.revocation_quarantine)?;
 
         state.end()

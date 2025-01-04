@@ -96,6 +96,12 @@ impl From<ed25519_dalek::VerifyingKey> for Identifier {
     }
 }
 
+impl From<&ed25519_dalek::VerifyingKey> for Identifier {
+    fn from(verifying_key: &ed25519_dalek::VerifyingKey) -> Self {
+        Self(*verifying_key)
+    }
+}
+
 impl From<Identifier> for ed25519_dalek::VerifyingKey {
     fn from(identifier: Identifier) -> Self {
         identifier.0
