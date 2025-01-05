@@ -30,7 +30,7 @@ impl<T: Serialize> CaMap<T> {
         key
     }
 
-    pub fn own(&mut self, value: T) -> Digest<T> {
+    pub fn assume(&mut self, value: T) -> Digest<T> {
         self.insert(Rc::new(value))
     }
 

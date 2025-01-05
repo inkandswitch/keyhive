@@ -9,7 +9,9 @@ use crate::{
         share_key::ShareKey,
         signed::{Signed, SigningError, VerificationError},
     },
-    error::missing_dependency::MissingDependency,
+    error::{
+        missing_dependency::MissingDependency, nonexclusive_reference::NonexclusiveReferenceError,
+    },
     principal::{
         active::Active,
         agent::{Agent, AgentId},
@@ -313,6 +315,32 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         }
 
         None
+    }
+
+    // NOTE becuase groups have multple ownership, we cannot guarantee no references to the
+    // prior group exist. Ensure that there's no other refs first!
+    pub(crate) fn promote_to_document(
+        &self,
+        group_ref: Rc<RefCell<Group<T>>>,
+    ) -> Result<(), NonexclusiveReferenceError<RefCell<Group<T>>>> {
+        if let Some(group_cell) = Rc::into_inner(group_ref) {
+            let group: Group<T> = group_cell.into_inner();
+            let group_id = group.group_id();
+            self.groups.remove(&group_id);
+
+            let doc_id = DocumentId(group_id.into());
+            let doc = Document {
+                group,
+                reader_keys: todo!(),
+                content_heads: todo!(),
+                content_state: todo!(),
+                cgka: Cgka::new(doc_id, self.id(), todo!()),
+            };
+            // FIXME Check if conflict
+            self.docs.insert(doc_id, doc);
+        } else {
+            Err(NonexclusiveReferenceError(group_ref.as_ref()))
+        }
     }
 
     pub fn receive_delegation(

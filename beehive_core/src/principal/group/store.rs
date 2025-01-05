@@ -29,6 +29,10 @@ impl<T: ContentRef> GroupStore<T> {
         self.0.insert(id, group);
     }
 
+    pub(crate) fn remove(&mut self, id: &GroupId) {
+        self.0.remove(id);
+    }
+
     pub fn generate_group<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         parents: NonEmpty<Agent<T>>,
