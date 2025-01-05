@@ -96,8 +96,8 @@ pub struct StaticRevocation<T: ContentRef> {
 impl<T: ContentRef> From<Revocation<T>> for StaticRevocation<T> {
     fn from(revocation: Revocation<T>) -> Self {
         Self {
-            revoke: Digest::hash(revocation.revoke.as_ref()).coerce(),
-            proof: revocation.proof.map(|p| Digest::hash(p.as_ref()).coerce()),
+            revoke: Digest::hash(revocation.revoke.as_ref()).into(),
+            proof: revocation.proof.map(|p| Digest::hash(p.as_ref()).into()),
             after_content: BTreeMap::from_iter(
                 revocation
                     .after_content

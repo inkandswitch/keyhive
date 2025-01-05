@@ -8,13 +8,13 @@ use crate::{
     },
     principal::{
         agent::{Agent, AgentId},
-        document::{id::DocumentId, Document},
+        document::id::DocumentId,
         identifier::Identifier,
     },
 };
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, collections::BTreeMap, hash::Hash, rc::Rc};
+use std::{collections::BTreeMap, hash::Hash, rc::Rc};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,18 +150,14 @@ impl<T: ContentRef> From<Delegation<T>> for StaticDelegation<T> {
     fn from(delegation: Delegation<T>) -> Self {
         Self {
             can: delegation.can,
-            proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).coerce()),
+            proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).into()),
             delegate: delegation.delegate.id(),
             after_revocations: delegation
                 .after_revocations
                 .iter()
-                .map(|revocation| Digest::hash(revocation.as_ref()).coerce()) // FIXME remove coerce, add specific fincton for op <-> del
+                .map(|revocation| Digest::hash(revocation.as_ref()).into())
                 .collect(),
-            after_content: delegation
-                .after_content
-                .into_iter()
-                .map(|(doc_id, (_, content))| (doc_id, content))
-                .collect(),
+            after_content: delegation.after_content,
         }
     }
 }

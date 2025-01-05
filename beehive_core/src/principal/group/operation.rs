@@ -180,7 +180,7 @@ impl<T: ContentRef> Operation<T> {
         for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
             for (other_digest, other_op) in op_ancestors.iter() {
                 let (_, other_ancestors, other_longest_path) = ops_with_ancestors
-                    .get(&other_digest.coerce())
+                    .get(&other_digest.into())
                     .expect("values that we just put there to be there");
 
                 let ancestor_set: HashSet<&Operation<T>> =
@@ -217,7 +217,7 @@ impl<T: ContentRef> Operation<T> {
                             adjacencies
                                 .add_dependency((*other_digest, other_op.as_ref()), (*digest, op));
                         }
-                        Ordering::Equal => match other_digest.cmp(&digest.coerce()) {
+                        Ordering::Equal => match other_digest.cmp(digest.into()) {
                             Ordering::Less => {
                                 leftovers.remove(op);
                                 adjacencies.add_dependency(
@@ -621,7 +621,7 @@ mod tests {
 
             let a = (alice_hash, alice_op.clone());
             let b = (bob_hash, bob_op.clone());
-            let r = (rev_hash.coerce(), alice_revokes_bob.into());
+            let r = (rev_hash.into(), alice_revokes_bob.into());
 
             assert_eq!(observed.clone().len(), 3);
 

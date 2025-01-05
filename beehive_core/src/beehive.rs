@@ -15,7 +15,7 @@ use crate::{
         group::{
             id::GroupId,
             operation::{
-                delegation::{Delegation, DelegationError},
+                delegation::{Delegation, DelegationError, StaticDelegation},
                 revocation::Revocation,
             },
             store::GroupStore,
@@ -41,25 +41,25 @@ use std::{
 #[derive(Debug)]
 pub struct Beehive<T: ContentRef, R: rand::CryptoRng + rand::RngCore> {
     /// The [`Active`] user agent.
-    pub active: Rc<RefCell<Active>>,
+    active: Rc<RefCell<Active>>,
 
     /// The [`Individual`]s that are known to this agent.
-    pub individuals: BTreeMap<IndividualId, Rc<RefCell<Individual>>>,
+    individuals: BTreeMap<IndividualId, Rc<RefCell<Individual>>>,
 
     /// The [`Group`]s that are known to this agent.
-    pub groups: GroupStore<T>,
+    groups: GroupStore<T>,
 
     /// The [`Document`]s that are known to this agent.
-    pub docs: DocumentStore<T>,
+    docs: DocumentStore<T>,
 
     /// All applied [`Delegation`]s
-    pub delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
+    delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
 
     /// All applied [`Revocation`]s
-    pub revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+    revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
 
     /// Cryptographically secure (pseudo)random number generator.
-    pub csprng: R,
+    csprng: R,
 }
 
 impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
@@ -95,6 +95,8 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
                 head: self.active.dupe().into(),
                 tail: coparents,
             },
+            self.delegations.dupe(),
+            self.revocations.dupe(),
             &mut self.csprng,
         )?)
     }
@@ -111,10 +113,10 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         let new_doc = self.docs.generate_document(parents, &mut self.csprng)?;
 
         for head in new_doc.borrow().delegation_heads() {
-            self.delegations.insert(head.dupe());
+            self.delegations.borrow_mut().insert(head.dupe());
 
             for dep in head.payload().proof_lineage() {
-                self.delegations.insert(dep);
+                self.delegations.borrow_mut().insert(dep);
             }
 
             // FIXME also content and revs?
@@ -147,7 +149,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         to_add: Agent<T>,
         resource: &mut Membered<T>,
         can: Access,
-        after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+        after_content: BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<(), DelegationError> {
         let proof = resource
             .get_capability(&self.active.borrow().agent_id())
@@ -316,76 +318,78 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
     ) -> Result<(), ()> {
         static_dlg.try_verify()?;
 
-        if let Some(proof) = self
-            .delegations
-            .borrow()
-            .get(&static_dlg.payload().proof.coerce())
-        {
-            let subject_id = proof.subject();
+        let maybe_proof = static_dlg
+            .payload()
+            .proof
+            .and_then(|proof_digest| self.delegations.borrow().get(&proof_digest.into()));
 
-            let subject: Membered<T> = if let Some(group) = self.groups.get(&GroupId(subject_id)) {
-                Ok(group.into())
-            } else if let Some(doc) = self.docs.get(&DocumentId(subject_id)) {
-                Ok(doc.into())
-            } else if subject_id == static_dlg.verifying_key().into() {
-                todo!("FIXME register group or doc");
-            } else {
-                todo!("FIXME");
-            }?;
+        let subject_id = if let Some(proof) = maybe_proof {
+            proof.subject()
+        } else {
+            static_dlg.verifying_key().into()
+        };
 
-            let after_content = BTreeMap::from_iter([/* FIXME */]);
+        let subject: Membered<T> = if let Some(group) = self.groups.get(&GroupId(subject_id)) {
+            Ok(group.into())
+        } else if let Some(doc) = self.docs.get(&DocumentId(subject_id)) {
+            Ok(doc.into())
+        } else if subject_id == static_dlg.verifying_key().into() {
+            todo!("FIXME register group or doc");
+        } else {
+            todo!("FIXME");
+        }?;
 
-            let proof = static_dlg.payload().proof.map(|proof_hash| {
-                let p = self
-                    .delegations
-                    .borrow()
-                    .get(proof_hash)
-                    .ok_or(todo!("FIXME"))?;
+        let proof = static_dlg.payload().proof.map(|proof_hash| {
+            let p = self
+                .delegations
+                .borrow()
+                .get(&proof_hash.into())
+                .expect("FIXME");
+            // .ok_or(todo!("FIXME"))?;
 
-                // FIXME any other checks, too
-                if p.subject() != revoke.subject() {
-                    return Err(todo!());
-                }
-
-                Ok(p)
-            })?;
-
-            // FIXME break out
-            let delegate_id = static_dlg.delegate;
-            let delegate: Agent<T> = if let Some(group) = self.groups.get(delegate_id) {
-                group.into()
-            } else if let Some(doc) = self.docs.get(delegate_id) {
-                doc.into()
-            } else if let Some(indie) = self.individuals.get(delegate_id) {
-                indie.dupe().into()
-            } else if delegate_id == self.id() {
-                self.active.into()
-            } else {
-                let indie = Rc::new(RefCell::new(Individual::new(delegate_id)));
-                self.individuals.insert(delegate_id, indie);
-                indie.into()
-            };
-
-            let mut after_revocations = vec![];
-            let revs = self.revocations.borrow();
-            for rev_hash in static_dlg.payload().revocations.iter() {
-                let resolved_rev = revs.get(rev_hash).ok_or("FIXME")?;
-                after_revocations.push(resolved_rev.dupe());
+            // FIXME any other checks, too
+            if p.subject() != revoke.subject() {
+                panic!("FIXME");
+                // return Err(todo!());
             }
 
-            let dlg: Signed<Delegation<T>> = static_dlg.map(|_| Delegation {
-                delegate,
-                proof,
-                can: static_dlg.payaod().can,
-                after_revocations,
-                after_content: static_dlg.payload().after_content,
-            });
+            Ok(p.dupe())
+        })?;
 
-            subject.receive_delegation(d);
-            Ok(())
+        // FIXME break out
+        let delegate_id = static_dlg.payload().delegate;
+        let delegate: Agent<T> = if let Some(group) = self.groups.get(&GroupId(delegate_id)) {
+            group.into()
+        } else if let Some(doc) = self.docs.get(&DocumentId(delegate_id)) {
+            doc.into()
+        } else if let Some(indie) = self.individuals.get(&IndividualId(delegate_id)) {
+            indie.dupe().into()
+        } else if delegate_id.into() == self.id() {
+            self.active.into()
         } else {
-            todo!("FIXME missing dep");
+            let indie_id = IndividualId(delegate_id);
+            let indie = Rc::new(RefCell::new(Individual::new(indie_id)));
+            self.individuals.insert(indie_id, indie);
+            indie.into()
+        };
+
+        let mut after_revocations = vec![];
+        let revs = self.revocations.borrow();
+        for rev_hash in static_dlg.payload().after_revocations.iter() {
+            let resolved_rev = revs.get(&rev_hash.into()).ok_or(todo!("FIXME"))?;
+            after_revocations.push(resolved_rev.dupe());
         }
+
+        let dlg: Signed<Delegation<T>> = static_dlg.map(|_| Delegation {
+            delegate,
+            proof,
+            can: static_dlg.payload().can,
+            after_revocations,
+            after_content: static_dlg.payload().after_content,
+        });
+
+        subject.receive_delegation(d);
+        Ok(())
     }
 }
 
