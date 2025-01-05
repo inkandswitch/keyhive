@@ -8,6 +8,7 @@ use crate::{
         share_key::ShareKey,
         signed::{Signed, SigningError},
     },
+    error::missing_dependency::MissingDependency,
     principal::{
         active::Active,
         agent::{Agent, AgentId},
@@ -334,27 +335,24 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         } else if let Some(doc) = self.docs.get(&DocumentId(subject_id)) {
             Ok(doc.into())
         } else if subject_id == static_dlg.verifying_key().into() {
-            todo!("FIXME register group or doc");
+            todo!("FIXME register group or doc, or do we need another concept: UnknownEntity?");
         } else {
-            todo!("FIXME");
+            todo!("FIXME blow up?");
         }?;
 
-        let proof = static_dlg.payload().proof.map(|proof_hash| {
-            let p = self
-                .delegations
-                .borrow()
-                .get(&proof_hash.into())
-                .expect("FIXME");
-            // .ok_or(todo!("FIXME"))?;
-
-            // FIXME any other checks, too
-            if p.subject() != revoke.subject() {
-                panic!("FIXME");
-                // return Err(todo!());
-            }
-
-            Ok(p.dupe())
-        })?;
+        let proof: Option<_> = static_dlg
+            .payload()
+            .proof
+            .map(|proof_hash| {
+                let hash = proof_hash.into();
+                Ok(self
+                    .delegations
+                    .borrow()
+                    .get(&hash)
+                    .ok_or(MissingDependency(hash))?
+                    .dupe())
+            })
+            .transpose()?;
 
         // FIXME break out
         let delegate_id = static_dlg.payload().delegate;
@@ -375,21 +373,19 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
         let mut after_revocations = vec![];
         let revs = self.revocations.borrow();
-        for rev_hash in static_dlg.payload().after_revocations.iter() {
-            let resolved_rev = revs.get(&rev_hash.into()).ok_or(todo!("FIXME"))?;
+        for static_rev_hash in static_dlg.payload().after_revocations.iter() {
+            let hash = static_rev_hash.into();
+            let resolved_rev = revs.get(&hash).ok_or(MissingDependency(hash))?;
             after_revocations.push(resolved_rev.dupe());
         }
 
-        let dlg: Signed<Delegation<T>> = static_dlg.map(|_| Delegation {
+        subject.receive_delegation(static_dlg.map(|_| Delegation {
             delegate,
             proof,
             can: static_dlg.payload().can,
             after_revocations,
             after_content: static_dlg.payload().after_content,
-        });
-
-        subject.receive_delegation(d);
-        Ok(())
+        }))
     }
 }
 

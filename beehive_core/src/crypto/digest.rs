@@ -238,3 +238,39 @@ impl<T: ContentRef> From<Digest<Signed<StaticRevocation<T>>>> for Digest<Signed<
         }
     }
 }
+
+impl<T: ContentRef> From<&Digest<Signed<Delegation<T>>>> for Digest<Signed<StaticDelegation<T>>> {
+    fn from(hash: &Digest<Signed<Delegation<T>>>) -> Self {
+        Digest {
+            raw: hash.raw,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: ContentRef> From<&Digest<Signed<StaticDelegation<T>>>> for Digest<Signed<Delegation<T>>> {
+    fn from(hash: &Digest<Signed<StaticDelegation<T>>>) -> Self {
+        Digest {
+            raw: hash.raw,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: ContentRef> From<&Digest<Signed<Revocation<T>>>> for Digest<Signed<StaticRevocation<T>>> {
+    fn from(hash: &Digest<Signed<Revocation<T>>>) -> Self {
+        Digest {
+            raw: hash.raw,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: ContentRef> From<&Digest<Signed<StaticRevocation<T>>>> for Digest<Signed<Revocation<T>>> {
+    fn from(hash: &Digest<Signed<StaticRevocation<T>>>) -> Self {
+        Digest {
+            raw: hash.raw,
+            _phantom: PhantomData,
+        }
+    }
+}
