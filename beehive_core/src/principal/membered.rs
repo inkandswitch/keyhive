@@ -1,4 +1,5 @@
 pub mod id;
+pub mod unknown_error;
 
 use super::{
     agent::{Agent, AgentId},

@@ -4,9 +4,10 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::{
+        digest::Digest,
         encrypted::Encrypted,
         share_key::ShareKey,
-        signed::{Signed, SigningError},
+        signed::{Signed, SigningError, VerificationError},
     },
     error::missing_dependency::MissingDependency,
     principal::{
@@ -24,7 +25,7 @@ use crate::{
         },
         identifier::Identifier,
         individual::{id::IndividualId, Individual},
-        membered::Membered,
+        membered::{unknown_error::UnknownMemberedError, Membered},
         verifiable::Verifiable,
     },
     util::content_addressed_map::CaMap,
@@ -37,6 +38,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     rc::Rc,
 };
+use thiserror::Error;
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Debug)]
@@ -316,13 +318,14 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
     pub fn receive_delegation(
         &mut self,
         static_dlg: Signed<StaticDelegation<T>>,
-    ) -> Result<(), ()> {
+    ) -> Result<(), ReceieveStaticDelegationError<T>> {
         static_dlg.try_verify()?;
 
+        let dlgs = self.delegations.borrow();
         let maybe_proof = static_dlg
             .payload()
             .proof
-            .and_then(|proof_digest| self.delegations.borrow().get(&proof_digest.into()));
+            .and_then(|proof_digest| dlgs.get(&proof_digest.into()));
 
         let subject_id = if let Some(proof) = maybe_proof {
             proof.subject()
@@ -337,7 +340,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         } else if subject_id == static_dlg.verifying_key().into() {
             todo!("FIXME register group or doc, or do we need another concept: UnknownEntity?");
         } else {
-            todo!("FIXME blow up?");
+            Err(UnknownMemberedError(subject_id))
         }?;
 
         let proof: Option<_> = static_dlg
@@ -345,12 +348,11 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             .proof
             .map(|proof_hash| {
                 let hash = proof_hash.into();
-                Ok(self
-                    .delegations
+                self.delegations
                     .borrow()
                     .get(&hash)
-                    .ok_or(MissingDependency(hash))?
-                    .dupe())
+                    .ok_or(MissingDependency(hash))
+                    .map(Dupe::dupe)
             })
             .transpose()?;
 
@@ -362,12 +364,12 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             doc.into()
         } else if let Some(indie) = self.individuals.get(&IndividualId(delegate_id)) {
             indie.dupe().into()
-        } else if delegate_id.into() == self.id() {
-            self.active.into()
+        } else if delegate_id == self.id().into() {
+            self.active.dupe().into()
         } else {
             let indie_id = IndividualId(delegate_id);
             let indie = Rc::new(RefCell::new(Individual::new(indie_id)));
-            self.individuals.insert(indie_id, indie);
+            self.individuals.insert(indie_id, indie.dupe());
             indie.into()
         };
 
@@ -379,13 +381,19 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             after_revocations.push(resolved_rev.dupe());
         }
 
-        subject.receive_delegation(static_dlg.map(|_| Delegation {
-            delegate,
-            proof,
-            can: static_dlg.payload().can,
-            after_revocations,
-            after_content: static_dlg.payload().after_content,
-        }))
+        subject.receive_delegation(Signed {
+            verifying_key: static_dlg.verifying_key,
+            signature: static_dlg.signature,
+            payload: Delegation {
+                delegate,
+                proof,
+                can: static_dlg.payload().can,
+                after_revocations,
+                after_content: static_dlg.payload.after_content,
+            },
+        });
+
+        Ok(())
     }
 }
 
@@ -399,4 +407,19 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> From<&Beehive<T, R>> for
     fn from(context: &Beehive<T, R>) -> Self {
         context.active.dupe().into()
     }
+}
+
+#[derive(Debug, Error)]
+pub enum ReceieveStaticDelegationError<T: ContentRef> {
+    #[error(transparent)]
+    VerificationError(#[from] VerificationError),
+
+    #[error("Unknown subject: {0}")]
+    UnknownSubject(#[from] UnknownMemberedError),
+
+    #[error("Missing proof: {0}")]
+    MissingProof(#[from] MissingDependency<Digest<Signed<Delegation<T>>>>),
+
+    #[error("Missing revocation dependency: {0}")]
+    MissingRevocationDependency(#[from] MissingDependency<Digest<Signed<Revocation<T>>>>),
 }

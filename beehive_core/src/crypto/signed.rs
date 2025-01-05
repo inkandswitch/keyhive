@@ -14,13 +14,13 @@ use thiserror::Error;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signed<T: Serialize> {
     /// The data that was signed.
-    payload: T,
+    pub(crate) payload: T,
 
     /// The verifying key of the signer (for verifying the signature).
-    verifying_key: ed25519_dalek::VerifyingKey,
+    pub(crate) verifying_key: ed25519_dalek::VerifyingKey,
 
     /// The signature of the payload, which can be verified by the `verifying_key`.
-    signature: ed25519_dalek::Signature,
+    pub(crate) signature: ed25519_dalek::Signature,
 }
 
 impl<T: Serialize> Signed<T> {
