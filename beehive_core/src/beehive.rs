@@ -302,6 +302,12 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
     }
 
     pub fn get_agent(&self, id: Identifier) -> Option<Agent<T>> {
+        let indie_id = id.into();
+
+        if indie_id == self.active.borrow().id() {
+            return Some(self.active.dupe().into());
+        }
+
         if let Some(doc) = self.docs.get(&DocumentId(id)) {
             return Some(doc.into());
         }
@@ -310,7 +316,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             return Some(group.into());
         }
 
-        if let Some(indie) = self.individuals.get(&id.into()) {
+        if let Some(indie) = self.individuals.get(&indie_id) {
             return Some(indie.clone().into());
         }
 
@@ -319,7 +325,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
     // NOTE becuase groups have multple ownership, we cannot guarantee no references to the
     // prior group exist. Ensure that there's no other refs first!
-    pub(crate) fn promote_to_document(
+    pub(crate) fn promote_group_to_document(
         &self,
         group_ref: Rc<RefCell<Group<T>>>,
     ) -> Result<(), NonexclusiveReferenceError<RefCell<Group<T>>>> {
@@ -348,30 +354,9 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         static_dlg: Signed<StaticDelegation<T>>,
     ) -> Result<(), ReceieveStaticDelegationError<T>> {
         static_dlg.try_verify()?;
+        // FIXME other checks?
 
-        let dlgs = self.delegations.borrow();
-        let maybe_proof = static_dlg
-            .payload()
-            .proof
-            .and_then(|proof_digest| dlgs.get(&proof_digest.into()));
-
-        let subject_id = if let Some(proof) = maybe_proof {
-            proof.subject()
-        } else {
-            static_dlg.verifying_key().into()
-        };
-
-        let subject: Membered<T> = if let Some(group) = self.groups.get(&GroupId(subject_id)) {
-            Ok(group.into())
-        } else if let Some(doc) = self.docs.get(&DocumentId(subject_id)) {
-            Ok(doc.into())
-        } else if subject_id == static_dlg.verifying_key().into() {
-            todo!("FIXME register group or doc, or do we need another concept: UnknownEntity?");
-        } else {
-            Err(UnknownMemberedError(subject_id))
-        }?;
-
-        let proof: Option<_> = static_dlg
+        let proof: Option<Rc<Signed<Delegation<T>>>> = static_dlg
             .payload()
             .proof
             .map(|proof_hash| {
@@ -384,30 +369,39 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             })
             .transpose()?;
 
-        // FIXME break out
-        let delegate_id = static_dlg.payload().delegate;
-        let delegate: Agent<T> = if let Some(group) = self.groups.get(&GroupId(delegate_id)) {
-            group.into()
-        } else if let Some(doc) = self.docs.get(&DocumentId(delegate_id)) {
-            doc.into()
-        } else if let Some(indie) = self.individuals.get(&IndividualId(delegate_id)) {
-            indie.dupe().into()
-        } else if delegate_id == self.id().into() {
-            self.active.dupe().into()
+        let subject_id = proof
+            .as_ref()
+            .map(|p| p.subject())
+            .unwrap_or_else(|| static_dlg.verifying_key().into());
+
+        let subject: Membered<T> = if let Some(group) = self.groups.get(&GroupId(subject_id)) {
+            Ok(group.into())
+        } else if let Some(doc) = self.docs.get(&DocumentId(subject_id)) {
+            Ok(doc.into())
+        } else if subject_id == static_dlg.verifying_key().into() {
+            todo!("FIXME register group or doc, or do we need another concept: UnknownEntity?");
         } else {
+            Err(UnknownMemberedError(subject_id))
+        }?;
+
+        let delegate_id = static_dlg.payload().delegate;
+        let delegate: Agent<T> = self.get_agent(delegate_id).unwrap_or_else(|| {
             let indie_id = IndividualId(delegate_id);
             let indie = Rc::new(RefCell::new(Individual::new(indie_id)));
-            self.individuals.insert(indie_id, indie.dupe());
+            self.individuals.insert(indie_id, indie.dupe()); // FIXME break out indie store?
             indie.into()
-        };
+        });
 
-        let mut after_revocations = vec![];
         let revs = self.revocations.borrow();
-        for static_rev_hash in static_dlg.payload().after_revocations.iter() {
-            let hash = static_rev_hash.into();
-            let resolved_rev = revs.get(&hash).ok_or(MissingDependency(hash))?;
-            after_revocations.push(resolved_rev.dupe());
-        }
+        let after_revocations = static_dlg.payload().after_revocations.iter().try_fold(
+            vec![],
+            |mut acc, static_rev_hash| {
+                let rev_hash = static_rev_hash.into();
+                let resolved_rev = revs.get(&rev_hash).ok_or(MissingDependency(rev_hash))?;
+                acc.push(resolved_rev.dupe());
+                Ok::<_, ReceieveStaticDelegationError<T>>(acc)
+            },
+        )?;
 
         subject.receive_delegation(Signed {
             verifying_key: static_dlg.verifying_key,
