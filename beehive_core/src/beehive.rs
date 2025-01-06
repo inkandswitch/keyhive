@@ -97,6 +97,14 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         })
     }
 
+    pub fn groups(&self) -> &GroupStore<T> {
+        &self.groups
+    }
+
+    pub fn documents(&self) -> &DocumentStore<T> {
+        &self.docs
+    }
+
     pub fn generate_group(
         &mut self,
         coparents: Vec<Agent<T>>,

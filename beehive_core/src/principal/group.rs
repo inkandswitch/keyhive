@@ -53,10 +53,12 @@ impl<T: ContentRef> Group<T> {
         delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
         revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
     ) -> Self {
-        let state = state::GroupState::new(head, delegations, revocations);
-        let members = state.materialize();
-
-        Self { members, state }
+        let mut group = Self {
+            members: HashMap::new(),
+            state: state::GroupState::new(head, delegations, revocations),
+        };
+        group.rebuild();
+        group
     }
 
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.

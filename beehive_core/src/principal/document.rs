@@ -61,7 +61,7 @@ impl<T: ContentRef> Document<T> {
             content_state: Default::default(),
             cgka: Cgka::new(doc_id, viewer_id, viewer_pk)?,
         };
-        doc.materialize();
+        doc.rebuild();
         Ok(doc)
     }
 
@@ -213,8 +213,8 @@ impl<T: ContentRef> Document<T> {
         self.group.get_agent_revocations(agent)
     }
 
-    pub fn materialize(&mut self) {
-        self.group.materialize()
+    pub fn rebuild(&mut self) {
+        self.group.rebuild()
     }
 
     pub fn receive_delegation(

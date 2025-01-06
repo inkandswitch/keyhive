@@ -163,7 +163,7 @@ impl<T: ContentRef> GroupState<T> {
 
         todo!("FIXME");
 
-        self.revocation_heads.assume(revocation);
+        self.revocation_heads.own(revocation);
         // FIXME check that this is actually a head
         Ok(())
     }

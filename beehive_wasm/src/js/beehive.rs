@@ -17,10 +17,10 @@ use super::{
 };
 use beehive_core::{
     beehive::Beehive,
-    principal::document::{id::DocumentId, DecryptError, Document, EncryptError},
+    principal::document::{id::DocumentId, DecryptError, EncryptError},
 };
 use dupe::Dupe;
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::collections::BTreeMap;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -78,11 +78,18 @@ impl JsBeehive {
         &mut self,
         coparents: Vec<JsAgent>,
     ) -> Result<JsDocument, JsDelegationError> {
-        let doc_id = self
+        let doc = self
             .0
             .generate_doc(coparents.into_iter().map(|a| a.0).collect::<Vec<_>>())?;
 
-        Ok(JsDocument(self.0.docs.get(&doc_id).unwrap()))
+        let doc_id = doc.borrow().doc_id();
+
+        Ok(JsDocument(
+            self.0
+                .documents()
+                .get(&doc_id)
+                .expect("doc that we just created not found"),
+        ))
     }
 
     #[wasm_bindgen(js_name = trySign)]
@@ -141,14 +148,11 @@ impl JsBeehive {
         access: JsAccess,
         after_content: Vec<DocContentRefs>,
     ) -> Result<(), JsDelegationError> {
-        let content_ref_map: BTreeMap<
-            DocumentId,
-            (Rc<RefCell<Document<JsChangeRef>>>, Vec<JsChangeRef>),
-        > = after_content
+        let content_ref_map: BTreeMap<DocumentId, Vec<JsChangeRef>> = after_content
             .into_iter()
             .map(|r| {
                 let hashes = r.change_hashes().into_iter().collect();
-                (r.doc().borrow().doc_id(), (r.doc().0, hashes))
+                (r.doc_id().0, hashes)
             })
             .collect();
 
