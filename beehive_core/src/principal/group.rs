@@ -143,12 +143,8 @@ impl<T: ContentRef> Group<T> {
         &self.members
     }
 
-    pub fn delegation_heads(&self) -> &HashSet<Rc<Signed<Delegation<T>>>> {
+    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<T>>> {
         &self.state.delegation_heads
-    }
-
-    pub fn delegations(&self) -> &CaMap<Signed<Delegation<T>>> {
-        &self.state.delegations
     }
 
     pub fn get_capability(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
@@ -162,6 +158,7 @@ impl<T: ContentRef> Group<T> {
     pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
         self.state
             .revocations
+            .borrow()
             .iter()
             .filter_map(|(_digest, rvk)| {
                 if rvk.payload().revoke.payload().delegate == *agent {
@@ -184,10 +181,11 @@ impl<T: ContentRef> Group<T> {
         // ...look at the quarantine and see if any of them depend on this one
         // ...etc etc
         // FIXME check that delegation is authorized
+        // FIXME
 
         let id = signed_delegation.payload().delegate.agent_id();
         let rc = Rc::new(signed_delegation);
-        self.state.delegations.insert(rc.dupe());
+        self.state.delegations.borrow_mut().insert(rc.dupe());
 
         match self.members.get_mut(&id) {
             Some(caps) => {
@@ -239,14 +237,7 @@ impl<T: ContentRef> Group<T> {
                     .map(|d| {
                         (
                             d.borrow().doc_id(),
-                            (
-                                (*d).dupe(),
-                                d.borrow()
-                                    .content_heads
-                                    .iter()
-                                    .map(|c| (*c).clone())
-                                    .collect(),
-                            ),
+                            d.borrow().content_heads.iter().cloned().collect::<Vec<_>>(),
                         )
                     })
                     .collect(),
@@ -261,7 +252,7 @@ impl<T: ContentRef> Group<T> {
         &mut self,
         member_to_remove: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<RefCell<Document<T>>>], // TODO just lookup reachable docs directly
+        relevant_docs: &[&Rc<RefCell<Document<T>>>], // TODO FIXME just lookup reachable docs directly
     ) -> Result<(), SigningError> {
         let revocations = &mut self.state.revocations;
 
@@ -270,28 +261,18 @@ impl<T: ContentRef> Group<T> {
                 let revocation = Signed::try_sign(
                     Revocation {
                         revoke: dlg.dupe(),
-                        proof: None, // FIXME lookup a valid proof
-                        after_content: relevant_docs
-                            .iter()
-                            .map(|d| {
-                                (
-                                    d.borrow().doc_id(),
-                                    (
-                                        (*d).dupe(),
-                                        (*d).borrow()
-                                            .content_heads
-                                            .iter()
-                                            .map(|c| (*c).clone())
-                                            .collect(),
-                                    ),
-                                )
-                            })
-                            .collect(),
+                        proof: None, // FIXME lookup a valid proof FIXME
+                        after_content: BTreeMap::from_iter(relevant_docs.iter().map(|d| {
+                            (
+                                d.borrow().doc_id(),
+                                d.borrow().content_heads.iter().cloned().collect(),
+                            )
+                        })),
                     },
                     &signing_key,
                 )?;
 
-                revocations.insert(Rc::new(revocation));
+                revocations.borrow_mut().insert(Rc::new(revocation));
 
                 Ok(())
             })

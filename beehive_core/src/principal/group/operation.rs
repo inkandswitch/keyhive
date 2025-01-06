@@ -4,10 +4,7 @@ pub mod revocation;
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
-    principal::{
-        document::{id::DocumentId, Document},
-        identifier::Identifier,
-    },
+    principal::{document::id::DocumentId, identifier::Identifier},
     util::content_addressed_map::CaMap,
 };
 use delegation::Delegation;
@@ -15,7 +12,6 @@ use dupe::Dupe;
 use revocation::Revocation;
 use serde::Serialize;
 use std::{
-    cell::RefCell,
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
     hash::Hash,
@@ -70,7 +66,7 @@ impl<T: ContentRef> Operation<T> {
     ) -> (
         Vec<Rc<Signed<Delegation<T>>>>,
         Vec<Rc<Signed<Revocation<T>>>>,
-        &BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+        &BTreeMap<DocumentId, Vec<T>>,
     ) {
         match self {
             Operation::Delegation(delegation) => {
@@ -84,7 +80,7 @@ impl<T: ContentRef> Operation<T> {
         }
     }
 
-    pub fn after_content(&self) -> &BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)> {
+    pub fn after_content(&self) -> &BTreeMap<DocumentId, Vec<T>> {
         match self {
             Operation::Delegation(delegation) => &delegation.payload().after_content,
             Operation::Revocation(revocation) => &revocation.payload().after_content,
@@ -140,8 +136,8 @@ impl<T: ContentRef> Operation<T> {
     }
 
     pub fn topsort(
-        delegation_heads: &HashSet<Rc<Signed<Delegation<T>>>>,
-        revocation_heads: &HashSet<Rc<Signed<Revocation<T>>>>,
+        delegation_heads: &CaMap<Signed<Delegation<T>>>,
+        revocation_heads: &CaMap<Signed<Revocation<T>>>,
     ) -> Vec<(Digest<Operation<T>>, Operation<T>)> {
         // NOTE: BTreeMap to get deterministic order
         let mut ops_with_ancestors: BTreeMap<
@@ -152,13 +148,13 @@ impl<T: ContentRef> Operation<T> {
         let mut leftovers: HashSet<Operation<T>> = HashSet::new();
         let mut explore: Vec<Operation<T>> = vec![];
 
-        for dlg in delegation_heads.iter() {
+        for dlg in delegation_heads.values() {
             let op: Operation<T> = dlg.dupe().into();
             leftovers.insert(op.clone());
             explore.push(op);
         }
 
-        for rev in revocation_heads.iter() {
+        for rev in revocation_heads.values() {
             let op: Operation<T> = rev.dupe().into();
             leftovers.insert(op.clone());
             explore.push(op);
@@ -180,7 +176,7 @@ impl<T: ContentRef> Operation<T> {
         for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
             for (other_digest, other_op) in op_ancestors.iter() {
                 let (_, other_ancestors, other_longest_path) = ops_with_ancestors
-                    .get(&other_digest.into())
+                    .get(other_digest.into())
                     .expect("values that we just put there to be there");
 
                 let ancestor_set: HashSet<&Operation<T>> =

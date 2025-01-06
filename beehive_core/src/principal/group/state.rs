@@ -135,14 +135,6 @@ impl<T: ContentRef> GroupState<T> {
         &self.revocation_heads
     }
 
-    pub fn delegations(&self) -> &CaMap<Signed<Delegation<T>>> {
-        &self.delegations
-    }
-
-    pub fn revocations(&self) -> &CaMap<Signed<Revocation<T>>> {
-        &self.revocations
-    }
-
     pub fn add_delegation(
         &mut self,
         delegation: Signed<Delegation<T>>,
@@ -176,12 +168,13 @@ impl<T: ContentRef> GroupState<T> {
         Ok(())
     }
 
-    pub fn delegations_for(&self, agent: Agent<T>) -> Vec<&Rc<Signed<Delegation<T>>>> {
-        self.delegations()
-            .iter()
-            .filter_map(|(_, delegation)| {
+    pub fn delegations_for(&self, agent: Agent<T>) -> Vec<Rc<Signed<Delegation<T>>>> {
+        self.delegations
+            .borrow()
+            .values()
+            .filter_map(|delegation| {
                 if delegation.payload().delegate == agent {
-                    Some(delegation)
+                    Some(delegation.dupe())
                 } else {
                     None
                 }
@@ -198,19 +191,27 @@ impl<T: ContentRef> std::hash::Hash for GroupState<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
 
-        for dh in self.delegation_heads.iter() {
+        for dh in self.delegation_heads.iter().collect::<HashSet<_>>().iter() {
             dh.hash(state);
         }
 
-        self.delegations.hash(state);
-        self.delegation_quarantine.hash(state);
+        self.delegations
+            .borrow()
+            .values()
+            .collect::<Vec<_>>()
+            .sort_by_key(|d| Digest::hash((**d).as_ref())) // FIXME use buitin hash
+            .hash(state);
 
-        for rh in self.revocation_heads.iter() {
+        for rh in self.revocation_heads.iter().collect::<HashSet<_>>().iter() {
             rh.hash(state);
         }
 
-        self.revocations.hash(state);
-        self.revocation_quarantine.hash(state);
+        self.revocations
+            .borrow()
+            .values()
+            .collect::<Vec<_>>()
+            .sort_by_key(|d| Digest::hash((**d).as_ref())) // FIXME use buitin hash
+            .hash(state);
     }
 }
 
@@ -219,13 +220,11 @@ impl<T: ContentRef> From<VerifyingKey> for GroupState<T> {
         GroupState {
             id: GroupId(verifier.into()),
 
-            delegation_heads: HashSet::new(),
-            delegations: CaMap::new(),
-            delegation_quarantine: CaMap::new(),
+            delegation_heads: CaMap::new(),
+            delegations: Rc::new(RefCell::new(CaMap::new())),
 
-            revocation_heads: HashSet::new(),
-            revocations: CaMap::new(),
-            revocation_quarantine: CaMap::new(),
+            revocation_heads: CaMap::new(),
+            revocations: Rc::new(RefCell::new(CaMap::new())),
         }
     }
 }
@@ -248,27 +247,25 @@ pub enum AddError {
 // FIXME test
 impl<T: ContentRef> Serialize for GroupState<T> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("GroupState", 6)?;
+        let mut state = serializer.serialize_struct("GroupState", 3)?;
 
         state.serialize_field("id", &self.id)?;
         state.serialize_field(
             "delegation_heads",
             &self
                 .delegation_heads
-                .iter()
-                .map(|d| d.as_ref())
-                .collect::<Vec<_>>(),
+                .values()
+                .collect::<Vec<_>>()
+                .sort_by_key(|dlg| Digest::hash(dlg.as_ref())),
         )?;
-        state.serialize_field("delegation_quarantine", &self.delegation_quarantine)?;
         state.serialize_field(
             "revocation_heads",
             &self
                 .revocation_heads
-                .iter()
-                .map(|r| r.as_ref())
-                .collect::<Vec<_>>(),
+                .values()
+                .collect::<Vec<_>>()
+                .sort_by_key(|rev| Digest::hash(rev.as_ref())),
         )?;
-        state.serialize_field("revocation_quarantine", &self.revocation_quarantine)?;
 
         state.end()
     }

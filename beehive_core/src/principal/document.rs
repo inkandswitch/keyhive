@@ -46,6 +46,25 @@ pub struct Document<T: ContentRef> {
 }
 
 impl<T: ContentRef> Document<T> {
+    pub fn new(
+        head: Signed<Delegation<T>>,
+        viewer_id: IndividualId,
+        viewer_pk: ShareKey,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+    ) -> Result<Self, CgkaError> {
+        let doc_id = DocumentId(head.subject());
+        let mut doc = Document {
+            group: Group::new(head, delegations, revocations),
+            reader_keys: Default::default(),
+            content_heads: Default::default(),
+            content_state: Default::default(),
+            cgka: Cgka::new(doc_id, viewer_id, viewer_pk)?,
+        };
+        doc.materialize();
+        Ok(doc)
+    }
+
     pub fn id(&self) -> Identifier {
         self.group.id()
     }
@@ -62,12 +81,8 @@ impl<T: ContentRef> Document<T> {
         self.group.members()
     }
 
-    pub fn delegation_heads(&self) -> &HashSet<Rc<Signed<Delegation<T>>>> {
+    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<T>>> {
         self.group.delegation_heads()
-    }
-
-    pub fn delegations(&self) -> &CaMap<Signed<Delegation<T>>> {
-        self.group.delegations()
     }
 
     pub fn get_capabilty(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
@@ -76,11 +91,13 @@ impl<T: ContentRef> Document<T> {
 
     pub fn generate<R: rand::RngCore + rand::CryptoRng>(
         parents: NonEmpty<Agent<T>>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
         let group = parents.iter().try_fold(
-            Group::generate(parents.clone(), csprng)?,
+            Group::generate(parents.clone(), delegations, revocations, csprng)?,
             |mut acc, parent| {
                 let dlg = Signed::try_sign(
                     Delegation {

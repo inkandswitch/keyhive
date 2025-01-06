@@ -1,7 +1,7 @@
 //! The current user agent (which can sign and encrypt).
 
 use super::{
-    document::{id::DocumentId, Document},
+    document::id::DocumentId,
     identifier::Identifier,
     individual::{id::IndividualId, op::KeyOp, Individual},
     verifiable::Verifiable,
@@ -25,7 +25,7 @@ use crate::{
 use dupe::Dupe;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::Serialize;
-use std::{cell::RefCell, collections::BTreeMap, fmt::Debug, rc::Rc};
+use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).

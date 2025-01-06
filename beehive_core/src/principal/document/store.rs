@@ -2,10 +2,15 @@ use super::{id::DocumentId, Document};
 use crate::{
     access::Access,
     content::reference::ContentRef,
+    crypto::signed::Signed,
     principal::{
         agent::{Agent, AgentId},
-        group::operation::delegation::DelegationError,
+        group::operation::{
+            delegation::{Delegation, DelegationError},
+            revocation::Revocation,
+        },
     },
+    util::content_addressed_map::CaMap,
 };
 use dupe::Dupe;
 use nonempty::NonEmpty;
@@ -42,9 +47,11 @@ impl<T: ContentRef> DocumentStore<T> {
     pub fn generate_document<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         parents: NonEmpty<Agent<T>>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
         csprng: &mut R,
     ) -> Result<Rc<RefCell<Document<T>>>, DelegationError> {
-        let new_doc = Document::generate(parents, csprng)?;
+        let new_doc = Document::generate(parents, delegations, revocations, csprng)?;
         let rc_ref = Rc::new(RefCell::new(new_doc));
         self.insert(rc_ref.dupe());
         Ok(rc_ref)

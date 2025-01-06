@@ -2,6 +2,7 @@
 
 use crate::{
     access::Access,
+    cgka::error::CgkaError,
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -9,9 +10,7 @@ use crate::{
         share_key::ShareKey,
         signed::{Signed, SigningError, VerificationError},
     },
-    error::{
-        missing_dependency::MissingDependency, nonexclusive_reference::NonexclusiveReferenceError,
-    },
+    error::missing_dependency::MissingDependency,
     principal::{
         active::Active,
         agent::{Agent, AgentId},
@@ -57,6 +56,12 @@ pub struct Beehive<T: ContentRef, R: rand::CryptoRng + rand::RngCore> {
     /// The [`Document`]s that are known to this agent.
     docs: DocumentStore<T>,
 
+    /// [`Document`]s that this user has heard of via `after_content`,
+    /// but doesn't have access to.
+    ///
+    /// This is mainly useful for initializing docs as docs instead of as groups first.
+    unregistered_docs: HashSet<DocumentId>,
+
     /// All applied [`Delegation`]s
     delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
 
@@ -85,6 +90,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             individuals: Default::default(),
             groups: GroupStore::new(),
             docs: DocumentStore::new(),
+            unregistered_docs: HashSet::new(),
             delegations: Rc::new(RefCell::new(CaMap::new())),
             revocations: Rc::new(RefCell::new(CaMap::new())),
             csprng,
@@ -115,9 +121,14 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             tail: coparents,
         };
 
-        let new_doc = self.docs.generate_document(parents, &mut self.csprng)?;
+        let new_doc = self.docs.generate_document(
+            parents,
+            self.delegations.dupe(),
+            self.revocations.dupe(),
+            &mut self.csprng,
+        )?;
 
-        for head in new_doc.borrow().delegation_heads() {
+        for head in new_doc.borrow().delegation_heads().values() {
             self.delegations.borrow_mut().insert(head.dupe());
 
             for dep in head.payload().proof_lineage() {
@@ -360,7 +371,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
     pub fn receive_delegation(
         &mut self,
         static_dlg: Signed<StaticDelegation<T>>,
-    ) -> Result<Signed<Delegation<T>>, ReceieveStaticDelegationError<T>> {
+    ) -> Result<(), ReceieveStaticDelegationError<T>> {
         // NOTE: this is the only place this gets parsed and this verification ONLY happens here
         static_dlg.try_verify()?;
 
@@ -388,6 +399,10 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             } else if let Some(doc) = self.docs.get(&DocumentId(subject_id)) {
                 Ok(Some(doc.into()))
             } else if subject_id == static_dlg.verifying_key().into() {
+                let doc_id = DocumentId(subject_id);
+                if static_dlg.payload.after_content.contains_key(&doc_id) {
+                    self.unregistered_docs.insert(doc_id);
+                }
                 Ok(None)
             } else {
                 Err(UnknownMemberedError(subject_id))
@@ -424,22 +439,28 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             },
         };
 
-        match existing_subject {
-            Some(subject) => {
-                // FIXME rename add_delegation becuase it takes a dlg not a static_dlg
-                // FIXME maybe should take an Rc?
-                subject.receive_delegation(delegation.clone());
-            }
-            None => {
+        if let Some(subject) = existing_subject {
+            subject.receive_delegation(delegation);
+        } else {
+            let doc_id = DocumentId(subject_id);
+            if self.unregistered_docs.remove(&doc_id) {
+                self.docs.insert(Rc::new(RefCell::new(Document::new(
+                    delegation,
+                    self.id(),
+                    self.active.borrow().pick_prekey(doc_id),
+                    self.delegations.dupe(),
+                    self.revocations.dupe(),
+                )?)));
+            } else {
                 self.groups.insert(Rc::new(RefCell::new(Group::new(
-                    delegation.clone(),
+                    delegation,
                     self.delegations.dupe(),
                     self.revocations.dupe(),
                 ))));
             }
         }
 
-        Ok(delegation) // FIXME or just the digest?
+        Ok(())
     }
 }
 
@@ -468,4 +489,7 @@ pub enum ReceieveStaticDelegationError<T: ContentRef> {
 
     #[error("Missing revocation dependency: {0}")]
     MissingRevocationDependency(#[from] MissingDependency<Digest<Signed<Revocation<T>>>>),
+
+    #[error("Cgka init error: {0}")]
+    CgkaInitError(#[from] CgkaError),
 }
