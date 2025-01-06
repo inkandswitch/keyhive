@@ -96,14 +96,8 @@ impl<T: ContentRef> Membered<T> {
 
     pub fn receive_delegation(&self, delegation: Signed<Delegation<T>>) -> Result<(), ()> {
         match self {
-            Membered::Group(group) => {
-                todo!("FIXME");
-                // group.borrow_mut().receive_delegation(delegation);
-            }
-            Membered::Document(document) => {
-                todo!("FIXME");
-                // document.borrow_mut().receive_delegation(delegation);
-            }
+            Membered::Group(group) => group.borrow_mut().receive_delegation(delegation),
+            Membered::Document(document) => document.borrow_mut().receive_delegation(delegation),
         }
     }
 }

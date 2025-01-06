@@ -88,7 +88,7 @@ impl<T: ContentRef> GroupState<T> {
         revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
-        let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(&mut rng);
+        let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(csprng);
         let group_id = signing_key.verifying_key().into();
 
         let group = GroupState {
@@ -147,7 +147,6 @@ impl<T: ContentRef> GroupState<T> {
         &mut self,
         delegation: Signed<Delegation<T>>,
     ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
-        delegation.try_verify()?;
         if *delegation.verifying_key() != self.id.0.verifying_key() {
             return Err(AddError::InvalidSubject(delegation.subject()));
         }
@@ -172,7 +171,6 @@ impl<T: ContentRef> GroupState<T> {
 
         todo!("FIXME");
 
-        revocation.try_verify()?;
         self.revocation_heads.assume(revocation);
         // FIXME check that this is actually a head
         Ok(())

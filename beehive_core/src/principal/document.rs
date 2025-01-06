@@ -200,6 +200,15 @@ impl<T: ContentRef> Document<T> {
         self.group.materialize()
     }
 
+    pub fn receive_delegation(
+        &mut self,
+        signed_delegation: Signed<Delegation<T>>,
+    ) -> Result<(), ()> {
+        self.group.receive_delegation(signed_delegation);
+        // FIXME self.rebuild();
+        Ok(())
+    }
+
     pub fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         csprng: &mut R,

@@ -126,7 +126,7 @@ impl Active {
         attenuate: Access,
         delegate: Agent<T>,
         after_revocations: Vec<Rc<Signed<Revocation<T>>>>,
-        after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+        after_content: BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<Signed<Delegation<T>>, ActiveDelegationError> {
         let proof = self
             .get_capability(subject, attenuate)

@@ -3,6 +3,7 @@
 pub mod id;
 pub mod op;
 pub mod state;
+pub mod store;
 
 use super::{agent::AgentId, document::id::DocumentId, verifiable::Verifiable};
 use crate::crypto::{

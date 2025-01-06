@@ -26,7 +26,7 @@ use crate::{
             Group,
         },
         identifier::Identifier,
-        individual::{id::IndividualId, Individual},
+        individual::{id::IndividualId, store::IndividualStore, Individual},
         membered::{unknown_error::UnknownMemberedError, Membered},
         verifiable::Verifiable,
     },
@@ -49,7 +49,7 @@ pub struct Beehive<T: ContentRef, R: rand::CryptoRng + rand::RngCore> {
     active: Rc<RefCell<Active>>,
 
     /// The [`Individual`]s that are known to this agent.
-    individuals: BTreeMap<IndividualId, Rc<RefCell<Individual>>>,
+    individuals: IndividualStore,
 
     /// The [`Group`]s that are known to this agent.
     groups: GroupStore<T>,
@@ -145,8 +145,16 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
     }
 
     pub fn register_individual(&mut self, individual: Individual) {
-        self.individuals
-            .insert(individual.id().into(), Rc::new(RefCell::new(individual)));
+        self.individuals.insert(Rc::new(RefCell::new(individual)));
+    }
+
+    pub fn register_group(&mut self, root_delegation: Signed<Delegation<T>>) {
+        let group = Group::new(
+            root_delegation,
+            self.delegations.dupe(),
+            self.revocations.dupe(),
+        );
+        self.groups.insert(Rc::new(RefCell::new(group)));
     }
 
     pub fn add_member(
@@ -317,7 +325,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         }
 
         if let Some(indie) = self.individuals.get(&indie_id) {
-            return Some(indie.clone().into());
+            return Some(indie.dupe().into());
         }
 
         None
@@ -325,36 +333,36 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
     // NOTE becuase groups have multple ownership, we cannot guarantee no references to the
     // prior group exist. Ensure that there's no other refs first!
-    pub(crate) fn promote_group_to_document(
-        &self,
-        group_ref: Rc<RefCell<Group<T>>>,
-    ) -> Result<(), NonexclusiveReferenceError<RefCell<Group<T>>>> {
-        if let Some(group_cell) = Rc::into_inner(group_ref) {
-            let group: Group<T> = group_cell.into_inner();
-            let group_id = group.group_id();
-            self.groups.remove(&group_id);
+    // pub(crate) fn promote_group_to_document(
+    //     &self,
+    //     group_ref: Rc<RefCell<Group<T>>>,
+    // ) -> Result<(), NonexclusiveReferenceError<RefCell<Group<T>>>> {
+    //     if let Some(group_cell) = Rc::into_inner(group_ref) {
+    //         let group: Group<T> = group_cell.into_inner();
+    //         let group_id = group.group_id();
+    //         self.groups.remove(&group_id);
 
-            let doc_id = DocumentId(group_id.into());
-            let doc = Document {
-                group,
-                reader_keys: todo!(),
-                content_heads: todo!(),
-                content_state: todo!(),
-                cgka: Cgka::new(doc_id, self.id(), todo!()),
-            };
-            // FIXME Check if conflict
-            self.docs.insert(doc_id, doc);
-        } else {
-            Err(NonexclusiveReferenceError(group_ref.as_ref()))
-        }
-    }
+    //         let doc_id = DocumentId(group_id.into());
+    //         let doc = Document {
+    //             group,
+    //             reader_keys: todo!(),
+    //             content_heads: todo!(),
+    //             content_state: todo!(),
+    //             cgka: Cgka::new(doc_id, self.id(), todo!()),
+    //         };
+    //         // FIXME Check if conflict
+    //         self.docs.insert(doc_id, doc);
+    //     } else {
+    //         Err(NonexclusiveReferenceError(group_ref.as_ref()))
+    //     }
+    // }
 
     pub fn receive_delegation(
         &mut self,
         static_dlg: Signed<StaticDelegation<T>>,
-    ) -> Result<(), ReceieveStaticDelegationError<T>> {
+    ) -> Result<Signed<Delegation<T>>, ReceieveStaticDelegationError<T>> {
+        // NOTE: this is the only place this gets parsed and this verification ONLY happens here
         static_dlg.try_verify()?;
-        // FIXME other checks?
 
         let proof: Option<Rc<Signed<Delegation<T>>>> = static_dlg
             .payload()
@@ -374,21 +382,22 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             .map(|p| p.subject())
             .unwrap_or_else(|| static_dlg.verifying_key().into());
 
-        let subject: Membered<T> = if let Some(group) = self.groups.get(&GroupId(subject_id)) {
-            Ok(group.into())
-        } else if let Some(doc) = self.docs.get(&DocumentId(subject_id)) {
-            Ok(doc.into())
-        } else if subject_id == static_dlg.verifying_key().into() {
-            todo!("FIXME register group or doc, or do we need another concept: UnknownEntity?");
-        } else {
-            Err(UnknownMemberedError(subject_id))
-        }?;
+        let existing_subject: Option<Membered<T>> =
+            if let Some(group) = self.groups.get(&GroupId(subject_id)) {
+                Ok(Some(group.into()))
+            } else if let Some(doc) = self.docs.get(&DocumentId(subject_id)) {
+                Ok(Some(doc.into()))
+            } else if subject_id == static_dlg.verifying_key().into() {
+                Ok(None)
+            } else {
+                Err(UnknownMemberedError(subject_id))
+            }?;
 
         let delegate_id = static_dlg.payload().delegate;
         let delegate: Agent<T> = self.get_agent(delegate_id).unwrap_or_else(|| {
             let indie_id = IndividualId(delegate_id);
             let indie = Rc::new(RefCell::new(Individual::new(indie_id)));
-            self.individuals.insert(indie_id, indie.dupe()); // FIXME break out indie store?
+            self.individuals.insert(indie.dupe());
             indie.into()
         });
 
@@ -403,7 +412,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             },
         )?;
 
-        subject.receive_delegation(Signed {
+        let delegation = Signed {
             verifying_key: static_dlg.verifying_key,
             signature: static_dlg.signature,
             payload: Delegation {
@@ -413,9 +422,24 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
                 after_revocations,
                 after_content: static_dlg.payload.after_content,
             },
-        });
+        };
 
-        Ok(())
+        match existing_subject {
+            Some(subject) => {
+                // FIXME rename add_delegation becuase it takes a dlg not a static_dlg
+                // FIXME maybe should take an Rc?
+                subject.receive_delegation(delegation.clone());
+            }
+            None => {
+                self.groups.insert(Rc::new(RefCell::new(Group::new(
+                    delegation.clone(),
+                    self.delegations.dupe(),
+                    self.revocations.dupe(),
+                ))));
+            }
+        }
+
+        Ok(delegation) // FIXME or just the digest?
     }
 }
 

@@ -173,6 +173,12 @@ impl<T: ContentRef> Group<T> {
             .collect()
     }
 
+    pub fn receive_delegation(&mut self, delegation: Signed<Delegation<T>>) -> Result<(), ()> {
+        self.state.add_delegation(delegation);
+        self.rebuild(); // FIXME error handling
+        Ok(())
+    }
+
     pub fn add_delegation(&mut self, signed_delegation: Signed<Delegation<T>>) {
         // FIXME check subject, signature, find dependencies or quarantine
         // ...look at the quarantine and see if any of them depend on this one
