@@ -1,6 +1,10 @@
 //! Wrap data in signatures.
 
-use crate::principal::identifier::Identifier;
+use crate::principal::{
+    agent::signer::{AgentSigner, SignerId},
+    identifier::Identifier,
+    verifiable::Verifiable,
+};
 use dupe::Dupe;
 use ed25519_dalek::{Signer, Verifier};
 use serde::{Deserialize, Serialize};
@@ -17,20 +21,20 @@ pub struct Signed<T: Serialize> {
     pub(crate) payload: T,
 
     /// The verifying key of the signer (for verifying the signature).
-    pub(crate) verifying_key: ed25519_dalek::VerifyingKey,
+    pub(crate) signed_by: SignerId,
 
     /// The signature of the payload, which can be verified by the `verifying_key`.
     pub(crate) signature: ed25519_dalek::Signature,
 }
 
 impl<T: Serialize> Signed<T> {
-    pub fn try_sign(payload: T, signer: &ed25519_dalek::SigningKey) -> Result<Self, SigningError> {
+    pub fn try_sign(payload: T, signer: &AgentSigner) -> Result<Self, SigningError> {
         let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
 
         Ok(Signed {
             payload,
-            verifying_key: signer.verifying_key(),
-            signature: signer.try_sign(payload_bytes.as_slice())?,
+            signed_by: signer.id(),
+            signature: signer.key().try_sign(payload_bytes.as_slice())?,
         })
     }
 
@@ -38,12 +42,12 @@ impl<T: Serialize> Signed<T> {
         &self.payload
     }
 
-    pub fn verifying_key(&self) -> &ed25519_dalek::VerifyingKey {
-        &self.verifying_key
+    pub fn id(&self) -> Identifier {
+        self.verifying_key().into()
     }
 
-    pub fn id(&self) -> Identifier {
-        self.verifying_key.into()
+    pub fn signed_by(&self) -> &SignerId {
+        &self.signed_by
     }
 
     pub fn signature(&self) -> &ed25519_dalek::Signature {
@@ -52,13 +56,15 @@ impl<T: Serialize> Signed<T> {
 
     pub fn try_verify(&self) -> Result<(), VerificationError> {
         let buf: Vec<u8> = bincode::serialize(&self.payload)?;
-        Ok(self.verifying_key.verify(buf.as_slice(), &self.signature)?)
+        Ok(self
+            .verifying_key()
+            .verify(buf.as_slice(), &self.signature)?)
     }
 
     pub fn map<U: Serialize, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
         Signed {
             payload: f(self.payload),
-            verifying_key: self.verifying_key,
+            signed_by: self.signed_by,
             signature: self.signature,
         }
     }
@@ -67,9 +73,9 @@ impl<T: Serialize> Signed<T> {
 impl<T: Serialize + PartialOrd> PartialOrd for Signed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self
-            .verifying_key
+            .verifying_key()
             .as_bytes()
-            .partial_cmp(other.verifying_key.as_bytes())
+            .partial_cmp(other.verifying_key().as_bytes())
         {
             Some(Ordering::Equal) => match self
                 .signature
@@ -87,9 +93,9 @@ impl<T: Serialize + PartialOrd> PartialOrd for Signed<T> {
 impl<T: Serialize + Ord> Ord for Signed<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         match self
-            .verifying_key
+            .verifying_key()
             .as_bytes()
-            .cmp(other.verifying_key.as_bytes())
+            .cmp(other.verifying_key().as_bytes())
         {
             Ordering::Equal => match self.signature.to_bytes().cmp(&other.signature.to_bytes()) {
                 Ordering::Equal => self.payload.cmp(&other.payload),
@@ -104,16 +110,22 @@ impl<T: Dupe + Serialize> Dupe for Signed<T> {
     fn dupe(&self) -> Self {
         Signed {
             payload: self.payload.dupe(),
-            verifying_key: self.verifying_key,
+            signed_by: self.signed_by.dupe(),
             signature: self.signature,
         }
+    }
+}
+
+impl<T: Serialize> Verifiable for Signed<T> {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.signed_by.verifying_key()
     }
 }
 
 // FIXME test
 impl<T: Serialize> Hash for Signed<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.verifying_key.as_bytes().hash(state);
+        self.signed_by.verifying_key().as_bytes().hash(state);
         self.signature.to_bytes().hash(state);
 
         let encoded: Vec<u8> = bincode::serialize(&self.payload).expect("serialization failed");
@@ -142,14 +154,19 @@ pub enum SigningError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::principal::group::id::GroupId;
 
     #[test]
     fn test_round_trip() {
         let sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let signed = Signed::try_sign(vec![1, 2, 3], &sk).unwrap();
+        let id = GroupId(ed25519_dalek::VerifyingKey::from(&sk).into()).into();
+        let signer = AgentSigner::new(id, sk).unwrap();
+
+        let signed = Signed::try_sign(vec![1, 2, 3], &signer).unwrap();
         assert!(signed.try_verify().is_ok());
     }
 
+    // FIXME FIXME
     // #[wasm_bindgen_test]
     // fn test_verify_counterexample() {
     //     let key1 = SigningKey::generate().unwrap();

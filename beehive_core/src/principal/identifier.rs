@@ -1,6 +1,7 @@
 //! The universally unique identifier of an [`Agent`](crate::principal::agentAgent).
 
 use super::verifiable::Verifiable;
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 
 /// A unique identifier for an [`Agent`](crate::principal::agentAgent).
@@ -36,6 +37,12 @@ impl Identifier {
 
 impl Clone for Identifier {
     fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl Dupe for Identifier {
+    fn dupe(&self) -> Self {
         *self
     }
 }

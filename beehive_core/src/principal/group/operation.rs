@@ -10,7 +10,7 @@ use crate::{
 use delegation::Delegation;
 use dupe::Dupe;
 use revocation::Revocation;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
@@ -271,6 +271,12 @@ impl<T: ContentRef> From<Rc<Signed<Revocation<T>>>> for Operation<T> {
     fn from(revocation: Rc<Signed<Revocation<T>>>) -> Self {
         Operation::Revocation(revocation)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum StaticOperation<T: ContentRef> {
+    Delegation(delegation::StaticDelegation<T>),
+    Revocation(revocation::StaticRevocation<T>),
 }
 
 #[cfg(test)]

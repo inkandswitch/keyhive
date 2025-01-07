@@ -14,7 +14,7 @@ use crate::{
         signed::{Signed, SigningError},
     },
     principal::{
-        agent::{Agent, AgentId},
+        agent::{id::AgentId, signer::AgentSigner, Agent},
         group::operation::{
             delegation::{Delegation, DelegationError},
             revocation::Revocation,
@@ -32,17 +32,17 @@ use thiserror::Error;
 #[derive(Clone, Serialize)]
 pub struct Active {
     /// The signing key of the active agent.
-    pub signer: SigningKey,
+    pub(crate) signer: SigningKey,
 
     // // FIXME generalize to use e.g. KMS
     // // FIXME include timestamp for next PCS update
     // /// The encryption "sharing" key pairs that the active agent has.
     // /// This includes the secret keys for ECDH.
     // FIXME: Can we remove this since we're using the Individual's map?
-    pub prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>, // FIXME generalize to use e.g. KMS
+    pub(crate) prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>, // FIXME generalize to use e.g. KMS
 
     /// The [`Individual`] representation (how others see this agent).
-    pub individual: Individual,
+    pub(crate) individual: Individual,
 }
 
 impl Active {
@@ -51,12 +51,15 @@ impl Active {
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
         let mut individual = Individual::new(signer.verifying_key().into());
+        let agent_signer = AgentSigner::new(individual.agent_id(), signer.clone())
+            .expect("key generated from SK should match");
+
         let mut prekey_pairs = BTreeMap::new();
 
         (0..7).try_for_each(|_| {
             let sk = ShareSecretKey::generate(csprng);
             let pk = sk.share_key();
-            let op = Signed::try_sign(KeyOp::add(pk), &signer)?;
+            let op = Signed::try_sign(KeyOp::add(pk), &agent_signer)?;
 
             prekey_pairs.insert(pk, sk);
             individual
@@ -90,19 +93,24 @@ impl Active {
         prekey: ShareKey,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
-        self.individual.rotate_prekey(prekey, &self.signer, csprng)
+        self.individual
+            .rotate_prekey(prekey, self.signer.clone(), csprng)
     }
 
     pub fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
-        self.individual.expand_prekeys(&self.signer, csprng)
+        self.individual.expand_prekeys(self.signer.clone(), csprng)
     }
 
     /// Sign a payload.
     pub fn try_sign<U: Serialize>(&self, payload: U) -> Result<Signed<U>, SigningError> {
-        Signed::<U>::try_sign(payload, &self.signer)
+        Signed::<U>::try_sign(payload, &self.signer())
+    }
+
+    pub fn signer(&self) -> AgentSigner {
+        AgentSigner::from_active(&self)
     }
 
     pub fn get_capability<T: ContentRef>(

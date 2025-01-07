@@ -7,7 +7,7 @@ use crate::{
         signed::{Signed, SigningError},
     },
     principal::{
-        agent::{Agent, AgentId},
+        agent::{id::AgentId, Agent},
         document::id::DocumentId,
         identifier::Identifier,
     },

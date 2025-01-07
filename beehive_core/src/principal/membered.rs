@@ -1,8 +1,7 @@
 pub mod id;
-pub mod unknown_error;
 
 use super::{
-    agent::{Agent, AgentId},
+    agent::{id::AgentId, Agent},
     document::Document,
     group::{
         operation::{delegation::Delegation, revocation::Revocation},
@@ -13,7 +12,10 @@ use super::{
 };
 use crate::{
     content::reference::ContentRef,
-    crypto::signed::{Signed, SigningError},
+    crypto::{
+        digest::Digest,
+        signed::{Signed, SigningError},
+    },
 };
 use dupe::{Dupe, OptionDupedExt};
 use id::MemberedId;
@@ -57,23 +59,12 @@ impl<T: ContentRef> Membered<T> {
         }
     }
 
-    pub fn add_member(&mut self, delegation: Signed<Delegation<T>>) {
-        match self {
-            Membered::Group(group) => {
-                group.borrow_mut().add_delegation(delegation);
-            }
-            Membered::Document(document) => {
-                document.borrow_mut().add_member(delegation);
-            }
-        }
-    }
-
     pub fn revoke_member(
         &mut self,
         member_id: AgentId,
-        signing_key: &ed25519_dalek::SigningKey,
+        signing_key: ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<RefCell<Document<T>>>],
-    ) -> Result<(), SigningError> {
+    ) -> Result<Digest<Signed<Revocation<T>>>, SigningError> {
         match self {
             Membered::Group(group) => {
                 group

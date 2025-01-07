@@ -7,12 +7,13 @@ use crate::{
     cgka::{error::CgkaError, keys::ShareKeyMap, operation::CgkaOperation, Cgka},
     content::reference::ContentRef,
     crypto::{
+        digest::Digest,
         encrypted::Encrypted,
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
     },
     principal::{
-        agent::{Agent, AgentId},
+        agent::{id::AgentId, signer::AgentSigner, Agent},
         group::{
             operation::{
                 delegation::{Delegation, DelegationError},
@@ -113,7 +114,9 @@ impl<T: ContentRef> Document<T> {
         revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
-        let doc_signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+        let doc_signer = AgentSigner::document_signer_from_key(sk);
+
         let group = parents.iter().try_fold(
             Group::generate(parents.clone(), delegations, revocations, csprng)?,
             |mut acc, parent| {
@@ -133,7 +136,7 @@ impl<T: ContentRef> Document<T> {
                 Ok::<Group<T>, DelegationError>(acc)
             },
         )?;
-        let owner_id = IndividualId(Identifier((&doc_signer).into()));
+        let owner_id = IndividualId(Identifier(doc_signer.verifying_key()));
         let doc_id = DocumentId(group.id());
         let owner_share_secret_key = ShareSecretKey::generate(csprng);
         let owner_share_key = owner_share_secret_key.share_key();
@@ -208,9 +211,9 @@ impl<T: ContentRef> Document<T> {
     pub fn revoke_member(
         &mut self,
         member_id: AgentId,
-        signing_key: &ed25519_dalek::SigningKey,
+        signing_key: ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<RefCell<Document<T>>>],
-    ) -> Result<(), SigningError> {
+    ) -> Result<Digest<Signed<Revocation<T>>>, SigningError> {
         // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
         // FIXME: We need to check if this has revoked the last member in our group?
         // let mut ops = Vec::new();
@@ -240,6 +243,15 @@ impl<T: ContentRef> Document<T> {
         signed_delegation: Signed<Delegation<T>>,
     ) -> Result<(), AddError> {
         self.group.receive_delegation(signed_delegation)?;
+        self.rebuild();
+        Ok(())
+    }
+
+    pub fn receive_revocation(
+        &mut self,
+        signed_revocation: Signed<Revocation<T>>,
+    ) -> Result<(), AddError> {
+        self.group.receive_revocation(signed_revocation)?;
         self.rebuild();
         Ok(())
     }

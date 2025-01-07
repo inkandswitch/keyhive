@@ -1,10 +1,10 @@
-// FIXME move to Group
+// FIXME move to Group FIXME
 
 use super::delegation::{Delegation, StaticDelegation};
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
-    principal::{agent::AgentId, document::id::DocumentId, identifier::Identifier},
+    principal::{agent::id::AgentId, document::id::DocumentId, identifier::Identifier},
 };
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
@@ -83,7 +83,7 @@ pub struct StaticRevocation<T: ContentRef> {
     pub proof: Option<Digest<Signed<StaticDelegation<T>>>>,
 
     /// The heads of relevant [`Document`] content at time of revocation.
-    pub after_content: BTreeMap<Identifier, Vec<T>>,
+    pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
 impl<T: ContentRef> From<Revocation<T>> for StaticRevocation<T> {
@@ -91,12 +91,7 @@ impl<T: ContentRef> From<Revocation<T>> for StaticRevocation<T> {
         Self {
             revoke: Digest::hash(revocation.revoke.as_ref()).into(),
             proof: revocation.proof.map(|p| Digest::hash(p.as_ref()).into()),
-            after_content: BTreeMap::from_iter(
-                revocation
-                    .after_content
-                    .into_iter()
-                    .map(|(doc_id, content)| (Identifier::from(doc_id), content)),
-            ),
+            after_content: revocation.after_content,
         }
     }
 }

@@ -4,7 +4,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::signed::{Signed, SigningError},
     principal::{
-        agent::{Agent, AgentId},
+        agent::{id::AgentId, Agent},
         group::{
             operation::{delegation::Delegation, revocation::Revocation},
             Group,
@@ -27,10 +27,6 @@ impl<T: ContentRef> GroupStore<T> {
     pub fn insert(&mut self, group: Rc<RefCell<Group<T>>>) {
         let id = group.borrow().group_id();
         self.0.insert(id, group);
-    }
-
-    pub(crate) fn remove(&mut self, id: &GroupId) -> Option<Rc<RefCell<Group<T>>>> {
-        self.0.remove(id)
     }
 
     pub fn generate_group<R: rand::CryptoRng + rand::RngCore>(

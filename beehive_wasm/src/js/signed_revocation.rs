@@ -1,5 +1,8 @@
 use super::{change_ref::JsChangeRef, revocation::JsRevocation};
-use beehive_core::{crypto::signed::Signed, principal::group::operation::revocation::Revocation};
+use beehive_core::{
+    crypto::signed::Signed,
+    principal::{group::operation::revocation::Revocation, verifiable::Verifiable},
+};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = SignedRevocation)]

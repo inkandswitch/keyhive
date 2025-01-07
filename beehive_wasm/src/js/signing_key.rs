@@ -1,5 +1,4 @@
-use super::signed::JsSigned;
-use beehive_core::crypto::signed::{Signed, SigningError};
+use beehive_core::crypto::signed::SigningError;
 use rand::Fill;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -36,14 +35,6 @@ impl JsSigningKey {
 
         JsSigningKey::new(buf.as_slice())
             .map_err(|_| GenSigningKeyError::CannotParseEd25519SigningKey)
-    }
-
-    #[wasm_bindgen(js_name = trySign)]
-    pub fn try_sign(&self, data: &[u8]) -> Result<JsSigned, JsSigningError> {
-        Ok(JsSigned(Signed::try_sign(
-            data.to_vec(),
-            &ed25519_dalek::SigningKey::from_bytes(&self.0),
-        )?))
     }
 }
 

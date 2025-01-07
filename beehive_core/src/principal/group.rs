@@ -6,7 +6,7 @@ pub mod state;
 pub mod store;
 
 use super::{
-    agent::{Agent, AgentId},
+    agent::{id::AgentId, signer::AgentSigner, Agent},
     document::{id::DocumentId, Document},
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
@@ -16,6 +16,7 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::{
+        digest::Digest,
         share_key::ShareKey,
         signed::{Signed, SigningError},
     },
@@ -68,7 +69,8 @@ impl<T: ContentRef> Group<T> {
         revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
         csprng: &mut R,
     ) -> Result<Group<T>, SigningError> {
-        let group_signer = ed25519_dalek::SigningKey::generate(csprng);
+        let sk = ed25519_dalek::SigningKey::generate(csprng);
+        let group_signer = AgentSigner::group_signer_from_key(sk);
         let group_id = GroupId(group_signer.verifying_key().into());
 
         let mut delegation_heads = CaMap::new();
@@ -175,43 +177,29 @@ impl<T: ContentRef> Group<T> {
     pub fn receive_delegation(
         &mut self,
         delegation: Signed<Delegation<T>>,
-    ) -> Result<(), state::AddError> {
-        self.state.add_delegation(delegation)?;
+    ) -> Result<Digest<Signed<Delegation<T>>>, state::AddError> {
+        let digest = self.state.add_delegation(delegation)?;
         self.rebuild();
-        Ok(())
+        Ok(digest)
     }
 
-    pub fn add_delegation(&mut self, signed_delegation: Signed<Delegation<T>>) {
-        // FIXME check subject, signature, find dependencies or quarantine
-        // ...look at the quarantine and see if any of them depend on this one
-        // ...etc etc
-        // FIXME check that delegation is authorized
-        // FIXME
-
-        let id = signed_delegation.payload().delegate.agent_id();
-        let rc = Rc::new(signed_delegation);
-        self.state.delegations.borrow_mut().insert(rc.dupe());
-
-        match self.members.get_mut(&id) {
-            Some(caps) => {
-                caps.push(rc);
-            }
-            None => {
-                self.members.insert(id, vec![rc]);
-            }
-        }
-
-        self.rebuild()
+    pub fn receive_revocation(
+        &mut self,
+        revocation: Signed<Revocation<T>>,
+    ) -> Result<Digest<Signed<Revocation<T>>>, state::AddError> {
+        let digest = self.state.add_revocation(revocation)?;
+        self.rebuild();
+        Ok(digest)
     }
 
     pub fn add_member(
         &mut self,
         member_to_add: Agent<T>,
         can: Access,
-        signing_key: &ed25519_dalek::SigningKey,
+        signing_key: ed25519_dalek::SigningKey,
         after_revocations: &[&Rc<Signed<Revocation<T>>>],
         relevant_docs: &[&Rc<RefCell<Document<T>>>],
-    ) -> Result<(), AddMemberError> {
+    ) -> Result<Digest<Signed<Delegation<T>>>, AddMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
         let agent: Agent<T> = indie.into();
         let proof = if self.verifying_key() == signing_key.verifying_key() {
@@ -247,19 +235,21 @@ impl<T: ContentRef> Group<T> {
                     })
                     .collect(),
             },
-            &signing_key,
+            &AgentSigner::group_signer_from_key(signing_key),
         )?;
 
-        Ok(self.add_delegation(delegation))
+        let digest = self.receive_delegation(delegation)?;
+        Ok(digest)
     }
 
     pub fn revoke_member(
         &mut self,
         member_to_remove: AgentId,
-        signing_key: &ed25519_dalek::SigningKey,
+        signing_key: ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<RefCell<Document<T>>>], // TODO FIXME just lookup reachable docs directly
-    ) -> Result<(), SigningError> {
+    ) -> Result<Digest<Signed<Revocation<T>>>, SigningError> {
         let revocations = &mut self.state.revocations;
+        let signer = AgentSigner::group_signer_from_key(signing_key);
 
         if let Some(revoke_dlgs) = self.members.remove(&member_to_remove) {
             revoke_dlgs.iter().try_fold((), |_, dlg| {
@@ -274,15 +264,14 @@ impl<T: ContentRef> Group<T> {
                             )
                         })),
                     },
-                    &signing_key,
+                    &signer.dupe(),
                 )?;
 
-                revocations.borrow_mut().insert(Rc::new(revocation));
-
-                Ok(())
+                let digest = revocations.borrow_mut().receive_revocation(revocation)?;
+                Ok(digest)
             })
         } else {
-            Ok(())
+            todo!("FIXME")
         }
 
         // FIXME check that you can actually do this with tiebreaking, seniroity etc etc
@@ -313,39 +302,6 @@ impl<T: ContentRef> Group<T> {
             }
         }
     }
-
-    pub fn add_revocation(
-        &mut self,
-        signed_revocation: Signed<Revocation<T>>,
-    ) -> Result<(), state::AddError> {
-        // FIXME check subject, signature, find dependencies or quarantine
-        // ...look at the quarantine and see if any of them depend on this one
-        // ...etc etc
-        // FIXME check that delegation is authorized
-        self.members.remove(
-            &signed_revocation
-                .payload()
-                .revoke
-                .payload()
-                .delegate
-                .agent_id(),
-        );
-
-        self.state.add_revocation(signed_revocation)
-    }
-
-    // pub fn add_member(&mut self, delegation: Signed<Delegation>) {
-    //     FIXME check subject, signature, find dependencies or quarantine
-    //     ...look at the quarantine and see if any of them depend on this one
-    //     ...etc etc
-    //     self.state.delegations.insert(delegation.into());
-    //     todo!() // rebuild, later do IVM
-    // }
-
-    // pub fn revoke(&mut self, revocation: Signed<Revocation>) {
-    //     self.state.revocations.insert(revocation.into());
-    //     todo!() // rebuild, later do IVM
-    // }
 }
 
 impl<T: ContentRef> Verifiable for Group<T> {

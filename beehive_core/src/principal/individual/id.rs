@@ -1,7 +1,10 @@
 use crate::principal::{identifier::Identifier, verifiable::Verifiable};
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[derive(
+    Debug, Copy, Dupe, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
+)]
 pub struct IndividualId(pub Identifier);
 
 impl IndividualId {

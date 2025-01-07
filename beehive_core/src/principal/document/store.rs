@@ -4,7 +4,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::signed::Signed,
     principal::{
-        agent::{Agent, AgentId},
+        agent::{id::AgentId, Agent},
         group::operation::{
             delegation::{Delegation, DelegationError},
             revocation::Revocation,

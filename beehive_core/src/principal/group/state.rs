@@ -10,7 +10,9 @@ use crate::{
         signed::{Signed, VerificationError},
     },
     principal::{
-        agent::Agent, group::operation::delegation::DelegationError, identifier::Identifier,
+        agent::{signer::AgentSigner, Agent},
+        group::operation::delegation::DelegationError,
+        identifier::Identifier,
         verifiable::Verifiable,
     },
     util::content_addressed_map::CaMap,
@@ -88,8 +90,9 @@ impl<T: ContentRef> GroupState<T> {
         revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
-        let signing_key: ed25519_dalek::SigningKey = ed25519_dalek::SigningKey::generate(csprng);
+        let signing_key = ed25519_dalek::SigningKey::generate(csprng);
         let group_id = signing_key.verifying_key().into();
+        let signer = AgentSigner::group_signer_from_key(signing_key);
 
         let group = GroupState {
             id: GroupId(group_id),
@@ -111,7 +114,7 @@ impl<T: ContentRef> GroupState<T> {
                     after_revocations: vec![],
                     after_content: BTreeMap::new(),
                 },
-                &signing_key,
+                &signer,
             )?;
 
             acc.delegation_heads.insert(Rc::new(dlg));
@@ -139,16 +142,27 @@ impl<T: ContentRef> GroupState<T> {
         &mut self,
         delegation: Signed<Delegation<T>>,
     ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
-        if *delegation.verifying_key() != self.id.0.verifying_key() {
+        if delegation.verifying_key() != self.id.0.verifying_key() {
             return Err(AddError::InvalidSubject(delegation.subject()));
         }
 
         let rc = Rc::new(delegation);
+        let mut inserted = false;
 
         for (head_digest, head) in self.delegation_heads.clone().iter() {
             if head.payload().is_ancestor_of(&rc) {
-                self.delegation_heads.insert(rc.dupe());
                 self.delegation_heads.remove_by_hash(head_digest);
+
+                if !inserted {
+                    self.delegation_heads.insert(rc.dupe());
+                    inserted = true;
+                }
+            }
+        }
+
+        for (head_digest, head) in self.revocation_heads.clone().iter() {
+            if rc.payload.after_revocations.contains(head) {
+                self.revocation_heads.remove_by_hash(head_digest);
             }
         }
 
@@ -156,16 +170,30 @@ impl<T: ContentRef> GroupState<T> {
         Ok(hash)
     }
 
-    pub fn add_revocation(&mut self, revocation: Signed<Revocation<T>>) -> Result<(), AddError> {
+    pub fn add_revocation(
+        &mut self,
+        revocation: Signed<Revocation<T>>,
+    ) -> Result<Digest<Signed<Revocation<T>>>, AddError> {
         if revocation.subject() != self.id.into() {
             return Err(AddError::InvalidSubject(revocation.subject()));
         }
 
-        todo!("FIXME");
+        let rc = Rc::new(revocation);
+        let mut inserted = false;
 
-        self.revocation_heads.insert(Rc::new(revocation));
-        // FIXME check that this is actually a head
-        Ok(())
+        for (head_digest, head) in self.delegation_heads.clone().iter() {
+            if rc.payload.revoke == *head || rc.payload.proof == Some(head.dupe()) {
+                self.delegation_heads.remove_by_hash(head_digest);
+
+                if !inserted {
+                    self.revocation_heads.insert(rc.dupe());
+                    inserted = true;
+                }
+            }
+        }
+
+        let hash = self.revocations.borrow_mut().insert(rc);
+        Ok(hash)
     }
 
     pub fn delegations_for(&self, agent: Agent<T>) -> Vec<Rc<Signed<Delegation<T>>>> {
@@ -180,10 +208,6 @@ impl<T: ContentRef> GroupState<T> {
                 }
             })
             .collect()
-    }
-
-    pub fn get_capability(&self) {
-        todo!()
     }
 }
 

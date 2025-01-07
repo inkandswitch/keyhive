@@ -1,5 +1,8 @@
 use super::{change_ref::JsChangeRef, delegation::JsDelegation};
-use beehive_core::{crypto::signed::Signed, principal::group::operation::delegation::Delegation};
+use beehive_core::{
+    crypto::signed::Signed,
+    principal::{group::operation::delegation::Delegation, verifiable::Verifiable},
+};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = SignedDelegation)]

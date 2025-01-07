@@ -5,7 +5,7 @@ pub mod op;
 pub mod state;
 pub mod store;
 
-use super::{agent::AgentId, document::id::DocumentId, verifiable::Verifiable};
+use super::{agent::id::AgentId, document::id::DocumentId, verifiable::Verifiable};
 use crate::crypto::{
     share_key::ShareKey,
     signed::{Signed, SigningError},
@@ -79,7 +79,7 @@ impl Individual {
     }
 
     pub fn receive_prekey_op(&mut self, op: Signed<op::KeyOp>) -> Result<(), ReceivePrekeyOpError> {
-        if *op.verifying_key() != self.id.verifying_key() {
+        if op.verifying_key() != self.id.verifying_key() {
             return Err(ReceivePrekeyOpError::IncorrectSigner);
         }
 
@@ -105,7 +105,7 @@ impl Individual {
     pub(crate) fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old_key: ShareKey,
-        signer: &ed25519_dalek::SigningKey,
+        signer: ed25519_dalek::SigningKey,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_key = self.prekey_state.rotate_gen(old_key, signer, csprng)?;
@@ -116,7 +116,7 @@ impl Individual {
 
     pub(crate) fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
-        signer: &ed25519_dalek::SigningKey,
+        signer: ed25519_dalek::SigningKey,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_key = self.prekey_state.expand(signer, csprng)?;
