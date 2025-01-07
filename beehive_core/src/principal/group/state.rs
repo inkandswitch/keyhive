@@ -163,7 +163,7 @@ impl<T: ContentRef> GroupState<T> {
 
         todo!("FIXME");
 
-        self.revocation_heads.own(revocation);
+        self.revocation_heads.insert(Rc::new(revocation));
         // FIXME check that this is actually a head
         Ok(())
     }
@@ -235,6 +235,7 @@ impl<T: ContentRef> Verifiable for GroupState<T> {
     }
 }
 
+// FIXME move to ../error.rs
 #[derive(Debug, thiserror::Error)]
 pub enum AddError {
     #[error("Invalid subject {0}")]

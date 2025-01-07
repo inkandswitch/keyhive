@@ -30,8 +30,8 @@ impl<T: Serialize> CaMap<T> {
         key
     }
 
-    pub fn own(&mut self, value: T) -> Digest<T> {
-        self.insert(Rc::new(value))
+    pub(crate) fn insert_direct(&mut self, key: Digest<T>, value: Rc<T>) {
+        self.0.insert(key, value);
     }
 
     /// Remove an element from the map by its [`Digest`].

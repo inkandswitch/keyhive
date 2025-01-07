@@ -172,9 +172,12 @@ impl<T: ContentRef> Group<T> {
             .collect()
     }
 
-    pub fn receive_delegation(&mut self, delegation: Signed<Delegation<T>>) -> Result<(), ()> {
-        self.state.add_delegation(delegation);
-        self.rebuild(); // FIXME error handling
+    pub fn receive_delegation(
+        &mut self,
+        delegation: Signed<Delegation<T>>,
+    ) -> Result<(), state::AddError> {
+        self.state.add_delegation(delegation)?;
+        self.rebuild();
         Ok(())
     }
 

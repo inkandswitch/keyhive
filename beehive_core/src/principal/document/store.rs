@@ -44,6 +44,10 @@ impl<T: ContentRef> DocumentStore<T> {
         self.docs.get(id).map(|d| d.borrow_mut())
     }
 
+    pub fn contains_key(&self, id: &DocumentId) -> bool {
+        self.docs.contains_key(id)
+    }
+
     pub fn generate_document<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         parents: NonEmpty<Agent<T>>,

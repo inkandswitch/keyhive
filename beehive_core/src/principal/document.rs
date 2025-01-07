@@ -18,6 +18,7 @@ use crate::{
                 delegation::{Delegation, DelegationError},
                 revocation::Revocation,
             },
+            state::AddError,
             Group,
         },
         identifier::Identifier,
@@ -56,6 +57,23 @@ impl<T: ContentRef> Document<T> {
         let doc_id = DocumentId(head.subject());
         let mut doc = Document {
             group: Group::new(head, delegations, revocations),
+            reader_keys: Default::default(),
+            content_heads: Default::default(),
+            content_state: Default::default(),
+            cgka: Cgka::new(doc_id, viewer_id, viewer_pk)?,
+        };
+        doc.rebuild();
+        Ok(doc)
+    }
+
+    pub(crate) fn from_group(
+        group: Group<T>,
+        viewer_id: IndividualId,
+        viewer_pk: ShareKey,
+    ) -> Result<Self, CgkaError> {
+        let doc_id = DocumentId(group.id());
+        let mut doc = Document {
+            group,
             reader_keys: Default::default(),
             content_heads: Default::default(),
             content_state: Default::default(),
@@ -220,9 +238,9 @@ impl<T: ContentRef> Document<T> {
     pub fn receive_delegation(
         &mut self,
         signed_delegation: Signed<Delegation<T>>,
-    ) -> Result<(), ()> {
-        self.group.receive_delegation(signed_delegation);
-        // FIXME self.rebuild();
+    ) -> Result<(), AddError> {
+        self.group.receive_delegation(signed_delegation)?;
+        self.rebuild();
         Ok(())
     }
 

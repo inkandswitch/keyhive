@@ -7,7 +7,7 @@ use crate::{
     crypto::{
         digest::Digest,
         encrypted::Encrypted,
-        share_key::ShareKey,
+        share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError, VerificationError},
     },
     error::missing_dependency::MissingDependency,
@@ -16,10 +16,12 @@ use crate::{
         agent::{Agent, AgentId},
         document::{id::DocumentId, store::DocumentStore, DecryptError, Document, EncryptError},
         group::{
+            self,
             id::GroupId,
             operation::{
                 delegation::{Delegation, DelegationError, StaticDelegation},
                 revocation::Revocation,
+                Operation,
             },
             store::GroupStore,
             Group,
@@ -350,31 +352,50 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         None
     }
 
-    // NOTE becuase groups have multple ownership, we cannot guarantee no references to the
-    // prior group exist. Ensure that there's no other refs first!
-    // pub(crate) fn promote_group_to_document(
-    //     &self,
-    //     group_ref: Rc<RefCell<Group<T>>>,
-    // ) -> Result<(), NonexclusiveReferenceError<RefCell<Group<T>>>> {
-    //     if let Some(group_cell) = Rc::into_inner(group_ref) {
-    //         let group: Group<T> = group_cell.into_inner();
-    //         let group_id = group.group_id();
-    //         self.groups.remove(&group_id);
+    pub fn promote_group_to_document(
+        &mut self,
+        group_id: GroupId,
+    ) -> Result<DocumentId, CgkaError> {
+        let doc_id = DocumentId(group_id.into());
+        if self.docs.contains_key(&doc_id) {
+            todo!("FIXME")
+        }
 
-    //         let doc_id = DocumentId(group_id.into());
-    //         let doc = Document {
-    //             group,
-    //             reader_keys: todo!(),
-    //             content_heads: todo!(),
-    //             content_state: todo!(),
-    //             cgka: Cgka::new(doc_id, self.id(), todo!()),
-    //         };
-    //         // FIXME Check if conflict
-    //         self.docs.insert(doc_id, doc);
-    //     } else {
-    //         Err(NonexclusiveReferenceError(group_ref.as_ref()))
-    //     }
-    // }
+        let group_ref = self.groups.remove(&group_id).expect("FIXME");
+        let group = Rc::into_inner(group_ref).expect("FIXME").into_inner(); // NOTE if docs and groups are stored together, then this woudl be possile to adjust mutibly
+
+        let mut delegations = CaMap::new();
+        let mut seen_delegations = HashSet::new();
+        //FIXME maybe easier to just indictae what kind of thing you are in the root delegatrion
+        // AKA use an AgentId as the verifyingkey(!)
+
+        // FIXME may actually be easier to seirlaisze/deserilaize
+
+        for (head_digest, head) in group.delegation_heads().iter() {
+            if seen_delegations.contains(head_digest) {
+                continue;
+            }
+
+            let mut ancestors = vec![head.payload.proof];
+            while let Some(Some(ancestor)) = ancestors.pop() {
+                let digest = delegations.insert(ancestor.map(|payload| Delegation {
+                    delegate:
+                    proof: payload.proof,
+
+                }));
+                seen_delegations.insert(digest);
+            }
+        }
+
+        let mut revocations = CaMap::new();
+
+        let viewer_pk = ShareSecretKey::generate(&mut self.csprng).share_key();
+        let doc = Document::from_group(group, self.id(), viewer_pk)?;
+
+        self.docs.insert(Rc::new(RefCell::new(doc)));
+
+        Ok(doc_id)
+    }
 
     pub fn receive_delegation(
         &mut self,
@@ -448,7 +469,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         };
 
         if let Some(subject) = existing_subject {
-            subject.receive_delegation(delegation);
+            subject.receive_delegation(delegation)?;
         } else {
             let doc_id = DocumentId(subject_id);
             if self.unregistered_docs.remove(&doc_id) {
@@ -500,4 +521,7 @@ pub enum ReceieveStaticDelegationError<T: ContentRef> {
 
     #[error("Cgka init error: {0}")]
     CgkaInitError(#[from] CgkaError),
+
+    #[error(transparent)]
+    GroupReceiveError(#[from] group::state::AddError),
 }

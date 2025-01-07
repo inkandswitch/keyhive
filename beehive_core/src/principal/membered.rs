@@ -6,6 +6,7 @@ use super::{
     document::Document,
     group::{
         operation::{delegation::Delegation, revocation::Revocation},
+        state::AddError,
         Group,
     },
     verifiable::Verifiable,
@@ -94,7 +95,7 @@ impl<T: ContentRef> Membered<T> {
         }
     }
 
-    pub fn receive_delegation(&self, delegation: Signed<Delegation<T>>) -> Result<(), ()> {
+    pub fn receive_delegation(&self, delegation: Signed<Delegation<T>>) -> Result<(), AddError> {
         match self {
             Membered::Group(group) => group.borrow_mut().receive_delegation(delegation),
             Membered::Document(document) => document.borrow_mut().receive_delegation(delegation),

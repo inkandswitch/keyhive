@@ -20,8 +20,4 @@ impl IndividualStore {
     pub fn get(&self, id: &IndividualId) -> Option<Rc<RefCell<Individual>>> {
         self.0.get(id).duped()
     }
-
-    pub(crate) fn remove(&mut self, id: &IndividualId) {
-        self.0.remove(id);
-    }
 }
