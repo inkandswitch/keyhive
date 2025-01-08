@@ -251,91 +251,111 @@ impl<T: ContentRef> Group<T> {
     ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
         let agent_id = AgentId::from(signer.clone());
         let signer_id = signer.id();
+        let mut revocations = vec![];
 
-        enum ProofCtx<U: ContentRef> {
-            Root,
-            Admin(Rc<Signed<Delegation<U>>>),
-            Ancestor(Rc<Signed<Delegation<U>>>),
+        let all_to_revoke: Vec<Rc<Signed<Delegation<T>>>> = self
+            .members()
+            .get(&member_to_remove)
+            .cloned() // Relatively cheap since it's &Vec<Rc<_>>
+            .unwrap_or_default();
+
+        if all_to_revoke.is_empty() {
+            self.members.remove(&member_to_remove);
+            return Ok(vec![]);
         }
 
-        let mut proof_map = HashMap::new();
-        if let Some(to_revoke) = self.members().get(&member_to_remove) {
-            if agent_id == self.agent_id() {
-                for r in to_revoke {
-                    proof_map.insert(r.signature.to_bytes(), ProofCtx::Root);
-                }
-            } else {
-                for dlg in to_revoke.iter() {
-                    let sig = dlg.signature().to_bytes();
+        if agent_id == self.agent_id() {
+            // In the unlikely case that the group signing key still exists and is doing the revocation.
+            // Arguably this could be made impossible, but it would likely be surprising behaviour.
+            for to_revoke in all_to_revoke.iter() {
+                let r = self.build_revocation(
+                    signer.dupe(),
+                    to_revoke.dupe(),
+                    None,
+                    after_content.clone(),
+                )?;
+                self.receive_revocation(r.dupe())?;
+                revocations.push(r);
+            }
+        } else {
+            for to_revoke in all_to_revoke.iter() {
+                let mut found = false;
 
-                    if let Some(member_dlgs) = self.members().get(&agent_id) {
-                        for dlg in member_dlgs.iter() {
-                            // FIXME check this at the ingestion site
-
-                            if dlg.payload().can == Access::Admin {
-                                // Use your awesome & terrible admin powers!
-                                //
-                                // NOTE we don't do admin revocation cycle checking here for a few reasons:
-                                // 1. Unknown to you, the cycle may be broken with some other revocation
-                                // 2. It all gets resolved at materialization time
-                                proof_map.insert(sig, ProofCtx::Admin(dlg.dupe()));
-                            }
+                if let Some(member_dlgs) = self.members().get(&agent_id) {
+                    for mem_dlg in member_dlgs.clone().iter() {
+                        if mem_dlg.payload().can == Access::Admin {
+                            // Use your awesome & terrible admin powers!
+                            //
+                            // NOTE we don't do admin revocation cycle checking here for a few reasons:
+                            // 1. Unknown to you, the cycle may be broken with some other revocation
+                            // 2. It all gets resolved at materialization time
+                            let r = self.build_revocation(
+                                signer.dupe(),
+                                to_revoke.dupe(),
+                                Some(mem_dlg.dupe()), // Admin proof
+                                after_content.clone(),
+                            )?;
+                            self.receive_revocation(r.dupe())?;
+                            revocations.push(r);
+                            found = true;
                         }
                     }
+                }
 
-                    if dlg.signed_by == signer_id {
-                        proof_map.insert(sig, ProofCtx::Ancestor(dlg.dupe()));
-                        break;
-                    }
+                // "Double up" even if you're an admin in case you get concurrently demoted.
+                // We include the admin proofs as well since those could also get revoked.
 
-                    // Double up even if you're an admin in case you get concurrently demoted
-                    // We include the admin proofs as well in case one of these also gets revoked
-                    for ancestor in dlg.payload().proof_lineage() {
+                if to_revoke.signed_by == signer_id {
+                    found = true;
+                    revocations.push(self.build_revocation(
+                        signer.dupe(),
+                        to_revoke.dupe(),
+                        Some(to_revoke.dupe()),
+                        after_content.clone(),
+                    )?);
+                } else {
+                    for ancestor in to_revoke.payload().proof_lineage() {
                         if ancestor.signed_by == signer_id {
-                            proof_map.insert(sig, ProofCtx::Ancestor(ancestor.dupe()));
+                            found = true;
+                            let r = self.build_revocation(
+                                signer.dupe(),
+                                to_revoke.dupe(),
+                                Some(ancestor.dupe()),
+                                after_content.clone(),
+                            )?;
+                            revocations.push(r.dupe());
+                            self.receive_revocation(r)?;
                             break;
                         }
                     }
-
-                    if !proof_map.contains_key(&sig) {
-                        todo!("FIXME blow up because you're unauthorized");
-                    }
                 }
 
-                if proof_map.len() != to_revoke.len() {
-                    todo!()
+                if !found {
+                    return Err(RevokeMemberError::NoProof);
                 }
             }
-        } else {
-            // FIXME nothing to do
-            todo!()
-        };
-
-        let proof = match proof_ctx {
-            ProofCtx::Root => None,
-            ProofCtx::Admin(ref proof) => Some(proof.dupe()),
-            ProofCtx::Ancestor(ref proof) => Some(proof.dupe()),
-        };
-
-        if let Some(revoke_dlgs) = self.members.remove(&member_to_remove) {
-            revoke_dlgs.iter().try_fold(vec![], |mut acc, dlg| {
-                let revocation = Signed::try_sign(
-                    Revocation {
-                        revoke: dlg.dupe(),
-                        proof: proof.dupe(),
-                        after_content: after_content.clone(),
-                    },
-                    &signer.dupe(),
-                )?;
-
-                let rc = Rc::new(revocation);
-                let _digest = self.receive_revocation(rc.dupe())?;
-                acc.push(rc);
-                Ok::<_, RevokeMemberError>(acc)
-            })
-        } else {
-            todo!("FIXME")
         }
+
+        Ok(revocations)
+    }
+
+    fn build_revocation(
+        &mut self,
+        signer: AgentSigner,
+        revoke: Rc<Signed<Delegation<T>>>,
+        proof: Option<Rc<Signed<Delegation<T>>>>,
+        after_content: BTreeMap<DocumentId, Vec<T>>,
+    ) -> Result<Rc<Signed<Revocation<T>>>, SigningError> {
+        let revocation = Signed::try_sign(
+            Revocation {
+                revoke,
+                proof,
+                after_content,
+            },
+            &signer.dupe(),
+        )?;
+
+        Ok(Rc::new(revocation))
     }
 
     pub fn rebuild(&mut self) {
@@ -344,6 +364,7 @@ impl<T: ContentRef> Group<T> {
         {
             match op {
                 Operation::Delegation(d) => {
+                    // FIXME check for escelation
                     if let Some(mut_dlgs) = self.members.get_mut(&d.payload().delegate.agent_id()) {
                         mut_dlgs.push(d.dupe());
                     } else {
@@ -356,6 +377,7 @@ impl<T: ContentRef> Group<T> {
                         .members
                         .get_mut(&r.payload().revoke.payload().delegate.agent_id())
                     {
+                        // FIXME OOOOOR is an admin
                         // FIXME maintain this as a CaMap for easier removals, too
                         mut_dlgs.retain(|d| *d != r.payload().revoke);
                     }
@@ -415,6 +437,9 @@ pub enum AddMemberError {
 pub enum RevokeMemberError {
     #[error(transparent)]
     AddError(#[from] state::AddError),
+
+    #[error("Proof missing to authorize revocation")]
+    NoProof,
 
     #[error(transparent)]
     SigningError(#[from] SigningError),
