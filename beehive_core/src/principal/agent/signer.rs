@@ -28,6 +28,14 @@ impl AgentSigner {
         Some(AgentSigner { id, key })
     }
 
+    pub(crate) fn id(&self) -> SignerId {
+        self.id
+    }
+
+    pub(crate) fn key(&self) -> &ed25519_dalek::SigningKey {
+        &self.key
+    }
+
     pub(crate) fn from_active(active: &Active) -> Self {
         AgentSigner {
             id: SignerId::Individual(active.individual.id()),
@@ -57,13 +65,9 @@ impl AgentSigner {
     }
 }
 
-impl AgentSigner {
-    pub(crate) fn id(&self) -> SignerId {
-        self.id
-    }
-
-    pub(crate) fn key(&self) -> &ed25519_dalek::SigningKey {
-        &self.key
+impl From<AgentSigner> for AgentId {
+    fn from(signer: AgentSigner) -> Self {
+        signer.id.into()
     }
 }
 
@@ -96,6 +100,27 @@ impl Verifiable for SignerId {
             Self::Individual(id) => id.verifying_key(),
             Self::Group(id) => id.verifying_key(),
             Self::Document(id) => id.verifying_key(),
+        }
+    }
+}
+
+impl From<SignerId> for AgentId {
+    fn from(id: SignerId) -> Self {
+        match id {
+            SignerId::Individual(id) => AgentId::IndividualId(id),
+            SignerId::Group(id) => AgentId::GroupId(id),
+            SignerId::Document(id) => AgentId::DocumentId(id),
+        }
+    }
+}
+
+impl From<AgentId> for SignerId {
+    fn from(id: AgentId) -> Self {
+        match id {
+            AgentId::ActiveId(id) => SignerId::Individual(id),
+            AgentId::IndividualId(id) => SignerId::Individual(id),
+            AgentId::GroupId(id) => SignerId::Group(id),
+            AgentId::DocumentId(id) => SignerId::Document(id),
         }
     }
 }

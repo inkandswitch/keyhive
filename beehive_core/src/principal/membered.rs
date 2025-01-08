@@ -2,7 +2,7 @@ pub mod id;
 
 use super::{
     agent::{id::AgentId, Agent},
-    document::Document,
+    document::{id::DocumentId, Document},
     group::{
         operation::{delegation::Delegation, revocation::Revocation},
         state::AddError,
@@ -16,7 +16,11 @@ use crate::{
 };
 use dupe::{Dupe, OptionDupedExt};
 use id::MemberedId;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashMap},
+    rc::Rc,
+};
 
 /// The union of Agents that have updatable membership
 #[derive(Debug, Clone, Dupe, PartialEq, Eq)]
@@ -60,7 +64,7 @@ impl<T: ContentRef> Membered<T> {
         &mut self,
         member_id: AgentId,
         signing_key: ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<RefCell<Document<T>>>],
+        relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
         match self {
             Membered::Group(group) => {

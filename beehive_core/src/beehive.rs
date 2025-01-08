@@ -207,12 +207,15 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         to_revoke: AgentId,
         resource: &mut Membered<T>,
     ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
-        let relevant_docs = vec![]; // FIXME FIXME calculate reachable for revoked or just all known docs
+        let mut relevant_docs = BTreeMap::new();
+        for (doc_id, (doc, _)) in self.reachable_docs() {
+            relevant_docs.insert(doc_id, doc.borrow().content_heads.iter().cloned().collect());
+        }
 
         resource.revoke_member(
             to_revoke,
             self.active.borrow().signer.clone(),
-            relevant_docs.as_slice(),
+            &mut relevant_docs,
         )
     }
 

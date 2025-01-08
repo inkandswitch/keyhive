@@ -246,23 +246,84 @@ impl<T: ContentRef> Group<T> {
     pub fn revoke_member(
         &mut self,
         member_to_remove: AgentId,
-        signing_key: ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<RefCell<Document<T>>>], // TODO FIXME just lookup reachable docs directly
+        signer: AgentSigner,
+        after_content: &BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
-        let signer = AgentSigner::group_signer_from_key(signing_key);
+        let agent_id = AgentId::from(signer.clone());
+        let signer_id = signer.id();
+
+        enum ProofCtx<U: ContentRef> {
+            Root,
+            Admin(Rc<Signed<Delegation<U>>>),
+            Ancestor(Rc<Signed<Delegation<U>>>),
+        }
+
+        let mut proof_map = HashMap::new();
+        if let Some(to_revoke) = self.members().get(&member_to_remove) {
+            if agent_id == self.agent_id() {
+                for r in to_revoke {
+                    proof_map.insert(r.signature.to_bytes(), ProofCtx::Root);
+                }
+            } else {
+                for dlg in to_revoke.iter() {
+                    let sig = dlg.signature().to_bytes();
+
+                    if let Some(member_dlgs) = self.members().get(&agent_id) {
+                        for dlg in member_dlgs.iter() {
+                            // FIXME check this at the ingestion site
+
+                            if dlg.payload().can == Access::Admin {
+                                // Use your awesome & terrible admin powers!
+                                //
+                                // NOTE we don't do admin revocation cycle checking here for a few reasons:
+                                // 1. Unknown to you, the cycle may be broken with some other revocation
+                                // 2. It all gets resolved at materialization time
+                                proof_map.insert(sig, ProofCtx::Admin(dlg.dupe()));
+                            }
+                        }
+                    }
+
+                    if dlg.signed_by == signer_id {
+                        proof_map.insert(sig, ProofCtx::Ancestor(dlg.dupe()));
+                        break;
+                    }
+
+                    // Double up even if you're an admin in case you get concurrently demoted
+                    // We include the admin proofs as well in case one of these also gets revoked
+                    for ancestor in dlg.payload().proof_lineage() {
+                        if ancestor.signed_by == signer_id {
+                            proof_map.insert(sig, ProofCtx::Ancestor(ancestor.dupe()));
+                            break;
+                        }
+                    }
+
+                    if !proof_map.contains_key(&sig) {
+                        todo!("FIXME blow up because you're unauthorized");
+                    }
+                }
+
+                if proof_map.len() != to_revoke.len() {
+                    todo!()
+                }
+            }
+        } else {
+            // FIXME nothing to do
+            todo!()
+        };
+
+        let proof = match proof_ctx {
+            ProofCtx::Root => None,
+            ProofCtx::Admin(ref proof) => Some(proof.dupe()),
+            ProofCtx::Ancestor(ref proof) => Some(proof.dupe()),
+        };
 
         if let Some(revoke_dlgs) = self.members.remove(&member_to_remove) {
             revoke_dlgs.iter().try_fold(vec![], |mut acc, dlg| {
                 let revocation = Signed::try_sign(
                     Revocation {
                         revoke: dlg.dupe(),
-                        proof: None, // FIXME lookup a valid proof FIXME
-                        after_content: BTreeMap::from_iter(relevant_docs.iter().map(|d| {
-                            (
-                                d.borrow().doc_id(),
-                                d.borrow().content_heads.iter().cloned().collect(),
-                            )
-                        })),
+                        proof: proof.dupe(),
+                        after_content: after_content.clone(),
                     },
                     &signer.dupe(),
                 )?;
@@ -275,8 +336,6 @@ impl<T: ContentRef> Group<T> {
         } else {
             todo!("FIXME")
         }
-
-        // FIXME check that you can actually do this with tiebreaking, seniroity etc etc
     }
 
     pub fn rebuild(&mut self) {
