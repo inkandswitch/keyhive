@@ -13,7 +13,11 @@ use crate::{
     error::missing_dependency::MissingDependency,
     principal::{
         active::Active,
-        agent::{id::AgentId, signer::SignerId, Agent},
+        agent::{
+            id::AgentId,
+            signer::{AgentSigner, SignerId},
+            Agent,
+        },
         document::{id::DocumentId, store::DocumentStore, DecryptError, Document, EncryptError},
         group::{
             self,
@@ -214,7 +218,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
         resource.revoke_member(
             to_revoke,
-            self.active.borrow().signer.clone(),
+            AgentSigner::from_active(&self.active.borrow()),
             &mut relevant_docs,
         )
     }

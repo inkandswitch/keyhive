@@ -212,7 +212,7 @@ impl<T: ContentRef> Document<T> {
     pub fn revoke_member(
         &mut self,
         member_id: AgentId,
-        signing_key: ed25519_dalek::SigningKey,
+        signer: AgentSigner,
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
         // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
@@ -229,7 +229,7 @@ impl<T: ContentRef> Document<T> {
         // }
         after_other_doc_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
         self.group
-            .revoke_member(member_id, signing_key, &after_other_doc_content)
+            .revoke_member(member_id, signer, &after_other_doc_content)
     }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
