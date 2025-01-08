@@ -1,14 +1,12 @@
 use super::{
+    error::AddError,
     id::GroupId,
     operation::{delegation::Delegation, revocation::Revocation},
 };
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::{
-        digest::Digest,
-        signed::{Signed, VerificationError},
-    },
+    crypto::{digest::Digest, signed::Signed},
     principal::{
         agent::{signer::AgentSigner, Agent},
         group::operation::delegation::DelegationError,
@@ -211,27 +209,13 @@ impl<T: ContentRef> std::hash::Hash for GroupState<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
 
-        for dh in self.delegation_heads.iter().collect::<HashSet<_>>().iter() {
+        for dh in self.delegation_heads.iter() {
             dh.hash(state);
         }
 
-        self.delegations
-            .borrow()
-            .values()
-            .collect::<Vec<_>>()
-            .sort_by_key(|d| Digest::hash((**d).as_ref())) // FIXME use buitin hash
-            .hash(state);
-
-        for rh in self.revocation_heads.iter().collect::<HashSet<_>>().iter() {
+        for rh in self.revocation_heads.iter() {
             rh.hash(state);
         }
-
-        self.revocations
-            .borrow()
-            .values()
-            .collect::<Vec<_>>()
-            .sort_by_key(|d| Digest::hash((**d).as_ref())) // FIXME use buitin hash
-            .hash(state);
     }
 }
 
@@ -253,16 +237,6 @@ impl<T: ContentRef> Verifiable for GroupState<T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.id.0.verifying_key()
     }
-}
-
-// FIXME move to ../error.rs
-#[derive(Debug, thiserror::Error)]
-pub enum AddError {
-    #[error("Invalid subject {0}")]
-    InvalidSubject(Identifier),
-
-    #[error("Invalid signature")]
-    InvalidSignature(#[from] VerificationError),
 }
 
 // FIXME test

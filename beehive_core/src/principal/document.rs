@@ -15,11 +15,11 @@ use crate::{
     principal::{
         agent::{id::AgentId, signer::AgentSigner, Agent},
         group::{
+            error::AddError,
             operation::{
                 delegation::{Delegation, DelegationError},
                 revocation::Revocation,
             },
-            state::AddError,
             Group, RevokeMemberError,
         },
         identifier::Identifier,
@@ -55,13 +55,12 @@ impl<T: ContentRef> Document<T> {
         delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
         revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
     ) -> Result<Self, CgkaError> {
-        let doc_id = DocumentId(head.subject());
         let mut doc = Document {
+            cgka: Cgka::new(DocumentId(head.subject()), viewer_id, viewer_pk)?,
             group: Group::new(head, delegations, revocations),
             reader_keys: Default::default(),
             content_heads: Default::default(),
             content_state: Default::default(),
-            cgka: Cgka::new(doc_id, viewer_id, viewer_pk)?,
         };
         doc.rebuild();
         Ok(doc)

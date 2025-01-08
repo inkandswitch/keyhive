@@ -1,4 +1,4 @@
-// FIXME move stores to crate/principal/store/_store.rs?
+// TODO move all stores to crate/principal/store/*_store.rs
 
 use super::{id::IndividualId, Individual};
 use dupe::OptionDupedExt;

@@ -165,20 +165,4 @@ mod tests {
         let signed = Signed::try_sign(vec![1, 2, 3], &signer).unwrap();
         assert!(signed.try_verify().is_ok());
     }
-
-    // FIXME FIXME
-    // #[wasm_bindgen_test]
-    // fn test_verify_counterexample() {
-    //     let key1 = SigningKey::generate().unwrap();
-    //     let good_signed = key1.try_sign(vec![1, 2, 3].as_slice()).unwrap();
-
-    //     let key1 = SigningKey::generate().unwrap();
-    //     let bad_signed = Signed {
-    //         data: good_signed.0.data.clone(),
-    //         signature: good_signed.0.signature.clone(),
-    //         public_key: key2.0.verify_key().clone(),
-    //     };
-
-    //     assert_eq!(bad_signed.verify(), false);
-    // }
 }

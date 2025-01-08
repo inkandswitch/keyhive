@@ -21,13 +21,13 @@ use crate::{
         document::{id::DocumentId, store::DocumentStore, DecryptError, Document, EncryptError},
         group::{
             self,
+            error::AddError,
             id::GroupId,
             operation::{
                 delegation::{Delegation, DelegationError, StaticDelegation},
                 revocation::{Revocation, StaticRevocation},
                 StaticOperation,
             },
-            state::AddError,
             store::GroupStore,
             Group, RevokeMemberError,
         },
@@ -142,8 +142,6 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             for dep in head.payload().proof_lineage() {
                 self.delegations.borrow_mut().insert(dep);
             }
-
-            // FIXME also content and revs?
         }
 
         Ok(new_doc)
@@ -446,7 +444,6 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         &mut self,
         static_dlg: Signed<StaticRevocation<T>>,
     ) -> Result<(), ReceieveStaticDelegationError<T>> {
-        // FIXME better err
         // NOTE: this is the only place this gets parsed and this verification ONLY happens here
         static_dlg.try_verify()?;
 
@@ -554,5 +551,5 @@ pub enum ReceieveStaticDelegationError<T: ContentRef> {
     CgkaInitError(#[from] CgkaError),
 
     #[error(transparent)]
-    GroupReceiveError(#[from] group::state::AddError),
+    GroupReceiveError(#[from] group::error::AddError),
 }

@@ -1,4 +1,4 @@
-// FIXME move to Group FIXME
+// FIXME move to Group
 
 use super::delegation::{Delegation, StaticDelegation};
 use crate::{
@@ -18,7 +18,6 @@ pub struct Revocation<T: ContentRef> {
 }
 
 impl<T: ContentRef> Revocation<T> {
-    // FIXME MemberedId
     pub fn subject(&self) -> Identifier {
         self.revoke.subject()
     }

@@ -4,8 +4,8 @@ use super::{
     agent::{id::AgentId, signer::AgentSigner, Agent},
     document::{id::DocumentId, Document},
     group::{
+        error::AddError,
         operation::{delegation::Delegation, revocation::Revocation},
-        state::AddError,
         Group, RevokeMemberError,
     },
     verifiable::Verifiable,

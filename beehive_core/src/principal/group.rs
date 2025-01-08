@@ -1,5 +1,6 @@
 //! Model a collection of agents with no associated content.
 
+pub mod error;
 pub mod id;
 pub mod operation;
 pub mod state;
@@ -177,7 +178,7 @@ impl<T: ContentRef> Group<T> {
     pub fn receive_delegation(
         &mut self,
         delegation: Rc<Signed<Delegation<T>>>,
-    ) -> Result<Digest<Signed<Delegation<T>>>, state::AddError> {
+    ) -> Result<Digest<Signed<Delegation<T>>>, error::AddError> {
         let digest = self.state.add_delegation(delegation)?;
         self.rebuild();
         Ok(digest)
@@ -186,7 +187,7 @@ impl<T: ContentRef> Group<T> {
     pub fn receive_revocation(
         &mut self,
         revocation: Rc<Signed<Revocation<T>>>,
-    ) -> Result<Digest<Signed<Revocation<T>>>, state::AddError> {
+    ) -> Result<Digest<Signed<Revocation<T>>>, error::AddError> {
         let digest = self.state.add_revocation(revocation)?;
         self.rebuild();
         Ok(digest)
@@ -430,13 +431,13 @@ pub enum AddMemberError {
     AccessEscalation { wanted: Access, have: Access },
 
     #[error(transparent)]
-    AddError(#[from] state::AddError),
+    AddError(#[from] error::AddError),
 }
 
 #[derive(Debug, Error)]
 pub enum RevokeMemberError {
     #[error(transparent)]
-    AddError(#[from] state::AddError),
+    AddError(#[from] error::AddError),
 
     #[error("Proof missing to authorize revocation")]
     NoProof,

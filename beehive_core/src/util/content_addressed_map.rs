@@ -60,6 +60,7 @@ impl<T: Serialize> CaMap<T> {
         self.0.keys()
     }
     pub fn values(&self) -> std::collections::btree_map::Values<'_, Digest<T>, Rc<T>> {
+        // Sorted because BTreeMap
         self.0.values()
     }
 
