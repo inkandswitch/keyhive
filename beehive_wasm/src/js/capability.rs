@@ -31,6 +31,6 @@ impl Capability {
 
     #[wasm_bindgen(getter)]
     pub fn proof(&self) -> JsSignedDelegation {
-        self.proof.as_ref().clone().into()
+        self.proof.dupe().into()
     }
 }

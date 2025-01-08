@@ -1,5 +1,6 @@
 use super::{
     access::JsAccess,
+    add_member_error::JsAddMemberError,
     agent::JsAgent,
     change_ref::JsChangeRef,
     delegation::JsDelegationError,
@@ -10,8 +11,11 @@ use super::{
     identifier::JsIdentifier,
     individual_id::JsIndividualId,
     membered::JsMembered,
+    revoke_member_error::JsRevokeMemberError,
     share_key::JsShareKey,
     signed::JsSigned,
+    signed_delegation::JsSignedDelegation,
+    signed_revocation::JsSignedRevocation,
     signing_key::{JsSigningError, JsSigningKey},
     summary::Summary,
 };
@@ -147,7 +151,7 @@ impl JsBeehive {
         membered: &mut JsMembered,
         access: JsAccess,
         after_content: Vec<DocContentRefs>,
-    ) -> Result<(), JsDelegationError> {
+    ) -> Result<JsSignedDelegation, JsAddMemberError> {
         let content_ref_map: BTreeMap<DocumentId, Vec<JsChangeRef>> = after_content
             .into_iter()
             .map(|r| {
@@ -156,9 +160,11 @@ impl JsBeehive {
             })
             .collect();
 
-        Ok(self
+        let dlg = self
             .0
-            .add_member(to_add.0.dupe(), membered, *access, content_ref_map)?)
+            .add_member(to_add.0.dupe(), membered, *access, content_ref_map)?;
+
+        Ok(dlg.into())
     }
 
     #[wasm_bindgen(js_name = revokeMember)]
@@ -166,8 +172,9 @@ impl JsBeehive {
         &mut self,
         to_revoke: &JsAgent,
         membered: &mut JsMembered,
-    ) -> Result<(), JsSigningError> {
-        Ok(self.0.revoke_member(to_revoke.agent_id(), membered)?)
+    ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
+        let revs = self.0.revoke_member(to_revoke.agent_id(), membered)?;
+        Ok(revs.into_iter().map(|r| JsSignedRevocation(r)).collect())
     }
 
     #[wasm_bindgen(js_name = reachableDocs)]

@@ -140,59 +140,55 @@ impl<T: ContentRef> GroupState<T> {
 
     pub fn add_delegation(
         &mut self,
-        delegation: Signed<Delegation<T>>,
+        delegation: Rc<Signed<Delegation<T>>>,
     ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
         if delegation.verifying_key() != self.id.0.verifying_key() {
             return Err(AddError::InvalidSubject(delegation.subject()));
         }
 
-        let rc = Rc::new(delegation);
         let mut inserted = false;
-
         for (head_digest, head) in self.delegation_heads.clone().iter() {
-            if head.payload().is_ancestor_of(&rc) {
+            if head.payload().is_ancestor_of(&delegation) {
                 self.delegation_heads.remove_by_hash(head_digest);
 
                 if !inserted {
-                    self.delegation_heads.insert(rc.dupe());
+                    self.delegation_heads.insert(delegation.dupe());
                     inserted = true;
                 }
             }
         }
 
         for (head_digest, head) in self.revocation_heads.clone().iter() {
-            if rc.payload.after_revocations.contains(head) {
+            if delegation.payload.after_revocations.contains(head) {
                 self.revocation_heads.remove_by_hash(head_digest);
             }
         }
 
-        let hash = self.delegations.borrow_mut().insert(rc);
+        let hash = self.delegations.borrow_mut().insert(delegation);
         Ok(hash)
     }
 
     pub fn add_revocation(
         &mut self,
-        revocation: Signed<Revocation<T>>,
+        revocation: Rc<Signed<Revocation<T>>>,
     ) -> Result<Digest<Signed<Revocation<T>>>, AddError> {
         if revocation.subject() != self.id.into() {
             return Err(AddError::InvalidSubject(revocation.subject()));
         }
 
-        let rc = Rc::new(revocation);
         let mut inserted = false;
-
         for (head_digest, head) in self.delegation_heads.clone().iter() {
-            if rc.payload.revoke == *head || rc.payload.proof == Some(head.dupe()) {
+            if revocation.payload.revoke == *head || revocation.payload.proof == Some(head.dupe()) {
                 self.delegation_heads.remove_by_hash(head_digest);
 
                 if !inserted {
-                    self.revocation_heads.insert(rc.dupe());
+                    self.revocation_heads.insert(revocation.dupe());
                     inserted = true;
                 }
             }
         }
 
-        let hash = self.revocations.borrow_mut().insert(rc);
+        let hash = self.revocations.borrow_mut().insert(revocation);
         Ok(hash)
     }
 

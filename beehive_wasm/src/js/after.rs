@@ -1,5 +1,3 @@
-use wasm_bindgen::prelude::*;
-
 use super::{
     change_ref::JsChangeRef, doc_content_refs::DocContentRefs, document_id::JsDocumentId,
     signed_delegation::JsSignedDelegation, signed_revocation::JsSignedRevocation,
@@ -11,7 +9,9 @@ use beehive_core::{
         group::operation::{delegation::Delegation, revocation::Revocation},
     },
 };
+use dupe::Dupe;
 use std::{collections::BTreeMap, rc::Rc};
+use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
@@ -26,14 +26,14 @@ impl After {
     pub fn delegations(&self) -> Vec<JsSignedDelegation> {
         self.delegations
             .iter()
-            .map(|d| JsSignedDelegation(d.as_ref().clone()))
+            .map(|d| JsSignedDelegation(d.dupe()))
             .collect()
     }
 
     pub fn revocations(&self) -> Vec<JsSignedRevocation> {
         self.revocations
             .iter()
-            .map(|r| JsSignedRevocation(r.as_ref().clone()))
+            .map(|r| JsSignedRevocation(r.dupe()))
             .collect()
     }
 

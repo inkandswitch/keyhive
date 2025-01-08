@@ -7,7 +7,7 @@ use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AgentSigner {
+pub struct AgentSigner {
     id: SignerId,
     key: ed25519_dalek::SigningKey,
 }

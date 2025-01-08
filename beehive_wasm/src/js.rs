@@ -1,4 +1,5 @@
 pub mod access;
+pub mod add_member_error;
 pub mod after;
 pub mod agent;
 pub mod beehive;
@@ -15,6 +16,7 @@ pub mod identifier;
 pub mod individual_id;
 pub mod membered;
 pub mod revocation;
+pub mod revoke_member_error;
 pub mod share_key;
 pub mod signed;
 pub mod signed_delegation;

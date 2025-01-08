@@ -23,8 +23,9 @@ use crate::{
                 revocation::{Revocation, StaticRevocation},
                 StaticOperation,
             },
+            state::AddError,
             store::GroupStore,
-            Group,
+            Group, RevokeMemberError,
         },
         identifier::Identifier,
         individual::{id::IndividualId, store::IndividualStore, Individual},
@@ -177,13 +178,13 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         resource: &mut Membered<T>,
         can: Access,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<(), DelegationError> {
+    ) -> Result<Rc<Signed<Delegation<T>>>, AddMemberError> {
         let proof = resource
             .get_capability(&self.active.borrow().agent_id())
             .ok_or(DelegationError::Escalation)?;
 
         if can > proof.payload().can {
-            return Err(DelegationError::Escalation);
+            Err(DelegationError::Escalation)?;
         }
 
         let after_revocations = resource.get_agent_revocations(&to_add);
@@ -196,15 +197,17 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             after_content,
         })?;
 
-        Ok(resource.receive_delegation(dlg)?)
+        let rc = Rc::new(dlg);
+        resource.receive_delegation(rc.dupe())?;
+        Ok(rc)
     }
 
     pub fn revoke_member(
         &mut self,
         to_revoke: AgentId,
         resource: &mut Membered<T>,
-    ) -> Result<Digest<Signed<Revocation<T>>>, SigningError> {
-        let relevant_docs = vec![]; // FIXME calculate reachable for revoked or just all known docs
+    ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
+        let relevant_docs = vec![]; // FIXME FIXME calculate reachable for revoked or just all known docs
 
         resource.revoke_member(
             to_revoke,
@@ -402,7 +405,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         match subject_id {
             SignerId::Group(group_id) => {
                 if let Some(group) = self.groups.get(&group_id) {
-                    group.borrow_mut().receive_delegation(delegation)?;
+                    group.borrow_mut().receive_delegation(Rc::new(delegation))?;
                 } else {
                     self.groups.insert(Rc::new(RefCell::new(Group::new(
                         delegation,
@@ -415,7 +418,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             }
             SignerId::Document(doc_id) => {
                 if let Some(doc) = self.docs.get(&doc_id) {
-                    doc.borrow_mut().receive_delegation(delegation)?;
+                    doc.borrow_mut().receive_delegation(Rc::new(delegation))?;
                 } else {
                     self.docs.insert(Rc::new(RefCell::new(Document::new(
                         delegation,
@@ -473,9 +476,9 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
         let id = revocation.subject();
         if let Some(group) = self.groups.get(&GroupId(id)) {
-            group.borrow_mut().receive_revocation(revocation)?;
+            group.borrow_mut().receive_revocation(Rc::new(revocation))?;
         } else if let Some(doc) = self.docs.get(&DocumentId(id)) {
-            doc.borrow_mut().receive_revocation(revocation)?;
+            doc.borrow_mut().receive_revocation(Rc::new(revocation))?;
         } else {
             Err(ReceieveStaticDelegationError::CannotDelegateIndividuals)?;
         }
@@ -512,6 +515,18 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> From<&Beehive<T, R>> for
     fn from(context: &Beehive<T, R>) -> Self {
         context.active.dupe().into()
     }
+}
+
+#[derive(Debug, Error)]
+pub enum AddMemberError {
+    #[error(transparent)]
+    DelegationError(#[from] DelegationError),
+
+    #[error(transparent)]
+    AddError(#[from] AddError),
+
+    #[error(transparent)]
+    SigningError(#[from] SigningError),
 }
 
 #[derive(Debug, Error)]

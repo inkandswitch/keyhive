@@ -10,7 +10,7 @@ use crate::{
         digest::Digest,
         encrypted::Encrypted,
         share_key::{ShareKey, ShareSecretKey},
-        signed::{Signed, SigningError},
+        signed::Signed,
     },
     principal::{
         agent::{id::AgentId, signer::AgentSigner, Agent},
@@ -20,7 +20,7 @@ use crate::{
                 revocation::Revocation,
             },
             state::AddError,
-            Group,
+            Group, RevokeMemberError,
         },
         identifier::Identifier,
         individual::Individual,
@@ -67,7 +67,8 @@ impl<T: ContentRef> Document<T> {
         Ok(doc)
     }
 
-    pub(crate) fn from_group(
+    // NOTE doesn't register into the top-level Beehive context
+    pub fn from_group(
         group: Group<T>,
         viewer_id: IndividualId,
         viewer_pk: ShareKey,
@@ -213,7 +214,7 @@ impl<T: ContentRef> Document<T> {
         member_id: AgentId,
         signing_key: ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<RefCell<Document<T>>>],
-    ) -> Result<Digest<Signed<Revocation<T>>>, SigningError> {
+    ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
         // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
         // FIXME: We need to check if this has revoked the last member in our group?
         // let mut ops = Vec::new();
@@ -240,20 +241,20 @@ impl<T: ContentRef> Document<T> {
 
     pub fn receive_delegation(
         &mut self,
-        signed_delegation: Signed<Delegation<T>>,
-    ) -> Result<(), AddError> {
-        self.group.receive_delegation(signed_delegation)?;
+        signed_delegation: Rc<Signed<Delegation<T>>>,
+    ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
+        let digest = self.group.receive_delegation(signed_delegation)?;
         self.rebuild();
-        Ok(())
+        Ok(digest)
     }
 
     pub fn receive_revocation(
         &mut self,
-        signed_revocation: Signed<Revocation<T>>,
-    ) -> Result<(), AddError> {
-        self.group.receive_revocation(signed_revocation)?;
+        signed_revocation: Rc<Signed<Revocation<T>>>,
+    ) -> Result<Digest<Signed<Revocation<T>>>, AddError> {
+        let hash = self.group.receive_revocation(signed_revocation)?;
         self.rebuild();
-        Ok(())
+        Ok(hash)
     }
 
     pub fn pcs_update<R: rand::RngCore + rand::CryptoRng>(

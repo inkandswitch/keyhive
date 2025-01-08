@@ -6,16 +6,13 @@ use super::{
     group::{
         operation::{delegation::Delegation, revocation::Revocation},
         state::AddError,
-        Group,
+        Group, RevokeMemberError,
     },
     verifiable::Verifiable,
 };
 use crate::{
     content::reference::ContentRef,
-    crypto::{
-        digest::Digest,
-        signed::{Signed, SigningError},
-    },
+    crypto::{digest::Digest, signed::Signed},
 };
 use dupe::{Dupe, OptionDupedExt};
 use id::MemberedId;
@@ -64,7 +61,7 @@ impl<T: ContentRef> Membered<T> {
         member_id: AgentId,
         signing_key: ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<RefCell<Document<T>>>],
-    ) -> Result<Digest<Signed<Revocation<T>>>, SigningError> {
+    ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
         match self {
             Membered::Group(group) => {
                 group
@@ -86,10 +83,15 @@ impl<T: ContentRef> Membered<T> {
         }
     }
 
-    pub fn receive_delegation(&self, delegation: Signed<Delegation<T>>) -> Result<(), AddError> {
+    pub fn receive_delegation(
+        &self,
+        delegation: Rc<Signed<Delegation<T>>>,
+    ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
         match self {
-            Membered::Group(group) => group.borrow_mut().receive_delegation(delegation),
-            Membered::Document(document) => document.borrow_mut().receive_delegation(delegation),
+            Membered::Group(group) => Ok(group.borrow_mut().receive_delegation(delegation)?),
+            Membered::Document(document) => {
+                Ok(document.borrow_mut().receive_delegation(delegation)?)
+            }
         }
     }
 }

@@ -176,7 +176,7 @@ impl<T: ContentRef> Group<T> {
 
     pub fn receive_delegation(
         &mut self,
-        delegation: Signed<Delegation<T>>,
+        delegation: Rc<Signed<Delegation<T>>>,
     ) -> Result<Digest<Signed<Delegation<T>>>, state::AddError> {
         let digest = self.state.add_delegation(delegation)?;
         self.rebuild();
@@ -185,7 +185,7 @@ impl<T: ContentRef> Group<T> {
 
     pub fn receive_revocation(
         &mut self,
-        revocation: Signed<Revocation<T>>,
+        revocation: Rc<Signed<Revocation<T>>>,
     ) -> Result<Digest<Signed<Revocation<T>>>, state::AddError> {
         let digest = self.state.add_revocation(revocation)?;
         self.rebuild();
@@ -199,7 +199,7 @@ impl<T: ContentRef> Group<T> {
         signing_key: ed25519_dalek::SigningKey,
         after_revocations: &[&Rc<Signed<Revocation<T>>>],
         relevant_docs: &[&Rc<RefCell<Document<T>>>],
-    ) -> Result<Digest<Signed<Delegation<T>>>, AddMemberError> {
+    ) -> Result<Rc<Signed<Delegation<T>>>, AddMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
         let agent: Agent<T> = indie.into();
         let proof = if self.verifying_key() == signing_key.verifying_key() {
@@ -238,8 +238,9 @@ impl<T: ContentRef> Group<T> {
             &AgentSigner::group_signer_from_key(signing_key),
         )?;
 
-        let digest = self.receive_delegation(delegation)?;
-        Ok(digest)
+        let rc = Rc::new(delegation);
+        let _digest = self.receive_delegation(rc.dupe())?;
+        Ok(rc)
     }
 
     pub fn revoke_member(
@@ -247,12 +248,11 @@ impl<T: ContentRef> Group<T> {
         member_to_remove: AgentId,
         signing_key: ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<RefCell<Document<T>>>], // TODO FIXME just lookup reachable docs directly
-    ) -> Result<Digest<Signed<Revocation<T>>>, SigningError> {
-        let revocations = &mut self.state.revocations;
+    ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
         let signer = AgentSigner::group_signer_from_key(signing_key);
 
         if let Some(revoke_dlgs) = self.members.remove(&member_to_remove) {
-            revoke_dlgs.iter().try_fold((), |_, dlg| {
+            revoke_dlgs.iter().try_fold(vec![], |mut acc, dlg| {
                 let revocation = Signed::try_sign(
                     Revocation {
                         revoke: dlg.dupe(),
@@ -267,8 +267,10 @@ impl<T: ContentRef> Group<T> {
                     &signer.dupe(),
                 )?;
 
-                let digest = revocations.borrow_mut().receive_revocation(revocation)?;
-                Ok(digest)
+                let rc = Rc::new(revocation);
+                let _digest = self.receive_revocation(rc.dupe())?;
+                acc.push(rc);
+                Ok::<_, RevokeMemberError>(acc)
             })
         } else {
             todo!("FIXME")
@@ -345,6 +347,18 @@ pub enum AddMemberError {
 
     #[error("Access escalation. Wanted {wanted}, only have {have}.")]
     AccessEscalation { wanted: Access, have: Access },
+
+    #[error(transparent)]
+    AddError(#[from] state::AddError),
+}
+
+#[derive(Debug, Error)]
+pub enum RevokeMemberError {
+    #[error(transparent)]
+    AddError(#[from] state::AddError),
+
+    #[error(transparent)]
+    SigningError(#[from] SigningError),
 }
 
 #[cfg(test)]
