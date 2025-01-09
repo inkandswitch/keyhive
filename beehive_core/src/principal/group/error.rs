@@ -1,4 +1,4 @@
-use crate::{crypto::signed::VerificationError, principal::identifier::Identifier};
+use crate::{access::Access, crypto::signed::VerificationError, principal::identifier::Identifier};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AddError {
@@ -7,4 +7,10 @@ pub enum AddError {
 
     #[error("Invalid signature")]
     InvalidSignature(#[from] VerificationError),
+
+    #[error("Escelation: claims {claimed}, but the proof has {proof}")]
+    Escelation { claimed: Access, proof: Access },
+
+    #[error("Invalid proof chain")]
+    InvalidProofChain,
 }

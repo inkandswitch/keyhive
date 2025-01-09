@@ -142,6 +142,30 @@ impl<T: ContentRef> GroupState<T> {
             return Err(AddError::InvalidSubject(delegation.subject()));
         }
 
+        if delegation.payload().proof.is_none()
+            && delegation.signed_by.verifying_key() != self.verifying_key()
+        {
+            return Err(AddError::InvalidProofChain);
+        }
+
+        delegation.payload.proof_lineage().iter().try_fold(
+            delegation.as_ref(),
+            |head, proof| {
+                if delegation.payload.can > proof.payload.can {
+                    return Err(AddError::Escelation {
+                        claimed: delegation.payload.can,
+                        proof: proof.payload.can,
+                    });
+                }
+
+                if head.verifying_key() != proof.payload.delegate.verifying_key() {
+                    return Err(AddError::InvalidProofChain);
+                }
+
+                Ok(proof.as_ref())
+            },
+        )?;
+
         let mut inserted = false;
         for (head_digest, head) in self.delegation_heads.clone().iter() {
             if head.payload().is_ancestor_of(&delegation) {
@@ -170,6 +194,33 @@ impl<T: ContentRef> GroupState<T> {
     ) -> Result<Digest<Signed<Revocation<T>>>, AddError> {
         if revocation.subject() != self.id.into() {
             return Err(AddError::InvalidSubject(revocation.subject()));
+        }
+
+        if let Some(proof) = &revocation.payload.proof {
+            if !revocation.payload.revoke.payload.is_descendant_of(proof) {
+                return Err(AddError::InvalidProofChain);
+            }
+
+            proof
+                .payload
+                .proof_lineage()
+                .iter()
+                .try_fold(proof.as_ref(), |head, next_proof| {
+                    if proof.payload.can > proof.payload.can {
+                        return Err(AddError::Escelation {
+                            claimed: proof.payload.can,
+                            proof: next_proof.payload.can,
+                        });
+                    }
+
+                    if head.verifying_key() != next_proof.payload.delegate.verifying_key() {
+                        return Err(AddError::InvalidProofChain);
+                    }
+
+                    Ok(proof.as_ref())
+                })?;
+        } else if revocation.signed_by.verifying_key() != self.verifying_key() {
+            return Err(AddError::InvalidProofChain);
         }
 
         let mut inserted = false;
