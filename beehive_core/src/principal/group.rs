@@ -198,11 +198,11 @@ impl<T: ContentRef> Group<T> {
         member_to_add: Agent<T>,
         can: Access,
         signing_key: ed25519_dalek::SigningKey,
-        after_revocations: &[&Rc<Signed<Revocation<T>>>],
         relevant_docs: &[&Rc<RefCell<Document<T>>>],
     ) -> Result<Rc<Signed<Delegation<T>>>, AddMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
         let agent: Agent<T> = indie.into();
+
         let proof = if self.verifying_key() == signing_key.verifying_key() {
             None
         } else {
@@ -225,7 +225,7 @@ impl<T: ContentRef> Group<T> {
                 delegate: member_to_add,
                 can,
                 proof,
-                after_revocations: after_revocations.iter().duped().duped().collect(),
+                after_revocations: self.state.revocation_heads.values().duped().collect(),
                 after_content: relevant_docs
                     .iter()
                     .map(|d| {
@@ -451,20 +451,20 @@ mod tests {
     use super::*;
 
     use super::{operation::delegation::Delegation, store::GroupStore};
-    use crate::principal::{active::Active, individual::Individual};
+    use crate::principal::active::Active;
     use nonempty::nonempty;
     use std::cell::RefCell;
 
-    fn setup_user() -> Individual {
-        ed25519_dalek::SigningKey::generate(&mut rand::thread_rng())
-            .verifying_key()
-            .into()
+    fn setup_user(csprng: &mut (impl rand::CryptoRng + rand::RngCore)) -> Active {
+        let sk = ed25519_dalek::SigningKey::generate(csprng);
+        Active::generate(sk, csprng).unwrap()
     }
 
     fn setup_groups<T: ContentRef>(
         store: &mut GroupStore<T>,
-        alice: Rc<RefCell<Individual>>,
-        bob: Rc<RefCell<Individual>>,
+        alice: Rc<RefCell<Active>>,
+        bob: Rc<RefCell<Active>>,
+        csprng: &mut (impl rand::CryptoRng + rand::RngCore),
     ) -> [Rc<RefCell<Group<T>>>; 4] {
         /*              ┌───────────┐        ┌───────────┐
                         │           │        │           │
@@ -492,15 +492,43 @@ mod tests {
         let alice_agent: Agent<T> = alice.into();
         let bob_agent = bob.into();
 
-        let g0 = store.generate_group(nonempty![alice_agent.dupe()]).unwrap();
+        let dlg_store = Rc::new(RefCell::new(CaMap::new()));
+        let rev_store = Rc::new(RefCell::new(CaMap::new()));
+
+        let g0 = store
+            .generate_group(
+                nonempty![alice_agent.dupe()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
+
         let g1 = store
-            .generate_group(nonempty![alice_agent, g0.clone().into()])
+            .generate_group(
+                nonempty![alice_agent, g0.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
             .unwrap();
+
         let g2 = store
-            .generate_group(nonempty![bob_agent, g1.clone().into()])
+            .generate_group(
+                nonempty![bob_agent, g1.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
             .unwrap();
+
         let g3 = store
-            .generate_group(nonempty![g1.clone().into(), g2.clone().into()])
+            .generate_group(
+                nonempty![g1.clone().into(), g2.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
             .unwrap();
 
         [g0, g1, g2, g3]
@@ -508,37 +536,125 @@ mod tests {
 
     fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         gs: &mut GroupStore<T>,
-        alice: Rc<RefCell<Individual>>,
-        bob: Rc<RefCell<Individual>>,
+        alice: Rc<RefCell<Active>>,
+        bob: Rc<RefCell<Active>>,
         csprng: &mut R,
     ) -> [Rc<RefCell<Group<T>>>; 10] {
-        let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Active::generate(signer, csprng).unwrap();
+        let dlg_store = Rc::new(RefCell::new(CaMap::new()));
+        let rev_store = Rc::new(RefCell::new(CaMap::new()));
 
-        let group0 = gs.generate_group(nonempty![alice.into()]).unwrap();
-        let group1 = gs.generate_group(nonempty![bob.into()]).unwrap();
-        let group2 = gs.generate_group(nonempty![group1.clone().into()]).unwrap();
-        let group3 = gs.generate_group(nonempty![group2.clone().into()]).unwrap();
-        let group4 = gs.generate_group(nonempty![group3.clone().into()]).unwrap();
-        let group5 = gs.generate_group(nonempty![group4.clone().into()]).unwrap();
-        let group6 = gs.generate_group(nonempty![group5.clone().into()]).unwrap();
-        let group7 = gs.generate_group(nonempty![group6.clone().into()]).unwrap();
-        let group8 = gs.generate_group(nonempty![group7.clone().into()]).unwrap();
-        let group9 = gs.generate_group(nonempty![group8.clone().into()]).unwrap();
-
-        group0.borrow_mut().add_delegation(
-            Signed::try_sign(
-                Delegation {
-                    delegate: group9.clone().into(),
-                    can: Access::Admin,
-                    proof: None,
-                    after_revocations: vec![],
-                    after_content: BTreeMap::new(),
-                },
-                &active.signer,
+        let group0 = gs
+            .generate_group(
+                nonempty![alice.dupe().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
             )
-            .unwrap(),
-        );
+            .unwrap();
+
+        let group1 = gs
+            .generate_group(
+                nonempty![bob.into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
+
+        let group2 = gs
+            .generate_group(
+                nonempty![group1.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
+
+        let group3 = gs
+            .generate_group(
+                nonempty![group2.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
+
+        let group4 = gs
+            .generate_group(
+                nonempty![group3.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
+
+        let group5 = gs
+            .generate_group(
+                nonempty![group4.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
+
+        let group6 = gs
+            .generate_group(
+                nonempty![group5.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
+
+        let group7 = gs
+            .generate_group(
+                nonempty![group6.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
+
+        let group8 = gs
+            .generate_group(
+                nonempty![group7.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
+
+        let group9 = gs
+            .generate_group(
+                nonempty![group8.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
+
+        let proof = group0
+            .borrow()
+            .get_capability(&alice.borrow().agent_id())
+            .unwrap()
+            .dupe();
+
+        group0
+            .borrow_mut()
+            .receive_delegation(Rc::new(
+                Signed::try_sign(
+                    Delegation {
+                        delegate: group9.clone().into(),
+                        can: Access::Admin,
+                        proof: Some(proof),
+                        after_revocations: vec![],
+                        after_content: BTreeMap::new(),
+                    },
+                    &alice.borrow().signer(),
+                )
+                .unwrap(),
+            ))
+            .unwrap();
 
         [
             group0, group1, group2, group3, group4, group5, group6, group7, group8, group9,
@@ -547,14 +663,16 @@ mod tests {
 
     #[test]
     fn test_transitive_self() {
-        let alice = Rc::new(RefCell::new(setup_user()));
+        let csprng = &mut rand::thread_rng();
+
+        let alice = Rc::new(RefCell::new(setup_user(csprng)));
         let alice_agent: Agent<String> = alice.dupe().into();
         let alice_id = alice_agent.agent_id();
 
-        let bob = Rc::new(RefCell::new(setup_user()));
+        let bob = Rc::new(RefCell::new(setup_user(csprng)));
 
         let mut gs: GroupStore<String> = GroupStore::new();
-        let [g0, ..] = setup_groups(&mut gs, alice.clone(), bob);
+        let [g0, ..] = setup_groups(&mut gs, alice.clone(), bob, csprng);
 
         let g0_mems = gs.transitive_members(&g0.dupe().as_ref().clone().into_inner());
 
@@ -566,15 +684,17 @@ mod tests {
 
     #[test]
     fn test_transitive_one() {
-        let alice = Rc::new(RefCell::new(setup_user()));
+        let csprng = &mut rand::thread_rng();
+
+        let alice = Rc::new(RefCell::new(setup_user(csprng)));
         let alice_agent: Agent<String> = alice.dupe().into();
         let alice_id = alice_agent.agent_id();
 
-        let bob = Rc::new(RefCell::new(setup_user()));
+        let bob = Rc::new(RefCell::new(setup_user(csprng)));
 
         let mut gs: GroupStore<String> = GroupStore::new();
 
-        let [_g0, g1, _g2, _g3] = setup_groups(&mut gs, alice.dupe(), bob);
+        let [_g0, g1, _g2, _g3] = setup_groups(&mut gs, alice.dupe(), bob, csprng);
         let g1_mems = gs.transitive_members(&g1.borrow());
 
         assert_eq!(
@@ -585,17 +705,19 @@ mod tests {
 
     #[test]
     fn test_transitive_two() {
-        let alice = Rc::new(RefCell::new(setup_user()));
+        let csprng = &mut rand::thread_rng();
+
+        let alice = Rc::new(RefCell::new(setup_user(csprng)));
         let alice_agent: Agent<String> = alice.dupe().into();
         let alice_id = alice_agent.agent_id();
 
-        let bob = Rc::new(RefCell::new(setup_user()));
+        let bob = Rc::new(RefCell::new(setup_user(csprng)));
         let bob_agent: Agent<String> = bob.dupe().into();
         let bob_id = bob_agent.agent_id();
 
         let mut gs: GroupStore<String> = GroupStore::new();
 
-        let [_g0, _g1, g2, _g3] = setup_groups(&mut gs, alice.dupe(), bob.dupe());
+        let [_g0, _g1, g2, _g3] = setup_groups(&mut gs, alice.dupe(), bob.dupe(), csprng);
         let g1_mems = gs.transitive_members(&g2.borrow());
 
         assert_eq!(
@@ -609,17 +731,19 @@ mod tests {
 
     #[test]
     fn test_transitive_three() {
-        let alice = Rc::new(RefCell::new(setup_user()));
+        let csprng = &mut rand::thread_rng();
+
+        let alice = Rc::new(RefCell::new(setup_user(csprng)));
         let alice_agent: Agent<String> = alice.dupe().into();
         let alice_id = alice_agent.agent_id();
 
-        let bob = Rc::new(RefCell::new(setup_user()));
+        let bob = Rc::new(RefCell::new(setup_user(csprng)));
         let bob_agent: Agent<String> = bob.dupe().into();
         let bob_id = bob_agent.agent_id();
 
         let mut gs: GroupStore<String> = GroupStore::new();
 
-        let [_g0, _g1, _g2, g3] = setup_groups(&mut gs, alice.dupe(), bob.dupe());
+        let [_g0, _g1, _g2, g3] = setup_groups(&mut gs, alice.dupe(), bob.dupe(), csprng);
         let g1_mems = gs.transitive_members(&g3.borrow());
 
         assert_eq!(
@@ -635,11 +759,11 @@ mod tests {
     fn test_transitive_cycles() {
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user()));
+        let alice = Rc::new(RefCell::new(setup_user(csprng)));
         let alice_agent: Agent<String> = alice.dupe().into();
         let alice_id = alice_agent.agent_id();
 
-        let bob = Rc::new(RefCell::new(setup_user()));
+        let bob = Rc::new(RefCell::new(setup_user(csprng)));
         let bob_agent: Agent<String> = bob.dupe().into();
         let bob_id = bob_agent.agent_id();
 
@@ -661,39 +785,57 @@ mod tests {
     fn test_add_member() {
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user()));
+        let alice = Rc::new(RefCell::new(setup_user(csprng)));
         let alice_agent: Agent<String> = alice.dupe().into();
 
-        let bob = Rc::new(RefCell::new(setup_user()));
+        let bob = Rc::new(RefCell::new(setup_user(csprng)));
         let bob_agent: Agent<String> = bob.dupe().into();
 
-        let carol = Rc::new(RefCell::new(setup_user()));
+        let carol = Rc::new(RefCell::new(setup_user(csprng)));
         let carol_agent: Agent<String> = carol.dupe().into();
 
-        let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+        let signer = ed25519_dalek::SigningKey::generate(csprng);
         let active = Rc::new(RefCell::new(Active::generate(signer, csprng).unwrap()));
         let active_agent: Agent<String> = active.dupe().into();
 
+        let dlg_store = Rc::new(RefCell::new(CaMap::new()));
+        let rev_store = Rc::new(RefCell::new(CaMap::new()));
+        let mut csprng = rand::thread_rng();
+
         let mut gs: GroupStore<String> = GroupStore::new();
 
-        let g0 = gs.generate_group(nonempty![active.dupe().into()]).unwrap();
-        let g1 = gs
-            .generate_group(nonempty![
-                alice_agent.dupe(),
-                bob_agent.dupe(),
-                g0.dupe().into()
-            ])
+        let g0 = gs
+            .generate_group(
+                nonempty![active.dupe().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                &mut csprng,
+            )
             .unwrap();
+
+        let g1 = gs
+            .generate_group(
+                nonempty![alice_agent.dupe(), bob_agent.dupe(), g0.dupe().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                &mut csprng,
+            )
+            .unwrap();
+
         let g2 = gs
-            .generate_group(nonempty![carol_agent.dupe(), g1.dupe().into()])
+            .generate_group(
+                nonempty![carol_agent.dupe(), g1.dupe().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                &mut csprng,
+            )
             .unwrap();
 
         g0.borrow_mut()
             .add_member(
                 carol_agent.dupe(),
                 Access::Write,
-                &active.borrow().signer,
-                &[],
+                active.borrow().signing_key.clone(),
                 &[],
             )
             .unwrap();

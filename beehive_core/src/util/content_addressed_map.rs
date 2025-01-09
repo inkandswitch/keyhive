@@ -56,6 +56,14 @@ impl<T: Serialize> CaMap<T> {
         self.0.iter()
     }
 
+    pub fn from_iter_direct(elements: impl IntoIterator<Item = Rc<T>>) -> Self {
+        let mut cam = CaMap::new();
+        for rc in elements.into_iter() {
+            cam.0.insert(Digest::hash(rc.as_ref()), rc);
+        }
+        cam
+    }
+
     pub fn keys(&self) -> std::collections::btree_map::Keys<'_, Digest<T>, Rc<T>> {
         self.0.keys()
     }

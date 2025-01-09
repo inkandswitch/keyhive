@@ -18,11 +18,9 @@ use crate::{
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use serde::{ser::SerializeStruct, Serialize, Serializer};
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, HashSet},
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+
+// FIXME validate admin on ingest & buld
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupState<T: ContentRef> {
@@ -140,7 +138,7 @@ impl<T: ContentRef> GroupState<T> {
         &mut self,
         delegation: Rc<Signed<Delegation<T>>>,
     ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
-        if delegation.verifying_key() != self.id.0.verifying_key() {
+        if delegation.subject() != self.id.0.verifying_key().into() {
             return Err(AddError::InvalidSubject(delegation.subject()));
         }
 

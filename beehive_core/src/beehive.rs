@@ -97,6 +97,10 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         })
     }
 
+    pub fn active(&self) -> &Rc<RefCell<Active>> {
+        &self.active
+    }
+
     pub fn groups(&self) -> &GroupStore<T> {
         &self.groups
     }

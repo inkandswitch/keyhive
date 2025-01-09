@@ -13,6 +13,12 @@ pub struct AgentSigner {
 }
 
 impl AgentSigner {
+    #[cfg(any(feature = "test_utils", test))]
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
+        let key = ed25519_dalek::SigningKey::generate(csprng);
+        AgentSigner::individual_signer_from_key(key)
+    }
+
     pub(crate) fn new(agent_id: AgentId, key: ed25519_dalek::SigningKey) -> Option<Self> {
         if agent_id.verifying_key() != key.verifying_key() {
             return None;
@@ -39,7 +45,7 @@ impl AgentSigner {
     pub(crate) fn from_active(active: &Active) -> Self {
         AgentSigner {
             id: SignerId::Individual(active.individual.id()),
-            key: active.signer.clone(),
+            key: active.signing_key.clone(),
         }
     }
 

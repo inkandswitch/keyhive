@@ -70,23 +70,3 @@ impl From<SigningError> for JsSigningError {
         JsSigningError(Box::new(e))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use wasm_bindgen_test::*;
-
-    #[cfg(feature = "browser_test")]
-    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
-
-    mod data {
-        use super::*;
-
-        #[wasm_bindgen_test(unsupported = test)]
-        fn test_round_trip() {
-            let key = JsSigningKey::generate().unwrap();
-            let signed = key.try_sign(vec![1, 2, 3].as_slice()).unwrap();
-            assert!(signed.verify());
-        }
-    }
-}

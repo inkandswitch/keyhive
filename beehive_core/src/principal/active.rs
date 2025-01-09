@@ -32,14 +32,10 @@ use thiserror::Error;
 #[derive(Clone, Serialize)]
 pub struct Active {
     /// The signing key of the active agent.
-    pub(crate) signer: SigningKey,
+    pub(crate) signing_key: SigningKey,
 
-    // // FIXME generalize to use e.g. KMS
-    // // FIXME include timestamp for next PCS update
-    // /// The encryption "sharing" key pairs that the active agent has.
-    // /// This includes the secret keys for ECDH.
-    // FIXME: Can we remove this since we're using the Individual's map?
-    pub(crate) prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>, // FIXME generalize to use e.g. KMS
+    // FIXME generalize to use e.g. KMS
+    pub(crate) prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>,
 
     /// The [`Individual`] representation (how others see this agent).
     pub(crate) individual: Individual,
@@ -47,11 +43,11 @@ pub struct Active {
 
 impl Active {
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        signer: SigningKey,
+        signing_key: SigningKey,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
-        let mut individual = Individual::new(signer.verifying_key().into());
-        let agent_signer = AgentSigner::new(individual.agent_id(), signer.clone())
+        let mut individual = Individual::new(signing_key.verifying_key().into());
+        let agent_signer = AgentSigner::new(individual.agent_id(), signing_key.clone())
             .expect("key generated from SK should match");
 
         let mut prekey_pairs = BTreeMap::new();
@@ -72,7 +68,7 @@ impl Active {
         Ok(Self {
             individual,
             prekey_pairs,
-            signer,
+            signing_key,
         })
     }
 
@@ -94,14 +90,15 @@ impl Active {
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         self.individual
-            .rotate_prekey(prekey, self.signer.clone(), csprng)
+            .rotate_prekey(prekey, self.signing_key.clone(), csprng)
     }
 
     pub fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
-        self.individual.expand_prekeys(self.signer.clone(), csprng)
+        self.individual
+            .expand_prekeys(self.signing_key.clone(), csprng)
     }
 
     /// Sign a payload.
@@ -187,7 +184,7 @@ impl Debug for Active {
 impl std::hash::Hash for Active {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id().hash(state);
-        self.signer.to_bytes().hash(state);
+        self.verifying_key().hash(state);
         for pk in self.prekey_pairs.keys() {
             pk.hash(state);
         }
@@ -196,13 +193,13 @@ impl std::hash::Hash for Active {
 
 impl Verifiable for Active {
     fn verifying_key(&self) -> VerifyingKey {
-        self.signer.verifying_key()
+        self.signing_key.verifying_key()
     }
 }
 
 impl Signer<Signature> for Active {
     fn try_sign(&self, message: &[u8]) -> Result<Signature, signature::Error> {
-        self.signer.try_sign(message)
+        self.signing_key.try_sign(message)
     }
 }
 
@@ -210,7 +207,7 @@ impl Signer<Signature> for Active {
 impl PartialEq for Active {
     fn eq(&self, other: &Self) -> bool {
         self.id() == other.id()
-            && self.signer.to_bytes() == other.signer.to_bytes()
+            && self.signing_key.to_bytes() == other.signing_key.to_bytes()
             && self
                 .prekey_pairs
                 .iter()

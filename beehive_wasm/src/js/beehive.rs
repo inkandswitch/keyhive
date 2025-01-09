@@ -264,8 +264,8 @@ mod tests {
         #[wasm_bindgen_test(unsupported = test)]
         fn test_encrypt_decrypt() -> Result<(), Box<dyn Error>> {
             let mut bh = setup();
-            let active = bh.0.active.clone();
-            active.borrow_mut().expand_prekeys(&mut bh.0.csprng)?;
+            let active = bh.0.active().clone();
+            bh.expand_prekeys().unwrap();
             let agent = JsAgent(Agent::Active(active));
             let doc = bh.generate_doc(vec![agent])?;
             let content = vec![1, 2, 3, 4];

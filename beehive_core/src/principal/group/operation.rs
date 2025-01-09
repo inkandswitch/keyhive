@@ -282,29 +282,32 @@ pub enum StaticOperation<T: ContentRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{access::Access, principal::individual::Individual};
+    use crate::{
+        access::Access,
+        principal::{agent::signer::AgentSigner, individual::Individual, verifiable::Verifiable},
+    };
     use dupe::Dupe;
     use std::rc::Rc;
 
     use std::sync::LazyLock;
 
-    static GROUP_SK: LazyLock<ed25519_dalek::SigningKey> =
-        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+    static GROUP_SIGNER: LazyLock<AgentSigner> =
+        LazyLock::new(|| AgentSigner::generate(&mut rand::thread_rng()));
 
-    static ALICE_SK: LazyLock<ed25519_dalek::SigningKey> =
-        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+    static ALICE_SIGNER: LazyLock<AgentSigner> =
+        LazyLock::new(|| AgentSigner::generate(&mut rand::thread_rng()));
 
-    static BOB_SK: LazyLock<ed25519_dalek::SigningKey> =
-        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+    static BOB_SIGNER: LazyLock<AgentSigner> =
+        LazyLock::new(|| AgentSigner::generate(&mut rand::thread_rng()));
 
-    static CAROL_SK: LazyLock<ed25519_dalek::SigningKey> =
-        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+    static CAROL_SIGNER: LazyLock<AgentSigner> =
+        LazyLock::new(|| AgentSigner::generate(&mut rand::thread_rng()));
 
-    static DAN_SK: LazyLock<ed25519_dalek::SigningKey> =
-        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+    static DAN_SIGNER: LazyLock<AgentSigner> =
+        LazyLock::new(|| AgentSigner::generate(&mut rand::thread_rng()));
 
-    static ERIN_SK: LazyLock<ed25519_dalek::SigningKey> =
-        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
+    static ERIN_SIGNER: LazyLock<AgentSigner> =
+        LazyLock::new(|| AgentSigner::generate(&mut rand::thread_rng()));
 
     /*
              ┌────────┐
@@ -337,8 +340,8 @@ mod tests {
     */
 
     fn add_alice() -> Rc<Signed<Delegation<String>>> {
-        let alice: Individual = fixture(&ALICE_SK).verifying_key().into();
-        let group_sk = LazyLock::force(&GROUP_SK).clone();
+        let alice: Individual = fixture(&ALICE_SIGNER).verifying_key().into();
+        let group_sk = LazyLock::force(&GROUP_SIGNER).clone();
 
         Rc::new(
             Signed::try_sign(
@@ -357,8 +360,8 @@ mod tests {
     }
 
     fn add_bob() -> Rc<Signed<Delegation<String>>> {
-        let alice_sk = fixture(&ALICE_SK).clone();
-        let bob: Individual = fixture(&BOB_SK).verifying_key().into();
+        let alice_sk = fixture(&ALICE_SIGNER).clone();
+        let bob: Individual = fixture(&BOB_SIGNER).verifying_key().into();
 
         Rc::new(
             Signed::try_sign(
@@ -376,8 +379,8 @@ mod tests {
     }
 
     fn add_carol() -> Rc<Signed<Delegation<String>>> {
-        let alice_sk = fixture(&ALICE_SK).clone();
-        let carol: Individual = fixture(&CAROL_SK).verifying_key().into();
+        let alice_sk = fixture(&ALICE_SIGNER).clone();
+        let carol: Individual = fixture(&CAROL_SIGNER).verifying_key().into();
 
         Rc::new(
             Signed::try_sign(
@@ -395,8 +398,8 @@ mod tests {
     }
 
     fn add_dan() -> Rc<Signed<Delegation<String>>> {
-        let carol_sk = fixture(&CAROL_SK).clone();
-        let dan: Individual = fixture(&DAN_SK).verifying_key().into();
+        let carol_sk = fixture(&CAROL_SIGNER).clone();
+        let dan: Individual = fixture(&DAN_SIGNER).verifying_key().into();
 
         Rc::new(
             Signed::try_sign(
@@ -414,8 +417,8 @@ mod tests {
     }
 
     fn add_erin() -> Rc<Signed<Delegation<String>>> {
-        let bob_sk = fixture(&BOB_SK).clone();
-        let erin: Individual = fixture(&ERIN_SK).verifying_key().into();
+        let bob_sk = fixture(&BOB_SIGNER).clone();
+        let erin: Individual = fixture(&ERIN_SIGNER).verifying_key().into();
 
         Rc::new(
             Signed::try_sign(
@@ -433,7 +436,7 @@ mod tests {
     }
 
     fn remove_carol() -> Rc<Signed<Revocation<String>>> {
-        let alice_sk = fixture(&ALICE_SK).clone();
+        let alice_sk = fixture(&ALICE_SIGNER).clone();
 
         Rc::new(
             Signed::try_sign(
@@ -449,7 +452,7 @@ mod tests {
     }
 
     fn remove_dan() -> Rc<Signed<Revocation<String>>> {
-        let bob_sk = fixture(&BOB_SK).clone();
+        let bob_sk = fixture(&BOB_SIGNER).clone();
 
         Rc::new(
             Signed::try_sign(
@@ -521,8 +524,8 @@ mod tests {
 
         #[test]
         fn test_empty() {
-            let dlgs = HashSet::new();
-            let revs = HashSet::new();
+            let dlgs = CaMap::new();
+            let revs = CaMap::new();
 
             let observed = Operation::<String>::topsort(&dlgs, &revs);
             assert_eq!(observed, vec![]);
@@ -532,8 +535,8 @@ mod tests {
         fn test_one_delegation() {
             let dlg = add_alice();
 
-            let dlgs = HashSet::from_iter([dlg.dupe()]);
-            let revs = HashSet::new();
+            let dlgs = CaMap::from_iter_direct([dlg.dupe()]);
+            let revs = CaMap::new();
 
             let observed = Operation::topsort(&dlgs, &revs);
             let expected = dlg.into();
@@ -546,8 +549,8 @@ mod tests {
             let alice_dlg = add_alice();
             let bob_dlg = add_bob();
 
-            let dlg_heads = HashSet::from_iter([bob_dlg.dupe()]);
-            let rev_heads = HashSet::new();
+            let dlg_heads = CaMap::from_iter_direct([bob_dlg.dupe()]);
+            let rev_heads = CaMap::new();
 
             let observed = Operation::topsort(&dlg_heads, &rev_heads);
 
@@ -569,8 +572,8 @@ mod tests {
             let carol_dlg = add_carol();
             let dan_dlg = add_dan();
 
-            let dlg_heads = HashSet::from_iter([dan_dlg.dupe()]);
-            let rev_heads = HashSet::new();
+            let dlg_heads = CaMap::from_iter_direct([dan_dlg.dupe()]);
+            let rev_heads = CaMap::new();
 
             let observed = Operation::topsort(&dlg_heads, &rev_heads);
 
@@ -592,7 +595,7 @@ mod tests {
 
         #[test]
         fn test_one_revocation() {
-            let alice_sk = fixture(&ALICE_SK).clone();
+            let alice_sk = fixture(&ALICE_SIGNER).clone();
             let alice_dlg = add_alice();
             let bob_dlg = add_bob();
 
@@ -610,8 +613,8 @@ mod tests {
             let rev_op: Operation<String> = alice_revokes_bob.dupe().into();
             let rev_hash = Digest::hash(&rev_op);
 
-            let dlgs = HashSet::new();
-            let revs = HashSet::from_iter([alice_revokes_bob.dupe()]);
+            let dlgs = CaMap::new();
+            let revs = CaMap::from_iter_direct([alice_revokes_bob.dupe()]);
 
             let mut observed = Operation::topsort(&dlgs, &revs);
 
@@ -651,9 +654,9 @@ mod tests {
             let rev_dan_op: Operation<String> = bob_revokes_dan.dupe().into();
             let rev_dan_hash = Digest::hash(&rev_dan_op);
 
-            let dlg_heads = HashSet::from_iter([erin_dlg.dupe()]);
+            let dlg_heads = CaMap::from_iter_direct([erin_dlg.dupe()]);
             let rev_heads =
-                HashSet::from_iter([alice_revokes_carol.dupe(), bob_revokes_dan.dupe()]);
+                CaMap::from_iter_direct([alice_revokes_carol.dupe(), bob_revokes_dan.dupe()]);
 
             let observed = Operation::topsort(&dlg_heads, &rev_heads);
 
