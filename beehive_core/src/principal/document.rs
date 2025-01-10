@@ -7,7 +7,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
-        encrypted::Encrypted,
+        encrypted::EncryptedContent,
         share_key::{ShareKey, ShareSecretKey},
         signed::Signed,
     },
@@ -262,7 +262,7 @@ impl<T: ContentRef> Document<T> {
         content: &[u8],
         pred_refs: &Vec<T>,
         csprng: &mut R,
-    ) -> Result<(Encrypted<Vec<u8>, T>, Option<CgkaOperation>), EncryptError> {
+    ) -> Result<(EncryptedContent<Vec<u8>, T>, Option<CgkaOperation>), EncryptError> {
         let (app_secret, maybe_update_op) = self
             .cgka
             .new_app_secret_for(content_ref, content, pred_refs, csprng)
@@ -278,7 +278,7 @@ impl<T: ContentRef> Document<T> {
 
     pub fn try_decrypt_content(
         &mut self,
-        encrypted_content: &Encrypted<Vec<u8>, T>,
+        encrypted_content: &EncryptedContent<Vec<u8>, T>,
     ) -> Result<Vec<u8>, DecryptError> {
         let decrypt_key = self
             .cgka

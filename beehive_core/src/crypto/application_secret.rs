@@ -2,11 +2,12 @@ use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{
-        digest::Digest, encrypted::Encrypted, separable::Separable, share_key::ShareSecretKey,
-        siv::Siv, symmetric_key::SymmetricKey,
+        digest::Digest, encrypted::EncryptedContent, separable::Separable,
+        share_key::ShareSecretKey, siv::Siv, symmetric_key::SymmetricKey,
     },
 };
 use serde::{Deserialize, Serialize};
+
 const STATIC_CONTEXT: &str = "/automerge/beehive/beekem/app_secret/";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -45,10 +46,10 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
     pub fn try_encrypt<T>(
         &self,
         plaintext: &[u8],
-    ) -> Result<Encrypted<T, Cr>, chacha20poly1305::Error> {
+    ) -> Result<EncryptedContent<T, Cr>, chacha20poly1305::Error> {
         let mut ciphertext = plaintext.to_vec();
         self.key.try_encrypt(self.nonce, &mut ciphertext)?;
-        Ok(Encrypted::new(
+        Ok(EncryptedContent::new(
             self.nonce,
             ciphertext,
             self.pcs_key_hash,

@@ -9,7 +9,7 @@
 
 *ownership of a tree*: you own a tree if you can use it to encrypt a new root secret. An owner will correspond to one of the members of the tree group (and hence one of its leaves).
 
-*resolution*: either (1) the public key/s of a node or (2) if the node is blank, all of its highest non-blank descendants' public keys. The resolution is ordered by left to right positions on the tree. The resolution is never taken at the root, so the worst case resolution is the n / 2 leaves of one of the root's child sub-trees if all of that sub-tree's inner nodes are blank.
+*resolution*: either (1) the public key/s of a node or (2) if the node is blank or contains conflict keys, all of its highest non-blank, non-conflict descendants' public keys. The resolution is never taken at the root, so the worst case resolution is the n / 2 leaves of one of the root's child sub-trees if all of that sub-tree's inner nodes are blank or contain conflict keys.
 
 ## Invariants
 

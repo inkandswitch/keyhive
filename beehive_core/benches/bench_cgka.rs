@@ -7,13 +7,11 @@ use beehive_core::{
             TestMemberCgka,
         },
     },
-    crypto::{encrypted::NestedEncrypted, share_key::ShareSecretKey},
+    crypto::share_key::ShareSecretKey,
     principal::document::id::DocumentId,
 };
 use divan::Bencher;
-use nonempty::nonempty;
 use std::time::Duration;
-use x25519_dalek::StaticSecret;
 
 fn main() {
     divan::main();
@@ -27,33 +25,6 @@ fn create_key_pairs(n: u32) {
     for _ in 0..n {
         let s = ShareSecretKey::generate(&mut csprng);
         s.share_key();
-    }
-}
-
-#[divan::bench(
-    args = [(100, 31), (100, 255), (100, 511)],
-    max_time = Duration::from_secs(120),
-)]
-fn encrypt_and_decrypt_log_2_of_members(iters_and_member_count: (u32, u32)) {
-    let mut csprng = rand::thread_rng();
-    let doc_id = DocumentId::generate(&mut csprng);
-
-    let (iters, member_count) = iters_and_member_count;
-    let path_length = (member_count as f32).log2() as u32 + 1;
-    for _ in 0..iters {
-        for _ in 0..path_length {
-            let secret = StaticSecret::random();
-            let s1 = ShareSecretKey::generate(&mut csprng);
-            let p1 = s1.share_key();
-            let s2 = ShareSecretKey::generate(&mut csprng);
-            let p2 = s2.share_key();
-            let encrypt_keys = nonempty![p2];
-            let decrypt_keys = vec![s2.derive_symmetric_key(&p1)];
-            let encrypted: NestedEncrypted<ShareSecretKey> =
-                NestedEncrypted::try_encrypt(doc_id, secret.to_bytes(), &s1, &encrypt_keys)
-                    .unwrap();
-            encrypted.try_sibling_decrypt(&decrypt_keys).unwrap();
-        }
     }
 }
 

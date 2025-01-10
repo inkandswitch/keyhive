@@ -6,7 +6,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
-        encrypted::Encrypted,
+        encrypted::EncryptedContent,
         share_key::ShareKey,
         signed::{Signed, SigningError, VerificationError},
     },
@@ -239,7 +239,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
-    ) -> Result<Encrypted<Vec<u8>, T>, EncryptError> {
+    ) -> Result<EncryptedContent<Vec<u8>, T>, EncryptError> {
         let (encrypted, _maybe_update_op) = doc.borrow_mut().try_encrypt_content(
             content_ref,
             content,
@@ -253,7 +253,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
     pub fn try_decrypt_content(
         &mut self,
         doc: Rc<RefCell<Document<T>>>,
-        encrypted: &Encrypted<Vec<u8>, T>,
+        encrypted: &EncryptedContent<Vec<u8>, T>,
     ) -> Result<Vec<u8>, DecryptError> {
         doc.borrow_mut().try_decrypt_content(encrypted)
     }
