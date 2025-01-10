@@ -282,32 +282,29 @@ pub enum StaticOperation<T: ContentRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        access::Access,
-        principal::{agent::signer::AgentSigner, individual::Individual, verifiable::Verifiable},
-    };
+    use crate::{access::Access, principal::individual::Individual};
     use dupe::Dupe;
     use std::rc::Rc;
 
     use std::sync::LazyLock;
 
-    static GROUP_SIGNER: LazyLock<AgentSigner> =
-        LazyLock::new(|| AgentSigner::generate(&mut rand::thread_rng()));
+    static GROUP_SIGNER: LazyLock<ed25519_dalek::SigningKey> =
+        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
 
-    static ALICE_SIGNER: LazyLock<AgentSigner> =
-        LazyLock::new(|| AgentSigner::generate(&mut rand::thread_rng()));
+    static ALICE_SIGNER: LazyLock<ed25519_dalek::SigningKey> =
+        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
 
-    static BOB_SIGNER: LazyLock<AgentSigner> =
-        LazyLock::new(|| AgentSigner::generate(&mut rand::thread_rng()));
+    static BOB_SIGNER: LazyLock<ed25519_dalek::SigningKey> =
+        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
 
-    static CAROL_SIGNER: LazyLock<AgentSigner> =
-        LazyLock::new(|| AgentSigner::generate(&mut rand::thread_rng()));
+    static CAROL_SIGNER: LazyLock<ed25519_dalek::SigningKey> =
+        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
 
-    static DAN_SIGNER: LazyLock<AgentSigner> =
-        LazyLock::new(|| AgentSigner::generate(&mut rand::thread_rng()));
+    static DAN_SIGNER: LazyLock<ed25519_dalek::SigningKey> =
+        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
 
-    static ERIN_SIGNER: LazyLock<AgentSigner> =
-        LazyLock::new(|| AgentSigner::generate(&mut rand::thread_rng()));
+    static ERIN_SIGNER: LazyLock<ed25519_dalek::SigningKey> =
+        LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
 
     /*
              ┌────────┐

@@ -1,10 +1,6 @@
 //! Wrap data in signatures.
 
-use crate::principal::{
-    agent::signer::{AgentSigner, SignerId},
-    identifier::Identifier,
-    verifiable::Verifiable,
-};
+use crate::principal::{identifier::Identifier, verifiable::Verifiable};
 use dupe::Dupe;
 use ed25519_dalek::{Signer, Verifier};
 use serde::{Deserialize, Serialize};
@@ -21,20 +17,20 @@ pub struct Signed<T: Serialize> {
     pub(crate) payload: T,
 
     /// The verifying key of the signer (for verifying the signature).
-    pub(crate) signed_by: SignerId,
+    pub(crate) issuer: ed25519_dalek::VerifyingKey,
 
     /// The signature of the payload, which can be verified by the `verifying_key`.
     pub(crate) signature: ed25519_dalek::Signature,
 }
 
 impl<T: Serialize> Signed<T> {
-    pub fn try_sign(payload: T, signer: &AgentSigner) -> Result<Self, SigningError> {
+    pub fn try_sign(payload: T, signer: &ed25519_dalek::SigningKey) -> Result<Self, SigningError> {
         let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
 
         Ok(Signed {
             payload,
-            signed_by: signer.id(),
-            signature: signer.key().try_sign(payload_bytes.as_slice())?,
+            issuer: signer.verifying_key(),
+            signature: signer.try_sign(payload_bytes.as_slice())?,
         })
     }
 
@@ -46,8 +42,8 @@ impl<T: Serialize> Signed<T> {
         self.verifying_key().into()
     }
 
-    pub fn signed_by(&self) -> &SignerId {
-        &self.signed_by
+    pub fn issuer(&self) -> &ed25519_dalek::VerifyingKey {
+        &self.issuer
     }
 
     pub fn signature(&self) -> &ed25519_dalek::Signature {
@@ -64,7 +60,7 @@ impl<T: Serialize> Signed<T> {
     pub fn map<U: Serialize, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
         Signed {
             payload: f(self.payload),
-            signed_by: self.signed_by,
+            issuer: self.issuer,
             signature: self.signature,
         }
     }
@@ -110,7 +106,7 @@ impl<T: Dupe + Serialize> Dupe for Signed<T> {
     fn dupe(&self) -> Self {
         Signed {
             payload: self.payload.dupe(),
-            signed_by: self.signed_by.dupe(),
+            issuer: self.issuer,
             signature: self.signature,
         }
     }
@@ -118,14 +114,13 @@ impl<T: Dupe + Serialize> Dupe for Signed<T> {
 
 impl<T: Serialize> Verifiable for Signed<T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.signed_by.verifying_key()
+        self.issuer
     }
 }
 
-// FIXME test
 impl<T: Serialize> Hash for Signed<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.signed_by.verifying_key().as_bytes().hash(state);
+        self.issuer.hash(state);
         self.signature.to_bytes().hash(state);
 
         let encoded: Vec<u8> = bincode::serialize(&self.payload).expect("serialization failed");
@@ -154,15 +149,11 @@ pub enum SigningError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::principal::group::id::GroupId;
 
     #[test]
     fn test_round_trip() {
         let sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let id = GroupId(ed25519_dalek::VerifyingKey::from(&sk).into()).into();
-        let signer = AgentSigner::new(id, sk).unwrap();
-
-        let signed = Signed::try_sign(vec![1, 2, 3], &signer).unwrap();
+        let signed = Signed::try_sign(vec![1, 2, 3], &sk).unwrap();
         assert!(signed.try_verify().is_ok());
     }
 }

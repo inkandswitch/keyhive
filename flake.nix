@@ -2,7 +2,7 @@
   description = "beehive";
 
   inputs = {
-    nixpkgs.url = "nixpkgs/nixos-24.05";
+    nixpkgs.url = "nixpkgs/nixos-24.11";
     nixos-unstable.url = "nixpkgs/nixos-unstable-small";
 
     command-utils.url = "github:expede/nix-command-utils";
@@ -39,7 +39,7 @@
           config.allowUnfree = true;
         };
 
-        rustVersion = "1.80.1";
+        rustVersion = "1.83.0";
 
         rust-toolchain = pkgs.rust-bin.stable.${rustVersion}.default.override {
           extensions = [

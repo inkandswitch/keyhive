@@ -13,7 +13,8 @@ use crate::{
         signed::Signed,
     },
     principal::{
-        agent::{id::AgentId, signer::AgentSigner, Agent},
+        active::Active,
+        agent::{id::AgentId, Agent},
         group::{
             error::AddError,
             operation::{
@@ -48,37 +49,15 @@ pub struct Document<T: ContentRef> {
 }
 
 impl<T: ContentRef> Document<T> {
-    pub fn new(
-        head: Signed<Delegation<T>>,
-        viewer_id: IndividualId,
-        viewer_pk: ShareKey,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
-    ) -> Result<Self, CgkaError> {
-        let mut doc = Document {
-            cgka: Cgka::new(DocumentId(head.subject()), viewer_id, viewer_pk)?,
-            group: Group::new(head, delegations, revocations),
-            reader_keys: Default::default(),
-            content_heads: Default::default(),
-            content_state: Default::default(),
-        };
-        doc.rebuild();
-        Ok(doc)
-    }
-
     // NOTE doesn't register into the top-level Beehive context
-    pub fn from_group(
-        group: Group<T>,
-        viewer_id: IndividualId,
-        viewer_pk: ShareKey,
-    ) -> Result<Self, CgkaError> {
-        let doc_id = DocumentId(group.id());
+    pub fn from_group(group: Group<T>, viewer: &Active) -> Result<Self, CgkaError> {
+        let doc_id = DocumentId(group.verifying_key().into());
         let mut doc = Document {
+            cgka: Cgka::new(doc_id, viewer.id(), viewer.pick_prekey(doc_id))?,
             group,
             reader_keys: Default::default(),
             content_heads: Default::default(),
             content_state: Default::default(),
-            cgka: Cgka::new(doc_id, viewer_id, viewer_pk)?,
         };
         doc.rebuild();
         Ok(doc)
@@ -115,7 +94,6 @@ impl<T: ContentRef> Document<T> {
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let doc_signer = AgentSigner::document_signer_from_key(sk);
 
         let group = parents.iter().try_fold(
             Group::generate(parents.clone(), delegations, revocations, csprng)?,
@@ -128,7 +106,7 @@ impl<T: ContentRef> Document<T> {
                         after_revocations: vec![],
                         after_content: BTreeMap::new(),
                     },
-                    &doc_signer,
+                    &sk,
                 )?;
                 let rc = Rc::new(dlg);
                 acc.state.delegation_heads.insert(rc.dupe());
@@ -136,7 +114,7 @@ impl<T: ContentRef> Document<T> {
                 Ok::<Group<T>, DelegationError>(acc)
             },
         )?;
-        let owner_id = IndividualId(Identifier(doc_signer.verifying_key()));
+        let owner_id = IndividualId(sk.verifying_key().into());
         let doc_id = DocumentId(group.id());
         let owner_share_secret_key = ShareSecretKey::generate(csprng);
         let owner_share_key = owner_share_secret_key.share_key();
@@ -211,7 +189,7 @@ impl<T: ContentRef> Document<T> {
     pub fn revoke_member(
         &mut self,
         member_id: AgentId,
-        signer: AgentSigner,
+        signing_key: &ed25519_dalek::SigningKey,
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
         // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
@@ -228,7 +206,7 @@ impl<T: ContentRef> Document<T> {
         // }
         after_other_doc_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
         self.group
-            .revoke_member(member_id, signer, &after_other_doc_content)
+            .revoke_member(member_id, signing_key, &after_other_doc_content)
     }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {

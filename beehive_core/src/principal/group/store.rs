@@ -14,7 +14,11 @@ use crate::{
 };
 use dupe::{Dupe, IterDupedExt, OptionDupedExt};
 use nonempty::NonEmpty;
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashSet},
+    rc::Rc,
+};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct GroupStore<T: ContentRef>(BTreeMap<GroupId, Rc<RefCell<Group<T>>>>);
@@ -64,7 +68,9 @@ impl<T: ContentRef> GroupStore<T> {
         let mut explore: Vec<GroupAccess<T>> = vec![];
 
         for member in group.members.keys() {
-            let dlg = group.get_capability(member).unwrap();
+            let dlg = group
+                .get_capability(member)
+                .expect("members have capabilities by defintion");
 
             explore.push(GroupAccess {
                 agent: dlg.payload().delegate.clone(),
@@ -74,6 +80,7 @@ impl<T: ContentRef> GroupStore<T> {
         }
 
         let mut caps: BTreeMap<AgentId, (Agent<T>, Access)> = BTreeMap::new();
+        let mut seen: HashSet<[u8; 64]> = Default::default();
 
         while let Some(GroupAccess {
             agent: member,
@@ -81,34 +88,60 @@ impl<T: ContentRef> GroupStore<T> {
             parent_access,
         }) = explore.pop()
         {
-            match member {
+            let agent_id = member.agent_id();
+
+            match member.dupe() {
                 Agent::Active(_) | Agent::Individual(_) => {
                     let current_path_access = access.min(parent_access);
 
-                    let best_access =
-                        if let Some((_, prev_found_path_access)) = caps.get(&member.agent_id()) {
-                            (*prev_found_path_access).max(current_path_access)
-                        } else {
-                            current_path_access
-                        };
+                    let best_access = if let Some((_, prev_found_path_access)) = caps.get(&agent_id)
+                    {
+                        (*prev_found_path_access).max(current_path_access)
+                    } else {
+                        current_path_access
+                    };
 
-                    caps.insert(member.agent_id(), (member, best_access));
+                    caps.insert(agent_id, (member, best_access));
                 }
-                Agent::Group(group) => {
-                    for (mem, proofs) in group.borrow().members().iter() {
-                        for proof in proofs.iter() {
+                Agent::Group(inner_group) => {
+                    let current_path_access = access.min(parent_access);
+
+                    let best_access = if let Some((_, prev_found_path_access)) = caps.get(&agent_id)
+                    {
+                        let new = (*prev_found_path_access).max(current_path_access);
+                        if new <= current_path_access {
+                            continue;
+                        }
+                        new
+                    } else {
+                        current_path_access
+                    };
+
+                    caps.insert(agent_id, (member, best_access));
+
+                    /////////// FIXME
+
+                    // Recurse
+                    for (mem_id, dlgs) in inner_group.borrow().members.iter() {
+                        for dlg in dlgs.iter() {
+                            let bytes: [u8; 64] = dlg.signature.to_bytes();
+                            if seen.contains(&bytes) {
+                                continue;
+                            }
+                            seen.insert(bytes);
+
                             let current_path_access =
-                                access.min(proof.payload().can).min(parent_access);
+                                access.min(dlg.payload.can).min(parent_access);
 
                             let best_access =
-                                if let Some((_, prev_found_path_access)) = caps.get(mem) {
+                                if let Some((_, prev_found_path_access)) = caps.get(mem_id) {
                                     (*prev_found_path_access).max(current_path_access)
                                 } else {
                                     current_path_access
                                 };
 
                             explore.push(GroupAccess {
-                                agent: proof.payload().delegate.clone(),
+                                agent: dlg.payload().delegate.clone(),
                                 agent_access: best_access,
                                 parent_access,
                             });
@@ -116,25 +149,26 @@ impl<T: ContentRef> GroupStore<T> {
                     }
                 }
                 Agent::Document(doc) => {
-                    for (mem, proof_hashes) in doc.borrow().group.members.iter() {
-                        for proof in proof_hashes.iter() {
-                            let current_path_access =
-                                access.min(proof.payload().can).min(parent_access);
+                    // FIXME
+                    // for (mem, proof_hashes) in doc.borrow().group.members.iter() {
+                    //     for proof in proof_hashes.iter() {
+                    //         let current_path_access =
+                    //             access.min(proof.payload().can).min(parent_access);
 
-                            let best_access =
-                                if let Some((_, prev_found_path_access)) = caps.get(mem) {
-                                    (*prev_found_path_access).max(current_path_access)
-                                } else {
-                                    current_path_access
-                                };
+                    //         let best_access =
+                    //             if let Some((_, prev_found_path_access)) = caps.get(mem) {
+                    //                 (*prev_found_path_access).max(current_path_access)
+                    //             } else {
+                    //                 current_path_access
+                    //             };
 
-                            explore.push(GroupAccess {
-                                agent: proof.payload().delegate.clone(),
-                                agent_access: best_access,
-                                parent_access,
-                            });
-                        }
-                    }
+                    //         explore.push(GroupAccess {
+                    //             agent: proof.payload().delegate.clone(),
+                    //             agent_access: best_access,
+                    //             parent_access,
+                    //         });
+                    //     }
+                    // }
                 }
             }
         }

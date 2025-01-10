@@ -1,7 +1,7 @@
 pub mod id;
 
 use super::{
-    agent::{id::AgentId, signer::AgentSigner, Agent},
+    agent::{id::AgentId, Agent},
     document::{id::DocumentId, Document},
     group::{
         error::AddError,
@@ -63,19 +63,19 @@ impl<T: ContentRef> Membered<T> {
     pub fn revoke_member(
         &mut self,
         member_id: AgentId,
-        signer: AgentSigner,
+        signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
         match self {
             Membered::Group(group) => {
                 group
                     .borrow_mut()
-                    .revoke_member(member_id, signer, relevant_docs)
+                    .revoke_member(member_id, signing_key, relevant_docs)
             }
             Membered::Document(document) => {
                 document
                     .borrow_mut()
-                    .revoke_member(member_id, signer, relevant_docs)
+                    .revoke_member(member_id, signing_key, relevant_docs)
             }
         }
     }

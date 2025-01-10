@@ -14,7 +14,7 @@ use crate::{
         signed::{Signed, SigningError},
     },
     principal::{
-        agent::{id::AgentId, signer::AgentSigner, Agent},
+        agent::{id::AgentId, Agent},
         group::operation::{
             delegation::{Delegation, DelegationError},
             revocation::Revocation,
@@ -32,7 +32,7 @@ use thiserror::Error;
 #[derive(Clone, Serialize)]
 pub struct Active {
     /// The signing key of the active agent.
-    pub(crate) signing_key: SigningKey,
+    pub(crate) signing_key: ed25519_dalek::SigningKey,
 
     // FIXME generalize to use e.g. KMS
     pub(crate) prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>,
@@ -47,15 +47,13 @@ impl Active {
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
         let mut individual = Individual::new(signing_key.verifying_key().into());
-        let agent_signer = AgentSigner::new(individual.agent_id(), signing_key.clone())
-            .expect("key generated from SK should match");
 
         let mut prekey_pairs = BTreeMap::new();
 
         (0..7).try_for_each(|_| {
             let sk = ShareSecretKey::generate(csprng);
             let pk = sk.share_key();
-            let op = Signed::try_sign(KeyOp::add(pk), &agent_signer)?;
+            let op = Signed::try_sign(KeyOp::add(pk), &signing_key)?;
 
             prekey_pairs.insert(pk, sk);
             individual
@@ -90,24 +88,19 @@ impl Active {
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         self.individual
-            .rotate_prekey(prekey, self.signing_key.clone(), csprng)
+            .rotate_prekey(prekey, &self.signing_key, csprng)
     }
 
     pub fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
-        self.individual
-            .expand_prekeys(self.signing_key.clone(), csprng)
+        self.individual.expand_prekeys(&self.signing_key, csprng)
     }
 
     /// Sign a payload.
     pub fn try_sign<U: Serialize>(&self, payload: U) -> Result<Signed<U>, SigningError> {
-        Signed::<U>::try_sign(payload, &self.signer())
-    }
-
-    pub fn signer(&self) -> AgentSigner {
-        AgentSigner::from_active(&self)
+        Signed::<U>::try_sign(payload, &self.signing_key)
     }
 
     pub fn get_capability<T: ContentRef>(

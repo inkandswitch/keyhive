@@ -13,11 +13,7 @@ use crate::{
     error::missing_dependency::MissingDependency,
     principal::{
         active::Active,
-        agent::{
-            id::AgentId,
-            signer::{AgentSigner, SignerId},
-            Agent,
-        },
+        agent::{id::AgentId, Agent},
         document::{id::DocumentId, store::DocumentStore, DecryptError, Document, EncryptError},
         group::{
             self,
@@ -80,6 +76,10 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
     pub fn agent_id(&self) -> AgentId {
         self.active.borrow().agent_id()
+    }
+
+    pub fn generate_device_group() -> Self {
+        todo!()
     }
 
     pub fn generate(
@@ -170,8 +170,9 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
     }
 
     pub fn register_group(&mut self, root_delegation: Signed<Delegation<T>>) {
-        let group = Group::new(
-            root_delegation,
+        let group = Group::from_individual(
+            Individual::new(root_delegation.issuer.into()),
+            Rc::new(root_delegation),
             self.delegations.dupe(),
             self.revocations.dupe(),
         );
@@ -220,7 +221,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
         resource.revoke_member(
             to_revoke,
-            AgentSigner::from_active(&self.active.borrow()),
+            &self.active.borrow().signing_key,
             &mut relevant_docs,
         )
     }
@@ -361,10 +362,18 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         &mut self,
         static_dlg: Signed<StaticDelegation<T>>,
     ) -> Result<(), ReceieveStaticDelegationError<T>> {
+        if self
+            .delegations
+            .borrow()
+            .contains_key(&Digest::hash(&static_dlg).into())
+        {
+            return Ok(());
+        }
+
         // NOTE: this is the only place this gets parsed and this verification ONLY happens here
         static_dlg.try_verify()?;
 
-        let signed_by = static_dlg.signed_by().dupe();
+        let signed_by = static_dlg.issuer;
         let proof: Option<Rc<Signed<Delegation<T>>>> = static_dlg
             .payload()
             .proof
@@ -386,11 +395,11 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             indie.into()
         });
 
-        let revs = self.revocations.borrow();
         let after_revocations = static_dlg.payload().after_revocations.iter().try_fold(
             vec![],
             |mut acc, static_rev_hash| {
                 let rev_hash = static_rev_hash.into();
+                let revs = self.revocations.borrow();
                 let resolved_rev = revs.get(&rev_hash).ok_or(MissingDependency(rev_hash))?;
                 acc.push(resolved_rev.dupe());
                 Ok::<_, ReceieveStaticDelegationError<T>>(acc)
@@ -398,7 +407,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         )?;
 
         let delegation = Signed {
-            signed_by: static_dlg.signed_by,
+            issuer: static_dlg.issuer,
             signature: static_dlg.signature,
             payload: Delegation {
                 delegate,
@@ -409,49 +418,43 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             },
         };
 
-        let subject_id = proof.map(|prf| prf.signed_by().dupe()).unwrap_or(signed_by);
+        let subject_id = proof.map(|prf| prf.issuer).unwrap_or(signed_by).into();
 
-        match subject_id {
-            SignerId::Group(group_id) => {
-                if let Some(group) = self.groups.get(&group_id) {
-                    group.borrow_mut().receive_delegation(Rc::new(delegation))?;
-                } else {
-                    self.groups.insert(Rc::new(RefCell::new(Group::new(
-                        delegation,
-                        self.delegations.dupe(),
-                        self.revocations.dupe(),
-                    ))));
-                }
+        if let Some(group) = self.groups.get(&GroupId(subject_id)) {
+            group.borrow_mut().receive_delegation(Rc::new(delegation))?;
+        } else if let Some(doc) = self.docs.get(&DocumentId(subject_id)) {
+            doc.borrow_mut().receive_delegation(Rc::new(delegation))?;
+        } else if let Some(indie) = self.individuals.remove(&IndividualId(subject_id)) {
+            self.promote_individual_to_group(indie, Rc::new(delegation));
+        } else {
+            let group = Group::from_individual(
+                Individual::new(IndividualId(subject_id)),
+                Rc::new(delegation),
+                self.delegations.dupe(),
+                self.revocations.dupe(),
+            );
+            self.groups.insert(Rc::new(RefCell::new(group)));
+        };
 
-                Ok(())
-            }
-            SignerId::Document(doc_id) => {
-                if let Some(doc) = self.docs.get(&doc_id) {
-                    doc.borrow_mut().receive_delegation(Rc::new(delegation))?;
-                } else {
-                    self.docs.insert(Rc::new(RefCell::new(Document::new(
-                        delegation,
-                        self.id(),
-                        self.active.borrow().pick_prekey(doc_id),
-                        self.delegations.dupe(),
-                        self.revocations.dupe(),
-                    )?)));
-                }
-
-                Ok(())
-            }
-            _ => Err(ReceieveStaticDelegationError::CannotDelegateIndividuals),
-        }
+        Ok(())
     }
 
     pub fn receive_revocation(
         &mut self,
-        static_dlg: Signed<StaticRevocation<T>>,
+        static_rev: Signed<StaticRevocation<T>>,
     ) -> Result<(), ReceieveStaticDelegationError<T>> {
-        // NOTE: this is the only place this gets parsed and this verification ONLY happens here
-        static_dlg.try_verify()?;
+        if self
+            .revocations
+            .borrow()
+            .contains_key(&Digest::hash(&static_rev).into())
+        {
+            return Ok(());
+        }
 
-        let revoke_hash = static_dlg.payload.revoke.into();
+        // NOTE: this is the only place this gets parsed and this verification ONLY happens here
+        static_rev.try_verify()?;
+
+        let revoke_hash = static_rev.payload.revoke.into();
         let revoke: Rc<Signed<Delegation<T>>> = self
             .delegations
             .borrow()
@@ -459,7 +462,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             .map(Dupe::dupe)
             .ok_or(MissingDependency(revoke_hash))?;
 
-        let proof: Option<Rc<Signed<Delegation<T>>>> = static_dlg
+        let proof: Option<Rc<Signed<Delegation<T>>>> = static_rev
             .payload()
             .proof
             .map(|proof_hash| {
@@ -473,12 +476,12 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             .transpose()?;
 
         let revocation = Signed {
-            signed_by: static_dlg.signed_by,
-            signature: static_dlg.signature,
+            issuer: static_rev.issuer,
+            signature: static_rev.signature,
             payload: Revocation {
                 revoke,
                 proof,
-                after_content: static_dlg.payload.after_content,
+                after_content: static_rev.payload.after_content,
             },
         };
 
@@ -487,8 +490,19 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             group.borrow_mut().receive_revocation(Rc::new(revocation))?;
         } else if let Some(doc) = self.docs.get(&DocumentId(id)) {
             doc.borrow_mut().receive_revocation(Rc::new(revocation))?;
+        } else if let Some(indie) = self.individuals.remove(&IndividualId(id)) {
+            let group = self.promote_individual_to_group(indie, revocation.payload.revoke.dupe());
+            group.borrow_mut().receive_revocation(Rc::new(revocation))?;
         } else {
-            Err(ReceieveStaticDelegationError::CannotDelegateIndividuals)?;
+            let mut group = Group::from_individual(
+                Individual::new(static_rev.issuer.into()),
+                revocation.payload.revoke.dupe(),
+                self.delegations.dupe(),
+                self.revocations.dupe(),
+            );
+
+            group.receive_revocation(Rc::new(revocation))?;
+            self.groups.insert(Rc::new(RefCell::new(group)));
         }
 
         Ok(())
@@ -501,15 +515,80 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         match static_op.payload {
             StaticOperation::Delegation(d) => self.receive_delegation(Signed {
                 payload: d,
-                signed_by: static_op.signed_by,
+                issuer: static_op.issuer,
                 signature: static_op.signature,
             }),
             StaticOperation::Revocation(r) => self.receive_revocation(Signed {
                 payload: r,
-                signed_by: static_op.signed_by,
+                issuer: static_op.issuer,
                 signature: static_op.signature,
             }),
         }
+    }
+
+    pub fn promote_individual_to_group(
+        &mut self,
+        individual: Rc<RefCell<Individual>>,
+        head: Rc<Signed<Delegation<T>>>,
+    ) -> Rc<RefCell<Group<T>>> {
+        let group = Rc::new(RefCell::new(Group::from_individual(
+            individual.borrow().clone(),
+            head,
+            self.delegations.dupe(),
+            self.revocations.dupe(),
+        )));
+
+        let agent = Agent::from(group.dupe());
+
+        for (digest, dlg) in self.delegations.clone().borrow().iter() {
+            if dlg.payload.delegate == agent {
+                self.delegations.borrow_mut().0.insert(
+                    digest.clone(),
+                    Rc::new(Signed {
+                        issuer: dlg.issuer,
+                        signature: dlg.signature,
+                        payload: Delegation {
+                            delegate: agent.dupe(),
+                            can: dlg.payload.can,
+                            proof: dlg.payload.proof.clone(),
+                            after_revocations: dlg.payload.after_revocations.clone(),
+                            after_content: dlg.payload.after_content.clone(),
+                        },
+                    }),
+                );
+            }
+        }
+
+        // FIXME keep serialized delegation and revocaton around? as an Option<>?
+        for (digest, rev) in self.revocations.clone().borrow().iter() {
+            if rev.payload.subject() == group.borrow().id() {
+                self.revocations.borrow_mut().0.insert(
+                    digest.clone(),
+                    Rc::new(Signed {
+                        issuer: rev.issuer,
+                        signature: rev.signature,
+                        payload: Revocation {
+                            revoke: self
+                                .delegations
+                                .borrow()
+                                .get(&Digest::hash(&rev.payload.revoke))
+                                .expect("revoked delegation to be available")
+                                .dupe(),
+                            proof: rev.payload.proof.dupe().map(|proof| {
+                                self.delegations
+                                    .borrow()
+                                    .get(&Digest::hash(&proof))
+                                    .cloned()
+                                    .expect("revoked delegation to be available")
+                            }),
+                            after_content: rev.payload.after_content.clone(),
+                        },
+                    }),
+                );
+            }
+        }
+
+        group
     }
 }
 
@@ -541,9 +620,6 @@ pub enum AddMemberError {
 pub enum ReceieveStaticDelegationError<T: ContentRef> {
     #[error(transparent)]
     VerificationError(#[from] VerificationError),
-
-    #[error("Cannot delegate individuals")]
-    CannotDelegateIndividuals,
 
     #[error("Missing proof: {0}")]
     MissingProof(#[from] MissingDependency<Digest<Signed<Delegation<T>>>>),

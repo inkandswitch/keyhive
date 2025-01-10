@@ -70,14 +70,17 @@ impl<T: ContentRef> DocumentStore<T> {
 
         let mut explore: Vec<GroupAccess<T>> = vec![];
 
-        for dlgs in doc.group.members.values() {
-            for delegation in dlgs {
-                explore.push(GroupAccess {
-                    agent: delegation.payload().delegate.dupe(),
-                    agent_access: delegation.payload().can, // FIXME need to lookup
-                    parent_access: Access::Admin,
-                });
-            }
+        for member in doc.members().keys() {
+            let dlg = doc
+                .group
+                .get_capability(member)
+                .expect("members have capabilities by defintion");
+
+            explore.push(GroupAccess {
+                agent: dlg.payload().delegate.clone(),
+                agent_access: dlg.payload().can,
+                parent_access: Access::Admin,
+            });
         }
 
         let mut caps: BTreeMap<AgentId, (Agent<T>, Access)> = BTreeMap::new();

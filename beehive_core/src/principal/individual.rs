@@ -105,7 +105,7 @@ impl Individual {
     pub(crate) fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old_key: ShareKey,
-        signer: ed25519_dalek::SigningKey,
+        signer: &ed25519_dalek::SigningKey,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_key = self.prekey_state.rotate_gen(old_key, signer, csprng)?;
@@ -116,7 +116,7 @@ impl Individual {
 
     pub(crate) fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
-        signer: ed25519_dalek::SigningKey,
+        signer: &ed25519_dalek::SigningKey,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_key = self.prekey_state.expand(signer, csprng)?;

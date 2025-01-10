@@ -8,9 +8,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
     principal::{
-        agent::{signer::AgentSigner, Agent},
-        group::operation::delegation::DelegationError,
-        identifier::Identifier,
+        agent::Agent, group::operation::delegation::DelegationError, identifier::Identifier,
         verifiable::Verifiable,
     },
     util::content_addressed_map::CaMap,
@@ -35,13 +33,12 @@ pub struct GroupState<T: ContentRef> {
 
 impl<T: ContentRef> GroupState<T> {
     pub fn new(
-        delegation_head: Signed<Delegation<T>>,
+        delegation_head: Rc<Signed<Delegation<T>>>,
         delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
         revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
     ) -> Self {
         let id = GroupId(delegation_head.verifying_key().into());
-        let rc = Rc::new(delegation_head);
-        let mut heads = vec![rc.dupe()];
+        let mut heads = vec![delegation_head.dupe()];
 
         while let Some(head) = heads.pop() {
             if delegations.borrow().contains_value(head.as_ref()) {
@@ -65,7 +62,7 @@ impl<T: ContentRef> GroupState<T> {
         }
 
         let mut delegation_heads = CaMap::new();
-        delegation_heads.insert(rc);
+        delegation_heads.insert(delegation_head);
 
         Self {
             id,
@@ -88,7 +85,6 @@ impl<T: ContentRef> GroupState<T> {
     ) -> Result<Self, DelegationError> {
         let signing_key = ed25519_dalek::SigningKey::generate(csprng);
         let group_id = signing_key.verifying_key().into();
-        let signer = AgentSigner::group_signer_from_key(signing_key);
 
         let group = GroupState {
             id: GroupId(group_id),
@@ -110,7 +106,7 @@ impl<T: ContentRef> GroupState<T> {
                     after_revocations: vec![],
                     after_content: BTreeMap::new(),
                 },
-                &signer,
+                &signing_key,
             )?;
 
             acc.delegation_heads.insert(Rc::new(dlg));
@@ -142,9 +138,7 @@ impl<T: ContentRef> GroupState<T> {
             return Err(AddError::InvalidSubject(delegation.subject()));
         }
 
-        if delegation.payload().proof.is_none()
-            && delegation.signed_by.verifying_key() != self.verifying_key()
-        {
+        if delegation.payload().proof.is_none() && delegation.issuer != self.verifying_key() {
             return Err(AddError::InvalidProofChain);
         }
 
@@ -219,7 +213,7 @@ impl<T: ContentRef> GroupState<T> {
 
                     Ok(proof.as_ref())
                 })?;
-        } else if revocation.signed_by.verifying_key() != self.verifying_key() {
+        } else if revocation.issuer != self.verifying_key() {
             return Err(AddError::InvalidProofChain);
         }
 

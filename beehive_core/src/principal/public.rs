@@ -1,6 +1,5 @@
 use super::{
     active::Active,
-    agent::signer::AgentSigner,
     identifier::Identifier,
     individual::{op::KeyOp, state::PrekeyState, Individual},
     verifiable::Verifiable,
@@ -38,12 +37,8 @@ impl Public {
         self.share_secret_key().share_key()
     }
 
-    pub fn signer(&self) -> AgentSigner {
-        AgentSigner::individual_signer_from_key(self.signing_key())
-    }
-
     pub fn individual(&self) -> Individual {
-        let op = Signed::try_sign(KeyOp::add(self.share_key()), &self.signer())
+        let op = Signed::try_sign(KeyOp::add(self.share_key()), &self.signing_key())
             .expect("signature with well-known key should work");
 
         Individual {

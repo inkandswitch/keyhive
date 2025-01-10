@@ -1,5 +1,4 @@
 pub mod id;
-pub mod signer;
 
 use super::{
     active::Active,

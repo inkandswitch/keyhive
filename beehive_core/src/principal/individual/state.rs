@@ -5,7 +5,6 @@ use crate::{
         signed::{Signed, SigningError, VerificationError},
     },
     error::missing_dependency::MissingDependency,
-    principal::agent::signer::AgentSigner,
     util::content_addressed_map::CaMap,
 };
 use serde::{Deserialize, Serialize};
@@ -66,7 +65,7 @@ impl PrekeyState {
     ///
     /// Returns a [`SigningError`] if the operation could not be signed.
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        signer: &ed25519_dalek::SigningKey,
+        signing_key: &ed25519_dalek::SigningKey,
         size: usize,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
@@ -74,10 +73,7 @@ impl PrekeyState {
             let secret_key = ShareSecretKey::generate(csprng);
             let share_key = secret_key.share_key();
 
-            let op = Signed::try_sign(
-                KeyOp::add(share_key),
-                &AgentSigner::individual_signer_from_key(signer.clone()),
-            )?;
+            let op = Signed::try_sign(KeyOp::add(share_key), signing_key)?;
             ops.insert(op.into());
 
             Ok::<_, SigningError>(ops)
@@ -125,12 +121,9 @@ impl PrekeyState {
         &mut self,
         old: ShareKey,
         new: ShareKey,
-        signer: ed25519_dalek::SigningKey,
+        signing_key: &ed25519_dalek::SigningKey,
     ) -> Result<ShareKey, SigningError> {
-        let op = Signed::try_sign(
-            KeyOp::rotate(old, new),
-            &AgentSigner::individual_signer_from_key(signer),
-        )?;
+        let op = Signed::try_sign(KeyOp::rotate(old, new), signing_key)?;
         self.ops.insert(op.into());
         Ok(new)
     }
@@ -139,7 +132,7 @@ impl PrekeyState {
     pub(crate) fn rotate_gen<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old: ShareKey,
-        signer: ed25519_dalek::SigningKey,
+        signer: &ed25519_dalek::SigningKey,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
@@ -149,18 +142,13 @@ impl PrekeyState {
     /// Expand the [`PrekeyState`] with a new, randomly-generated [`ShareSecretKey`].
     pub(crate) fn expand<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
-        signer: ed25519_dalek::SigningKey,
+        signing_key: &ed25519_dalek::SigningKey,
         csprng: &mut R,
     ) -> Result<ShareKey, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
         let new = new_secret.share_key();
-        let op = Signed::try_sign(
-            KeyOp::add(new),
-            &AgentSigner::individual_signer_from_key(signer),
-        )?;
-
+        let op = Signed::try_sign(KeyOp::add(new), signing_key)?;
         self.ops.insert(op.into());
-
         Ok(new)
     }
 
@@ -230,8 +218,7 @@ mod tests {
         let mut state = PrekeyState::new();
 
         let mut rando = rand::thread_rng();
-        let signing_key = ed25519_dalek::SigningKey::generate(&mut rando);
-        let signer = AgentSigner::individual_signer_from_key(signing_key);
+        let signer = ed25519_dalek::SigningKey::generate(&mut rando);
 
         let share_key_1 = ShareKey::generate(&mut rando);
         let share_key_2 = ShareKey::generate(&mut rando);
@@ -287,8 +274,7 @@ mod tests {
         let mut state = PrekeyState::new();
 
         let mut rando = rand::thread_rng();
-        let signing_key = ed25519_dalek::SigningKey::generate(&mut rando);
-        let signer = AgentSigner::individual_signer_from_key(signing_key);
+        let signer = ed25519_dalek::SigningKey::generate(&mut rando);
 
         let share_key_1 = ShareKey::generate(&mut rando);
         let share_key_2 = ShareKey::generate(&mut rando);
