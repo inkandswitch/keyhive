@@ -95,13 +95,13 @@ impl Server {
     fn get_current_secret(&self, client_pk: ed25519_dalek::VerifyingKey) -> Secret {
         let mut secret_preimage = self.current_secret_swarm_seed.0.to_vec();
         secret_preimage.extend_from_slice(client_pk.as_bytes());
-        blake3::derive_key(&"/beelay/handshake/secret/", &secret_preimage).into()
+        blake3::derive_key("/beelay/handshake/secret/", &secret_preimage).into()
     }
 
     fn get_prior_secret(&self, client_pk: ed25519_dalek::VerifyingKey) -> Secret {
         let mut secret_preimage = self.prior_secret_swarm_seed.0.to_vec();
         secret_preimage.extend_from_slice(client_pk.as_bytes());
-        blake3::derive_key(&"/beelay/handshake/secret/", &secret_preimage).into()
+        blake3::derive_key("/beelay/handshake/secret/", &secret_preimage).into()
     }
 }
 

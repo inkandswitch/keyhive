@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use super::error::CgkaError;
 
-/// A ShareSecretKeyMap is used to store the secret keys for all of the public keys
+/// A [`ShareKeyMap`] is used to store the secret keys for all of the public keys
 /// on your path that you have encountered so far (either because you added them
 /// to your path as part of an update or decrypted them when decrypting your path).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -64,6 +64,7 @@ impl From<ShareKey> for NodeKey {
     }
 }
 
+/// Keys that were concurrently added to the same node.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub struct ConflictKeys {
     pub first: ShareKey,

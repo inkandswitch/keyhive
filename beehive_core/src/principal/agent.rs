@@ -48,16 +48,8 @@ impl<T: ContentRef> Agent<T> {
 
     pub fn individual_ids(&self) -> HashSet<IndividualId> {
         match self {
-            Agent::Active(a) => {
-                let mut ids = HashSet::new();
-                ids.insert(a.borrow().id());
-                ids
-            }
-            Agent::Individual(i) => {
-                let mut ids = HashSet::new();
-                ids.insert(i.borrow().id());
-                ids
-            }
+            Agent::Active(a) => HashSet::from_iter([a.borrow().id()]),
+            Agent::Individual(i) => HashSet::from_iter([i.borrow().id()]),
             Agent::Group(g) => g.borrow().individual_ids(),
             Agent::Document(d) => d.borrow().group.individual_ids(),
         }
@@ -66,14 +58,10 @@ impl<T: ContentRef> Agent<T> {
     pub fn pick_individual_prekeys(&self, doc_id: DocumentId) -> HashMap<IndividualId, ShareKey> {
         match self {
             Agent::Active(a) => {
-                let mut m = HashMap::new();
-                m.insert(a.borrow().id(), a.borrow().pick_prekey(doc_id));
-                m
+                HashMap::from_iter([(a.borrow().id(), a.borrow().pick_prekey(doc_id))])
             }
             Agent::Individual(i) => {
-                let mut m = HashMap::new();
-                m.insert(i.borrow().id(), i.borrow().pick_prekey(doc_id));
-                m
+                HashMap::from_iter([(i.borrow().id(), i.borrow().pick_prekey(doc_id))])
             }
             Agent::Group(g) => g.borrow().pick_individual_prekeys(doc_id),
             Agent::Document(d) => d.borrow().group.pick_individual_prekeys(doc_id),

@@ -7,7 +7,6 @@ pub trait Separable: Sized {
     /// Use [`derive_from_bytes`] instead.
     fn directly_from_32_bytes(array: [u8; 32]) -> Self;
 
-    ///
     fn derive_from_bytes(bytes: &[u8]) -> Self {
         Self::directly_from_32_bytes(blake3::derive_key(SEPARATOR_STR, bytes))
     }

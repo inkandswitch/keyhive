@@ -188,7 +188,7 @@ fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
 
     let shiftsize: u8 = 64 - digits;
 
-    let mut hash_stream = blake3::Hasher::new().update(&seed).finalize_xof();
+    let mut hash_stream = blake3::Hasher::new().update(seed).finalize_xof();
     let mut buf = [0; 8]; // usize max
     let mut idx = None;
 

@@ -50,3 +50,4 @@ test_utils = ["proptest", "proptest-derive"]
 
 name = "bench_cgka"
 harness = false
+required-features = ["test_utils"]

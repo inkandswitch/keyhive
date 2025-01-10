@@ -19,7 +19,7 @@ impl<T> Encrypted<T> {
         Vec<u8>: From<T>,
     {
         let mut buf: Vec<u8> = value.into();
-        let tag = key.encrypt_in_place_detached(&nonce, associated_data, &mut buf)?;
+        let tag = key.encrypt_in_place_detached(nonce, associated_data, &mut buf)?;
 
         Ok(Encrypted {
             ciphertext: buf,
@@ -38,7 +38,7 @@ impl<T> Encrypted<T> {
         T: TryFrom<Vec<u8>>,
     {
         let mut buf = self.ciphertext;
-        key.decrypt_in_place_detached(&nonce, associated_data, &mut buf, &self.tag)
+        key.decrypt_in_place_detached(nonce, associated_data, &mut buf, &self.tag)
             .map_err(DecryptionError::CryptoError)?;
 
         let value: T = buf

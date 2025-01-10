@@ -106,24 +106,20 @@ impl<T: ContentRef> Group<T> {
     }
 
     pub fn individual_ids(&self) -> HashSet<IndividualId> {
-        let mut ids = HashSet::new();
-        for delegations in self.members.values() {
-            ids.extend(&delegations[0].payload().delegate.individual_ids())
-        }
-        ids
+        HashSet::from_iter(
+            self.members
+                .values()
+                .flat_map(|delegations| delegations[0].payload().delegate.individual_ids()),
+        )
     }
 
     pub fn pick_individual_prekeys(&self, doc_id: DocumentId) -> HashMap<IndividualId, ShareKey> {
-        let mut m = HashMap::new();
-        for delegations in self.members.values() {
-            m.extend(
-                &delegations[0]
-                    .payload()
-                    .delegate
-                    .pick_individual_prekeys(doc_id),
-            );
-        }
-        m
+        HashMap::from_iter(self.members.values().flat_map(|delegations| {
+            delegations[0]
+                .payload()
+                .delegate
+                .pick_individual_prekeys(doc_id)
+        }))
     }
 
     pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
@@ -226,10 +222,11 @@ impl<T: ContentRef> Group<T> {
                     })
                     .collect(),
             },
-            &signing_key,
+            signing_key,
         )?;
 
-        Ok(self.add_delegation(delegation))
+        self.add_delegation(delegation);
+        Ok(())
     }
 
     pub fn revoke_member(
@@ -263,7 +260,7 @@ impl<T: ContentRef> Group<T> {
                             })
                             .collect(),
                     },
-                    &signing_key,
+                    signing_key,
                 )?;
 
                 revocations.insert(Rc::new(revocation));
@@ -632,7 +629,7 @@ mod tests {
             )
             .unwrap();
 
-        gs.insert(g0.clone().into());
+        gs.insert(g0.clone());
         let g0_mems = gs.transitive_members(&g0.borrow());
 
         assert_eq!(g0_mems.len(), 2);
