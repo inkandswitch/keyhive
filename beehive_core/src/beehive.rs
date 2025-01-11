@@ -264,7 +264,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         membered: Membered<T>,
     ) -> BTreeMap<AgentId, (Agent<T>, Access)> {
         match membered {
-            Membered::Group(group) => self.groups.transitive_members(&group.borrow()),
+            Membered::Group(group) => self.groups.transitive_members(group.dupe()),
             Membered::Document(doc) => self.docs.transitive_members(&doc.borrow()),
         }
     }

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 pub struct Identifier(pub ed25519_dalek::VerifyingKey);
 
 impl Identifier {
-    #[cfg(feature = "test_utils")]
+    #[cfg(any(feature = "test_utils", test))]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         ed25519_dalek::SigningKey::generate(csprng)
             .verifying_key()

@@ -10,7 +10,7 @@ use std::fmt::{Display, Formatter};
 pub struct DocumentId(pub(crate) Identifier);
 
 impl DocumentId {
-    #[cfg(feature = "test_utils")]
+    #[cfg(any(feature = "test_utils", test))]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         Self(Identifier::generate(csprng))
     }

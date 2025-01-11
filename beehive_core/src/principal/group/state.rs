@@ -13,6 +13,7 @@ use crate::{
     },
     util::content_addressed_map::CaMap,
 };
+use derivative::Derivative;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use serde::{ser::SerializeStruct, Serialize, Serializer};
@@ -20,15 +21,18 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 // FIXME validate admin on ingest & buld
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Derivative, Eq)]
+#[derivative(PartialEq, Hash)]
 pub struct GroupState<T: ContentRef> {
     pub(crate) id: GroupId,
 
-    pub(crate) delegation_heads: CaMap<Signed<Delegation<T>>>,
+    #[derivative(PartialEq = "ignore", Hash = "ignore")]
     pub(crate) delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
+    pub(crate) delegation_heads: CaMap<Signed<Delegation<T>>>,
 
-    pub(crate) revocation_heads: CaMap<Signed<Revocation<T>>>,
+    #[derivative(PartialEq = "ignore", Hash = "ignore")]
     pub(crate) revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+    pub(crate) revocation_heads: CaMap<Signed<Revocation<T>>>,
 }
 
 impl<T: ContentRef> GroupState<T> {
@@ -245,20 +249,6 @@ impl<T: ContentRef> GroupState<T> {
                 }
             })
             .collect()
-    }
-}
-
-impl<T: ContentRef> std::hash::Hash for GroupState<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-
-        for dh in self.delegation_heads.iter() {
-            dh.hash(state);
-        }
-
-        for rh in self.revocation_heads.iter() {
-            rh.hash(state);
-        }
     }
 }
 

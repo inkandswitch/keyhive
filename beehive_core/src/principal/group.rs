@@ -21,6 +21,7 @@ use crate::{
         share_key::ShareKey,
         signed::{Signed, SigningError},
     },
+    principal::individual,
     util::content_addressed_map::CaMap,
 };
 use dupe::{Dupe, IterDupedExt};
@@ -81,6 +82,10 @@ impl<T: ContentRef> Group<T> {
         let mut delegation_heads = CaMap::new();
         let mut members = HashMap::new();
 
+        let ds = delegations.dupe();
+        let mut ds_mut = ds.borrow_mut();
+
+        dbg!("START");
         parents.iter().try_fold((), |_, parent| {
             let dlg = Signed::try_sign(
                 Delegation {
@@ -93,26 +98,38 @@ impl<T: ContentRef> Group<T> {
                 &sk,
             )?;
 
+            dbg!("  RC");
             let rc = Rc::new(dlg);
-            delegations.borrow_mut().insert(rc.dupe());
+            dbg!("  INSERT");
+            ds_mut.insert(rc.dupe());
+            dbg!("  HEADS");
             delegation_heads.insert(rc.dupe());
-            members.insert((*parent).agent_id(), vec![rc]);
+            members.insert(parent.agent_id(), vec![rc]);
 
             Ok::<(), SigningError>(())
         })?;
+        dbg!("END");
+
+        dbg!("SETUP STATE");
+        let state = state::GroupState {
+            id: group_id,
+
+            delegation_heads,
+            delegations,
+
+            revocation_heads: CaMap::new(),
+            revocations,
+        };
+        dbg!("DONE SETUP STATE");
+
+        dbg!("START INDIE");
+        let individual = Individual::new(id.into());
+        dbg!("END INDIE");
 
         Ok(Group {
-            individual: Individual::new(id.into()),
+            individual,
             members,
-            state: state::GroupState {
-                id: group_id,
-
-                delegation_heads,
-                delegations,
-
-                revocation_heads: CaMap::new(),
-                revocations,
-            },
+            state,
         })
     }
 
@@ -198,6 +215,7 @@ impl<T: ContentRef> Group<T> {
         Ok(digest)
     }
 
+    // FIXME make ote that the best way to do this is to add_deegation after get_capability
     pub fn add_member(
         &mut self,
         member_to_add: Agent<T>,
@@ -516,6 +534,8 @@ mod tests {
             )
             .unwrap();
 
+        dbg!("G0 BUILT");
+
         let g1 = store
             .generate_group(
                 nonempty![alice_agent, g0.clone().into()],
@@ -524,6 +544,7 @@ mod tests {
                 csprng,
             )
             .unwrap();
+        dbg!("G1 BUILT");
 
         let g2 = store
             .generate_group(
@@ -564,156 +585,168 @@ mod tests {
             )
             .unwrap();
 
-        let group1 = gs
-            .generate_group(
-                nonempty![bob.into()],
-                dlg_store.dupe(),
-                rev_store.dupe(),
-                csprng,
-            )
-            .unwrap();
+        // let group1 = gs
+        //     .generate_group(
+        //         nonempty![bob.into()],
+        //         dlg_store.dupe(),
+        //         rev_store.dupe(),
+        //         csprng,
+        //     )
+        //     .unwrap();
 
-        let group2 = gs
-            .generate_group(
-                nonempty![group1.clone().into()],
-                dlg_store.dupe(),
-                rev_store.dupe(),
-                csprng,
-            )
-            .unwrap();
+        // let group2 = gs
+        //     .generate_group(
+        //         nonempty![group1.clone().into()],
+        //         dlg_store.dupe(),
+        //         rev_store.dupe(),
+        //         csprng,
+        //     )
+        //     .unwrap();
 
-        let group3 = gs
-            .generate_group(
-                nonempty![group2.clone().into()],
-                dlg_store.dupe(),
-                rev_store.dupe(),
-                csprng,
-            )
-            .unwrap();
+        // let group3 = gs
+        //     .generate_group(
+        //         nonempty![group2.clone().into()],
+        //         dlg_store.dupe(),
+        //         rev_store.dupe(),
+        //         csprng,
+        //     )
+        //     .unwrap();
 
-        let group4 = gs
-            .generate_group(
-                nonempty![group3.clone().into()],
-                dlg_store.dupe(),
-                rev_store.dupe(),
-                csprng,
-            )
-            .unwrap();
+        // let group4 = gs
+        //     .generate_group(
+        //         nonempty![group3.clone().into()],
+        //         dlg_store.dupe(),
+        //         rev_store.dupe(),
+        //         csprng,
+        //     )
+        //     .unwrap();
 
-        let group5 = gs
-            .generate_group(
-                nonempty![group4.clone().into()],
-                dlg_store.dupe(),
-                rev_store.dupe(),
-                csprng,
-            )
-            .unwrap();
+        // let group5 = gs
+        //     .generate_group(
+        //         nonempty![group4.clone().into()],
+        //         dlg_store.dupe(),
+        //         rev_store.dupe(),
+        //         csprng,
+        //     )
+        //     .unwrap();
 
-        let group6 = gs
-            .generate_group(
-                nonempty![group5.clone().into()],
-                dlg_store.dupe(),
-                rev_store.dupe(),
-                csprng,
-            )
-            .unwrap();
+        // let group6 = gs
+        //     .generate_group(
+        //         nonempty![group5.clone().into()],
+        //         dlg_store.dupe(),
+        //         rev_store.dupe(),
+        //         csprng,
+        //     )
+        //     .unwrap();
 
-        let group7 = gs
-            .generate_group(
-                nonempty![group6.clone().into()],
-                dlg_store.dupe(),
-                rev_store.dupe(),
-                csprng,
-            )
-            .unwrap();
+        // let group7 = gs
+        //     .generate_group(
+        //         nonempty![group6.clone().into()],
+        //         dlg_store.dupe(),
+        //         rev_store.dupe(),
+        //         csprng,
+        //     )
+        //     .unwrap();
 
-        let group8 = gs
-            .generate_group(
-                nonempty![group7.clone().into()],
-                dlg_store.dupe(),
-                rev_store.dupe(),
-                csprng,
-            )
-            .unwrap();
+        // let group8 = gs
+        //     .generate_group(
+        //         nonempty![group7.clone().into()],
+        //         dlg_store.dupe(),
+        //         rev_store.dupe(),
+        //         csprng,
+        //     )
+        //     .unwrap();
 
-        let group9 = gs
-            .generate_group(
-                nonempty![group8.clone().into()],
-                dlg_store.dupe(),
-                rev_store.dupe(),
-                csprng,
-            )
-            .unwrap();
+        // let group9 = gs
+        //     .generate_group(
+        //         nonempty![group8.clone().into()],
+        //         dlg_store.dupe(),
+        //         rev_store.dupe(),
+        //         csprng,
+        //     )
+        //     .unwrap();
 
-        let proof = group0
-            .borrow()
-            .get_capability(&alice.borrow().agent_id())
-            .unwrap()
-            .dupe();
+        // let proof = group0
+        //     .borrow()
+        //     .get_capability(&alice.borrow().agent_id()) // FIXME IS IT THIS?
+        //     .unwrap()
+        //     .dupe();
 
-        group0
-            .borrow_mut()
-            .receive_delegation(Rc::new(
-                Signed::try_sign(
-                    Delegation {
-                        delegate: group9.clone().into(),
-                        can: Access::Admin,
-                        proof: Some(proof),
-                        after_revocations: vec![],
-                        after_content: BTreeMap::new(),
-                    },
-                    &alice.borrow().signing_key,
-                )
-                .unwrap(),
-            ))
-            .unwrap();
+        // group0
+        //     .borrow_mut()
+        //     .receive_delegation(Rc::new(
+        //         Signed::try_sign(
+        //             Delegation {
+        //                 delegate: group9.clone().into(),
+        //                 can: Access::Admin,
+        //                 proof: Some(proof),
+        //                 after_revocations: vec![],
+        //                 after_content: BTreeMap::new(),
+        //             },
+        //             &alice.borrow().signing_key,
+        //         )
+        //         .unwrap(),
+        //     ))
+        //     .unwrap();
 
         [
-            group0, group1, group2, group3, group4, group5, group6, group7, group8, group9,
+            // group0, group1, group2, group3, group4, group5, group6, group7, group8, group9,
+            group0.clone(),
+            group0.clone(),
+            group0.clone(),
+            group0.clone(),
+            group0.clone(),
+            group0.clone(),
+            group0.clone(),
+            group0.clone(),
+            group0.clone(),
+            group0.clone(),
         ]
     }
 
-    // #[test]
-    // fn test_transitive_self() {
-    //     let csprng = &mut rand::thread_rng();
+    #[test]
+    fn test_transitive_self() {
+        let csprng = &mut rand::thread_rng();
 
-    //     let alice = Rc::new(RefCell::new(setup_user(csprng)));
-    //     let alice_agent: Agent<String> = alice.dupe().into();
-    //     let alice_id = alice_agent.agent_id();
+        let alice = Rc::new(RefCell::new(setup_user(csprng)));
+        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice_id = alice_agent.agent_id();
 
-    //     let bob = Rc::new(RefCell::new(setup_user(csprng)));
+        let bob = Rc::new(RefCell::new(setup_user(csprng)));
+        let mut gs: GroupStore<String> = GroupStore::new();
 
-    //     let mut gs: GroupStore<String> = GroupStore::new();
-    //     let [g0, ..] = setup_groups(&mut gs, alice.clone(), bob, csprng);
+        let [g0, ..] = setup_groups(&mut gs, alice.clone(), bob, csprng);
+        // let [g0, ..] = setup_groups(&mut gs, alice.clone(), bob, csprng);
+        dbg!("GOT G0");
+        let g0_mems = gs.transitive_members(g0);
 
-    //     let g0_mems = gs.transitive_members(&g0.dupe().as_ref().clone().into_inner());
+        let expected = BTreeMap::from_iter([(alice_id, (alice.dupe().into(), Access::Admin))]);
+        dbg!("EXPECTED");
 
-    //     assert_eq!(
-    //         g0_mems,
-    //         BTreeMap::from_iter([(alice_id, (alice.into(), Access::Admin))])
-    //     );
-    // }
+        dbg!(g0_mems == expected);
+        assert!(g0_mems == expected);
+        assert_eq!(g0_mems, expected);
+    }
 
-    // #[test]
-    // fn test_transitive_one() {
-    //     let csprng = &mut rand::thread_rng();
+    #[test]
+    fn test_transitive_one() {
+        let csprng = &mut rand::thread_rng();
 
-    //     let alice = Rc::new(RefCell::new(setup_user(csprng)));
-    //     let alice_agent: Agent<String> = alice.dupe().into();
-    //     let alice_id = alice_agent.agent_id();
+        let alice = Rc::new(RefCell::new(setup_user(csprng)));
+        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice_id = alice_agent.agent_id();
 
-    //     let bob = Rc::new(RefCell::new(setup_user(csprng)));
+        let bob = Rc::new(RefCell::new(setup_user(csprng)));
+        let mut gs: GroupStore<String> = GroupStore::new();
 
-    //     let mut gs: GroupStore<String> = GroupStore::new();
+        let [_g0, g1, ..] = setup_groups(&mut gs, alice.dupe(), bob, csprng);
+        let g1_mems = gs.transitive_members(g1.dupe());
 
-    //     let [_g0, g1, _g2, _g3] = setup_groups(&mut gs, alice.dupe(), bob, csprng);
-    //     let g1_mems = gs.transitive_members(&g1.borrow());
-
-    //     assert_eq!(
-    //         g1_mems,
-    //         BTreeMap::from_iter([(alice_id, (alice.clone().into(), Access::Admin))])
-    //     );
-    // }
+        assert_eq!(
+            g1_mems,
+            BTreeMap::from_iter([(alice_id, (alice.clone().into(), Access::Admin))])
+        );
+    }
 
     // #[test]
     // fn test_transitive_two() {
@@ -782,7 +815,7 @@ mod tests {
         let mut gs: GroupStore<String> = GroupStore::new();
 
         let [g0, ..] = setup_cyclic_groups(&mut gs, alice.dupe(), bob.dupe(), csprng);
-        let g1_mems = gs.transitive_members(&g0.borrow());
+        let g1_mems = gs.transitive_members(g0.dupe());
 
         assert_eq!(
             g1_mems,

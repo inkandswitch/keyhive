@@ -38,7 +38,7 @@ pub struct Active {
     pub(crate) prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>,
 
     /// The [`Individual`] representation (how others see this agent).
-    pub(crate) individual: Individual,
+    pub(crate) individual: Individual, // FIXME NOPE! THis is an Agent<T> now
 }
 
 impl Active {
