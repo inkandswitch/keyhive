@@ -16,7 +16,7 @@ use dupe::Dupe;
 use nonempty::NonEmpty;
 use std::{
     cell::{RefCell, RefMut},
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     rc::Rc,
 };
 
@@ -61,7 +61,7 @@ impl<T: ContentRef> DocumentStore<T> {
         Ok(rc_ref)
     }
 
-    pub fn transitive_members(&self, doc: &Document<T>) -> BTreeMap<AgentId, (Agent<T>, Access)> {
+    pub fn transitive_members(&self, doc: &Document<T>) -> HashMap<AgentId, (Agent<T>, Access)> {
         struct GroupAccess<U: ContentRef> {
             agent: Agent<U>,
             agent_access: Access,
@@ -83,7 +83,7 @@ impl<T: ContentRef> DocumentStore<T> {
             });
         }
 
-        let mut caps: BTreeMap<AgentId, (Agent<T>, Access)> = BTreeMap::new();
+        let mut caps: HashMap<AgentId, (Agent<T>, Access)> = HashMap::new();
 
         while let Some(GroupAccess {
             agent: member,

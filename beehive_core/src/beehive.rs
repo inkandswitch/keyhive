@@ -39,7 +39,7 @@ use nonempty::NonEmpty;
 use serde::Serialize;
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
 use thiserror::Error;
@@ -259,12 +259,9 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         self.docs_reachable_by_agent(self.active.dupe().into())
     }
 
-    pub fn reachable_members(
-        &self,
-        membered: Membered<T>,
-    ) -> BTreeMap<AgentId, (Agent<T>, Access)> {
+    pub fn reachable_members(&self, membered: Membered<T>) -> HashMap<AgentId, (Agent<T>, Access)> {
         match membered {
-            Membered::Group(group) => self.groups.transitive_members(group.dupe()),
+            Membered::Group(group) => self.groups.transitive_members(&group.borrow()),
             Membered::Document(doc) => self.docs.transitive_members(&doc.borrow()),
         }
     }

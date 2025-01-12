@@ -21,7 +21,6 @@ use crate::{
         share_key::ShareKey,
         signed::{Signed, SigningError},
     },
-    principal::individual,
     util::content_addressed_map::CaMap,
 };
 use dupe::{Dupe, IterDupedExt};
@@ -85,7 +84,6 @@ impl<T: ContentRef> Group<T> {
         let ds = delegations.dupe();
         let mut ds_mut = ds.borrow_mut();
 
-        dbg!("START");
         parents.iter().try_fold((), |_, parent| {
             let dlg = Signed::try_sign(
                 Delegation {
@@ -98,19 +96,14 @@ impl<T: ContentRef> Group<T> {
                 &sk,
             )?;
 
-            dbg!("  RC");
             let rc = Rc::new(dlg);
-            dbg!("  INSERT");
             ds_mut.insert(rc.dupe());
-            dbg!("  HEADS");
             delegation_heads.insert(rc.dupe());
             members.insert(parent.agent_id(), vec![rc]);
 
             Ok::<(), SigningError>(())
         })?;
-        dbg!("END");
 
-        dbg!("SETUP STATE");
         let state = state::GroupState {
             id: group_id,
 
@@ -120,14 +113,9 @@ impl<T: ContentRef> Group<T> {
             revocation_heads: CaMap::new(),
             revocations,
         };
-        dbg!("DONE SETUP STATE");
-
-        dbg!("START INDIE");
-        let individual = Individual::new(id.into());
-        dbg!("END INDIE");
 
         Ok(Group {
-            individual,
+            individual: Individual::new(id.into()),
             members,
             state,
         })
@@ -483,6 +471,7 @@ mod tests {
     use super::{operation::delegation::Delegation, store::GroupStore};
     use crate::principal::active::Active;
     use nonempty::nonempty;
+    use pretty_assertions::assert_eq;
     use std::cell::RefCell;
 
     fn setup_user(csprng: &mut (impl rand::CryptoRng + rand::RngCore)) -> Active {
@@ -534,8 +523,6 @@ mod tests {
             )
             .unwrap();
 
-        dbg!("G0 BUILT");
-
         let g1 = store
             .generate_group(
                 nonempty![alice_agent, g0.clone().into()],
@@ -544,7 +531,6 @@ mod tests {
                 csprng,
             )
             .unwrap();
-        dbg!("G1 BUILT");
 
         let g2 = store
             .generate_group(
@@ -585,122 +571,112 @@ mod tests {
             )
             .unwrap();
 
-        // let group1 = gs
-        //     .generate_group(
-        //         nonempty![bob.into()],
-        //         dlg_store.dupe(),
-        //         rev_store.dupe(),
-        //         csprng,
-        //     )
-        //     .unwrap();
+        let group1 = gs
+            .generate_group(
+                nonempty![bob.into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
 
-        // let group2 = gs
-        //     .generate_group(
-        //         nonempty![group1.clone().into()],
-        //         dlg_store.dupe(),
-        //         rev_store.dupe(),
-        //         csprng,
-        //     )
-        //     .unwrap();
+        let group2 = gs
+            .generate_group(
+                nonempty![group1.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
 
-        // let group3 = gs
-        //     .generate_group(
-        //         nonempty![group2.clone().into()],
-        //         dlg_store.dupe(),
-        //         rev_store.dupe(),
-        //         csprng,
-        //     )
-        //     .unwrap();
+        let group3 = gs
+            .generate_group(
+                nonempty![group2.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
 
-        // let group4 = gs
-        //     .generate_group(
-        //         nonempty![group3.clone().into()],
-        //         dlg_store.dupe(),
-        //         rev_store.dupe(),
-        //         csprng,
-        //     )
-        //     .unwrap();
+        let group4 = gs
+            .generate_group(
+                nonempty![group3.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
 
-        // let group5 = gs
-        //     .generate_group(
-        //         nonempty![group4.clone().into()],
-        //         dlg_store.dupe(),
-        //         rev_store.dupe(),
-        //         csprng,
-        //     )
-        //     .unwrap();
+        let group5 = gs
+            .generate_group(
+                nonempty![group4.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
 
-        // let group6 = gs
-        //     .generate_group(
-        //         nonempty![group5.clone().into()],
-        //         dlg_store.dupe(),
-        //         rev_store.dupe(),
-        //         csprng,
-        //     )
-        //     .unwrap();
+        let group6 = gs
+            .generate_group(
+                nonempty![group5.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
 
-        // let group7 = gs
-        //     .generate_group(
-        //         nonempty![group6.clone().into()],
-        //         dlg_store.dupe(),
-        //         rev_store.dupe(),
-        //         csprng,
-        //     )
-        //     .unwrap();
+        let group7 = gs
+            .generate_group(
+                nonempty![group6.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
 
-        // let group8 = gs
-        //     .generate_group(
-        //         nonempty![group7.clone().into()],
-        //         dlg_store.dupe(),
-        //         rev_store.dupe(),
-        //         csprng,
-        //     )
-        //     .unwrap();
+        let group8 = gs
+            .generate_group(
+                nonempty![group7.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
 
-        // let group9 = gs
-        //     .generate_group(
-        //         nonempty![group8.clone().into()],
-        //         dlg_store.dupe(),
-        //         rev_store.dupe(),
-        //         csprng,
-        //     )
-        //     .unwrap();
+        let group9 = gs
+            .generate_group(
+                nonempty![group8.clone().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                csprng,
+            )
+            .unwrap();
 
-        // let proof = group0
-        //     .borrow()
-        //     .get_capability(&alice.borrow().agent_id()) // FIXME IS IT THIS?
-        //     .unwrap()
-        //     .dupe();
+        let proof = group0
+            .borrow()
+            .get_capability(&alice.borrow().agent_id()) // FIXME IS IT THIS?
+            .unwrap()
+            .dupe();
 
-        // group0
-        //     .borrow_mut()
-        //     .receive_delegation(Rc::new(
-        //         Signed::try_sign(
-        //             Delegation {
-        //                 delegate: group9.clone().into(),
-        //                 can: Access::Admin,
-        //                 proof: Some(proof),
-        //                 after_revocations: vec![],
-        //                 after_content: BTreeMap::new(),
-        //             },
-        //             &alice.borrow().signing_key,
-        //         )
-        //         .unwrap(),
-        //     ))
-        //     .unwrap();
+        group0
+            .borrow_mut()
+            .receive_delegation(Rc::new(
+                Signed::try_sign(
+                    Delegation {
+                        delegate: group9.clone().into(),
+                        can: Access::Admin,
+                        proof: Some(proof),
+                        after_revocations: vec![],
+                        after_content: BTreeMap::new(),
+                    },
+                    &alice.borrow().signing_key,
+                )
+                .unwrap(),
+            ))
+            .unwrap();
 
         [
-            // group0, group1, group2, group3, group4, group5, group6, group7, group8, group9,
-            group0.clone(),
-            group0.clone(),
-            group0.clone(),
-            group0.clone(),
-            group0.clone(),
-            group0.clone(),
-            group0.clone(),
-            group0.clone(),
-            group0.clone(),
-            group0.clone(),
+            group0, group1, group2, group3, group4, group5, group6, group7, group8, group9,
         ]
     }
 
@@ -716,15 +692,10 @@ mod tests {
         let mut gs: GroupStore<String> = GroupStore::new();
 
         let [g0, ..] = setup_groups(&mut gs, alice.clone(), bob, csprng);
-        // let [g0, ..] = setup_groups(&mut gs, alice.clone(), bob, csprng);
-        dbg!("GOT G0");
-        let g0_mems = gs.transitive_members(g0);
+        let g0_mems = gs.transitive_members(&g0.borrow());
 
-        let expected = BTreeMap::from_iter([(alice_id, (alice.dupe().into(), Access::Admin))]);
-        dbg!("EXPECTED");
+        let expected = HashMap::from_iter([(alice_id, (alice.dupe().into(), Access::Admin))]);
 
-        dbg!(g0_mems == expected);
-        assert!(g0_mems == expected);
         assert_eq!(g0_mems, expected);
     }
 
@@ -739,66 +710,82 @@ mod tests {
         let bob = Rc::new(RefCell::new(setup_user(csprng)));
         let mut gs: GroupStore<String> = GroupStore::new();
 
-        let [_g0, g1, ..] = setup_groups(&mut gs, alice.dupe(), bob, csprng);
-        let g1_mems = gs.transitive_members(g1.dupe());
+        let [g0, g1, ..] = setup_groups(&mut gs, alice.dupe(), bob, csprng);
+        let g1_mems = gs.transitive_members(&g1.borrow());
 
         assert_eq!(
             g1_mems,
-            BTreeMap::from_iter([(alice_id, (alice.clone().into(), Access::Admin))])
+            HashMap::from_iter([
+                (
+                    alice_id,
+                    (Agent::<String>::from(alice.dupe()), Access::Admin)
+                ),
+                (
+                    g0.borrow().agent_id(),
+                    (Agent::<String>::from(g0.dupe()), Access::Admin)
+                )
+            ])
         );
     }
 
-    // #[test]
-    // fn test_transitive_two() {
-    //     let csprng = &mut rand::thread_rng();
+    #[test]
+    fn test_transitive_two() {
+        let csprng = &mut rand::thread_rng();
 
-    //     let alice = Rc::new(RefCell::new(setup_user(csprng)));
-    //     let alice_agent: Agent<String> = alice.dupe().into();
-    //     let alice_id = alice_agent.agent_id();
+        let alice = Rc::new(RefCell::new(setup_user(csprng)));
+        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice_id = alice_agent.agent_id();
 
-    //     let bob = Rc::new(RefCell::new(setup_user(csprng)));
-    //     let bob_agent: Agent<String> = bob.dupe().into();
-    //     let bob_id = bob_agent.agent_id();
+        let bob = Rc::new(RefCell::new(setup_user(csprng)));
+        let bob_agent: Agent<String> = bob.dupe().into();
+        let bob_id = bob_agent.agent_id();
 
-    //     let mut gs: GroupStore<String> = GroupStore::new();
+        let mut gs: GroupStore<String> = GroupStore::new();
 
-    //     let [_g0, _g1, g2, _g3] = setup_groups(&mut gs, alice.dupe(), bob.dupe(), csprng);
-    //     let g1_mems = gs.transitive_members(&g2.borrow());
+        let [g0, g1, g2, _g3] = setup_groups(&mut gs, alice.dupe(), bob.dupe(), csprng);
+        let g1_mems = gs.transitive_members(&g2.borrow());
 
-    //     assert_eq!(
-    //         g1_mems,
-    //         BTreeMap::from_iter([
-    //             (alice_id, (alice.into(), Access::Admin)),
-    //             (bob_id, (bob.into(), Access::Admin))
-    //         ])
-    //     );
-    // }
+        assert_eq!(
+            g1_mems,
+            HashMap::from_iter([
+                (alice_id, (alice.into(), Access::Admin)),
+                (bob_id, (bob.into(), Access::Admin)),
+                (g0.borrow().agent_id(), (g0.dupe().into(), Access::Admin)),
+                (g1.borrow().agent_id(), (g1.dupe().into(), Access::Admin)),
+            ])
+        );
+    }
 
-    // #[test]
-    // fn test_transitive_three() {
-    //     let csprng = &mut rand::thread_rng();
+    #[test]
+    fn test_transitive_three() {
+        let csprng = &mut rand::thread_rng();
 
-    //     let alice = Rc::new(RefCell::new(setup_user(csprng)));
-    //     let alice_agent: Agent<String> = alice.dupe().into();
-    //     let alice_id = alice_agent.agent_id();
+        let alice = Rc::new(RefCell::new(setup_user(csprng)));
+        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice_id = alice_agent.agent_id();
 
-    //     let bob = Rc::new(RefCell::new(setup_user(csprng)));
-    //     let bob_agent: Agent<String> = bob.dupe().into();
-    //     let bob_id = bob_agent.agent_id();
+        let bob = Rc::new(RefCell::new(setup_user(csprng)));
+        let bob_agent: Agent<String> = bob.dupe().into();
+        let bob_id = bob_agent.agent_id();
 
-    //     let mut gs: GroupStore<String> = GroupStore::new();
+        let mut gs: GroupStore<String> = GroupStore::new();
 
-    //     let [_g0, _g1, _g2, g3] = setup_groups(&mut gs, alice.dupe(), bob.dupe(), csprng);
-    //     let g1_mems = gs.transitive_members(&g3.borrow());
+        let [g0, g1, g2, g3] = setup_groups(&mut gs, alice.dupe(), bob.dupe(), csprng);
+        let g3_mems = gs.transitive_members(&g3.borrow());
 
-    //     assert_eq!(
-    //         g1_mems,
-    //         BTreeMap::from_iter([
-    //             (alice_id, (alice.into(), Access::Admin)),
-    //             (bob_id, (bob.into(), Access::Admin))
-    //         ])
-    //     );
-    // }
+        assert_eq!(g3_mems.len(), 5);
+
+        assert_eq!(
+            g3_mems.keys().collect::<std::collections::HashSet<_>>(),
+            HashSet::from_iter([
+                &alice_id,
+                &bob_id,
+                &g0.borrow().agent_id(),
+                &g1.borrow().agent_id(),
+                &g2.borrow().agent_id(),
+            ])
+        );
+    }
 
     #[test]
     fn test_transitive_cycles() {
@@ -814,114 +801,134 @@ mod tests {
 
         let mut gs: GroupStore<String> = GroupStore::new();
 
-        let [g0, ..] = setup_cyclic_groups(&mut gs, alice.dupe(), bob.dupe(), csprng);
-        let g1_mems = gs.transitive_members(g0.dupe());
+        let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9] =
+            setup_cyclic_groups(&mut gs, alice.dupe(), bob.dupe(), csprng);
+        let g0_mems = gs.transitive_members(&g0.borrow());
 
         assert_eq!(
-            g1_mems,
-            BTreeMap::from_iter([
+            g0_mems,
+            HashMap::from_iter([
                 (alice_id, (alice.into(), Access::Admin)),
-                (bob_id, (bob.into(), Access::Admin))
+                (bob_id, (bob.into(), Access::Admin)),
+                (g1.borrow().agent_id(), (g1.dupe().into(), Access::Admin)),
+                (g2.borrow().agent_id(), (g2.dupe().into(), Access::Admin)),
+                (g3.borrow().agent_id(), (g3.dupe().into(), Access::Admin)),
+                (g4.borrow().agent_id(), (g4.dupe().into(), Access::Admin)),
+                (g5.borrow().agent_id(), (g5.dupe().into(), Access::Admin)),
+                (g6.borrow().agent_id(), (g6.dupe().into(), Access::Admin)),
+                (g7.borrow().agent_id(), (g7.dupe().into(), Access::Admin)),
+                (g8.borrow().agent_id(), (g8.dupe().into(), Access::Admin)),
+                (g9.borrow().agent_id(), (g9.dupe().into(), Access::Admin)),
             ])
         );
     }
 
-    // #[test]
-    // fn test_add_member() {
-    //     let csprng = &mut rand::thread_rng();
+    #[test]
+    fn test_add_member() {
+        let csprng = &mut rand::thread_rng();
 
-    //     let alice = Rc::new(RefCell::new(setup_user(csprng)));
-    //     let alice_agent: Agent<String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user(csprng)));
+        let alice_agent: Agent<String> = alice.dupe().into();
 
-    //     let bob = Rc::new(RefCell::new(setup_user(csprng)));
-    //     let bob_agent: Agent<String> = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user(csprng)));
+        let bob_agent: Agent<String> = bob.dupe().into();
 
-    //     let carol = Rc::new(RefCell::new(setup_user(csprng)));
-    //     let carol_agent: Agent<String> = carol.dupe().into();
+        let carol = Rc::new(RefCell::new(setup_user(csprng)));
+        let carol_agent: Agent<String> = carol.dupe().into();
 
-    //     let signer = ed25519_dalek::SigningKey::generate(csprng);
-    //     let active = Rc::new(RefCell::new(Active::generate(signer, csprng).unwrap()));
-    //     let active_agent: Agent<String> = active.dupe().into();
+        let signer = ed25519_dalek::SigningKey::generate(csprng);
+        let active = Rc::new(RefCell::new(Active::generate(signer, csprng).unwrap()));
+        let active_agent: Agent<String> = active.dupe().into();
 
-    //     let dlg_store = Rc::new(RefCell::new(CaMap::new()));
-    //     let rev_store = Rc::new(RefCell::new(CaMap::new()));
-    //     let mut csprng = rand::thread_rng();
+        let dlg_store = Rc::new(RefCell::new(CaMap::new()));
+        let rev_store = Rc::new(RefCell::new(CaMap::new()));
+        let mut csprng = rand::thread_rng();
 
-    //     let mut gs: GroupStore<String> = GroupStore::new();
+        let mut gs: GroupStore<String> = GroupStore::new();
 
-    //     let g0 = gs
-    //         .generate_group(
-    //             nonempty![active.dupe().into()],
-    //             dlg_store.dupe(),
-    //             rev_store.dupe(),
-    //             &mut csprng,
-    //         )
-    //         .unwrap();
+        let g0 = gs
+            .generate_group(
+                nonempty![active.dupe().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                &mut csprng,
+            )
+            .unwrap();
 
-    //     let g1 = gs
-    //         .generate_group(
-    //             nonempty![alice_agent.dupe(), bob_agent.dupe(), g0.dupe().into()],
-    //             dlg_store.dupe(),
-    //             rev_store.dupe(),
-    //             &mut csprng,
-    //         )
-    //         .unwrap();
+        let g1 = gs
+            .generate_group(
+                nonempty![alice_agent.dupe(), bob_agent.dupe(), g0.dupe().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                &mut csprng,
+            )
+            .unwrap();
 
-    //     let g2 = gs
-    //         .generate_group(
-    //             nonempty![carol_agent.dupe(), g1.dupe().into()],
-    //             dlg_store.dupe(),
-    //             rev_store.dupe(),
-    //             &mut csprng,
-    //         )
-    //         .unwrap();
+        let g2 = gs
+            .generate_group(
+                nonempty![carol_agent.dupe(), g1.dupe().into()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                &mut csprng,
+            )
+            .unwrap();
 
-    //     g0.borrow_mut()
-    //         .add_member(
-    //             carol_agent.dupe(),
-    //             Access::Write,
-    //             active.borrow().signing_key.clone(),
-    //             &[],
-    //         )
-    //         .unwrap();
+        g0.borrow_mut()
+            .add_member(
+                carol_agent.dupe(),
+                Access::Write,
+                active.borrow().signing_key.clone(),
+                &[],
+            )
+            .unwrap();
 
-    //     gs.insert(g0.clone().into());
-    //     let g0_mems = gs.transitive_members(&g0.borrow());
+        gs.insert(g0.clone().into());
+        let g0_mems = gs.transitive_members(&g0.borrow());
 
-    //     assert_eq!(g0_mems.len(), 2);
+        assert_eq!(g0_mems.len(), 2);
 
-    //     assert_eq!(
-    //         g0_mems.get(&active.dupe().borrow().agent_id()),
-    //         Some(&(active.dupe().into(), Access::Admin))
-    //     );
+        assert_eq!(
+            g0_mems.get(&active.dupe().borrow().agent_id()),
+            Some(&(active.dupe().into(), Access::Admin))
+        );
 
-    //     assert_eq!(
-    //         g0_mems.get(&carol_agent.agent_id()),
-    //         Some(&(carol.clone().into(), Access::Write))
-    //     );
+        assert_eq!(
+            g0_mems.get(&carol_agent.agent_id()),
+            Some(&(carol.clone().into(), Access::Write))
+        );
 
-    //     let g2_mems = gs.transitive_members(&g2.borrow());
+        let g2_mems = gs.transitive_members(&g2.borrow());
 
-    //     assert_eq!(g2_mems.len(), 4);
+        assert_eq!(g2_mems.len(), 6);
 
-    //     assert_eq!(
-    //         g2_mems.get(&active_agent.agent_id()),
-    //         Some(&(active.into(), Access::Admin))
-    //     );
+        assert_eq!(
+            g2_mems.get(&active_agent.agent_id()),
+            Some(&(active.into(), Access::Admin))
+        );
 
-    //     assert_eq!(
-    //         g2_mems.get(&alice_agent.agent_id()),
-    //         Some(&(alice.into(), Access::Admin))
-    //     );
+        assert_eq!(
+            g2_mems.get(&alice_agent.agent_id()),
+            Some(&(alice.into(), Access::Admin))
+        );
 
-    //     assert_eq!(
-    //         g2_mems.get(&bob_agent.agent_id()),
-    //         Some(&(bob.into(), Access::Admin))
-    //     );
+        assert_eq!(
+            g2_mems.get(&bob_agent.agent_id()),
+            Some(&(bob.into(), Access::Admin))
+        );
 
-    //     assert_eq!(
-    //         g2_mems.get(&carol_agent.agent_id()),
-    //         Some(&(carol.into(), Access::Admin))
-    //     );
-    // }
+        assert_eq!(
+            g2_mems.get(&carol_agent.agent_id()),
+            Some(&(carol.into(), Access::Write)) // NOTE: non-admin!
+        );
+
+        assert_eq!(
+            g2_mems.get(&g0.borrow().agent_id()),
+            Some(&(g0.dupe().into(), Access::Admin))
+        );
+
+        assert_eq!(
+            g2_mems.get(&g1.borrow().agent_id()),
+            Some(&(g1.dupe().into(), Access::Admin))
+        );
+    }
 }

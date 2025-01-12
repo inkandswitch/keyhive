@@ -76,7 +76,7 @@ impl From<x25519_dalek::PublicKey> for ShareKey {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ShareSecretKey([u8; 32]);
 
 impl ShareSecretKey {
@@ -149,5 +149,23 @@ impl From<&ShareSecretKey> for Vec<u8> {
 impl Separable for ShareSecretKey {
     fn directly_from_32_bytes(bytes: [u8; 32]) -> Self {
         ShareSecretKey(bytes)
+    }
+}
+
+impl fmt::LowerHex for ShareSecretKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        crate::util::hex::bytes_as_hex(self.0.iter(), f)
+    }
+}
+
+impl fmt::Display for ShareSecretKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:#x}", self)
+    }
+}
+
+impl fmt::Debug for ShareSecretKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
     }
 }

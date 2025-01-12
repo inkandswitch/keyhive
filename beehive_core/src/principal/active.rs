@@ -22,6 +22,7 @@ use crate::{
         membered::Membered,
     },
 };
+use derivative::Derivative;
 use dupe::Dupe;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::Serialize;
@@ -29,12 +30,16 @@ use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
-#[derive(Clone, Serialize)]
+#[derive(Clone, Derivative, Serialize)]
+#[derivative(Hash)]
 pub struct Active {
     /// The signing key of the active agent.
+    #[derivative(Hash(hash_with = "crate::util::hasher::signing_key"))]
     pub(crate) signing_key: ed25519_dalek::SigningKey,
 
     // FIXME generalize to use e.g. KMS
+    // FIXME consider hashmap
+    #[derivative(Hash(hash_with = "crate::util::hasher::keys"))]
     pub(crate) prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>,
 
     /// The [`Individual`] representation (how others see this agent).
@@ -171,16 +176,6 @@ impl Debug for Active {
             .field("signer", &"<Signer>")
             .field("share_key_pairs", &keypairs_hidden_secret_keys)
             .finish()
-    }
-}
-
-impl std::hash::Hash for Active {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id().hash(state);
-        self.verifying_key().hash(state);
-        for pk in self.prekey_pairs.keys() {
-            pk.hash(state);
-        }
     }
 }
 

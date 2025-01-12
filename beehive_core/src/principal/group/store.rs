@@ -9,6 +9,7 @@ use crate::{
             operation::{delegation::Delegation, revocation::Revocation},
             Group,
         },
+        membered::Membered,
     },
     util::content_addressed_map::CaMap,
 };
@@ -16,7 +17,7 @@ use dupe::{Dupe, IterDupedExt, OptionDupedExt};
 use nonempty::NonEmpty;
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
 
@@ -59,159 +60,90 @@ impl<T: ContentRef> GroupStore<T> {
     }
 
     // FIXME uses self anywhere? move to group/membered directly?
-    pub fn transitive_members(
-        &self,
-        group_rc: Rc<RefCell<Group<T>>>, // FIXME put back as &Group<T>
-    ) -> BTreeMap<AgentId, (Agent<T>, Access)> {
+    pub fn transitive_members(&self, group: &Group<T>) -> HashMap<AgentId, (Agent<T>, Access)> {
         struct GroupAccess<U: ContentRef> {
             agent: Agent<U>,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let group = group_rc.borrow();
-        BTreeMap::from_iter([(group.agent_id(), (group_rc.dupe().into(), Access::Admin))])
+        let mut explore: Vec<GroupAccess<T>> = vec![];
+        // FIXME do these do the same thing?
+        let mut seen: HashSet<[u8; 64]> = HashSet::new();
+        let mut visited: HashSet<(AgentId, Access)> =
+            HashSet::from_iter([((group.agent_id(), Access::Admin))]);
 
-        // let mut explore: Vec<GroupAccess<T>> = vec![];
+        for member in group.members.keys() {
+            let dlg = group
+                .get_capability(member)
+                .expect("members have capabilities by defintion");
 
-        // for member in group.members.keys() {
-        //     let dlg = group
-        //         .get_capability(member)
-        //         .expect("members have capabilities by defintion");
+            explore.push(GroupAccess {
+                agent: dlg.payload().delegate.clone(),
+                agent_access: dlg.payload().can,
+                parent_access: Access::Admin,
+            });
+        }
 
-        //     explore.push(GroupAccess {
-        //         agent: dlg.payload().delegate.clone(),
-        //         agent_access: dlg.payload().can,
-        //         parent_access: Access::Admin,
-        //     });
-        // }
+        let mut caps: HashMap<AgentId, (Agent<T>, Access)> = HashMap::new();
 
-        // let mut caps: BTreeMap<AgentId, (Agent<T>, Access)> = BTreeMap::new();
-        // // let mut caps2: BTreeMap<AgentId, (Agent<T>, Access)> = BTreeMap::new();
-        // let mut seen: HashSet<[u8; 64]> = HashSet::new();
-        // let mut visited: HashSet<(AgentId, Access)> = Default::default();
-        // // caps2.insert(group.agent_id(), (group_rc.dupe().into(), Access::Admin));
+        while let Some(GroupAccess {
+            agent: member,
+            agent_access: access,
+            parent_access,
+        }) = explore.pop()
+        {
+            let agent_id = member.agent_id();
 
-        // while let Some(GroupAccess {
-        //     agent: member,
-        //     agent_access: access,
-        //     parent_access,
-        // }) = explore.pop()
-        // {
-        //     let agent_id = member.agent_id();
+            if agent_id == group.agent_id() {
+                continue;
+            }
 
-        //     if agent_id == group.agent_id() {
-        //         continue;
-        //     }
+            if visited.contains(&(agent_id, parent_access)) {
+                continue;
+            } else {
+                visited.insert((agent_id, parent_access));
+            }
 
-        //     if visited.contains(&(agent_id, parent_access)) {
-        //         continue;
-        //     }
-        //     visited.insert((agent_id, parent_access));
-        //     let current_path_access = access.min(parent_access);
+            let current_path_access = access.min(parent_access);
 
-        //     let best_access = if let Some((_, prev_found_path_access)) = caps.get(&agent_id) {
-        //         (*prev_found_path_access).max(current_path_access)
-        //     } else {
-        //         current_path_access
-        //     };
+            let best_access = if let Some((_, prev_found_path_access)) = caps.get(&agent_id) {
+                (*prev_found_path_access).max(current_path_access)
+            } else {
+                current_path_access
+            };
 
-        //     caps.insert(agent_id, (member.clone() /* FIXME */, best_access));
+            caps.insert(agent_id, (member.dupe(), best_access));
 
-        //     match member.dupe() {
-        //         Agent::Active(_) | Agent::Individual(_) => {
-        //             let current_path_access = access.min(parent_access);
+            match member.dupe() {
+                Agent::Group(inner_group) => Some(inner_group.into()),
+                Agent::Document(doc) => Some(doc.into()),
+                _ => None,
+            }
+            .map(|membered: Membered<T>| {
+                // Recurse
+                for (mem_id, dlgs) in membered.members().iter() {
+                    if mem_id == &group.agent_id() {
+                        continue;
+                    }
 
-        //             let best_access = if let Some((_, prev_found_path_access)) = caps.get(&agent_id)
-        //             {
-        //                 (*prev_found_path_access).max(current_path_access)
-        //             } else {
-        //                 current_path_access
-        //             };
+                    for dlg in dlgs.iter() {
+                        let bytes: [u8; 64] = dlg.signature.to_bytes();
+                        if seen.contains(&bytes) {
+                            continue;
+                        }
+                        seen.insert(bytes);
 
-        //             caps.insert(agent_id, (member, best_access));
-        //         }
-        //         Agent::Group(inner_group) => {
-        //             if inner_group.borrow().group_id() == group.group_id() {
-        //                 continue;
-        //             }
+                        explore.push(GroupAccess {
+                            agent: dlg.payload().delegate.clone(),
+                            agent_access: dlg.payload().can.min(current_path_access),
+                            parent_access,
+                        });
+                    }
+                }
+            });
+        }
 
-        //             let current_path_access = access.min(parent_access);
-
-        //             let best_access = if let Some((_, prev_found_path_access)) = caps.get(&agent_id)
-        //             {
-        //                 let new = (*prev_found_path_access).max(current_path_access);
-        //                 if new <= current_path_access {
-        //                     continue;
-        //                 }
-        //                 new
-        //             } else {
-        //                 current_path_access
-        //             };
-
-        //             // FIXME probably wrong stuff in here
-        //             caps.insert(agent_id, (member, best_access));
-        //             // caps2.insert(group.agent_id(), (group_rc.dupe().into(), best_access));
-
-        //             // FIXME test delegation serailization round trip
-        //             /////////// FIXME
-
-        //             // Recurse
-        //             for (mem_id, dlgs) in inner_group.borrow().members.iter() {
-        //                 if mem_id == &group.agent_id() {
-        //                     continue;
-        //                 }
-
-        //                 for dlg in dlgs.iter() {
-        //                     let bytes: [u8; 64] = dlg.signature.to_bytes();
-        //                     if seen.contains(&bytes) {
-        //                         continue;
-        //                     }
-        //                     seen.insert(bytes);
-
-        //                     let current_path_access =
-        //                         access.min(dlg.payload.can).min(parent_access);
-
-        //                     let best_access =
-        //                         if let Some((_, prev_found_path_access)) = caps.get(mem_id) {
-        //                             (*prev_found_path_access).max(current_path_access)
-        //                         } else {
-        //                             current_path_access
-        //                         };
-
-        //                     explore.push(GroupAccess {
-        //                         agent: dlg.payload().delegate.clone(),
-        //                         agent_access: best_access,
-        //                         parent_access,
-        //                     });
-        //                 }
-        //             }
-        //         }
-        //         Agent::Document(doc) => {
-        //             // FIXME
-        //             // for (mem, proof_hashes) in doc.borrow().group.members.iter() {
-        //             //     for proof in proof_hashes.iter() {
-        //             //         let current_path_access =
-        //             //             access.min(proof.payload().can).min(parent_access);
-
-        //             //         let best_access =
-        //             //             if let Some((_, prev_found_path_access)) = caps.get(mem) {
-        //             //                 (*prev_found_path_access).max(current_path_access)
-        //             //             } else {
-        //             //                 current_path_access
-        //             //             };
-
-        //             //         explore.push(GroupAccess {
-        //             //             agent: proof.payload().delegate.clone(),
-        //             //             agent_access: best_access,
-        //             //             parent_access,
-        //             //         });
-        //             //     }
-        //             // }
-        //         }
-        //     }
-        // }
-
-        // caps
+        caps
     }
 }

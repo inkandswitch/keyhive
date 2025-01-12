@@ -21,16 +21,16 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 // FIXME validate admin on ingest & buld
 
-#[derive(Debug, Clone, Derivative, Eq)]
-#[derivative(PartialEq, Hash)]
+#[derive(Clone, Eq, Derivative)]
+#[derivative(Debug, PartialEq, Hash)]
 pub struct GroupState<T: ContentRef> {
     pub(crate) id: GroupId,
 
-    #[derivative(PartialEq = "ignore", Hash = "ignore")]
+    #[derivative(Debug = "ignore", PartialEq = "ignore", Hash = "ignore")]
     pub(crate) delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
     pub(crate) delegation_heads: CaMap<Signed<Delegation<T>>>,
 
-    #[derivative(PartialEq = "ignore", Hash = "ignore")]
+    #[derivative(Debug = "ignore", PartialEq = "ignore", Hash = "ignore")]
     pub(crate) revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
     pub(crate) revocation_heads: CaMap<Signed<Revocation<T>>>,
 }

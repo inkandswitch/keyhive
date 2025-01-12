@@ -1,6 +1,7 @@
 //! Wrap data in signatures.
 
 use crate::principal::{identifier::Identifier, verifiable::Verifiable};
+use derivative::Derivative;
 use dupe::Dupe;
 use ed25519_dalek::{Signer, Verifier};
 use serde::{Deserialize, Serialize};
@@ -11,16 +12,39 @@ use std::{
 use thiserror::Error;
 
 /// A wrapper to add a signature and signer information to an arbitrary payload.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Derivative, Eq, Serialize, Deserialize)]
+#[derivative(Debug, PartialEq, Hash)]
 pub struct Signed<T: Serialize> {
     /// The data that was signed.
+    #[derivative(PartialEq = "ignore", Hash = "ignore")]
     pub(crate) payload: T,
-
+    //
+    // FIXME pub(crate) serialized: Option<Vec<u8>>,
+    //
     /// The verifying key of the signer (for verifying the signature).
+    #[derivative(Debug(format_with = "format_key"))] // FIXME change to a wrapped type
     pub(crate) issuer: ed25519_dalek::VerifyingKey,
 
     /// The signature of the payload, which can be verified by the `verifying_key`.
+    // FIXME contribute Hash to ed25519_dalek::Signature
+    #[derivative(Hash(hash_with = "hash_signature"))]
+    #[derivative(Debug(format_with = "format_sig"))]
     pub(crate) signature: ed25519_dalek::Signature,
+}
+
+fn format_sig(sig: &ed25519_dalek::Signature, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    crate::util::hex::bytes_as_hex(sig.to_bytes().iter(), f)
+}
+
+fn format_key(
+    key: &ed25519_dalek::VerifyingKey,
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+    crate::util::hex::bytes_as_hex(key.as_bytes().iter(), f)
+}
+
+fn hash_signature<H: Hasher>(signature: &ed25519_dalek::Signature, state: &mut H) {
+    signature.to_bytes().hash(state);
 }
 
 impl<T: Serialize> Signed<T> {
@@ -115,16 +139,6 @@ impl<T: Dupe + Serialize> Dupe for Signed<T> {
 impl<T: Serialize> Verifiable for Signed<T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.issuer
-    }
-}
-
-impl<T: Serialize> Hash for Signed<T> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.issuer.hash(state);
-        self.signature.to_bytes().hash(state);
-
-        let encoded: Vec<u8> = bincode::serialize(&self.payload).expect("serialization failed");
-        encoded.hash(state);
     }
 }
 
