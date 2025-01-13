@@ -1,5 +1,4 @@
 pub mod id;
-pub mod store;
 
 use super::{individual::id::IndividualId, verifiable::Verifiable};
 use crate::{
@@ -77,6 +76,10 @@ impl<T: ContentRef> Document<T> {
 
     pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
         self.group.members()
+    }
+
+    pub fn transitive_members(&self) -> HashMap<AgentId, (Agent<T>, Access)> {
+        self.group.transitive_members()
     }
 
     pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<T>>> {

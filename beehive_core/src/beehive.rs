@@ -14,7 +14,7 @@ use crate::{
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
-        document::{id::DocumentId, store::DocumentStore, DecryptError, Document, EncryptError},
+        document::{id::DocumentId, DecryptError, Document, EncryptError},
         group::{
             self,
             error::AddError,
@@ -24,7 +24,6 @@ use crate::{
                 revocation::{Revocation, StaticRevocation},
                 StaticOperation,
             },
-            store::GroupStore,
             Group, RevokeMemberError,
         },
         identifier::Identifier,
@@ -54,10 +53,10 @@ pub struct Beehive<T: ContentRef, R: rand::CryptoRng + rand::RngCore> {
     individuals: IndividualStore,
 
     /// The [`Group`]s that are known to this agent.
-    groups: GroupStore<T>,
+    groups: HashMap<GroupId, Rc<RefCell<Group<T>>>>,
 
     /// The [`Document`]s that are known to this agent.
-    docs: DocumentStore<T>,
+    docs: HashMap<DocumentId, Rc<RefCell<Document<T>>>>,
 
     /// All applied [`Delegation`]s
     delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
@@ -89,8 +88,8 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         Ok(Self {
             active: Rc::new(RefCell::new(Active::generate(signing_key, &mut csprng)?)),
             individuals: Default::default(),
-            groups: GroupStore::new(),
-            docs: DocumentStore::new(),
+            groups: HashMap::new(),
+            docs: HashMap::new(),
             delegations: Rc::new(RefCell::new(CaMap::new())),
             revocations: Rc::new(RefCell::new(CaMap::new())),
             csprng,
@@ -101,11 +100,11 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         &self.active
     }
 
-    pub fn groups(&self) -> &GroupStore<T> {
+    pub fn groups(&self) -> &HashMap<GroupId, Rc<RefCell<Group<T>>>> {
         &self.groups
     }
 
-    pub fn documents(&self) -> &DocumentStore<T> {
+    pub fn documents(&self) -> &HashMap<DocumentId, Rc<RefCell<Document<T>>>> {
         &self.docs
     }
 
@@ -113,7 +112,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         &mut self,
         coparents: Vec<Agent<T>>,
     ) -> Result<Rc<RefCell<Group<T>>>, SigningError> {
-        Ok(self.groups.generate_group(
+        let g = Rc::new(RefCell::new(Group::generate(
             NonEmpty {
                 head: self.active.dupe().into(),
                 tail: coparents,
@@ -121,7 +120,11 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             self.delegations.dupe(),
             self.revocations.dupe(),
             &mut self.csprng,
-        )?)
+        )?));
+
+        self.groups.insert(g.borrow().group_id(), g.dupe());
+
+        Ok(g)
     }
 
     pub fn generate_doc(
@@ -133,14 +136,14 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             tail: coparents,
         };
 
-        let new_doc = self.docs.generate_document(
+        let new_doc = Document::generate(
             parents,
             self.delegations.dupe(),
             self.revocations.dupe(),
             &mut self.csprng,
         )?;
 
-        for head in new_doc.borrow().delegation_heads().values() {
+        for head in new_doc.delegation_heads().values() {
             self.delegations.borrow_mut().insert(head.dupe());
 
             for dep in head.payload().proof_lineage() {
@@ -148,7 +151,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             }
         }
 
-        Ok(new_doc)
+        Ok(Rc::new(RefCell::new(new_doc)))
     }
 
     pub fn rotate_prekey(&mut self, prekey: ShareKey) -> Result<ShareKey, SigningError> {
@@ -176,7 +179,8 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             self.delegations.dupe(),
             self.revocations.dupe(),
         );
-        self.groups.insert(Rc::new(RefCell::new(group)));
+        self.groups
+            .insert(group.group_id(), Rc::new(RefCell::new(group)));
     }
 
     pub fn add_member(
@@ -261,8 +265,8 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
     pub fn reachable_members(&self, membered: Membered<T>) -> HashMap<AgentId, (Agent<T>, Access)> {
         match membered {
-            Membered::Group(group) => self.groups.transitive_members(&group.borrow()),
-            Membered::Document(doc) => self.docs.transitive_members(&doc.borrow()),
+            Membered::Group(group) => group.borrow().transitive_members(),
+            Membered::Document(doc) => doc.borrow().transitive_members(),
         }
     }
 
@@ -276,7 +280,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
         let agent_id = agent.agent_id();
 
-        for doc in self.docs.docs.values() {
+        for doc in self.docs.values() {
             seen.insert(doc.clone().borrow().agent_id());
 
             let doc_id = doc.borrow().doc_id();
@@ -299,7 +303,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         }
 
         while let Some((group, _access)) = explore.pop() {
-            for doc in self.docs.docs.values() {
+            for doc in self.docs.values() {
                 if seen.contains(&doc.borrow().agent_id()) {
                     continue;
                 }
@@ -341,11 +345,11 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         }
 
         if let Some(doc) = self.docs.get(&DocumentId(id)) {
-            return Some(doc.into());
+            return Some(doc.dupe().into());
         }
 
         if let Some(group) = self.groups.get(&GroupId::new(id)) {
-            return Some(group.into());
+            return Some(group.dupe().into());
         }
 
         if let Some(indie) = self.individuals.get(&indie_id) {
@@ -430,7 +434,8 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
                 self.delegations.dupe(),
                 self.revocations.dupe(),
             );
-            self.groups.insert(Rc::new(RefCell::new(group)));
+            self.groups
+                .insert(group.group_id(), Rc::new(RefCell::new(group)));
         };
 
         Ok(())
@@ -499,7 +504,8 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             );
 
             group.receive_revocation(Rc::new(revocation))?;
-            self.groups.insert(Rc::new(RefCell::new(group)));
+            self.groups
+                .insert(group.group_id(), Rc::new(RefCell::new(group)));
         }
 
         Ok(())

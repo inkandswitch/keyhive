@@ -92,7 +92,8 @@ impl JsBeehive {
             self.0
                 .documents()
                 .get(&doc_id)
-                .expect("doc that we just created not found"),
+                .expect("doc that we just created not found")
+                .dupe(),
         ))
     }
 

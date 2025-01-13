@@ -29,4 +29,4 @@ rand = "0.8.5"
 serde = { version = "1.0", features = ["derive"] }
 signature = "2.2"
 thiserror = "1.0"
-x25519-dalek = { version = "2.0", features = ["getrandom", "serde", "reusable_secrets", "static_secrets"] }
+x25519-dalek = { version = "2.0", features = ["serde", "reusable_secrets", "static_secrets"] }
