@@ -1,4 +1,5 @@
-use beehive_core::crypto::signed::SigningError;
+use beehive_core::crypto::signed::{Signed, SigningError};
+use super::signed::JsSigned;
 use rand::Fill;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -36,6 +37,14 @@ impl JsSigningKey {
         JsSigningKey::new(buf.as_slice())
             .map_err(|_| GenSigningKeyError::CannotParseEd25519SigningKey)
     }
+
+    #[wasm_bindgen(js_name = trySign)]
+    pub fn try_sign(&self, data: &[u8]) -> Result<JsSigned, JsSigningError> {
+        Ok(JsSigned(Signed::try_sign(
+            data.to_vec(),
+            &ed25519_dalek::SigningKey::from_bytes(&self.0),
+        )?))
+    }
 }
 
 #[wasm_bindgen]
@@ -68,5 +77,25 @@ impl JsSigningError {
 impl From<SigningError> for JsSigningError {
     fn from(e: SigningError) -> Self {
         JsSigningError(Box::new(e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    #[cfg(feature = "browser_test")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    mod data {
+        use super::*;
+
+        #[wasm_bindgen_test(unsupported = test)]
+        fn test_round_trip() {
+            let key = JsSigningKey::generate().unwrap();
+            let signed = key.try_sign(vec![1, 2, 3].as_slice()).unwrap();
+            assert!(signed.verify());
+        }
     }
 }

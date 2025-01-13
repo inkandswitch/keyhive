@@ -241,18 +241,23 @@ impl<T: ContentRef> Group<T> {
     }
 
     pub fn get_capability(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
+        self.members.get(member_id).and_then(|delegations| {
+            delegations
+                .iter()
+                .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
+        })
+    }
+
+    pub fn get_transitive_capability(
+        &self,
+        member_id: &AgentId,
+    ) -> Option<&Rc<Signed<Delegation<T>>>> {
         // FIXME shoud be transitive, right?
-        self.members
-            .get(member_id)
-            .and_then(|delegations| {
-                delegations
-                    .iter()
-                    .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
-            })
-            .or_else(|| {
-                // FIXME transitve members
-                None
-            })
+        self.get_capability(member_id).or_else(|| {
+            // FIXME transitve members
+            todo!("FIXME");
+            None
+        })
     }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {

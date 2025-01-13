@@ -86,15 +86,7 @@ impl JsBeehive {
             .0
             .generate_doc(coparents.into_iter().map(|a| a.0).collect::<Vec<_>>())?;
 
-        let doc_id = doc.borrow().doc_id();
-
-        Ok(JsDocument(
-            self.0
-                .documents()
-                .get(&doc_id)
-                .expect("doc that we just created not found")
-                .dupe(),
-        ))
+        Ok(JsDocument(doc))
     }
 
     #[wasm_bindgen(js_name = trySign)]
