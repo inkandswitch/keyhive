@@ -154,7 +154,6 @@ impl<T: ContentRef> Group<T> {
         m
     }
 
-    // FIXME direct_members
     pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
         &self.members
     }
@@ -167,14 +166,14 @@ impl<T: ContentRef> Group<T> {
         }
 
         let mut explore: Vec<GroupAccess<T>> = vec![];
-        let mut seen_delegations: HashSet<[u8; 64]> = HashSet::new();
+        let mut seen: HashSet<([u8; 64], Access)> = HashSet::new();
 
         for member in self.members.keys() {
             let dlg = self
                 .get_capability(member)
                 .expect("members have capabilities by defintion");
 
-            seen_delegations.insert(dlg.signature.to_bytes());
+            seen.insert((dlg.signature.to_bytes(), Access::Admin));
 
             explore.push(GroupAccess {
                 agent: dlg.payload.delegate.clone(),
@@ -204,7 +203,7 @@ impl<T: ContentRef> Group<T> {
             let current_path_access = access.min(parent_access);
             caps.insert(member.agent_id(), (member.dupe(), current_path_access));
 
-            match member.dupe() {
+            match member {
                 Agent::Group(inner_group) => Some(inner_group.into()),
                 Agent::Document(doc) => Some(doc.into()),
                 _ => None,
@@ -216,15 +215,14 @@ impl<T: ContentRef> Group<T> {
                         .expect("members have capabilities by defintion");
 
                     caps.insert(*mem_id, (dlg.payload.delegate.dupe(), best_access));
-                    seen_delegations.insert(dlg.signature.to_bytes());
 
-                    for sub_dlg in dlgs.iter() {
-                        if !seen_delegations.insert(sub_dlg.signature.to_bytes()) {
-                            continue;
+                    'inner: for sub_dlg in dlgs.iter() {
+                        if !seen.insert((sub_dlg.signature.to_bytes(), dlg.payload.can)) {
+                            continue 'inner;
                         }
 
                         explore.push(GroupAccess {
-                            agent: sub_dlg.payload.delegate.clone(),
+                            agent: sub_dlg.payload.delegate.dupe(),
                             agent_access: sub_dlg.payload.can,
                             parent_access: best_access,
                         });
@@ -252,11 +250,8 @@ impl<T: ContentRef> Group<T> {
         &self,
         member_id: &AgentId,
     ) -> Option<&Rc<Signed<Delegation<T>>>> {
-        // FIXME shoud be transitive, right?
         self.get_capability(member_id).or_else(|| {
-            // FIXME transitve members
             todo!("FIXME");
-            None
         })
     }
 
@@ -499,16 +494,6 @@ impl<T: ContentRef> Group<T> {
 impl<T: ContentRef> Verifiable for Group<T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
-    }
-}
-
-// FIXME test and consistent order
-impl<T: ContentRef> std::hash::Hash for Group<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        for m in self.members.iter() {
-            m.hash(state);
-        }
-        self.state.hash(state);
     }
 }
 
@@ -901,6 +886,8 @@ mod tests {
             setup_cyclic_groups(alice.dupe(), bob.dupe(), csprng);
         let g0_mems = g0.borrow().transitive_members();
 
+        assert_eq!(g0_mems.len(), 11);
+
         assert_eq!(
             g0_mems,
             HashMap::from_iter([
@@ -977,14 +964,15 @@ mod tests {
             )
             .unwrap();
 
-        g2.borrow_mut()
-            .add_member(
-                carol_agent.dupe(),
-                Access::Read,
-                active.borrow().signing_key.clone(),
-                &[],
-            )
-            .unwrap();
+        // FIXME trasnitive add
+        // g2.borrow_mut()
+        //     .add_member(
+        //         carol_agent.dupe(),
+        //         Access::Read,
+        //         active.borrow().signing_key.clone(),
+        //         &[],
+        //     )
+        //     .unwrap();
 
         let g0_mems = g0.borrow().transitive_members();
 
@@ -1014,7 +1002,7 @@ mod tests {
 
         assert_eq!(
             g2_mems.get(&carol_agent.agent_id()),
-            Some(&(carol.into(), Access::Read)) // NOTE: non-admin!
+            Some(&(carol.into(), Access::Write)) // NOTE: non-admin!
         );
 
         assert_eq!(

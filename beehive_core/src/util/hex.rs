@@ -6,7 +6,7 @@ use std::iter::Iterator;
 ///
 /// This does not include the `0x` prefix. It is mainly helpful in implementing
 /// [`std::fmt::LowerHex`] on the way to implement [`std::fmt::Display`].
-pub fn bytes_as_hex<'a, I: Iterator<Item = &'a u8>>(
+pub(crate) fn bytes_as_hex<'a, I: Iterator<Item = &'a u8>>(
     byte_iter: I,
     f: &mut std::fmt::Formatter<'_>,
 ) -> std::fmt::Result {

@@ -306,19 +306,6 @@ pub enum DecryptError {
     DecryptionFailed(chacha20poly1305::Error),
 }
 
-// FIXME test
-impl<T: ContentRef> std::hash::Hash for Document<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.group.hash(state);
-        for key in self.reader_keys.keys() {
-            key.hash(state);
-        }
-        for c in self.content_state.iter() {
-            c.hash(state);
-        }
-    }
-}
-
 impl<T: ContentRef> Verifiable for Document<T> {
     fn verifying_key(&self) -> VerifyingKey {
         self.group.verifying_key()

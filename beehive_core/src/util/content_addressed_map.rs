@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, rc::Rc};
 ///
 /// Since all operations are referenced by their hash,
 /// a map that indexes by the same cryptographic hash is convenient.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Ord, Hash)]
 pub struct CaMap<T: Serialize>(pub(crate) BTreeMap<Digest<T>, Rc<T>>);
 
 impl<T: Serialize> CaMap<T> {
@@ -117,6 +117,15 @@ impl<T: Serialize> FromIterator<T> for CaMap<T> {
                 .map(|preimage| (Digest::hash(&preimage), Rc::new(preimage)))
                 .collect(),
         )
+    }
+}
+
+impl<T: Serialize + PartialOrd> PartialOrd for CaMap<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.0
+            .keys()
+            .collect::<Vec<_>>()
+            .partial_cmp(&other.0.keys().collect::<Vec<_>>())
     }
 }
 

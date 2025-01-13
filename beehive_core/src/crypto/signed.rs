@@ -18,9 +18,7 @@ pub struct Signed<T: Serialize> {
     /// The data that was signed.
     #[derivative(PartialEq = "ignore", Hash = "ignore")]
     pub(crate) payload: T,
-    //
-    // FIXME pub(crate) serialized: Option<Vec<u8>>,
-    //
+
     /// The verifying key of the signer (for verifying the signature).
     #[derivative(Debug(format_with = "format_key"))] // FIXME change to a wrapped type
     pub(crate) issuer: ed25519_dalek::VerifyingKey,
