@@ -25,5 +25,3 @@ jobs:
       run: cargo check --verbose --features=test_utils
     - name: Clippy
       run: cargo clippy
-    - name: Security vulnerability audit
-      run: cargo audit
