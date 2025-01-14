@@ -1,6 +1,8 @@
 name: "Audit Dependencies"
 on:
   push:
+    branches:
+      - main
     paths:
       # Run if workflow changes
       - '.github/workflows/audit.yml'
@@ -14,6 +16,7 @@ on:
     - cron: '0 0 * * *'
   # Run manually
   workflow_dispatch:
+  pull_request:
 
 jobs:
   audit:
