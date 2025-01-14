@@ -8,6 +8,7 @@ use std::{
 
 use auth::message::Message;
 pub use auth::{audience::Audience, unix_timestamp::UnixTimestamp};
+use beehive_core::beehive::Beehive;
 use deser::{Encode, Parse};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use effects::{OutgoingRequest, TaskEffects};
@@ -57,6 +58,7 @@ mod spawn;
 mod stream;
 pub use stream::{StreamDirection, StreamError, StreamEvent, StreamId};
 use task::ActiveTask;
+pub mod loading;
 mod task;
 
 /// The main entrypoint for this library
@@ -75,7 +77,8 @@ mod task;
 /// representing the initiation of a story using [`Event::add_commits`]. This method returns both
 /// an event to be passed to the `Beelay` and a `StoryId` which will be used to notify the caller
 /// when the story is complete (and pass the results back to the caller).
-pub struct Beelay<R> {
+pub struct Beelay<R: rand::Rng + rand::CryptoRng> {
+    beehive: beehive_core::beehive::Beehive<CommitHash, R>,
     peer_id: PeerId,
     active_tasks: HashMap<Task, ActiveTask>,
     /// Outbound listen handler
@@ -87,7 +90,7 @@ pub struct Beelay<R> {
     run_state: RunState,
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum RunState {
     Running,
     Stopping,
@@ -195,7 +198,7 @@ impl DocumentId {
 // I _think_ that this means it is safe to implement Send for Beelay. If it turns out that this
 // is not the case then we would need to switch to using `Arc<RwLock<T>>` instead of
 // `Rc<RefCell<T>>` which I am loath to do because it is not no_std compatible.
-unsafe impl<R: Send> Send for Beelay<R> {}
+unsafe impl<R: Send + rand::Rng + rand::CryptoRng> Send for Beelay<R> {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
 enum Task {
@@ -229,8 +232,37 @@ struct EventCtx {
     results: EventResults,
 }
 
-impl<R: rand::Rng + rand::CryptoRng + 'static> Beelay<R> {
+impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
     pub fn new(mut rng: R, signing_key: Option<SigningKey>) -> Beelay<R> {
+        let signing_key =
+            signing_key.unwrap_or_else(|| ed25519_dalek::SigningKey::generate(&mut rng));
+        let peer_id = PeerId::from(signing_key.verifying_key());
+        let state = Rc::new(RefCell::new(effects::State::new(
+            rng.clone(),
+            signing_key.clone(),
+        )));
+        let (outbound_listen_task, outbound_listen_tx) = outbound_listens::OutboundListens::spawn(
+            TaskEffects::new(Task::OutboundListens, state.clone()),
+        );
+        let beehive = Beehive::generate(signing_key, rng).unwrap();
+        Beelay {
+            beehive,
+            peer_id,
+            active_tasks: HashMap::new(),
+            outbound_listen_task,
+            outbound_listen_tx,
+            state,
+            run_state: RunState::Running,
+        }
+    }
+}
+
+impl<R: rand::Rng + rand::CryptoRng + 'static> Beelay<R> {
+    pub(crate) fn new_with_beehive(
+        mut rng: R,
+        beehive: beehive_core::beehive::Beehive<CommitHash, R>,
+        signing_key: Option<SigningKey>,
+    ) -> Beelay<R> {
         let signing_key =
             signing_key.unwrap_or_else(|| ed25519_dalek::SigningKey::generate(&mut rng));
         let peer_id = PeerId::from(signing_key.verifying_key());
@@ -239,6 +271,7 @@ impl<R: rand::Rng + rand::CryptoRng + 'static> Beelay<R> {
             TaskEffects::new(Task::OutboundListens, state.clone()),
         );
         Beelay {
+            beehive,
             peer_id,
             active_tasks: HashMap::new(),
             outbound_listen_task,
@@ -286,7 +319,7 @@ impl<R: rand::Rng + rand::CryptoRng + 'static> Beelay<R> {
                 self.handle_response(&mut ctx, req_id, rpc_response);
             }
             EventInner::Stop => {
-                if self.run_state == RunState::Running {
+                if matches!(self.run_state, RunState::Running) {
                     tracing::debug!("starting graceful shutdown");
                     self.run_state = RunState::Stopping;
                     // wake up any tasks waiting for the stop
@@ -443,7 +476,7 @@ impl<R: rand::Rng + rand::CryptoRng + 'static> Beelay<R> {
             }
         }
         self.pump_tasks(&mut ctx);
-        if self.run_state == RunState::Stopping {
+        if matches!(self.run_state, RunState::Stopping) {
             let num_remaining_tasks = self
                 .active_tasks
                 .keys()

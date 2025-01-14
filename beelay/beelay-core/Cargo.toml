@@ -15,6 +15,7 @@ rand = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = "0.1.40"
+beehive_core = { path = "../../beehive_core" }
 
 # Crypto
 blake3 = { workspace = true }
