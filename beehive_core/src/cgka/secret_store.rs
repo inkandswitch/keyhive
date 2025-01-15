@@ -4,7 +4,7 @@ use super::{
     treemath::TreeNodeIndex,
 };
 use crate::crypto::{
-    encrypted::NestedEncrypted,
+    encrypted::EncryptedSecret,
     share_key::{ShareKey, ShareSecretKey},
 };
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,7 @@ impl SecretStore {
     pub fn new(
         pk: ShareKey,
         encrypter_pk: ShareKey,
-        sk: BTreeMap<TreeNodeIndex, NestedEncrypted<ShareSecretKey>>,
+        sk: BTreeMap<TreeNodeIndex, EncryptedSecret<ShareSecretKey>>,
     ) -> Self {
         let version = SecretStoreVersion {
             pk,
@@ -83,53 +83,23 @@ impl SecretStore {
         self.versions[0].decrypt_secret(child_node_key, child_sks, seen_idxs)
     }
 
-    pub fn decrypt_undecrypted_secrets(
-        &self,
-        child_node_key: &NodeKey,
-        child_sks: &mut ShareKeyMap,
-        seen_idxs: &[TreeNodeIndex],
-    ) -> Result<(), CgkaError> {
-        for version in &self.versions {
-            if !child_sks.contains_key(&version.pk) {
-                let secret = version.decrypt_secret(child_node_key, child_sks, seen_idxs)?;
-                child_sks.insert(version.pk, secret);
-            }
-        }
-        Ok(())
-    }
-
     // TODO: Is it possible we're bringing in duplicate keys here?
-    pub fn merge(
-        &mut self,
-        other: &SecretStore,
-        removed_keys: &[ShareKey],
-    ) -> Result<(), CgkaError> {
-        self.remove_keys_from(removed_keys)?;
+    pub fn merge(&mut self, other: &SecretStore, removed_keys: &HashSet<ShareKey>) {
+        self.remove_keys_from(removed_keys);
         self.versions.append(&mut other.versions.clone());
-        self.sort_keys();
-        Ok(())
     }
 
-    // TODO: Make this more performant.
-    fn remove_keys_from(&mut self, removed_keys: &[ShareKey]) -> Result<(), CgkaError> {
+    fn remove_keys_from(&mut self, removed_keys: &HashSet<ShareKey>) {
         if removed_keys.is_empty() {
-            return Ok(());
+            return;
         }
-        let mut remove_idxs = HashSet::new();
         let mut new_versions = Vec::new();
         for (idx, version) in self.versions.iter().enumerate() {
-            if removed_keys.contains(&version.pk) {
-                remove_idxs.insert(idx);
-            } else {
+            if !removed_keys.contains(&version.pk) {
                 new_versions.push(self.versions[idx].clone());
             }
         }
         self.versions = new_versions;
-        Ok(())
-    }
-
-    fn sort_keys(&mut self) {
-        self.versions.sort();
     }
 }
 
@@ -140,7 +110,7 @@ pub(crate) struct SecretStoreVersion {
     pub(crate) pk: ShareKey,
     /// This is a map in order to handle the case of blank siblings, when we must encrypt
     /// the same secret key separately for each public key in the sibling resolution.
-    pub(crate) sk: BTreeMap<TreeNodeIndex, NestedEncrypted<ShareSecretKey>>,
+    pub(crate) sk: BTreeMap<TreeNodeIndex, EncryptedSecret<ShareSecretKey>>,
     /// The PublicKey of the child that encrypted this parent.
     pub(crate) encrypter_pk: ShareKey,
 }
@@ -182,7 +152,7 @@ impl SecretStoreVersion {
                 .try_encrypter_decrypt(secret_key)
                 .map_err(|e| CgkaError::Decryption(e.to_string()))?
         } else {
-            child_sks.decrypt_nested_sibling_encryption(self.encrypter_pk, encrypted)?
+            child_sks.try_decrypt_encryption(self.encrypter_pk, encrypted)?
         };
 
         let arr: [u8; 32] = decrypted.try_into().map_err(|_| CgkaError::Conversion)?;

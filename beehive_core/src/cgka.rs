@@ -18,7 +18,7 @@ use crate::{
     crypto::{
         application_secret::{ApplicationSecret, PcsKey},
         digest::Digest,
-        encrypted::Encrypted,
+        encrypted::EncryptedContent,
         share_key::{ShareKey, ShareSecretKey},
         siv::Siv,
         symmetric_key::SymmetricKey,
@@ -139,7 +139,7 @@ impl Cgka {
     /// hashes. Then we use that [`PcsKey`] to derive an [`ApplicationSecret`].
     pub fn decryption_key_for<T, Cr: ContentRef>(
         &mut self,
-        encrypted: &Encrypted<T, Cr>,
+        encrypted: &EncryptedContent<T, Cr>,
     ) -> Result<SymmetricKey, CgkaError> {
         let pcs_key =
             self.pcs_key_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)?;
@@ -166,7 +166,7 @@ impl Cgka {
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
-        let leaf_index = self.tree.push_leaf(id, pk.into())?;
+        let leaf_index = self.tree.push_leaf(id, pk.into());
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
         let add_predecessors = Vec::from_iter(self.ops_graph.add_heads.iter().cloned());
         let op = CgkaOperation::Add {
@@ -284,13 +284,13 @@ impl Cgka {
         }
         match op {
             CgkaOperation::Add { added_id, pk, .. } => {
-                self.tree.push_leaf(*added_id, (*pk).into())?;
+                self.tree.push_leaf(*added_id, (*pk).into());
             }
             CgkaOperation::Remove { id, .. } => {
                 self.tree.remove_id(*id)?;
             }
             CgkaOperation::Update { new_path, .. } => {
-                self.tree.apply_path(new_path)?;
+                self.tree.apply_path(new_path);
             }
         }
         self.ops_graph.add_op(op, &op.predecessors());
@@ -336,7 +336,7 @@ impl Cgka {
                     .sort_leaves_and_blank_paths_for_concurrent_membership_changes(
                         added_ids,
                         removed_ids,
-                    )?;
+                    );
             }
         }
         Ok(())

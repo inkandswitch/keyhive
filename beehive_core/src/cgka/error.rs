@@ -9,6 +9,9 @@ pub enum CgkaError {
     #[error("Decryption failed: {0}")]
     Decryption(String),
 
+    #[error("Deriving nonce failed: {0}")]
+    DeriveNonce(String),
+
     #[error("Encryption failed: {0}")]
     Encryption(chacha20poly1305::Error),
 
@@ -44,9 +47,6 @@ pub enum CgkaError {
 
     #[error("Serialization failed: {0}")]
     Serialize(String),
-
-    #[error("Tree index out of bounds")]
-    TreeIndexOutOfBounds,
 
     #[error("Unexpected key conflict")]
     UnexpectedKeyConflict,
