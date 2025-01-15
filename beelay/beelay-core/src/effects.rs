@@ -7,7 +7,11 @@ use std::{
     task::{self, Waker},
 };
 
-use beehive_core::beehive::Beehive;
+use beehive_core::{
+    beehive::Beehive,
+    crypto::digest::Digest,
+    principal::{group::operation::StaticOperation, verifiable::Verifiable},
+};
 use ed25519_dalek::SigningKey;
 use futures::FutureExt;
 
@@ -19,8 +23,8 @@ use crate::{
     messages::{FetchedSedimentree, Notification, UploadItem},
     riblt::{self, doc_and_heads::CodedDocAndHeadsSymbol},
     snapshots::{self, Snapshot, Snapshots},
-    spawn, stream, BlobHash, CommitCategory, DocEvent, DocumentId, IoTaskId, OutboundRequestId,
-    PeerId, Request, Response, SnapshotId, StorageKey, TargetNodeInfo, Task,
+    spawn, stream, BlobHash, CommitCategory, CommitHash, DocEvent, DocumentId, IoTaskId,
+    OutboundRequestId, PeerId, Request, Response, SnapshotId, StorageKey, TargetNodeInfo, Task,
 };
 
 pub(crate) struct State<R: rand::Rng + rand::CryptoRng> {
@@ -802,26 +806,51 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
         }
     }
 
+    /// Check if the given peer is allowed to write to the document
     pub(crate) fn can_write(&self, peer: PeerId, doc: &DocumentId) -> bool {
         let state = self.state.borrow_mut();
         let beehive = &state.beehive;
+        // TODO: Brooke magic
         todo!("do some things with the beehive")
     }
 
+    /// Check if the given peer is allowed to read from the document
     pub(crate) fn can_read(&self, peer: PeerId, doc: &DocumentId) -> bool {
         let state = self.state.borrow_mut();
         let beehive = &state.beehive;
+        // TODO: Brooke magic
         todo!("do some things with the beehive")
     }
 
-    pub(crate) fn apply_beehive_ops(&self, ops: Vec<beehive_sync::BeehiveOp>) {
+    /// Apply the given beehive ops locally
+    pub(crate) fn apply_beehive_ops(&self, ops: Vec<StaticOperation<CommitHash>>) {
         let state = self.state.borrow_mut();
         let beehive = &state.beehive;
+        // TODO: Brooke magic
         todo!()
     }
 
-    pub(crate) fn beehive_ops(&self) -> impl Iterator<Item = beehive_sync::BeehiveOp> {
+    /// Get the behive ops which we think the other end should have
+    pub(crate) fn beehive_ops(
+        &self,
+        for_sync_with_peer: ed25519_dalek::VerifyingKey,
+    ) -> impl Iterator<Item = beehive_core::principal::group::operation::StaticOperation<CommitHash>>
+    {
+        let state = self.state.borrow_mut();
+        let beehive = &state.beehive;
+        // TODO: Brooke magic
         std::iter::empty()
+    }
+
+    /// Get the beehive ops corresponding to the hashes provided
+    pub(crate) fn get_beehive_ops(
+        &self,
+        op_hashes: Vec<Digest<StaticOperation<CommitHash>>>,
+    ) -> Vec<beehive_core::principal::group::operation::StaticOperation<CommitHash>> {
+        let state = self.state.borrow_mut();
+        let beehive = &state.beehive;
+        // TODO: Brooke magic
+        todo!()
     }
 
     pub(crate) fn new_beehive_sync_session(
@@ -848,11 +877,12 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
         state.beehive_sync_sessions.next_n_symbols(session_id, n)
     }
 
-    pub(crate) fn get_beehive_ops(
-        &self,
-        op_hashes: Vec<beehive_sync::OpHash>,
-    ) -> Vec<beehive_sync::BeehiveOp> {
-        todo!()
+    pub(crate) fn create_beehive_doc(&self) -> DocumentId {
+        let mut state = self.state.borrow_mut();
+        let beehive = &mut state.beehive;
+        let doc = beehive.generate_doc(Vec::new()).unwrap();
+        let key = doc.borrow().verifying_key();
+        key.into()
     }
 }
 

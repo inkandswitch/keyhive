@@ -33,7 +33,7 @@ impl std::fmt::Display for PeerAddress {
 pub(crate) struct TargetNodeInfo {
     target: PeerAddress,
     audience: Audience,
-    last_known_peer_id: Option<crate::PeerId>,
+    pub(crate) last_known_peer_id: Option<crate::PeerId>,
 }
 
 impl std::fmt::Display for TargetNodeInfo {

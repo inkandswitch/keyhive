@@ -389,7 +389,7 @@ pub mod doc_and_heads {
     #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize)]
     #[cfg_attr(test, derive(arbitrary::Arbitrary))]
     pub(crate) struct DocAndHeadsSymbol {
-        part1: [u8; 16],
+        part1: [u8; 32],
         part2: [u8; 32],
     }
 
@@ -403,7 +403,7 @@ pub mod doc_and_heads {
     impl Parse<'_> for DocAndHeadsSymbol {
         fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
             input.parse_in_ctx("RibltSymbol", |input| {
-                let (input, part1) = input.parse_in_ctx("part1", parse::arr::<16>)?;
+                let (input, part1) = input.parse_in_ctx("part1", parse::arr::<32>)?;
                 let (input, part2) = input.parse_in_ctx("part2", parse::arr::<32>)?;
                 Ok((input, Self { part1, part2 }))
             })
@@ -419,7 +419,8 @@ pub mod doc_and_heads {
         }
         pub(crate) fn decode(self) -> (DocumentId, MinimalTreeHash) {
             (
-                DocumentId::from(self.part1),
+                //TODO: return an error
+                DocumentId::try_from(self.part1).unwrap(),
                 MinimalTreeHash::from(self.part2),
             )
         }
@@ -428,7 +429,7 @@ pub mod doc_and_heads {
     impl super::Symbol for DocAndHeadsSymbol {
         fn zero() -> Self {
             Self {
-                part1: [0; 16],
+                part1: [0; 32],
                 part2: [0; 32],
             }
         }

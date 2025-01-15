@@ -4,7 +4,9 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use beehive_core::beehive::Beehive;
+use beehive_core::{
+    beehive::Beehive, crypto::digest::Digest, principal::group::operation::StaticOperation,
+};
 pub(crate) use beehive_sync_id::BeehiveSyncId;
 
 pub(crate) async fn sync_beehive<R: rand::Rng + rand::CryptoRng>(
@@ -12,7 +14,10 @@ pub(crate) async fn sync_beehive<R: rand::Rng + rand::CryptoRng>(
     peer: TargetNodeInfo,
 ) {
     // start a beehive auth sync session
-    let local_ops = effects.beehive_ops().collect::<Vec<_>>();
+    let local_ops = effects
+        .beehive_ops(*peer.last_known_peer_id.unwrap().as_key())
+        .map(BeehiveOp)
+        .collect::<Vec<_>>();
     let (session_id, first_symbols) = effects.begin_auth_sync(peer.clone()).await.unwrap();
     let mut decoder = riblt::Decoder::<OpHash>::new();
     for symbol in first_symbols {
@@ -40,7 +45,7 @@ pub(crate) async fn sync_beehive<R: rand::Rng + rand::CryptoRng>(
         .await
         .unwrap();
 
-    effects.apply_beehive_ops(ops);
+    effects.apply_beehive_ops(ops.into_iter().map(|o| o.into()).collect());
 
     let hashes_to_upload = decoder
         .get_local_symbols()
@@ -60,7 +65,7 @@ use crate::{
     effects::TaskEffects,
     parse,
     peer_address::TargetNodeInfo,
-    riblt, CommitHash,
+    riblt, CommitHash, PeerId,
 };
 
 pub(crate) struct BeehiveSyncSessions {
@@ -105,34 +110,66 @@ impl BeehiveSyncSessions {
 
 // TODO: Fill out all the ops beehive can produce here
 // // This should be SignedOperation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
-#[cfg_attr(test, derive(arbitrary::Arbitrary))]
-pub enum BeehiveOp {
-    Dummy,
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BeehiveOp(StaticOperation<CommitHash>);
+
+#[cfg(test)]
+impl<'a> arbitrary::Arbitrary<'a> for BeehiveOp {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        todo!()
+    }
 }
 
 impl BeehiveOp {
     pub(crate) fn op_hash(&self) -> OpHash {
         // beehive::digest
-        todo!()
+        OpHash(
+            *beehive_core::crypto::digest::Digest::hash(&self.0)
+                .raw
+                .as_bytes(),
+        )
     }
 }
 
 impl Encode for BeehiveOp {
     fn encode_into(&self, buf: &mut Vec<u8>) {
-        todo!()
+        // For now just serialize to JSON
+        let encoded = serde_json::to_vec(&self.0).unwrap();
+        crate::leb128::encode_uleb128(buf, encoded.len() as u64);
+        buf.extend_from_slice(&encoded);
     }
 }
 
 impl Parse<'_> for BeehiveOp {
     fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        todo!()
+        let (input, raw) = parse::slice(input)?;
+        let decoded = serde_json::from_slice(raw)
+            .map_err(|e| input.error(format!("failed to parse op: {}", e)))?;
+        Ok((input, Self(decoded)))
+    }
+}
+
+impl From<BeehiveOp> for StaticOperation<CommitHash> {
+    fn from(op: BeehiveOp) -> Self {
+        op.0
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash, Ord)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
-pub(crate) struct OpHash([u8; 32]);
+pub(crate) struct OpHash(pub(crate) [u8; 32]);
+
+impl From<StaticOperation<CommitHash>> for BeehiveOp {
+    fn from(op: StaticOperation<CommitHash>) -> Self {
+        Self(op.into())
+    }
+}
+
+impl From<OpHash> for Digest<StaticOperation<CommitHash>> {
+    fn from(hash: OpHash) -> Self {
+        Self::from(hash.0)
+    }
+}
 
 impl Encode for OpHash {
     fn encode_into(&self, buf: &mut Vec<u8>) {

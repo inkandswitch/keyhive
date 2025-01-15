@@ -1,6 +1,7 @@
 use futures::{pin_mut, FutureExt};
 
 use crate::{
+    beehive_sync,
     blob::BlobMeta,
     effects::RpcError,
     log::Source,
@@ -113,11 +114,15 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             session: _,
             op_hashes,
         } => {
-            let ops = effects.get_beehive_ops(op_hashes);
-            Response::RequestBeehiveOps(ops)
+            let ops = effects.get_beehive_ops(op_hashes.into_iter().map(|o| o.into()).collect());
+            Response::RequestBeehiveOps(
+                ops.into_iter()
+                    .map(|o| beehive_sync::BeehiveOp::from(o))
+                    .collect(),
+            )
         }
         crate::messages::Request::UploadBeehiveOps { ops } => {
-            effects.apply_beehive_ops(ops);
+            effects.apply_beehive_ops(ops.into_iter().map(|o| o.into()).collect());
             Response::UploadBeehiveOps
         }
     };

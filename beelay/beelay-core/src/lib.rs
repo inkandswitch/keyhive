@@ -59,8 +59,12 @@ mod stream;
 pub use stream::{StreamDirection, StreamError, StreamEvent, StreamId};
 use task::ActiveTask;
 mod beehive_sync;
+mod peer_id;
+pub use peer_id::PeerId;
+mod document_id;
 pub mod loading;
 mod task;
+pub use document_id::DocumentId;
 
 /// The main entrypoint for this library
 ///
@@ -100,81 +104,6 @@ enum RunState {
 impl RunState {
     fn is_running(&self) -> bool {
         matches!(self, RunState::Running)
-    }
-}
-
-#[derive(Clone, Copy, Eq, Hash, PartialEq, PartialOrd, Ord)]
-#[cfg_attr(test, derive(arbitrary::Arbitrary))]
-pub struct DocumentId([u8; 16]);
-
-impl Encode for DocumentId {
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.0);
-    }
-}
-
-impl Parse<'_> for DocumentId {
-    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.parse_in_ctx("DocumentId", |input| {
-            let (input, bytes) = parse::arr::<16>(input)?;
-            Ok((input, DocumentId::from(bytes)))
-        })
-    }
-}
-
-impl serde::Serialize for DocumentId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        // Serialize as  the bs58 string
-        serializer.serialize_str(self.to_string().as_str())
-    }
-}
-
-impl std::fmt::Display for DocumentId {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        bs58::encode(&self.0).with_check().into_string().fmt(f)
-    }
-}
-
-impl std::fmt::Debug for DocumentId {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "DocumentId({})", self)
-    }
-}
-
-impl From<[u8; 16]> for DocumentId {
-    fn from(value: [u8; 16]) -> Self {
-        DocumentId(value)
-    }
-}
-
-impl std::str::FromStr for DocumentId {
-    type Err = error::InvalidDocumentId;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes = bs58::decode(s).with_check(None).into_vec()?;
-
-        if bytes.len() == 16 {
-            let mut id = [0; 16];
-            id.copy_from_slice(&bytes);
-            Ok(DocumentId(id))
-        } else {
-            Err(error::InvalidDocumentId::InvalidLength)
-        }
-    }
-}
-
-impl DocumentId {
-    pub fn random<R: Rng>(rng: &mut R) -> DocumentId {
-        let mut id = [0; 16];
-        rng.fill_bytes(&mut id);
-        DocumentId(id)
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 16] {
-        &self.0
     }
 }
 
@@ -1102,51 +1031,6 @@ impl Encode for InnerRpcResponse {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize)]
-pub struct PeerId(VerifyingKey);
-
-#[cfg(test)]
-impl<'a> arbitrary::Arbitrary<'a> for PeerId {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let secret = u.arbitrary::<[u8; 32]>()?;
-        let signing_key = ed25519_dalek::SigningKey::from(secret);
-        Ok(PeerId(signing_key.verifying_key()))
-    }
-}
-
-impl std::fmt::Display for PeerId {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(self.0.as_bytes()))
-    }
-}
-
-impl FromStr for PeerId {
-    type Err = error::InvalidPeerId;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes = hex::decode(s).map_err(|_| error::InvalidPeerId)?;
-        let bytes = <[u8; 32]>::try_from(bytes).map_err(|_| error::InvalidPeerId)?;
-        let key = VerifyingKey::from_bytes(&bytes).map_err(|_| error::InvalidPeerId)?;
-        Ok(PeerId(key))
-    }
-}
-
-impl<'a> TryFrom<&'a [u8]> for PeerId {
-    type Error = error::InvalidPeerId;
-
-    fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
-        let bytes = <[u8; 32]>::try_from(value).map_err(|_| error::InvalidPeerId)?;
-        let key = VerifyingKey::from_bytes(&bytes).map_err(|_| error::InvalidPeerId)?;
-        Ok(PeerId(key))
-    }
-}
-
-impl From<ed25519_dalek::VerifyingKey> for PeerId {
-    fn from(value: ed25519_dalek::VerifyingKey) -> Self {
-        PeerId(value)
-    }
-}
-
 pub(crate) struct OutgoingResponse {
     audience: Audience,
     response: Response,
@@ -1297,6 +1181,8 @@ impl InboundRequestId {
 }
 
 pub mod error {
+    pub use crate::document_id::error::InvalidDocumentId;
+    pub use crate::peer_id::error::InvalidPeerId;
     pub struct Stopped;
 
     impl std::fmt::Display for Stopped {
@@ -1328,52 +1214,6 @@ pub mod error {
     }
 
     impl std::error::Error for InvalidRequestId {}
-
-    pub struct InvalidPeerId;
-
-    impl std::fmt::Display for InvalidPeerId {
-        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            write!(f, "invalid peer id")
-        }
-    }
-
-    impl std::fmt::Debug for InvalidPeerId {
-        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            std::fmt::Display::fmt(self, f)
-        }
-    }
-
-    impl std::error::Error for InvalidPeerId {}
-
-    pub enum InvalidDocumentId {
-        InvalidLength,
-        InvalidEncoding(bs58::decode::Error),
-    }
-
-    impl std::fmt::Display for InvalidDocumentId {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                InvalidDocumentId::InvalidLength => write!(f, "invalid DocumentId length"),
-                InvalidDocumentId::InvalidEncoding(e) => {
-                    write!(f, "invalid DocumentId encoding: {}", e)
-                }
-            }
-        }
-    }
-
-    impl std::fmt::Debug for InvalidDocumentId {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            std::fmt::Display::fmt(self, f)
-        }
-    }
-
-    impl std::error::Error for InvalidDocumentId {}
-
-    impl From<bs58::decode::Error> for InvalidDocumentId {
-        fn from(e: bs58::decode::Error) -> Self {
-            InvalidDocumentId::InvalidEncoding(e)
-        }
-    }
 
     pub struct DecodeMessage(pub(super) String);
     impl std::fmt::Debug for DecodeMessage {

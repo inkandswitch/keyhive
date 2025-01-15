@@ -5,7 +5,9 @@ use crate::{
 
 pub use error::InvalidCommitHash;
 
-#[derive(Clone, Copy, Eq, Hash, PartialEq, Ord, PartialOrd, serde::Serialize)]
+#[derive(
+    Clone, Copy, Eq, Hash, PartialEq, Ord, PartialOrd, serde::Serialize, serde::Deserialize,
+)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct CommitHash([u8; 32]);
 

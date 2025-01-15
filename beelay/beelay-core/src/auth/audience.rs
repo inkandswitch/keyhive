@@ -31,7 +31,7 @@ impl Audience {
     }
 
     pub fn peer(peer: &crate::PeerId) -> Self {
-        peer.0.into()
+        (*peer.as_key()).into()
     }
 
     pub fn verifying_key(vk: ed25519_dalek::VerifyingKey) -> Self {
