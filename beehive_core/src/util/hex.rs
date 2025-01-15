@@ -7,14 +7,14 @@ use std::iter::Iterator;
 /// This does not include the `0x` prefix. It is mainly helpful in implementing
 /// [`std::fmt::LowerHex`] on the way to implement [`std::fmt::Display`].
 pub(crate) fn bytes_as_hex<'a, I: Iterator<Item = &'a u8>>(
-    byte_iter: I,
+    mut byte_iter: I,
     f: &mut std::fmt::Formatter<'_>,
 ) -> std::fmt::Result {
     if f.alternate() {
         write!(f, "0x")?;
     }
 
-    byte_iter.fold(Ok(()), |_, byte| write!(f, "{:02x}", byte))
+    byte_iter.try_fold((), |_, byte| write!(f, "{:02x}", byte))
 }
 
 #[cfg(test)]

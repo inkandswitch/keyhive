@@ -549,7 +549,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         for (digest, dlg) in self.delegations.clone().borrow().iter() {
             if dlg.payload.delegate == agent {
                 self.delegations.borrow_mut().0.insert(
-                    digest.clone(),
+                    *digest,
                     Rc::new(Signed {
                         issuer: dlg.issuer,
                         signature: dlg.signature,
@@ -568,7 +568,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         for (digest, rev) in self.revocations.clone().borrow().iter() {
             if rev.payload.subject() == group.borrow().id() {
                 self.revocations.borrow_mut().0.insert(
-                    digest.clone(),
+                    *digest,
                     Rc::new(Signed {
                         issuer: rev.issuer,
                         signature: rev.signature,

@@ -176,7 +176,7 @@ impl<T: ContentRef> Operation<T> {
         for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
             for (other_digest, other_op) in op_ancestors.iter() {
                 let (_, other_ancestors, other_longest_path) = ops_with_ancestors
-                    .get(other_digest.into())
+                    .get(other_digest)
                     .expect("values that we just put there to be there");
 
                 let ancestor_set: HashSet<&Operation<T>> =
@@ -213,7 +213,7 @@ impl<T: ContentRef> Operation<T> {
                             adjacencies
                                 .add_dependency((*other_digest, other_op.as_ref()), (*digest, op));
                         }
-                        Ordering::Equal => match other_digest.cmp(digest.into()) {
+                        Ordering::Equal => match other_digest.cmp(digest) {
                             Ordering::Less => {
                                 leftovers.remove(op);
                                 adjacencies.add_dependency(

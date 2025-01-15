@@ -199,12 +199,11 @@ impl<T: ContentRef> Group<T> {
             let current_path_access = access.min(parent_access);
             caps.insert(member.agent_id(), (member.dupe(), current_path_access));
 
-            match member {
-                Agent::Group(inner_group) => Some(inner_group.into()),
+            if let Some(membered) = match member {
+                Agent::Group(inner_group) => Some(Membered::<T>::from(inner_group)),
                 Agent::Document(doc) => Some(doc.into()),
                 _ => None,
-            }
-            .map(|membered: Membered<T>| {
+            } {
                 for (mem_id, dlgs) in membered.members().iter() {
                     let dlg = membered
                         .get_capability(mem_id)
@@ -224,7 +223,7 @@ impl<T: ContentRef> Group<T> {
                         });
                     }
                 }
-            });
+            }
         }
 
         caps
