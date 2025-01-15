@@ -163,7 +163,7 @@ pub(crate) async fn sync_linked_docs<R: rand::Rng + rand::CryptoRng>(
     root: DocumentId,
     remote: crate::TargetNodeInfo,
 ) -> Result<SyncDocResult, crate::error::SyncDoc> {
-    let our_snapshot = snapshots::Snapshot::load(effects.clone(), root, None).await;
+    let our_snapshot = snapshots::Snapshot::load(effects.clone(), None, root, None).await;
     tracing::debug!(our_snapshot=%our_snapshot.id(), ?root, ?remote, "beginning linked doc sync");
     Ok(sync_docs::sync_root_doc(effects, &our_snapshot, remote).await?)
 }

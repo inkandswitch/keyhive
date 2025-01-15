@@ -7,6 +7,7 @@ use std::{
     task::{self, Waker},
 };
 
+use beehive_core::beehive::Beehive;
 use ed25519_dalek::SigningKey;
 use futures::FutureExt;
 
@@ -22,9 +23,10 @@ use crate::{
     PeerId, Request, Response, SnapshotId, StorageKey, TargetNodeInfo, Task,
 };
 
-pub(crate) struct State<R> {
+pub(crate) struct State<R: rand::Rng + rand::CryptoRng> {
     pub(crate) io: Io,
     pub(crate) auth: crate::auth::manager::Manager,
+    pub(crate) beehive: Rc<RefCell<Beehive<crate::CommitHash, R>>>,
     snapshots: Snapshots,
     log: log::Log,
     awaiting_new_log_entries: HashMap<Task, LogEntryListener>,
@@ -42,7 +44,11 @@ struct LogEntryListener {
 }
 
 impl<R: rand::Rng + rand::CryptoRng> State<R> {
-    pub(crate) fn new(rng: R, signing_key: SigningKey) -> Self {
+    pub(crate) fn new(
+        rng: R,
+        beehive: Beehive<crate::CommitHash, R>,
+        signing_key: SigningKey,
+    ) -> Self {
         Self {
             io: Io {
                 load_range: JobTracker::new(),
@@ -57,6 +63,7 @@ impl<R: rand::Rng + rand::CryptoRng> State<R> {
                 stopping: Arc::new(AtomicBool::new(false)),
             },
             auth: crate::auth::manager::Manager::new(signing_key.clone(), None),
+            beehive: Rc::new(RefCell::new(beehive)),
             log: log::Log::new(),
             snapshots: Snapshots::new(),
             awaiting_new_log_entries: HashMap::new(),
@@ -324,12 +331,12 @@ impl<Descriptor: Eq + std::hash::Hash + Clone, Payload, Result>
     }
 }
 
-pub(crate) struct TaskEffects<R> {
+pub(crate) struct TaskEffects<R: rand::Rng + rand::CryptoRng> {
     task_data: Rc<RefCell<crate::task::TaskData>>,
     state: Rc<RefCell<State<R>>>,
 }
 
-impl<R> std::clone::Clone for TaskEffects<R> {
+impl<R: rand::Rng + rand::CryptoRng> std::clone::Clone for TaskEffects<R> {
     fn clone(&self) -> Self {
         Self {
             task_data: self.task_data.clone(),
@@ -709,6 +716,18 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
             task: self.task_data.borrow().id,
             wakers: state.io.wakers.clone(),
         }
+    }
+
+    pub(crate) fn can_write(&self, peer: PeerId, doc: &DocumentId) -> bool {
+        let state = self.state.borrow_mut();
+        let beehive = &state.beehive;
+        todo!("do some things with the beehive")
+    }
+
+    pub(crate) fn can_read(&self, peer: PeerId, doc: &DocumentId) -> bool {
+        let state = self.state.borrow_mut();
+        let beehive = &state.beehive;
+        todo!("do some things with the beehive")
     }
 }
 

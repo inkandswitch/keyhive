@@ -9,7 +9,7 @@ use crate::{
     effects::TaskEffects,
     hex, parse, reachability, riblt,
     sedimentree::MinimalTreeHash,
-    CommitCategory, DocumentId, StorageKey, TargetNodeInfo,
+    CommitCategory, DocumentId, PeerId, StorageKey, TargetNodeInfo,
 };
 
 pub struct Snapshots {
@@ -142,6 +142,7 @@ impl Snapshot {
 
     pub(crate) async fn load<R: rand::Rng + rand::CryptoRng>(
         mut effects: TaskEffects<R>,
+        requestor: Option<PeerId>,
         root_doc: DocumentId,
         source: Option<SnapshotId>,
     ) -> Self {
@@ -154,7 +155,7 @@ impl Snapshot {
             .await
             .is_empty();
         let docs_to_hashes = if we_have_doc {
-            reachability::load_reachable_docs(effects.clone(), root_doc).await
+            reachability::load_reachable_docs(effects.clone(), requestor, root_doc).await
         } else {
             HashMap::new()
         };

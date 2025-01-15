@@ -7,7 +7,7 @@ use crate::{
     effects::TaskEffects,
     parse,
     sedimentree::{self, MinimalTreeHash},
-    CommitCategory, CommitHash, CommitOrBundle, DocumentId, StorageKey,
+    CommitCategory, CommitHash, CommitOrBundle, DocumentId, PeerId, StorageKey,
 };
 
 #[derive(Default, Debug)]
@@ -121,6 +121,7 @@ impl Encode for ReachabilityIndexEntry {
 
 pub(crate) async fn load_reachable_docs<R: rand::Rng + rand::CryptoRng>(
     effects: TaskEffects<R>,
+    requestor: Option<PeerId>,
     root: DocumentId,
 ) -> HashMap<DocumentId, MinimalTreeHash> {
     let mut to_process = vec![root];
@@ -129,6 +130,11 @@ pub(crate) async fn load_reachable_docs<R: rand::Rng + rand::CryptoRng>(
     while let Some(doc) = to_process.pop() {
         let index = ReachabilityIndex::load(effects.clone(), &doc).await;
         for doc in index.into_iter() {
+            if let Some(requestor) = requestor {
+                if !effects.can_read(requestor, &doc) {
+                    continue;
+                }
+            }
             to_process.push(doc);
         }
         if let Some(tree) = sedimentree::storage::load(

@@ -29,10 +29,25 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             data,
             category,
         } => {
+            if !effects.can_write(from, &doc) {
+                return OutgoingResponse {
+                    audience: Audience::peer(&from),
+                    response: Response::Error("not authorized".to_string()),
+                    responding_to: source,
+                };
+            }
             upload_commits(effects, from, doc, data, category).await;
             Response::UploadCommits
         }
         crate::Request::FetchSedimentree(doc_id) => {
+            if !effects.can_read(from, &doc_id) {
+                // TODO: Return an empty response rather than an error
+                return OutgoingResponse {
+                    audience: Audience::peer(&from),
+                    response: Response::Error("not authorized".to_string()),
+                    responding_to: source,
+                };
+            }
             let trees = fetch_sedimentree(effects, doc_id).await;
             Response::FetchSedimentree(trees)
         }
@@ -40,14 +55,17 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             blob,
             offset,
             length,
-        } => match effects.load(StorageKey::blob(blob)).await {
-            None => Response::Error("no such blob".to_string()),
-            Some(data) => {
-                let offset = offset as usize;
-                let length = length as usize;
-                Response::FetchBlobPart(data[offset..offset + length].to_vec())
+        } => {
+            // TODO: Scope the fetchblob by document ID so we can check permissions
+            match effects.load(StorageKey::blob(blob)).await {
+                None => Response::Error("no such blob".to_string()),
+                Some(data) => {
+                    let offset = offset as usize;
+                    let length = length as usize;
+                    Response::FetchBlobPart(data[offset..offset + length].to_vec())
+                }
             }
-        },
+        }
         crate::Request::UploadBlob(_vec) => todo!(),
         crate::Request::CreateSnapshot {
             root_doc,
@@ -225,8 +243,13 @@ async fn create_snapshot<R: rand::Rng + rand::CryptoRng>(
         return (empty.id(), symbols);
     }
 
-    let snapshot =
-        snapshots::Snapshot::load(effects.clone(), root_doc, Some(source_snapshot)).await;
+    let snapshot = snapshots::Snapshot::load(
+        effects.clone(),
+        Some(requestor),
+        root_doc,
+        Some(source_snapshot),
+    )
+    .await;
     let mut snapshot = effects.store_snapshot(snapshot);
 
     let mut nodes_to_ask = effects.who_should_i_ask(root_doc);
@@ -246,8 +269,13 @@ async fn create_snapshot<R: rand::Rng + rand::CryptoRng>(
             fut.map(move |r| (c, r))
         });
         let forwarded = futures::future::join_all(syncing).await;
-        let mut reloaded_snapshot =
-            snapshots::Snapshot::load(effects.clone(), root_doc, Some(source_snapshot)).await;
+        let mut reloaded_snapshot = snapshots::Snapshot::load(
+            effects.clone(),
+            Some(requestor),
+            root_doc,
+            Some(source_snapshot),
+        )
+        .await;
         for (peer, sync_result) in forwarded {
             match sync_result {
                 Ok(sync_result) => {

@@ -78,7 +78,6 @@ mod task;
 /// an event to be passed to the `Beelay` and a `StoryId` which will be used to notify the caller
 /// when the story is complete (and pass the results back to the caller).
 pub struct Beelay<R: rand::Rng + rand::CryptoRng> {
-    beehive: beehive_core::beehive::Beehive<CommitHash, R>,
     peer_id: PeerId,
     active_tasks: HashMap<Task, ActiveTask>,
     /// Outbound listen handler
@@ -237,16 +236,12 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
         let signing_key =
             signing_key.unwrap_or_else(|| ed25519_dalek::SigningKey::generate(&mut rng));
         let peer_id = PeerId::from(signing_key.verifying_key());
-        let state = Rc::new(RefCell::new(effects::State::new(
-            rng.clone(),
-            signing_key.clone(),
-        )));
+        let beehive = Beehive::generate(signing_key.clone(), rng.clone()).unwrap();
+        let state = Rc::new(RefCell::new(effects::State::new(rng, beehive, signing_key)));
         let (outbound_listen_task, outbound_listen_tx) = outbound_listens::OutboundListens::spawn(
             TaskEffects::new(Task::OutboundListens, state.clone()),
         );
-        let beehive = Beehive::generate(signing_key, rng).unwrap();
         Beelay {
-            beehive,
             peer_id,
             active_tasks: HashMap::new(),
             outbound_listen_task,
@@ -266,12 +261,11 @@ impl<R: rand::Rng + rand::CryptoRng + 'static> Beelay<R> {
         let signing_key =
             signing_key.unwrap_or_else(|| ed25519_dalek::SigningKey::generate(&mut rng));
         let peer_id = PeerId::from(signing_key.verifying_key());
-        let state = Rc::new(RefCell::new(effects::State::new(rng, signing_key)));
+        let state = Rc::new(RefCell::new(effects::State::new(rng, beehive, signing_key)));
         let (outbound_listen_task, outbound_listen_tx) = outbound_listens::OutboundListens::spawn(
             TaskEffects::new(Task::OutboundListens, state.clone()),
         );
         Beelay {
-            beehive,
             peer_id,
             active_tasks: HashMap::new(),
             outbound_listen_task,
