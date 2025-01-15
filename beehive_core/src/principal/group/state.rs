@@ -204,7 +204,8 @@ impl<T: ContentRef> GroupState<T> {
                 .proof_lineage()
                 .iter()
                 .try_fold(proof.as_ref(), |head, next_proof| {
-                    if proof.payload.can > proof.payload.can {
+                    if std::cmp::Ordering::Greater == proof.payload.can.cmp(&next_proof.payload.can)
+                    {
                         return Err(AddError::Escelation {
                             claimed: proof.payload.can,
                             proof: next_proof.payload.can,

@@ -8,10 +8,10 @@ use super::{
         operation::{delegation::Delegation, revocation::Revocation},
         Group, RevokeMemberError,
     },
+    revocation_ops::RevocationOps,
     verifiable::Verifiable,
 };
 use crate::{
-    cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
 };
@@ -64,7 +64,7 @@ impl<T: ContentRef> Membered<T> {
         member_id: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<(Vec<Rc<Signed<Revocation<T>>>>, Vec<CgkaOperation>), RevokeMemberError> {
+    ) -> Result<RevocationOps<T>, RevokeMemberError> {
         match self {
             Membered::Group(group) => {
                 let revs =
@@ -72,7 +72,10 @@ impl<T: ContentRef> Membered<T> {
                         .borrow_mut()
                         .revoke_member(member_id, signing_key, relevant_docs)?;
 
-                Ok((revs, vec![]))
+                Ok(RevocationOps {
+                    revocations: revs,
+                    cgka_operations: vec![],
+                })
             }
             Membered::Document(document) => {
                 document

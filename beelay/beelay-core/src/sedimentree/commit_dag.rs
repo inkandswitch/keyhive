@@ -420,7 +420,7 @@ impl<'a> Parents<'a> {
     }
 }
 
-impl<'a> Iterator for Parents<'a> {
+impl Iterator for Parents<'_> {
     type Item = NodeIdx;
 
     fn next(&mut self) -> Option<Self::Item> {

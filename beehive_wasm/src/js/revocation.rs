@@ -1,5 +1,5 @@
 use super::{
-    after::After, change_ref::JsChangeRef, identifier::JsIdentifier,
+    change_ref::JsChangeRef, history::JsHistory, identifier::JsIdentifier,
     signed_delegation::JsSignedDelegation,
 };
 use beehive_core::principal::group::operation::revocation::Revocation;
@@ -28,13 +28,8 @@ impl JsRevocation {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn after(&self) -> After {
-        let (delegations, revocations, cs) = self.0.after();
-        After {
-            delegations,
-            revocations,
-            content: cs.clone(),
-        }
+    pub fn after(&self) -> JsHistory {
+        self.0.after().into()
     }
 }
 

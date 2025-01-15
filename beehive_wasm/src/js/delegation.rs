@@ -1,5 +1,5 @@
 use super::{
-    access::JsAccess, after::After, agent::JsAgent, change_ref::JsChangeRef,
+    access::JsAccess, agent::JsAgent, change_ref::JsChangeRef, history::JsHistory,
     signed_delegation::JsSignedDelegation,
 };
 use beehive_core::principal::group::operation::delegation::{Delegation, DelegationError};
@@ -29,13 +29,8 @@ impl JsDelegation {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn after(&self) -> After {
-        let (delegations, revocations, cs) = self.0.after();
-        After {
-            delegations,
-            revocations,
-            content: cs.clone(),
-        }
+    pub fn after(&self) -> JsHistory {
+        self.0.after().into()
     }
 }
 

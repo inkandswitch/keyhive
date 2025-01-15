@@ -1,6 +1,6 @@
 pub mod id;
 
-use super::{individual::id::IndividualId, verifiable::Verifiable};
+use super::{individual::id::IndividualId, revocation_ops::RevocationOps, verifiable::Verifiable};
 use crate::{
     access::Access,
     cgka::{error::CgkaError, keys::ShareKeyMap, operation::CgkaOperation, Cgka},
@@ -14,6 +14,7 @@ use crate::{
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
+        encryption_response::EncryptionResponse,
         group::{
             error::AddError,
             operation::{
@@ -194,7 +195,7 @@ impl<T: ContentRef> Document<T> {
         member_id: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<(Vec<Rc<Signed<Revocation<T>>>>, Vec<CgkaOperation>), RevokeMemberError> {
+    ) -> Result<RevocationOps<T>, RevokeMemberError> {
         // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
         // FIXME: We need to check if this has revoked the last member in our group?
         let mut ops = Vec::new();
@@ -211,9 +212,12 @@ impl<T: ContentRef> Document<T> {
         after_other_doc_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
         let revs = self
             .group
-            .revoke_member(member_id, signing_key, &after_other_doc_content)?;
+            .revoke_member(member_id, signing_key, after_other_doc_content)?;
 
-        Ok((revs, ops))
+        Ok(RevocationOps {
+            revocations: revs,
+            cgka_operations: ops,
+        })
     }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
@@ -262,18 +266,18 @@ impl<T: ContentRef> Document<T> {
         content: &[u8],
         pred_refs: &Vec<T>,
         csprng: &mut R,
-    ) -> Result<(EncryptedContent<Vec<u8>, T>, Option<CgkaOperation>), EncryptError> {
+    ) -> Result<EncryptionResponse<T>, EncryptError> {
         let (app_secret, maybe_update_op) = self
             .cgka
             .new_app_secret_for(content_ref, content, pred_refs, csprng)
             .map_err(EncryptError::FailedToMakeAppSecret)?;
 
-        Ok((
-            app_secret
+        Ok(EncryptionResponse {
+            cgka_op: maybe_update_op,
+            ciphertext: app_secret
                 .try_encrypt(content)
                 .map_err(EncryptError::EncryptionFailed)?,
-            maybe_update_op,
-        ))
+        })
     }
 
     pub fn try_decrypt_content(

@@ -167,7 +167,7 @@ impl JsBeehive {
         membered: &mut JsMembered,
     ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
         let revs = self.0.revoke_member(to_revoke.agent_id(), membered)?;
-        Ok(revs.into_iter().map(|r| JsSignedRevocation(r)).collect())
+        Ok(revs.into_iter().map(JsSignedRevocation).collect())
     }
 
     #[wasm_bindgen(js_name = reachableDocs)]
@@ -175,10 +175,10 @@ impl JsBeehive {
         self.0
             .reachable_docs()
             .into_values()
-            .fold(Vec::new(), |mut acc, (doc, access)| {
+            .fold(Vec::new(), |mut acc, caps| {
                 acc.push(Summary {
-                    doc: JsDocument(doc.dupe()),
-                    access: JsAccess(access),
+                    doc: JsDocument(caps.doc().dupe()),
+                    access: JsAccess(caps.can()),
                 });
                 acc
             })

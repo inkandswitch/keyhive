@@ -10,7 +10,7 @@ pub struct JsAgent(pub(crate) Agent<JsChangeRef>);
 #[wasm_bindgen(js_class = Agent)]
 impl JsAgent {
     #[wasm_bindgen(js_name = toString)]
-    pub fn to_string(&self) -> String {
+    pub fn to_js_string(&self) -> String {
         self.0
             .id()
             .as_slice()

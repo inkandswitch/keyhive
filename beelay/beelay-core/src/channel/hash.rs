@@ -6,11 +6,11 @@ pub struct Hash<T> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: Clone> Hash<T>
+impl<T: Clone> From<&T> for Hash<T>
 where
     Vec<u8>: From<T>,
 {
-    pub fn hash(t: &T) -> Self {
+    fn from(t: &T) -> Self {
         Self {
             raw: blake3::hash(Vec::<u8>::from(t.clone()).as_slice()),
             _phantom: PhantomData,
