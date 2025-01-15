@@ -3,7 +3,7 @@ use crate::{access::Access, crypto::signed::VerificationError, principal::identi
 #[derive(Debug, thiserror::Error)]
 pub enum AddError {
     #[error("Invalid subject {0}")]
-    InvalidSubject(Identifier),
+    InvalidSubject(Box<Identifier>),
 
     #[error("Invalid signature")]
     InvalidSignature(#[from] VerificationError),
