@@ -272,7 +272,7 @@ impl<T: ContentRef> Verifiable for GroupState<T> {
     }
 }
 
-// FIXME test
+// FIXME replace with serde_derive
 impl<T: ContentRef> Serialize for GroupState<T> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut state = serializer.serialize_struct("GroupState", 3)?;

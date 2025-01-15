@@ -31,18 +31,24 @@ use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
 #[derive(Clone, Derivative, Serialize)]
-#[derivative(Hash)]
+#[derivative(Hash, PartialEq)]
 pub struct Active {
     /// The signing key of the active agent.
-    #[derivative(Hash(hash_with = "crate::util::hasher::signing_key"))]
+    #[derivative(
+        Hash(hash_with = "crate::util::hasher::signing_key"),
+        PartialEq(compare_with = "key_partial_eq")
+    )]
     pub(crate) signing_key: ed25519_dalek::SigningKey,
 
     // FIXME generalize to use e.g. KMS
-    #[derivative(Hash(hash_with = "crate::util::hasher::keys"))]
+    #[derivative(
+        Hash(hash_with = "crate::util::hasher::keys"),
+        PartialEq(compare_with = "prekey_partial_eq")
+    )]
     pub(crate) prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>,
 
     /// The [`Individual`] representation (how others see this agent).
-    pub(crate) individual: Individual, // FIXME NOPE! THis is an Agent<T> now
+    pub(crate) individual: Individual,
 }
 
 impl Active {
@@ -190,17 +196,19 @@ impl Signer<Signature> for Active {
     }
 }
 
-// FIXME test
-impl PartialEq for Active {
-    fn eq(&self, other: &Self) -> bool {
-        self.id() == other.id()
-            && self.signing_key.to_bytes() == other.signing_key.to_bytes()
-            && self
-                .prekey_pairs
-                .iter()
-                .zip(other.prekey_pairs.iter())
-                .all(|((pk1, sk1), (pk2, sk2))| pk1 == pk2 && sk1.to_bytes() == sk2.to_bytes())
-    }
+fn prekey_partial_eq(
+    xs: &BTreeMap<ShareKey, ShareSecretKey>,
+    ys: &BTreeMap<ShareKey, ShareSecretKey>,
+) -> bool {
+    xs.len() == ys.len()
+        && xs
+            .iter()
+            .zip(ys.iter())
+            .all(|((xk, xv), (yk, yv))| xk == yk && xv.to_bytes() == yv.to_bytes())
+}
+
+fn key_partial_eq(a: &ed25519_dalek::SigningKey, b: &ed25519_dalek::SigningKey) -> bool {
+    a.to_bytes() == b.to_bytes()
 }
 
 impl Eq for Active {}

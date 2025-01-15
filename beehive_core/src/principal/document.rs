@@ -96,7 +96,7 @@ impl<T: ContentRef> Document<T> {
         revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+        let sk = ed25519_dalek::SigningKey::generate(csprng);
 
         let group = parents.iter().try_fold(
             Group::generate(parents.clone(), delegations, revocations, csprng)?,
