@@ -16,7 +16,7 @@ authors = [
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/inkandswitch/beehive"
-rust-version = "1.80.1"
+rust-version = "1.83.0"
 version = "0.1.0"
 
 [workspace.dependencies]
@@ -28,4 +28,4 @@ rand = "0.8.5"
 serde = { version = "1.0", features = ["derive"] }
 signature = "2.2"
 thiserror = "1.0"
-x25519-dalek = { version = "2.0", features = ["getrandom", "serde", "reusable_secrets", "static_secrets"] }
+x25519-dalek = { version = "2.0", features = ["serde", "reusable_secrets", "static_secrets"] }

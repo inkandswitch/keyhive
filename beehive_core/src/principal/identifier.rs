@@ -1,6 +1,7 @@
 //! The universally unique identifier of an [`Agent`](crate::principal::agentAgent).
 
 use super::verifiable::Verifiable;
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 
 /// A unique identifier for an [`Agent`](crate::principal::agentAgent).
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 pub struct Identifier(pub ed25519_dalek::VerifyingKey);
 
 impl Identifier {
-    #[cfg(feature = "test_utils")]
+    #[cfg(any(feature = "test_utils", test))]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         ed25519_dalek::SigningKey::generate(csprng)
             .verifying_key()
@@ -36,6 +37,12 @@ impl Identifier {
 
 impl Clone for Identifier {
     fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl Dupe for Identifier {
+    fn dupe(&self) -> Self {
         *self
     }
 }
@@ -93,6 +100,12 @@ impl Verifiable for Identifier {
 impl From<ed25519_dalek::VerifyingKey> for Identifier {
     fn from(verifying_key: ed25519_dalek::VerifyingKey) -> Self {
         Self(verifying_key)
+    }
+}
+
+impl From<&ed25519_dalek::VerifyingKey> for Identifier {
+    fn from(verifying_key: &ed25519_dalek::VerifyingKey) -> Self {
+        Self(*verifying_key)
     }
 }
 

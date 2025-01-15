@@ -51,7 +51,7 @@ impl Public {
 
     pub fn active(&self) -> Active {
         Active {
-            signer: self.signing_key(),
+            signing_key: self.signing_key(),
             prekey_pairs: BTreeMap::from_iter([(self.share_key(), self.share_secret_key())]),
             individual: self.individual(),
         }

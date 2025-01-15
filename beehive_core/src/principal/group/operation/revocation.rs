@@ -4,25 +4,20 @@ use super::delegation::{Delegation, StaticDelegation};
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
-    principal::{
-        agent::AgentId,
-        document::{id::DocumentId, Document},
-        identifier::Identifier,
-    },
+    principal::{agent::id::AgentId, document::id::DocumentId, identifier::Identifier},
 };
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{collections::BTreeMap, rc::Rc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Revocation<T: ContentRef> {
     pub(crate) revoke: Rc<Signed<Delegation<T>>>,
     pub(crate) proof: Option<Rc<Signed<Delegation<T>>>>,
-    pub(crate) after_content: BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+    pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
 impl<T: ContentRef> Revocation<T> {
-    // FIXME MemberedId
     pub fn subject(&self) -> Identifier {
         self.revoke.subject()
     }
@@ -44,7 +39,7 @@ impl<T: ContentRef> Revocation<T> {
     ) -> (
         Vec<Rc<Signed<Delegation<T>>>>,
         Vec<Rc<Signed<Revocation<T>>>>,
-        &BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+        &BTreeMap<DocumentId, Vec<T>>,
     ) {
         let mut dlgs = vec![self.revoke.dupe()];
         if let Some(dlg) = &self.proof {
@@ -68,10 +63,7 @@ impl<T: ContentRef> std::hash::Hash for Revocation<T> {
 
         let mut vec = self.after_content.iter().collect::<Vec<_>>();
         vec.sort_by_key(|(doc_id, _)| *doc_id);
-
-        for (doc_id, (_, cs)) in vec.iter() {
-            (doc_id, cs).hash(state);
-        }
+        vec.hash(state);
     }
 }
 
@@ -90,20 +82,15 @@ pub struct StaticRevocation<T: ContentRef> {
     pub proof: Option<Digest<Signed<StaticDelegation<T>>>>,
 
     /// The heads of relevant [`Document`] content at time of revocation.
-    pub after_content: BTreeMap<Identifier, Vec<T>>,
+    pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
 impl<T: ContentRef> From<Revocation<T>> for StaticRevocation<T> {
     fn from(revocation: Revocation<T>) -> Self {
         Self {
-            revoke: Digest::hash(revocation.revoke.as_ref()).coerce(),
-            proof: revocation.proof.map(|p| Digest::hash(p.as_ref()).coerce()),
-            after_content: BTreeMap::from_iter(
-                revocation
-                    .after_content
-                    .into_iter()
-                    .map(|(doc_id, (_, content))| (Identifier::from(doc_id), content)),
-            ),
+            revoke: Digest::hash(revocation.revoke.as_ref()).into(),
+            proof: revocation.proof.map(|p| Digest::hash(p.as_ref()).into()),
+            after_content: revocation.after_content,
         }
     }
 }

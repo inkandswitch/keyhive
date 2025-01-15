@@ -4,7 +4,6 @@ use super::{
 };
 use beehive_core::principal::group::operation::revocation::Revocation;
 use dupe::Dupe;
-use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Revocation)]
@@ -20,13 +19,12 @@ impl JsRevocation {
 
     #[wasm_bindgen(getter)]
     pub fn revoked(&self) -> JsSignedDelegation {
-        self.0.revoked().as_ref().clone().into()
+        self.0.revoked().dupe().into()
     }
 
     #[wasm_bindgen(getter)]
     pub fn proof(&self) -> Option<JsSignedDelegation> {
-        let rc = self.0.proof()?;
-        Some(Rc::unwrap_or_clone(rc.dupe()).into())
+        Some(self.0.proof()?.dupe().into())
     }
 
     #[wasm_bindgen(getter)]

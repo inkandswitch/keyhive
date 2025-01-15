@@ -1,15 +1,17 @@
+pub mod id;
+
 use super::{
     active::Active,
     document::{id::DocumentId, Document},
-    group::{id::GroupId, Group},
+    group::Group,
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
+    membered::Membered,
     verifiable::Verifiable,
 };
 use crate::{content::reference::ContentRef, crypto::share_key::ShareKey};
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
-use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -37,7 +39,7 @@ impl<T: ContentRef> Agent<T> {
         }
     }
 
-    pub fn agent_id(&self) -> AgentId {
+    pub fn agent_id(&self) -> id::AgentId {
         match self {
             Agent::Active(a) => a.borrow().agent_id(),
             Agent::Individual(i) => i.borrow().agent_id(),
@@ -110,6 +112,15 @@ impl<T: ContentRef> From<Group<T>> for Agent<T> {
     }
 }
 
+impl<T: ContentRef> From<Membered<T>> for Agent<T> {
+    fn from(m: Membered<T>) -> Self {
+        match m {
+            Membered::Group(g) => g.into(),
+            Membered::Document(d) => d.into(),
+        }
+    }
+}
+
 impl<T: ContentRef> From<Rc<RefCell<Group<T>>>> for Agent<T> {
     fn from(g: Rc<RefCell<Group<T>>>) -> Self {
         Agent::Group(g)
@@ -135,75 +146,6 @@ impl<T: ContentRef> Verifiable for Agent<T> {
             Agent::Individual(i) => i.borrow().verifying_key(),
             Agent::Group(g) => (*g).borrow().verifying_key(),
             Agent::Document(d) => d.borrow().group.verifying_key(),
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum AgentId {
-    ActiveId(IndividualId),
-    IndividualId(IndividualId),
-    GroupId(GroupId),
-    DocumentId(DocumentId),
-}
-
-impl AgentId {
-    pub fn as_bytes(&self) -> [u8; 32] {
-        match self {
-            AgentId::ActiveId(i) => i.to_bytes(),
-            AgentId::IndividualId(i) => i.to_bytes(),
-            AgentId::GroupId(i) => i.to_bytes(),
-            AgentId::DocumentId(i) => i.to_bytes(),
-        }
-    }
-
-    pub fn as_slice(&self) -> &[u8] {
-        match self {
-            AgentId::ActiveId(i) => i.as_bytes(),
-            AgentId::IndividualId(i) => i.as_bytes(),
-            AgentId::GroupId(i) => i.as_bytes(),
-            AgentId::DocumentId(i) => i.as_bytes(),
-        }
-    }
-}
-
-impl<T: ContentRef> From<Agent<T>> for AgentId {
-    fn from(a: Agent<T>) -> Self {
-        a.agent_id()
-    }
-}
-
-impl<T: ContentRef> From<&Agent<T>> for AgentId {
-    fn from(a: &Agent<T>) -> Self {
-        a.agent_id()
-    }
-}
-
-impl From<IndividualId> for AgentId {
-    fn from(id: IndividualId) -> Self {
-        AgentId::IndividualId(id)
-    }
-}
-
-impl From<GroupId> for AgentId {
-    fn from(id: GroupId) -> Self {
-        AgentId::GroupId(id)
-    }
-}
-
-impl From<DocumentId> for AgentId {
-    fn from(id: DocumentId) -> Self {
-        AgentId::DocumentId(id)
-    }
-}
-
-impl From<AgentId> for Identifier {
-    fn from(id: AgentId) -> Self {
-        match id {
-            AgentId::ActiveId(i) => i.into(),
-            AgentId::IndividualId(i) => i.into(),
-            AgentId::GroupId(i) => i.into(),
-            AgentId::DocumentId(i) => i.into(),
         }
     }
 }

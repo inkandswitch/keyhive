@@ -4,18 +4,14 @@ pub mod revocation;
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
-    principal::{
-        document::{id::DocumentId, Document},
-        identifier::Identifier,
-    },
+    principal::{document::id::DocumentId, identifier::Identifier},
     util::content_addressed_map::CaMap,
 };
 use delegation::Delegation;
 use dupe::Dupe;
 use revocation::Revocation;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
-    cell::RefCell,
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
     hash::Hash,
@@ -70,7 +66,7 @@ impl<T: ContentRef> Operation<T> {
     ) -> (
         Vec<Rc<Signed<Delegation<T>>>>,
         Vec<Rc<Signed<Revocation<T>>>>,
-        &BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)>,
+        &BTreeMap<DocumentId, Vec<T>>,
     ) {
         match self {
             Operation::Delegation(delegation) => {
@@ -84,7 +80,7 @@ impl<T: ContentRef> Operation<T> {
         }
     }
 
-    pub fn after_content(&self) -> &BTreeMap<DocumentId, (Rc<RefCell<Document<T>>>, Vec<T>)> {
+    pub fn after_content(&self) -> &BTreeMap<DocumentId, Vec<T>> {
         match self {
             Operation::Delegation(delegation) => &delegation.payload().after_content,
             Operation::Revocation(revocation) => &revocation.payload().after_content,
@@ -140,8 +136,8 @@ impl<T: ContentRef> Operation<T> {
     }
 
     pub fn topsort(
-        delegation_heads: &HashSet<Rc<Signed<Delegation<T>>>>,
-        revocation_heads: &HashSet<Rc<Signed<Revocation<T>>>>,
+        delegation_heads: &CaMap<Signed<Delegation<T>>>,
+        revocation_heads: &CaMap<Signed<Revocation<T>>>,
     ) -> Vec<(Digest<Operation<T>>, Operation<T>)> {
         // NOTE: BTreeMap to get deterministic order
         let mut ops_with_ancestors: BTreeMap<
@@ -152,13 +148,13 @@ impl<T: ContentRef> Operation<T> {
         let mut leftovers: HashSet<Operation<T>> = HashSet::new();
         let mut explore: Vec<Operation<T>> = vec![];
 
-        for dlg in delegation_heads.iter() {
+        for dlg in delegation_heads.values() {
             let op: Operation<T> = dlg.dupe().into();
             leftovers.insert(op.clone());
             explore.push(op);
         }
 
-        for rev in revocation_heads.iter() {
+        for rev in revocation_heads.values() {
             let op: Operation<T> = rev.dupe().into();
             leftovers.insert(op.clone());
             explore.push(op);
@@ -180,7 +176,7 @@ impl<T: ContentRef> Operation<T> {
         for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
             for (other_digest, other_op) in op_ancestors.iter() {
                 let (_, other_ancestors, other_longest_path) = ops_with_ancestors
-                    .get(&other_digest.coerce())
+                    .get(other_digest)
                     .expect("values that we just put there to be there");
 
                 let ancestor_set: HashSet<&Operation<T>> =
@@ -217,7 +213,7 @@ impl<T: ContentRef> Operation<T> {
                             adjacencies
                                 .add_dependency((*other_digest, other_op.as_ref()), (*digest, op));
                         }
-                        Ordering::Equal => match other_digest.cmp(&digest.coerce()) {
+                        Ordering::Equal => match other_digest.cmp(digest) {
                             Ordering::Less => {
                                 leftovers.remove(op);
                                 adjacencies.add_dependency(
@@ -277,6 +273,12 @@ impl<T: ContentRef> From<Rc<Signed<Revocation<T>>>> for Operation<T> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum StaticOperation<T: ContentRef> {
+    Delegation(delegation::StaticDelegation<T>),
+    Revocation(revocation::StaticRevocation<T>),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,22 +288,22 @@ mod tests {
 
     use std::sync::LazyLock;
 
-    static GROUP_SK: LazyLock<ed25519_dalek::SigningKey> =
+    static GROUP_SIGNER: LazyLock<ed25519_dalek::SigningKey> =
         LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
 
-    static ALICE_SK: LazyLock<ed25519_dalek::SigningKey> =
+    static ALICE_SIGNER: LazyLock<ed25519_dalek::SigningKey> =
         LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
 
-    static BOB_SK: LazyLock<ed25519_dalek::SigningKey> =
+    static BOB_SIGNER: LazyLock<ed25519_dalek::SigningKey> =
         LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
 
-    static CAROL_SK: LazyLock<ed25519_dalek::SigningKey> =
+    static CAROL_SIGNER: LazyLock<ed25519_dalek::SigningKey> =
         LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
 
-    static DAN_SK: LazyLock<ed25519_dalek::SigningKey> =
+    static DAN_SIGNER: LazyLock<ed25519_dalek::SigningKey> =
         LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
 
-    static ERIN_SK: LazyLock<ed25519_dalek::SigningKey> =
+    static ERIN_SIGNER: LazyLock<ed25519_dalek::SigningKey> =
         LazyLock::new(|| ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()));
 
     /*
@@ -335,8 +337,8 @@ mod tests {
     */
 
     fn add_alice() -> Rc<Signed<Delegation<String>>> {
-        let alice: Individual = fixture(&ALICE_SK).verifying_key().into();
-        let group_sk = LazyLock::force(&GROUP_SK).clone();
+        let alice: Individual = fixture(&ALICE_SIGNER).verifying_key().into();
+        let group_sk = LazyLock::force(&GROUP_SIGNER).clone();
 
         Rc::new(
             Signed::try_sign(
@@ -355,8 +357,8 @@ mod tests {
     }
 
     fn add_bob() -> Rc<Signed<Delegation<String>>> {
-        let alice_sk = fixture(&ALICE_SK).clone();
-        let bob: Individual = fixture(&BOB_SK).verifying_key().into();
+        let alice_sk = fixture(&ALICE_SIGNER).clone();
+        let bob: Individual = fixture(&BOB_SIGNER).verifying_key().into();
 
         Rc::new(
             Signed::try_sign(
@@ -374,8 +376,8 @@ mod tests {
     }
 
     fn add_carol() -> Rc<Signed<Delegation<String>>> {
-        let alice_sk = fixture(&ALICE_SK).clone();
-        let carol: Individual = fixture(&CAROL_SK).verifying_key().into();
+        let alice_sk = fixture(&ALICE_SIGNER).clone();
+        let carol: Individual = fixture(&CAROL_SIGNER).verifying_key().into();
 
         Rc::new(
             Signed::try_sign(
@@ -393,8 +395,8 @@ mod tests {
     }
 
     fn add_dan() -> Rc<Signed<Delegation<String>>> {
-        let carol_sk = fixture(&CAROL_SK).clone();
-        let dan: Individual = fixture(&DAN_SK).verifying_key().into();
+        let carol_sk = fixture(&CAROL_SIGNER).clone();
+        let dan: Individual = fixture(&DAN_SIGNER).verifying_key().into();
 
         Rc::new(
             Signed::try_sign(
@@ -412,8 +414,8 @@ mod tests {
     }
 
     fn add_erin() -> Rc<Signed<Delegation<String>>> {
-        let bob_sk = fixture(&BOB_SK).clone();
-        let erin: Individual = fixture(&ERIN_SK).verifying_key().into();
+        let bob_sk = fixture(&BOB_SIGNER).clone();
+        let erin: Individual = fixture(&ERIN_SIGNER).verifying_key().into();
 
         Rc::new(
             Signed::try_sign(
@@ -431,7 +433,7 @@ mod tests {
     }
 
     fn remove_carol() -> Rc<Signed<Revocation<String>>> {
-        let alice_sk = fixture(&ALICE_SK).clone();
+        let alice_sk = fixture(&ALICE_SIGNER).clone();
 
         Rc::new(
             Signed::try_sign(
@@ -447,7 +449,7 @@ mod tests {
     }
 
     fn remove_dan() -> Rc<Signed<Revocation<String>>> {
-        let bob_sk = fixture(&BOB_SK).clone();
+        let bob_sk = fixture(&BOB_SIGNER).clone();
 
         Rc::new(
             Signed::try_sign(
@@ -519,8 +521,8 @@ mod tests {
 
         #[test]
         fn test_empty() {
-            let dlgs = HashSet::new();
-            let revs = HashSet::new();
+            let dlgs = CaMap::new();
+            let revs = CaMap::new();
 
             let observed = Operation::<String>::topsort(&dlgs, &revs);
             assert_eq!(observed, vec![]);
@@ -530,8 +532,8 @@ mod tests {
         fn test_one_delegation() {
             let dlg = add_alice();
 
-            let dlgs = HashSet::from_iter([dlg.dupe()]);
-            let revs = HashSet::new();
+            let dlgs = CaMap::from_iter_direct([dlg.dupe()]);
+            let revs = CaMap::new();
 
             let observed = Operation::topsort(&dlgs, &revs);
             let expected = dlg.into();
@@ -544,8 +546,8 @@ mod tests {
             let alice_dlg = add_alice();
             let bob_dlg = add_bob();
 
-            let dlg_heads = HashSet::from_iter([bob_dlg.dupe()]);
-            let rev_heads = HashSet::new();
+            let dlg_heads = CaMap::from_iter_direct([bob_dlg.dupe()]);
+            let rev_heads = CaMap::new();
 
             let observed = Operation::topsort(&dlg_heads, &rev_heads);
 
@@ -567,8 +569,8 @@ mod tests {
             let carol_dlg = add_carol();
             let dan_dlg = add_dan();
 
-            let dlg_heads = HashSet::from_iter([dan_dlg.dupe()]);
-            let rev_heads = HashSet::new();
+            let dlg_heads = CaMap::from_iter_direct([dan_dlg.dupe()]);
+            let rev_heads = CaMap::new();
 
             let observed = Operation::topsort(&dlg_heads, &rev_heads);
 
@@ -590,7 +592,7 @@ mod tests {
 
         #[test]
         fn test_one_revocation() {
-            let alice_sk = fixture(&ALICE_SK).clone();
+            let alice_sk = fixture(&ALICE_SIGNER).clone();
             let alice_dlg = add_alice();
             let bob_dlg = add_bob();
 
@@ -608,8 +610,8 @@ mod tests {
             let rev_op: Operation<String> = alice_revokes_bob.dupe().into();
             let rev_hash = Digest::hash(&rev_op);
 
-            let dlgs = HashSet::new();
-            let revs = HashSet::from_iter([alice_revokes_bob.dupe()]);
+            let dlgs = CaMap::new();
+            let revs = CaMap::from_iter_direct([alice_revokes_bob.dupe()]);
 
             let mut observed = Operation::topsort(&dlgs, &revs);
 
@@ -621,7 +623,7 @@ mod tests {
 
             let a = (alice_hash, alice_op.clone());
             let b = (bob_hash, bob_op.clone());
-            let r = (rev_hash.coerce(), alice_revokes_bob.into());
+            let r = (rev_hash.into(), alice_revokes_bob.into());
 
             assert_eq!(observed.clone().len(), 3);
 
@@ -649,9 +651,9 @@ mod tests {
             let rev_dan_op: Operation<String> = bob_revokes_dan.dupe().into();
             let rev_dan_hash = Digest::hash(&rev_dan_op);
 
-            let dlg_heads = HashSet::from_iter([erin_dlg.dupe()]);
+            let dlg_heads = CaMap::from_iter_direct([erin_dlg.dupe()]);
             let rev_heads =
-                HashSet::from_iter([alice_revokes_carol.dupe(), bob_revokes_dan.dupe()]);
+                CaMap::from_iter_direct([alice_revokes_carol.dupe(), bob_revokes_dan.dupe()]);
 
             let observed = Operation::topsort(&dlg_heads, &rev_heads);
 

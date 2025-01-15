@@ -4,7 +4,6 @@ use super::{
 };
 use beehive_core::principal::group::operation::delegation::{Delegation, DelegationError};
 use dupe::Dupe;
-use std::rc::Rc;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -26,8 +25,7 @@ impl JsDelegation {
 
     #[wasm_bindgen(getter)]
     pub fn proof(&self) -> Option<JsSignedDelegation> {
-        let rc = self.0.proof()?;
-        Some(Rc::unwrap_or_clone(rc.dupe()).into())
+        Some(self.0.proof()?.dupe().into())
     }
 
     #[wasm_bindgen(getter)]
