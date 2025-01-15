@@ -76,7 +76,7 @@ impl Connecting {
     }
 
     fn server_id_hash(&self) -> Hash<String> {
-        Hash::hash(&self.server_id)
+        Hash::from(&self.server_id)
     }
 }
 

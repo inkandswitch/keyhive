@@ -39,7 +39,9 @@ impl PrekeyState {
     /// # Returns
     ///
     /// A new [`PrekeyState`] with the operations from `iter`.
-    pub fn from_iter(iter: impl IntoIterator<Item = Signed<KeyOp>>) -> Result<Self, NewOpError> {
+    pub fn try_from_iter(
+        iter: impl IntoIterator<Item = Signed<KeyOp>>,
+    ) -> Result<Self, NewOpError> {
         let mut s = Self::new();
 
         for op in iter {

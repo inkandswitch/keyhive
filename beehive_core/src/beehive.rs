@@ -1,6 +1,7 @@
 //! The primary API for the library.
 
 use crate::{
+    ability::Ability,
     access::Access,
     cgka::error::CgkaError,
     content::reference::ContentRef,
@@ -15,6 +16,7 @@ use crate::{
         active::Active,
         agent::{id::AgentId, Agent},
         document::{id::DocumentId, DecryptError, Document, EncryptError},
+        encryption_response::EncryptionResponse,
         group::{
             self,
             error::AddError,
@@ -220,17 +222,17 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         resource: &mut Membered<T>,
     ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
         let mut relevant_docs = BTreeMap::new();
-        for (doc_id, (doc, _)) in self.reachable_docs() {
+        for (doc_id, Ability { doc, .. }) in self.reachable_docs() {
             relevant_docs.insert(doc_id, doc.borrow().content_heads.iter().cloned().collect());
         }
 
-        let (revs, _cgka_ops) = resource.revoke_member(
+        let ops = resource.revoke_member(
             to_revoke,
             &self.active.borrow().signing_key,
             &mut relevant_docs,
         )?;
 
-        Ok(revs)
+        Ok(ops.revocations)
     }
 
     pub fn try_encrypt_content(
@@ -240,14 +242,14 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<EncryptedContent<Vec<u8>, T>, EncryptError> {
-        let (encrypted, _maybe_update_op) = doc.borrow_mut().try_encrypt_content(
+        let EncryptionResponse { ciphertext, .. } = doc.borrow_mut().try_encrypt_content(
             content_ref,
             content,
             pred_refs,
             &mut self.csprng,
         )?;
         // FIXME: We need to handle the optional op as well
-        Ok(encrypted)
+        Ok(ciphertext)
     }
 
     pub fn try_decrypt_content(
@@ -262,7 +264,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         doc.borrow_mut().pcs_update(&mut self.csprng)
     }
 
-    pub fn reachable_docs(&self) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> {
+    pub fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<T>> {
         self.docs_reachable_by_agent(self.active.dupe().into())
     }
 
@@ -273,12 +275,9 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         }
     }
 
-    pub fn docs_reachable_by_agent(
-        &self,
-        agent: Agent<T>,
-    ) -> BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> {
+    pub fn docs_reachable_by_agent(&self, agent: Agent<T>) -> BTreeMap<DocumentId, Ability<T>> {
         let mut explore: Vec<(Rc<RefCell<Group<T>>>, Access)> = vec![];
-        let mut caps: BTreeMap<DocumentId, (&Rc<RefCell<Document<T>>>, Access)> = BTreeMap::new();
+        let mut caps: BTreeMap<DocumentId, Ability<T>> = BTreeMap::new();
         let mut seen: HashSet<AgentId> = HashSet::new();
 
         let agent_id = agent.agent_id();
@@ -290,7 +289,13 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
             if let Some(proofs) = doc.borrow().members().get(&agent_id) {
                 for proof in proofs {
-                    caps.insert(doc_id, (doc, proof.payload().can));
+                    caps.insert(
+                        doc_id,
+                        Ability {
+                            doc,
+                            can: proof.payload().can,
+                        },
+                    );
                 }
             }
         }
@@ -315,7 +320,13 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
                 if let Some(proofs) = doc.borrow().members().get(&agent_id) {
                     for proof in proofs {
-                        caps.insert(doc_id, (doc, proof.payload().can));
+                        caps.insert(
+                            doc_id,
+                            Ability {
+                                doc,
+                                can: proof.payload().can,
+                            },
+                        );
                     }
                 }
             }

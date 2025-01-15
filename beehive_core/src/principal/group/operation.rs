@@ -1,4 +1,5 @@
 pub mod delegation;
+pub mod dependencies;
 pub mod revocation;
 
 use crate::{
@@ -8,6 +9,7 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use delegation::Delegation;
+use dependencies::Dependencies;
 use dupe::Dupe;
 use revocation::Revocation;
 use serde::{Deserialize, Serialize};
@@ -54,29 +56,18 @@ impl<T: ContentRef> Operation<T> {
     }
 
     pub fn after_auth(&self) -> Vec<Operation<T>> {
-        let (dlgs, revs, _) = self.after();
-        dlgs.into_iter()
+        let deps = self.after();
+        deps.delegations
+            .into_iter()
             .map(|d| d.into())
-            .chain(revs.into_iter().map(|r| r.into()))
+            .chain(deps.revocations.into_iter().map(|r| r.into()))
             .collect()
     }
 
-    pub fn after(
-        &self,
-    ) -> (
-        Vec<Rc<Signed<Delegation<T>>>>,
-        Vec<Rc<Signed<Revocation<T>>>>,
-        &BTreeMap<DocumentId, Vec<T>>,
-    ) {
+    pub fn after(&self) -> Dependencies<T> {
         match self {
-            Operation::Delegation(delegation) => {
-                let (dlgs, revs, content) = delegation.payload().after();
-                (dlgs, revs, content)
-            }
-            Operation::Revocation(revocation) => {
-                let (dlg, revs, content) = revocation.payload().after();
-                (dlg, revs, content)
-            }
+            Operation::Delegation(delegation) => delegation.payload().after(),
+            Operation::Revocation(revocation) => revocation.payload().after(),
         }
     }
 
@@ -99,6 +90,7 @@ impl<T: ContentRef> Operation<T> {
             return (CaMap::new(), 1);
         }
 
+        #[allow(clippy::mutable_key_type)]
         let mut ancestors = HashMap::new();
         let mut heads = vec![];
 
@@ -139,12 +131,16 @@ impl<T: ContentRef> Operation<T> {
         delegation_heads: &CaMap<Signed<Delegation<T>>>,
         revocation_heads: &CaMap<Signed<Revocation<T>>>,
     ) -> Vec<(Digest<Operation<T>>, Operation<T>)> {
-        // NOTE: BTreeMap to get deterministic order
-        let mut ops_with_ancestors: BTreeMap<
-            Digest<Operation<T>>,
-            (Operation<T>, CaMap<Operation<T>>, usize),
-        > = BTreeMap::new();
+        struct History<U: ContentRef> {
+            op: Operation<U>,
+            op_ancestors: CaMap<Operation<U>>,
+            longest_path: usize,
+        }
 
+        // NOTE: BTreeMap to get deterministic order
+        let mut ops_with_ancestors: BTreeMap<Digest<Operation<T>>, History<T>> = BTreeMap::new();
+
+        #[allow(clippy::mutable_key_type)]
         let mut leftovers: HashSet<Operation<T>> = HashSet::new();
         let mut explore: Vec<Operation<T>> = vec![];
 
@@ -161,27 +157,48 @@ impl<T: ContentRef> Operation<T> {
         }
 
         while let Some(op) = explore.pop() {
-            let (ancestors, longest_path) = op.ancestors();
+            let (op_ancestors, longest_path) = op.ancestors();
 
-            for ancestor in ancestors.values() {
+            for ancestor in op_ancestors.values() {
                 explore.push(ancestor.as_ref().clone());
             }
 
-            ops_with_ancestors.insert(Digest::hash(&op), (op, ancestors, longest_path));
+            ops_with_ancestors.insert(
+                Digest::hash(&op),
+                History {
+                    op,
+                    op_ancestors,
+                    longest_path,
+                },
+            );
         }
 
         let mut adjacencies: TopologicalSort<(Digest<Operation<T>>, &Operation<T>)> =
             topological_sort::TopologicalSort::new();
 
-        for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
+        for (
+            digest,
+            History {
+                op,
+                op_ancestors,
+                longest_path,
+            },
+        ) in ops_with_ancestors.iter()
+        {
             for (other_digest, other_op) in op_ancestors.iter() {
-                let (_, other_ancestors, other_longest_path) = ops_with_ancestors
+                let History {
+                    op: _,
+                    op_ancestors: other_ancestors,
+                    longest_path: other_longest_path,
+                } = ops_with_ancestors
                     .get(other_digest)
                     .expect("values that we just put there to be there");
 
+                #[allow(clippy::mutable_key_type)]
                 let ancestor_set: HashSet<&Operation<T>> =
                     op_ancestors.values().map(|op| op.as_ref()).collect();
 
+                #[allow(clippy::mutable_key_type)]
                 let other_ancestor_set: HashSet<&Operation<T>> =
                     other_ancestors.values().map(|op| op.as_ref()).collect();
 

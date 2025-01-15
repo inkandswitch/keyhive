@@ -1,6 +1,7 @@
-// FIXME move to Group
-
-use super::delegation::{Delegation, StaticDelegation};
+use super::{
+    delegation::{Delegation, StaticDelegation},
+    dependencies::Dependencies,
+};
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
@@ -34,19 +35,17 @@ impl<T: ContentRef> Revocation<T> {
         self.proof.dupe()
     }
 
-    pub fn after(
-        &self,
-    ) -> (
-        Vec<Rc<Signed<Delegation<T>>>>,
-        Vec<Rc<Signed<Revocation<T>>>>,
-        &BTreeMap<DocumentId, Vec<T>>,
-    ) {
+    pub fn after(&self) -> Dependencies<T> {
         let mut dlgs = vec![self.revoke.dupe()];
         if let Some(dlg) = &self.proof {
             dlgs.push(dlg.clone());
         }
 
-        (dlgs, vec![], &self.after_content)
+        Dependencies {
+            delegations: dlgs,
+            revocations: vec![],
+            content: &self.after_content,
+        }
     }
 }
 

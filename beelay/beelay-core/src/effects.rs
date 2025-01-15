@@ -208,7 +208,7 @@ impl<Descriptor: Eq + std::hash::Hash + Clone, Payload, Result>
                 .entry(descriptor.clone())
                 .or_default()
                 .insert(initiator);
-            return self.running.get(&descriptor).unwrap().clone();
+            self.running.get(&descriptor).unwrap().clone()
         } else {
             let result = Rc::new(RefCell::new(None));
             self.new.push((descriptor.clone(), payload));

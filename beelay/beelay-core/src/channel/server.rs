@@ -41,7 +41,7 @@ impl Server {
         hello: Signed<Hello>,
         csprng: &mut R,
     ) -> Result<Connect, ReceiveHelloError> {
-        if hello.payload.server_id_hash != Hash::hash(&self.my_id) {
+        if hello.payload.server_id_hash != Hash::from(&self.my_id) {
             return Err(ReceiveHelloError::InvalidServerId);
         }
 

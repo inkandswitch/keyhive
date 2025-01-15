@@ -1,6 +1,9 @@
 use beehive_core::access::Access;
 use dupe::Dupe;
-use std::ops::Deref;
+use std::{
+    fmt::{self, Display, Formatter},
+    ops::Deref,
+};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Access)]
@@ -21,8 +24,8 @@ impl JsAccess {
     }
 
     #[wasm_bindgen(js_name = toString)]
-    pub fn to_string(&self) -> String {
-        self.0.to_string()
+    pub fn to_js_string(&self) -> String {
+        self.to_string()
     }
 }
 
@@ -43,5 +46,11 @@ impl Deref for JsAccess {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl Display for JsAccess {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }

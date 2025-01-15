@@ -231,7 +231,7 @@ impl Cgka {
             let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
             let op = CgkaOperation::Update {
                 id: self.owner_id,
-                new_path,
+                new_path: Box::new(new_path),
                 predecessors,
             };
             self.ops_graph.add_local_op(&op);

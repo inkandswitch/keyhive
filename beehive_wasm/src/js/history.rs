@@ -6,23 +6,25 @@ use beehive_core::{
     crypto::signed::Signed,
     principal::{
         document::id::DocumentId,
-        group::operation::{delegation::Delegation, revocation::Revocation},
+        group::operation::{
+            delegation::Delegation, dependencies::Dependencies, revocation::Revocation,
+        },
     },
 };
 use dupe::Dupe;
 use std::{collections::BTreeMap, rc::Rc};
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen]
+#[wasm_bindgen(js_name = After)]
 #[derive(Debug, Clone)]
-pub struct After {
+pub struct JsHistory {
     pub(crate) delegations: Vec<Rc<Signed<Delegation<JsChangeRef>>>>,
     pub(crate) revocations: Vec<Rc<Signed<Revocation<JsChangeRef>>>>,
     pub(crate) content: BTreeMap<DocumentId, Vec<JsChangeRef>>,
 }
 
-#[wasm_bindgen]
-impl After {
+#[wasm_bindgen(js_class = After)]
+impl JsHistory {
     pub fn delegations(&self) -> Vec<JsSignedDelegation> {
         self.delegations
             .iter()
@@ -46,5 +48,15 @@ impl After {
                 change_hashes: refs.clone(),
             })
             .collect()
+    }
+}
+
+impl From<Dependencies<'_, JsChangeRef>> for JsHistory {
+    fn from(auth_history: Dependencies<JsChangeRef>) -> Self {
+        JsHistory {
+            delegations: auth_history.delegations,
+            revocations: auth_history.revocations,
+            content: auth_history.content.clone(),
+        }
     }
 }
