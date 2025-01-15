@@ -11,6 +11,7 @@ use super::{
     verifiable::Verifiable,
 };
 use crate::{
+    cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
 };
@@ -63,18 +64,20 @@ impl<T: ContentRef> Membered<T> {
         member_id: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
+    ) -> Result<(Vec<Rc<Signed<Revocation<T>>>>, Vec<CgkaOperation>), RevokeMemberError> {
         match self {
             Membered::Group(group) => {
-                group
-                    .borrow_mut()
-                    .revoke_member(member_id, signing_key, relevant_docs)
+                let revs =
+                    group
+                        .borrow_mut()
+                        .revoke_member(member_id, signing_key, relevant_docs)?;
+
+                Ok((revs, vec![]))
             }
             Membered::Document(document) => {
                 document
                     .borrow_mut()
-                    .revoke_member(member_id, signing_key, relevant_docs)?;
-                Ok(())
+                    .revoke_member(member_id, signing_key, relevant_docs)
             }
         }
     }

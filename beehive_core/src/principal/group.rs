@@ -328,7 +328,7 @@ impl<T: ContentRef> Group<T> {
                     })
                     .collect(),
             },
-            signing_key,
+            &signing_key,
         )?;
 
         let rc = Rc::new(delegation);

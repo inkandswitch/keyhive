@@ -224,11 +224,13 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             relevant_docs.insert(doc_id, doc.borrow().content_heads.iter().cloned().collect());
         }
 
-        resource.revoke_member(
+        let (revs, _cgka_ops) = resource.revoke_member(
             to_revoke,
             &self.active.borrow().signing_key,
             &mut relevant_docs,
-        )
+        )?;
+
+        Ok(revs)
     }
 
     pub fn try_encrypt_content(

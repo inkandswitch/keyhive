@@ -193,8 +193,8 @@ impl<T: ContentRef> Document<T> {
         &mut self,
         member_id: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<RefCell<Document<T>>>],
-    ) -> Result<Vec<CgkaOperation>, SigningError> {
+        after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
+    ) -> Result<(Vec<Rc<Signed<Revocation<T>>>>, Vec<CgkaOperation>), RevokeMemberError> {
         // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
         // FIXME: We need to check if this has revoked the last member in our group?
         let mut ops = Vec::new();
@@ -209,8 +209,11 @@ impl<T: ContentRef> Document<T> {
         }
 
         after_other_doc_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
-        self.group
-            .revoke_member(member_id, signing_key, &after_other_doc_content)
+        let revs = self
+            .group
+            .revoke_member(member_id, signing_key, &after_other_doc_content)?;
+
+        Ok((revs, ops))
     }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
