@@ -282,7 +282,7 @@ async fn add_link<R: rand::Rng + rand::CryptoRng>(
 async fn create_doc<R: rand::Rng + rand::CryptoRng>(
     effects: crate::effects::TaskEffects<R>,
 ) -> DocumentId {
-    let doc_id = DocumentId::random(&mut *effects.rng());
+    let doc_id = DocumentId::random(&mut *effects.rng().borrow_mut());
     tracing::trace!(?doc_id, "creating doc");
     doc_id
 }

@@ -95,6 +95,31 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
                 Err(e) => Response::Error(e.to_string()),
             }
         }
+        crate::messages::Request::BeginAuthSync => {
+            let (session_id, first_symbols) = effects.new_beehive_sync_session();
+            Response::BeginAuthSync {
+                session_id,
+                first_symbols,
+            }
+        }
+        crate::messages::Request::BeehiveSymbols { session_id } => {
+            if let Some(symbols) = effects.next_n_beehive_sync_symbols(session_id, 100) {
+                Response::BeehiveSymbols(symbols)
+            } else {
+                Response::Error("no such session".to_string())
+            }
+        }
+        crate::messages::Request::RequestBeehiveOps {
+            session: _,
+            op_hashes,
+        } => {
+            let ops = effects.get_beehive_ops(op_hashes);
+            Response::RequestBeehiveOps(ops)
+        }
+        crate::messages::Request::UploadBeehiveOps { ops } => {
+            effects.apply_beehive_ops(ops);
+            Response::UploadBeehiveOps
+        }
     };
     OutgoingResponse {
         audience: Audience::peer(&from),

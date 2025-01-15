@@ -58,6 +58,7 @@ mod spawn;
 mod stream;
 pub use stream::{StreamDirection, StreamError, StreamEvent, StreamId};
 use task::ActiveTask;
+mod beehive_sync;
 pub mod loading;
 mod task;
 

@@ -10,6 +10,10 @@ pub(super) enum RequestType {
     CreateSnapshot,
     SnapshotSymbols,
     Listen,
+    BeginAuthSync,
+    BeehiveSymbols,
+    RequestBeehiveOps,
+    UploadBeehiveOps,
 }
 
 impl RequestType {
@@ -37,6 +41,10 @@ impl TryFrom<u8> for RequestType {
             4 => Ok(Self::CreateSnapshot),
             5 => Ok(Self::SnapshotSymbols),
             6 => Ok(Self::Listen),
+            7 => Ok(Self::BeginAuthSync),
+            8 => Ok(Self::BeehiveSymbols),
+            9 => Ok(Self::RequestBeehiveOps),
+            10 => Ok(Self::UploadBeehiveOps),
             _ => Err(error::InvalidRequestType(value)),
         }
     }
@@ -52,6 +60,10 @@ impl From<RequestType> for u8 {
             RequestType::CreateSnapshot => 4,
             RequestType::SnapshotSymbols => 5,
             RequestType::Listen => 6,
+            RequestType::BeginAuthSync => 7,
+            RequestType::BeehiveSymbols => 8,
+            RequestType::RequestBeehiveOps => 9,
+            RequestType::UploadBeehiveOps => 10,
         }
     }
 }
@@ -66,6 +78,10 @@ pub(super) enum ResponseType {
     CreateSnapshot,
     SnapshotSymbols,
     Listen,
+    BeginAuthSync,
+    BeehiveSymbols,
+    RequestBeehiveOps,
+    UploadBeehiveOps,
 }
 
 impl ResponseType {
@@ -93,6 +109,10 @@ impl TryFrom<u8> for ResponseType {
             4 => Ok(Self::CreateSnapshot),
             5 => Ok(Self::SnapshotSymbols),
             6 => Ok(Self::Listen),
+            7 => Ok(Self::BeginAuthSync),
+            8 => Ok(Self::BeehiveSymbols),
+            9 => Ok(Self::RequestBeehiveOps),
+            10 => Ok(Self::UploadBeehiveOps),
             _ => Err(error::InvalidResponseType(value)),
         }
     }
@@ -108,6 +128,10 @@ impl From<ResponseType> for u8 {
             ResponseType::CreateSnapshot => 4,
             ResponseType::SnapshotSymbols => 5,
             ResponseType::Listen => 6,
+            ResponseType::BeginAuthSync => 7,
+            ResponseType::BeehiveSymbols => 8,
+            ResponseType::RequestBeehiveOps => 9,
+            ResponseType::UploadBeehiveOps => 10,
         }
     }
 }

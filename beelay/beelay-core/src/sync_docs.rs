@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use futures::{pin_mut, StreamExt, TryStreamExt};
 
 use crate::{
+    beehive_sync,
     blob::BlobMeta,
     deser::Parse,
     effects::TaskEffects,
@@ -20,6 +21,8 @@ pub(crate) async fn sync_root_doc<R: rand::Rng + rand::CryptoRng>(
     remote: TargetNodeInfo,
 ) -> Result<SyncDocResult, crate::effects::RpcError> {
     tracing::trace!("beginning root doc sync");
+
+    beehive_sync::sync_beehive(effects.clone(), remote.clone()).await;
 
     let OutOfSync {
         their_differing,

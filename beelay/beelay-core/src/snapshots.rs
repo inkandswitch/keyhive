@@ -128,7 +128,7 @@ impl Snapshot {
         root_doc: DocumentId,
         source_id: Option<SnapshotId>,
     ) -> Self {
-        let id = SnapshotId::random(&mut *effects.rng());
+        let id = SnapshotId::random(&mut *effects.rng().borrow_mut());
         Self {
             id,
             root_doc,
@@ -146,7 +146,7 @@ impl Snapshot {
         root_doc: DocumentId,
         source: Option<SnapshotId>,
     ) -> Self {
-        let id = SnapshotId::random(&mut *effects.rng());
+        let id = SnapshotId::random(&mut *effects.rng().borrow_mut());
         let we_have_doc = !effects
             .load_range(StorageKey::sedimentree_root(
                 &root_doc,

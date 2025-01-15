@@ -13,7 +13,7 @@ use futures::FutureExt;
 
 use crate::{
     auth::Authenticated,
-    endpoint,
+    beehive_sync, endpoint,
     io::{IoResult, IoResultPayload, IoTask},
     log,
     messages::{FetchedSedimentree, Notification, UploadItem},
@@ -26,7 +26,8 @@ use crate::{
 pub(crate) struct State<R: rand::Rng + rand::CryptoRng> {
     pub(crate) io: Io,
     pub(crate) auth: crate::auth::manager::Manager,
-    pub(crate) beehive: Rc<RefCell<Beehive<crate::CommitHash, R>>>,
+    pub(crate) beehive: Beehive<crate::CommitHash, R>,
+    beehive_sync_sessions: beehive_sync::BeehiveSyncSessions,
     snapshots: Snapshots,
     log: log::Log,
     awaiting_new_log_entries: HashMap<Task, LogEntryListener>,
@@ -35,7 +36,7 @@ pub(crate) struct State<R: rand::Rng + rand::CryptoRng> {
     pub spawned_tasks: HashMap<spawn::SpawnId, crate::task::ActiveTask>,
     pub(crate) streams: stream::Streams,
     pub(crate) endpoints: endpoint::Endpoints,
-    rng: R,
+    rng: Rc<RefCell<R>>,
 }
 
 struct LogEntryListener {
@@ -63,7 +64,8 @@ impl<R: rand::Rng + rand::CryptoRng> State<R> {
                 stopping: Arc::new(AtomicBool::new(false)),
             },
             auth: crate::auth::manager::Manager::new(signing_key.clone(), None),
-            beehive: Rc::new(RefCell::new(beehive)),
+            beehive,
+            beehive_sync_sessions: beehive_sync::BeehiveSyncSessions::new(),
             log: log::Log::new(),
             snapshots: Snapshots::new(),
             awaiting_new_log_entries: HashMap::new(),
@@ -72,7 +74,7 @@ impl<R: rand::Rng + rand::CryptoRng> State<R> {
             spawned_tasks: HashMap::new(),
             streams: stream::Streams::new(signing_key),
             endpoints: endpoint::Endpoints::new(),
-            rng,
+            rng: Rc::new(RefCell::new(rng)),
         }
     }
 
@@ -593,14 +595,96 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
         }
     }
 
+    pub(crate) fn begin_auth_sync(
+        &self,
+        to_peer: TargetNodeInfo,
+    ) -> impl Future<
+        Output = Result<
+            (
+                beehive_sync::BeehiveSyncId,
+                Vec<riblt::CodedSymbol<beehive_sync::OpHash>>,
+            ),
+            RpcError,
+        >,
+    > {
+        let request = Request::BeginAuthSync;
+        let task = self.request(to_peer, request);
+        async move {
+            let response = task.await?;
+            match response.content {
+                crate::Response::BeginAuthSync {
+                    session_id,
+                    first_symbols,
+                } => Ok((session_id, first_symbols)),
+                crate::Response::Error(err) => Err(RpcError::ErrorReported(err)),
+                _ => Err(RpcError::IncorrectResponseType),
+            }
+        }
+    }
+
+    pub(crate) fn beehive_symbols(
+        &self,
+        from_peer: TargetNodeInfo,
+        session_id: beehive_sync::BeehiveSyncId,
+    ) -> impl Future<Output = Result<Vec<riblt::CodedSymbol<beehive_sync::OpHash>>, RpcError>> {
+        let request = Request::BeehiveSymbols { session_id };
+        let task = self.request(from_peer, request);
+        async move {
+            let response = task.await?;
+            match response.content {
+                crate::Response::BeehiveSymbols(symbols) => Ok(symbols),
+                crate::Response::Error(err) => Err(RpcError::ErrorReported(err)),
+                _ => Err(RpcError::IncorrectResponseType),
+            }
+        }
+    }
+
+    pub(crate) fn request_beehive_ops(
+        &self,
+        from_peer: TargetNodeInfo,
+        session_id: beehive_sync::BeehiveSyncId,
+        op_hashes: Vec<beehive_sync::OpHash>,
+    ) -> impl Future<Output = Result<Vec<beehive_sync::BeehiveOp>, RpcError>> {
+        let request = Request::RequestBeehiveOps {
+            session: session_id,
+            op_hashes,
+        };
+        let task = self.request(from_peer, request);
+        async move {
+            let response = task.await?;
+            match response.content {
+                crate::Response::RequestBeehiveOps(ops) => Ok(ops),
+                crate::Response::Error(err) => Err(RpcError::ErrorReported(err)),
+                _ => Err(RpcError::IncorrectResponseType),
+            }
+        }
+    }
+
+    pub(crate) fn upload_beehive_ops(
+        &self,
+        to_peer: TargetNodeInfo,
+        ops: Vec<beehive_sync::BeehiveOp>,
+    ) -> impl Future<Output = Result<(), RpcError>> {
+        let request = Request::UploadBeehiveOps { ops };
+        let task = self.request(to_peer, request);
+        async move {
+            let response = task.await?;
+            match response.content {
+                crate::Response::UploadBeehiveOps => Ok(()),
+                crate::Response::Error(err) => Err(RpcError::ErrorReported(err)),
+                _ => Err(RpcError::IncorrectResponseType),
+            }
+        }
+    }
+
     pub(crate) fn log(&mut self) -> RefMut<'_, log::Log> {
         let state = RefCell::borrow_mut(&self.state);
         RefMut::map(state, |s| &mut s.log)
     }
 
-    pub(crate) fn rng(&self) -> std::cell::RefMut<'_, R> {
+    pub(crate) fn rng(&self) -> Rc<RefCell<R>> {
         let state = RefCell::borrow_mut(&self.state);
-        RefMut::map(state, |j| &mut j.rng)
+        state.rng.clone()
     }
 
     pub(crate) fn who_should_i_ask(&self, _about_doc: DocumentId) -> HashSet<TargetNodeInfo> {
@@ -728,6 +812,47 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
         let state = self.state.borrow_mut();
         let beehive = &state.beehive;
         todo!("do some things with the beehive")
+    }
+
+    pub(crate) fn apply_beehive_ops(&self, ops: Vec<beehive_sync::BeehiveOp>) {
+        let state = self.state.borrow_mut();
+        let beehive = &state.beehive;
+        todo!()
+    }
+
+    pub(crate) fn beehive_ops(&self) -> impl Iterator<Item = beehive_sync::BeehiveOp> {
+        std::iter::empty()
+    }
+
+    pub(crate) fn new_beehive_sync_session(
+        &self,
+    ) -> (
+        beehive_sync::BeehiveSyncId,
+        Vec<riblt::CodedSymbol<beehive_sync::OpHash>>,
+    ) {
+        let state = self.state.borrow_mut();
+        let rng = state.rng.clone();
+        let mut rng_ref = rng.borrow_mut();
+        let (mut beehive_sync_sessions, beehive) = RefMut::map_split(state, |state| {
+            (&mut state.beehive_sync_sessions, &mut state.beehive)
+        });
+        beehive_sync_sessions.new_session(&mut *rng_ref, &*beehive)
+    }
+
+    pub(crate) fn next_n_beehive_sync_symbols(
+        &self,
+        session_id: beehive_sync::BeehiveSyncId,
+        n: u64,
+    ) -> Option<Vec<riblt::CodedSymbol<beehive_sync::OpHash>>> {
+        let mut state = self.state.borrow_mut();
+        state.beehive_sync_sessions.next_n_symbols(session_id, n)
+    }
+
+    pub(crate) fn get_beehive_ops(
+        &self,
+        op_hashes: Vec<beehive_sync::OpHash>,
+    ) -> Vec<beehive_sync::BeehiveOp> {
+        todo!()
     }
 }
 

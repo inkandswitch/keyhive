@@ -1,8 +1,9 @@
 use crate::{
+    beehive_sync,
     deser::{Encode, Parse},
     leb128::encode_uleb128,
     parse,
-    riblt::doc_and_heads::CodedDocAndHeadsSymbol,
+    riblt::{self, doc_and_heads::CodedDocAndHeadsSymbol},
     sedimentree::SedimentreeSummary,
     BlobHash, CommitCategory, CommitHash, DocumentId, SnapshotId,
 };
@@ -11,7 +12,7 @@ mod decode;
 mod encode;
 mod encoding_types;
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub(crate) enum Response {
     Error(String),
@@ -27,6 +28,13 @@ pub(crate) enum Response {
         notifications: Vec<Notification>,
         remote_offset: u64,
     },
+    BeginAuthSync {
+        session_id: crate::beehive_sync::BeehiveSyncId,
+        first_symbols: Vec<riblt::CodedSymbol<crate::beehive_sync::OpHash>>,
+    },
+    BeehiveSymbols(Vec<riblt::CodedSymbol<beehive_sync::OpHash>>),
+    RequestBeehiveOps(Vec<beehive_sync::BeehiveOp>),
+    UploadBeehiveOps,
 }
 
 impl Parse<'_> for Response {
@@ -73,6 +81,24 @@ impl std::fmt::Display for Response {
                     remote_offset
                 )
             }
+            Response::BeginAuthSync {
+                session_id,
+                first_symbols,
+            } => {
+                write!(
+                    f,
+                    "BeginAuthSync(session_id: {:?}, first_symbols: ({} symbols))",
+                    session_id,
+                    first_symbols.len()
+                )
+            }
+            Response::BeehiveSymbols(symbols) => {
+                write!(f, "BeehiveSymbols({} symbols)", symbols.len())
+            }
+            Response::RequestBeehiveOps(hashes) => {
+                write!(f, "RequestBeehiveOps({} ops)", hashes.len())
+            }
+            Response::UploadBeehiveOps => write!(f, "UploadBeehiveOps"),
         }
     }
 }
@@ -135,7 +161,6 @@ pub(crate) struct ContentAndLinks {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
-#[derive(serde::Serialize)]
 pub(crate) enum Request {
     UploadBlob(Vec<u8>),
     UploadCommits {
@@ -157,6 +182,17 @@ pub(crate) enum Request {
         snapshot_id: SnapshotId,
     },
     Listen(SnapshotId, Option<u64>),
+    BeginAuthSync,
+    BeehiveSymbols {
+        session_id: beehive_sync::BeehiveSyncId,
+    },
+    RequestBeehiveOps {
+        session: beehive_sync::BeehiveSyncId,
+        op_hashes: Vec<beehive_sync::OpHash>,
+    },
+    UploadBeehiveOps {
+        ops: Vec<beehive_sync::BeehiveOp>,
+    },
 }
 
 impl Parse<'_> for Request {
@@ -205,6 +241,16 @@ impl std::fmt::Display for Request {
             }
             Request::Listen(snapshot_id, from_offset) => {
                 write!(f, "Listen({}, {:?})", snapshot_id, from_offset)
+            }
+            Request::BeginAuthSync => write!(f, "BeginAuthSync"),
+            Request::BeehiveSymbols { session_id } => {
+                write!(f, "BeehiveSymbols({})", session_id)
+            }
+            Request::RequestBeehiveOps { session, op_hashes } => {
+                write!(f, "RequestBeehiveOps({}, {} ops)", session, op_hashes.len())
+            }
+            Request::UploadBeehiveOps { ops } => {
+                write!(f, "UploadBeehiveOps({} ops)", ops.len())
             }
         }
     }

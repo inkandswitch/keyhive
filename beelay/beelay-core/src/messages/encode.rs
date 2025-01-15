@@ -58,6 +58,22 @@ pub(super) fn encode_request(buf: &mut Vec<u8>, req: &Request) {
                 buf.push(0);
             }
         }
+        Request::BeginAuthSync => {
+            buf.push(RequestType::BeginAuthSync.into());
+        }
+        Request::BeehiveSymbols { session_id } => {
+            buf.push(RequestType::BeehiveSymbols.into());
+            session_id.encode_into(buf);
+        }
+        Request::RequestBeehiveOps { session, op_hashes } => {
+            buf.push(RequestType::RequestBeehiveOps.into());
+            session.encode_into(buf);
+            op_hashes.encode_into(buf);
+        }
+        Request::UploadBeehiveOps { ops } => {
+            buf.push(RequestType::UploadBeehiveOps.into());
+            ops.encode_into(buf);
+        }
     }
 }
 
@@ -108,6 +124,25 @@ pub(crate) fn encode_response(buf: &mut Vec<u8>, resp: &Response) {
                 notification.encode_into(buf);
             }
             encode_uleb128(buf, *remote_offset);
+        }
+        Response::BeginAuthSync {
+            session_id,
+            first_symbols,
+        } => {
+            buf.push(ResponseType::BeginAuthSync.into());
+            session_id.encode_into(buf);
+            first_symbols.encode_into(buf);
+        }
+        Response::BeehiveSymbols(symbols) => {
+            buf.push(ResponseType::BeehiveSymbols.into());
+            symbols.encode_into(buf);
+        }
+        Response::RequestBeehiveOps(ops) => {
+            buf.push(ResponseType::RequestBeehiveOps.into());
+            ops.encode_into(buf);
+        }
+        Response::UploadBeehiveOps => {
+            buf.push(ResponseType::UploadBeehiveOps.into());
         }
     }
 }

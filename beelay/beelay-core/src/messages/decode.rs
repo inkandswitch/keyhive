@@ -1,11 +1,14 @@
 use crate::{
-    deser::Parse, leb128, parse, riblt::doc_and_heads::CodedDocAndHeadsSymbol, BlobHash,
-    CommitCategory, DocumentId, SnapshotId,
+    beehive_sync::{self, OpHash},
+    deser::Parse,
+    leb128, parse,
+    riblt::doc_and_heads::CodedDocAndHeadsSymbol,
+    BlobHash, CommitCategory, DocumentId, SnapshotId,
 };
 
 use super::{
     encoding_types::{RequestType, ResponseType},
-    FetchedSedimentree, Notification, UploadItem,
+    riblt, FetchedSedimentree, Notification, UploadItem,
 };
 
 pub(super) fn parse_request(
@@ -73,6 +76,25 @@ pub(super) fn parse_request(
             };
             Ok((input, super::Request::Listen(snapshot_id, offset)))
         }),
+        RequestType::BeginAuthSync => Ok((input, super::Request::BeginAuthSync)),
+        RequestType::BeehiveSymbols => input.parse_in_ctx("BeehiveSymbols", |input| {
+            let (input, session_id) =
+                input.parse_in_ctx("session_id", beehive_sync::BeehiveSyncId::parse)?;
+            Ok((input, super::Request::BeehiveSymbols { session_id }))
+        }),
+        RequestType::RequestBeehiveOps => input.parse_in_ctx("RequestBeehiveOps", |input| {
+            let (input, session) =
+                input.parse_in_ctx("session_id", beehive_sync::BeehiveSyncId::parse)?;
+            let (input, op_hashes) = input.parse_in_ctx("ops", Vec::<OpHash>::parse)?;
+            Ok((
+                input,
+                super::Request::RequestBeehiveOps { session, op_hashes },
+            ))
+        }),
+        RequestType::UploadBeehiveOps => input.parse_in_ctx("UploadBeehiveOps", |input| {
+            let (input, ops) = input.parse_in_ctx("ops", Vec::<beehive_sync::BeehiveOp>::parse)?;
+            Ok((input, super::Request::UploadBeehiveOps { ops }))
+        }),
     }
 }
 
@@ -120,6 +142,31 @@ pub(crate) fn parse_response(
                     remote_offset,
                 },
             ))
+        }),
+        ResponseType::BeginAuthSync => input.parse_in_ctx("BeginAuthSync", |input| {
+            let (input, session_id) =
+                input.parse_in_ctx("session", beehive_sync::BeehiveSyncId::parse)?;
+            let (input, first_symbols) =
+                input.parse_in_ctx("first_symbols", Vec::<riblt::CodedSymbol<OpHash>>::parse)?;
+            Ok((
+                input,
+                super::Response::BeginAuthSync {
+                    session_id,
+                    first_symbols,
+                },
+            ))
+        }),
+        ResponseType::BeehiveSymbols => input.parse_in_ctx("BeehiveSymbols", |input| {
+            let (input, symbols) =
+                Vec::<riblt::CodedSymbol<OpHash>>::parse_in_ctx("symbols", input)?;
+            Ok((input, super::Response::BeehiveSymbols(symbols)))
+        }),
+        ResponseType::RequestBeehiveOps => input.parse_in_ctx("RequestBeehiveOps", |input| {
+            let (input, ops) = Vec::<beehive_sync::BeehiveOp>::parse_in_ctx("ops", input)?;
+            Ok((input, super::Response::RequestBeehiveOps(ops)))
+        }),
+        ResponseType::UploadBeehiveOps => input.parse_in_ctx("UploadBeehiveOps", |input| {
+            Ok((input, super::Response::UploadBeehiveOps))
         }),
     }?;
     Ok((input, resp))

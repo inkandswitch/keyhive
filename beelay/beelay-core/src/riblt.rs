@@ -1,5 +1,10 @@
 use std::vec::Vec;
 
+use crate::{
+    deser::{Encode, Parse},
+    leb128, parse,
+};
+
 pub(crate) trait Symbol {
     fn zero() -> Self;
     fn xor(&self, other: &Self) -> Self;
@@ -57,11 +62,39 @@ impl<T: Symbol + Copy> HashedSymbol<T> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub(crate) struct CodedSymbol<T: Symbol + Copy> {
     pub(crate) symbol: T,
     pub(crate) hash: u64,
     pub(crate) count: i64,
+}
+
+impl<T: Encode + Symbol + Copy> Encode for CodedSymbol<T> {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.symbol.encode_into(out);
+        out.extend(self.hash.to_be_bytes());
+        crate::leb128::signed::encode(out, self.count);
+    }
+}
+
+impl<'a, T: Parse<'a> + Copy + Symbol> Parse<'a> for CodedSymbol<T> {
+    fn parse(input: parse::Input<'a>) -> Result<(parse::Input<'a>, Self), parse::ParseError> {
+        input.parse_in_ctx("CodedSymbol", |input| {
+            let (input, symbol) = T::parse_in_ctx("symbol", input)?;
+            let (input, hash_bytes) = input.parse_in_ctx("hash", parse::arr::<8>)?;
+            let hash = u64::from_be_bytes(hash_bytes);
+            let (input, count) = input.parse_in_ctx("count", leb128::signed::parse)?;
+            Ok((
+                input,
+                Self {
+                    symbol,
+                    hash,
+                    count,
+                },
+            ))
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -70,6 +103,21 @@ pub(crate) struct Encoder<T: Symbol + Copy> {
     mappings: Vec<RandomMapping>,
     queue: Vec<SymbolMapping>,
     next_idx: u64,
+}
+
+impl<T: Symbol + Copy> Encoder<T> {
+    pub(crate) fn next_n_symbols(&mut self, n: u64) -> Vec<CodedSymbol<T>> {
+        let mut result = vec![];
+        for _ in 0..n {
+            let symbol = self.produce_next_coded_symbol();
+            result.push(CodedSymbol {
+                symbol: symbol.symbol,
+                hash: symbol.hash,
+                count: symbol.count,
+            });
+        }
+        result
+    }
 }
 
 #[derive(Clone)]
