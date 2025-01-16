@@ -151,7 +151,11 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             }
         }
 
-        Ok(Rc::new(RefCell::new(new_doc)))
+        let doc_id = new_doc.doc_id();
+        let doc = Rc::new(RefCell::new(new_doc));
+        self.docs.insert(doc_id, doc.dupe());
+
+        Ok(doc)
     }
 
     pub fn rotate_prekey(&mut self, prekey: ShareKey) -> Result<ShareKey, SigningError> {
