@@ -34,7 +34,7 @@ impl<T: ContentRef> Membered<T> {
     pub fn get_capability(&self, agent_id: &AgentId) -> Option<Rc<Signed<Delegation<T>>>> {
         match self {
             Membered::Group(group) => group.borrow().get_capability(agent_id).duped(),
-            Membered::Document(doc) => doc.borrow().get_capabilty(agent_id).duped(),
+            Membered::Document(doc) => doc.borrow().get_capability(agent_id).duped(),
         }
     }
 

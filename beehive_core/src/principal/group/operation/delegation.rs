@@ -48,6 +48,10 @@ impl<T: ContentRef> Delegation<T> {
         self.proof.as_ref()
     }
 
+    pub fn after_revocations(&self) -> &[Rc<Signed<Revocation<T>>>] {
+        &self.after_revocations
+    }
+
     pub fn after(
         &self,
     ) -> (

@@ -275,8 +275,21 @@ impl<T: ContentRef> From<Rc<Signed<Revocation<T>>>> for Operation<T> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum StaticOperation<T: ContentRef> {
-    Delegation(delegation::StaticDelegation<T>),
-    Revocation(revocation::StaticRevocation<T>),
+    Delegation(Signed<delegation::StaticDelegation<T>>),
+    Revocation(Signed<revocation::StaticRevocation<T>>),
+}
+
+impl<T: ContentRef> From<Operation<T>> for StaticOperation<T> {
+    fn from(op: Operation<T>) -> Self {
+        match op {
+            Operation::Delegation(d) => {
+                StaticOperation::Delegation(Rc::unwrap_or_clone(d).map(Into::into))
+            }
+            Operation::Revocation(r) => {
+                StaticOperation::Revocation(Rc::unwrap_or_clone(r).map(Into::into))
+            }
+        }
+    }
 }
 
 #[cfg(test)]

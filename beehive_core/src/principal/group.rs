@@ -233,6 +233,10 @@ impl<T: ContentRef> Group<T> {
         &self.state.delegation_heads
     }
 
+    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<T>>> {
+        &self.state.revocation_heads
+    }
+
     pub fn get_capability(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
         self.members.get(member_id).and_then(|delegations| {
             delegations

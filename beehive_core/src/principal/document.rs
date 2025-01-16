@@ -86,7 +86,11 @@ impl<T: ContentRef> Document<T> {
         self.group.delegation_heads()
     }
 
-    pub fn get_capabilty(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
+    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<T>>> {
+        self.group.revocation_heads()
+    }
+
+    pub fn get_capability(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
         self.group.get_capability(member_id)
     }
 

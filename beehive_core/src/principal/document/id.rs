@@ -34,6 +34,12 @@ impl From<DocumentId> for Identifier {
     }
 }
 
+impl From<Identifier> for DocumentId {
+    fn from(id: Identifier) -> DocumentId {
+        DocumentId(id)
+    }
+}
+
 impl From<DocumentId> for MemberedId {
     fn from(id: DocumentId) -> MemberedId {
         MemberedId::DocumentId(id)

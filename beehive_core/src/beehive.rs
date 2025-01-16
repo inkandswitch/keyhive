@@ -22,7 +22,7 @@ use crate::{
             operation::{
                 delegation::{Delegation, DelegationError, StaticDelegation},
                 revocation::{Revocation, StaticRevocation},
-                StaticOperation,
+                Operation, StaticOperation,
             },
             Group, RevokeMemberError,
         },
@@ -184,6 +184,19 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             .insert(group.group_id(), Rc::new(RefCell::new(group)));
     }
 
+    pub fn get_operation(&self, digest: &Digest<Operation<T>>) -> Option<Operation<T>> {
+        self.delegations
+            .borrow()
+            .get(&digest.into())
+            .map(|d| d.dupe().into())
+            .or_else(|| {
+                self.revocations
+                    .borrow()
+                    .get(&digest.into())
+                    .map(|r| r.dupe().into())
+            })
+    }
+
     pub fn add_member(
         &mut self,
         to_add: Agent<T>,
@@ -340,6 +353,55 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         caps
     }
 
+    pub fn ops_for_agent(&self, agent: Agent<T>) -> HashMap<Digest<Operation<T>>, Operation<T>> {
+        let mut ops = HashMap::new();
+        let mut visited_hashes = HashSet::new();
+        let mut heads: Vec<(Digest<Operation<T>>, Operation<T>)> = vec![];
+
+        for (doc_rc, _max_acces) in self.docs_reachable_by_agent(agent).values() {
+            for (hash, dlg_head) in doc_rc.borrow().delegation_heads().iter() {
+                heads.push((hash.into(), dlg_head.dupe().into()));
+            }
+
+            for (hash, rev_head) in doc_rc.borrow().revocation_heads().iter() {
+                heads.push((hash.into(), rev_head.dupe().into()));
+            }
+        }
+
+        while let Some((hash, op)) = heads.pop() {
+            if visited_hashes.contains(&hash) {
+                continue;
+            }
+
+            visited_hashes.insert(hash);
+            ops.insert(hash, op.clone());
+
+            match op {
+                Operation::Delegation(dlg) => {
+                    if let Some(proof) = &dlg.payload.proof {
+                        heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
+                    }
+
+                    for rev in dlg.payload.after_revocations.iter() {
+                        heads.push((Digest::hash(rev.as_ref()).into(), rev.dupe().into()));
+                    }
+                }
+                Operation::Revocation(rev) => {
+                    if let Some(proof) = &rev.payload.proof {
+                        heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
+                    }
+
+                    heads.push((
+                        Digest::hash(rev.as_ref()).into(),
+                        rev.payload.revoke.dupe().into(),
+                    ));
+                }
+            }
+        }
+
+        ops
+    }
+
     pub fn get_agent(&self, id: Identifier) -> Option<Agent<T>> {
         let indie_id = id.into();
 
@@ -364,12 +426,12 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
     pub fn receive_delegation(
         &mut self,
-        static_dlg: Signed<StaticDelegation<T>>,
+        static_dlg: &Signed<StaticDelegation<T>>,
     ) -> Result<(), ReceieveStaticDelegationError<T>> {
         if self
             .delegations
             .borrow()
-            .contains_key(&Digest::hash(&static_dlg).into())
+            .contains_key(&Digest::hash(static_dlg).into())
         {
             return Ok(());
         }
@@ -418,7 +480,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
                 proof: proof.clone(),
                 can: static_dlg.payload().can,
                 after_revocations,
-                after_content: static_dlg.payload.after_content,
+                after_content: static_dlg.payload.after_content.clone(),
             },
         };
 
@@ -446,12 +508,12 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
     pub fn receive_revocation(
         &mut self,
-        static_rev: Signed<StaticRevocation<T>>,
+        static_rev: &Signed<StaticRevocation<T>>,
     ) -> Result<(), ReceieveStaticDelegationError<T>> {
         if self
             .revocations
             .borrow()
-            .contains_key(&Digest::hash(&static_rev).into())
+            .contains_key(&Digest::hash(static_rev).into())
         {
             return Ok(());
         }
@@ -486,7 +548,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             payload: Revocation {
                 revoke,
                 proof,
-                after_content: static_rev.payload.after_content,
+                after_content: static_rev.payload.after_content.clone(),
             },
         };
 
@@ -516,19 +578,11 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
     pub fn receive_op(
         &mut self,
-        static_op: Signed<StaticOperation<T>>,
+        static_op: &StaticOperation<T>,
     ) -> Result<(), ReceieveStaticDelegationError<T>> {
-        match static_op.payload {
-            StaticOperation::Delegation(d) => self.receive_delegation(Signed {
-                payload: d,
-                issuer: static_op.issuer,
-                signature: static_op.signature,
-            }),
-            StaticOperation::Revocation(r) => self.receive_revocation(Signed {
-                payload: r,
-                issuer: static_op.issuer,
-                signature: static_op.signature,
-            }),
+        match static_op {
+            StaticOperation::Delegation(d) => self.receive_delegation(d),
+            StaticOperation::Revocation(r) => self.receive_revocation(r),
         }
     }
 

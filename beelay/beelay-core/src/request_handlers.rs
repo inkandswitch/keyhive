@@ -1,8 +1,10 @@
+use beehive_core::principal::group::operation::StaticOperation;
 use futures::{pin_mut, FutureExt};
 
 use crate::{
     beehive_sync,
     blob::BlobMeta,
+    commit::CommitHash,
     effects::RpcError,
     log::Source,
     messages::{BlobRef, ContentAndLinks, FetchedSedimentree, TreePart, UploadItem},
@@ -122,7 +124,7 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             )
         }
         crate::messages::Request::UploadBeehiveOps { ops } => {
-            effects.apply_beehive_ops(ops.into_iter().map(|o| o.into()).collect());
+            effects.apply_beehive_ops(ops.into_iter().map(|bop| bop.0.into()).collect());
             Response::UploadBeehiveOps
         }
     };

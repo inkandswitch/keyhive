@@ -8,9 +8,15 @@ use std::{
 };
 
 use beehive_core::{
+    access::Access,
     beehive::Beehive,
     crypto::digest::Digest,
-    principal::{group::operation::StaticOperation, verifiable::Verifiable},
+    principal::{
+        document::id::DocumentId as BeehiveDocumentId,
+        group::operation::{Operation as BeehiveOperation, StaticOperation},
+        identifier::Identifier,
+        verifiable::Verifiable,
+    },
 };
 use ed25519_dalek::SigningKey;
 use futures::FutureExt;
@@ -806,51 +812,91 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
         }
     }
 
+    pub(crate) fn can_do(&self, peer_id: PeerId, doc_id: &DocumentId, access: Access) -> bool {
+        let beehive = &self.state.borrow().beehive;
+
+        if let Some(peer) = beehive.get_agent(peer_id.as_key().into()) {
+            if let Some(doc) = beehive
+                .documents()
+                .get(&BeehiveDocumentId::from(Identifier::from(doc_id.as_key())))
+            {
+                return doc
+                    .borrow()
+                    .get_capability(&peer.agent_id())
+                    .map(|cap| cap.payload().can() >= access)
+                    .unwrap_or(false);
+            }
+        }
+
+        false
+    }
+
     /// Check if the given peer is allowed to write to the document
-    pub(crate) fn can_write(&self, peer: PeerId, doc: &DocumentId) -> bool {
-        let state = self.state.borrow_mut();
-        let beehive = &state.beehive;
-        // TODO: Brooke magic
-        todo!("do some things with the beehive")
+    pub(crate) fn can_write(&self, peer_id: PeerId, doc_id: &DocumentId) -> bool {
+        self.can_do(peer_id, doc_id, Access::Write)
     }
 
     /// Check if the given peer is allowed to read from the document
-    pub(crate) fn can_read(&self, peer: PeerId, doc: &DocumentId) -> bool {
-        let state = self.state.borrow_mut();
-        let beehive = &state.beehive;
-        // TODO: Brooke magic
-        todo!("do some things with the beehive")
+    pub(crate) fn can_read(&self, peer_id: PeerId, doc_id: &DocumentId) -> bool {
+        self.can_do(peer_id, doc_id, Access::Read)
     }
 
     /// Apply the given beehive ops locally
-    pub(crate) fn apply_beehive_ops(&self, ops: Vec<StaticOperation<CommitHash>>) {
-        let state = self.state.borrow_mut();
-        let beehive = &state.beehive;
-        // TODO: Brooke magic
-        todo!()
+    pub(crate) fn apply_beehive_ops(
+        &self,
+        mut ops: Vec<StaticOperation<CommitHash>>,
+    ) -> Result<(), Vec<StaticOperation<CommitHash>>> {
+        let beehive = &mut self.state.borrow_mut().beehive;
+        let mut try_later = vec![];
+
+        // Out of order & deduplicated ingestion
+        loop {
+            let mut ingested = false;
+            while let Some(op) = ops.pop() {
+                if let Ok(()) = beehive.receive_op(&op) {
+                    ingested = true;
+                } else {
+                    try_later.push(op);
+                }
+            }
+
+            if try_later.is_empty() {
+                break;
+            } else if !ingested {
+                break;
+            } else {
+                ops = try_later;
+                try_later = vec![];
+            }
+        }
+
+        if ops.is_empty() {
+            Ok(())
+        } else {
+            Err(ops)
+        }
     }
 
     /// Get the behive ops which we think the other end should have
     pub(crate) fn beehive_ops(
         &self,
         for_sync_with_peer: ed25519_dalek::VerifyingKey,
-    ) -> impl Iterator<Item = beehive_core::principal::group::operation::StaticOperation<CommitHash>>
-    {
-        let state = self.state.borrow_mut();
-        let beehive = &state.beehive;
-        // TODO: Brooke magic
-        std::iter::empty()
+    ) -> HashMap<Digest<BeehiveOperation<CommitHash>>, BeehiveOperation<CommitHash>> {
+        let beehive = &self.state.borrow().beehive;
+        let peer = beehive.get_agent(for_sync_with_peer.into()).expect("FIXME");
+        beehive.ops_for_agent(peer)
     }
 
     /// Get the beehive ops corresponding to the hashes provided
     pub(crate) fn get_beehive_ops(
         &self,
         op_hashes: Vec<Digest<StaticOperation<CommitHash>>>,
-    ) -> Vec<beehive_core::principal::group::operation::StaticOperation<CommitHash>> {
-        let state = self.state.borrow_mut();
-        let beehive = &state.beehive;
-        // TODO: Brooke magic
-        todo!()
+    ) -> Vec<beehive_core::principal::group::operation::Operation<CommitHash>> {
+        let beehive = &self.state.borrow().beehive;
+        op_hashes
+            .iter()
+            .map(|static_hash| beehive.get_operation(&static_hash.into()).expect("FIXME"))
+            .collect()
     }
 
     pub(crate) fn new_beehive_sync_session(

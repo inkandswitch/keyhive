@@ -1,11 +1,14 @@
 mod beehive_sync_id;
+use dupe::Dupe;
 use std::{
     collections::{HashMap, HashSet},
     hash::{Hash, Hasher},
 };
 
 use beehive_core::{
-    beehive::Beehive, crypto::digest::Digest, principal::group::operation::StaticOperation,
+    beehive::Beehive,
+    crypto::digest::Digest,
+    principal::group::operation::{Operation, StaticOperation},
 };
 pub(crate) use beehive_sync_id::BeehiveSyncId;
 
@@ -16,7 +19,8 @@ pub(crate) async fn sync_beehive<R: rand::Rng + rand::CryptoRng>(
     // start a beehive auth sync session
     let local_ops = effects
         .beehive_ops(*peer.last_known_peer_id.unwrap().as_key())
-        .map(BeehiveOp)
+        .values()
+        .map(|op| BeehiveOp(op.dupe()))
         .collect::<Vec<_>>();
     let (session_id, first_symbols) = effects.begin_auth_sync(peer.clone()).await.unwrap();
     let mut decoder = riblt::Decoder::<OpHash>::new();
@@ -45,7 +49,7 @@ pub(crate) async fn sync_beehive<R: rand::Rng + rand::CryptoRng>(
         .await
         .unwrap();
 
-    effects.apply_beehive_ops(ops.into_iter().map(|o| o.into()).collect());
+    effects.apply_beehive_ops(ops.into_iter().map(|o| o.0.into()).collect());
 
     let hashes_to_upload = decoder
         .get_local_symbols()
@@ -109,9 +113,15 @@ impl BeehiveSyncSessions {
 }
 
 // TODO: Fill out all the ops beehive can produce here
-// // This should be SignedOperation
+// // This should be Operation<T
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BeehiveOp(StaticOperation<CommitHash>);
+pub struct BeehiveOp(pub(crate) Operation<CommitHash>);
+
+impl From<Operation<CommitHash>> for BeehiveOp {
+    fn from(op: Operation<CommitHash>) -> Self {
+        Self(op)
+    }
+}
 
 #[cfg(test)]
 impl<'a> arbitrary::Arbitrary<'a> for BeehiveOp {
@@ -149,7 +159,7 @@ impl Parse<'_> for BeehiveOp {
     }
 }
 
-impl From<BeehiveOp> for StaticOperation<CommitHash> {
+impl From<BeehiveOp> for Operation<CommitHash> {
     fn from(op: BeehiveOp) -> Self {
         op.0
     }
@@ -158,12 +168,6 @@ impl From<BeehiveOp> for StaticOperation<CommitHash> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash, Ord)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub(crate) struct OpHash(pub(crate) [u8; 32]);
-
-impl From<StaticOperation<CommitHash>> for BeehiveOp {
-    fn from(op: StaticOperation<CommitHash>) -> Self {
-        Self(op.into())
-    }
-}
 
 impl From<OpHash> for Digest<StaticOperation<CommitHash>> {
     fn from(hash: OpHash) -> Self {

@@ -2,6 +2,7 @@ use crate::{
     deser::{Encode, Parse},
     hex, parse,
 };
+use dupe::Dupe;
 
 pub use error::InvalidCommitHash;
 
@@ -10,6 +11,12 @@ pub use error::InvalidCommitHash;
 )]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct CommitHash([u8; 32]);
+
+impl Dupe for CommitHash {
+    fn dupe(&self) -> Self {
+        CommitHash(self.0)
+    }
+}
 
 impl Encode for CommitHash {
     fn encode_into(&self, out: &mut Vec<u8>) {
