@@ -14,6 +14,7 @@ pub(super) enum RequestType {
     BeehiveSymbols,
     RequestBeehiveOps,
     UploadBeehiveOps,
+    Ping,
 }
 
 impl RequestType {
@@ -45,6 +46,7 @@ impl TryFrom<u8> for RequestType {
             8 => Ok(Self::BeehiveSymbols),
             9 => Ok(Self::RequestBeehiveOps),
             10 => Ok(Self::UploadBeehiveOps),
+            11 => Ok(Self::Ping),
             _ => Err(error::InvalidRequestType(value)),
         }
     }
@@ -64,6 +66,7 @@ impl From<RequestType> for u8 {
             RequestType::BeehiveSymbols => 8,
             RequestType::RequestBeehiveOps => 9,
             RequestType::UploadBeehiveOps => 10,
+            RequestType::Ping => 11,
         }
     }
 }
@@ -82,6 +85,7 @@ pub(super) enum ResponseType {
     BeehiveSymbols,
     RequestBeehiveOps,
     UploadBeehiveOps,
+    Pong,
 }
 
 impl ResponseType {
@@ -113,6 +117,7 @@ impl TryFrom<u8> for ResponseType {
             8 => Ok(Self::BeehiveSymbols),
             9 => Ok(Self::RequestBeehiveOps),
             10 => Ok(Self::UploadBeehiveOps),
+            11 => Ok(Self::Pong),
             _ => Err(error::InvalidResponseType(value)),
         }
     }
@@ -132,6 +137,7 @@ impl From<ResponseType> for u8 {
             ResponseType::BeehiveSymbols => 8,
             ResponseType::RequestBeehiveOps => 9,
             ResponseType::UploadBeehiveOps => 10,
+            ResponseType::Pong => 11,
         }
     }
 }

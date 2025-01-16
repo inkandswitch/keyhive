@@ -35,6 +35,7 @@ pub(crate) enum Response {
     BeehiveSymbols(Vec<riblt::CodedSymbol<beehive_sync::OpHash>>),
     RequestBeehiveOps(Vec<beehive_sync::BeehiveOp>),
     UploadBeehiveOps,
+    Pong,
 }
 
 impl Parse<'_> for Response {
@@ -99,6 +100,7 @@ impl std::fmt::Display for Response {
                 write!(f, "RequestBeehiveOps({} ops)", hashes.len())
             }
             Response::UploadBeehiveOps => write!(f, "UploadBeehiveOps"),
+            Response::Pong => write!(f, "Pong"),
         }
     }
 }
@@ -193,6 +195,7 @@ pub(crate) enum Request {
     UploadBeehiveOps {
         ops: Vec<beehive_sync::BeehiveOp>,
     },
+    Ping,
 }
 
 impl Parse<'_> for Request {
@@ -252,6 +255,7 @@ impl std::fmt::Display for Request {
             Request::UploadBeehiveOps { ops } => {
                 write!(f, "UploadBeehiveOps({} ops)", ops.len())
             }
+            Request::Ping => write!(f, "Ping"),
         }
     }
 }

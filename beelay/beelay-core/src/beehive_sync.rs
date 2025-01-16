@@ -18,7 +18,11 @@ pub(crate) async fn sync_beehive<R: rand::Rng + rand::CryptoRng>(
 ) {
     tracing::debug!("syncing beehive auth graph");
     // start a beehive auth sync session
-    let local_ops = effects.beehive_ops(*peer.last_known_peer_id.unwrap().as_key());
+    let remote_peer_id = match peer.last_known_peer_id {
+        Some(p) => p,
+        None => effects.ping(peer.clone()).await.unwrap(),
+    };
+    let local_ops = effects.beehive_ops(*remote_peer_id.as_key());
     let mut decoder = riblt::Decoder::<OpHash>::new();
     for op_hash in local_ops.keys() {
         decoder.add_symbol(&OpHash::from(*op_hash));

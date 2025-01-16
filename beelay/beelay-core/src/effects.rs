@@ -609,6 +609,22 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
         }
     }
 
+    pub(crate) fn ping(
+        &self,
+        peer: TargetNodeInfo,
+    ) -> impl Future<Output = Result<PeerId, RpcError>> {
+        let request = Request::Ping;
+        let task = self.request(peer, request);
+        async move {
+            let response = task.await?;
+            match response.content {
+                crate::Response::Pong => Ok(response.from.into()),
+                crate::Response::Error(err) => Err(RpcError::ErrorReported(err)),
+                _ => Err(RpcError::IncorrectResponseType),
+            }
+        }
+    }
+
     pub(crate) fn begin_auth_sync(
         &self,
         to_peer: TargetNodeInfo,

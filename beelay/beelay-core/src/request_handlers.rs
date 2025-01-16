@@ -127,6 +127,7 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
                 .expect("FIXME");
             Response::UploadBeehiveOps
         }
+        crate::messages::Request::Ping => Response::Pong,
     };
     OutgoingResponse {
         audience: Audience::peer(&from),
@@ -217,6 +218,7 @@ async fn upload_commits<R: rand::Rng + rand::CryptoRng + 'static>(
                     let effects = effects.clone();
                     let d = d.clone();
                     effects.spawn(move |effects| async move {
+                        beehive_sync::sync_beehive(effects.clone(), peer.clone()).await;
                         if let Err(e) = effects.upload_commits(peer, doc, vec![d], content).await {
                             tracing::warn!(err=?e, "error forwarding upload to peer");
                         }

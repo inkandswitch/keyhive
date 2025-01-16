@@ -95,6 +95,7 @@ pub(super) fn parse_request(
             let (input, ops) = input.parse_in_ctx("ops", Vec::<beehive_sync::BeehiveOp>::parse)?;
             Ok((input, super::Request::UploadBeehiveOps { ops }))
         }),
+        RequestType::Ping => Ok((input, super::Request::Ping)),
     }
 }
 
@@ -168,6 +169,7 @@ pub(crate) fn parse_response(
         ResponseType::UploadBeehiveOps => input.parse_in_ctx("UploadBeehiveOps", |input| {
             Ok((input, super::Response::UploadBeehiveOps))
         }),
+        ResponseType::Pong => Ok((input, super::Response::Pong)),
     }?;
     Ok((input, resp))
 }
