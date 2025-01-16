@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use futures::{future::LocalBoxFuture, FutureExt};
 
 use crate::{
+    beehive_sync,
     blob::BlobMeta,
     deser::Encode,
     effects::TaskEffects,
@@ -216,6 +217,9 @@ async fn add_commits<R: rand::Rng + rand::CryptoRng + 'static>(
                     let doc_id = doc_id.clone();
                     let item = item.clone();
                     effects.spawn(move |effects| async move {
+                        // first sync beehive
+                        beehive_sync::sync_beehive(effects.clone(), peer.clone()).await;
+
                         let _ = effects
                             .upload_commits(
                                 target,

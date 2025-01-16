@@ -67,11 +67,15 @@ impl TargetNodeInfo {
         })
     }
 
-    pub(crate) fn new(target: PeerAddress, audience: Audience) -> Self {
+    pub(crate) fn new(
+        target: PeerAddress,
+        audience: Audience,
+        last_known_peer_id: Option<crate::PeerId>,
+    ) -> Self {
         Self {
             target,
             audience,
-            last_known_peer_id: None,
+            last_known_peer_id,
         }
     }
 

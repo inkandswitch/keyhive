@@ -12,10 +12,12 @@ use beehive_core::{
 };
 pub(crate) use beehive_sync_id::BeehiveSyncId;
 
+#[tracing::instrument(skip(effects, peer))]
 pub(crate) async fn sync_beehive<R: rand::Rng + rand::CryptoRng>(
     effects: TaskEffects<R>,
     peer: TargetNodeInfo,
 ) {
+    tracing::debug!("syncing beehive auth graph");
     // start a beehive auth sync session
     let local_ops = effects
         .beehive_ops(*peer.last_known_peer_id.unwrap().as_key())
@@ -35,6 +37,10 @@ pub(crate) async fn sync_beehive<R: rand::Rng + rand::CryptoRng>(
             .unwrap();
         for symbol in next_symbols {
             decoder.add_coded_symbol(&symbol);
+            decoder.try_decode().unwrap();
+            if decoder.decoded() {
+                break;
+            }
         }
     }
     decoder.try_decode().unwrap();
@@ -44,6 +50,7 @@ pub(crate) async fn sync_beehive<R: rand::Rng + rand::CryptoRng>(
         .iter()
         .map(|c| c.symbol())
         .collect();
+    tracing::trace!(?to_download, "downloading ops");
     let ops = effects
         .request_beehive_ops(peer.clone(), session_id, to_download)
         .await
@@ -58,6 +65,7 @@ pub(crate) async fn sync_beehive<R: rand::Rng + rand::CryptoRng>(
         .iter()
         .map(|c| c.symbol())
         .collect::<HashSet<_>>();
+    tracing::trace!(?hashes_to_upload, "uploading ops");
     let to_upload = local_ops
         .iter()
         .filter(|op| hashes_to_upload.contains(&op.op_hash()))
@@ -88,13 +96,12 @@ impl BeehiveSyncSessions {
     pub(crate) fn new_session<R: rand::Rng + rand::CryptoRng>(
         &mut self,
         rng: &mut R,
-        beehive: &beehive_core::beehive::Beehive<CommitHash, R>,
+        ops: HashMap<Digest<Operation<CommitHash>>, Operation<CommitHash>>,
     ) -> (BeehiveSyncId, Vec<riblt::CodedSymbol<OpHash>>) {
         let session_id = BeehiveSyncId::random(rng);
-        let ops: HashMap<OpHash, BeehiveOp> = ops(beehive).map(|op| (op.op_hash(), op)).collect();
         let mut encoder = riblt::Encoder::new();
         for op_hash in ops.keys() {
-            encoder.add_symbol(op_hash);
+            encoder.add_symbol(&OpHash::from(*op_hash));
         }
         let first_10_symbols = encoder.next_n_symbols(10);
         let session = Session { ops, encoder };
@@ -118,6 +125,14 @@ impl BeehiveSyncSessions {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BeehiveOp(pub(crate) StaticOperation<CommitHash>);
 
+#[cfg(test)]
+impl<'a> arbitrary::Arbitrary<'a> for BeehiveOp {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let op = u.arbitrary::<StaticOperation<CommitHash>>()?;
+        Ok(Self(op))
+    }
+}
+
 impl From<StaticOperation<CommitHash>> for BeehiveOp {
     fn from(op: StaticOperation<CommitHash>) -> Self {
         Self(op)
@@ -127,13 +142,6 @@ impl From<StaticOperation<CommitHash>> for BeehiveOp {
 impl From<Operation<CommitHash>> for BeehiveOp {
     fn from(op: Operation<CommitHash>) -> Self {
         Self(op.into())
-    }
-}
-
-#[cfg(test)]
-impl<'a> arbitrary::Arbitrary<'a> for BeehiveOp {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        todo!()
     }
 }
 
@@ -151,7 +159,7 @@ impl BeehiveOp {
 impl Encode for BeehiveOp {
     fn encode_into(&self, buf: &mut Vec<u8>) {
         // For now just serialize to JSON
-        let encoded = serde_json::to_vec(&self.0).unwrap();
+        let encoded = bincode::serialize(&self.0).unwrap();
         crate::leb128::encode_uleb128(buf, encoded.len() as u64);
         buf.extend_from_slice(&encoded);
     }
@@ -160,7 +168,7 @@ impl Encode for BeehiveOp {
 impl Parse<'_> for BeehiveOp {
     fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
         let (input, raw) = parse::slice(input)?;
-        let decoded = serde_json::from_slice(raw)
+        let decoded = bincode::deserialize(&raw)
             .map_err(|e| input.error(format!("failed to parse op: {}", e)))?;
         Ok((input, Self(decoded)))
     }
@@ -179,6 +187,12 @@ pub(crate) struct OpHash(pub(crate) [u8; 32]);
 impl From<OpHash> for Digest<StaticOperation<CommitHash>> {
     fn from(hash: OpHash) -> Self {
         Self::from(hash.0)
+    }
+}
+
+impl From<Digest<Operation<CommitHash>>> for OpHash {
+    fn from(digest: Digest<Operation<CommitHash>>) -> Self {
+        Self(*digest.raw.as_bytes())
     }
 }
 

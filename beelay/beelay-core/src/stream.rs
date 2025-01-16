@@ -153,6 +153,7 @@ impl Streams {
                     return Some(TargetNodeInfo::new(
                         PeerAddress::Stream(*id),
                         Audience::peer(&connected.their_peer_id()),
+                        Some(connected.their_peer_id()),
                     ));
                 }
             }

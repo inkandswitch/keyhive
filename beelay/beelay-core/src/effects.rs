@@ -15,6 +15,7 @@ use beehive_core::{
         document::id::DocumentId as BeehiveDocumentId,
         group::operation::{Operation as BeehiveOperation, StaticOperation},
         identifier::Identifier,
+        public::Public,
         verifiable::Verifiable,
     },
 };
@@ -812,22 +813,35 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
         }
     }
 
+    #[tracing::instrument(skip(self, peer_id), fields(peer_id=%peer_id), ret(level=tracing::Level::TRACE))]
     pub(crate) fn can_do(&self, peer_id: PeerId, doc_id: &DocumentId, access: Access) -> bool {
+        tracing::trace!("checking access");
         let beehive = &self.state.borrow().beehive;
 
-        if let Some(peer) = beehive.get_agent(peer_id.as_key().into()) {
-            if let Some(doc) = beehive
-                .documents()
-                .get(&BeehiveDocumentId::from(Identifier::from(doc_id.as_key())))
-            {
-                return doc
-                    .borrow()
-                    .get_capability(&peer.agent_id())
-                    .map(|cap| cap.payload().can() >= access)
-                    .unwrap_or(false);
-            }
+        let Some(doc) = beehive
+            .documents()
+            .get(&BeehiveDocumentId::from(Identifier::from(doc_id.as_key())))
+        else {
+            tracing::trace!("document not found in Beehive");
+            return false;
+        };
+        if doc
+            .borrow()
+            .get_capability(&Public.individual().agent_id())
+            .map(|cap| cap.payload().can() >= access)
+            .unwrap_or(false)
+        {
+            tracing::trace!("public access allowed");
+            return true;
         }
-
+        if let Some(peer) = beehive.get_agent(peer_id.as_key().into()) {
+            return doc
+                .borrow()
+                .get_capability(&peer.agent_id())
+                .map(|cap| cap.payload().can() >= access)
+                .unwrap_or(false);
+        }
+        tracing::trace!("agent not found in beehive");
         false
     }
 
@@ -883,8 +897,21 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
         for_sync_with_peer: ed25519_dalek::VerifyingKey,
     ) -> HashMap<Digest<BeehiveOperation<CommitHash>>, BeehiveOperation<CommitHash>> {
         let beehive = &self.state.borrow().beehive;
-        let peer = beehive.get_agent(for_sync_with_peer.into()).expect("FIXME");
-        beehive.ops_for_agent(peer)
+        let mut ops = HashMap::new();
+        if let Some(public_ops) = beehive
+            .get_agent(Public.id())
+            .map(|agent| beehive.ops_for_agent(agent))
+        {
+            ops.extend(public_ops);
+        }
+
+        if let Some(peer_ops) = beehive
+            .get_agent(for_sync_with_peer.into())
+            .map(|agent| beehive.ops_for_agent(agent))
+        {
+            ops.extend(peer_ops);
+        }
+        ops
     }
 
     /// Get the beehive ops corresponding to the hashes provided
@@ -911,7 +938,7 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
         let (mut beehive_sync_sessions, beehive) = RefMut::map_split(state, |state| {
             (&mut state.beehive_sync_sessions, &mut state.beehive)
         });
-        beehive_sync_sessions.new_session(&mut *rng_ref, &*beehive)
+        beehive_sync_sessions.new_session(&mut *rng_ref, &*beehive, for_peer)
     }
 
     pub(crate) fn next_n_beehive_sync_symbols(
@@ -926,8 +953,12 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
     pub(crate) fn create_beehive_doc(&self) -> DocumentId {
         let mut state = self.state.borrow_mut();
         let beehive = &mut state.beehive;
-        let doc = beehive.generate_doc(Vec::new()).unwrap();
-        let key = doc.borrow().verifying_key();
+        let doc = beehive
+            .generate_doc(vec![beehive_core::principal::public::Public
+                .individual()
+                .into()])
+            .unwrap();
+        let key = doc.borrow().doc_id().verifying_key();
         key.into()
     }
 }

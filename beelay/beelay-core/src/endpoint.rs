@@ -44,7 +44,11 @@ impl Endpoints {
     pub(crate) fn forward_targets(&self) -> impl Iterator<Item = TargetNodeInfo> + '_ {
         self.endpoints.values().filter_map(|e| {
             if e.forwarding == Forwarding::Forward {
-                Some(TargetNodeInfo::new(PeerAddress::Endpoint(e.id), e.audience))
+                Some(TargetNodeInfo::new(
+                    PeerAddress::Endpoint(e.id),
+                    e.audience,
+                    None,
+                ))
             } else {
                 None
             }
