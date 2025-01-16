@@ -651,7 +651,7 @@ impl<R: rand::Rng + rand::CryptoRng + 'static> Beelay<R> {
                     .receive::<Response>(ctx.now, *resp);
                 match resp {
                     Ok(r) => {
-                        tracing::trace!(response=?r.content, "successful response");
+                        tracing::trace!(response=%r.content, "successful response");
                         Ok(r)
                     }
                     Err(e) => Err(match e {

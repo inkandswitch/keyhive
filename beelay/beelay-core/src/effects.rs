@@ -13,7 +13,10 @@ use beehive_core::{
     crypto::digest::Digest,
     principal::{
         document::id::DocumentId as BeehiveDocumentId,
-        group::operation::{Operation as BeehiveOperation, StaticOperation},
+        group::{
+            id::GroupId,
+            operation::{Operation as BeehiveOperation, StaticOperation},
+        },
         identifier::Identifier,
         public::Public,
         verifiable::Verifiable,
@@ -818,28 +821,49 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
         tracing::trace!("checking access");
         let beehive = &self.state.borrow().beehive;
 
-        let Some(doc) = beehive
+        if let Some(doc) = beehive
             .documents()
             .get(&BeehiveDocumentId::from(Identifier::from(doc_id.as_key())))
-        else {
-            tracing::trace!("document not found in Beehive");
-            return false;
-        };
-        if doc
-            .borrow()
-            .get_capability(&Public.individual().agent_id())
-            .map(|cap| cap.payload().can() >= access)
-            .unwrap_or(false)
         {
-            tracing::trace!("public access allowed");
-            return true;
-        }
-        if let Some(peer) = beehive.get_agent(peer_id.as_key().into()) {
-            return doc
+            tracing::trace!("document found in beehive");
+            if doc
                 .borrow()
-                .get_capability(&peer.agent_id())
+                .get_capability(&Public.individual().agent_id())
                 .map(|cap| cap.payload().can() >= access)
-                .unwrap_or(false);
+                .unwrap_or(false)
+            {
+                tracing::trace!("public access allowed");
+                return true;
+            }
+            if let Some(peer) = beehive.get_agent(peer_id.as_key().into()) {
+                return doc
+                    .borrow()
+                    .get_capability(&peer.agent_id())
+                    .map(|cap| cap.payload().can() >= access)
+                    .unwrap_or(false);
+            }
+        }
+        if let Some(group) = beehive
+            .groups()
+            .get(&GroupId::new(Identifier::from(doc_id.as_key())))
+        {
+            tracing::trace!("group corresponding to doc found in Beehiv");
+            if group
+                .borrow()
+                .get_capability(&Public.individual().agent_id())
+                .map(|cap| cap.payload().can() >= access)
+                .unwrap_or(false)
+            {
+                tracing::trace!("public access allowed");
+                return true;
+            }
+            if let Some(peer) = beehive.get_agent(peer_id.as_key().into()) {
+                return group
+                    .borrow()
+                    .get_capability(&peer.agent_id())
+                    .map(|cap| cap.payload().can() >= access)
+                    .unwrap_or(false);
+            }
         }
         tracing::trace!("agent not found in beehive");
         false
@@ -897,13 +921,7 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
         for_sync_with_peer: ed25519_dalek::VerifyingKey,
     ) -> HashMap<Digest<BeehiveOperation<CommitHash>>, BeehiveOperation<CommitHash>> {
         let beehive = &self.state.borrow().beehive;
-        let mut ops = HashMap::new();
-        if let Some(public_ops) = beehive
-            .get_agent(Public.id())
-            .map(|agent| beehive.ops_for_agent(agent))
-        {
-            ops.extend(public_ops);
-        }
+        let mut ops = beehive.ops_for_agent(Public.individual().into());
 
         if let Some(peer_ops) = beehive
             .get_agent(for_sync_with_peer.into())
@@ -937,10 +955,6 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
         let mut state = self.state.borrow_mut();
         let rng = state.rng.clone();
         let mut rng_ref = rng.borrow_mut();
-        let (mut beehive_sync_sessions, beehive) = RefMut::map_split(state, |state| {
-            (&mut state.beehive_sync_sessions, &mut state.beehive)
-        });
-        beehive_sync_sessions.new_session(&mut *rng_ref, &*beehive, for_peer)
         state
             .beehive_sync_sessions
             .new_session(&mut *rng_ref, local_ops)
