@@ -97,7 +97,7 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             }
         }
         crate::messages::Request::BeginAuthSync => {
-            let (session_id, first_symbols) = effects.new_beehive_sync_session();
+            let (session_id, first_symbols) = effects.new_beehive_sync_session(from);
             Response::BeginAuthSync {
                 session_id,
                 first_symbols,

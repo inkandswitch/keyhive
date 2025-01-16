@@ -1,5 +1,4 @@
 mod beehive_sync_id;
-use dupe::Dupe;
 use std::{
     collections::{HashMap, HashSet},
     hash::{Hash, Hasher},
@@ -19,15 +18,19 @@ pub(crate) async fn sync_beehive<R: rand::Rng + rand::CryptoRng>(
 ) {
     tracing::debug!("syncing beehive auth graph");
     // start a beehive auth sync session
-    let local_ops = effects
-        .beehive_ops(*peer.last_known_peer_id.unwrap().as_key())
-        .values()
-        .map(|op| BeehiveOp(op.dupe().into()))
-        .collect::<Vec<_>>();
-    let (session_id, first_symbols) = effects.begin_auth_sync(peer.clone()).await.unwrap();
+    let local_ops = effects.beehive_ops(*peer.last_known_peer_id.unwrap().as_key());
     let mut decoder = riblt::Decoder::<OpHash>::new();
+    for op_hash in local_ops.keys() {
+        decoder.add_symbol(&OpHash::from(*op_hash));
+    }
+    tracing::trace!(?local_ops, "beginning sync");
+    let (session_id, first_symbols) = effects.begin_auth_sync(peer.clone()).await.unwrap();
     for symbol in first_symbols {
         decoder.add_coded_symbol(&symbol);
+        decoder.try_decode().unwrap();
+        if decoder.decoded() {
+            break;
+        }
     }
 
     while !decoder.decoded() {
@@ -49,29 +52,35 @@ pub(crate) async fn sync_beehive<R: rand::Rng + rand::CryptoRng>(
         .get_remote_symbols()
         .iter()
         .map(|c| c.symbol())
-        .collect();
-    tracing::trace!(?to_download, "downloading ops");
-    let ops = effects
-        .request_beehive_ops(peer.clone(), session_id, to_download)
-        .await
-        .unwrap();
-
-    effects
-        .apply_beehive_ops(ops.into_iter().map(|o| o.0.into()).collect())
-        .expect("FIXME");
+        .collect::<Vec<_>>();
+    if !to_download.is_empty() {
+        tracing::trace!(?to_download, "downloading ops");
+        let ops = effects
+            .request_beehive_ops(peer.clone(), session_id, to_download)
+            .await
+            .unwrap();
+        effects
+            .apply_beehive_ops(ops.into_iter().map(|o| o.0.into()).collect())
+            .expect("FIXME");
+    } else {
+        tracing::trace!("no new beehive ops to download");
+    }
 
     let hashes_to_upload = decoder
         .get_local_symbols()
         .iter()
         .map(|c| c.symbol())
         .collect::<HashSet<_>>();
-    tracing::trace!(?hashes_to_upload, "uploading ops");
-    let to_upload = local_ops
-        .iter()
-        .filter(|op| hashes_to_upload.contains(&op.op_hash()))
-        .cloned()
-        .collect::<Vec<_>>();
-    effects.upload_beehive_ops(peer, to_upload).await.unwrap();
+    if !hashes_to_upload.is_empty() {
+        tracing::trace!(?hashes_to_upload, "uploading ops");
+        let to_upload = hashes_to_upload
+            .into_iter()
+            .map(|h| BeehiveOp(local_ops.get(&(h.into())).unwrap().clone().into()))
+            .collect();
+        effects.upload_beehive_ops(peer, to_upload).await.unwrap();
+    } else {
+        tracing::trace!("no beehive ops to upload");
+    }
 }
 
 use crate::{
@@ -79,7 +88,7 @@ use crate::{
     effects::TaskEffects,
     parse,
     peer_address::TargetNodeInfo,
-    riblt, CommitHash, PeerId,
+    riblt, CommitHash,
 };
 
 pub(crate) struct BeehiveSyncSessions {
@@ -98,6 +107,7 @@ impl BeehiveSyncSessions {
         rng: &mut R,
         ops: HashMap<Digest<Operation<CommitHash>>, Operation<CommitHash>>,
     ) -> (BeehiveSyncId, Vec<riblt::CodedSymbol<OpHash>>) {
+        tracing::trace!(?ops, "creating new sync session");
         let session_id = BeehiveSyncId::random(rng);
         let mut encoder = riblt::Encoder::new();
         for op_hash in ops.keys() {
@@ -145,17 +155,6 @@ impl From<Operation<CommitHash>> for BeehiveOp {
     }
 }
 
-impl BeehiveOp {
-    pub(crate) fn op_hash(&self) -> OpHash {
-        // beehive::digest
-        OpHash(
-            *beehive_core::crypto::digest::Digest::hash(&self.0)
-                .raw
-                .as_bytes(),
-        )
-    }
-}
-
 impl Encode for BeehiveOp {
     fn encode_into(&self, buf: &mut Vec<u8>) {
         // For now just serialize to JSON
@@ -185,6 +184,12 @@ impl From<BeehiveOp> for StaticOperation<CommitHash> {
 pub(crate) struct OpHash(pub(crate) [u8; 32]);
 
 impl From<OpHash> for Digest<StaticOperation<CommitHash>> {
+    fn from(hash: OpHash) -> Self {
+        Self::from(hash.0)
+    }
+}
+
+impl From<OpHash> for Digest<Operation<CommitHash>> {
     fn from(hash: OpHash) -> Self {
         Self::from(hash.0)
     }
@@ -226,7 +231,7 @@ impl riblt::Symbol for OpHash {
 }
 
 struct Session {
-    ops: HashMap<OpHash, BeehiveOp>,
+    ops: HashMap<Digest<Operation<CommitHash>>, Operation<CommitHash>>,
     encoder: riblt::Encoder<OpHash>,
 }
 

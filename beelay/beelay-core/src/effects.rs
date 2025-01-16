@@ -928,17 +928,22 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
 
     pub(crate) fn new_beehive_sync_session(
         &self,
+        for_peer: PeerId,
     ) -> (
         beehive_sync::BeehiveSyncId,
         Vec<riblt::CodedSymbol<beehive_sync::OpHash>>,
     ) {
-        let state = self.state.borrow_mut();
+        let local_ops = self.beehive_ops(*for_peer.as_key());
+        let mut state = self.state.borrow_mut();
         let rng = state.rng.clone();
         let mut rng_ref = rng.borrow_mut();
         let (mut beehive_sync_sessions, beehive) = RefMut::map_split(state, |state| {
             (&mut state.beehive_sync_sessions, &mut state.beehive)
         });
         beehive_sync_sessions.new_session(&mut *rng_ref, &*beehive, for_peer)
+        state
+            .beehive_sync_sessions
+            .new_session(&mut *rng_ref, local_ops)
     }
 
     pub(crate) fn next_n_beehive_sync_symbols(
