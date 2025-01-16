@@ -696,3 +696,37 @@ pub enum ReceieveStaticDelegationError<T: ContentRef> {
     #[error(transparent)]
     GroupReceiveError(#[from] group::error::AddError),
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::principal::public::Public;
+
+    use super::Beehive;
+
+    #[test]
+    fn transitive_ops_for_agent() {
+        let mut left = make_beehive();
+        let mut middle = make_beehive();
+        let mut right = make_beehive();
+
+        let _left_doc = left.generate_doc(vec![Public.individual().into()]).unwrap();
+        let left_to_mid_ops = left.ops_for_agent(Public.individual().into());
+        for (_, op) in &left_to_mid_ops {
+            middle.receive_op(&op.clone().into()).unwrap();
+        }
+
+        let mid_to_right_ops = middle.ops_for_agent(Public.individual().into());
+        for (_, op) in mid_to_right_ops {
+            right.receive_op(&op.into()).unwrap();
+        }
+
+        // Now, the right hand side should have the same ops as the left
+        let ops_on_right = right.ops_for_agent(Public.individual().into());
+        assert_eq!(left_to_mid_ops, ops_on_right);
+    }
+
+    fn make_beehive() -> Beehive<[u8; 32], rand::rngs::OsRng> {
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        Beehive::generate(sk, rand::rngs::OsRng).unwrap()
+    }
+}
