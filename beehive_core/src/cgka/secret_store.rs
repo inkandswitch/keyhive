@@ -124,7 +124,6 @@ impl SecretStoreVersion {
     ) -> Result<ShareSecretKey, CgkaError> {
         let is_encrypter = child_node_key.contains_key(&self.encrypter_pk);
         let mut lookup_idx = seen_idxs.last().ok_or(CgkaError::EncryptedSecretNotFound)?;
-        // TODO: Refactor with fewer lines
         if !self.sk.contains_key(lookup_idx) {
             let mut found = false;
             for idx in seen_idxs.iter().rev().skip(1) {
