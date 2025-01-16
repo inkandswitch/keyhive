@@ -20,7 +20,7 @@ pub(crate) async fn sync_beehive<R: rand::Rng + rand::CryptoRng>(
     let local_ops = effects
         .beehive_ops(*peer.last_known_peer_id.unwrap().as_key())
         .values()
-        .map(|op| BeehiveOp(op.dupe()))
+        .map(|op| BeehiveOp(op.dupe().into()))
         .collect::<Vec<_>>();
     let (session_id, first_symbols) = effects.begin_auth_sync(peer.clone()).await.unwrap();
     let mut decoder = riblt::Decoder::<OpHash>::new();
@@ -49,7 +49,9 @@ pub(crate) async fn sync_beehive<R: rand::Rng + rand::CryptoRng>(
         .await
         .unwrap();
 
-    effects.apply_beehive_ops(ops.into_iter().map(|o| o.0.into()).collect());
+    effects
+        .apply_beehive_ops(ops.into_iter().map(|o| o.0.into()).collect())
+        .expect("FIXME");
 
     let hashes_to_upload = decoder
         .get_local_symbols()
@@ -113,13 +115,18 @@ impl BeehiveSyncSessions {
 }
 
 // TODO: Fill out all the ops beehive can produce here
-// // This should be Operation<T
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BeehiveOp(pub(crate) Operation<CommitHash>);
+pub struct BeehiveOp(pub(crate) StaticOperation<CommitHash>);
+
+impl From<StaticOperation<CommitHash>> for BeehiveOp {
+    fn from(op: StaticOperation<CommitHash>) -> Self {
+        Self(op)
+    }
+}
 
 impl From<Operation<CommitHash>> for BeehiveOp {
     fn from(op: Operation<CommitHash>) -> Self {
-        Self(op)
+        Self(op.into())
     }
 }
 
@@ -159,7 +166,7 @@ impl Parse<'_> for BeehiveOp {
     }
 }
 
-impl From<BeehiveOp> for Operation<CommitHash> {
+impl From<BeehiveOp> for StaticOperation<CommitHash> {
     fn from(op: BeehiveOp) -> Self {
         op.0
     }
