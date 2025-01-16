@@ -274,6 +274,7 @@ impl<T: ContentRef> From<Rc<Signed<Revocation<T>>>> for Operation<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum StaticOperation<T: ContentRef> {
     Delegation(Signed<delegation::StaticDelegation<T>>),
     Revocation(Signed<revocation::StaticRevocation<T>>),

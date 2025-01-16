@@ -37,6 +37,14 @@ pub struct Digest<T: Serialize> {
     pub(crate) _phantom: PhantomData<T>,
 }
 
+#[cfg(any(test, feature = "arbitrary"))]
+impl<'a, T: arbitrary::Arbitrary<'a> + Serialize> arbitrary::Arbitrary<'a> for Digest<T> {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let preimage = T::arbitrary(u)?;
+        Ok(Digest::hash(&preimage))
+    }
+}
+
 impl<T: Serialize> Digest<T> {
     /// Digest a value and retain its type as a phantom parameter.
     pub fn hash(preimage: &T) -> Self {

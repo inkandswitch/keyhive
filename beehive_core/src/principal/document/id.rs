@@ -7,6 +7,7 @@ use std::fmt::{Display, Formatter};
 #[derive(
     Debug, Copy, Dupe, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct DocumentId(pub(crate) Identifier);
 
 impl DocumentId {

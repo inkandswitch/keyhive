@@ -140,6 +140,7 @@ impl<T: ContentRef> Serialize for Delegation<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct StaticDelegation<T: ContentRef> {
     pub can: Access,
 

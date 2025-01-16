@@ -37,8 +37,10 @@ nonempty = "0.10.0"
 # Testing
 proptest = { version = "1.5", optional = true }
 proptest-derive = { version = "0.5.0", optional = true }
+arbitrary = { version = "1.4.1", features = ["derive"], optional = true }
 
 [dev-dependencies]
+arbitrary = { version = "1.4.1", features = ["derive"] }
 
 # Benchmarks
 divan = "0.1.15"
