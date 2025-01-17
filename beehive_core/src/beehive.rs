@@ -884,7 +884,6 @@ mod tests {
 
         assert!(right.groups.len() == 1 || right.docs.len() == 1);
         assert!(right
-            // NOTE TO BROOKE: the doc is getting ingested as a group
             .docs
             .get(&DocumentId(left_doc.borrow().id()))
             .is_some());
