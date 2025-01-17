@@ -18,8 +18,8 @@ pub struct Revocation<T: ContentRef> {
 }
 
 impl<T: ContentRef> Revocation<T> {
-    pub fn subject(&self) -> Identifier {
-        self.revoke.subject()
+    pub fn subject_id(&self) -> Identifier {
+        self.revoke.subject_id()
     }
 
     pub fn revoked(&self) -> &Rc<Signed<Delegation<T>>> {
@@ -51,8 +51,8 @@ impl<T: ContentRef> Revocation<T> {
 }
 
 impl<T: ContentRef> Signed<Revocation<T>> {
-    pub fn subject(&self) -> Identifier {
-        self.payload().subject()
+    pub fn subject_id(&self) -> Identifier {
+        self.payload.subject_id()
     }
 }
 

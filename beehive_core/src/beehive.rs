@@ -556,7 +556,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             },
         };
 
-        let id = revocation.subject();
+        let id = revocation.subject_id();
         if let Some(group) = self.groups.get(&GroupId(id)) {
             group.borrow_mut().receive_revocation(Rc::new(revocation))?;
         } else if let Some(doc) = self.docs.get(&DocumentId(id)) {
@@ -624,7 +624,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         }
 
         for (digest, rev) in self.revocations.clone().borrow().iter() {
-            if rev.payload.subject() == group.borrow().id() {
+            if rev.payload.subject_id() == group.borrow().id() {
                 self.revocations.borrow_mut().0.insert(
                     *digest,
                     Rc::new(Signed {

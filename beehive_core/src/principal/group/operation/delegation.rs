@@ -28,9 +28,9 @@ pub struct Delegation<T: ContentRef> {
 }
 
 impl<T: ContentRef> Delegation<T> {
-    pub fn subject(&self, issuer: AgentId) -> Identifier {
+    pub fn subject_id(&self, issuer: AgentId) -> Identifier {
         if let Some(proof) = &self.proof {
-            proof.subject()
+            proof.subject_id()
         } else {
             issuer.into()
         }
@@ -122,7 +122,7 @@ impl<T: ContentRef> Delegation<T> {
 }
 
 impl<T: ContentRef> Signed<Delegation<T>> {
-    pub fn subject(&self) -> Identifier {
+    pub fn subject_id(&self) -> Identifier {
         let mut head = self;
 
         while let Some(parent) = &head.payload().proof {

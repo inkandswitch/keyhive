@@ -35,10 +35,10 @@ impl<T: ContentRef + Serialize> Serialize for Operation<T> {
 }
 
 impl<T: ContentRef> Operation<T> {
-    pub fn subject(&self) -> Identifier {
+    pub fn subject_id(&self) -> Identifier {
         match self {
-            Operation::Delegation(delegation) => delegation.subject(),
-            Operation::Revocation(revocation) => revocation.subject(),
+            Operation::Delegation(delegation) => delegation.subject_id(),
+            Operation::Revocation(revocation) => revocation.subject_id(),
         }
     }
 

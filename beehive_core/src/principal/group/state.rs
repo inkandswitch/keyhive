@@ -138,8 +138,8 @@ impl<T: ContentRef> GroupState<T> {
         &mut self,
         delegation: Rc<Signed<Delegation<T>>>,
     ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
-        if delegation.subject() != self.id.0.verifying_key().into() {
-            return Err(AddError::InvalidSubject(Box::new(delegation.subject())));
+        if delegation.subject_id() != self.id.0.verifying_key().into() {
+            return Err(AddError::InvalidSubject(Box::new(delegation.subject_id())));
         }
 
         if delegation.payload().proof.is_none() && delegation.issuer != self.verifying_key() {
@@ -190,8 +190,8 @@ impl<T: ContentRef> GroupState<T> {
         &mut self,
         revocation: Rc<Signed<Revocation<T>>>,
     ) -> Result<Digest<Signed<Revocation<T>>>, AddError> {
-        if revocation.subject() != self.id.into() {
-            return Err(AddError::InvalidSubject(Box::new(revocation.subject())));
+        if revocation.subject_id() != self.id.into() {
+            return Err(AddError::InvalidSubject(Box::new(revocation.subject_id())));
         }
 
         if let Some(proof) = &revocation.payload.proof {
