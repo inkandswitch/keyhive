@@ -80,7 +80,7 @@ impl<T: ContentRef> Membered<T> {
         member_to_add: Agent<T>,
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<RefCell<Document<T>>>],
+        other_relevant_docs: &[&Document<T>],
     ) -> Result<(Rc<Signed<Delegation<T>>>, Vec<CgkaOperation>), AddMemberError> {
         match self {
             Membered::Group(group) => {
@@ -88,16 +88,17 @@ impl<T: ContentRef> Membered<T> {
                     member_to_add,
                     can,
                     signing_key,
-                    relevant_docs,
+                    other_relevant_docs,
                 )?;
 
                 Ok((dlg, vec![]))
             }
-            Membered::Document(document) => {
-                document
-                    .borrow_mut()
-                    .add_member(member_to_add, can, signing_key, relevant_docs)
-            }
+            Membered::Document(document) => document.borrow_mut().add_member(
+                member_to_add,
+                can,
+                signing_key,
+                other_relevant_docs,
+            ),
         }
     }
 

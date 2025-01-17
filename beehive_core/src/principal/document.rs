@@ -100,13 +100,22 @@ impl<T: ContentRef> Document<T> {
 
     pub fn generate<R: rand::RngCore + rand::CryptoRng>(
         parents: NonEmpty<Agent<T>>,
+        initial_content_heads: NonEmpty<T>,
         delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
         revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
-        initial_content_heads: NonEmpty<T>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let sk = ed25519_dalek::SigningKey::generate(csprng);
-        let group = Group::generate(parents, delegations, revocations, csprng)?;
+        let group = Group::generate_after_content(
+            &sk,
+            parents,
+            delegations,
+            revocations,
+            BTreeMap::from_iter([(
+                DocumentId(sk.verifying_key().into()),
+                initial_content_heads.clone().into_iter().collect(),
+            )]),
+        )?;
 
         let owner_id = IndividualId(sk.verifying_key().into());
         let doc_id = DocumentId(group.id());
@@ -145,7 +154,7 @@ impl<T: ContentRef> Document<T> {
             group,
             reader_keys: HashMap::new(), // FIXME
             content_state: HashSet::new(),
-            content_heads: initial_content_heads.into_iter().collect(),
+            content_heads: initial_content_heads.iter().cloned().collect(),
             cgka,
         })
     }
@@ -155,11 +164,21 @@ impl<T: ContentRef> Document<T> {
         member_to_add: Agent<T>,
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<RefCell<Document<T>>>],
+        other_relevant_docs: &[&Document<T>],
     ) -> Result<(Rc<Signed<Delegation<T>>>, Vec<CgkaOperation>), AddMemberError> {
-        let dlgs = self
-            .group
-            .add_member(member_to_add.dupe(), can, signing_key, relevant_docs)?;
+        let mut after_content: BTreeMap<DocumentId, Vec<T>> = other_relevant_docs
+            .iter()
+            .map(|d| (d.doc_id(), d.content_heads.iter().cloned().collect()))
+            .collect();
+
+        after_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
+
+        let dlgs = self.group.add_member_with_manual_content(
+            member_to_add.dupe(),
+            can,
+            signing_key,
+            after_content,
+        )?;
 
         let mut ops = Vec::new();
         for (id, pre_key) in member_to_add.pick_individual_prekeys(self.doc_id()) {

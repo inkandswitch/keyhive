@@ -75,7 +75,17 @@ impl<T: ContentRef> Group<T> {
         csprng: &mut R,
     ) -> Result<Group<T>, SigningError> {
         let sk = ed25519_dalek::SigningKey::generate(csprng);
-        let id = sk.verifying_key().into();
+        Self::generate_after_content(&sk, parents, delegations, revocations, Default::default())
+    }
+
+    pub(crate) fn generate_after_content(
+        signing_key: &ed25519_dalek::SigningKey,
+        parents: NonEmpty<Agent<T>>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+        after_content: BTreeMap<DocumentId, Vec<T>>,
+    ) -> Result<Group<T>, SigningError> {
+        let id = signing_key.verifying_key().into();
         let group_id = GroupId(id);
 
         let mut delegation_heads = CaMap::new();
@@ -91,9 +101,9 @@ impl<T: ContentRef> Group<T> {
                     can: Access::Admin,
                     proof: None,
                     after_revocations: vec![],
-                    after_content: BTreeMap::new(),
+                    after_content: after_content.clone(),
                 },
-                &sk,
+                &signing_key,
             )?;
 
             let rc = Rc::new(dlg);
@@ -287,13 +297,33 @@ impl<T: ContentRef> Group<T> {
         Ok(digest)
     }
 
-    // FIXME make ote that the best way to do this is to add_deegation after get_capability
+    // FIXME make note that the best way to do this is to add_deegation after get_capability
     pub fn add_member(
         &mut self,
         member_to_add: Agent<T>,
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Rc<RefCell<Document<T>>>],
+        relevant_docs: &[&Document<T>],
+    ) -> Result<Rc<Signed<Delegation<T>>>, AddMemberError> {
+        let after_content = relevant_docs
+            .iter()
+            .map(|d| {
+                (
+                    d.doc_id(),
+                    d.content_heads.iter().cloned().collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+
+        self.add_member_with_manual_content(member_to_add, can, signing_key, after_content)
+    }
+
+    pub(crate) fn add_member_with_manual_content(
+        &mut self,
+        member_to_add: Agent<T>,
+        can: Access,
+        signing_key: &ed25519_dalek::SigningKey,
+        after_content: BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<Rc<Signed<Delegation<T>>>, AddMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
         let agent: Agent<T> = indie.into();
@@ -321,15 +351,7 @@ impl<T: ContentRef> Group<T> {
                 can,
                 proof,
                 after_revocations: self.state.revocation_heads.values().duped().collect(),
-                after_content: relevant_docs
-                    .iter()
-                    .map(|d| {
-                        (
-                            d.borrow().doc_id(),
-                            d.borrow().content_heads.iter().cloned().collect::<Vec<_>>(),
-                        )
-                    })
-                    .collect(),
+                after_content,
             },
             &signing_key,
         )?;
