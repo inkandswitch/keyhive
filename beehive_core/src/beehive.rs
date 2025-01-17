@@ -131,6 +131,25 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         coparents: Vec<Agent<T>>,
         initial_content_heads: NonEmpty<T>,
     ) -> Result<Rc<RefCell<Document<T>>>, DelegationError> {
+        for agent in coparents.iter() {
+            if self.get_agent(agent.id()).is_none() {
+                match agent {
+                    Agent::Individual(indie) => {
+                        self.individuals.insert(indie.borrow().id(), indie.dupe());
+                    }
+                    Agent::Group(group) => {
+                        self.groups.insert(group.borrow().group_id(), group.dupe());
+                    }
+                    Agent::Document(docs) => {
+                        self.docs.insert(docs.borrow().doc_id(), docs.dupe());
+                    }
+                    Agent::Active(_active) => {
+                        panic!("FIXME add to Delegation Error");
+                    }
+                }
+            }
+        }
+
         let parents = NonEmpty {
             head: self.active.dupe().into(),
             tail: coparents,
@@ -364,9 +383,13 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         agent: Agent<T>,
     ) -> HashMap<MemberedId, (Membered<T>, Access)> {
         let mut caps = HashMap::new();
+        dbg!("==============");
+        dbg!(self.agent_id());
 
         for group in self.groups.values() {
+            dbg!("GROUP");
             if let Some((_, can)) = group.borrow().transitive_members().get(&agent.agent_id()) {
+                dbg!("GROUP CAP");
                 caps.insert(
                     group.borrow().group_id().into(),
                     (group.dupe().into(), *can),
@@ -375,13 +398,12 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         }
 
         for doc in self.docs.values() {
+            dbg!("DOC");
             if let Some((_, can)) = doc.borrow().transitive_members().get(&agent.agent_id()) {
+                dbg!("DOC CAP");
                 caps.insert(doc.borrow().doc_id().into(), (doc.dupe().into(), *can));
             }
         }
-
-        // dbg!("=======");
-        // dbg!(self.id(), caps.keys().collect::<Vec<_>>());
 
         caps
     }
@@ -391,18 +413,8 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         let mut visited_hashes = HashSet::new();
         let mut heads: Vec<(Digest<Operation<T>>, Operation<T>)> = vec![];
 
-        dbg!(format!(
-            "id: {}, len: {}",
-            self.id().0,
-            self.membered_reachable_by_agent(agent.dupe()).len()
-        ));
-
         for (mem_rc, _max_acces) in self.membered_reachable_by_agent(agent).values() {
-            dbg!(format!(
-                "head_len: {}",
-                mem_rc.dupe().delegation_heads().len()
-            ));
-
+            dbg!(mem_rc.agent_id());
             for (hash, dlg_head) in mem_rc.delegation_heads().iter() {
                 heads.push((hash.into(), dlg_head.dupe().into()));
             }
@@ -412,6 +424,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             }
         }
 
+        dbg!(heads.len());
         while let Some((hash, op)) = heads.pop() {
             if visited_hashes.contains(&hash) {
                 continue;
@@ -435,18 +448,11 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
                         heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
                     }
 
-                    heads.push((
-                        Digest::hash(rev.as_ref()).into(),
-                        rev.payload.revoke.dupe().into(),
-                    ));
+                    let r = rev.payload.revoke.dupe();
+                    heads.push((Digest::hash(r.as_ref()).into(), r.into()));
                 }
             }
         }
-
-        dbg!(">>>>>>");
-        dbg!(self.groups.len());
-        dbg!(self.docs.len());
-        dbg!(self.delegations.borrow().len());
 
         ops
     }
@@ -802,44 +808,119 @@ mod tests {
         let mut right = make_beehive();
         dbg!(right.id().0);
 
-        let _left_doc = left
+        // 2 delegations (you & public)
+        let left_doc = left
             .generate_doc(vec![Public.individual().into()], nonempty![[0u8; 32]])
             .unwrap();
+        // 1 delegation (you)
+        let left_group = left.generate_group(vec![]).unwrap();
         dbg!(left.delegations.borrow().len());
 
+        assert_eq!(left.delegations.borrow().len(), 3);
+        assert_eq!(left.revocations.borrow().len(), 0);
+
+        assert_eq!(left.individuals.len(), 1);
+        assert!(left.individuals.get(&IndividualId(Public.id())).is_some());
+
+        assert_eq!(left.groups.len(), 1);
+        assert_eq!(left.docs.len(), 1);
+
+        assert!(left.docs.get(&left_doc.borrow().doc_id()).is_some());
+        assert!(left.groups.get(&left_group.borrow().group_id()).is_some());
+
+        // NOTE: *NOT* the group
+        let left_membered = left.membered_reachable_by_agent(Public.individual().into());
+
+        assert_eq!(left_membered.len(), 1);
+        assert!(left_membered
+            .get(&left_doc.borrow().doc_id().into())
+            .is_some());
+        assert!(left_membered
+            .get(&left_group.borrow().group_id().into())
+            .is_none()); // NOTE *not* included because Public is not a member
+
         let left_to_mid_ops = left.ops_for_agent(Public.individual().into());
+        assert_eq!(left_to_mid_ops.len(), 2);
         for (h, op) in &left_to_mid_ops {
             dbg!("l->m");
             dbg!(h.raw);
             middle.receive_op(&op.clone().into()).unwrap();
+            assert!(middle.delegations.borrow().get(&h.into()).is_some());
         }
 
-        // dbg!(left_to_mid_ops.len());
+        // Left unchanged
+        assert_eq!(left.groups.len(), 1);
+        assert_eq!(left.docs.len(), 1);
+        assert_eq!(left.delegations.borrow().len(), 3);
+        assert_eq!(left.revocations.borrow().len(), 0);
+
+        // Middle should now look the same
+        assert!(middle
+            // NOTE TO BROOKE: the doc is getting ingested as a group
+            .groups
+            .get(&GroupId(left_doc.borrow().id()))
+            .is_some());
+        // assert!(middle.docs.get(&left_doc.borrow().doc_id()).is_some());
+        assert!(middle.groups.get(&left_group.borrow().group_id()).is_none()); // NOTE: *None*
+
+        assert_eq!(middle.individuals.len(), 2); // NOTE: includes Left
+        assert_eq!(middle.groups.len(), 1); // FIXME shoud be 0
+                                            // assert_eq!(middle.docs.len(), 1);
+
+        assert_eq!(middle.revocations.borrow().len(), 0);
+        assert_eq!(middle.delegations.borrow().len(), 2);
+        assert_eq!(
+            middle
+                .groups
+                .get(&GroupId(left_doc.borrow().id()))
+                .unwrap()
+                .borrow()
+                .delegation_heads()
+                .len(),
+            2
+        );
 
         let mid_to_right_ops = middle.ops_for_agent(Public.individual().into());
-        for (_, op) in &mid_to_right_ops {
+        assert_eq!(mid_to_right_ops.len(), 2);
+        for (h, op) in &mid_to_right_ops {
+            dbg!("m->r");
             right.receive_op(&op.clone().into()).unwrap();
+            assert!(right.delegations.borrow().get(&h.into()).is_some());
         }
-        // dbg!(mid_to_right_ops.len());
+
+        // Left unchanged
+        assert_eq!(left.groups.len(), 1);
+        assert_eq!(left.docs.len(), 1);
+        assert_eq!(left.delegations.borrow().len(), 3);
+        assert_eq!(left.revocations.borrow().len(), 0);
+
+        // Middle unchanged
+        assert_eq!(middle.individuals.len(), 2);
+        assert_eq!(middle.groups.len(), 1);
+        // FIXME assert_eq!(middle.docs.len(), 1);
+        assert_eq!(middle.delegations.borrow().len(), 2);
+        assert_eq!(middle.revocations.borrow().len(), 0);
+
+        // Right should now look the same
+        assert_eq!(right.revocations.borrow().len(), 0);
+        assert_eq!(right.delegations.borrow().len(), 2);
+
+        assert!(right.groups.len() == 1 || right.docs.len() == 1);
+        assert!(right
+            // NOTE TO BROOKE: the doc is getting ingested as a group
+            .groups
+            .get(&GroupId(left_doc.borrow().id()))
+            .is_some());
+        // assert!(right.docs.get(&left_doc.borrow().doc_id()).is_some());
+        assert!(right.groups.get(&left_group.borrow().group_id()).is_none()); // NOTE: *None*
+
+        assert_eq!(right.individuals.len(), 2);
+        assert_eq!(right.groups.len(), 1); // FIXME shoud be 0
+                                           // assert_eq!(middle.docs.len(), 1);
 
         // Now, the right hand side should have the same ops as the left
         let ops_on_right = right.ops_for_agent(Public.individual().into());
-        // dbg!(ops_on_right.len());
-
-        assert_eq!(
-            left.individuals.len() + left.groups.len() + left.docs.len(),
-            1
-        );
-
-        assert_eq!(
-            left.individuals.len() + left.groups.len() + left.docs.len(),
-            middle.individuals.len() + middle.groups.len() + middle.docs.len(),
-        );
-
-        assert_eq!(
-            middle.groups.len() + middle.docs.len(),
-            right.groups.len() + right.docs.len()
-        );
+        assert_eq!(left_to_mid_ops.len(), 2);
 
         assert_eq!(
             left_to_mid_ops.keys().collect::<Vec<_>>(),
@@ -860,7 +941,7 @@ mod tests {
     fn test_add_member() {
         let mut beehive = make_beehive();
         let doc = beehive
-            .generate_doc(vec![Public.individual().into()])
+            .generate_doc(vec![Public.individual().into()], nonempty![[0u8; 32]])
             .unwrap();
         let member = Public.individual().into();
         let dlg = beehive

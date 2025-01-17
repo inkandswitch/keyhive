@@ -145,7 +145,7 @@ impl<T: ContentRef> Document<T> {
             group,
             reader_keys: HashMap::new(), // FIXME
             content_state: HashSet::new(),
-            content_heads,
+            content_heads: initial_content_heads.into_iter().collect(),
             cgka,
         })
     }

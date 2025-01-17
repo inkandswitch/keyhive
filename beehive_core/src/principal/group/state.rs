@@ -164,15 +164,13 @@ impl<T: ContentRef> GroupState<T> {
             },
         )?;
 
-        let mut inserted = false;
         for (head_digest, head) in self.delegation_heads.clone().iter() {
-            if head.payload().is_ancestor_of(&delegation) {
-                self.delegation_heads.remove_by_hash(head_digest);
+            if !delegation.payload.is_ancestor_of(&head) {
+                self.delegation_heads.insert(delegation.dupe());
+            }
 
-                if !inserted {
-                    self.delegation_heads.insert(delegation.dupe());
-                    inserted = true;
-                }
+            if head.payload.is_ancestor_of(&delegation) {
+                self.delegation_heads.remove_by_hash(head_digest);
             }
         }
 
