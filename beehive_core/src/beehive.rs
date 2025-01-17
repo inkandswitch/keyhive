@@ -710,7 +710,7 @@ mod tests {
 
         // Now, the right hand side should have the same ops as the left
         let ops_on_right = right.ops_for_agent(Public.individual().into());
-        // assert_eq!(left_to_mid_ops, ops_on_right);
+        assert_eq!(left_to_mid_ops, ops_on_right);
     }
 
     fn make_beehive() -> Beehive<[u8; 32], rand::rngs::OsRng> {
