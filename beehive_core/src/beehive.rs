@@ -27,7 +27,7 @@ use crate::{
         },
         identifier::Identifier,
         individual::{id::IndividualId, Individual},
-        membered::Membered,
+        membered::{id::MemberedId, Membered},
         verifiable::Verifiable,
     },
     util::content_addressed_map::CaMap,
@@ -129,6 +129,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
     pub fn generate_doc(
         &mut self,
         coparents: Vec<Agent<T>>,
+        initial_content_heads: NonEmpty<T>,
     ) -> Result<Rc<RefCell<Document<T>>>, DelegationError> {
         let parents = NonEmpty {
             head: self.active.dupe().into(),
@@ -139,6 +140,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             parents,
             self.delegations.dupe(),
             self.revocations.dupe(),
+            initial_content_heads,
             &mut self.csprng,
         )?;
 
@@ -171,9 +173,9 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         self.active.borrow().try_sign(data)
     }
 
-    pub fn register_individual(&mut self, individual: Individual) {
-        self.individuals
-            .insert(individual.id(), Rc::new(RefCell::new(individual)));
+    pub fn register_individual(&mut self, individual: Rc<RefCell<Individual>>) {
+        let id = individual.borrow().id();
+        self.individuals.insert(id, individual);
     }
 
     pub fn register_group(&mut self, root_delegation: Signed<Delegation<T>>) {
@@ -357,17 +359,55 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         caps
     }
 
+    pub fn membered_reachable_by_agent(
+        &self,
+        agent: Agent<T>,
+    ) -> HashMap<MemberedId, (Membered<T>, Access)> {
+        let mut caps = HashMap::new();
+
+        for group in self.groups.values() {
+            if let Some((_, can)) = group.borrow().transitive_members().get(&agent.agent_id()) {
+                caps.insert(
+                    group.borrow().group_id().into(),
+                    (group.dupe().into(), *can),
+                );
+            }
+        }
+
+        for doc in self.docs.values() {
+            if let Some((_, can)) = doc.borrow().transitive_members().get(&agent.agent_id()) {
+                caps.insert(doc.borrow().doc_id().into(), (doc.dupe().into(), *can));
+            }
+        }
+
+        // dbg!("=======");
+        // dbg!(self.id(), caps.keys().collect::<Vec<_>>());
+
+        caps
+    }
+
     pub fn ops_for_agent(&self, agent: Agent<T>) -> HashMap<Digest<Operation<T>>, Operation<T>> {
         let mut ops = HashMap::new();
         let mut visited_hashes = HashSet::new();
         let mut heads: Vec<(Digest<Operation<T>>, Operation<T>)> = vec![];
 
-        for (doc_rc, _max_acces) in self.docs_reachable_by_agent(agent).values() {
-            for (hash, dlg_head) in doc_rc.borrow().delegation_heads().iter() {
+        dbg!(format!(
+            "id: {}, len: {}",
+            self.id().0,
+            self.membered_reachable_by_agent(agent.dupe()).len()
+        ));
+
+        for (mem_rc, _max_acces) in self.membered_reachable_by_agent(agent).values() {
+            dbg!(format!(
+                "head_len: {}",
+                mem_rc.dupe().delegation_heads().len()
+            ));
+
+            for (hash, dlg_head) in mem_rc.delegation_heads().iter() {
                 heads.push((hash.into(), dlg_head.dupe().into()));
             }
 
-            for (hash, rev_head) in doc_rc.borrow().revocation_heads().iter() {
+            for (hash, rev_head) in mem_rc.revocation_heads().iter() {
                 heads.push((hash.into(), rev_head.dupe().into()));
             }
         }
@@ -402,6 +442,11 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
                 }
             }
         }
+
+        dbg!(">>>>>>");
+        dbg!(self.groups.len());
+        dbg!(self.docs.len());
+        dbg!(self.delegations.borrow().len());
 
         ops
     }
@@ -443,7 +488,6 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         // NOTE: this is the only place this gets parsed and this verification ONLY happens here
         static_dlg.try_verify()?;
 
-        let signed_by = static_dlg.issuer;
         let proof: Option<Rc<Signed<Delegation<T>>>> = static_dlg
             .payload()
             .proof
@@ -488,7 +532,10 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             },
         };
 
-        let subject_id = proof.map(|prf| prf.issuer).unwrap_or(signed_by).into();
+        let subject_id = delegation.subject_id();
+        dbg!(self.id().0);
+        dbg!(&delegation.payload.delegate.id());
+        dbg!(&subject_id);
 
         if let Some(group) = self.groups.get(&GroupId(subject_id)) {
             group.borrow_mut().receive_delegation(Rc::new(delegation))?;
@@ -503,8 +550,19 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
                 self.delegations.dupe(),
                 self.revocations.dupe(),
             );
-            self.groups
-                .insert(group.group_id(), Rc::new(RefCell::new(group)));
+
+            if let Some(content_heads) = static_dlg
+                .payload
+                .after_content
+                .get(&subject_id.into())
+                .and_then(|content_heads| NonEmpty::collect(content_heads.iter().cloned()))
+            {
+                let doc = Document::from_group(group, &self.active.borrow(), content_heads)?;
+                self.docs.insert(doc.doc_id(), Rc::new(RefCell::new(doc)));
+            } else {
+                self.groups
+                    .insert(group.group_id(), Rc::new(RefCell::new(group)));
+            }
         };
 
         Ok(())
@@ -687,30 +745,110 @@ pub enum ReceieveStaticDelegationError<T: ContentRef> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::{access::Access, principal::public::Public};
-
-    use super::Beehive;
+    use nonempty::nonempty;
+    use pretty_assertions::assert_eq;
 
     #[test]
-    fn transitive_ops_for_agent() {
-        let mut left = make_beehive();
-        let mut middle = make_beehive();
-        let mut right = make_beehive();
+    fn test_receive_delegation() {
+        let mut hive1 = make_beehive();
+        let mut hive2 = make_beehive();
 
-        let _left_doc = left.generate_doc(vec![Public.individual().into()]).unwrap();
+        let hive2_on_hive1 = Rc::new(RefCell::new(hive2.active.borrow().individual.clone()));
+        hive1.register_individual(hive2_on_hive1.dupe());
+        let group1_on_hive1 = hive1.generate_group(vec![hive2_on_hive1.into()]).unwrap();
+
+        assert_eq!(hive1.delegations.borrow().len(), 2);
+        assert_eq!(hive1.revocations.borrow().len(), 0);
+        assert_eq!(hive1.individuals.len(), 1);
+        assert_eq!(hive1.groups.len(), 1);
+        assert_eq!(hive1.docs.len(), 0);
+
+        assert_eq!(group1_on_hive1.borrow().delegation_heads().len(), 2);
+        assert_eq!(group1_on_hive1.borrow().revocation_heads().len(), 0);
+
+        for dlg in group1_on_hive1.borrow().delegation_heads().values() {
+            assert_eq!(dlg.subject_id(), group1_on_hive1.borrow().group_id().into());
+
+            let delegate_id = dlg.payload.delegate.dupe().agent_id();
+            assert!(delegate_id == hive1.agent_id() || delegate_id == hive2.agent_id());
+        }
+
+        assert_eq!(hive2.delegations.borrow().len(), 0);
+        assert_eq!(hive2.revocations.borrow().len(), 0);
+        assert_eq!(hive2.individuals.len(), 0);
+        assert_eq!(hive2.groups.len(), 0);
+        assert_eq!(hive2.docs.len(), 0);
+
+        for dlg in group1_on_hive1.borrow().delegation_heads().values() {
+            let static_dlg = dlg.as_ref().clone().map(|d| d.into()); // FIXME add FROM instance
+            hive2.receive_delegation(&static_dlg).unwrap();
+        }
+
+        assert_eq!(hive2.delegations.borrow().len(), 2);
+        assert_eq!(hive2.revocations.borrow().len(), 0);
+        assert_eq!(hive2.individuals.len(), 1);
+        assert_eq!(hive2.groups.len(), 1);
+        assert_eq!(hive2.docs.len(), 0);
+    }
+
+    #[test]
+    fn test_transitive_ops_for_agent() {
+        let mut left = make_beehive();
+        dbg!(left.id().0);
+        let mut middle = make_beehive();
+        dbg!(middle.id().0);
+        let mut right = make_beehive();
+        dbg!(right.id().0);
+
+        let _left_doc = left
+            .generate_doc(vec![Public.individual().into()], nonempty![[0u8; 32]])
+            .unwrap();
+        dbg!(left.delegations.borrow().len());
+
         let left_to_mid_ops = left.ops_for_agent(Public.individual().into());
-        for (_, op) in &left_to_mid_ops {
+        for (h, op) in &left_to_mid_ops {
+            dbg!("l->m");
+            dbg!(h.raw);
             middle.receive_op(&op.clone().into()).unwrap();
         }
 
+        // dbg!(left_to_mid_ops.len());
+
         let mid_to_right_ops = middle.ops_for_agent(Public.individual().into());
-        for (_, op) in mid_to_right_ops {
-            right.receive_op(&op.into()).unwrap();
+        for (_, op) in &mid_to_right_ops {
+            right.receive_op(&op.clone().into()).unwrap();
         }
+        // dbg!(mid_to_right_ops.len());
 
         // Now, the right hand side should have the same ops as the left
         let ops_on_right = right.ops_for_agent(Public.individual().into());
-        assert_eq!(left_to_mid_ops, ops_on_right);
+        // dbg!(ops_on_right.len());
+
+        assert_eq!(
+            left.individuals.len() + left.groups.len() + left.docs.len(),
+            1
+        );
+
+        assert_eq!(
+            left.individuals.len() + left.groups.len() + left.docs.len(),
+            middle.individuals.len() + middle.groups.len() + middle.docs.len(),
+        );
+
+        assert_eq!(
+            middle.groups.len() + middle.docs.len(),
+            right.groups.len() + right.docs.len()
+        );
+
+        assert_eq!(
+            left_to_mid_ops.keys().collect::<Vec<_>>(),
+            mid_to_right_ops.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            mid_to_right_ops.keys().collect::<Vec<_>>(),
+            ops_on_right.keys().collect::<Vec<_>>()
+        );
     }
 
     fn make_beehive() -> Beehive<[u8; 32], rand::rngs::OsRng> {

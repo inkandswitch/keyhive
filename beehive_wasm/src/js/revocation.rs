@@ -13,8 +13,8 @@ pub struct JsRevocation(pub(crate) Revocation<JsChangeRef>);
 #[wasm_bindgen(js_class = Revocation)]
 impl JsRevocation {
     #[wasm_bindgen(getter)]
-    pub fn subject(&self) -> JsIdentifier {
-        self.0.subject().into()
+    pub fn subject_id(&self) -> JsIdentifier {
+        self.0.subject_id().into()
     }
 
     #[wasm_bindgen(getter)]

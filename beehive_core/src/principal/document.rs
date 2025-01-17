@@ -49,13 +49,17 @@ pub struct Document<T: ContentRef> {
 
 impl<T: ContentRef> Document<T> {
     // NOTE doesn't register into the top-level Beehive context
-    pub fn from_group(group: Group<T>, viewer: &Active) -> Result<Self, CgkaError> {
+    pub fn from_group(
+        group: Group<T>,
+        viewer: &Active,
+        content_heads: NonEmpty<T>,
+    ) -> Result<Self, CgkaError> {
         let doc_id = DocumentId(group.verifying_key().into());
         let mut doc = Document {
             cgka: Cgka::new(doc_id, viewer.id(), viewer.pick_prekey(doc_id))?,
             group,
             reader_keys: Default::default(),
-            content_heads: Default::default(),
+            content_heads: content_heads.iter().cloned().collect(),
             content_state: Default::default(),
         };
         doc.rebuild();
@@ -98,6 +102,7 @@ impl<T: ContentRef> Document<T> {
         parents: NonEmpty<Agent<T>>,
         delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
         revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+        initial_content_heads: NonEmpty<T>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let sk = ed25519_dalek::SigningKey::generate(csprng);
@@ -140,7 +145,7 @@ impl<T: ContentRef> Document<T> {
             group,
             reader_keys: HashMap::new(), // FIXME
             content_state: HashSet::new(),
-            content_heads: HashSet::new(),
+            content_heads,
             cgka,
         })
     }

@@ -15,6 +15,7 @@ use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
+    util::content_addressed_map::CaMap,
 };
 use dupe::{Dupe, OptionDupedExt};
 use id::MemberedId;
@@ -50,6 +51,20 @@ impl<T: ContentRef> Membered<T> {
         match self {
             Membered::Group(group) => MemberedId::GroupId(group.borrow().group_id()),
             Membered::Document(document) => MemberedId::DocumentId(document.borrow().doc_id()),
+        }
+    }
+
+    pub fn delegation_heads(&self) -> CaMap<Signed<Delegation<T>>> {
+        match self {
+            Membered::Group(group) => group.borrow().delegation_heads().clone(),
+            Membered::Document(document) => document.borrow().delegation_heads().clone(),
+        }
+    }
+
+    pub fn revocation_heads(&self) -> CaMap<Signed<Revocation<T>>> {
+        match self {
+            Membered::Group(group) => group.borrow().revocation_heads().clone(),
+            Membered::Document(document) => document.borrow().revocation_heads().clone(),
         }
     }
 
