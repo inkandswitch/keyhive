@@ -56,7 +56,7 @@ impl Individual {
         }
     }
 
-    #[cfg(feature = "test_utils")]
+    #[cfg(any(feature = "test_utils", test))]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
         signer: &ed25519_dalek::SigningKey,
         csprng: &mut R,

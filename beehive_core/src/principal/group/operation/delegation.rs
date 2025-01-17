@@ -125,11 +125,11 @@ impl<T: ContentRef> Signed<Delegation<T>> {
     pub fn subject_id(&self) -> Identifier {
         let mut head = self;
 
-        while let Some(parent) = &head.payload().proof {
-            head = parent;
+        while let Some(proof) = &head.payload.proof {
+            head = proof;
         }
 
-        head.id()
+        head.issuer.into()
     }
 }
 

@@ -138,7 +138,7 @@ impl<T: ContentRef> GroupState<T> {
         &mut self,
         delegation: Rc<Signed<Delegation<T>>>,
     ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
-        if delegation.subject_id() != self.id.0.verifying_key().into() {
+        if delegation.subject_id() != self.id.into() {
             return Err(AddError::InvalidSubject(Box::new(delegation.subject_id())));
         }
 

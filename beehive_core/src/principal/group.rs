@@ -292,7 +292,7 @@ impl<T: ContentRef> Group<T> {
         &mut self,
         member_to_add: Agent<T>,
         can: Access,
-        signing_key: ed25519_dalek::SigningKey,
+        signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &[&Rc<RefCell<Document<T>>>],
     ) -> Result<Rc<Signed<Delegation<T>>>, AddMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
@@ -958,7 +958,7 @@ mod tests {
             .add_member(
                 carol_agent.dupe(),
                 Access::Write,
-                active.borrow().signing_key.clone(),
+                &active.borrow().signing_key,
                 &[],
             )
             .unwrap();

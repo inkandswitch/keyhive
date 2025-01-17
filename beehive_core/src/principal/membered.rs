@@ -6,11 +6,12 @@ use super::{
     group::{
         error::AddError,
         operation::{delegation::Delegation, revocation::Revocation},
-        Group, RevokeMemberError,
+        AddMemberError, Group, RevokeMemberError,
     },
     verifiable::Verifiable,
 };
 use crate::{
+    access::Access,
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
@@ -56,6 +57,32 @@ impl<T: ContentRef> Membered<T> {
         match self {
             Membered::Group(group) => group.borrow().members().clone(),
             Membered::Document(document) => document.borrow().members().clone(),
+        }
+    }
+
+    pub fn add_member(
+        &mut self,
+        member_to_add: Agent<T>,
+        can: Access,
+        signing_key: &ed25519_dalek::SigningKey,
+        relevant_docs: &[&Rc<RefCell<Document<T>>>],
+    ) -> Result<(Rc<Signed<Delegation<T>>>, Vec<CgkaOperation>), AddMemberError> {
+        match self {
+            Membered::Group(group) => {
+                let dlg = group.borrow_mut().add_member(
+                    member_to_add,
+                    can,
+                    signing_key,
+                    relevant_docs,
+                )?;
+
+                Ok((dlg, vec![]))
+            }
+            Membered::Document(document) => {
+                document
+                    .borrow_mut()
+                    .add_member(member_to_add, can, signing_key, relevant_docs)
+            }
         }
     }
 
