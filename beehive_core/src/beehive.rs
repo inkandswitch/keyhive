@@ -906,6 +906,20 @@ mod tests {
             mid_to_right_ops.keys().collect::<HashSet<_>>(),
             ops_on_right.keys().collect::<HashSet<_>>()
         );
+
+        right.generate_group(vec![left_doc.dupe().into()]).unwrap();
+
+        // Check transitivity
+        let transitive_right_to_mid_ops = right.ops_for_agent(Public.individual().into());
+        assert_eq!(transitive_right_to_mid_ops.len(), 4);
+        for (h, op) in &transitive_right_to_mid_ops {
+            middle.receive_op(&op.clone().into()).unwrap();
+            assert!(middle.delegations.borrow().get(&h.into()).is_some());
+        }
+        assert_eq!(middle.individuals.len(), 3); // NOTE now includes Right
+        assert_eq!(middle.groups.len(), 1);
+        assert_eq!(middle.docs.len(), 1);
+        assert_eq!(middle.delegations.borrow().len(), 4);
     }
 
     fn make_beehive() -> Beehive<[u8; 32], rand::rngs::OsRng> {
