@@ -1,4 +1,4 @@
-use beelay_core::{Commit, CommitHash, CommitOrBundle, DocEvent};
+use beelay_core::{Access, Commit, CommitHash, CommitOrBundle, DocEvent};
 use network::{ConnForwarding, Network};
 use test_utils::init_logging;
 
@@ -14,7 +14,7 @@ fn uploaded_commits_emits_local_event() {
     network.connect_stream(&peer1, &peer2, ConnForwarding::LeftToRight);
 
     // Now, create a document on left
-    let doc_id = network.beelay(&peer1).create_doc();
+    let doc_id = network.beelay(&peer1).create_doc(Access::Public);
     let commit = Commit::new(vec![], "hello".into(), CommitHash::from([1; 32]));
     network
         .beelay(&peer1)

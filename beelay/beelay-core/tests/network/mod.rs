@@ -12,10 +12,10 @@ pub struct BeelayHandle<'a> {
 }
 
 impl BeelayHandle<'_> {
-    pub fn create_doc(&mut self) -> DocumentId {
+    pub fn create_doc(&mut self, access: beelay_core::Access) -> DocumentId {
         let story = {
             let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
-            let (story, event) = beelay_core::Event::create_doc();
+            let (story, event) = beelay_core::Event::create_doc(access);
             beelay.inbox.push_back(event);
             story
         };
@@ -29,8 +29,12 @@ impl BeelayHandle<'_> {
         }
     }
 
-    pub fn create_doc_with_contents(&mut self, content: Vec<u8>) -> DocumentId {
-        let doc = self.create_doc();
+    pub fn create_doc_with_contents(
+        &mut self,
+        access: beelay_core::Access,
+        content: Vec<u8>,
+    ) -> DocumentId {
+        let doc = self.create_doc(access);
         let commit = beelay_core::Commit::new(vec![], content, CommitHash::from([1; 32]));
         self.add_commits(doc, vec![commit]);
         doc
@@ -191,6 +195,13 @@ impl BeelayHandle<'_> {
             }
             beelay.handle_events();
         }
+    }
+
+    pub fn add_member(&mut self, doc: DocumentId, peer: PeerId) {
+        let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
+        let (_, event) = beelay_core::Event::add_member(doc, peer);
+        beelay.inbox.push_back(event);
+        self.network.run_until_quiescent();
     }
 }
 

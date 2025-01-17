@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use beelay_core::{Commit, CommitHash, CommitOrBundle, DocEvent, Forwarding};
+use beelay_core::{Access, Commit, CommitHash, CommitOrBundle, DocEvent, Forwarding};
 use network::Network;
 use test_utils::init_logging;
 
@@ -29,7 +29,7 @@ fn listen_to_connected() {
         .beelay(&peer2)
         .register_endpoint(&peer1, Forwarding::Forward);
 
-    let doc1_id = network.beelay(&peer1).create_doc();
+    let doc1_id = network.beelay(&peer1).create_doc(Access::Public);
     let commit1 = Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
     network
         .beelay(&peer1)
@@ -87,7 +87,7 @@ fn listen() {
         .beelay(&peer2)
         .register_endpoint(&peer3, Forwarding::DontForward);
 
-    let doc1_id = network.beelay(&peer1).create_doc();
+    let doc1_id = network.beelay(&peer1).create_doc(Access::Public);
     let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
     network
         .beelay(&peer1)
@@ -142,7 +142,7 @@ fn three_peers_listening_to_each_other_do_not_loop() {
         .beelay(&peer2)
         .register_endpoint(&peer1, Forwarding::Forward);
 
-    let doc1_id = network.beelay(&peer1).create_doc();
+    let doc1_id = network.beelay(&peer1).create_doc(Access::Public);
     let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
     network
         .beelay(&peer1)
@@ -183,7 +183,7 @@ fn two_peers_listening_to_each_other_do_not_loop() {
         .beelay(&peer2)
         .register_endpoint(&peer1, Forwarding::Forward);
 
-    let doc1_id = network.beelay(&peer1).create_doc();
+    let doc1_id = network.beelay(&peer1).create_doc(Access::Public);
     let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
     network
         .beelay(&peer1)

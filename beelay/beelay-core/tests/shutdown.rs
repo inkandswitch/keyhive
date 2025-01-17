@@ -1,3 +1,4 @@
+use beelay_core::Access;
 use network::{ConnForwarding, ConnectedPair, Network};
 use test_utils::init_logging;
 
@@ -13,7 +14,7 @@ fn pending_inbound_listens_are_cancelled_by_shutdown() {
     let ConnectedPair { right_to_left, .. } =
         network.connect_stream(&peer1, &peer2, ConnForwarding::Both);
 
-    let doc1_id = network.beelay(&peer1).create_doc();
+    let doc1_id = network.beelay(&peer1).create_doc(Access::Public);
 
     let snapshot = network
         .beelay(&peer2)
@@ -47,7 +48,7 @@ fn shutdown_while_forwarding_listen_does_not_throw() {
         ..
     } = network.connect_stream(&peer2, &peer3, ConnForwarding::Both);
 
-    let doc1_id = network.beelay(&peer1).create_doc();
+    let doc1_id = network.beelay(&peer1).create_doc(Access::Public);
 
     let snapshot = network
         .beelay(&peer3)

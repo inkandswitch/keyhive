@@ -8,7 +8,7 @@ use std::{
 };
 
 use beehive_core::{
-    access::Access,
+    access::Access as BeehiveAccess,
     beehive::Beehive,
     crypto::digest::Digest,
     principal::{
@@ -33,7 +33,7 @@ use crate::{
     messages::{FetchedSedimentree, Notification, UploadItem},
     riblt::{self, doc_and_heads::CodedDocAndHeadsSymbol},
     snapshots::{self, Snapshot, Snapshots},
-    spawn, stream, BlobHash, CommitCategory, CommitHash, DocEvent, DocumentId, IoTaskId,
+    spawn, stream, Access, BlobHash, CommitCategory, CommitHash, DocEvent, DocumentId, IoTaskId,
     OutboundRequestId, PeerId, Request, Response, SnapshotId, StorageKey, TargetNodeInfo, Task,
 };
 
@@ -833,7 +833,12 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
     }
 
     #[tracing::instrument(skip(self, peer_id), fields(peer_id=%peer_id), ret(level=tracing::Level::TRACE))]
-    pub(crate) fn can_do(&self, peer_id: PeerId, doc_id: &DocumentId, access: Access) -> bool {
+    pub(crate) fn can_do(
+        &self,
+        peer_id: PeerId,
+        doc_id: &DocumentId,
+        access: BeehiveAccess,
+    ) -> bool {
         tracing::trace!("checking access");
         let beehive = &self.state.borrow().beehive;
 
@@ -887,12 +892,12 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
 
     /// Check if the given peer is allowed to write to the document
     pub(crate) fn can_write(&self, peer_id: PeerId, doc_id: &DocumentId) -> bool {
-        self.can_do(peer_id, doc_id, Access::Write)
+        self.can_do(peer_id, doc_id, BeehiveAccess::Write)
     }
 
     /// Check if the given peer is allowed to read from the document
     pub(crate) fn can_read(&self, peer_id: PeerId, doc_id: &DocumentId) -> bool {
-        self.can_do(peer_id, doc_id, Access::Read)
+        self.can_do(peer_id, doc_id, BeehiveAccess::Read)
     }
 
     /// Apply the given beehive ops locally
@@ -985,14 +990,14 @@ impl<R: rand::Rng + rand::CryptoRng> TaskEffects<R> {
         state.beehive_sync_sessions.next_n_symbols(session_id, n)
     }
 
-    pub(crate) fn create_beehive_doc(&self) -> DocumentId {
+    pub(crate) fn create_beehive_doc(&self, access: Access) -> DocumentId {
         let mut state = self.state.borrow_mut();
         let beehive = &mut state.beehive;
-        let doc = beehive
-            .generate_doc(vec![beehive_core::principal::public::Public
-                .individual()
-                .into()])
-            .unwrap();
+        let parents = match access {
+            Access::Public => vec![Public.individual().into()],
+            Access::Private => vec![],
+        };
+        let doc = beehive.generate_doc(parents).unwrap();
         let key = doc.borrow().doc_id().verifying_key();
         key.into()
     }

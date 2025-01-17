@@ -1,4 +1,4 @@
-use beelay_core::{CommitHash, CommitOrBundle, Forwarding};
+use beelay_core::{Access, CommitHash, CommitOrBundle, Forwarding};
 use network::{ConnForwarding, ConnectedPair, Network};
 use test_utils::init_logging;
 
@@ -28,7 +28,7 @@ fn loopy_topology_sync_is_bounded() {
     //Create a doc on peer1
     let doc1_id = network
         .beelay(&peer1)
-        .create_doc_with_contents("hello".into());
+        .create_doc_with_contents(Access::Public, "hello".into());
 
     // fetch the doc on peer3
     let sync_with_2 = network.beelay(&peer3).sync_doc(doc1_id, peer3_to_peer2);
@@ -61,7 +61,7 @@ fn added_commits_are_uploaded_to_forwarding_peers() {
         .register_endpoint(&peer2, Forwarding::Forward);
 
     // Create a document on peer1
-    let doc_id = network.beelay(&peer1).create_doc();
+    let doc_id = network.beelay(&peer1).create_doc(Access::Public);
     let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
     network
         .beelay(&peer1)
@@ -90,7 +90,7 @@ fn added_commits_are_automatically_forwarded_by_intermediate_nodes() {
     network.connect_stream(&middle, &right, ConnForwarding::LeftToRight);
 
     // Create a doc and add a commit on the left node
-    let doc_id = network.beelay(&left).create_doc();
+    let doc_id = network.beelay(&left).create_doc(Access::Public);
     let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
     network
         .beelay(&left)
@@ -126,7 +126,7 @@ fn added_commits_do_not_loop_forever_in_mesh_topologies() {
     network.connect_stream(&peer3, &peer1, ConnForwarding::Both);
 
     // Create a doc and add a commit on peer1
-    let doc_id = network.beelay(&peer1).create_doc();
+    let doc_id = network.beelay(&peer1).create_doc(Access::Public);
     let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
     network
         .beelay(&peer1)

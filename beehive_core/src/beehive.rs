@@ -699,7 +699,7 @@ pub enum ReceieveStaticDelegationError<T: ContentRef> {
 
 #[cfg(test)]
 mod tests {
-    use crate::principal::public::Public;
+    use crate::{access::Access, principal::public::Public};
 
     use super::Beehive;
 
@@ -728,5 +728,22 @@ mod tests {
     fn make_beehive() -> Beehive<[u8; 32], rand::rngs::OsRng> {
         let sk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
         Beehive::generate(sk, rand::rngs::OsRng).unwrap()
+    }
+
+    #[test]
+    fn add_member() {
+        let mut beehive = make_beehive();
+        let doc = beehive
+            .generate_doc(vec![Public.individual().into()])
+            .unwrap();
+        let member = Public.individual().into();
+        let _dlg = beehive
+            .add_member(
+                member,
+                &mut doc.clone().into(),
+                Access::Read,
+                Default::default(),
+            )
+            .unwrap();
     }
 }

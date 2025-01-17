@@ -1,8 +1,7 @@
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
-    str::FromStr,
     sync::Arc,
 };
 
@@ -15,7 +14,6 @@ use effects::{OutgoingRequest, TaskEffects};
 use futures::{future::LocalBoxFuture, FutureExt};
 use io::IoResult;
 use messages::{Request, Response};
-use rand::Rng;
 
 mod blob;
 pub use blob::BlobHash;
@@ -30,8 +28,8 @@ pub use error::{InvalidPeerId, InvalidRequestId, Stopped};
 pub mod io;
 pub use io::IoTaskId;
 mod stories;
+pub use stories::{Access, StoryId, StoryResult};
 use stories::{AsyncStory, Story, SyncStory};
-pub use stories::{StoryId, StoryResult};
 mod effects;
 mod log;
 pub mod messages;
@@ -314,6 +312,45 @@ impl<R: rand::Rng + rand::CryptoRng + 'static> Beelay<R> {
                                 ctx.results
                                     .completed_stories
                                     .insert(story_id, Ok(StoryResult::UnregisterEndpoint));
+                            }
+                            SyncStory::AddMember(doc_id, peer_id) => {
+                                let mut state = self.state.borrow_mut();
+                                if let Some(doc) = state.beehive.documents().get(
+                                    &beehive_core::principal::document::id::DocumentId::from(
+                                        beehive_core::principal::identifier::Identifier::from(
+                                            doc_id.as_key(),
+                                        ),
+                                    ),
+                                ) {
+                                    let doc = doc.clone();
+                                    let peer = state
+                                        .beehive
+                                        .register_individual((*peer_id.as_key()).into());
+                                    if let Some(peer) = state
+                                        .beehive
+                                        .get_agent(
+                                            beehive_core::principal::identifier::Identifier::from(
+                                                peer_id.as_key(),
+                                            ),
+                                        )
+                                        .clone()
+                                    {
+                                        tracing::trace!("adding member");
+                                        state
+                                            .beehive
+                                            .add_member(
+                                                peer,
+                                                &mut doc.clone().into(),
+                                                beehive_core::access::Access::Write,
+                                                BTreeMap::new(),
+                                            )
+                                            .unwrap();
+                                    } else {
+                                        tracing::warn!("no such peer");
+                                    };
+                                } else {
+                                    tracing::warn!("no such doc");
+                                }
                             }
                         },
                     }
@@ -801,11 +838,11 @@ impl Event {
         )
     }
 
-    pub fn create_doc() -> (StoryId, Event) {
+    pub fn create_doc(access: Access) -> (StoryId, Event) {
         let story_id = StoryId::new();
         let event = Event(EventInner::BeginStory(
             story_id,
-            Story::Async(AsyncStory::CreateDoc),
+            Story::Async(AsyncStory::CreateDoc(access)),
         ));
         (story_id, event)
     }
@@ -899,6 +936,15 @@ impl Event {
 
     pub fn stop() -> Event {
         Event(EventInner::Stop)
+    }
+
+    pub fn add_member(doc_id: DocumentId, peer: PeerId) -> (StoryId, Event) {
+        let story_id = StoryId::new();
+        let event = Event(EventInner::BeginStory(
+            story_id,
+            Story::SyncStory(SyncStory::AddMember(doc_id, peer)),
+        ));
+        (story_id, event)
     }
 }
 

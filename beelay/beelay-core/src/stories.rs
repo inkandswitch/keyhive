@@ -14,8 +14,8 @@ use crate::{
     reachability::ReachabilityIndexEntry,
     sedimentree::{self, LooseCommit},
     snapshots, stream, sync_docs, AddLink, Audience, BundleSpec, Commit, CommitBundle,
-    CommitCategory, CommitOrBundle, DocumentId, Forwarding, PeerAddress, SnapshotId, StorageKey,
-    SyncDocResult,
+    CommitCategory, CommitOrBundle, DocumentId, Forwarding, PeerAddress, PeerId, SnapshotId,
+    StorageKey, SyncDocResult,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -54,6 +54,13 @@ pub(crate) enum SyncStory {
     CreateStream(stream::StreamDirection, Forwarding),
     RegisterEndpoint(Audience, Forwarding),
     UnregisterEndpoints(endpoint::EndpointId),
+    AddMember(DocumentId, PeerId),
+}
+
+#[derive(Debug)]
+pub enum Access {
+    Public,
+    Private,
 }
 
 #[derive(Debug)]
@@ -69,7 +76,7 @@ pub(crate) enum AsyncStory {
     LoadDoc {
         doc_id: DocumentId,
     },
-    CreateDoc,
+    CreateDoc(Access),
     AddLink(AddLink),
     AddBundle {
         doc_id: DocumentId,
@@ -127,8 +134,8 @@ pub(super) fn handle_story<R: rand::Rng + rand::CryptoRng + 'static>(
             )
         }
         .boxed_local(),
-        AsyncStory::CreateDoc => {
-            async move { StoryResult::CreateDoc(create_doc(effects).await) }.boxed_local()
+        AsyncStory::CreateDoc(access) => {
+            async move { StoryResult::CreateDoc(create_doc(effects, access).await) }.boxed_local()
         }
         AsyncStory::AddLink(add) => async move {
             add_link(effects, add).await;
@@ -285,8 +292,9 @@ async fn add_link<R: rand::Rng + rand::CryptoRng>(
 #[tracing::instrument(skip(effects))]
 async fn create_doc<R: rand::Rng + rand::CryptoRng>(
     effects: crate::effects::TaskEffects<R>,
+    access: Access,
 ) -> DocumentId {
-    let doc_id = effects.create_beehive_doc();
+    let doc_id = effects.create_beehive_doc(access);
     tracing::trace!(?doc_id, "creating doc");
     doc_id
 }

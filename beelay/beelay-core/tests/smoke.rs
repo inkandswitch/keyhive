@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use beelay_core::{CommitHash, CommitOrBundle, Forwarding};
+use beelay_core::{Access, CommitHash, CommitOrBundle, Forwarding};
 use network::{ConnForwarding, ConnectedPair, Network};
 use test_utils::init_logging;
 
@@ -12,7 +12,7 @@ fn save_and_load() {
     let mut network = Network::new();
     let peer1 = network.create_peer("peer1");
 
-    let doc_id = network.beelay(&peer1).create_doc();
+    let doc_id = network.beelay(&peer1).create_doc(Access::Public);
     let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
     network
         .beelay(&peer1)
@@ -33,7 +33,7 @@ fn create_and_sync() {
         .beelay(&peer2)
         .register_endpoint(&peer1, Forwarding::DontForward);
 
-    let doc1_id = network.beelay(&peer1).create_doc();
+    let doc1_id = network.beelay(&peer1).create_doc(Access::Public);
     let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
     let commit2 = beelay_core::Commit::new(
         vec![commit1.hash()],
@@ -44,7 +44,7 @@ fn create_and_sync() {
         .beelay(&peer1)
         .add_commits(doc1_id, vec![commit1.clone(), commit2.clone()]);
 
-    let doc2_id = network.beelay(&peer1).create_doc();
+    let doc2_id = network.beelay(&peer1).create_doc(Access::Public);
     let commit3 = beelay_core::Commit::new(vec![], vec![7, 8, 9], CommitHash::from([3; 32]));
     network
         .beelay(&peer1)
@@ -99,7 +99,7 @@ fn create_and_sync_via_stream() {
         ..
     } = network.connect_stream(&peer2, &peer1, ConnForwarding::Neither);
 
-    let doc1_id = network.beelay(&peer1).create_doc();
+    let doc1_id = network.beelay(&peer1).create_doc(Access::Public);
     let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
     let commit2 = beelay_core::Commit::new(
         vec![commit1.hash()],
@@ -110,7 +110,7 @@ fn create_and_sync_via_stream() {
         .beelay(&peer1)
         .add_commits(doc1_id, vec![commit1.clone(), commit2.clone()]);
 
-    let doc2_id = network.beelay(&peer1).create_doc();
+    let doc2_id = network.beelay(&peer1).create_doc(Access::Public);
     let commit3 = beelay_core::Commit::new(vec![], vec![7, 8, 9], CommitHash::from([3; 32]));
     network
         .beelay(&peer1)
@@ -176,7 +176,7 @@ fn request_from_connected() {
         .beelay(&peer2)
         .register_endpoint(&peer1, Forwarding::Forward);
 
-    let doc1_id = network.beelay(&peer1).create_doc();
+    let doc1_id = network.beelay(&peer1).create_doc(Access::Public);
     let commit1 = beelay_core::Commit::new(vec![], vec![1, 2, 3], CommitHash::from([1; 32]));
     network
         .beelay(&peer1)
@@ -205,7 +205,7 @@ fn saving_many_times_loads_correctly() {
     let mut network = Network::new();
     let peer = network.create_peer("peer");
 
-    let doc_id = network.beelay(&peer).create_doc();
+    let doc_id = network.beelay(&peer).create_doc(Access::Public);
 
     let mut saved_commits = HashSet::new();
 
