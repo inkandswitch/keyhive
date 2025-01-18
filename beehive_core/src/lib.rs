@@ -9,7 +9,6 @@
 )]
 #![deny(unreachable_pub)]
 
-pub mod ability;
 pub mod access;
 pub mod beehive;
 pub mod cgka;

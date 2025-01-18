@@ -1,15 +1,16 @@
 use super::{
-    access::JsAccess, agent::JsAgent, change_ref::JsChangeRef, history::JsHistory,
+    access::JsAccess, after::After, agent::JsAgent, change_ref::JsChangeRef,
     signed_delegation::JsSignedDelegation,
 };
 use beehive_core::principal::group::operation::delegation::{Delegation, DelegationError};
+use derive_more::{From, Into};
 use dupe::Dupe;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Delegation)]
-#[derive(Debug, Clone)]
-pub struct JsDelegation(pub(crate) Delegation<JsChangeRef>);
+#[derive(Debug, Clone, From, Into)]
+pub struct JsDelegation(Delegation<JsChangeRef>);
 
 #[wasm_bindgen(js_class = Delegation)]
 impl JsDelegation {
@@ -29,25 +30,18 @@ impl JsDelegation {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn after(&self) -> JsHistory {
-        self.0.after().into()
-    }
-}
-
-impl From<Delegation<JsChangeRef>> for JsDelegation {
-    fn from(delegation: Delegation<JsChangeRef>) -> Self {
-        JsDelegation(delegation)
-    }
-}
-
-impl From<JsDelegation> for Delegation<JsChangeRef> {
-    fn from(delegation: JsDelegation) -> Self {
-        delegation.0
+    pub fn after(&self) -> After {
+        let (delegations, revocations, cs) = self.0.after();
+        After {
+            delegations,
+            revocations,
+            content: cs.clone(),
+        }
     }
 }
 
 #[wasm_bindgen(js_name = DelegationError)]
-#[derive(Debug, Error)]
+#[derive(Debug, Error, From, Into)]
 #[error(transparent)]
 pub struct JsDelegationError(DelegationError);
 
@@ -55,11 +49,5 @@ pub struct JsDelegationError(DelegationError);
 impl JsDelegationError {
     pub fn message(&self) -> String {
         self.0.to_string()
-    }
-}
-
-impl From<DelegationError> for JsDelegationError {
-    fn from(error: DelegationError) -> Self {
-        JsDelegationError(error)
     }
 }

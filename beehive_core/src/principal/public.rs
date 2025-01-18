@@ -44,7 +44,7 @@ impl Public {
         Individual {
             id: self.verifying_key().into(),
             prekeys: HashSet::from_iter([self.share_key()]),
-            prekey_state: PrekeyState::try_from_iter([op])
+            prekey_state: PrekeyState::from_iter([op])
                 .expect("well-known prekey op should be valid"),
         }
     }

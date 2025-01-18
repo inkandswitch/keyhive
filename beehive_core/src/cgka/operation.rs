@@ -50,7 +50,7 @@ pub enum CgkaOperation {
     },
     Update {
         id: IndividualId,
-        new_path: Box<PathChange>,
+        new_path: PathChange,
         predecessors: Vec<Digest<CgkaOperation>>,
     },
 }

@@ -6,14 +6,16 @@ use super::{
     group::{
         error::AddError,
         operation::{delegation::Delegation, revocation::Revocation},
-        Group, RevokeMemberError,
+        AddMemberError, Group, RevokeMemberError,
     },
-    revocation_ops::RevocationOps,
     verifiable::Verifiable,
 };
 use crate::{
+    access::Access,
+    cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
+    util::content_addressed_map::CaMap,
 };
 use dupe::{Dupe, OptionDupedExt};
 use id::MemberedId;
@@ -34,7 +36,7 @@ impl<T: ContentRef> Membered<T> {
     pub fn get_capability(&self, agent_id: &AgentId) -> Option<Rc<Signed<Delegation<T>>>> {
         match self {
             Membered::Group(group) => group.borrow().get_capability(agent_id).duped(),
-            Membered::Document(doc) => doc.borrow().get_capabilty(agent_id).duped(),
+            Membered::Document(doc) => doc.borrow().get_capability(agent_id).duped(),
         }
     }
 
@@ -52,10 +54,51 @@ impl<T: ContentRef> Membered<T> {
         }
     }
 
+    pub fn delegation_heads(&self) -> CaMap<Signed<Delegation<T>>> {
+        match self {
+            Membered::Group(group) => group.borrow().delegation_heads().clone(),
+            Membered::Document(document) => document.borrow().delegation_heads().clone(),
+        }
+    }
+
+    pub fn revocation_heads(&self) -> CaMap<Signed<Revocation<T>>> {
+        match self {
+            Membered::Group(group) => group.borrow().revocation_heads().clone(),
+            Membered::Document(document) => document.borrow().revocation_heads().clone(),
+        }
+    }
+
     pub fn members(&self) -> HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
         match self {
             Membered::Group(group) => group.borrow().members().clone(),
             Membered::Document(document) => document.borrow().members().clone(),
+        }
+    }
+
+    pub fn add_member(
+        &mut self,
+        member_to_add: Agent<T>,
+        can: Access,
+        signing_key: &ed25519_dalek::SigningKey,
+        other_relevant_docs: &[&Document<T>],
+    ) -> Result<(Rc<Signed<Delegation<T>>>, Vec<CgkaOperation>), AddMemberError> {
+        match self {
+            Membered::Group(group) => {
+                let dlg = group.borrow_mut().add_member(
+                    member_to_add,
+                    can,
+                    signing_key,
+                    other_relevant_docs,
+                )?;
+
+                Ok((dlg, vec![]))
+            }
+            Membered::Document(document) => document.borrow_mut().add_member(
+                member_to_add,
+                can,
+                signing_key,
+                other_relevant_docs,
+            ),
         }
     }
 
@@ -64,7 +107,7 @@ impl<T: ContentRef> Membered<T> {
         member_id: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<RevocationOps<T>, RevokeMemberError> {
+    ) -> Result<(Vec<Rc<Signed<Revocation<T>>>>, Vec<CgkaOperation>), RevokeMemberError> {
         match self {
             Membered::Group(group) => {
                 let revs =
@@ -72,10 +115,7 @@ impl<T: ContentRef> Membered<T> {
                         .borrow_mut()
                         .revoke_member(member_id, signing_key, relevant_docs)?;
 
-                Ok(RevocationOps {
-                    revocations: revs,
-                    cgka_operations: vec![],
-                })
+                Ok((revs, vec![]))
             }
             Membered::Document(document) => {
                 document

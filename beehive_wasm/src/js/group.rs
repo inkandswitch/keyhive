@@ -2,12 +2,13 @@ use super::{
     capability::Capability, change_ref::JsChangeRef, group_id::JsGroupId, identifier::JsIdentifier,
 };
 use beehive_core::principal::group::Group;
+use derive_more::{From, Into};
 use dupe::Dupe;
 use std::{cell::RefCell, rc::Rc};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Group)]
-#[derive(Debug, Clone, Dupe)]
+#[derive(Debug, Clone, Dupe, From, Into)]
 pub struct JsGroup(pub(crate) Rc<RefCell<Group<JsChangeRef>>>);
 
 #[wasm_bindgen(js_class = Group)]

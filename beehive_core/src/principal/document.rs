@@ -1,6 +1,6 @@
 pub mod id;
 
-use super::{individual::id::IndividualId, revocation_ops::RevocationOps, verifiable::Verifiable};
+use super::{individual::id::IndividualId, verifiable::Verifiable};
 use crate::{
     access::Access,
     cgka::{error::CgkaError, keys::ShareKeyMap, operation::CgkaOperation, Cgka},
@@ -14,14 +14,13 @@ use crate::{
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
-        encryption_response::EncryptionResponse,
         group::{
             error::AddError,
             operation::{
                 delegation::{Delegation, DelegationError},
                 revocation::Revocation,
             },
-            Group, RevokeMemberError,
+            AddMemberError, Group, RevokeMemberError,
         },
         identifier::Identifier,
         individual::Individual,
@@ -50,13 +49,17 @@ pub struct Document<T: ContentRef> {
 
 impl<T: ContentRef> Document<T> {
     // NOTE doesn't register into the top-level Beehive context
-    pub fn from_group(group: Group<T>, viewer: &Active) -> Result<Self, CgkaError> {
+    pub fn from_group(
+        group: Group<T>,
+        viewer: &Active,
+        content_heads: NonEmpty<T>,
+    ) -> Result<Self, CgkaError> {
         let doc_id = DocumentId(group.verifying_key().into());
         let mut doc = Document {
             cgka: Cgka::new(doc_id, viewer.id(), viewer.pick_prekey(doc_id))?,
             group,
             reader_keys: Default::default(),
-            content_heads: Default::default(),
+            content_heads: content_heads.iter().cloned().collect(),
             content_state: Default::default(),
         };
         doc.rebuild();
@@ -87,37 +90,33 @@ impl<T: ContentRef> Document<T> {
         self.group.delegation_heads()
     }
 
-    pub fn get_capabilty(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
+    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<T>>> {
+        self.group.revocation_heads()
+    }
+
+    pub fn get_capability(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
         self.group.get_capability(member_id)
     }
 
     pub fn generate<R: rand::RngCore + rand::CryptoRng>(
         parents: NonEmpty<Agent<T>>,
+        initial_content_heads: NonEmpty<T>,
         delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
         revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let sk = ed25519_dalek::SigningKey::generate(csprng);
-
-        let group = parents.iter().try_fold(
-            Group::generate(parents.clone(), delegations, revocations, csprng)?,
-            |mut acc, parent| {
-                let dlg = Signed::try_sign(
-                    Delegation {
-                        delegate: parent.dupe(),
-                        can: Access::Admin,
-                        proof: None,
-                        after_revocations: vec![],
-                        after_content: BTreeMap::new(),
-                    },
-                    &sk,
-                )?;
-                let rc = Rc::new(dlg);
-                acc.state.delegation_heads.insert(rc.dupe());
-                acc.members.insert(parent.agent_id(), vec![rc]);
-                Ok::<Group<T>, DelegationError>(acc)
-            },
+        let group = Group::generate_after_content(
+            &sk,
+            parents,
+            delegations,
+            revocations,
+            BTreeMap::from_iter([(
+                DocumentId(sk.verifying_key().into()),
+                initial_content_heads.clone().into_iter().collect(),
+            )]),
         )?;
+
         let owner_id = IndividualId(sk.verifying_key().into());
         let doc_id = DocumentId(group.id());
         let owner_share_secret_key = ShareSecretKey::generate(csprng);
@@ -155,39 +154,39 @@ impl<T: ContentRef> Document<T> {
             group,
             reader_keys: HashMap::new(), // FIXME
             content_state: HashSet::new(),
-            content_heads: HashSet::new(),
+            content_heads: initial_content_heads.iter().cloned().collect(),
             cgka,
         })
     }
 
-    pub fn add_member(&mut self, signed_delegation: Signed<Delegation<T>>) -> Vec<CgkaOperation> {
-        // FIXME check subject, signature, find dependencies or quarantine
-        // ...look at the quarantine and see if any of them depend on this one
-        // ...etc etc
-        // FIXME check that delegation is authorized
-        let agent_id = signed_delegation.payload().delegate.agent_id();
-        let rc = Rc::new(signed_delegation);
-        match self.group.members.get_mut(&agent_id) {
-            Some(caps) => {
-                caps.push(rc.clone());
-            }
-            None => {
-                self.group.members.insert(agent_id, vec![rc.clone()]);
-            }
-        }
+    pub fn add_member(
+        &mut self,
+        member_to_add: Agent<T>,
+        can: Access,
+        signing_key: &ed25519_dalek::SigningKey,
+        other_relevant_docs: &[&Document<T>],
+    ) -> Result<(Rc<Signed<Delegation<T>>>, Vec<CgkaOperation>), AddMemberError> {
+        let mut after_content: BTreeMap<DocumentId, Vec<T>> = other_relevant_docs
+            .iter()
+            .map(|d| (d.doc_id(), d.content_heads.iter().cloned().collect()))
+            .collect();
+
+        after_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
+
+        let dlgs = self.group.add_member_with_manual_content(
+            member_to_add.dupe(),
+            can,
+            signing_key,
+            after_content,
+        )?;
+
         let mut ops = Vec::new();
-        for (id, pre_key) in rc
-            .clone()
-            .payload()
-            .delegate
-            .pick_individual_prekeys(self.doc_id())
-        {
+        for (id, pre_key) in member_to_add.pick_individual_prekeys(self.doc_id()) {
             let op = self.cgka.add(id, pre_key).expect("FIXME");
             ops.push(op);
         }
-        // FIXME: We don't currently do anything with these ops, but need to share them
-        // across the network.
-        ops
+
+        Ok((dlgs, ops))
     }
 
     pub fn revoke_member(
@@ -195,7 +194,12 @@ impl<T: ContentRef> Document<T> {
         member_id: AgentId,
         signing_key: &ed25519_dalek::SigningKey,
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<RevocationOps<T>, RevokeMemberError> {
+    ) -> Result<(Vec<Rc<Signed<Revocation<T>>>>, Vec<CgkaOperation>), RevokeMemberError> {
+        after_other_doc_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
+        let revs = self
+            .group
+            .revoke_member(member_id, signing_key, &after_other_doc_content)?;
+
         // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
         // FIXME: We need to check if this has revoked the last member in our group?
         let mut ops = Vec::new();
@@ -209,15 +213,7 @@ impl<T: ContentRef> Document<T> {
             }
         }
 
-        after_other_doc_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
-        let revs = self
-            .group
-            .revoke_member(member_id, signing_key, after_other_doc_content)?;
-
-        Ok(RevocationOps {
-            revocations: revs,
-            cgka_operations: ops,
-        })
+        Ok((revs, ops))
     }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
@@ -232,18 +228,14 @@ impl<T: ContentRef> Document<T> {
         &mut self,
         signed_delegation: Rc<Signed<Delegation<T>>>,
     ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
-        let digest = self.group.receive_delegation(signed_delegation)?;
-        self.rebuild();
-        Ok(digest)
+        self.group.receive_delegation(signed_delegation)
     }
 
     pub fn receive_revocation(
         &mut self,
         signed_revocation: Rc<Signed<Revocation<T>>>,
     ) -> Result<Digest<Signed<Revocation<T>>>, AddError> {
-        let hash = self.group.receive_revocation(signed_revocation)?;
-        self.rebuild();
-        Ok(hash)
+        self.group.receive_revocation(signed_revocation)
     }
 
     pub fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
@@ -266,18 +258,18 @@ impl<T: ContentRef> Document<T> {
         content: &[u8],
         pred_refs: &Vec<T>,
         csprng: &mut R,
-    ) -> Result<EncryptionResponse<T>, EncryptError> {
+    ) -> Result<(EncryptedContent<Vec<u8>, T>, Option<CgkaOperation>), EncryptError> {
         let (app_secret, maybe_update_op) = self
             .cgka
             .new_app_secret_for(content_ref, content, pred_refs, csprng)
             .map_err(EncryptError::FailedToMakeAppSecret)?;
 
-        Ok(EncryptionResponse {
-            cgka_op: maybe_update_op,
-            ciphertext: app_secret
+        Ok((
+            app_secret
                 .try_encrypt(content)
                 .map_err(EncryptError::EncryptionFailed)?,
-        })
+            maybe_update_op,
+        ))
     }
 
     pub fn try_decrypt_content(

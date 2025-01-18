@@ -1,7 +1,4 @@
-use super::{
-    dependencies::Dependencies,
-    revocation::{Revocation, StaticRevocation},
-};
+use super::revocation::{Revocation, StaticRevocation};
 use crate::{
     access::Access,
     content::reference::ContentRef,
@@ -31,9 +28,9 @@ pub struct Delegation<T: ContentRef> {
 }
 
 impl<T: ContentRef> Delegation<T> {
-    pub fn subject(&self, issuer: AgentId) -> Identifier {
+    pub fn subject_id(&self, issuer: AgentId) -> Identifier {
         if let Some(proof) = &self.proof {
-            proof.subject()
+            proof.subject_id()
         } else {
             issuer.into()
         }
@@ -51,21 +48,32 @@ impl<T: ContentRef> Delegation<T> {
         self.proof.as_ref()
     }
 
-    pub fn after(&self) -> Dependencies<T> {
-        let AuthHistory { proof, revocations } = self.after_auth();
-
-        Dependencies {
-            delegations: proof.map(|d| vec![d]).unwrap_or(vec![]),
-            revocations: revocations.to_vec(),
-            content: &self.after_content,
-        }
+    pub fn after_revocations(&self) -> &[Rc<Signed<Revocation<T>>>] {
+        &self.after_revocations
     }
 
-    pub fn after_auth(&self) -> AuthHistory<T> {
-        AuthHistory {
-            proof: self.proof.dupe(),
-            revocations: &self.after_revocations,
-        }
+    pub fn after(
+        &self,
+    ) -> (
+        Vec<Rc<Signed<Delegation<T>>>>,
+        Vec<Rc<Signed<Revocation<T>>>>,
+        &BTreeMap<DocumentId, Vec<T>>,
+    ) {
+        let (dlgs, revs) = self.after_auth();
+        (
+            dlgs.map(|d| vec![d]).unwrap_or(vec![]),
+            revs.to_vec(),
+            &self.after_content,
+        )
+    }
+
+    pub fn after_auth(
+        &self,
+    ) -> (
+        Option<Rc<Signed<Delegation<T>>>>,
+        &[Rc<Signed<Revocation<T>>>],
+    ) {
+        (self.proof.dupe(), &self.after_revocations)
     }
 
     pub fn is_root(&self) -> bool {
@@ -114,14 +122,14 @@ impl<T: ContentRef> Delegation<T> {
 }
 
 impl<T: ContentRef> Signed<Delegation<T>> {
-    pub fn subject(&self) -> Identifier {
+    pub fn subject_id(&self) -> Identifier {
         let mut head = self;
 
-        while let Some(parent) = &head.payload().proof {
-            head = parent;
+        while let Some(proof) = &head.payload.proof {
+            head = proof;
         }
 
-        head.id()
+        head.issuer.into()
     }
 }
 
@@ -132,6 +140,7 @@ impl<T: ContentRef> Serialize for Delegation<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct StaticDelegation<T: ContentRef> {
     pub can: Access,
 
@@ -155,22 +164,6 @@ impl<T: ContentRef> From<Delegation<T>> for StaticDelegation<T> {
                 .collect(),
             after_content: delegation.after_content,
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuthHistory<'a, T: ContentRef> {
-    proof: Option<Rc<Signed<Delegation<T>>>>,
-    revocations: &'a [Rc<Signed<Revocation<T>>>],
-}
-
-impl<T: ContentRef> AuthHistory<'_, T> {
-    pub fn proof(&self) -> Option<&Rc<Signed<Delegation<T>>>> {
-        self.proof.as_ref()
-    }
-
-    pub fn revocations(&self) -> &[Rc<Signed<Revocation<T>>>] {
-        self.revocations
     }
 }
 

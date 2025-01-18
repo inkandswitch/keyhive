@@ -13,10 +13,12 @@ crate-type = ["cdylib"]
 [dependencies]
 beehive_core = { path = "../beehive_core" }
 
+derive_more = { workspace = true }
 dupe = { workspace = true }
 ed25519-dalek = { workspace = true }
-thiserror = { workspace = true }
+nonempty = { workspace = true }
 serde = { workspace = true }
+thiserror = { workspace = true }
 
 rand = { workspace = true }
 getrandom = { version = "0.2", features = ["js"] }

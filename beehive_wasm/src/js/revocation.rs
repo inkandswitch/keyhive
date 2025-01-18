@@ -1,20 +1,21 @@
 use super::{
-    change_ref::JsChangeRef, history::JsHistory, identifier::JsIdentifier,
+    after::After, change_ref::JsChangeRef, identifier::JsIdentifier,
     signed_delegation::JsSignedDelegation,
 };
 use beehive_core::principal::group::operation::revocation::Revocation;
+use derive_more::{From, Into};
 use dupe::Dupe;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Revocation)]
-#[derive(Debug, Clone)]
-pub struct JsRevocation(pub(crate) Revocation<JsChangeRef>);
+#[derive(Debug, Clone, From, Into)]
+pub struct JsRevocation(Revocation<JsChangeRef>);
 
 #[wasm_bindgen(js_class = Revocation)]
 impl JsRevocation {
     #[wasm_bindgen(getter)]
-    pub fn subject(&self) -> JsIdentifier {
-        self.0.subject().into()
+    pub fn subject_id(&self) -> JsIdentifier {
+        self.0.subject_id().into()
     }
 
     #[wasm_bindgen(getter)]
@@ -28,19 +29,12 @@ impl JsRevocation {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn after(&self) -> JsHistory {
-        self.0.after().into()
-    }
-}
-
-impl From<Revocation<JsChangeRef>> for JsRevocation {
-    fn from(delegation: Revocation<JsChangeRef>) -> Self {
-        JsRevocation(delegation)
-    }
-}
-
-impl From<JsRevocation> for Revocation<JsChangeRef> {
-    fn from(delegation: JsRevocation) -> Self {
-        delegation.0
+    pub fn after(&self) -> After {
+        let (delegations, revocations, cs) = self.0.after();
+        After {
+            delegations,
+            revocations,
+            content: cs.clone(),
+        }
     }
 }

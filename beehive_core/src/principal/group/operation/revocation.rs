@@ -1,7 +1,6 @@
-use super::{
-    delegation::{Delegation, StaticDelegation},
-    dependencies::Dependencies,
-};
+// FIXME move to Group
+
+use super::delegation::{Delegation, StaticDelegation};
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
@@ -19,8 +18,8 @@ pub struct Revocation<T: ContentRef> {
 }
 
 impl<T: ContentRef> Revocation<T> {
-    pub fn subject(&self) -> Identifier {
-        self.revoke.subject()
+    pub fn subject_id(&self) -> Identifier {
+        self.revoke.subject_id()
     }
 
     pub fn revoked(&self) -> &Rc<Signed<Delegation<T>>> {
@@ -35,23 +34,25 @@ impl<T: ContentRef> Revocation<T> {
         self.proof.dupe()
     }
 
-    pub fn after(&self) -> Dependencies<T> {
+    pub fn after(
+        &self,
+    ) -> (
+        Vec<Rc<Signed<Delegation<T>>>>,
+        Vec<Rc<Signed<Revocation<T>>>>,
+        &BTreeMap<DocumentId, Vec<T>>,
+    ) {
         let mut dlgs = vec![self.revoke.dupe()];
         if let Some(dlg) = &self.proof {
             dlgs.push(dlg.clone());
         }
 
-        Dependencies {
-            delegations: dlgs,
-            revocations: vec![],
-            content: &self.after_content,
-        }
+        (dlgs, vec![], &self.after_content)
     }
 }
 
 impl<T: ContentRef> Signed<Revocation<T>> {
-    pub fn subject(&self) -> Identifier {
-        self.payload().subject()
+    pub fn subject_id(&self) -> Identifier {
+        self.payload.subject_id()
     }
 }
 
@@ -73,6 +74,7 @@ impl<T: ContentRef> Serialize for Revocation<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct StaticRevocation<T: ContentRef> {
     /// The [`Delegation`] being revoked.
     pub revoke: Digest<Signed<StaticDelegation<T>>>,

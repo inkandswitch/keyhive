@@ -12,6 +12,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Copy, Serialize, Deserialize)]
 pub struct Identifier(pub ed25519_dalek::VerifyingKey);
 
+#[cfg(any(test, feature = "arbitrary"))]
+impl<'a> arbitrary::Arbitrary<'a> for Identifier {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let bytes = u.bytes(32)?;
+        let arr = <[u8; 32]>::try_from(bytes).unwrap();
+        let key = ed25519_dalek::SigningKey::from_bytes(&arr);
+        Ok(key.verifying_key().into())
+    }
+}
+
 impl Identifier {
     #[cfg(any(feature = "test_utils", test))]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {

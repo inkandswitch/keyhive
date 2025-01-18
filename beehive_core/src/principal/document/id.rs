@@ -1,12 +1,26 @@
 use crate::principal::{identifier::Identifier, membered::id::MemberedId, verifiable::Verifiable};
+use derive_more::{From, Into};
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 #[derive(
-    Debug, Copy, Dupe, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+    Debug,
+    Copy,
+    Dupe,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    From,
+    Into,
 )]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct DocumentId(pub(crate) Identifier);
 
 impl DocumentId {
@@ -25,12 +39,6 @@ impl DocumentId {
 
     pub fn as_slice(&self) -> &[u8] {
         self.0.as_slice()
-    }
-}
-
-impl From<DocumentId> for Identifier {
-    fn from(id: DocumentId) -> Identifier {
-        id.0
     }
 }
 

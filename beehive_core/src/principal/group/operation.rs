@@ -1,5 +1,4 @@
 pub mod delegation;
-pub mod dependencies;
 pub mod revocation;
 
 use crate::{
@@ -9,7 +8,6 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use delegation::Delegation;
-use dependencies::Dependencies;
 use dupe::Dupe;
 use revocation::Revocation;
 use serde::{Deserialize, Serialize};
@@ -37,10 +35,10 @@ impl<T: ContentRef + Serialize> Serialize for Operation<T> {
 }
 
 impl<T: ContentRef> Operation<T> {
-    pub fn subject(&self) -> Identifier {
+    pub fn subject_id(&self) -> Identifier {
         match self {
-            Operation::Delegation(delegation) => delegation.subject(),
-            Operation::Revocation(revocation) => revocation.subject(),
+            Operation::Delegation(delegation) => delegation.subject_id(),
+            Operation::Revocation(revocation) => revocation.subject_id(),
         }
     }
 
@@ -56,18 +54,29 @@ impl<T: ContentRef> Operation<T> {
     }
 
     pub fn after_auth(&self) -> Vec<Operation<T>> {
-        let deps = self.after();
-        deps.delegations
-            .into_iter()
+        let (dlgs, revs, _) = self.after();
+        dlgs.into_iter()
             .map(|d| d.into())
-            .chain(deps.revocations.into_iter().map(|r| r.into()))
+            .chain(revs.into_iter().map(|r| r.into()))
             .collect()
     }
 
-    pub fn after(&self) -> Dependencies<T> {
+    pub fn after(
+        &self,
+    ) -> (
+        Vec<Rc<Signed<Delegation<T>>>>,
+        Vec<Rc<Signed<Revocation<T>>>>,
+        &BTreeMap<DocumentId, Vec<T>>,
+    ) {
         match self {
-            Operation::Delegation(delegation) => delegation.payload().after(),
-            Operation::Revocation(revocation) => revocation.payload().after(),
+            Operation::Delegation(delegation) => {
+                let (dlgs, revs, content) = delegation.payload().after();
+                (dlgs, revs, content)
+            }
+            Operation::Revocation(revocation) => {
+                let (dlg, revs, content) = revocation.payload().after();
+                (dlg, revs, content)
+            }
         }
     }
 
@@ -90,7 +99,6 @@ impl<T: ContentRef> Operation<T> {
             return (CaMap::new(), 1);
         }
 
-        #[allow(clippy::mutable_key_type)]
         let mut ancestors = HashMap::new();
         let mut heads = vec![];
 
@@ -131,16 +139,12 @@ impl<T: ContentRef> Operation<T> {
         delegation_heads: &CaMap<Signed<Delegation<T>>>,
         revocation_heads: &CaMap<Signed<Revocation<T>>>,
     ) -> Vec<(Digest<Operation<T>>, Operation<T>)> {
-        struct History<U: ContentRef> {
-            op: Operation<U>,
-            op_ancestors: CaMap<Operation<U>>,
-            longest_path: usize,
-        }
-
         // NOTE: BTreeMap to get deterministic order
-        let mut ops_with_ancestors: BTreeMap<Digest<Operation<T>>, History<T>> = BTreeMap::new();
+        let mut ops_with_ancestors: BTreeMap<
+            Digest<Operation<T>>,
+            (Operation<T>, CaMap<Operation<T>>, usize),
+        > = BTreeMap::new();
 
-        #[allow(clippy::mutable_key_type)]
         let mut leftovers: HashSet<Operation<T>> = HashSet::new();
         let mut explore: Vec<Operation<T>> = vec![];
 
@@ -157,48 +161,27 @@ impl<T: ContentRef> Operation<T> {
         }
 
         while let Some(op) = explore.pop() {
-            let (op_ancestors, longest_path) = op.ancestors();
+            let (ancestors, longest_path) = op.ancestors();
 
-            for ancestor in op_ancestors.values() {
+            for ancestor in ancestors.values() {
                 explore.push(ancestor.as_ref().clone());
             }
 
-            ops_with_ancestors.insert(
-                Digest::hash(&op),
-                History {
-                    op,
-                    op_ancestors,
-                    longest_path,
-                },
-            );
+            ops_with_ancestors.insert(Digest::hash(&op), (op, ancestors, longest_path));
         }
 
         let mut adjacencies: TopologicalSort<(Digest<Operation<T>>, &Operation<T>)> =
             topological_sort::TopologicalSort::new();
 
-        for (
-            digest,
-            History {
-                op,
-                op_ancestors,
-                longest_path,
-            },
-        ) in ops_with_ancestors.iter()
-        {
+        for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
             for (other_digest, other_op) in op_ancestors.iter() {
-                let History {
-                    op: _,
-                    op_ancestors: other_ancestors,
-                    longest_path: other_longest_path,
-                } = ops_with_ancestors
+                let (_, other_ancestors, other_longest_path) = ops_with_ancestors
                     .get(other_digest)
                     .expect("values that we just put there to be there");
 
-                #[allow(clippy::mutable_key_type)]
                 let ancestor_set: HashSet<&Operation<T>> =
                     op_ancestors.values().map(|op| op.as_ref()).collect();
 
-                #[allow(clippy::mutable_key_type)]
                 let other_ancestor_set: HashSet<&Operation<T>> =
                     other_ancestors.values().map(|op| op.as_ref()).collect();
 
@@ -291,9 +274,23 @@ impl<T: ContentRef> From<Rc<Signed<Revocation<T>>>> for Operation<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum StaticOperation<T: ContentRef> {
-    Delegation(delegation::StaticDelegation<T>),
-    Revocation(revocation::StaticRevocation<T>),
+    Delegation(Signed<delegation::StaticDelegation<T>>),
+    Revocation(Signed<revocation::StaticRevocation<T>>),
+}
+
+impl<T: ContentRef> From<Operation<T>> for StaticOperation<T> {
+    fn from(op: Operation<T>) -> Self {
+        match op {
+            Operation::Delegation(d) => {
+                StaticOperation::Delegation(Rc::unwrap_or_clone(d).map(Into::into))
+            }
+            Operation::Revocation(r) => {
+                StaticOperation::Revocation(Rc::unwrap_or_clone(r).map(Into::into))
+            }
+        }
+    }
 }
 
 #[cfg(test)]

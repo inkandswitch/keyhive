@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
+use derive_more::{From, Into};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = ChangeRef)]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Into, From,
+)]
 pub struct JsChangeRef(pub(crate) Vec<u8>);
 
 #[wasm_bindgen(js_class = ChangeRef)]

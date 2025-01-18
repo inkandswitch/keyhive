@@ -6,6 +6,7 @@ use crate::{
     principal::group::operation::{
         delegation::{Delegation, StaticDelegation},
         revocation::{Revocation, StaticRevocation},
+        Operation, StaticOperation,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,14 @@ pub struct Digest<T: Serialize> {
 
     /// A phantom parameter to retain the type of the preimage.
     pub(crate) _phantom: PhantomData<T>,
+}
+
+#[cfg(any(test, feature = "arbitrary"))]
+impl<'a, T: arbitrary::Arbitrary<'a> + Serialize> arbitrary::Arbitrary<'a> for Digest<T> {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let preimage = T::arbitrary(u)?;
+        Ok(Digest::hash(&preimage))
+    }
 }
 
 impl<T: Serialize> Digest<T> {
@@ -100,6 +109,16 @@ impl<T: Serialize> Digest<T> {
         }
 
         count
+    }
+
+    // NOTE a private helper for implementing From instances.
+    // We do this instead of exposing it because only certain hash types
+    // are considered equivalent.
+    fn coerce<U: Serialize>(&self) -> Digest<U> {
+        Digest {
+            raw: self.raw,
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -205,72 +224,132 @@ impl<T: Serialize> From<Digest<T>> for Vec<u8> {
 
 impl<T: ContentRef> From<Digest<Signed<Delegation<T>>>> for Digest<Signed<StaticDelegation<T>>> {
     fn from(hash: Digest<Signed<Delegation<T>>>) -> Self {
-        Digest {
-            raw: hash.raw,
-            _phantom: PhantomData,
-        }
+        hash.coerce()
     }
 }
 
 impl<T: ContentRef> From<Digest<Signed<StaticDelegation<T>>>> for Digest<Signed<Delegation<T>>> {
     fn from(hash: Digest<Signed<StaticDelegation<T>>>) -> Self {
-        Digest {
-            raw: hash.raw,
-            _phantom: PhantomData,
-        }
+        hash.coerce()
     }
 }
 
 impl<T: ContentRef> From<Digest<Signed<Revocation<T>>>> for Digest<Signed<StaticRevocation<T>>> {
     fn from(hash: Digest<Signed<Revocation<T>>>) -> Self {
-        Digest {
-            raw: hash.raw,
-            _phantom: PhantomData,
-        }
+        hash.coerce()
     }
 }
 
 impl<T: ContentRef> From<Digest<Signed<StaticRevocation<T>>>> for Digest<Signed<Revocation<T>>> {
     fn from(hash: Digest<Signed<StaticRevocation<T>>>) -> Self {
-        Digest {
-            raw: hash.raw,
-            _phantom: PhantomData,
-        }
+        hash.coerce()
     }
 }
 
 impl<T: ContentRef> From<&Digest<Signed<Delegation<T>>>> for Digest<Signed<StaticDelegation<T>>> {
     fn from(hash: &Digest<Signed<Delegation<T>>>) -> Self {
-        Digest {
-            raw: hash.raw,
-            _phantom: PhantomData,
-        }
+        hash.coerce()
     }
 }
 
 impl<T: ContentRef> From<&Digest<Signed<StaticDelegation<T>>>> for Digest<Signed<Delegation<T>>> {
     fn from(hash: &Digest<Signed<StaticDelegation<T>>>) -> Self {
-        Digest {
-            raw: hash.raw,
-            _phantom: PhantomData,
-        }
+        hash.coerce()
     }
 }
 
 impl<T: ContentRef> From<&Digest<Signed<Revocation<T>>>> for Digest<Signed<StaticRevocation<T>>> {
     fn from(hash: &Digest<Signed<Revocation<T>>>) -> Self {
-        Digest {
-            raw: hash.raw,
-            _phantom: PhantomData,
-        }
+        hash.coerce()
     }
 }
 
 impl<T: ContentRef> From<&Digest<Signed<StaticRevocation<T>>>> for Digest<Signed<Revocation<T>>> {
     fn from(hash: &Digest<Signed<StaticRevocation<T>>>) -> Self {
-        Digest {
-            raw: hash.raw,
-            _phantom: PhantomData,
-        }
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<Digest<Signed<StaticRevocation<T>>>> for Digest<StaticOperation<T>> {
+    fn from(hash: Digest<Signed<StaticRevocation<T>>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<Digest<Signed<StaticDelegation<T>>>> for Digest<StaticOperation<T>> {
+    fn from(hash: Digest<Signed<StaticDelegation<T>>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<Digest<StaticOperation<T>>> for Digest<Signed<StaticDelegation<T>>> {
+    fn from(hash: Digest<StaticOperation<T>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<Digest<StaticOperation<T>>> for Digest<Signed<StaticRevocation<T>>> {
+    fn from(hash: Digest<StaticOperation<T>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<Digest<StaticOperation<T>>> for Digest<Operation<T>> {
+    fn from(hash: Digest<StaticOperation<T>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<&Digest<StaticOperation<T>>> for Digest<Operation<T>> {
+    fn from(hash: &Digest<StaticOperation<T>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<Digest<Operation<T>>> for Digest<Signed<Delegation<T>>> {
+    fn from(hash: Digest<Operation<T>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<Digest<Operation<T>>> for Digest<Signed<Revocation<T>>> {
+    fn from(hash: Digest<Operation<T>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<&Digest<Operation<T>>> for Digest<Signed<Delegation<T>>> {
+    fn from(hash: &Digest<Operation<T>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<&Digest<Operation<T>>> for Digest<Signed<Revocation<T>>> {
+    fn from(hash: &Digest<Operation<T>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<Digest<Signed<Delegation<T>>>> for Digest<Operation<T>> {
+    fn from(hash: Digest<Signed<Delegation<T>>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<&Digest<Signed<Delegation<T>>>> for Digest<Operation<T>> {
+    fn from(hash: &Digest<Signed<Delegation<T>>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<Digest<Signed<Revocation<T>>>> for Digest<Operation<T>> {
+    fn from(hash: Digest<Signed<Revocation<T>>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef> From<&Digest<Signed<Revocation<T>>>> for Digest<Operation<T>> {
+    fn from(hash: &Digest<Signed<Revocation<T>>>) -> Self {
+        hash.coerce()
     }
 }
