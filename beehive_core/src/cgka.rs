@@ -23,6 +23,7 @@ use crate::{
 };
 use beekem::BeeKem;
 use derivative::Derivative;
+use dupe::Dupe;
 use error::CgkaError;
 use keys::ShareKeyMap;
 use nonempty::NonEmpty;
@@ -32,6 +33,7 @@ use std::{
     borrow::Borrow,
     collections::{BTreeSet, HashMap, HashSet},
     hash::{Hash, Hasher},
+    rc::Rc,
 };
 
 /// Exposes CGKA (Continuous Group Key Agreement) operations like deriving
@@ -271,18 +273,21 @@ impl Cgka {
     /// we add it to our ops graph but don't apply it yet. If there are no outstanding
     /// membership changes and we receive a concurrent update, we can apply it
     /// immediately.
-    pub fn merge_concurrent_operation(&mut self, op: &CgkaOperation) -> Result<(), CgkaError> {
-        if self.ops_graph.contains_op_hash(&Digest::hash(op)) {
+    pub fn merge_concurrent_operation(&mut self, op: Rc<CgkaOperation>) -> Result<(), CgkaError> {
+        if self.ops_graph.contains_op_hash(&Digest::hash(op.borrow())) {
             return Ok(());
         }
         let predecessors = op.predecessors();
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
             if self.pending_ops_for_structural_change {
-                self.ops_graph.add_op(op, &predecessors);
-            } else if matches!(op, CgkaOperation::Add { .. } | CgkaOperation::Remove { .. }) {
+                self.ops_graph.add_op(op.borrow(), &predecessors);
+            } else if matches!(
+                op.borrow(),
+                CgkaOperation::Add { .. } | CgkaOperation::Remove { .. }
+            ) {
                 self.pending_ops_for_structural_change = true;
-                self.ops_graph.add_op(op, &predecessors);
+                self.ops_graph.add_op(op.borrow(), &predecessors);
             } else {
                 self.apply_operation(op)?;
             }
@@ -296,11 +301,11 @@ impl Cgka {
     }
 
     /// Apply a [`CgkaOperation`].
-    fn apply_operation(&mut self, op: &CgkaOperation) -> Result<(), CgkaError> {
-        if self.ops_graph.contains_op_hash(&Digest::hash(op)) {
+    fn apply_operation(&mut self, op: Rc<CgkaOperation>) -> Result<(), CgkaError> {
+        if self.ops_graph.contains_op_hash(&Digest::hash(op.borrow())) {
             return Ok(());
         }
-        match op {
+        match op.borrow() {
             CgkaOperation::Add { added_id, pk, .. } => {
                 self.tree.push_leaf(*added_id, (*pk).into());
             }
@@ -311,7 +316,7 @@ impl Cgka {
                 self.tree.apply_path(new_path);
             }
         }
-        self.ops_graph.add_op(op, &op.predecessors());
+        self.ops_graph.add_op(op.borrow(), &op.predecessors());
         Ok(())
     }
 
@@ -320,7 +325,7 @@ impl Cgka {
     fn apply_epochs(&mut self, epochs: &NonEmpty<CgkaEpoch>) -> Result<(), CgkaError> {
         for epoch in epochs {
             if epoch.len() == 1 {
-                self.apply_operation(&epoch[0])?;
+                self.apply_operation(epoch[0].dupe())?;
             } else {
                 // If all operations in this epoch are updates, we can apply them
                 // directly and move on to the next epoch.
@@ -329,7 +334,7 @@ impl Cgka {
                     .all(|op| matches!(op.borrow(), CgkaOperation::Update { .. }))
                 {
                     for op in epoch.iter() {
-                        self.apply_operation(op)?;
+                        self.apply_operation(op.dupe())?;
                     }
                     continue;
                 }
@@ -348,7 +353,7 @@ impl Cgka {
                         }
                         _ => {}
                     }
-                    self.apply_operation(op)?;
+                    self.apply_operation(op.dupe())?;
                 }
                 self.tree
                     .sort_leaves_and_blank_paths_for_concurrent_membership_changes(
@@ -548,9 +553,9 @@ mod tests {
         let (mut cgkas, _ops) = setup_member_cgkas(doc_id, 7)?;
         assert!(cgkas[0].cgka.has_pcs_key());
         let (_pcs_key, op1) = cgkas[1].update(csprng)?;
-        cgkas[0].cgka.merge_concurrent_operation(&op1)?;
+        cgkas[0].cgka.merge_concurrent_operation(Rc::new(op1))?;
         let (_pcs_key, op6) = cgkas[6].update(csprng)?;
-        cgkas[0].cgka.merge_concurrent_operation(&op6)?;
+        cgkas[0].cgka.merge_concurrent_operation(Rc::new(op6))?;
         assert!(!cgkas[0].cgka.has_pcs_key());
         Ok(())
     }
@@ -565,7 +570,8 @@ mod tests {
             if idx == m_idx {
                 continue;
             }
-            m.cgka.merge_concurrent_operation(&update_op.clone())?;
+            m.cgka
+                .merge_concurrent_operation(Rc::new(update_op.clone()))?;
         }
         // Compare the result of secret() for all members
         for m in member_cgkas.iter_mut() {
