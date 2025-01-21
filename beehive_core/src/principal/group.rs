@@ -379,6 +379,9 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
 
         let rc = Rc::new(delegation);
         self.listener.on_delegation(&rc);
+        for doc in relevant_docs {
+            doc.borrow_mut().add_cgka_member(rc.dupe());
+        }
         let _digest = self.receive_delegation(rc.dupe())?;
         Ok(rc)
     }
@@ -481,6 +484,17 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         for r in revocations.iter() {
             self.listener.on_revocation(r);
         }
+
+        // FIXME: Return these ops at the end of this method.
+        // let mut ops = Vec::new();
+        // for r in revocations {
+        //     for id in r.payload().delegate.individual_ids() {
+        //         FIXME: Get a handle on all documents for each delegate
+        //         for doc in documents {
+        //             ops.push(doc.remove_cgka_member(id));
+        //         }
+        //     }
+        // }
 
         Ok(revocations)
     }

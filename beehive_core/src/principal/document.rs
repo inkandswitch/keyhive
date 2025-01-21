@@ -194,16 +194,25 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
             after_content,
         )?;
 
-        let mut ops = Vec::new();
-        for (id, pre_key) in member_to_add.pick_individual_prekeys(self.doc_id()) {
-            let op = self.cgka.add(id, pre_key)?;
-            ops.push(op);
-        }
+        self.add_cgka_member(rc)
 
         Ok(AddMemberUpdate {
             delegation: dlgs,
             cgka_ops: ops,
         })
+
+    pub fn add_cgka_member(&mut self, delegation: Rc<Signed<Delegation<T>>>) -> Vec<CgkaOperation> {
+        let mut ops = Vec::new();
+        for (id, pre_key) in delegation
+            .clone()
+            .payload()
+            .delegate
+            .pick_individual_prekeys(self.doc_id())
+        {
+            let op = self.cgka.add(id, pre_key).expect("FIXME");
+            ops.push(op);
+        }
+        ops
     }
 
     pub fn revoke_member(
@@ -234,6 +243,10 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
             revocations: revs,
             cgka_ops: ops,
         })
+    }
+
+    pub fn remove_cgka_member(&mut self, id: IndividualId) -> CgkaOperation {
+        self.cgka.remove(id).expect("FIXME")
     }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T, L>) -> Vec<Rc<Signed<Revocation<T, L>>>> {
