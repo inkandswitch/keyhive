@@ -304,7 +304,7 @@ impl<T: ContentRef> Group<T> {
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &[&Document<T>],
-    ) -> Result<Rc<Signed<Delegation<T>>>, AddMemberError> {
+    ) -> Result<Rc<Signed<Delegation<T>>>, AddGroupMemberError> {
         let after_content = relevant_docs
             .iter()
             .map(|d| {
@@ -324,7 +324,7 @@ impl<T: ContentRef> Group<T> {
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Rc<Signed<Delegation<T>>>, AddMemberError> {
+    ) -> Result<Rc<Signed<Delegation<T>>>, AddGroupMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
         let agent: Agent<T> = indie.into();
 
@@ -333,10 +333,10 @@ impl<T: ContentRef> Group<T> {
         } else {
             let p = self
                 .get_capability(&agent.agent_id())
-                .ok_or(AddMemberError::NoProof)?;
+                .ok_or(AddGroupMemberError::NoProof)?;
 
             if can > p.payload().can {
-                return Err(AddMemberError::AccessEscalation {
+                return Err(AddGroupMemberError::AccessEscalation {
                     wanted: can,
                     have: p.payload().can,
                 });
@@ -534,7 +534,7 @@ impl<T: ContentRef> Serialize for Group<T> {
 }
 
 #[derive(Debug, Error)]
-pub enum AddMemberError {
+pub enum AddGroupMemberError {
     #[error(transparent)]
     SigningError(#[from] SigningError),
 

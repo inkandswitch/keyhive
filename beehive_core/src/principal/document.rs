@@ -20,7 +20,7 @@ use crate::{
                 delegation::{Delegation, DelegationError},
                 revocation::Revocation,
             },
-            AddMemberError, Group, RevokeMemberError,
+            AddGroupMemberError, Group, RevokeMemberError,
         },
         identifier::Identifier,
         individual::Individual,
@@ -182,7 +182,7 @@ impl<T: ContentRef> Document<T> {
 
         let mut ops = Vec::new();
         for (id, pre_key) in member_to_add.pick_individual_prekeys(self.doc_id()) {
-            let op = self.cgka.add(id, pre_key).expect("FIXME");
+            let op = self.cgka.add(id, pre_key)?;
             ops.push(op);
         }
 
@@ -304,6 +304,15 @@ pub struct AddMemberUpdate<T: ContentRef> {
 pub struct RevokeMemberUpdate<T: ContentRef> {
     pub(crate) revocations: Vec<Rc<Signed<Revocation<T>>>>,
     pub(crate) cgka_ops: Vec<CgkaOperation>,
+}
+
+#[derive(Debug, Error)]
+pub enum AddMemberError {
+    #[error(transparent)]
+    AddMemberError(#[from] AddGroupMemberError),
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

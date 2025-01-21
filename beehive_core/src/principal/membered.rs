@@ -2,11 +2,11 @@ pub mod id;
 
 use super::{
     agent::{id::AgentId, Agent},
-    document::{id::DocumentId, AddMemberUpdate, Document, RevokeMemberUpdate},
+    document::{id::DocumentId, AddMemberError, AddMemberUpdate, Document, RevokeMemberUpdate},
     group::{
         error::AddError,
         operation::{delegation::Delegation, revocation::Revocation},
-        AddMemberError, Group, RevokeMemberError,
+        Group, RevokeMemberError,
     },
     verifiable::Verifiable,
 };

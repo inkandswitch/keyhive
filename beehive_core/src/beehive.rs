@@ -15,6 +15,7 @@ use crate::{
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
+        document::AddMemberError,
         document::{
             id::DocumentId, AddMemberUpdate, DecryptError, Document, EncryptError,
             EncryptedContentWithUpdate, RevokeMemberUpdate,
@@ -27,7 +28,7 @@ use crate::{
                 revocation::{Revocation, StaticRevocation},
                 Operation, StaticOperation,
             },
-            AddMemberError, Group, RevokeMemberError,
+            Group, RevokeMemberError,
         },
         identifier::Identifier,
         individual::{id::IndividualId, Individual},
