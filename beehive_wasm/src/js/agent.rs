@@ -1,11 +1,10 @@
 use super::change_ref::JsChangeRef;
 use beehive_core::principal::agent::Agent;
-use derive_more::{Deref, From, Into};
-use std::fmt::{Display, Formatter};
+use derive_more::{Deref, Display, From, Into};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Agent)]
-#[derive(Debug, Clone, From, Into, Deref)]
+#[derive(Debug, Clone, From, Into, Deref, Display)]
 pub struct JsAgent(pub(crate) Agent<JsChangeRef>);
 
 #[wasm_bindgen(js_class = Agent)]
@@ -35,11 +34,5 @@ impl JsAgent {
     #[wasm_bindgen(js_name = isDocument)]
     pub fn is_document(&self) -> bool {
         matches!(self.0, Agent::Document(_))
-    }
-}
-
-impl Display for JsAgent {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
     }
 }

@@ -202,7 +202,7 @@ impl<T: ContentRef> GroupState<T> {
                 .proof_lineage()
                 .iter()
                 .try_fold(proof.as_ref(), |head, next_proof| {
-                    if proof.payload.can.cmp(&proof.payload.can) == Ordering::Greater {
+                    if proof.payload.can.cmp(&next_proof.payload.can) == Ordering::Greater {
                         return Err(AddError::Escelation {
                             claimed: proof.payload.can,
                             proof: next_proof.payload.can,

@@ -10,7 +10,7 @@ use super::{
     verifiable::Verifiable,
 };
 use crate::{content::reference::ContentRef, crypto::share_key::ShareKey};
-use derive_more::From;
+use derive_more::{From, TryInto};
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use std::{
@@ -23,7 +23,7 @@ use std::{
 /// Immutable union over all agent types.
 ///
 /// This type is very lightweight to clone, since it only contains immutable references to the actual agents.
-#[derive(Debug, Clone, PartialEq, Eq, From)]
+#[derive(Debug, Clone, PartialEq, Eq, From, TryInto)]
 pub enum Agent<T: ContentRef> {
     Active(Rc<RefCell<Active>>),
     Individual(Rc<RefCell<Individual>>),

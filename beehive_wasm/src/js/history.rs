@@ -23,7 +23,7 @@ pub struct JsHistory {
     pub(crate) content: BTreeMap<DocumentId, Vec<JsChangeRef>>,
 }
 
-#[wasm_bindgen(js_class = After)]
+#[wasm_bindgen(js_class = History)]
 impl JsHistory {
     pub fn delegations(&self) -> Vec<JsSignedDelegation> {
         self.delegations
