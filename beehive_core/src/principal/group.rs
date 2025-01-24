@@ -499,7 +499,7 @@ impl<T: ContentRef> Group<T> {
                                 // Proof not in the current state, so skip this one
                                 continue;
                             }
-                        } else {
+                        } else if found_proof.issuer != self.verifying_key() {
                             continue;
                         };
                     } else if d.issuer != self.verifying_key() {
