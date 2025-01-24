@@ -19,7 +19,6 @@ use crate::{
         document::{
             id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError, Document, EncryptError,
             EncryptedContentWithUpdate, MissingIndividualError, RevokeMemberUpdate,
-            TryFromDocumentArchiveError,
         },
         group::{
             error::AddError,
@@ -29,7 +28,6 @@ use crate::{
                 revocation::{Revocation, StaticRevocation},
                 Operation, StaticOperation,
             },
-            state::MissingOperation,
             Group, RevokeMemberError,
         },
         identifier::Identifier,
@@ -1061,31 +1059,6 @@ pub enum TryFromArchiveError<T: ContentRef> {
 impl<T: ContentRef> From<MissingIndividualError> for TryFromArchiveError<T> {
     fn from(e: MissingIndividualError) -> Self {
         TryFromArchiveError::MissingIndividual(e.0)
-    }
-}
-
-impl<T: ContentRef> From<MissingOperation<T>> for TryFromArchiveError<T> {
-    fn from(e: MissingOperation<T>) -> Self {
-        match e {
-            MissingOperation::Delegation(d) => TryFromArchiveError::MissingDelegation(d),
-            MissingOperation::Revocation(r) => TryFromArchiveError::MissingRevocation(r),
-        }
-    }
-}
-
-impl<T: ContentRef> From<TryFromDocumentArchiveError<T>> for TryFromArchiveError<T> {
-    fn from(e: TryFromDocumentArchiveError<T>) -> Self {
-        match e {
-            TryFromDocumentArchiveError::MissingDelegation(d) => {
-                TryFromArchiveError::MissingDelegation(d)
-            }
-            TryFromDocumentArchiveError::MissingRevocation(r) => {
-                TryFromArchiveError::MissingRevocation(r)
-            }
-            TryFromDocumentArchiveError::MissingIndividual(i) => {
-                TryFromArchiveError::MissingIndividual(Box::new(i))
-            }
-        }
     }
 }
 

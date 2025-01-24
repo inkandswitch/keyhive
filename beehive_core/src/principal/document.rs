@@ -21,7 +21,6 @@ use crate::{
                 delegation::{Delegation, DelegationError},
                 revocation::Revocation,
             },
-            state::MissingOperation,
             Group, GroupArchive, RevokeMemberError,
         },
         identifier::Identifier,
@@ -424,14 +423,5 @@ impl<T: ContentRef> From<MissingDependency<Digest<Signed<Delegation<T>>>>>
 {
     fn from(e: MissingDependency<Digest<Signed<Delegation<T>>>>) -> Self {
         TryFromDocumentArchiveError::MissingDelegation(e.0)
-    }
-}
-
-impl<T: ContentRef> From<MissingOperation<T>> for TryFromDocumentArchiveError<T> {
-    fn from(missing: MissingOperation<T>) -> Self {
-        match missing {
-            MissingOperation::Delegation(d) => TryFromDocumentArchiveError::MissingDelegation(d),
-            MissingOperation::Revocation(r) => TryFromDocumentArchiveError::MissingRevocation(r),
-        }
     }
 }

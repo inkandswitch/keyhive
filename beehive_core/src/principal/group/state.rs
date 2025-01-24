@@ -23,7 +23,6 @@ use std::{
     collections::{BTreeMap, HashSet},
     rc::Rc,
 };
-use thiserror::Error;
 
 #[derive(Clone, Eq, Derivative)]
 #[derivative(Debug, PartialEq, Hash)]
@@ -305,13 +304,4 @@ impl<T: ContentRef> From<&GroupState<T>> for GroupStateArchive<T> {
             revocation_heads: state.revocation_heads.keys().cloned().collect(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum MissingOperation<T: ContentRef> {
-    #[error("Missing delegation: {0}")]
-    Delegation(#[from] Digest<Signed<Delegation<T>>>),
-
-    #[error("Missing revocation: {0}")]
-    Revocation(#[from] Digest<Signed<Revocation<T>>>),
 }
