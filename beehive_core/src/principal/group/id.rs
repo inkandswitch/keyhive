@@ -1,11 +1,24 @@
 use crate::principal::{identifier::Identifier, verifiable::Verifiable};
+use derive_more::{From, Into};
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 
 /// A group identifier.
 #[derive(
-    Debug, Copy, Clone, Dupe, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+    Debug,
+    Copy,
+    Clone,
+    Dupe,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    From,
+    Into,
+    Serialize,
+    Deserialize,
 )]
 pub struct GroupId(pub(crate) Identifier);
 
@@ -25,12 +38,6 @@ impl GroupId {
 
     pub fn as_slice(&self) -> &[u8] {
         self.0.as_slice()
-    }
-}
-
-impl From<GroupId> for Identifier {
-    fn from(group_id: GroupId) -> Identifier {
-        group_id.0
     }
 }
 

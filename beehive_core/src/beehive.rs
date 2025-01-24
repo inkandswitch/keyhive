@@ -287,7 +287,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
     pub fn revoke_member(
         &mut self,
-        to_revoke: AgentId,
+        to_revoke: Identifier,
         resource: &mut Membered<T>,
     ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
         let mut relevant_docs = BTreeMap::new();
@@ -340,7 +340,10 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         self.docs_reachable_by_agent(self.active.dupe().into())
     }
 
-    pub fn reachable_members(&self, membered: Membered<T>) -> HashMap<AgentId, (Agent<T>, Access)> {
+    pub fn reachable_members(
+        &self,
+        membered: Membered<T>,
+    ) -> HashMap<Identifier, (Agent<T>, Access)> {
         match membered {
             Membered::Group(group) => group.borrow().transitive_members(),
             Membered::Document(doc) => doc.borrow().transitive_members(),
@@ -352,14 +355,12 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         let mut caps: BTreeMap<DocumentId, Ability<T>> = BTreeMap::new();
         let mut seen: HashSet<AgentId> = HashSet::new();
 
-        let agent_id = agent.agent_id();
-
         for doc in self.docs.values() {
             seen.insert(doc.clone().borrow().agent_id());
 
             let doc_id = doc.borrow().doc_id();
 
-            if let Some(proofs) = doc.borrow().members().get(&agent_id) {
+            if let Some(proofs) = doc.borrow().members().get(&agent.id()) {
                 for proof in proofs {
                     caps.insert(
                         doc_id,
@@ -375,7 +376,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         for group in self.groups.values() {
             seen.insert(group.borrow().agent_id());
 
-            if let Some(proofs) = group.borrow().members().get(&agent_id) {
+            if let Some(proofs) = group.borrow().members().get(&agent.id()) {
                 for proof in proofs {
                     explore.push((group.dupe(), proof.payload().can));
                 }
@@ -390,7 +391,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
 
                 let doc_id = doc.borrow().doc_id();
 
-                if let Some(proofs) = doc.borrow().members().get(&agent_id) {
+                if let Some(proofs) = doc.borrow().members().get(&agent.id()) {
                     for proof in proofs {
                         caps.insert(
                             doc_id,
@@ -412,7 +413,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
                     continue;
                 }
 
-                if let Some(proofs) = focus_group.borrow().members().get(&agent_id) {
+                if let Some(proofs) = focus_group.borrow().members().get(&agent.id()) {
                     for proof in proofs {
                         explore.push((focus_group.dupe(), proof.payload.can));
                     }
@@ -430,7 +431,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         let mut caps = HashMap::new();
 
         for group in self.groups.values() {
-            if let Some((_, can)) = group.borrow().transitive_members().get(&agent.agent_id()) {
+            if let Some((_, can)) = group.borrow().transitive_members().get(&agent.id()) {
                 caps.insert(
                     group.borrow().group_id().into(),
                     (group.dupe().into(), *can),
@@ -439,7 +440,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
         }
 
         for doc in self.docs.values() {
-            if let Some((_, can)) = doc.borrow().transitive_members().get(&agent.agent_id()) {
+            if let Some((_, can)) = doc.borrow().transitive_members().get(&agent.id()) {
                 caps.insert(doc.borrow().doc_id().into(), (doc.dupe().into(), *can));
             }
         }
@@ -930,7 +931,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             rev_store: Rc<RefCell<CaMap<Signed<Revocation<U>>>>>,
             dlg_head_hashes: &HashSet<Digest<Signed<Delegation<U>>>>,
             rev_head_hashes: &HashSet<Digest<Signed<Revocation<U>>>>,
-            members: HashMap<AgentId, NonEmpty<Digest<Signed<Delegation<U>>>>>,
+            members: HashMap<Identifier, NonEmpty<Digest<Signed<Delegation<U>>>>>,
         ) -> Result<(), TryFromArchiveError<U>> {
             let read_dlgs = dlg_store.borrow();
             let read_revs = rev_store.borrow();
@@ -972,13 +973,18 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
                 .groups
                 .get(group_id)
                 .ok_or(TryFromArchiveError::MissingGroup(Box::new(*group_id)))?;
+
             reify_ops(
                 &mut group.borrow_mut(),
                 delegations.dupe(),
                 revocations.dupe(),
                 &group_archive.state.delegation_heads,
                 &group_archive.state.revocation_heads,
-                group_archive.members.clone(),
+                group_archive
+                    .members
+                    .iter()
+                    .map(|(k, v)| ((*k).into(), v.clone()))
+                    .collect(),
             )?;
         }
 
@@ -987,13 +993,19 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
                 .docs
                 .get(doc_id)
                 .ok_or(TryFromArchiveError::MissingDocument(Box::new(*doc_id)))?;
+
             reify_ops(
                 &mut doc.borrow_mut().group,
                 delegations.dupe(),
                 revocations.dupe(),
                 &doc_archive.group.state.delegation_heads,
                 &doc_archive.group.state.revocation_heads,
-                doc_archive.group.members.clone(),
+                doc_archive
+                    .group
+                    .members
+                    .iter()
+                    .map(|(k, v)| ((*k).into(), v.clone()))
+                    .collect(),
             )?;
         }
 

@@ -45,7 +45,7 @@ pub struct Group<T: ContentRef> {
     pub(crate) individual: Individual,
 
     /// The current view of members of a group.
-    pub(crate) members: HashMap<AgentId, NonEmpty<Rc<Signed<Delegation<T>>>>>,
+    pub(crate) members: HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T>>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
     pub(crate) state: state::GroupState<T>,
@@ -109,7 +109,7 @@ impl<T: ContentRef> Group<T> {
             let rc = Rc::new(dlg);
             ds_mut.insert(rc.dupe());
             delegation_heads.insert(rc.dupe());
-            members.insert(parent.agent_id(), nonempty![rc]);
+            members.insert(parent.id(), nonempty![rc]);
 
             Ok::<(), SigningError>(())
         })?;
@@ -160,11 +160,11 @@ impl<T: ContentRef> Group<T> {
         }))
     }
 
-    pub fn members(&self) -> &HashMap<AgentId, NonEmpty<Rc<Signed<Delegation<T>>>>> {
+    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T>>>>> {
         &self.members
     }
 
-    pub fn transitive_members(&self) -> HashMap<AgentId, (Agent<T>, Access)> {
+    pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<T>, Access)> {
         struct GroupAccess<U: ContentRef> {
             agent: Agent<U>,
             agent_access: Access,
@@ -188,7 +188,7 @@ impl<T: ContentRef> Group<T> {
             });
         }
 
-        let mut caps: HashMap<AgentId, (Agent<T>, Access)> = HashMap::new();
+        let mut caps: HashMap<Identifier, (Agent<T>, Access)> = HashMap::new();
 
         while let Some(GroupAccess {
             agent: member,
@@ -196,18 +196,18 @@ impl<T: ContentRef> Group<T> {
             parent_access,
         }) = explore.pop()
         {
-            let agent_id = member.agent_id();
-            if agent_id == self.agent_id() {
+            let id = member.id();
+            if id == self.id() {
                 continue;
             }
 
             let best_access = *caps
-                .get(&agent_id)
+                .get(&id)
                 .map(|(_, existing_access)| existing_access.max(&access))
                 .unwrap_or(&access);
 
             let current_path_access = access.min(parent_access);
-            caps.insert(member.agent_id(), (member.dupe(), current_path_access));
+            caps.insert(member.id(), (member.dupe(), current_path_access));
 
             if let Some(membered) = match member {
                 Agent::Group(inner_group) => Some(Membered::<T>::from(inner_group)),
@@ -247,7 +247,7 @@ impl<T: ContentRef> Group<T> {
         &self.state.revocation_heads
     }
 
-    pub fn get_capability(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
+    pub fn get_capability(&self, member_id: &Identifier) -> Option<&Rc<Signed<Delegation<T>>>> {
         self.members.get(member_id).and_then(|delegations| {
             delegations
                 .iter()
@@ -257,9 +257,10 @@ impl<T: ContentRef> Group<T> {
 
     pub fn get_transitive_capability(
         &self,
-        member_id: &AgentId,
+        member_id: &Identifier,
     ) -> Option<&Rc<Signed<Delegation<T>>>> {
         self.get_capability(member_id).or_else(|| {
+            // FIXME
             todo!("FIXME");
         })
     }
@@ -332,7 +333,7 @@ impl<T: ContentRef> Group<T> {
             None
         } else {
             let p = self
-                .get_capability(&agent.agent_id())
+                .get_capability(&agent.id())
                 .ok_or(AddGroupMemberError::NoProof)?;
 
             if can > p.payload().can {
@@ -363,7 +364,7 @@ impl<T: ContentRef> Group<T> {
 
     pub fn revoke_member(
         &mut self,
-        member_to_remove: AgentId,
+        member_to_remove: Identifier,
         signing_key: &ed25519_dalek::SigningKey,
         after_content: &BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<Vec<Rc<Signed<Revocation<T>>>>, RevokeMemberError> {
@@ -398,13 +399,7 @@ impl<T: ContentRef> Group<T> {
             for to_revoke in all_to_revoke.iter() {
                 let mut found = false;
 
-                let id: Identifier = vk.into();
-                if let Some(member_dlgs) = self
-                    .members
-                    .get(&AgentId::IndividualId(id.into()))
-                    .or_else(|| self.members.get(&AgentId::GroupId(GroupId(id))))
-                    .or_else(|| self.members.get(&AgentId::DocumentId(DocumentId(id))))
-                {
+                if let Some(member_dlgs) = self.members.get(&vk.into()) {
                     // "Double up" if you're an admin in case you get concurrently demoted.
                     // We include the admin proofs as well since those could also get revoked.
                     for mem_dlg in member_dlgs.clone().iter() {
@@ -484,27 +479,60 @@ impl<T: ContentRef> Group<T> {
     }
 
     pub fn rebuild(&mut self) {
+        self.members.clear();
+        let mut stateful_revocations = HashSet::new();
+
         for (_, op) in
             Operation::topsort(&self.state.delegation_heads, &self.state.revocation_heads).iter()
         {
             match op {
                 Operation::Delegation(d) => {
-                    // FIXME check for escelation
-                    if let Some(mut_dlgs) = self.members.get_mut(&d.payload().delegate.agent_id()) {
+                    if stateful_revocations.contains(&d.signature.to_bytes()) {
+                        continue;
+                    }
+
+                    if let Some(found_proof) = &d.payload.proof {
+                        if let Some(issuer_proofs) = self.members.get(&found_proof.issuer.into()) {
+                            if issuer_proofs.contains(&found_proof) {
+                                // Seems okay, so proceed as normal
+                            } else {
+                                // Proof not in the current state, so skip this one
+                                continue;
+                            }
+                        } else {
+                            continue;
+                        };
+                    } else if d.issuer != self.verifying_key() {
+                        continue;
+                    }
+
+                    if let Some(mut_dlgs) = self.members.get_mut(&d.payload.delegate.id()) {
                         mut_dlgs.push(d.dupe());
                     } else {
                         self.members
-                            .insert(d.payload().delegate.agent_id(), nonempty![d.dupe()]);
+                            .insert(d.payload().delegate.id(), nonempty![d.dupe()]);
                     }
                 }
                 Operation::Revocation(r) => {
                     if let Some(mut_dlgs) = self
                         .members
-                        .get(&r.payload().revoke.payload().delegate.agent_id())
+                        .get(&r.payload().revoke.payload().delegate.id())
                     {
-                        // FIXME OOOOOR is an admin
-                        // TODO maintain this as a CaMap for easier removals
+                        if let Some(found_proof) = &r.payload().proof {
+                            if let Some(issuer_proofs) =
+                                self.members.get(&found_proof.issuer.into())
+                            {
+                                if !issuer_proofs.contains(&found_proof) {
+                                    continue;
+                                }
+                            } else {
+                                continue;
+                            }
+                        }
 
+                        stateful_revocations.insert(r.payload.revoked().signature.to_bytes());
+
+                        // TODO maintain this as a CaMap for easier removals
                         let remaining =
                             mut_dlgs.clone().into_iter().fold(vec![], |mut acc, dlg| {
                                 if dlg.signature == r.payload().revoke.signature {
@@ -515,11 +543,11 @@ impl<T: ContentRef> Group<T> {
                                 }
                             });
 
-                        let agent_id = r.payload().revoke.payload().delegate.agent_id();
+                        let id = r.payload().revoke.payload().delegate.id();
                         if let Some(dlgs) = NonEmpty::from_vec(remaining) {
-                            self.members.insert(agent_id, dlgs);
+                            self.members.insert(id, dlgs);
                         } else {
-                            self.members.remove(&agent_id);
+                            self.members.remove(&id);
                         }
                     }
                 }
@@ -532,27 +560,8 @@ impl<T: ContentRef> Group<T> {
         delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
         revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
     ) -> Self {
-        let mut members: HashMap<AgentId, NonEmpty<Rc<Signed<Delegation<T>>>>> = HashMap::new();
-
-        // TODO complete hack to get nonempty; we replace this during ingestion
-        let hack_dlgs = nonempty![Rc::new(Signed {
-            issuer: archive.individual.verifying_key(),
-            signature: ed25519_dalek::Signature::from([0; 64]),
-            payload: Delegation {
-                delegate: Rc::new(RefCell::new(archive.individual.clone())).into(),
-                can: Access::Pull,
-                proof: None,
-                after_revocations: vec![],
-                after_content: BTreeMap::new(),
-            },
-        })];
-
-        for (agent_id, _dlg_hashes) in archive.members.into_iter() {
-            members.insert(agent_id, hack_dlgs.clone());
-        }
-
         Self {
-            members,
+            members: HashMap::new(),
             individual: archive.individual,
             state: state::GroupState::dummy_from_archive(archive.state, delegations, revocations),
         }
@@ -568,7 +577,7 @@ impl<T: ContentRef> Verifiable for Group<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupArchive<T: ContentRef> {
     pub(crate) individual: Individual,
-    pub(crate) members: HashMap<AgentId, NonEmpty<Digest<Signed<Delegation<T>>>>>,
+    pub(crate) members: HashMap<Identifier, NonEmpty<Digest<Signed<Delegation<T>>>>>,
     pub(crate) state: state::GroupStateArchive<T>,
 }
 
@@ -820,7 +829,7 @@ mod tests {
 
         let proof = group0
             .borrow()
-            .get_capability(&alice.borrow().agent_id()) // FIXME IS IT THIS?
+            .get_capability(&alice.borrow().id().into())
             .unwrap()
             .dupe();
 
@@ -852,7 +861,7 @@ mod tests {
 
         let alice = Rc::new(RefCell::new(setup_user(csprng)));
         let alice_agent: Agent<String> = alice.dupe().into();
-        let alice_id = alice_agent.agent_id();
+        let alice_id = alice_agent.id();
 
         let bob = Rc::new(RefCell::new(setup_user(csprng)));
 
@@ -870,7 +879,7 @@ mod tests {
 
         let alice = Rc::new(RefCell::new(setup_user(csprng)));
         let alice_agent: Agent<String> = alice.dupe().into();
-        let alice_id = alice_agent.agent_id();
+        let alice_id = alice_agent.id();
 
         let bob = Rc::new(RefCell::new(setup_user(csprng)));
 
@@ -885,7 +894,7 @@ mod tests {
                     (Agent::<String>::from(alice.dupe()), Access::Admin)
                 ),
                 (
-                    g0.borrow().agent_id(),
+                    g0.borrow().id(),
                     (Agent::<String>::from(g0.dupe()), Access::Admin)
                 )
             ])
@@ -898,11 +907,11 @@ mod tests {
 
         let alice = Rc::new(RefCell::new(setup_user(csprng)));
         let alice_agent: Agent<String> = alice.dupe().into();
-        let alice_id = alice_agent.agent_id();
+        let alice_id = alice_agent.id();
 
         let bob = Rc::new(RefCell::new(setup_user(csprng)));
         let bob_agent: Agent<String> = bob.dupe().into();
-        let bob_id = bob_agent.agent_id();
+        let bob_id = bob_agent.id();
 
         let [g0, g1, g2, _g3]: [Rc<RefCell<Group<String>>>; 4] =
             setup_groups(alice.dupe(), bob.dupe(), csprng);
@@ -913,8 +922,8 @@ mod tests {
             HashMap::from_iter([
                 (alice_id, (alice.into(), Access::Admin)),
                 (bob_id, (bob.into(), Access::Admin)),
-                (g0.borrow().agent_id(), (g0.dupe().into(), Access::Admin)),
-                (g1.borrow().agent_id(), (g1.dupe().into(), Access::Admin)),
+                (g0.borrow().id(), (g0.dupe().into(), Access::Admin)),
+                (g1.borrow().id(), (g1.dupe().into(), Access::Admin)),
             ])
         );
     }
@@ -925,11 +934,11 @@ mod tests {
 
         let alice = Rc::new(RefCell::new(setup_user(csprng)));
         let alice_agent: Agent<String> = alice.dupe().into();
-        let alice_id = alice_agent.agent_id();
+        let alice_id = alice_agent.id();
 
         let bob = Rc::new(RefCell::new(setup_user(csprng)));
         let bob_agent: Agent<String> = bob.dupe().into();
-        let bob_id = bob_agent.agent_id();
+        let bob_id = bob_agent.id();
 
         let [g0, g1, g2, g3]: [Rc<RefCell<Group<String>>>; 4] =
             setup_groups(alice.dupe(), bob.dupe(), csprng);
@@ -942,9 +951,9 @@ mod tests {
             HashSet::from_iter([
                 &alice_id,
                 &bob_id,
-                &g0.borrow().agent_id(),
-                &g1.borrow().agent_id(),
-                &g2.borrow().agent_id(),
+                &g0.borrow().id(),
+                &g1.borrow().id(),
+                &g2.borrow().id(),
             ])
         );
     }
@@ -955,11 +964,11 @@ mod tests {
 
         let alice = Rc::new(RefCell::new(setup_user(csprng)));
         let alice_agent: Agent<String> = alice.dupe().into();
-        let alice_id = alice_agent.agent_id();
+        let alice_id = alice_agent.id();
 
         let bob = Rc::new(RefCell::new(setup_user(csprng)));
         let bob_agent: Agent<String> = bob.dupe().into();
-        let bob_id = bob_agent.agent_id();
+        let bob_id = bob_agent.id();
 
         let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]: [Rc<RefCell<Group<String>>>; 10] =
             setup_cyclic_groups(alice.dupe(), bob.dupe(), csprng);
@@ -972,15 +981,15 @@ mod tests {
             HashMap::from_iter([
                 (alice_id, (alice.into(), Access::Admin)),
                 (bob_id, (bob.into(), Access::Admin)),
-                (g1.borrow().agent_id(), (g1.dupe().into(), Access::Admin)),
-                (g2.borrow().agent_id(), (g2.dupe().into(), Access::Admin)),
-                (g3.borrow().agent_id(), (g3.dupe().into(), Access::Admin)),
-                (g4.borrow().agent_id(), (g4.dupe().into(), Access::Admin)),
-                (g5.borrow().agent_id(), (g5.dupe().into(), Access::Admin)),
-                (g6.borrow().agent_id(), (g6.dupe().into(), Access::Admin)),
-                (g7.borrow().agent_id(), (g7.dupe().into(), Access::Admin)),
-                (g8.borrow().agent_id(), (g8.dupe().into(), Access::Admin)),
-                (g9.borrow().agent_id(), (g9.dupe().into(), Access::Admin)),
+                (g1.borrow().id(), (g1.dupe().into(), Access::Admin)),
+                (g2.borrow().id(), (g2.dupe().into(), Access::Admin)),
+                (g3.borrow().id(), (g3.dupe().into(), Access::Admin)),
+                (g4.borrow().id(), (g4.dupe().into(), Access::Admin)),
+                (g5.borrow().id(), (g5.dupe().into(), Access::Admin)),
+                (g6.borrow().id(), (g6.dupe().into(), Access::Admin)),
+                (g7.borrow().id(), (g7.dupe().into(), Access::Admin)),
+                (g8.borrow().id(), (g8.dupe().into(), Access::Admin)),
+                (g9.borrow().id(), (g9.dupe().into(), Access::Admin)),
             ])
         );
     }
@@ -1058,39 +1067,39 @@ mod tests {
         assert_eq!(g0_mems.len(), 2);
 
         assert_eq!(
-            g0_mems.get(&active.dupe().borrow().agent_id()),
+            g0_mems.get(&active.dupe().borrow().id().into()),
             Some(&(active.dupe().into(), Access::Admin))
         );
 
         assert_eq!(
-            g0_mems.get(&carol_agent.agent_id()),
+            g0_mems.get(&carol_agent.id()),
             Some(&(carol.clone().into(), Access::Write)) // NOTE: non-admin!
         );
 
         let g2_mems = g2.borrow().transitive_members();
 
         assert_eq!(
-            g2_mems.get(&alice_agent.agent_id()),
+            g2_mems.get(&alice_agent.id()),
             Some(&(alice.into(), Access::Admin))
         );
 
         assert_eq!(
-            g2_mems.get(&bob_agent.agent_id()),
+            g2_mems.get(&bob_agent.id()),
             Some(&(bob.into(), Access::Admin))
         );
 
         assert_eq!(
-            g2_mems.get(&carol_agent.agent_id()),
+            g2_mems.get(&carol_agent.id()),
             Some(&(carol.into(), Access::Write)) // NOTE: non-admin!
         );
 
         assert_eq!(
-            g2_mems.get(&g0.borrow().agent_id()),
+            g2_mems.get(&g0.borrow().id()),
             Some(&(g0.dupe().into(), Access::Admin))
         );
 
         assert_eq!(
-            g2_mems.get(&g1.borrow().agent_id()),
+            g2_mems.get(&g1.borrow().id()),
             Some(&(g1.dupe().into(), Access::Admin))
         );
 

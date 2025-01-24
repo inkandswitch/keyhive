@@ -169,7 +169,7 @@ impl JsBeehive {
         to_revoke: &JsAgent,
         membered: &mut JsMembered,
     ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
-        let revs = self.0.revoke_member(to_revoke.agent_id(), membered)?;
+        let revs = self.0.revoke_member(to_revoke.id(), membered)?;
         Ok(revs.into_iter().map(JsSignedRevocation).collect())
     }
 

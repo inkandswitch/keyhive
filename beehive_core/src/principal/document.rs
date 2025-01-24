@@ -80,11 +80,11 @@ impl<T: ContentRef> Document<T> {
         self.doc_id().into()
     }
 
-    pub fn members(&self) -> &HashMap<AgentId, NonEmpty<Rc<Signed<Delegation<T>>>>> {
+    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T>>>>> {
         self.group.members()
     }
 
-    pub fn transitive_members(&self) -> HashMap<AgentId, (Agent<T>, Access)> {
+    pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<T>, Access)> {
         self.group.transitive_members()
     }
 
@@ -96,7 +96,7 @@ impl<T: ContentRef> Document<T> {
         self.group.revocation_heads()
     }
 
-    pub fn get_capability(&self, member_id: &AgentId) -> Option<&Rc<Signed<Delegation<T>>>> {
+    pub fn get_capability(&self, member_id: &Identifier) -> Option<&Rc<Signed<Delegation<T>>>> {
         self.group.get_capability(member_id)
     }
 
@@ -196,7 +196,7 @@ impl<T: ContentRef> Document<T> {
 
     pub fn revoke_member(
         &mut self,
-        member_id: AgentId,
+        member_id: Identifier,
         signing_key: &ed25519_dalek::SigningKey,
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<RevokeMemberUpdate<T>, RevokeMemberError> {
@@ -208,7 +208,7 @@ impl<T: ContentRef> Document<T> {
         // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
         // FIXME: We need to check if this has revoked the last member in our group?
         let mut ops = Vec::new();
-        if let Some(delegations) = self.group.members.get(&member_id) {
+        if let Some(delegations) = self.group.members.get(&member_id.into()) {
             for id in delegations
                 .iter()
                 .flat_map(|d| d.payload().delegate.individual_ids())

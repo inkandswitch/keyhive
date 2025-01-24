@@ -118,7 +118,7 @@ impl Active {
         subject: Membered<T>,
         min: Access,
     ) -> Option<Rc<Signed<Delegation<T>>>> {
-        subject.get_capability(&self.agent_id()).and_then(|cap| {
+        subject.get_capability(&self.id().into()).and_then(|cap| {
             if cap.payload().can >= min {
                 Some(cap)
             } else {
