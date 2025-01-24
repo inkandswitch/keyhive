@@ -930,7 +930,7 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
             rev_store: Rc<RefCell<CaMap<Signed<Revocation<U>>>>>,
             dlg_head_hashes: &HashSet<Digest<Signed<Delegation<U>>>>,
             rev_head_hashes: &HashSet<Digest<Signed<Revocation<U>>>>,
-            members: HashMap<AgentId, Vec<Digest<Signed<Delegation<U>>>>>,
+            members: HashMap<AgentId, NonEmpty<Digest<Signed<Delegation<U>>>>>,
         ) -> Result<(), TryFromArchiveError<U>> {
             let read_dlgs = dlg_store.borrow();
             let read_revs = rev_store.borrow();

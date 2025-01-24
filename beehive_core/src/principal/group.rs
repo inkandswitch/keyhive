@@ -33,7 +33,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
-use thiserror::Error; // FIXME move to group::error.
+use thiserror::Error;
 
 /// A collection of agents with no associated content.
 ///
@@ -45,7 +45,7 @@ pub struct Group<T: ContentRef> {
     pub(crate) individual: Individual,
 
     /// The current view of members of a group.
-    pub(crate) members: HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>>, // FIXME nonempty?
+    pub(crate) members: HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
     pub(crate) state: state::GroupState<T>,
@@ -538,7 +538,7 @@ impl<T: ContentRef> Verifiable for Group<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupArchive<T: ContentRef> {
     pub(crate) individual: Individual,
-    pub(crate) members: HashMap<AgentId, Vec<Digest<Signed<Delegation<T>>>>>,
+    pub(crate) members: HashMap<AgentId, NonEmpty<Digest<Signed<Delegation<T>>>>>,
     pub(crate) state: state::GroupStateArchive<T>,
 }
 
@@ -549,11 +549,13 @@ impl<T: ContentRef> From<Group<T>> for GroupArchive<T> {
             members: group
                 .members
                 .iter()
-                .map(|(k, vs)| {
-                    let hashes = vs.iter().map(|v| Digest::hash(v.as_ref())).collect();
-                    (*k, hashes)
-                })
-                .collect(),
+                .fold(HashMap::new(), |mut acc, (k, vs)| {
+                    let hashes: Vec<_> = vs.iter().map(|v| Digest::hash(v.as_ref())).collect();
+                    if let Some(ne) = NonEmpty::from_vec(hashes) {
+                        acc.insert(*k, ne);
+                    }
+                    acc
+                }),
             state: state::GroupStateArchive::<T>::from(&group.state),
         }
     }
