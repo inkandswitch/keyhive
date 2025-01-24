@@ -89,7 +89,7 @@ test.describe("Beehive", async () => {
 
       const g1 = bh.generateGroup([])
       const g2 = bh.generateGroup([g1.toPeer()])
-      const d1 = bh.generateDoc([g2.toPeer()], changeRef, [])
+      const d1 = bh.generateDocument([g2.toPeer()], changeRef, [])
       bh.generateGroup([d1.toPeer()])
       bh.generateGroup([g2.toPeer(), d1.toPeer()])
 

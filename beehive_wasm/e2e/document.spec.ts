@@ -15,7 +15,7 @@ test.describe("Document", async () => {
         const changeRef = new ChangeRef(new Uint8Array([1, 2, 3]));
 
         const g = bh.generateGroup([]).toPeer()
-        const doc = bh.generateDoc([g], changeRef, [])
+        const doc = bh.generateDocument([g], changeRef, [])
         const docId = doc.id
 
         return { doc, docId }
