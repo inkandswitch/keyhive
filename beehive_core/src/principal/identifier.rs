@@ -35,6 +35,16 @@ impl Identifier {
     }
 }
 
+#[cfg(any(test, feature = "arbitrary"))]
+impl<'a> arbitrary::Arbitrary<'a> for Identifier {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let bytes = u.bytes(32)?;
+        let arr = <[u8; 32]>::try_from(bytes).unwrap();
+        let key = ed25519_dalek::SigningKey::from_bytes(&arr);
+        Ok(key.verifying_key().into())
+    }
+}
+
 impl Clone for Identifier {
     fn clone(&self) -> Self {
         *self

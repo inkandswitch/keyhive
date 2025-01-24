@@ -1,13 +1,10 @@
 use beehive_core::access::Access;
+use derive_more::{Deref, Display, From, Into};
 use dupe::Dupe;
-use std::{
-    fmt::{self, Display, Formatter},
-    ops::Deref,
-};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Access)]
-#[derive(Debug, Clone, Dupe, Copy)]
+#[derive(Debug, Clone, Dupe, Copy, Deref, Display, From, Into)]
 pub struct JsAccess(pub(crate) Access);
 
 #[wasm_bindgen(js_class = Access)]
@@ -26,31 +23,5 @@ impl JsAccess {
     #[wasm_bindgen(js_name = toString)]
     pub fn to_js_string(&self) -> String {
         self.to_string()
-    }
-}
-
-impl From<JsAccess> for Access {
-    fn from(js_access: JsAccess) -> Self {
-        js_access.0
-    }
-}
-
-impl From<Access> for JsAccess {
-    fn from(access: Access) -> Self {
-        JsAccess(access)
-    }
-}
-
-impl Deref for JsAccess {
-    type Target = Access;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Display for JsAccess {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
     }
 }

@@ -87,6 +87,35 @@ impl<T: Serialize> Signed<T> {
     }
 }
 
+#[cfg(any(test, feature = "arbitrary"))]
+mod arb {
+    use signature::SignerMut;
+
+    fn arb_signing_key<'a>(
+        unstructured: &mut arbitrary::Unstructured<'a>,
+    ) -> arbitrary::Result<ed25519_dalek::SigningKey> {
+        let bytes = unstructured.bytes(32)?;
+        let arr = <[u8; 32]>::try_from(bytes).unwrap();
+        Ok(ed25519_dalek::SigningKey::from_bytes(&arr))
+    }
+
+    impl<'a, T: serde::Serialize + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
+        for super::Signed<T>
+    {
+        fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+            let payload = T::arbitrary(u)?;
+            let mut key = arb_signing_key(u)?;
+            let encoded = bincode::serialize(&payload).unwrap();
+            let signature = key.sign(&encoded);
+            Ok(super::Signed {
+                payload,
+                issuer: key.verifying_key(),
+                signature,
+            })
+        }
+    }
+}
+
 impl<T: Serialize + PartialOrd> PartialOrd for Signed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self

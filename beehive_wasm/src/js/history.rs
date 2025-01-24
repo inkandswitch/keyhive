@@ -15,7 +15,7 @@ use dupe::Dupe;
 use std::{collections::BTreeMap, rc::Rc};
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen(js_name = After)]
+#[wasm_bindgen(js_name = History)]
 #[derive(Debug, Clone)]
 pub struct JsHistory {
     pub(crate) delegations: Vec<Rc<Signed<Delegation<JsChangeRef>>>>,
@@ -23,7 +23,7 @@ pub struct JsHistory {
     pub(crate) content: BTreeMap<DocumentId, Vec<JsChangeRef>>,
 }
 
-#[wasm_bindgen(js_class = After)]
+#[wasm_bindgen(js_class = History)]
 impl JsHistory {
     pub fn delegations(&self) -> Vec<JsSignedDelegation> {
         self.delegations
@@ -52,11 +52,11 @@ impl JsHistory {
 }
 
 impl From<Dependencies<'_, JsChangeRef>> for JsHistory {
-    fn from(auth_history: Dependencies<JsChangeRef>) -> Self {
-        JsHistory {
-            delegations: auth_history.delegations,
-            revocations: auth_history.revocations,
-            content: auth_history.content.clone(),
+    fn from(deps: Dependencies<JsChangeRef>) -> Self {
+        Self {
+            delegations: deps.delegations,
+            revocations: deps.revocations,
+            content: deps.content.clone(),
         }
     }
 }

@@ -4,13 +4,13 @@ use super::{
     agent::JsAgent,
     change_ref::JsChangeRef,
     delegation::JsDelegationError,
-    doc_content_refs::DocContentRefs,
     document::JsDocument,
     encrypted::JsEncrypted,
     group::JsGroup,
     identifier::JsIdentifier,
     individual_id::JsIndividualId,
     membered::JsMembered,
+    peer::JsPeer,
     revoke_member_error::JsRevokeMemberError,
     share_key::JsShareKey,
     signed::JsSigned,
@@ -21,10 +21,11 @@ use super::{
 };
 use beehive_core::{
     beehive::Beehive,
-    principal::document::{id::DocumentId, DecryptError, EncryptError},
+    principal::document::{DecryptError, EncryptError},
 };
 use dupe::Dupe;
-use std::collections::BTreeMap;
+use nonempty::NonEmpty;
+use std::ops::Deref;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -65,26 +66,31 @@ impl JsBeehive {
     }
 
     #[wasm_bindgen(js_name = generateGroup)]
-    pub fn generate_group(&mut self, coparents: Vec<JsAgent>) -> Result<JsGroup, JsSigningError> {
-        Ok(self
+    pub fn generate_group(&mut self, coparents: Vec<JsPeer>) -> Result<JsGroup, JsSigningError> {
+        let group = self
             .0
-            .generate_group(
-                coparents
-                    .into_iter()
-                    .map(|agent| agent.0)
-                    .collect::<Vec<_>>(),
-            )
-            .map(JsGroup)?)
+            .generate_group(coparents.into_iter().map(|p| p.0).collect::<Vec<_>>())?;
+
+        Ok(JsGroup(group))
     }
 
-    #[wasm_bindgen(js_name = generateDoc)]
+    #[wasm_bindgen(js_name = generateDocument)]
     pub fn generate_doc(
         &mut self,
-        coparents: Vec<JsAgent>,
+        coparents: Vec<JsPeer>,
+        initial_content_ref_head: JsChangeRef,
+        more_initial_content_refs: Vec<JsChangeRef>,
     ) -> Result<JsDocument, JsDelegationError> {
-        let doc = self
-            .0
-            .generate_doc(coparents.into_iter().map(|a| a.0).collect::<Vec<_>>())?;
+        let doc = self.0.generate_doc(
+            coparents.into_iter().map(Into::into).collect::<Vec<_>>(),
+            NonEmpty {
+                head: initial_content_ref_head,
+                tail: more_initial_content_refs
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            },
+        )?;
 
         Ok(JsDocument(doc))
     }
@@ -143,19 +149,18 @@ impl JsBeehive {
         to_add: &JsAgent,
         membered: &mut JsMembered,
         access: JsAccess,
-        after_content: Vec<DocContentRefs>,
+        other_relevant_docs: Vec<JsDocument>,
     ) -> Result<JsSignedDelegation, JsAddMemberError> {
-        let content_ref_map: BTreeMap<DocumentId, Vec<JsChangeRef>> = after_content
-            .into_iter()
-            .map(|r| {
-                let hashes = r.change_hashes().into_iter().collect();
-                (r.doc_id().0, hashes)
-            })
+        let other_docs_refs: Vec<_> = other_relevant_docs
+            .iter()
+            .map(|js_doc| js_doc.0.borrow())
             .collect();
+
+        let other_docs: Vec<_> = other_docs_refs.iter().map(Deref::deref).collect();
 
         let dlg = self
             .0
-            .add_member(to_add.0.dupe(), membered, *access, content_ref_map)?;
+            .add_member(to_add.0.dupe(), membered, *access, other_docs.as_slice())?;
 
         Ok(dlg.into())
     }
@@ -175,10 +180,10 @@ impl JsBeehive {
         self.0
             .reachable_docs()
             .into_values()
-            .fold(Vec::new(), |mut acc, caps| {
+            .fold(Vec::new(), |mut acc, ability| {
                 acc.push(Summary {
-                    doc: JsDocument(caps.doc().dupe()),
-                    access: JsAccess(caps.can()),
+                    doc: JsDocument(ability.doc().dupe()),
+                    access: JsAccess(ability.can()),
                 });
                 acc
             })
@@ -251,16 +256,13 @@ mod tests {
 
     mod try_encrypt_decrypt {
         use super::*;
-        use beehive_core::principal::agent::Agent;
         use std::error::Error;
 
         #[wasm_bindgen_test(unsupported = test)]
         fn test_encrypt_decrypt() -> Result<(), Box<dyn Error>> {
             let mut bh = setup();
-            let active = bh.0.active().clone();
             bh.expand_prekeys().unwrap();
-            let agent = JsAgent(Agent::Active(active));
-            let doc = bh.generate_doc(vec![agent])?;
+            let doc = bh.generate_doc(vec![], vec![0].into(), vec![])?;
             let content = vec![1, 2, 3, 4];
             let pred_refs = vec![JsChangeRef::new(vec![10, 11, 12])];
             let content_ref = JsChangeRef::new(vec![13, 14, 15]);

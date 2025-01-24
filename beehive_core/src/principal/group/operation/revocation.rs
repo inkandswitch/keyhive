@@ -1,3 +1,5 @@
+// FIXME move to Group
+
 use super::{
     delegation::{Delegation, StaticDelegation},
     dependencies::Dependencies,
@@ -19,8 +21,8 @@ pub struct Revocation<T: ContentRef> {
 }
 
 impl<T: ContentRef> Revocation<T> {
-    pub fn subject(&self) -> Identifier {
-        self.revoke.subject()
+    pub fn subject_id(&self) -> Identifier {
+        self.revoke.subject_id()
     }
 
     pub fn revoked(&self) -> &Rc<Signed<Delegation<T>>> {
@@ -36,13 +38,13 @@ impl<T: ContentRef> Revocation<T> {
     }
 
     pub fn after(&self) -> Dependencies<T> {
-        let mut dlgs = vec![self.revoke.dupe()];
+        let mut delegations = vec![self.revoke.dupe()];
         if let Some(dlg) = &self.proof {
-            dlgs.push(dlg.clone());
+            delegations.push(dlg.clone());
         }
 
         Dependencies {
-            delegations: dlgs,
+            delegations,
             revocations: vec![],
             content: &self.after_content,
         }
@@ -50,8 +52,8 @@ impl<T: ContentRef> Revocation<T> {
 }
 
 impl<T: ContentRef> Signed<Revocation<T>> {
-    pub fn subject(&self) -> Identifier {
-        self.payload().subject()
+    pub fn subject_id(&self) -> Identifier {
+        self.payload.subject_id()
     }
 }
 
@@ -73,6 +75,7 @@ impl<T: ContentRef> Serialize for Revocation<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct StaticRevocation<T: ContentRef> {
     /// The [`Delegation`] being revoked.
     pub revoke: Digest<Signed<StaticDelegation<T>>>,

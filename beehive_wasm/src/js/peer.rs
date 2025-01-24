@@ -1,14 +1,15 @@
 use super::change_ref::JsChangeRef;
-use beehive_core::principal::agent::Agent;
-use derive_more::{Deref, Display, From, Into};
+use beehive_core::principal::peer::Peer;
+use derive_more::{Deref, From, Into};
+use std::fmt::{Display, Formatter};
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen(js_name = Agent)]
-#[derive(Debug, Clone, From, Into, Deref, Display)]
-pub struct JsAgent(pub(crate) Agent<JsChangeRef>);
+#[wasm_bindgen(js_name = Peer)]
+#[derive(Debug, Clone, From, Into, Deref)]
+pub struct JsPeer(pub(crate) Peer<JsChangeRef>);
 
-#[wasm_bindgen(js_class = Agent)]
-impl JsAgent {
+#[wasm_bindgen(js_class = Peer)]
+impl JsPeer {
     #[wasm_bindgen(js_name = toString)]
     pub fn to_js_string(&self) -> String {
         self.0
@@ -23,16 +24,22 @@ impl JsAgent {
 
     #[wasm_bindgen(js_name = isIndividual)]
     pub fn is_individual(&self) -> bool {
-        matches!(self.0, Agent::Individual(_))
+        matches!(self.0, Peer::Individual(_))
     }
 
     #[wasm_bindgen(js_name = isGroup)]
     pub fn is_group(&self) -> bool {
-        matches!(self.0, Agent::Group(_))
+        matches!(self.0, Peer::Group(_))
     }
 
     #[wasm_bindgen(js_name = isDocument)]
     pub fn is_document(&self) -> bool {
-        matches!(self.0, Agent::Document(_))
+        matches!(self.0, Peer::Document(_))
+    }
+}
+
+impl Display for JsPeer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }

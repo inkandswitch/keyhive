@@ -5,11 +5,12 @@ pub mod revocation;
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed},
-    principal::{document::id::DocumentId, identifier::Identifier},
+    principal::{document::id::DocumentId, identifier::Identifier, verifiable::Verifiable},
     util::content_addressed_map::CaMap,
 };
 use delegation::Delegation;
 use dependencies::Dependencies;
+use derive_more::{From, Into};
 use dupe::Dupe;
 use revocation::Revocation;
 use serde::{Deserialize, Serialize};
@@ -37,10 +38,10 @@ impl<T: ContentRef + Serialize> Serialize for Operation<T> {
 }
 
 impl<T: ContentRef> Operation<T> {
-    pub fn subject(&self) -> Identifier {
+    pub fn subject_id(&self) -> Identifier {
         match self {
-            Operation::Delegation(delegation) => delegation.subject(),
-            Operation::Revocation(revocation) => revocation.subject(),
+            Operation::Delegation(delegation) => delegation.subject_id(),
+            Operation::Revocation(revocation) => revocation.subject_id(),
         }
     }
 
@@ -48,6 +49,13 @@ impl<T: ContentRef> Operation<T> {
         match self {
             Operation::Delegation(_) => true,
             Operation::Revocation(_) => false,
+        }
+    }
+
+    pub fn signature(&self) -> ed25519_dalek::Signature {
+        match self {
+            Operation::Delegation(delegation) => delegation.signature,
+            Operation::Revocation(revocation) => revocation.signature,
         }
     }
 
@@ -127,70 +135,63 @@ impl<T: ContentRef> Operation<T> {
         )
     }
 
+    #[allow(clippy::type_complexity)] // Clippy doens't like the returned pair
     pub fn topsort(
         delegation_heads: &CaMap<Signed<Delegation<T>>>,
         revocation_heads: &CaMap<Signed<Revocation<T>>>,
     ) -> Vec<(Digest<Operation<T>>, Operation<T>)> {
-        struct History<U: ContentRef> {
-            op: Operation<U>,
-            op_ancestors: CaMap<Operation<U>>,
-            longest_path: usize,
+        // NOTE: BTreeMap to get deterministic order
+        let mut ops_with_ancestors: BTreeMap<
+            Digest<Operation<T>>,
+            (Operation<T>, CaMap<Operation<T>>, usize),
+        > = BTreeMap::new();
+
+        #[derive(Debug, Clone, PartialEq, Eq, From, Into)]
+        struct Key(ed25519_dalek::Signature);
+
+        impl Hash for Key {
+            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                self.0.to_bytes().hash(state)
+            }
         }
 
-        // NOTE: BTreeMap to get deterministic order
-        let mut ops_with_ancestors: BTreeMap<Digest<Operation<T>>, History<T>> = BTreeMap::new();
+        impl std::borrow::Borrow<ed25519_dalek::Signature> for Key {
+            fn borrow(&self) -> &ed25519_dalek::Signature {
+                &self.0
+            }
+        }
 
-        #[allow(clippy::mutable_key_type)]
-        let mut leftovers: HashSet<Operation<T>> = HashSet::new();
+        let mut leftovers: HashMap<Key, Operation<T>> = HashMap::new();
         let mut explore: Vec<Operation<T>> = vec![];
 
         for dlg in delegation_heads.values() {
             let op: Operation<T> = dlg.dupe().into();
-            leftovers.insert(op.clone());
+            leftovers.insert(op.signature().into(), op.clone());
             explore.push(op);
         }
 
         for rev in revocation_heads.values() {
             let op: Operation<T> = rev.dupe().into();
-            leftovers.insert(op.clone());
+            leftovers.insert(op.signature().into(), op.clone());
             explore.push(op);
         }
 
         while let Some(op) = explore.pop() {
-            let (op_ancestors, longest_path) = op.ancestors();
+            let (ancestors, longest_path) = op.ancestors();
 
-            for ancestor in op_ancestors.values() {
+            for ancestor in ancestors.values() {
                 explore.push(ancestor.as_ref().clone());
             }
 
-            ops_with_ancestors.insert(
-                Digest::hash(&op),
-                History {
-                    op,
-                    op_ancestors,
-                    longest_path,
-                },
-            );
+            ops_with_ancestors.insert(Digest::hash(&op), (op, ancestors, longest_path));
         }
 
         let mut adjacencies: TopologicalSort<(Digest<Operation<T>>, &Operation<T>)> =
             topological_sort::TopologicalSort::new();
 
-        for (
-            digest,
-            History {
-                op,
-                op_ancestors,
-                longest_path,
-            },
-        ) in ops_with_ancestors.iter()
-        {
+        for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
             for (other_digest, other_op) in op_ancestors.iter() {
-                let History {
-                    op: _,
-                    op_ancestors: other_ancestors,
-                    longest_path: other_longest_path,
-                } = ops_with_ancestors
+                let (_, other_ancestors, other_longest_path) = ops_with_ancestors
                     .get(other_digest)
                     .expect("values that we just put there to be there");
 
@@ -203,7 +204,7 @@ impl<T: ContentRef> Operation<T> {
                     other_ancestors.values().map(|op| op.as_ref()).collect();
 
                 if other_ancestor_set.contains(op) || ancestor_set.is_subset(&other_ancestor_set) {
-                    leftovers.remove(other_op);
+                    leftovers.remove(&Key(other_op.signature()));
                     adjacencies.add_dependency((*other_digest, other_op.as_ref()), (*digest, op));
                     continue;
                 }
@@ -211,7 +212,7 @@ impl<T: ContentRef> Operation<T> {
                 if ancestor_set.contains(other_op.as_ref())
                     || ancestor_set.is_superset(&other_ancestor_set)
                 {
-                    leftovers.remove(op);
+                    leftovers.remove(&Key(op.signature()));
                     adjacencies.add_dependency((*digest, op), (*other_digest, other_op.as_ref()));
                     continue;
                 }
@@ -221,25 +222,25 @@ impl<T: ContentRef> Operation<T> {
                 if op.is_revocation() && other_op.is_revocation() {
                     match longest_path.cmp(other_longest_path) {
                         Ordering::Less => {
-                            leftovers.remove(op);
+                            leftovers.remove(&Key(op.signature()));
                             adjacencies
                                 .add_dependency((*digest, op), (*other_digest, other_op.as_ref()));
                         }
                         Ordering::Greater => {
-                            leftovers.remove(other_op);
+                            leftovers.remove(&Key(other_op.signature()));
                             adjacencies
                                 .add_dependency((*other_digest, other_op.as_ref()), (*digest, op));
                         }
                         Ordering::Equal => match other_digest.cmp(digest) {
                             Ordering::Less => {
-                                leftovers.remove(op);
+                                leftovers.remove(&Key(op.signature()));
                                 adjacencies.add_dependency(
                                     (*digest, op),
                                     (*other_digest, other_op.as_ref()),
                                 );
                             }
                             Ordering::Greater => {
-                                leftovers.remove(other_op);
+                                leftovers.remove(&Key(other_op.signature()));
                                 adjacencies.add_dependency(
                                     (*other_digest, other_op.as_ref()),
                                     (*digest, op),
@@ -253,8 +254,8 @@ impl<T: ContentRef> Operation<T> {
             }
         }
 
-        let mut history: Vec<_> = leftovers
-            .iter()
+        let mut history: Vec<(Digest<Operation<T>>, Operation<T>)> = leftovers
+            .values()
             .map(|op| (Digest::hash(op), op.clone()))
             .collect();
 
@@ -278,6 +279,15 @@ impl<T: ContentRef> Operation<T> {
     }
 }
 
+impl<T: ContentRef> Verifiable for Operation<T> {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        match self {
+            Operation::Delegation(delegation) => delegation.verifying_key(),
+            Operation::Revocation(revocation) => revocation.verifying_key(),
+        }
+    }
+}
+
 impl<T: ContentRef> From<Rc<Signed<Delegation<T>>>> for Operation<T> {
     fn from(delegation: Rc<Signed<Delegation<T>>>) -> Self {
         Operation::Delegation(delegation)
@@ -291,9 +301,23 @@ impl<T: ContentRef> From<Rc<Signed<Revocation<T>>>> for Operation<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum StaticOperation<T: ContentRef> {
-    Delegation(delegation::StaticDelegation<T>),
-    Revocation(revocation::StaticRevocation<T>),
+    Delegation(Signed<delegation::StaticDelegation<T>>),
+    Revocation(Signed<revocation::StaticRevocation<T>>),
+}
+
+impl<T: ContentRef> From<Operation<T>> for StaticOperation<T> {
+    fn from(op: Operation<T>) -> Self {
+        match op {
+            Operation::Delegation(d) => {
+                StaticOperation::Delegation(Rc::unwrap_or_clone(d).map(Into::into))
+            }
+            Operation::Revocation(r) => {
+                StaticOperation::Revocation(Rc::unwrap_or_clone(r).map(Into::into))
+            }
+        }
+    }
 }
 
 #[cfg(test)]

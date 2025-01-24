@@ -17,7 +17,7 @@ use derivative::Derivative;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use serde::{ser::SerializeStruct, Serialize, Serializer};
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{cell::RefCell, cmp::Ordering, collections::BTreeMap, rc::Rc};
 
 // FIXME validate admin on ingest & buld
 
@@ -138,8 +138,8 @@ impl<T: ContentRef> GroupState<T> {
         &mut self,
         delegation: Rc<Signed<Delegation<T>>>,
     ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
-        if delegation.subject() != self.id.0.verifying_key().into() {
-            return Err(AddError::InvalidSubject(Box::new(delegation.subject())));
+        if delegation.subject_id() != self.id.into() {
+            return Err(AddError::InvalidSubject(Box::new(delegation.subject_id())));
         }
 
         if delegation.payload().proof.is_none() && delegation.issuer != self.verifying_key() {
@@ -164,15 +164,13 @@ impl<T: ContentRef> GroupState<T> {
             },
         )?;
 
-        let mut inserted = false;
         for (head_digest, head) in self.delegation_heads.clone().iter() {
-            if head.payload().is_ancestor_of(&delegation) {
-                self.delegation_heads.remove_by_hash(head_digest);
+            if !delegation.payload.is_ancestor_of(head) {
+                self.delegation_heads.insert(delegation.dupe());
+            }
 
-                if !inserted {
-                    self.delegation_heads.insert(delegation.dupe());
-                    inserted = true;
-                }
+            if head.payload.is_ancestor_of(&delegation) {
+                self.delegation_heads.remove_by_hash(head_digest);
             }
         }
 
@@ -190,8 +188,8 @@ impl<T: ContentRef> GroupState<T> {
         &mut self,
         revocation: Rc<Signed<Revocation<T>>>,
     ) -> Result<Digest<Signed<Revocation<T>>>, AddError> {
-        if revocation.subject() != self.id.into() {
-            return Err(AddError::InvalidSubject(Box::new(revocation.subject())));
+        if revocation.subject_id() != self.id.into() {
+            return Err(AddError::InvalidSubject(Box::new(revocation.subject_id())));
         }
 
         if let Some(proof) = &revocation.payload.proof {
@@ -204,8 +202,7 @@ impl<T: ContentRef> GroupState<T> {
                 .proof_lineage()
                 .iter()
                 .try_fold(proof.as_ref(), |head, next_proof| {
-                    if std::cmp::Ordering::Greater == proof.payload.can.cmp(&next_proof.payload.can)
-                    {
+                    if proof.payload.can.cmp(&next_proof.payload.can) == Ordering::Greater {
                         return Err(AddError::Escelation {
                             claimed: proof.payload.can,
                             proof: next_proof.payload.can,

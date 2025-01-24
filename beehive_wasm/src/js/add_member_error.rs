@@ -1,4 +1,4 @@
-use beehive_core::beehive::AddMemberError;
+use beehive_core::principal::document::AddMemberError;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
