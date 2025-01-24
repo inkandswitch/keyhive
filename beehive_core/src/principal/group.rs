@@ -25,7 +25,7 @@ use crate::{
 };
 use dupe::{Dupe, IterDupedExt};
 use id::GroupId;
-use nonempty::NonEmpty;
+use nonempty::{nonempty, NonEmpty};
 use operation::{delegation::Delegation, revocation::Revocation, Operation};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -45,7 +45,7 @@ pub struct Group<T: ContentRef> {
     pub(crate) individual: Individual,
 
     /// The current view of members of a group.
-    pub(crate) members: HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>>,
+    pub(crate) members: HashMap<AgentId, NonEmpty<Rc<Signed<Delegation<T>>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
     pub(crate) state: state::GroupState<T>,
@@ -109,7 +109,7 @@ impl<T: ContentRef> Group<T> {
             let rc = Rc::new(dlg);
             ds_mut.insert(rc.dupe());
             delegation_heads.insert(rc.dupe());
-            members.insert(parent.agent_id(), vec![rc]);
+            members.insert(parent.agent_id(), nonempty![rc]);
 
             Ok::<(), SigningError>(())
         })?;
@@ -160,7 +160,7 @@ impl<T: ContentRef> Group<T> {
         }))
     }
 
-    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
+    pub fn members(&self) -> &HashMap<AgentId, NonEmpty<Rc<Signed<Delegation<T>>>>> {
         &self.members
     }
 
@@ -373,7 +373,7 @@ impl<T: ContentRef> Group<T> {
         let all_to_revoke: Vec<Rc<Signed<Delegation<T>>>> = self
             .members()
             .get(&member_to_remove)
-            .cloned() // Relatively cheap since it's &Vec<Rc<_>>
+            .map(|ne| Vec::<_>::from(ne.clone())) // Semi-inexpensive because `Vec<Rc<_>>`
             .unwrap_or_default();
 
         if all_to_revoke.is_empty() {
@@ -494,17 +494,33 @@ impl<T: ContentRef> Group<T> {
                         mut_dlgs.push(d.dupe());
                     } else {
                         self.members
-                            .insert(d.payload().delegate.agent_id(), vec![d.dupe()]);
+                            .insert(d.payload().delegate.agent_id(), nonempty![d.dupe()]);
                     }
                 }
                 Operation::Revocation(r) => {
                     if let Some(mut_dlgs) = self
                         .members
-                        .get_mut(&r.payload().revoke.payload().delegate.agent_id())
+                        .get(&r.payload().revoke.payload().delegate.agent_id())
                     {
                         // FIXME OOOOOR is an admin
-                        // FIXME maintain this as a CaMap for easier removals, too
-                        mut_dlgs.retain(|d| *d != r.payload().revoke);
+                        // TODO maintain this as a CaMap for easier removals
+
+                        let remaining =
+                            mut_dlgs.clone().into_iter().fold(vec![], |mut acc, dlg| {
+                                if dlg.signature == r.payload().revoke.signature {
+                                    acc
+                                } else {
+                                    acc.push(dlg);
+                                    acc
+                                }
+                            });
+
+                        let agent_id = r.payload().revoke.payload().delegate.agent_id();
+                        if let Some(dlgs) = NonEmpty::from_vec(remaining) {
+                            self.members.insert(agent_id, dlgs);
+                        } else {
+                            self.members.remove(&agent_id);
+                        }
                     }
                 }
             }
@@ -516,9 +532,23 @@ impl<T: ContentRef> Group<T> {
         delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
         revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
     ) -> Self {
-        let mut members = HashMap::new();
-        for (agent_id, _dlg_hashes) in archive.members.iter() {
-            members.insert(*agent_id, vec![]);
+        let mut members: HashMap<AgentId, NonEmpty<Rc<Signed<Delegation<T>>>>> = HashMap::new();
+
+        // TODO complete hack to get nonempty; we replace this during ingestion
+        let hack_dlgs = nonempty![Rc::new(Signed {
+            issuer: archive.individual.verifying_key(),
+            signature: ed25519_dalek::Signature::from([0; 64]),
+            payload: Delegation {
+                delegate: Rc::new(RefCell::new(archive.individual.clone())).into(),
+                can: Access::Pull,
+                proof: None,
+                after_revocations: vec![],
+                after_content: BTreeMap::new(),
+            },
+        })];
+
+        for (agent_id, _dlg_hashes) in archive.members.into_iter() {
+            members.insert(agent_id, hack_dlgs.clone());
         }
 
         Self {

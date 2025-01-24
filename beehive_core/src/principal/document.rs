@@ -80,7 +80,7 @@ impl<T: ContentRef> Document<T> {
         self.doc_id().into()
     }
 
-    pub fn members(&self) -> &HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
+    pub fn members(&self) -> &HashMap<AgentId, NonEmpty<Rc<Signed<Delegation<T>>>>> {
         self.group.members()
     }
 

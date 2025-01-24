@@ -18,6 +18,7 @@ use crate::{
 };
 use dupe::{Dupe, OptionDupedExt};
 use id::MemberedId;
+use nonempty::NonEmpty;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
@@ -67,7 +68,7 @@ impl<T: ContentRef> Membered<T> {
         }
     }
 
-    pub fn members(&self) -> HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
+    pub fn members(&self) -> HashMap<AgentId, NonEmpty<Rc<Signed<Delegation<T>>>>> {
         match self {
             Membered::Group(group) => group.borrow().members().clone(),
             Membered::Document(document) => document.borrow().members().clone(),

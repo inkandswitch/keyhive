@@ -957,7 +957,11 @@ impl<T: ContentRef, R: rand::CryptoRng + rand::RngCore> Beehive<T, R> {
                         .ok_or(TryFromArchiveError::MissingDelegation(*proof_hash))?;
                     proofs.push(actual_dlg.dupe());
                 }
-                group.members.insert(*agent_id, proofs);
+                group.members.insert(
+                    *agent_id,
+                    NonEmpty::try_from(proofs)
+                        .expect("started from a nonempty, so this should also be nonempty"),
+                );
             }
 
             Ok(())
