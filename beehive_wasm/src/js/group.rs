@@ -1,5 +1,6 @@
 use super::{
-    capability::Capability, change_ref::JsChangeRef, group_id::JsGroupId, identifier::JsIdentifier,
+    agent::JsAgent, capability::Capability, change_ref::JsChangeRef, group_id::JsGroupId,
+    identifier::JsIdentifier, peer::JsPeer,
 };
 use beehive_core::principal::group::Group;
 use derive_more::{From, Into};
@@ -41,5 +42,15 @@ impl JsGroup {
                 }
             })
             .collect()
+    }
+
+    #[wasm_bindgen(js_name = toPeer)]
+    pub fn to_peer(&self) -> JsPeer {
+        JsPeer(self.0.dupe().into())
+    }
+
+    #[wasm_bindgen(js_name = toAgent)]
+    pub fn to_agent(&self) -> JsAgent {
+        JsAgent(self.0.dupe().into())
     }
 }

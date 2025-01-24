@@ -1,11 +1,10 @@
 use super::change_ref::JsChangeRef;
 use beehive_core::principal::peer::Peer;
-use derive_more::{Deref, From, Into};
-use std::fmt::{Display, Formatter};
+use derive_more::{Deref, Display, From, Into};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Peer)]
-#[derive(Debug, Clone, From, Into, Deref)]
+#[derive(Debug, Clone, From, Into, Display, Deref)]
 pub struct JsPeer(pub(crate) Peer<JsChangeRef>);
 
 #[wasm_bindgen(js_class = Peer)]
@@ -35,11 +34,5 @@ impl JsPeer {
     #[wasm_bindgen(js_name = isDocument)]
     pub fn is_document(&self) -> bool {
         matches!(self.0, Peer::Document(_))
-    }
-}
-
-impl Display for JsPeer {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
     }
 }

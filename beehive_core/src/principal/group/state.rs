@@ -16,10 +16,13 @@ use crate::{
 use derivative::Derivative;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
-use serde::{ser::SerializeStruct, Serialize, Serializer};
-use std::{cell::RefCell, cmp::Ordering, collections::BTreeMap, rc::Rc};
-
-// FIXME validate admin on ingest & buld
+use serde::{Deserialize, Serialize};
+use std::{
+    cell::RefCell,
+    cmp::Ordering,
+    collections::{BTreeMap, HashSet},
+    rc::Rc,
+};
 
 #[derive(Clone, Eq, Derivative)]
 #[derivative(Debug, PartialEq, Hash)]
@@ -248,6 +251,22 @@ impl<T: ContentRef> GroupState<T> {
             })
             .collect()
     }
+
+    pub(crate) fn dummy_from_archive(
+        archive: GroupStateArchive<T>,
+        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
+        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+    ) -> Self {
+        Self {
+            id: archive.id,
+
+            delegation_heads: CaMap::new(),
+            delegations,
+
+            revocation_heads: CaMap::new(),
+            revocations,
+        }
+    }
 }
 
 impl<T: ContentRef> From<VerifyingKey> for GroupState<T> {
@@ -270,29 +289,19 @@ impl<T: ContentRef> Verifiable for GroupState<T> {
     }
 }
 
-// FIXME replace with serde_derive
-impl<T: ContentRef> Serialize for GroupState<T> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("GroupState", 3)?;
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct GroupStateArchive<T: ContentRef> {
+    pub(crate) id: GroupId,
+    pub(crate) delegation_heads: HashSet<Digest<Signed<Delegation<T>>>>,
+    pub(crate) revocation_heads: HashSet<Digest<Signed<Revocation<T>>>>,
+}
 
-        state.serialize_field("id", &self.id)?;
-        state.serialize_field(
-            "delegation_heads",
-            &self
-                .delegation_heads
-                .values()
-                .collect::<Vec<_>>()
-                .sort_by_key(|dlg| Digest::hash(dlg.as_ref())),
-        )?;
-        state.serialize_field(
-            "revocation_heads",
-            &self
-                .revocation_heads
-                .values()
-                .collect::<Vec<_>>()
-                .sort_by_key(|rev| Digest::hash(rev.as_ref())),
-        )?;
-
-        state.end()
+impl<T: ContentRef> From<&GroupState<T>> for GroupStateArchive<T> {
+    fn from(state: &GroupState<T>) -> Self {
+        GroupStateArchive {
+            id: state.id,
+            delegation_heads: state.delegation_heads.keys().cloned().collect(),
+            revocation_heads: state.revocation_heads.keys().cloned().collect(),
+        }
     }
 }

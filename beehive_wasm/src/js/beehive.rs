@@ -2,6 +2,7 @@ use super::{
     access::JsAccess,
     add_member_error::JsAddMemberError,
     agent::JsAgent,
+    archive::JsArchive,
     change_ref::JsChangeRef,
     delegation::JsDelegationError,
     document::JsDocument,
@@ -23,6 +24,7 @@ use beehive_core::{
     beehive::Beehive,
     principal::document::{DecryptError, EncryptError},
 };
+use derive_more::{From, Into};
 use dupe::Dupe;
 use nonempty::NonEmpty;
 use std::ops::Deref;
@@ -30,7 +32,7 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Beehive)]
-#[derive(Debug)]
+#[derive(Debug, From, Into)]
 pub struct JsBeehive(Beehive<JsChangeRef, rand::rngs::ThreadRng>);
 
 #[wasm_bindgen(js_class = Beehive)]
@@ -81,18 +83,19 @@ impl JsBeehive {
         initial_content_ref_head: JsChangeRef,
         more_initial_content_refs: Vec<JsChangeRef>,
     ) -> Result<JsDocument, JsDelegationError> {
-        let doc = self.0.generate_doc(
-            coparents.into_iter().map(Into::into).collect::<Vec<_>>(),
-            NonEmpty {
-                head: initial_content_ref_head,
-                tail: more_initial_content_refs
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-            },
-        )?;
-
-        Ok(JsDocument(doc))
+        Ok(self
+            .0
+            .generate_doc(
+                coparents.into_iter().map(Into::into).collect::<Vec<_>>(),
+                NonEmpty {
+                    head: initial_content_ref_head,
+                    tail: more_initial_content_refs
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                },
+            )?
+            .into())
     }
 
     #[wasm_bindgen(js_name = trySign)]
@@ -138,11 +141,6 @@ impl JsBeehive {
         Ok(self.0.try_decrypt_content(doc.0, &encrypted.0)?)
     }
 
-    #[wasm_bindgen(js_name = tryReceive)]
-    pub fn try_receive() {
-        todo!()
-    }
-
     #[wasm_bindgen(js_name = addMember)]
     pub fn add_member(
         &mut self,
@@ -171,7 +169,7 @@ impl JsBeehive {
         to_revoke: &JsAgent,
         membered: &mut JsMembered,
     ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
-        let revs = self.0.revoke_member(to_revoke.agent_id(), membered)?;
+        let revs = self.0.revoke_member(to_revoke.id(), membered)?;
         Ok(revs.into_iter().map(JsSignedRevocation).collect())
     }
 
@@ -208,6 +206,11 @@ impl JsBeehive {
     #[wasm_bindgen(js_name = getAgent)]
     pub fn get_agent(&self, id: JsIdentifier) -> Option<JsAgent> {
         self.0.get_agent(id.0).map(JsAgent)
+    }
+
+    #[wasm_bindgen(js_name = intoArchive)]
+    pub fn into_archive(self) -> JsArchive {
+        self.0.into_archive().into()
     }
 }
 

@@ -11,6 +11,7 @@
 
 pub mod ability;
 pub mod access;
+pub mod archive;
 pub mod beehive;
 pub mod cgka;
 pub mod content;

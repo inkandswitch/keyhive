@@ -25,12 +25,12 @@ use crate::{
 use derivative::Derivative;
 use dupe::Dupe;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
-#[derive(Clone, Derivative, Serialize)]
+#[derive(Clone, Derivative, Serialize, Deserialize)]
 #[derivative(Hash, PartialEq)]
 pub struct Active {
     /// The signing key of the active agent.
@@ -118,7 +118,7 @@ impl Active {
         subject: Membered<T>,
         min: Access,
     ) -> Option<Rc<Signed<Delegation<T>>>> {
-        subject.get_capability(&self.agent_id()).and_then(|cap| {
+        subject.get_capability(&self.id().into()).and_then(|cap| {
             if cap.payload().can >= min {
                 Some(cap)
             } else {

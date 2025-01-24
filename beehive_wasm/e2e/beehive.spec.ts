@@ -79,4 +79,40 @@ test.describe("Beehive", async () => {
       expect(out.canStr).toStrictEqual('Admin')
     })
   })
+
+  test.describe('archive', async () => {
+    const scenario = () => {
+      const { Beehive, SigningKey, Archive, ChangeRef } = window.beehive
+
+      const bh = new Beehive(SigningKey.generate())
+      const changeRef = new ChangeRef(new Uint8Array([1, 2, 3]));
+
+      const g1 = bh.generateGroup([])
+      const g2 = bh.generateGroup([g1.toPeer()])
+      const d1 = bh.generateDocument([g2.toPeer()], changeRef, [])
+      bh.generateGroup([d1.toPeer()])
+      bh.generateGroup([g2.toPeer(), d1.toPeer()])
+
+      const archive = bh.intoArchive()
+      const archiveBytes = archive.toBytes()
+      const archiveBytesIsUint8Array = archiveBytes instanceof Uint8Array
+      const roundTrip = new Archive(archiveBytes).tryToBeehive()
+      return { archive, archiveBytes, beehive: bh, roundTrip, archiveBytesIsUint8Array }
+    }
+
+    test('makes a new group', async ({ page }) => {
+      const out = await page.evaluate(scenario)
+      expect(out.beehive).toBeDefined()
+    })
+
+    test('serializes to bytes', async ({ page }) => {
+      const out = await page.evaluate(scenario)
+      expect(out.archiveBytesIsUint8Array).toBe(true)
+    })
+
+    test('round trip', async ({ page }) => {
+      const out = await page.evaluate(scenario)
+      expect(out.beehive.id).toBe(out.roundTrip.id)
+    })
+  })
 })

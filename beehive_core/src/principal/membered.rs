@@ -8,6 +8,7 @@ use super::{
         operation::{delegation::Delegation, revocation::Revocation},
         Group, RevokeMemberError,
     },
+    identifier::Identifier,
     verifiable::Verifiable,
 };
 use crate::{
@@ -18,6 +19,7 @@ use crate::{
 };
 use dupe::{Dupe, OptionDupedExt};
 use id::MemberedId;
+use nonempty::NonEmpty;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
@@ -32,10 +34,10 @@ pub enum Membered<T: ContentRef> {
 }
 
 impl<T: ContentRef> Membered<T> {
-    pub fn get_capability(&self, agent_id: &AgentId) -> Option<Rc<Signed<Delegation<T>>>> {
+    pub fn get_capability(&self, id: &Identifier) -> Option<Rc<Signed<Delegation<T>>>> {
         match self {
-            Membered::Group(group) => group.borrow().get_capability(agent_id).duped(),
-            Membered::Document(doc) => doc.borrow().get_capability(agent_id).duped(),
+            Membered::Group(group) => group.borrow().get_capability(id).duped(),
+            Membered::Document(doc) => doc.borrow().get_capability(id).duped(),
         }
     }
 
@@ -67,7 +69,7 @@ impl<T: ContentRef> Membered<T> {
         }
     }
 
-    pub fn members(&self) -> HashMap<AgentId, Vec<Rc<Signed<Delegation<T>>>>> {
+    pub fn members(&self) -> HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T>>>>> {
         match self {
             Membered::Group(group) => group.borrow().members().clone(),
             Membered::Document(document) => document.borrow().members().clone(),
@@ -102,7 +104,7 @@ impl<T: ContentRef> Membered<T> {
 
     pub fn revoke_member(
         &mut self,
-        member_id: AgentId,
+        member_id: Identifier,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<RevokeMemberUpdate<T>, RevokeMemberError> {

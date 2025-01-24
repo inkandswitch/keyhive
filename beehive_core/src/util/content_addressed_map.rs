@@ -1,13 +1,16 @@
 use crate::crypto::digest::Digest;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, rc::Rc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    rc::Rc,
+};
 
 /// A content-addressed map.
 ///
 /// Since all operations are referenced by their hash,
 /// a map that indexes by the same cryptographic hash is convenient.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CaMap<T: Serialize>(pub(crate) BTreeMap<Digest<T>, Rc<T>>);
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CaMap<T: Serialize>(pub(crate) HashMap<Digest<T>, Rc<T>>);
 
 impl<T: Serialize> CaMap<T> {
     /// Create an empty [`CaMap`].
@@ -20,7 +23,7 @@ impl<T: Serialize> CaMap<T> {
     /// assert_eq!(fresh.len(), 0);
     /// ```
     pub fn new() -> Self {
-        Self(std::collections::BTreeMap::new())
+        Self(HashMap::new())
     }
 
     /// Add a new value to the map, and return the associated [`Digest`].
@@ -65,10 +68,10 @@ impl<T: Serialize> CaMap<T> {
         cam
     }
 
-    pub fn keys(&self) -> std::collections::btree_map::Keys<'_, Digest<T>, Rc<T>> {
+    pub fn keys(&self) -> std::collections::hash_map::Keys<'_, Digest<T>, Rc<T>> {
         self.0.keys()
     }
-    pub fn values(&self) -> std::collections::btree_map::Values<'_, Digest<T>, Rc<T>> {
+    pub fn values(&self) -> std::collections::hash_map::Values<'_, Digest<T>, Rc<T>> {
         // Sorted because BTreeMap
         self.0.values()
     }
@@ -152,20 +155,19 @@ impl<T: Serialize> Serialize for CaMap<T> {
     }
 }
 
-impl<'de, T: Serialize + Deserialize<'de>> Deserialize<'de> for CaMap<T> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let tree = BTreeMap::<Digest<T>, T>::deserialize(deserializer)?;
-        let rcs: BTreeMap<Digest<T>, Rc<T>> =
-            tree.into_iter().map(|(k, v)| (k, Rc::new(v))).collect();
-        Ok(Self(rcs))
-    }
-}
-
 impl<T: Serialize> Extend<(Digest<T>, Rc<T>)> for CaMap<T> {
     fn extend<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = (Digest<T>, Rc<T>)>,
     {
         self.0.extend(iter);
+    }
+}
+
+impl<T: Serialize> std::hash::Hash for CaMap<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let mut keys: Vec<_> = self.0.keys().collect();
+        keys.sort();
+        keys.hash(state);
     }
 }

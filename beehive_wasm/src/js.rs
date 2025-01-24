@@ -1,6 +1,7 @@
 pub mod access;
 pub mod add_member_error;
 pub mod agent;
+pub mod archive;
 pub mod beehive;
 pub mod capability;
 pub mod change_ref;
@@ -13,6 +14,7 @@ pub mod group;
 pub mod group_id;
 pub mod history;
 pub mod identifier;
+pub mod individual;
 pub mod individual_id;
 pub mod membered;
 pub mod peer;

@@ -14,7 +14,7 @@ rust-version.workspace = true
 aquamarine = { version = "0.6", optional = true }
 
 # Encoding
-bincode = "1.3"
+bincode = { workspace = true }
 serde = { workspace = true }
 
 # Crypto

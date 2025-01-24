@@ -1,4 +1,4 @@
-use super::{change_ref::JsChangeRef, identifier::JsIdentifier};
+use super::{agent::JsAgent, change_ref::JsChangeRef, identifier::JsIdentifier, peer::JsPeer};
 use beehive_core::principal::document::Document;
 use derive_more::{Deref, From, Into};
 use dupe::Dupe;
@@ -14,5 +14,15 @@ impl JsDocument {
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> JsIdentifier {
         JsIdentifier(self.0.borrow().id())
+    }
+
+    #[wasm_bindgen(js_name = toPeer)]
+    pub fn to_peer(&self) -> JsPeer {
+        JsPeer(self.0.dupe().into())
+    }
+
+    #[wasm_bindgen(js_name = toAgent)]
+    pub fn to_agent(&self) -> JsAgent {
+        JsAgent(self.0.dupe().into())
     }
 }

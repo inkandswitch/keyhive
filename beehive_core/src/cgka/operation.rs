@@ -73,7 +73,7 @@ impl CgkaOperation {
 }
 
 /// Causal graph of [`CgkaOperation`]s.
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
+#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct CgkaOperationGraph {
     pub(crate) cgka_ops: CaMap<CgkaOperation>,
     pub(crate) cgka_ops_predecessors:
