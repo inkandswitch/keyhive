@@ -1,4 +1,7 @@
-use crate::principal::{identifier::Identifier, membered::id::MemberedId, verifiable::Verifiable};
+use crate::{
+    crypto::verifiable::Verifiable,
+    principal::{identifier::Identifier, membered::id::MemberedId},
+};
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};

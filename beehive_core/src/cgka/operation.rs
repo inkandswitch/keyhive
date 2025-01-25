@@ -4,11 +4,13 @@ use crate::{
     principal::individual::id::IndividualId,
     util::content_addressed_map::CaMap,
 };
+use derivative::Derivative;
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Borrow,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    hash::{Hash, Hasher},
     mem,
     ops::Deref,
     rc::Rc,
@@ -73,13 +75,30 @@ impl CgkaOperation {
 }
 
 /// Causal graph of [`CgkaOperation`]s.
-#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize, Derivative)]
+#[derivative(Hash)]
 pub(crate) struct CgkaOperationGraph {
     pub(crate) cgka_ops: CaMap<CgkaOperation>,
+
+    #[derivative(Hash(hash_with = "hash_cgka_ops_preds"))]
     pub(crate) cgka_ops_predecessors:
         HashMap<Digest<CgkaOperation>, HashSet<Digest<CgkaOperation>>>,
+
+    #[derivative(Hash(hash_with = "crate::util::hasher::hash_set"))]
     pub(crate) cgka_op_heads: HashSet<Digest<CgkaOperation>>,
+
+    #[derivative(Hash(hash_with = "crate::util::hasher::hash_set"))]
     pub(crate) add_heads: HashSet<Digest<CgkaOperation>>,
+}
+
+fn hash_cgka_ops_preds<H: Hasher>(
+    hmap: &HashMap<Digest<CgkaOperation>, HashSet<Digest<CgkaOperation>>>,
+    state: &mut H,
+) {
+    hmap.iter()
+        .map(|(k, v)| (k, v.iter().collect::<BTreeSet<_>>()))
+        .collect::<BTreeMap<_, _>>()
+        .hash(state)
 }
 
 impl CgkaOperationGraph {

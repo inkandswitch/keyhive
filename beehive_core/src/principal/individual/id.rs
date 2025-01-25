@@ -1,4 +1,4 @@
-use crate::principal::{identifier::Identifier, verifiable::Verifiable};
+use crate::{crypto::verifiable::Verifiable, principal::identifier::Identifier};
 use derive_more::Display;
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};

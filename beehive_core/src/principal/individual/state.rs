@@ -7,6 +7,7 @@ use crate::{
     error::missing_dependency::MissingDependency,
     util::content_addressed_map::CaMap,
 };
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, rc::Rc};
 use thiserror::Error;
@@ -16,12 +17,12 @@ use thiserror::Error;
 /// # Semantics
 ///
 /// This is essentially an OR-Set, with a small twist where we avoid the possibility
-/// of having a empty set of materialized keys by replacing tombstoning with
+/// of having a empty set of rebuildd keys by replacing tombstoning with
 /// rotation. The number of active prekeys can only expand, but the underlying store
 /// is the same size in both cases.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PrekeyState {
-    ops: CaMap<Signed<KeyOp>>,
+    pub(crate) ops: CaMap<KeyOp>,
 }
 
 impl PrekeyState {
@@ -39,9 +40,7 @@ impl PrekeyState {
     /// # Returns
     ///
     /// A new [`PrekeyState`] with the operations from `iter`.
-    pub fn try_from_iter(
-        iter: impl IntoIterator<Item = Signed<KeyOp>>,
-    ) -> Result<Self, NewOpError> {
+    pub fn try_from_iter(iter: impl IntoIterator<Item = KeyOp>) -> Result<Self, NewOpError> {
         let mut s = Self::new();
 
         for op in iter {
@@ -75,35 +74,36 @@ impl PrekeyState {
             let secret_key = ShareSecretKey::generate(csprng);
             let share_key = secret_key.share_key();
 
-            let op = Signed::try_sign(KeyOp::add(share_key), signing_key)?;
+            let op = KeyOp::Add(Rc::new(Signed::try_sign(
+                AddKeyOp { share_key },
+                signing_key,
+            )?));
+
             ops.insert(op.into());
 
-            Ok::<_, SigningError>(ops)
+            Ok::<CaMap<KeyOp>, SigningError>(ops)
         })?;
 
         Ok(Self { ops })
     }
 
     /// A getter for the operations in the [`PrekeyState`].
-    pub fn ops(&self) -> &CaMap<Signed<KeyOp>> {
+    pub fn ops(&self) -> &CaMap<KeyOp> {
         &self.ops
     }
 
     /// A getter for the keys in the [`PrekeyState`].
     pub fn all_keys(&self) -> HashSet<ShareKey> {
-        self.ops
-            .values()
-            .map(|signed| signed.payload().new_share_key())
-            .collect()
+        self.ops.values().map(|op| *op.new_key()).collect()
     }
 
     /// Insert a new [`Signed<KeyOp>`] into the [`PrekeyState`].
-    pub fn insert_op(&mut self, op: Signed<KeyOp>) -> Result<(), NewOpError> {
+    pub fn insert_op(&mut self, op: KeyOp) -> Result<(), NewOpError> {
         op.try_verify()?;
 
-        if let KeyOp::Rotate(RotateKeyOp { old, .. }) = op.payload() {
-            if !self.contains_share_key(old) {
-                return Err(MissingDependency(*old).into());
+        if let KeyOp::Rotate(ref rot) = op {
+            if !self.contains_share_key(&rot.payload.old) {
+                return Err(MissingDependency(rot.payload.old).into());
             }
         }
 
@@ -113,9 +113,7 @@ impl PrekeyState {
 
     /// Check if a [`ShareKey`] is in the [`PrekeyState`].
     pub fn contains_share_key(&self, key: &ShareKey) -> bool {
-        self.ops
-            .values()
-            .any(|signed| signed.payload().new_share_key() == *key)
+        self.ops.values().any(|op| op.new_key() == key)
     }
 
     /// Rotate a [`ShareKey`] in the [`PrekeyState`].
@@ -124,10 +122,10 @@ impl PrekeyState {
         old: ShareKey,
         new: ShareKey,
         signing_key: &ed25519_dalek::SigningKey,
-    ) -> Result<ShareKey, SigningError> {
-        let op = Signed::try_sign(KeyOp::rotate(old, new), signing_key)?;
-        self.ops.insert(op.into());
-        Ok(new)
+    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
+        let op = Rc::new(Signed::try_sign(RotateKeyOp { old, new }, signing_key)?);
+        self.ops.insert(KeyOp::from(op.dupe()).into());
+        Ok(op)
     }
 
     /// Rotate a [`ShareKey`] in the [`PrekeyState`] with a randomly-generated [`ShareSecretKey`].
@@ -136,7 +134,7 @@ impl PrekeyState {
         old: ShareKey,
         signer: &ed25519_dalek::SigningKey,
         csprng: &mut R,
-    ) -> Result<ShareKey, SigningError> {
+    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
         self.rotate(old, new_secret.share_key(), signer)
     }
@@ -146,33 +144,33 @@ impl PrekeyState {
         &mut self,
         signing_key: &ed25519_dalek::SigningKey,
         csprng: &mut R,
-    ) -> Result<ShareKey, SigningError> {
+    ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
         let new = new_secret.share_key();
-        let op = Signed::try_sign(KeyOp::add(new), signing_key)?;
-        self.ops.insert(op.into());
-        Ok(new)
+        let op = Rc::new(Signed::try_sign(AddKeyOp { share_key: new }, signing_key)?);
+        self.ops.insert(KeyOp::Add(op.dupe()).into());
+        Ok(op)
     }
 
-    /// Materialize the most recent set of active [`ShareKey`]s in the [`PrekeyState`].
-    pub fn materialize(&self) -> HashSet<ShareKey> {
+    /// Rebuild the most recent set of active [`ShareKey`]s in the [`PrekeyState`].
+    pub fn rebuild(&self) -> HashSet<ShareKey> {
         let mut keys = HashSet::new();
         let mut to_drop = vec![];
 
-        for signed in self.ops.values() {
-            match signed.payload() {
-                KeyOp::Add(AddKeyOp { share_key }) => {
-                    keys.insert(*share_key);
+        for op in self.ops.values() {
+            match op.as_ref() {
+                KeyOp::Add(add) => {
+                    keys.insert(add.payload.share_key);
                 }
-                KeyOp::Rotate(RotateKeyOp { old, new }) => {
-                    to_drop.push(old);
-                    keys.insert(*new);
+                KeyOp::Rotate(rot) => {
+                    to_drop.push(rot.payload.old);
+                    keys.insert(rot.payload.new);
                 }
             }
         }
 
         for tombstone in to_drop {
-            keys.remove(tombstone);
+            keys.remove(&tombstone);
         }
 
         keys
@@ -228,13 +226,63 @@ mod tests {
         let share_key_4 = ShareKey::generate(&mut rando);
         let share_key_5 = ShareKey::generate(&mut rando);
 
-        let op1 = Signed::try_sign(KeyOp::add(share_key_1), &signer).unwrap();
-        let op2 = Signed::try_sign(KeyOp::add(share_key_2), &signer).unwrap();
+        let op1 = Rc::new(
+            Signed::try_sign(
+                AddKeyOp {
+                    share_key: share_key_1,
+                },
+                &signer,
+            )
+            .unwrap(),
+        )
+        .into();
 
-        let op3 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_3), &signer).unwrap();
-        let op4 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_4), &signer).unwrap();
+        let op2 = Rc::new(
+            Signed::try_sign(
+                AddKeyOp {
+                    share_key: share_key_2,
+                },
+                &signer,
+            )
+            .unwrap(),
+        )
+        .into();
 
-        let op5 = Signed::try_sign(KeyOp::rotate(share_key_4, share_key_5), &signer).unwrap();
+        let op3 = Rc::new(
+            Signed::try_sign(
+                RotateKeyOp {
+                    old: share_key_1,
+                    new: share_key_3,
+                },
+                &signer,
+            )
+            .unwrap(),
+        )
+        .into();
+
+        let op4 = Rc::new(
+            Signed::try_sign(
+                RotateKeyOp {
+                    old: share_key_1,
+                    new: share_key_4,
+                },
+                &signer,
+            )
+            .unwrap(),
+        )
+        .into();
+
+        let op5 = Rc::new(
+            Signed::try_sign(
+                RotateKeyOp {
+                    old: share_key_4,
+                    new: share_key_5,
+                },
+                &signer,
+            )
+            .unwrap(),
+        )
+        .into();
 
         state.insert_op(op1).unwrap();
         state.insert_op(op2).unwrap();
@@ -242,11 +290,11 @@ mod tests {
         state.insert_op(op4).unwrap();
         state.insert_op(op5).unwrap();
 
-        let materialized = state.materialize();
-        assert_eq!(materialized.len(), 3);
-        assert!(materialized.contains(&share_key_2));
-        assert!(materialized.contains(&share_key_3));
-        assert!(materialized.contains(&share_key_5));
+        let rebuildd = state.rebuild();
+        assert_eq!(rebuildd.len(), 3);
+        assert!(rebuildd.contains(&share_key_2));
+        assert!(rebuildd.contains(&share_key_3));
+        assert!(rebuildd.contains(&share_key_5));
     }
 
     #[test]
@@ -284,14 +332,63 @@ mod tests {
         let share_key_4 = ShareKey::generate(&mut rando);
         let share_key_5 = ShareKey::generate(&mut rando);
 
-        let op1 = Signed::try_sign(KeyOp::add(share_key_1), &signer).unwrap();
-        let op2 = Signed::try_sign(KeyOp::add(share_key_2), &signer).unwrap();
+        let op1: KeyOp = Rc::new(
+            Signed::try_sign(
+                AddKeyOp {
+                    share_key: share_key_1,
+                },
+                &signer,
+            )
+            .unwrap(),
+        )
+        .into();
 
-        let op3 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_3), &signer).unwrap();
-        let op4 = Signed::try_sign(KeyOp::rotate(share_key_1, share_key_4), &signer).unwrap();
+        let op2: KeyOp = Rc::new(
+            Signed::try_sign(
+                AddKeyOp {
+                    share_key: share_key_2,
+                },
+                &signer,
+            )
+            .unwrap(),
+        )
+        .into();
 
-        //                                       vvvvvvvvvvv
-        let op5 = Signed::try_sign(KeyOp::rotate(share_key_4, share_key_5), &signer).unwrap();
+        let op3: KeyOp = Rc::new(
+            Signed::try_sign(
+                RotateKeyOp {
+                    old: share_key_1,
+                    new: share_key_3,
+                },
+                &signer,
+            )
+            .unwrap(),
+        )
+        .into();
+
+        let op4: KeyOp = Rc::new(
+            Signed::try_sign(
+                RotateKeyOp {
+                    old: share_key_1,
+                    new: share_key_4,
+                },
+                &signer,
+            )
+            .unwrap(),
+        )
+        .into();
+
+        let op5: KeyOp = Rc::new(
+            Signed::try_sign(
+                RotateKeyOp {
+                    old: share_key_4,
+                    new: share_key_5,
+                },
+                &signer,
+            )
+            .unwrap(),
+        )
+        .into();
 
         state.insert_op(op1.dupe()).unwrap();
         state.insert_op(op2.dupe()).unwrap();
@@ -299,10 +396,10 @@ mod tests {
         // Intentionally no inclusion of #4
         assert!(state.insert_op(op5.dupe()).is_err());
 
-        let materialized = state.materialize();
-        assert_eq!(materialized.len(), 2);
-        assert!(materialized.contains(&share_key_2));
-        assert!(materialized.contains(&share_key_3));
+        let rebuildd = state.rebuild();
+        assert_eq!(rebuildd.len(), 2);
+        assert!(rebuildd.contains(&share_key_2));
+        assert!(rebuildd.contains(&share_key_3));
 
         // Same elements again
 
@@ -310,17 +407,17 @@ mod tests {
         state.insert_op(op2).unwrap();
         state.insert_op(op1).unwrap();
 
-        let rematerialized = state.materialize();
-        assert_eq!(rematerialized.len(), 2);
-        assert!(rematerialized.contains(&share_key_2));
-        assert!(rematerialized.contains(&share_key_3));
+        let rerebuildd = state.rebuild();
+        assert_eq!(rerebuildd.len(), 2);
+        assert!(rerebuildd.contains(&share_key_2));
+        assert!(rerebuildd.contains(&share_key_3));
 
         // Connect op 4 & 5
 
         state.insert_op(op4).unwrap();
         state.insert_op(op5).unwrap();
 
-        let updated = state.materialize();
+        let updated = state.rebuild();
         assert_eq!(updated.len(), 3);
         assert!(updated.contains(&share_key_2));
         assert!(updated.contains(&share_key_3));

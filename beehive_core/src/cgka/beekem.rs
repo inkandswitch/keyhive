@@ -58,7 +58,7 @@ pub struct PathChange {
 /// [Causal TreeKEM]: https://mattweidner.com/assets/pdf/acs-dissertation.pdf
 /// [MLS]: https://messaginglayersecurity.rocks/
 /// [TreeKEM]: https://inria.hal.science/hal-02425247/file/treekem+(1).pdf
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
 pub(crate) struct BeeKem {
     doc_id: DocumentId,
     /// The next [`LeafNodeIndex`] available for adding a new member.
@@ -243,9 +243,8 @@ impl BeeKem {
             // path, then we can ratchet this parent secret forward for each of the
             // remaining nodes in the path and return early.
             if parent_idx == TreeNodeIndex::Inner(lca_with_encrypter) {
-                return Ok(secret.ratchet_n_forward(
-                    treemath::direct_path(parent_idx, self.tree_size).len(),
-                ));
+                return Ok(secret
+                    .ratchet_n_forward(treemath::direct_path(parent_idx, self.tree_size).len()));
             }
             seen_idxs.push(parent_idx);
             child_idx = parent_idx;
@@ -479,8 +478,7 @@ impl BeeKem {
                     NodeKey::ShareKey(share_key) => share_key,
                     _ => panic!("Sibling resolution nodes should have exactly one ShareKey"),
                 };
-                let encrypted_sk =
-                    encrypt_secret(self.doc_id, *new_parent_sk, child_sk, &next_pk)?;
+                let encrypted_sk = encrypt_secret(self.doc_id, *new_parent_sk, child_sk, &next_pk)?;
                 if !used_paired_sibling {
                     secret_map.insert(child_idx, encrypted_sk.clone());
                     used_paired_sibling = true;
@@ -629,7 +627,7 @@ impl BeeKem {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
 pub struct LeafNode {
     pub id: IndividualId,
     pub pk: NodeKey,

@@ -1,6 +1,7 @@
 //! Wrap data in signatures.
 
-use crate::principal::{identifier::Identifier, verifiable::Verifiable};
+use super::verifiable::Verifiable;
+use crate::principal::identifier::Identifier;
 use derivative::Derivative;
 use dupe::Dupe;
 use ed25519_dalek::{Signer, Verifier};
@@ -12,8 +13,8 @@ use std::{
 use thiserror::Error;
 
 /// A wrapper to add a signature and signer information to an arbitrary payload.
-#[derive(Clone, Derivative, Eq, Serialize, Deserialize)]
-#[derivative(Debug, PartialEq, Hash)]
+#[derive(Clone, Derivative, Serialize, Deserialize)]
+#[derivative(Debug, PartialEq, Eq, Hash)]
 pub struct Signed<T: Serialize> {
     /// The data that was signed.
     #[derivative(PartialEq = "ignore", Hash = "ignore")]

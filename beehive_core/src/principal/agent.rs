@@ -5,12 +5,17 @@ use super::{
     document::{id::DocumentId, Document},
     group::Group,
     identifier::Identifier,
-    individual::{id::IndividualId, Individual},
+    individual::{id::IndividualId, op::KeyOp, Individual},
     membered::Membered,
-    verifiable::Verifiable,
 };
-use crate::{content::reference::ContentRef, crypto::share_key::ShareKey};
+use crate::{
+    content::reference::ContentRef,
+    crypto::{share_key::ShareKey, verifiable::Verifiable},
+    listener::{membership::MembershipListener, no_listener::NoListener},
+};
+use derivative::Derivative;
 use derive_more::{From, TryInto};
+use derive_where::derive_where;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use std::{
@@ -23,15 +28,16 @@ use std::{
 /// Immutable union over all agent types.
 ///
 /// This type is very lightweight to clone, since it only contains immutable references to the actual agents.
-#[derive(Debug, Clone, PartialEq, Eq, From, TryInto)]
-pub enum Agent<T: ContentRef> {
-    Active(Rc<RefCell<Active>>),
+#[derive(Debug, Clone, Eq, From, TryInto, Derivative)]
+#[derive_where(PartialEq ;T)]
+pub enum Agent<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+    Active(Rc<RefCell<Active<L>>>),
     Individual(Rc<RefCell<Individual>>),
-    Group(Rc<RefCell<Group<T>>>),
-    Document(Rc<RefCell<Document<T>>>),
+    Group(Rc<RefCell<Group<T, L>>>),
+    Document(Rc<RefCell<Document<T, L>>>),
 }
 
-impl<T: ContentRef> Agent<T> {
+impl<T: ContentRef, L: MembershipListener<T>> Agent<T, L> {
     pub fn id(&self) -> Identifier {
         match self {
             Agent::Active(a) => a.borrow().id().into(),
@@ -62,48 +68,76 @@ impl<T: ContentRef> Agent<T> {
     pub fn pick_individual_prekeys(&self, doc_id: DocumentId) -> HashMap<IndividualId, ShareKey> {
         match self {
             Agent::Active(a) => {
-                HashMap::from_iter([(a.borrow().id(), a.borrow().pick_prekey(doc_id))])
+                if let Some(prekey) = a.borrow().pick_prekey(doc_id) {
+                    HashMap::from_iter([(a.borrow().id(), prekey)])
+                } else {
+                    HashMap::new()
+                }
             }
             Agent::Individual(i) => {
-                HashMap::from_iter([(i.borrow().id(), i.borrow().pick_prekey(doc_id))])
+                if let Some(prekey) = i.borrow().pick_prekey(doc_id) {
+                    HashMap::from_iter([(i.borrow().id(), prekey)])
+                } else {
+                    HashMap::new()
+                }
             }
             Agent::Group(g) => g.borrow().pick_individual_prekeys(doc_id),
             Agent::Document(d) => d.borrow().group.pick_individual_prekeys(doc_id),
         }
     }
-}
 
-impl<T: ContentRef> Dupe for Agent<T> {
-    fn dupe(&self) -> Self {
+    pub fn key_ops(&self) -> HashSet<Rc<KeyOp>> {
         match self {
-            Agent::Active(a) => Agent::Active(a.dupe()),
-            Agent::Individual(i) => Agent::Individual(i.dupe()),
-            Agent::Group(g) => Agent::Group(g.dupe()),
-            Agent::Document(d) => Agent::Document(d.dupe()),
+            Agent::Active(a) => a
+                .borrow()
+                .individual
+                .prekey_state
+                .ops
+                .values()
+                .cloned()
+                .collect(),
+            Agent::Individual(i) => i.borrow().prekey_state.ops.values().cloned().collect(),
+            Agent::Group(g) => g
+                .borrow()
+                .individual
+                .prekey_state
+                .ops
+                .values()
+                .cloned()
+                .collect(),
+            Agent::Document(d) => d
+                .borrow()
+                .group
+                .individual
+                .prekey_state
+                .ops
+                .values()
+                .cloned()
+                .collect(),
         }
     }
 }
 
-impl<T: ContentRef> From<Active> for Agent<T> {
-    fn from(a: Active) -> Self {
+impl<T: ContentRef, L: MembershipListener<T>> From<Active<L>> for Agent<T, L> {
+    fn from(a: Active<L>) -> Self {
         Agent::Active(Rc::new(RefCell::new(a)))
     }
 }
 
-impl<T: ContentRef> From<Individual> for Agent<T> {
+impl<T: ContentRef, L: MembershipListener<T>> From<Individual> for Agent<T, L> {
     fn from(i: Individual) -> Self {
         Agent::Individual(Rc::new(RefCell::new(i)))
     }
 }
 
-impl<T: ContentRef> From<Group<T>> for Agent<T> {
-    fn from(g: Group<T>) -> Self {
+impl<T: ContentRef, L: MembershipListener<T>> From<Group<T, L>> for Agent<T, L> {
+    fn from(g: Group<T, L>) -> Self {
         Agent::Group(Rc::new(RefCell::new(g)))
     }
 }
 
-impl<T: ContentRef> From<Membered<T>> for Agent<T> {
-    fn from(m: Membered<T>) -> Self {
+impl<T: ContentRef, L: MembershipListener<T>> From<Membered<T, L>> for Agent<T, L> {
+    fn from(m: Membered<T, L>) -> Self {
         match m {
             Membered::Group(g) => g.into(),
             Membered::Document(d) => d.into(),
@@ -111,13 +145,12 @@ impl<T: ContentRef> From<Membered<T>> for Agent<T> {
     }
 }
 
-impl<T: ContentRef> From<Document<T>> for Agent<T> {
-    fn from(d: Document<T>) -> Self {
+impl<T: ContentRef, L: MembershipListener<T>> From<Document<T, L>> for Agent<T, L> {
+    fn from(d: Document<T, L>) -> Self {
         Agent::Document(Rc::new(RefCell::new(d)))
     }
 }
-
-impl<T: ContentRef> Verifiable for Agent<T> {
+impl<T: ContentRef, L: MembershipListener<T>> Verifiable for Agent<T, L> {
     fn verifying_key(&self) -> VerifyingKey {
         match self {
             Agent::Active(a) => a.borrow().verifying_key(),
@@ -128,8 +161,19 @@ impl<T: ContentRef> Verifiable for Agent<T> {
     }
 }
 
-impl<T: ContentRef> Display for Agent<T> {
+impl<T: ContentRef, L: MembershipListener<T>> Display for Agent<T, L> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.id())
+    }
+}
+
+impl<T: ContentRef, L: MembershipListener<T>> Dupe for Agent<T, L> {
+    fn dupe(&self) -> Self {
+        match self {
+            Agent::Active(a) => a.dupe().into(),
+            Agent::Individual(i) => i.dupe().into(),
+            Agent::Group(g) => g.dupe().into(),
+            Agent::Document(d) => d.dupe().into(),
+        }
     }
 }

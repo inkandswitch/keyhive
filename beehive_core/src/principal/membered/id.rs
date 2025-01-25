@@ -1,5 +1,6 @@
-use crate::principal::{
-    document::id::DocumentId, group::id::GroupId, identifier::Identifier, verifiable::Verifiable,
+use crate::{
+    crypto::verifiable::Verifiable,
+    principal::{document::id::DocumentId, group::id::GroupId, identifier::Identifier},
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;

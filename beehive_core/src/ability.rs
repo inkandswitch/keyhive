@@ -1,14 +1,19 @@
-use crate::{access::Access, content::reference::ContentRef, principal::document::Document};
+use crate::{
+    access::Access,
+    content::reference::ContentRef,
+    listener::{membership::MembershipListener, no_listener::NoListener},
+    principal::document::Document,
+};
 use std::{cell::RefCell, rc::Rc};
 
 #[derive(Debug)]
-pub struct Ability<'a, T: ContentRef> {
-    pub(crate) doc: &'a Rc<RefCell<Document<T>>>,
+pub struct Ability<'a, T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+    pub(crate) doc: &'a Rc<RefCell<Document<T, L>>>,
     pub(crate) can: Access,
 }
 
-impl<T: ContentRef> Ability<'_, T> {
-    pub fn doc(&self) -> &Rc<RefCell<Document<T>>> {
+impl<T: ContentRef, L: MembershipListener<T>> Ability<'_, T, L> {
+    pub fn doc(&self) -> &Rc<RefCell<Document<T, L>>> {
         self.doc
     }
 

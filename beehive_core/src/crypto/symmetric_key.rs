@@ -12,8 +12,9 @@ use x25519_dalek::SharedSecret;
 /// ```
 /// # use beehive_core::{
 /// #     crypto::{siv::Siv, symmetric_key::SymmetricKey},
+/// #     listener::no_listener::NoListener,
 /// #     principal::{agent::Agent, document::Document, individual::Individual},
-/// #     util::content_addressed_map::CaMap,
+/// #     store::{delegation::DelegationStore, revocation::RevocationStore}
 /// # };
 /// # use std::{cell::RefCell, rc::Rc};
 /// # use nonempty::nonempty;
@@ -25,13 +26,14 @@ use x25519_dalek::SharedSecret;
 /// let user = Individual::generate(&mut sk, &mut csprng).unwrap();
 /// let user_agent: Agent<String> = Rc::new(RefCell::new(user)).into();
 ///
-/// let delegation_store = Rc::new(RefCell::new(CaMap::new()));
-/// let revocation_store = Rc::new(RefCell::new(CaMap::new()));
+/// let delegation_store = DelegationStore::new();
+/// let revocation_store = RevocationStore::new();
 /// let doc = Document::generate(
 ///     nonempty![user_agent],
 ///     nonempty!["commit-1".to_string()],
 ///     delegation_store,
 ///     revocation_store,
+///     NoListener,
 ///     &mut csprng
 /// ).unwrap();
 ///

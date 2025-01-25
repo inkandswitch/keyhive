@@ -1,11 +1,11 @@
-use super::change_ref::JsChangeRef;
+use super::{change_ref::JsChangeRef, event_handler::JsEventHandler};
 use beehive_core::principal::peer::Peer;
-use derive_more::{Deref, Display, From, Into};
+use derive_more::{Deref, From, Into};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Peer)]
-#[derive(Debug, Clone, From, Into, Display, Deref)]
-pub struct JsPeer(pub(crate) Peer<JsChangeRef>);
+#[derive(Debug, Clone, From, Into, Deref)]
+pub struct JsPeer(pub(crate) Peer<JsChangeRef, JsEventHandler>);
 
 #[wasm_bindgen(js_class = Peer)]
 impl JsPeer {

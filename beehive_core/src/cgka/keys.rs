@@ -49,6 +49,11 @@ impl ShareKeyMap {
         self.0.extend(other.0.iter());
     }
 }
+impl std::hash::Hash for ShareKeyMap {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.keys().for_each(|k| k.hash(state));
+    }
+}
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Deserialize, Serialize)]
 pub enum NodeKey {

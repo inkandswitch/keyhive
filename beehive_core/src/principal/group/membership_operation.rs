@@ -1,18 +1,17 @@
-pub mod delegation;
-pub mod dependencies;
-pub mod revocation;
-
+use super::{
+    delegation::{Delegation, StaticDelegation},
+    dependencies::Dependencies,
+    revocation::{Revocation, StaticRevocation},
+};
 use crate::{
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed},
-    principal::{document::id::DocumentId, identifier::Identifier, verifiable::Verifiable},
+    crypto::{digest::Digest, signed::Signed, verifiable::Verifiable},
+    listener::{membership::MembershipListener, no_listener::NoListener},
+    principal::{document::id::DocumentId, identifier::Identifier},
     util::content_addressed_map::CaMap,
 };
-use delegation::Delegation;
-use dependencies::Dependencies;
 use derive_more::{From, Into};
 use dupe::Dupe;
-use revocation::Revocation;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
@@ -22,40 +21,65 @@ use std::{
 };
 use topological_sort::TopologicalSort;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Dupe)]
-pub enum Operation<T: ContentRef> {
-    Delegation(Rc<Signed<Delegation<T>>>),
-    Revocation(Rc<Signed<Revocation<T>>>),
+#[derive(Debug, Dupe, Clone)]
+pub enum MembershipOperation<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+    Delegation(Rc<Signed<Delegation<T, L>>>),
+    Revocation(Rc<Signed<Revocation<T, L>>>),
 }
 
-impl<T: ContentRef + Serialize> Serialize for Operation<T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+impl<T: ContentRef, L: MembershipListener<T>> std::hash::Hash for MembershipOperation<T, L> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
-            Operation::Delegation(delegation) => delegation.serialize(serializer),
-            Operation::Revocation(revocation) => revocation.serialize(serializer),
+            MembershipOperation::Delegation(delegation) => {
+                delegation.signature.to_bytes().hash(state)
+            }
+            MembershipOperation::Revocation(revocation) => {
+                revocation.signature.to_bytes().hash(state)
+            }
         }
     }
 }
 
-impl<T: ContentRef> Operation<T> {
+impl<T: ContentRef, L: MembershipListener<T>> PartialEq for MembershipOperation<T, L> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (MembershipOperation::Delegation(d1), MembershipOperation::Delegation(d2)) => d1 == d2,
+            (MembershipOperation::Revocation(r1), MembershipOperation::Revocation(r2)) => r1 == r2,
+            _ => false,
+        }
+    }
+}
+
+impl<T: ContentRef, L: MembershipListener<T>> Eq for MembershipOperation<T, L> {}
+
+impl<T: ContentRef + Serialize, L: MembershipListener<T>> Serialize for MembershipOperation<T, L> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            MembershipOperation::Delegation(delegation) => delegation.serialize(serializer),
+            MembershipOperation::Revocation(revocation) => revocation.serialize(serializer),
+        }
+    }
+}
+
+impl<T: ContentRef, L: MembershipListener<T>> MembershipOperation<T, L> {
     pub fn subject_id(&self) -> Identifier {
         match self {
-            Operation::Delegation(delegation) => delegation.subject_id(),
-            Operation::Revocation(revocation) => revocation.subject_id(),
+            MembershipOperation::Delegation(delegation) => delegation.subject_id(),
+            MembershipOperation::Revocation(revocation) => revocation.subject_id(),
         }
     }
 
     pub fn is_delegation(&self) -> bool {
         match self {
-            Operation::Delegation(_) => true,
-            Operation::Revocation(_) => false,
+            MembershipOperation::Delegation(_) => true,
+            MembershipOperation::Revocation(_) => false,
         }
     }
 
     pub fn signature(&self) -> ed25519_dalek::Signature {
         match self {
-            Operation::Delegation(delegation) => delegation.signature,
-            Operation::Revocation(revocation) => revocation.signature,
+            MembershipOperation::Delegation(delegation) => delegation.signature,
+            MembershipOperation::Revocation(revocation) => revocation.signature,
         }
     }
 
@@ -63,7 +87,7 @@ impl<T: ContentRef> Operation<T> {
         !self.is_delegation()
     }
 
-    pub fn after_auth(&self) -> Vec<Operation<T>> {
+    pub fn after_auth(&self) -> Vec<MembershipOperation<T, L>> {
         let deps = self.after();
         deps.delegations
             .into_iter()
@@ -72,28 +96,28 @@ impl<T: ContentRef> Operation<T> {
             .collect()
     }
 
-    pub fn after(&self) -> Dependencies<T> {
+    pub fn after(&self) -> Dependencies<T, L> {
         match self {
-            Operation::Delegation(delegation) => delegation.payload().after(),
-            Operation::Revocation(revocation) => revocation.payload().after(),
+            MembershipOperation::Delegation(delegation) => delegation.payload.after(),
+            MembershipOperation::Revocation(revocation) => revocation.payload.after(),
         }
     }
 
     pub fn after_content(&self) -> &BTreeMap<DocumentId, Vec<T>> {
         match self {
-            Operation::Delegation(delegation) => &delegation.payload().after_content,
-            Operation::Revocation(revocation) => &revocation.payload().after_content,
+            MembershipOperation::Delegation(delegation) => &delegation.payload().after_content,
+            MembershipOperation::Revocation(revocation) => &revocation.payload().after_content,
         }
     }
 
     pub fn is_root(&self) -> bool {
         match self {
-            Operation::Delegation(delegation) => delegation.payload().is_root(),
-            Operation::Revocation(_) => false,
+            MembershipOperation::Delegation(delegation) => delegation.payload().is_root(),
+            MembershipOperation::Revocation(_) => false,
         }
     }
 
-    pub fn ancestors(&self) -> (CaMap<Operation<T>>, usize) {
+    pub fn ancestors(&self) -> (CaMap<MembershipOperation<T, L>>, usize) {
         if self.is_root() {
             return (CaMap::new(), 1);
         }
@@ -137,13 +161,17 @@ impl<T: ContentRef> Operation<T> {
 
     #[allow(clippy::type_complexity)] // Clippy doens't like the returned pair
     pub fn topsort(
-        delegation_heads: &CaMap<Signed<Delegation<T>>>,
-        revocation_heads: &CaMap<Signed<Revocation<T>>>,
-    ) -> Vec<(Digest<Operation<T>>, Operation<T>)> {
+        delegation_heads: &CaMap<Signed<Delegation<T, L>>>,
+        revocation_heads: &CaMap<Signed<Revocation<T, L>>>,
+    ) -> Vec<(Digest<MembershipOperation<T, L>>, MembershipOperation<T, L>)> {
         // NOTE: BTreeMap to get deterministic order
         let mut ops_with_ancestors: BTreeMap<
-            Digest<Operation<T>>,
-            (Operation<T>, CaMap<Operation<T>>, usize),
+            Digest<MembershipOperation<T, L>>,
+            (
+                MembershipOperation<T, L>,
+                CaMap<MembershipOperation<T, L>>,
+                usize,
+            ),
         > = BTreeMap::new();
 
         #[derive(Debug, Clone, PartialEq, Eq, From, Into)]
@@ -161,17 +189,17 @@ impl<T: ContentRef> Operation<T> {
             }
         }
 
-        let mut leftovers: HashMap<Key, Operation<T>> = HashMap::new();
-        let mut explore: Vec<Operation<T>> = vec![];
+        let mut leftovers: HashMap<Key, MembershipOperation<T, L>> = HashMap::new();
+        let mut explore: Vec<MembershipOperation<T, L>> = vec![];
 
         for dlg in delegation_heads.values() {
-            let op: Operation<T> = dlg.dupe().into();
+            let op: MembershipOperation<T, L> = dlg.dupe().into();
             leftovers.insert(op.signature().into(), op.clone());
             explore.push(op);
         }
 
         for rev in revocation_heads.values() {
-            let op: Operation<T> = rev.dupe().into();
+            let op: MembershipOperation<T, L> = rev.dupe().into();
             leftovers.insert(op.signature().into(), op.clone());
             explore.push(op);
         }
@@ -186,8 +214,10 @@ impl<T: ContentRef> Operation<T> {
             ops_with_ancestors.insert(Digest::hash(&op), (op, ancestors, longest_path));
         }
 
-        let mut adjacencies: TopologicalSort<(Digest<Operation<T>>, &Operation<T>)> =
-            topological_sort::TopologicalSort::new();
+        let mut adjacencies: TopologicalSort<(
+            Digest<MembershipOperation<T, L>>,
+            &MembershipOperation<T, L>,
+        )> = topological_sort::TopologicalSort::new();
 
         for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
             for (other_digest, other_op) in op_ancestors.iter() {
@@ -196,11 +226,11 @@ impl<T: ContentRef> Operation<T> {
                     .expect("values that we just put there to be there");
 
                 #[allow(clippy::mutable_key_type)]
-                let ancestor_set: HashSet<&Operation<T>> =
+                let ancestor_set: HashSet<&MembershipOperation<T, L>> =
                     op_ancestors.values().map(|op| op.as_ref()).collect();
 
                 #[allow(clippy::mutable_key_type)]
-                let other_ancestor_set: HashSet<&Operation<T>> =
+                let other_ancestor_set: HashSet<&MembershipOperation<T, L>> =
                     other_ancestors.values().map(|op| op.as_ref()).collect();
 
                 if other_ancestor_set.contains(op) || ancestor_set.is_subset(&other_ancestor_set) {
@@ -254,10 +284,11 @@ impl<T: ContentRef> Operation<T> {
             }
         }
 
-        let mut history: Vec<(Digest<Operation<T>>, Operation<T>)> = leftovers
-            .values()
-            .map(|op| (Digest::hash(op), op.clone()))
-            .collect();
+        let mut history: Vec<(Digest<MembershipOperation<T, L>>, MembershipOperation<T, L>)> =
+            leftovers
+                .values()
+                .map(|op| (Digest::hash(op), op.clone()))
+                .collect();
 
         history.sort_by_key(|(digest, _)| *digest);
 
@@ -279,42 +310,48 @@ impl<T: ContentRef> Operation<T> {
     }
 }
 
-impl<T: ContentRef> Verifiable for Operation<T> {
+impl<T: ContentRef, L: MembershipListener<T>> Verifiable for MembershipOperation<T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         match self {
-            Operation::Delegation(delegation) => delegation.verifying_key(),
-            Operation::Revocation(revocation) => revocation.verifying_key(),
+            MembershipOperation::Delegation(delegation) => delegation.verifying_key(),
+            MembershipOperation::Revocation(revocation) => revocation.verifying_key(),
         }
     }
 }
 
-impl<T: ContentRef> From<Rc<Signed<Delegation<T>>>> for Operation<T> {
-    fn from(delegation: Rc<Signed<Delegation<T>>>) -> Self {
-        Operation::Delegation(delegation)
+impl<T: ContentRef, L: MembershipListener<T>> From<Rc<Signed<Delegation<T, L>>>>
+    for MembershipOperation<T, L>
+{
+    fn from(delegation: Rc<Signed<Delegation<T, L>>>) -> Self {
+        MembershipOperation::Delegation(delegation)
     }
 }
 
-impl<T: ContentRef> From<Rc<Signed<Revocation<T>>>> for Operation<T> {
-    fn from(revocation: Rc<Signed<Revocation<T>>>) -> Self {
-        Operation::Revocation(revocation)
+impl<T: ContentRef, L: MembershipListener<T>> From<Rc<Signed<Revocation<T, L>>>>
+    for MembershipOperation<T, L>
+{
+    fn from(revocation: Rc<Signed<Revocation<T, L>>>) -> Self {
+        MembershipOperation::Revocation(revocation)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
-pub enum StaticOperation<T: ContentRef> {
-    Delegation(Signed<delegation::StaticDelegation<T>>),
-    Revocation(Signed<revocation::StaticRevocation<T>>),
+pub enum StaticMembershipOperation<T: ContentRef> {
+    Delegation(Signed<StaticDelegation<T>>),
+    Revocation(Signed<StaticRevocation<T>>),
 }
 
-impl<T: ContentRef> From<Operation<T>> for StaticOperation<T> {
-    fn from(op: Operation<T>) -> Self {
+impl<T: ContentRef, L: MembershipListener<T>> From<MembershipOperation<T, L>>
+    for StaticMembershipOperation<T>
+{
+    fn from(op: MembershipOperation<T, L>) -> Self {
         match op {
-            Operation::Delegation(d) => {
-                StaticOperation::Delegation(Rc::unwrap_or_clone(d).map(Into::into))
+            MembershipOperation::Delegation(d) => {
+                StaticMembershipOperation::Delegation(Rc::unwrap_or_clone(d).map(Into::into))
             }
-            Operation::Revocation(r) => {
-                StaticOperation::Revocation(Rc::unwrap_or_clone(r).map(Into::into))
+            MembershipOperation::Revocation(r) => {
+                StaticMembershipOperation::Revocation(Rc::unwrap_or_clone(r).map(Into::into))
             }
         }
     }
@@ -515,7 +552,7 @@ mod tests {
         #[test]
         fn test_singleton() {
             let alice_dlg = add_alice();
-            let (ancestors, longest) = Operation::from(alice_dlg).ancestors();
+            let (ancestors, longest) = MembershipOperation::from(alice_dlg).ancestors();
             assert!(ancestors.is_empty());
             assert_eq!(longest, 1);
         }
@@ -523,7 +560,7 @@ mod tests {
         #[test]
         fn test_two_direct() {
             let bob_dlg = add_bob();
-            let (ancestors, longest) = Operation::from(bob_dlg).ancestors();
+            let (ancestors, longest) = MembershipOperation::from(bob_dlg).ancestors();
             assert_eq!(ancestors.len(), 1);
             assert_eq!(longest, 2);
         }
@@ -533,8 +570,8 @@ mod tests {
             let bob_dlg = add_bob();
             let carol_dlg = add_carol();
 
-            let (bob_ancestors, bob_longest) = Operation::from(bob_dlg).ancestors();
-            let (carol_ancestors, carol_longest) = Operation::from(carol_dlg).ancestors();
+            let (bob_ancestors, bob_longest) = MembershipOperation::from(bob_dlg).ancestors();
+            let (carol_ancestors, carol_longest) = MembershipOperation::from(carol_dlg).ancestors();
 
             assert_eq!(bob_ancestors.len(), carol_ancestors.len());
             assert_eq!(bob_longest, carol_longest);
@@ -543,7 +580,7 @@ mod tests {
         #[test]
         fn test_longer() {
             let erin_dlg = add_erin();
-            let (ancestors, longest) = Operation::from(erin_dlg).ancestors();
+            let (ancestors, longest) = MembershipOperation::from(erin_dlg).ancestors();
             assert_eq!(ancestors.len(), 2);
             assert_eq!(longest, 2);
         }
@@ -551,7 +588,7 @@ mod tests {
         #[test]
         fn test_revocation() {
             let rev = remove_carol();
-            let (ancestors, longest) = Operation::from(rev).ancestors();
+            let (ancestors, longest) = MembershipOperation::from(rev).ancestors();
             assert_eq!(ancestors.len(), 2);
             assert_eq!(longest, 2);
         }
@@ -565,7 +602,7 @@ mod tests {
             let dlgs = CaMap::new();
             let revs = CaMap::new();
 
-            let observed = Operation::<String>::topsort(&dlgs, &revs);
+            let observed = MembershipOperation::<String>::topsort(&dlgs, &revs);
             assert_eq!(observed, vec![]);
         }
 
@@ -576,7 +613,7 @@ mod tests {
             let dlgs = CaMap::from_iter_direct([dlg.dupe()]);
             let revs = CaMap::new();
 
-            let observed = Operation::topsort(&dlgs, &revs);
+            let observed = MembershipOperation::topsort(&dlgs, &revs);
             let expected = dlg.into();
 
             assert_eq!(observed, vec![(Digest::hash(&expected), expected)]);
@@ -590,7 +627,7 @@ mod tests {
             let dlg_heads = CaMap::from_iter_direct([bob_dlg.dupe()]);
             let rev_heads = CaMap::new();
 
-            let observed = Operation::topsort(&dlg_heads, &rev_heads);
+            let observed = MembershipOperation::topsort(&dlg_heads, &rev_heads);
 
             let alice_op = alice_dlg.into();
             let bob_op = bob_dlg.into();
@@ -613,15 +650,15 @@ mod tests {
             let dlg_heads = CaMap::from_iter_direct([dan_dlg.dupe()]);
             let rev_heads = CaMap::new();
 
-            let observed = Operation::topsort(&dlg_heads, &rev_heads);
+            let observed = MembershipOperation::topsort(&dlg_heads, &rev_heads);
 
-            let alice_op: Operation<String> = alice_dlg.into();
+            let alice_op: MembershipOperation<String> = alice_dlg.into();
             let alice_hash = Digest::hash(&alice_op);
 
-            let carol_op: Operation<String> = carol_dlg.into();
+            let carol_op: MembershipOperation<String> = carol_dlg.into();
             let carol_hash = Digest::hash(&carol_op);
 
-            let dan_op: Operation<String> = dan_dlg.into();
+            let dan_op: MembershipOperation<String> = dan_dlg.into();
             let dan_hash = Digest::hash(&dan_op);
 
             let a = (alice_hash, alice_op.clone());
@@ -648,18 +685,18 @@ mod tests {
                 )
                 .unwrap(),
             );
-            let rev_op: Operation<String> = alice_revokes_bob.dupe().into();
+            let rev_op: MembershipOperation<String> = alice_revokes_bob.dupe().into();
             let rev_hash = Digest::hash(&rev_op);
 
             let dlgs = CaMap::new();
             let revs = CaMap::from_iter_direct([alice_revokes_bob.dupe()]);
 
-            let mut observed = Operation::topsort(&dlgs, &revs);
+            let mut observed = MembershipOperation::topsort(&dlgs, &revs);
 
-            let alice_op: Operation<String> = alice_dlg.into();
+            let alice_op: MembershipOperation<String> = alice_dlg.into();
             let alice_hash = Digest::hash(&alice_op);
 
-            let bob_op: Operation<String> = bob_dlg.into();
+            let bob_op: MembershipOperation<String> = bob_dlg.into();
             let bob_hash = Digest::hash(&bob_op);
 
             let a = (alice_hash, alice_op.clone());
@@ -686,31 +723,31 @@ mod tests {
             let alice_revokes_carol = remove_carol();
             let bob_revokes_dan = remove_dan();
 
-            let rev_carol_op: Operation<String> = alice_revokes_carol.dupe().into();
+            let rev_carol_op: MembershipOperation<String> = alice_revokes_carol.dupe().into();
             let rev_carol_hash = Digest::hash(&rev_carol_op);
 
-            let rev_dan_op: Operation<String> = bob_revokes_dan.dupe().into();
+            let rev_dan_op: MembershipOperation<String> = bob_revokes_dan.dupe().into();
             let rev_dan_hash = Digest::hash(&rev_dan_op);
 
             let dlg_heads = CaMap::from_iter_direct([erin_dlg.dupe()]);
             let rev_heads =
                 CaMap::from_iter_direct([alice_revokes_carol.dupe(), bob_revokes_dan.dupe()]);
 
-            let observed = Operation::topsort(&dlg_heads, &rev_heads);
+            let observed = MembershipOperation::topsort(&dlg_heads, &rev_heads);
 
-            let alice_op: Operation<String> = alice_dlg.clone().into();
+            let alice_op: MembershipOperation<String> = alice_dlg.clone().into();
             let alice_hash = Digest::hash(&alice_op);
 
-            let bob_op: Operation<String> = bob_dlg.clone().into();
+            let bob_op: MembershipOperation<String> = bob_dlg.clone().into();
             let bob_hash = Digest::hash(&bob_op);
 
-            let carol_op: Operation<String> = carol_dlg.clone().into();
+            let carol_op: MembershipOperation<String> = carol_dlg.clone().into();
             let carol_hash = Digest::hash(&carol_op);
 
-            let dan_op: Operation<String> = dan_dlg.clone().into();
+            let dan_op: MembershipOperation<String> = dan_dlg.clone().into();
             let dan_hash = Digest::hash(&dan_op);
 
-            let erin_op: Operation<String> = erin_dlg.clone().into();
+            let erin_op: MembershipOperation<String> = erin_dlg.clone().into();
             let erin_hash = Digest::hash(&erin_op);
 
             let mut bob_and_revoke_carol = [

@@ -1,6 +1,9 @@
-use crate::principal::{
-    document::id::DocumentId, group::id::GroupId, identifier::Identifier,
-    individual::id::IndividualId, verifiable::Verifiable,
+use crate::{
+    crypto::verifiable::Verifiable,
+    principal::{
+        document::id::DocumentId, group::id::GroupId, identifier::Identifier,
+        individual::id::IndividualId,
+    },
 };
 use derive_more::Display;
 use serde::{Deserialize, Serialize};

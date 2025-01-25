@@ -1,10 +1,10 @@
 use super::{
-    access::JsAccess, agent::JsAgent, change_ref::JsChangeRef,
+    access::JsAccess, agent::JsAgent, change_ref::JsChangeRef, event_handler::JsEventHandler,
     signed_delegation::JsSignedDelegation,
 };
 use beehive_core::{
     crypto::signed::Signed,
-    principal::{agent::Agent, group::operation::delegation::Delegation},
+    principal::{agent::Agent, group::delegation::Delegation},
 };
 use dupe::Dupe;
 use std::rc::Rc;
@@ -13,8 +13,8 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 #[derive(Debug, Clone, Dupe)]
 pub struct Capability {
-    pub(crate) who: Agent<JsChangeRef>,
-    pub(crate) proof: Rc<Signed<Delegation<JsChangeRef>>>,
+    pub(crate) who: Agent<JsChangeRef, JsEventHandler>,
+    pub(crate) proof: Rc<Signed<Delegation<JsChangeRef, JsEventHandler>>>,
 }
 
 #[wasm_bindgen]

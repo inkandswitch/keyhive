@@ -3,8 +3,11 @@
 use super::{
     document::id::DocumentId,
     identifier::Identifier,
-    individual::{id::IndividualId, op::KeyOp, Individual},
-    verifiable::Verifiable,
+    individual::{
+        id::IndividualId,
+        op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
+        Individual,
+    },
 };
 use crate::{
     access::Access,
@@ -12,18 +15,16 @@ use crate::{
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
+        verifiable::Verifiable,
     },
+    listener::{no_listener::NoListener, prekey::PrekeyListener},
     principal::{
-        agent::{id::AgentId, Agent},
-        group::operation::{
-            delegation::{Delegation, DelegationError},
-            revocation::Revocation,
-        },
+        agent::id::AgentId,
+        group::delegation::{Delegation, DelegationError},
         membered::Membered,
     },
 };
 use derivative::Derivative;
-use dupe::Dupe;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
@@ -32,7 +33,7 @@ use thiserror::Error;
 /// The current user agent (which can sign and encrypt).
 #[derive(Clone, Derivative, Serialize, Deserialize)]
 #[derivative(Hash, PartialEq)]
-pub struct Active {
+pub struct Active<L: PrekeyListener = NoListener> {
     /// The signing key of the active agent.
     #[derivative(
         Hash(hash_with = "crate::util::hasher::signing_key"),
@@ -49,11 +50,17 @@ pub struct Active {
 
     /// The [`Individual`] representation (how others see this agent).
     pub(crate) individual: Individual,
+
+    ///The listener for prekey events.
+    #[serde(skip)]
+    #[derivative(PartialEq = "ignore")]
+    pub(crate) listener: L,
 }
 
-impl Active {
+impl<L: PrekeyListener> Active<L> {
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
         signing_key: SigningKey,
+        listener: L,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
         let mut individual = Individual::new(signing_key.verifying_key().into());
@@ -63,7 +70,7 @@ impl Active {
         (0..7).try_for_each(|_| {
             let sk = ShareSecretKey::generate(csprng);
             let pk = sk.share_key();
-            let op = Signed::try_sign(KeyOp::add(pk), &signing_key)?;
+            let op = Rc::new(Signed::try_sign(AddKeyOp { share_key: pk }, &signing_key)?).into();
 
             prekey_pairs.insert(pk, sk);
             individual
@@ -76,6 +83,7 @@ impl Active {
         Ok(Self {
             individual,
             prekey_pairs,
+            listener,
             signing_key,
         })
     }
@@ -88,24 +96,29 @@ impl Active {
         AgentId::IndividualId(self.id())
     }
 
-    pub fn pick_prekey(&self, doc_id: DocumentId) -> ShareKey {
+    pub fn pick_prekey(&self, doc_id: DocumentId) -> Option<ShareKey> {
         self.individual.pick_prekey(doc_id)
     }
 
     pub fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
-        prekey: ShareKey,
+        old_prekey: ShareKey,
         csprng: &mut R,
-    ) -> Result<ShareKey, SigningError> {
-        self.individual
-            .rotate_prekey(prekey, &self.signing_key, csprng)
+    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
+        let op = self
+            .individual
+            .rotate_prekey(old_prekey, &self.signing_key, csprng)?;
+        self.listener.on_prekey_rotated(&op);
+        Ok(op)
     }
 
     pub fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: &mut R,
-    ) -> Result<ShareKey, SigningError> {
-        self.individual.expand_prekeys(&self.signing_key, csprng)
+    ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
+        let op = self.individual.expand_prekeys(&self.signing_key, csprng)?;
+        self.listener.on_prekeys_expanded(&op);
+        Ok(op)
     }
 
     /// Sign a payload.
@@ -126,49 +139,15 @@ impl Active {
             }
         })
     }
-
-    // FIXME replace with delegate_to
-    pub fn make_delegation<T: ContentRef>(
-        &self,
-        subject: Membered<T>,
-        attenuate: Access,
-        delegate: Agent<T>,
-        after_revocations: Vec<Rc<Signed<Revocation<T>>>>,
-        after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Signed<Delegation<T>>, ActiveDelegationError> {
-        let proof = self
-            .get_capability(subject, attenuate)
-            .ok_or(ActiveDelegationError::CannotFindProof)?;
-
-        if attenuate > proof.payload().can {
-            return Err(ActiveDelegationError::DelegationError(
-                DelegationError::Escalation,
-            ));
-        }
-
-        let delegation = self
-            .try_sign(Delegation {
-                delegate: delegate.dupe(),
-                can: attenuate,
-                proof: Some(proof.dupe()),
-                after_revocations,
-                after_content,
-            })
-            .map_err(DelegationError::SigningError)?;
-
-        // FIXME IVM
-
-        Ok(delegation)
-    }
 }
 
-impl std::fmt::Display for Active {
+impl<L: PrekeyListener> std::fmt::Display for Active<L> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.id(), f)
     }
 }
 
-impl Debug for Active {
+impl<L: PrekeyListener> Debug for Active<L> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let keypairs_hidden_secret_keys: Vec<(&ShareKey, &str)> = self
             .prekey_pairs
@@ -184,13 +163,13 @@ impl Debug for Active {
     }
 }
 
-impl Verifiable for Active {
+impl<L: PrekeyListener> Verifiable for Active<L> {
     fn verifying_key(&self) -> VerifyingKey {
         self.signing_key.verifying_key()
     }
 }
 
-impl Signer<Signature> for Active {
+impl<L: PrekeyListener> Signer<Signature> for Active<L> {
     fn try_sign(&self, message: &[u8]) -> Result<Signature, signature::Error> {
         self.signing_key.try_sign(message)
     }
@@ -211,7 +190,7 @@ fn key_partial_eq(a: &ed25519_dalek::SigningKey, b: &ed25519_dalek::SigningKey) 
     a.to_bytes() == b.to_bytes()
 }
 
-impl Eq for Active {}
+impl<L: PrekeyListener> Eq for Active<L> {}
 
 #[derive(Debug, Error)]
 pub enum ShareError {
@@ -248,7 +227,7 @@ mod tests {
     fn test_sign() {
         let csprng = &mut rand::thread_rng();
         let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Active::generate(signer, csprng).unwrap();
+        let active = Active::generate(signer, NoListener, csprng).unwrap();
         let message = "hello world".as_bytes();
         let signed = active.try_sign(message).unwrap();
 

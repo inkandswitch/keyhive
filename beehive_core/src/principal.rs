@@ -9,4 +9,3 @@ pub mod individual;
 pub mod membered;
 pub mod peer;
 pub mod public;
-pub mod verifiable;

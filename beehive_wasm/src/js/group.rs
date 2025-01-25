@@ -1,6 +1,6 @@
 use super::{
-    agent::JsAgent, capability::Capability, change_ref::JsChangeRef, group_id::JsGroupId,
-    identifier::JsIdentifier, peer::JsPeer,
+    agent::JsAgent, capability::Capability, change_ref::JsChangeRef, event_handler::JsEventHandler,
+    group_id::JsGroupId, identifier::JsIdentifier, peer::JsPeer,
 };
 use beehive_core::principal::group::Group;
 use derive_more::{From, Into};
@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Group)]
 #[derive(Debug, Clone, Dupe, Into, From)]
-pub struct JsGroup(pub(crate) Rc<RefCell<Group<JsChangeRef>>>);
+pub struct JsGroup(pub(crate) Rc<RefCell<Group<JsChangeRef, JsEventHandler>>>);
 
 #[wasm_bindgen(js_class = Group)]
 impl JsGroup {

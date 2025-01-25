@@ -1,4 +1,7 @@
-use super::{agent::JsAgent, change_ref::JsChangeRef, identifier::JsIdentifier, peer::JsPeer};
+use super::{
+    agent::JsAgent, change_ref::JsChangeRef, event_handler::JsEventHandler,
+    identifier::JsIdentifier, peer::JsPeer,
+};
 use beehive_core::principal::document::Document;
 use derive_more::{Deref, From, Into};
 use dupe::Dupe;
@@ -7,7 +10,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Document)]
 #[derive(Debug, Clone, Dupe, From, Into, Deref)]
-pub struct JsDocument(pub(crate) Rc<RefCell<Document<JsChangeRef>>>);
+pub struct JsDocument(pub(crate) Rc<RefCell<Document<JsChangeRef, JsEventHandler>>>);
 
 #[wasm_bindgen(js_class = Document)]
 impl JsDocument {

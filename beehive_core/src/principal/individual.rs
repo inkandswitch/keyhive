@@ -4,16 +4,20 @@ pub mod id;
 pub mod op;
 pub mod state;
 
-use super::{agent::id::AgentId, document::id::DocumentId, verifiable::Verifiable};
+use super::{agent::id::AgentId, document::id::DocumentId};
 use crate::crypto::{
     share_key::ShareKey,
     signed::{Signed, SigningError},
+    verifiable::Verifiable,
 };
+use derivative::Derivative;
+use derive_more::Debug;
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
+use op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
-use std::collections::HashSet;
+use std::{collections::HashSet, rc::Rc};
 use thiserror::Error;
 
 /// Single agents with no internal membership.
@@ -21,7 +25,8 @@ use thiserror::Error;
 /// `Individual`s can be thought of as the terminal agents. They represent
 /// keys that may sign ops, be delegated capabilties to
 /// [`Document`][super::document::Document]s and [`Group`][super::group::Group]s.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Derivative)]
+#[derivative(PartialEq, Eq)]
 pub struct Individual {
     /// The public key identifier.
     pub(crate) id: IndividualId,
@@ -64,7 +69,7 @@ impl Individual {
         let state = PrekeyState::generate(signer, 8, csprng)?;
         Ok(Self {
             id: IndividualId(signer.verifying_key().into()),
-            prekeys: state.materialize(),
+            prekeys: state.rebuild(),
             prekey_state: state,
         })
     }
@@ -77,28 +82,24 @@ impl Individual {
         AgentId::IndividualId(self.id)
     }
 
-    pub fn receive_prekey_op(&mut self, op: Signed<op::KeyOp>) -> Result<(), ReceivePrekeyOpError> {
+    pub fn receive_prekey_op(&mut self, op: op::KeyOp) -> Result<(), ReceivePrekeyOpError> {
         if op.verifying_key() != self.id.verifying_key() {
             return Err(ReceivePrekeyOpError::IncorrectSigner);
         }
 
         self.prekey_state.insert_op(op)?;
-        self.prekeys = self.prekey_state.materialize();
+        self.prekeys = self.prekey_state.rebuild();
         Ok(())
     }
 
-    pub fn pick_prekey(&self, doc_id: DocumentId) -> ShareKey {
+    pub fn pick_prekey(&self, doc_id: DocumentId) -> Option<ShareKey> {
         let mut bytes: Vec<u8> = self.id.to_bytes().to_vec();
         bytes.extend_from_slice(&doc_id.to_bytes());
 
         let prekeys_len = self.prekeys.len();
         let idx = pseudorandom_in_range(bytes.as_slice(), prekeys_len);
 
-        *self
-            .prekeys
-            .iter()
-            .nth(idx)
-            .expect("index in pre-checked bounds to exist")
+        self.prekeys.iter().nth(idx).cloned()
     }
 
     pub(crate) fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
@@ -106,21 +107,21 @@ impl Individual {
         old_key: ShareKey,
         signer: &ed25519_dalek::SigningKey,
         csprng: &mut R,
-    ) -> Result<ShareKey, SigningError> {
-        let new_key = self.prekey_state.rotate_gen(old_key, signer, csprng)?;
-        self.prekeys.remove(&old_key);
-        self.prekeys.insert(new_key);
-        Ok(new_key)
+    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
+        let op = self.prekey_state.rotate_gen(old_key, signer, csprng)?;
+        self.prekeys.remove(&op.payload.old);
+        self.prekeys.insert(op.payload.new);
+        Ok(op)
     }
 
     pub(crate) fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         signer: &ed25519_dalek::SigningKey,
         csprng: &mut R,
-    ) -> Result<ShareKey, SigningError> {
-        let new_key = self.prekey_state.expand(signer, csprng)?;
-        self.prekeys.insert(new_key);
-        Ok(new_key)
+    ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
+        let op = self.prekey_state.expand(signer, csprng)?;
+        self.prekeys.insert(op.payload.share_key);
+        Ok(op)
     }
 }
 
@@ -134,16 +135,6 @@ impl std::hash::Hash for Individual {
     }
 }
 
-impl From<VerifyingKey> for Individual {
-    fn from(verifier: VerifyingKey) -> Self {
-        Individual {
-            id: verifier.into(),
-            prekeys: HashSet::new(),
-            prekey_state: PrekeyState::new(),
-        }
-    }
-}
-
 impl PartialOrd for Individual {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -153,6 +144,16 @@ impl PartialOrd for Individual {
 impl Ord for Individual {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.id.to_bytes().cmp(&other.id.to_bytes())
+    }
+}
+
+impl From<VerifyingKey> for Individual {
+    fn from(id: VerifyingKey) -> Self {
+        Self {
+            id: IndividualId(id.into()),
+            prekeys: HashSet::new(),
+            prekey_state: PrekeyState::new(),
+        }
     }
 }
 

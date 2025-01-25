@@ -5,7 +5,11 @@ use super::{
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
 };
-use crate::{content::reference::ContentRef, crypto::share_key::ShareKey};
+use crate::{
+    content::reference::ContentRef,
+    crypto::share_key::ShareKey,
+    listener::{membership::MembershipListener, no_listener::NoListener},
+};
 use derive_more::{From, TryInto};
 use dupe::Dupe;
 use std::{
@@ -18,13 +22,13 @@ use thiserror::Error;
 
 /// An [`Agent`] minus the current user.
 #[derive(Debug, Clone, Dupe, PartialEq, Eq, From, TryInto)]
-pub enum Peer<T: ContentRef> {
+pub enum Peer<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
     Individual(Rc<RefCell<Individual>>),
-    Group(Rc<RefCell<Group<T>>>),
-    Document(Rc<RefCell<Document<T>>>),
+    Group(Rc<RefCell<Group<T, L>>>),
+    Document(Rc<RefCell<Document<T, L>>>),
 }
 
-impl<T: ContentRef> Peer<T> {
+impl<T: ContentRef, L: MembershipListener<T>> Peer<T, L> {
     pub fn id(&self) -> Identifier {
         match self {
             Peer::Individual(i) => i.borrow().id().into(),
@@ -52,7 +56,11 @@ impl<T: ContentRef> Peer<T> {
     pub fn pick_individual_prekeys(&self, doc_id: DocumentId) -> HashMap<IndividualId, ShareKey> {
         match self {
             Peer::Individual(i) => {
-                HashMap::from_iter([(i.borrow().id(), i.borrow().pick_prekey(doc_id))])
+                if let Some(prekey) = i.borrow().pick_prekey(doc_id) {
+                    HashMap::from_iter([(i.borrow().id(), prekey)])
+                } else {
+                    HashMap::new()
+                }
             }
             Peer::Group(g) => g.borrow().pick_individual_prekeys(doc_id),
             Peer::Document(d) => d.borrow().group.pick_individual_prekeys(doc_id),
@@ -60,14 +68,14 @@ impl<T: ContentRef> Peer<T> {
     }
 }
 
-impl<T: ContentRef> Display for Peer<T> {
+impl<T: ContentRef, L: MembershipListener<T>> Display for Peer<T, L> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.id().fmt(f)
     }
 }
 
-impl<T: ContentRef> From<Peer<T>> for Agent<T> {
-    fn from(peer: Peer<T>) -> Self {
+impl<T: ContentRef, L: MembershipListener<T>> From<Peer<T, L>> for Agent<T, L> {
+    fn from(peer: Peer<T, L>) -> Self {
         match peer {
             Peer::Individual(individual) => Agent::Individual(individual),
             Peer::Group(group) => Agent::Group(group),
@@ -76,10 +84,10 @@ impl<T: ContentRef> From<Peer<T>> for Agent<T> {
     }
 }
 
-impl<T: ContentRef> TryFrom<Agent<T>> for Peer<T> {
+impl<T: ContentRef, L: MembershipListener<T>> TryFrom<Agent<T, L>> for Peer<T, L> {
     type Error = ActiveUserIsNotAPeer;
 
-    fn try_from(agent: Agent<T>) -> Result<Self, Self::Error> {
+    fn try_from(agent: Agent<T, L>) -> Result<Self, Self::Error> {
         match agent {
             Agent::Individual(individual) => Ok(Peer::Individual(individual)),
             Agent::Group(group) => Ok(Peer::Group(group)),

@@ -1,6 +1,6 @@
 pub mod id;
 
-use super::{group::AddGroupMemberError, individual::id::IndividualId, verifiable::Verifiable};
+use super::{group::AddGroupMemberError, individual::id::IndividualId};
 use crate::{
     access::Access,
     cgka::{error::CgkaError, keys::ShareKeyMap, operation::CgkaOperation, Cgka},
@@ -10,24 +10,27 @@ use crate::{
         encrypted::EncryptedContent,
         share_key::{ShareKey, ShareSecretKey},
         signed::Signed,
+        verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
+    listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
         group::{
+            delegation::{Delegation, DelegationError},
             error::AddError,
-            operation::{
-                delegation::{Delegation, DelegationError},
-                revocation::Revocation,
-            },
+            revocation::Revocation,
             Group, GroupArchive, RevokeMemberError,
         },
         identifier::Identifier,
         individual::Individual,
     },
+    store::{delegation::DelegationStore, revocation::RevocationStore},
     util::content_addressed_map::CaMap,
 };
+use derivative::Derivative;
+use derive_where::derive_where;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
@@ -36,29 +39,35 @@ use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
+    hash::{Hash, Hasher},
     rc::Rc,
 };
 use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Document<T: ContentRef> {
-    pub(crate) group: Group<T>,
+#[derive(Debug, Clone, Eq, Derivative)]
+#[derive_where(PartialEq; T)]
+pub struct Document<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+    pub(crate) group: Group<T, L>,
     pub(crate) reader_keys: HashMap<IndividualId, (Rc<RefCell<Individual>>, ShareKey)>,
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
     pub(crate) cgka: Cgka,
 }
 
-impl<T: ContentRef> Document<T> {
+impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
     // NOTE doesn't register into the top-level Beehive context
     pub fn from_group(
-        group: Group<T>,
-        viewer: &Active,
+        group: Group<T, L>,
+        viewer: &Active<L>,
         content_heads: NonEmpty<T>,
     ) -> Result<Self, CgkaError> {
         let doc_id = DocumentId(group.verifying_key().into());
+        let doc_prekey = viewer
+            .pick_prekey(doc_id)
+            .ok_or(CgkaError::ShareKeyNotFound)?;
+
         let mut doc = Document {
-            cgka: Cgka::new(doc_id, viewer.id(), viewer.pick_prekey(doc_id))?,
+            cgka: Cgka::new(doc_id, viewer.id(), doc_prekey)?,
             group,
             reader_keys: Default::default(),
             content_heads: content_heads.iter().cloned().collect(),
@@ -80,31 +89,33 @@ impl<T: ContentRef> Document<T> {
         self.doc_id().into()
     }
 
-    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T>>>>> {
+    #[allow(clippy::type_complexity)]
+    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T, L>>>>> {
         self.group.members()
     }
 
-    pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<T>, Access)> {
+    pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<T, L>, Access)> {
         self.group.transitive_members()
     }
 
-    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<T>>> {
+    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<T, L>>> {
         self.group.delegation_heads()
     }
 
-    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<T>>> {
+    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<T, L>>> {
         self.group.revocation_heads()
     }
 
-    pub fn get_capability(&self, member_id: &Identifier) -> Option<&Rc<Signed<Delegation<T>>>> {
+    pub fn get_capability(&self, member_id: &Identifier) -> Option<&Rc<Signed<Delegation<T, L>>>> {
         self.group.get_capability(member_id)
     }
 
     pub fn generate<R: rand::RngCore + rand::CryptoRng>(
-        parents: NonEmpty<Agent<T>>,
+        parents: NonEmpty<Agent<T, L>>,
         initial_content_heads: NonEmpty<T>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+        delegations: DelegationStore<T, L>,
+        revocations: RevocationStore<T, L>,
+        listener: L,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let sk = ed25519_dalek::SigningKey::generate(csprng);
@@ -117,6 +128,7 @@ impl<T: ContentRef> Document<T> {
                 DocumentId(sk.verifying_key().into()),
                 initial_content_heads.clone().into_iter().collect(),
             )]),
+            listener,
         )?;
 
         let owner_id = IndividualId(sk.verifying_key().into());
@@ -163,11 +175,11 @@ impl<T: ContentRef> Document<T> {
 
     pub fn add_member(
         &mut self,
-        member_to_add: Agent<T>,
+        member_to_add: Agent<T, L>,
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
-        other_relevant_docs: &[&Document<T>],
-    ) -> Result<AddMemberUpdate<T>, AddMemberError> {
+        other_relevant_docs: &[&Document<T, L>],
+    ) -> Result<AddMemberUpdate<T, L>, AddMemberError> {
         let mut after_content: BTreeMap<DocumentId, Vec<T>> = other_relevant_docs
             .iter()
             .map(|d| (d.doc_id(), d.content_heads.iter().cloned().collect()))
@@ -199,7 +211,7 @@ impl<T: ContentRef> Document<T> {
         member_id: Identifier,
         signing_key: &ed25519_dalek::SigningKey,
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<RevokeMemberUpdate<T>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
         after_other_doc_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
         let revs = self
             .group
@@ -208,7 +220,7 @@ impl<T: ContentRef> Document<T> {
         // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
         // FIXME: We need to check if this has revoked the last member in our group?
         let mut ops = Vec::new();
-        if let Some(delegations) = self.group.members.get(&member_id.into()) {
+        if let Some(delegations) = self.group.members.get(&member_id) {
             for id in delegations
                 .iter()
                 .flat_map(|d| d.payload().delegate.individual_ids())
@@ -224,7 +236,7 @@ impl<T: ContentRef> Document<T> {
         })
     }
 
-    pub fn get_agent_revocations(&self, agent: &Agent<T>) -> Vec<Rc<Signed<Revocation<T>>>> {
+    pub fn get_agent_revocations(&self, agent: &Agent<T, L>) -> Vec<Rc<Signed<Revocation<T, L>>>> {
         self.group.get_agent_revocations(agent)
     }
 
@@ -234,15 +246,15 @@ impl<T: ContentRef> Document<T> {
 
     pub fn receive_delegation(
         &mut self,
-        signed_delegation: Rc<Signed<Delegation<T>>>,
-    ) -> Result<Digest<Signed<Delegation<T>>>, AddError> {
+        signed_delegation: Rc<Signed<Delegation<T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<T, L>>>, AddError> {
         self.group.receive_delegation(signed_delegation)
     }
 
     pub fn receive_revocation(
         &mut self,
-        signed_revocation: Rc<Signed<Revocation<T>>>,
-    ) -> Result<Digest<Signed<Revocation<T>>>, AddError> {
+        signed_revocation: Rc<Signed<Revocation<T, L>>>,
+    ) -> Result<Digest<Signed<Revocation<T, L>>>, AddError> {
         self.group.receive_revocation(signed_revocation)
     }
 
@@ -298,11 +310,17 @@ impl<T: ContentRef> Document<T> {
     pub(crate) fn dummy_from_archive(
         archive: DocumentArchive<T>,
         individuals: &HashMap<IndividualId, Rc<RefCell<Individual>>>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T>>>>>,
+        delegations: DelegationStore<T, L>,
+        revocations: RevocationStore<T, L>,
+        listener: L,
     ) -> Result<Self, MissingIndividualError> {
         Ok(Document {
-            group: Group::<T>::dummy_from_archive(archive.group, delegations, revocations),
+            group: Group::<T, L>::dummy_from_archive(
+                archive.group,
+                delegations,
+                revocations,
+                listener,
+            ),
             reader_keys: archive.reader_keys.into_iter().try_fold(
                 HashMap::new(),
                 |mut acc, (id, share_key)| {
@@ -326,21 +344,46 @@ impl<T: ContentRef> Document<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AddMemberUpdate<T: ContentRef> {
-    pub(crate) delegation: Rc<Signed<Delegation<T>>>,
-    pub(crate) cgka_ops: Vec<CgkaOperation>,
+impl<T: ContentRef, L: MembershipListener<T>> Verifiable for Document<T, L> {
+    fn verifying_key(&self) -> VerifyingKey {
+        self.group.verifying_key()
+    }
+}
+
+impl<T: ContentRef, L: MembershipListener<T>> Hash for Document<T, L> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.group.hash(state);
+        crate::util::hasher::hash_map_keys(&self.reader_keys, state);
+        crate::util::hasher::hash_set(&self.content_heads, state);
+        crate::util::hasher::hash_set(&self.content_state, state);
+        self.cgka.hash(state);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RevokeMemberUpdate<T: ContentRef> {
-    pub(crate) revocations: Vec<Rc<Signed<Revocation<T>>>>,
+pub struct AddMemberUpdate<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+    pub(crate) delegation: Rc<Signed<Delegation<T, L>>>,
     pub(crate) cgka_ops: Vec<CgkaOperation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("Missing individual: {0}")]
 pub struct MissingIndividualError(pub Box<IndividualId>);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RevokeMemberUpdate<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+    pub(crate) revocations: Vec<Rc<Signed<Revocation<T, L>>>>,
+    pub(crate) cgka_ops: Vec<CgkaOperation>,
+}
+
+#[derive(Debug, Error)]
+pub enum AddMemberError {
+    #[error(transparent)]
+    AddMemberError(#[from] AddGroupMemberError),
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum EncryptError {
@@ -358,27 +401,12 @@ pub struct EncryptedContentWithUpdate<T: ContentRef> {
     pub(crate) update_op: Option<CgkaOperation>,
 }
 
-#[derive(Debug, Error)]
-pub enum AddMemberError {
-    #[error(transparent)]
-    AddMemberError(#[from] AddGroupMemberError),
-
-    #[error(transparent)]
-    CgkaError(#[from] CgkaError),
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DecryptError {
     #[error("Key not found")]
     KeyNotFound,
     #[error("Decryption error: {0}")]
     DecryptionFailed(chacha20poly1305::Error),
-}
-
-impl<T: ContentRef> Verifiable for Document<T> {
-    fn verifying_key(&self) -> VerifyingKey {
-        self.group.verifying_key()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -390,8 +418,8 @@ pub(crate) struct DocumentArchive<T: ContentRef> {
     pub(crate) cgka: Cgka,
 }
 
-impl<T: ContentRef> From<Document<T>> for DocumentArchive<T> {
-    fn from(doc: Document<T>) -> Self {
+impl<T: ContentRef, L: MembershipListener<T>> From<Document<T, L>> for DocumentArchive<T> {
+    fn from(doc: Document<T, L>) -> Self {
         DocumentArchive {
             group: doc.group.into(),
             reader_keys: doc

@@ -1,4 +1,4 @@
-use beehive_core::{crypto::signed::Signed, principal::verifiable::Verifiable};
+use beehive_core::crypto::{signed::Signed, verifiable::Verifiable};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Signed)]
