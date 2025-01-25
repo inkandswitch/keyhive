@@ -212,7 +212,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
     pub fn add_cgka_member(&mut self, delegation: &Signed<Delegation<T, L>>) -> Vec<CgkaOperation> {
         let mut ops = Vec::new();
         for (id, pre_key) in delegation
-            .clone()
+            .dupe()
             .payload()
             .delegate
             .pick_individual_prekeys(self.doc_id())
