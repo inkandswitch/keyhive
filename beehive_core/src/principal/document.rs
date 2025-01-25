@@ -26,6 +26,7 @@ use crate::{
         identifier::Identifier,
         individual::Individual,
     },
+    store::{delegation::DelegationStore, revocation::RevocationStore},
     util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
@@ -88,6 +89,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         self.doc_id().into()
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T, L>>>>> {
         self.group.members()
     }
@@ -111,8 +113,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
     pub fn generate<R: rand::RngCore + rand::CryptoRng>(
         parents: NonEmpty<Agent<T, L>>,
         initial_content_heads: NonEmpty<T>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
+        delegations: DelegationStore<T, L>,
+        revocations: RevocationStore<T, L>,
         listener: L,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
@@ -218,7 +220,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
         // FIXME: We need to check if this has revoked the last member in our group?
         let mut ops = Vec::new();
-        if let Some(delegations) = self.group.members.get(&member_id.into()) {
+        if let Some(delegations) = self.group.members.get(&member_id) {
             for id in delegations
                 .iter()
                 .flat_map(|d| d.payload().delegate.individual_ids())
@@ -308,8 +310,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
     pub(crate) fn dummy_from_archive(
         archive: DocumentArchive<T>,
         individuals: &HashMap<IndividualId, Rc<RefCell<Individual>>>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
+        delegations: DelegationStore<T, L>,
+        revocations: RevocationStore<T, L>,
         listener: L,
     ) -> Result<Self, MissingIndividualError> {
         Ok(Document {

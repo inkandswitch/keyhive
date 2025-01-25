@@ -30,6 +30,7 @@ use crate::{
         verifiable::Verifiable,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
+    store::{delegation::DelegationStore, revocation::RevocationStore},
     util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
@@ -40,7 +41,6 @@ use id::GroupId;
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     hash::{Hash, Hasher},
     rc::Rc,
@@ -58,6 +58,7 @@ pub struct Group<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener
     pub(crate) individual: Individual,
 
     /// The current view of members of a group.
+    #[allow(clippy::type_complexity)]
     pub(crate) members: HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T, L>>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
@@ -72,8 +73,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
     pub fn from_individual(
         individual: Individual,
         head: Rc<Signed<Delegation<T, L>>>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
+        delegations: DelegationStore<T, L>,
+        revocations: RevocationStore<T, L>,
         listener: L,
     ) -> Self {
         let mut group = Self {
@@ -89,8 +90,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
         parents: NonEmpty<Agent<T, L>>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
+        delegations: DelegationStore<T, L>,
+        revocations: RevocationStore<T, L>,
         listener: L,
         csprng: &mut R,
     ) -> Result<Group<T, L>, SigningError> {
@@ -108,8 +109,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
     pub(crate) fn generate_after_content(
         signing_key: &ed25519_dalek::SigningKey,
         parents: NonEmpty<Agent<T, L>>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
+        delegations: DelegationStore<T, L>,
+        revocations: RevocationStore<T, L>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
         listener: L,
     ) -> Result<Group<T, L>, SigningError> {
@@ -188,6 +189,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         )
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T, L>>>>> {
         &self.members
     }
@@ -381,6 +383,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         Ok(rc)
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn revoke_member(
         &mut self,
         member_to_remove: Identifier,
@@ -476,7 +479,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         }
 
         for r in revocations.iter() {
-            self.listener.on_revocation(&r);
+            self.listener.on_revocation(r);
         }
 
         Ok(revocations)
@@ -517,7 +520,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
 
                     if let Some(found_proof) = &d.payload.proof {
                         if let Some(issuer_proofs) = self.members.get(&found_proof.issuer.into()) {
-                            if issuer_proofs.contains(&found_proof) {
+                            if issuer_proofs.contains(found_proof) {
                                 // Seems okay, so proceed as normal
                             } else {
                                 // Proof not in the current state, so skip this one
@@ -546,7 +549,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
                             if let Some(issuer_proofs) =
                                 self.members.get(&found_proof.issuer.into())
                             {
-                                if !issuer_proofs.contains(&found_proof) {
+                                if !issuer_proofs.contains(found_proof) {
                                     continue;
                                 }
                             } else {
@@ -581,8 +584,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
 
     pub(crate) fn dummy_from_archive(
         archive: GroupArchive<T>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
+        delegations: DelegationStore<T, L>,
+        revocations: RevocationStore<T, L>,
         listener: L,
     ) -> Self {
         Self {

@@ -10,6 +10,7 @@ use crate::{
     crypto::{digest::Digest, signed::Signed, verifiable::Verifiable},
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::Agent, group::delegation::DelegationError, identifier::Identifier},
+    store::{delegation::DelegationStore, revocation::RevocationStore},
     util::content_addressed_map::CaMap,
 };
 use derive_where::derive_where;
@@ -17,7 +18,6 @@ use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use std::{
-    cell::RefCell,
     cmp::Ordering,
     collections::{BTreeMap, HashSet},
     rc::Rc,
@@ -29,25 +29,25 @@ pub struct GroupState<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoLis
     pub(crate) id: GroupId,
 
     #[derive_where(skip)]
-    pub(crate) delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
+    pub(crate) delegations: DelegationStore<T, L>,
     pub(crate) delegation_heads: CaMap<Signed<Delegation<T, L>>>,
 
     #[derive_where(skip)]
-    pub(crate) revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
+    pub(crate) revocations: RevocationStore<T, L>,
     pub(crate) revocation_heads: CaMap<Signed<Revocation<T, L>>>,
 }
 
 impl<T: ContentRef, L: MembershipListener<T>> GroupState<T, L> {
     pub fn new(
         delegation_head: Rc<Signed<Delegation<T, L>>>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
+        delegations: DelegationStore<T, L>,
+        revocations: RevocationStore<T, L>,
     ) -> Self {
         let id = GroupId(delegation_head.verifying_key().into());
         let mut heads = vec![delegation_head.dupe()];
 
         while let Some(head) = heads.pop() {
-            if delegations.borrow().contains_value(head.as_ref()) {
+            if delegations.contains_value(head.as_ref()) {
                 continue;
             }
 
@@ -85,8 +85,8 @@ impl<T: ContentRef, L: MembershipListener<T>> GroupState<T, L> {
 
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
         parents: Vec<Agent<T, L>>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
+        delegations: DelegationStore<T, L>,
+        revocations: RevocationStore<T, L>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let signing_key = ed25519_dalek::SigningKey::generate(csprng);
@@ -253,8 +253,8 @@ impl<T: ContentRef, L: MembershipListener<T>> GroupState<T, L> {
 
     pub(crate) fn dummy_from_archive(
         archive: GroupStateArchive<T>,
-        delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
-        revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
+        delegations: DelegationStore<T, L>,
+        revocations: RevocationStore<T, L>,
     ) -> Self {
         Self {
             id: archive.id,
@@ -274,10 +274,10 @@ impl<T: ContentRef, L: MembershipListener<T>> From<VerifyingKey> for GroupState<
             id: GroupId(verifier.into()),
 
             delegation_heads: CaMap::new(),
-            delegations: Rc::new(RefCell::new(CaMap::new())),
+            delegations: DelegationStore::new(),
 
             revocation_heads: CaMap::new(),
-            revocations: Rc::new(RefCell::new(CaMap::new())),
+            revocations: RevocationStore::new(),
         }
     }
 }

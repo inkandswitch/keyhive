@@ -41,7 +41,7 @@ use crate::{
         peer::Peer,
         public::Public,
     },
-    util::content_addressed_map::CaMap,
+    store::{delegation::DelegationStore, revocation::RevocationStore},
 };
 use derivative::Derivative;
 use dupe::Dupe;
@@ -75,10 +75,10 @@ pub struct Beehive<
     docs: HashMap<DocumentId, Rc<RefCell<Document<T, L>>>>,
 
     /// All applied [`Delegation`]s
-    delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>>,
+    delegations: DelegationStore<T, L>,
 
     /// All applied [`Revocation`]s
-    revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>>,
+    revocations: RevocationStore<T, L>,
 
     /// Obsever for [`Event`]s. Intended for running live updates.
     event_listener: L,
@@ -114,8 +114,8 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
             )]),
             groups: HashMap::new(),
             docs: HashMap::new(),
-            delegations: Rc::new(RefCell::new(CaMap::new())),
-            revocations: Rc::new(RefCell::new(CaMap::new())),
+            delegations: DelegationStore::new(),
+            revocations: RevocationStore::new(),
             event_listener,
             csprng,
         })
@@ -177,10 +177,10 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         )?;
 
         for head in new_doc.delegation_heads().values() {
-            self.delegations.borrow_mut().insert(head.dupe());
+            self.delegations.insert(head.dupe());
 
             for dep in head.payload().proof_lineage() {
-                self.delegations.borrow_mut().insert(dep);
+                self.delegations.insert(dep);
             }
         }
 
@@ -266,12 +266,10 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         digest: &Digest<MembershipOperation<T, L>>,
     ) -> Option<MembershipOperation<T, L>> {
         self.delegations
-            .borrow()
             .get(&digest.into())
             .map(|d| d.dupe().into())
             .or_else(|| {
                 self.revocations
-                    .borrow()
                     .get(&digest.into())
                     .map(|r| r.dupe().into())
             })
@@ -308,6 +306,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn revoke_member(
         &mut self,
         to_revoke: Identifier,
@@ -380,9 +379,11 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         &self,
         agent: Agent<T, L>,
     ) -> BTreeMap<DocumentId, Ability<T, L>> {
-        let mut explore: Vec<(Rc<RefCell<Group<T, L>>>, Access)> = vec![];
         let mut caps: BTreeMap<DocumentId, Ability<T, L>> = BTreeMap::new();
         let mut seen: HashSet<AgentId> = HashSet::new();
+
+        #[allow(clippy::type_complexity)]
+        let mut explore: Vec<(Rc<RefCell<Group<T, L>>>, Access)> = vec![];
 
         for doc in self.docs.values() {
             seen.insert(doc.clone().borrow().agent_id());
@@ -503,6 +504,8 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
     ) -> HashMap<Digest<MembershipOperation<T, L>>, MembershipOperation<T, L>> {
         let mut ops = HashMap::new();
         let mut visited_hashes = HashSet::new();
+
+        #[allow(clippy::type_complexity)]
         let mut heads: Vec<(Digest<MembershipOperation<T, L>>, MembershipOperation<T, L>)> = vec![];
 
         for (mem_rc, _max_acces) in self.membered_reachable_by_agent(agent).values() {
@@ -562,15 +565,15 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
             for key_op in key_ops.iter() {
                 match key_op.as_ref() {
                     KeyOp::Add(_add) => {
-                        heads.push(key_op.dupe().into());
+                        heads.push(key_op.dupe());
                     }
                     KeyOp::Rotate(rot) => {
                         rotate_key_ops
                             .entry(rot.payload.old)
                             .and_modify(|set| {
-                                set.insert(key_op.dupe().into());
+                                set.insert(key_op.dupe());
                             })
-                            .or_insert(HashSet::from_iter([key_op.dupe().into()]));
+                            .or_insert(HashSet::from_iter([key_op.dupe()]));
                     }
                 }
             }
@@ -580,11 +583,11 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
             while let Some(head) = heads.pop() {
                 if let Some(ops) = rotate_key_ops.get(head.new_key()) {
                     for op in ops.iter() {
-                        heads.push(op.dupe().into());
+                        heads.push(op.dupe());
                     }
                 }
 
-                topsorted.push(head.dupe().into());
+                topsorted.push(head.dupe());
             }
 
             map.insert(agent_id, topsorted);
@@ -601,12 +604,12 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
                 .collect(),
         );
 
-        for (mem, _) in self.membered_reachable_by_agent(&agent).values() {
+        for (mem, _) in self.membered_reachable_by_agent(agent).values() {
             match mem {
                 Membered::Group(group) => {
                     add_many_keys(
                         &mut map,
-                        group.borrow().id().into(),
+                        group.borrow().id(),
                         Agent::from(group.dupe()).key_ops().into_iter().collect(),
                     );
 
@@ -617,7 +620,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
                 Membered::Document(doc) => {
                     add_many_keys(
                         &mut map,
-                        doc.borrow().id().into(),
+                        doc.borrow().id(),
                         Agent::from(doc.dupe()).key_ops().into_iter().collect(),
                     );
 
@@ -726,7 +729,6 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
     ) -> Result<(), ReceieveStaticDelegationError<T, L>> {
         if self
             .delegations
-            .borrow()
             .contains_key(&Digest::hash(static_dlg).into())
         {
             return Ok(());
@@ -740,11 +742,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
             .proof
             .map(|proof_hash| {
                 let hash = proof_hash.into();
-                self.delegations
-                    .borrow()
-                    .get(&hash)
-                    .ok_or(MissingDependency(hash))
-                    .map(Dupe::dupe)
+                self.delegations.get(&hash).ok_or(MissingDependency(hash))
             })
             .transpose()?;
 
@@ -830,9 +828,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         let revoke_hash = static_rev.payload.revoke.into();
         let revoke: Rc<Signed<Delegation<T, L>>> = self
             .delegations
-            .borrow()
             .get(&revoke_hash)
-            .map(Dupe::dupe)
             .ok_or(MissingDependency(revoke_hash))?;
 
         let proof: Option<Rc<Signed<Delegation<T, L>>>> = static_rev
@@ -840,11 +836,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
             .proof
             .map(|proof_hash| {
                 let hash = proof_hash.into();
-                self.delegations
-                    .borrow()
-                    .get(&hash)
-                    .ok_or(MissingDependency(hash))
-                    .map(Dupe::dupe)
+                self.delegations.get(&hash).ok_or(MissingDependency(hash))
             })
             .transpose()?;
 
@@ -908,7 +900,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
 
         let agent = Agent::from(group.dupe());
 
-        for (digest, dlg) in self.delegations.clone().borrow().iter() {
+        for (digest, dlg) in self.delegations.0.borrow().iter() {
             if dlg.payload.delegate == agent {
                 self.delegations.borrow_mut().0.insert(
                     *digest,
@@ -927,7 +919,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
             }
         }
 
-        for (digest, rev) in self.revocations.clone().borrow().iter() {
+        for (digest, rev) in self.revocations.0.borrow().iter() {
             if rev.payload.subject_id() == group.borrow().id() {
                 self.revocations.borrow_mut().0.insert(
                     *digest,
@@ -937,15 +929,12 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
                         payload: Revocation {
                             revoke: self
                                 .delegations
-                                .borrow()
                                 .get(&Digest::hash(&rev.payload.revoke))
                                 .expect("revoked delegation to be available")
                                 .dupe(),
                             proof: rev.payload.proof.dupe().map(|proof| {
                                 self.delegations
-                                    .borrow()
                                     .get(&Digest::hash(&proof))
-                                    .cloned()
                                     .expect("revoked delegation to be available")
                             }),
                             after_content: rev.payload.after_content.clone(),
@@ -1006,8 +995,8 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
             listener: listener.clone(),
         }));
 
-        let delegations: Rc<RefCell<CaMap<Signed<Delegation<T, L>>>>> = Default::default();
-        let revocations: Rc<RefCell<CaMap<Signed<Revocation<T, L>>>>> = Default::default();
+        let delegations: DelegationStore<T, L> = DelegationStore::new();
+        let revocations: RevocationStore<T, L> = RevocationStore::new();
 
         let mut individuals = HashMap::new();
         for (k, v) in archive.individuals.iter() {
@@ -1049,10 +1038,8 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
                         .proof
                         .map(|proof_digest| {
                             delegations
-                                .borrow()
                                 .get(&proof_digest.into())
                                 .ok_or(TryFromArchiveError::MissingDelegation(proof_digest.into()))
-                                .cloned()
                         })
                         .transpose()?;
 
@@ -1101,24 +1088,20 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
                             issuer: sr.issuer,
                             signature: sr.signature,
                             payload: Revocation {
-                                revoke: delegations
-                                    .borrow()
-                                    .get(&sr.payload.revoke.into())
-                                    .ok_or(TryFromArchiveError::MissingDelegation(
+                                revoke: delegations.get(&sr.payload.revoke.into()).ok_or(
+                                    TryFromArchiveError::MissingDelegation(
                                         sr.payload.revoke.into(),
-                                    ))
-                                    .cloned()?,
+                                    ),
+                                )?,
                                 proof: sr
                                     .payload
                                     .proof
                                     .map(|proof_digest| {
-                                        delegations
-                                            .borrow()
-                                            .get(&proof_digest.into())
-                                            .ok_or(TryFromArchiveError::MissingDelegation(
+                                        delegations.get(&proof_digest.into()).ok_or(
+                                            TryFromArchiveError::MissingDelegation(
                                                 proof_digest.into(),
-                                            ))
-                                            .cloned()
+                                            ),
+                                        )
                                     })
                                     .transpose()?,
                                 after_content: sr.payload.after_content.clone(),
@@ -1129,16 +1112,17 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
             };
         }
 
+        #[allow(clippy::type_complexity)]
         fn reify_ops<U: ContentRef, M: MembershipListener<U>>(
             group: &mut Group<U, M>,
-            dlg_store: Rc<RefCell<CaMap<Signed<Delegation<U, M>>>>>,
-            rev_store: Rc<RefCell<CaMap<Signed<Revocation<U, M>>>>>,
+            dlg_store: DelegationStore<U, M>,
+            rev_store: RevocationStore<U, M>,
             dlg_head_hashes: &HashSet<Digest<Signed<StaticDelegation<U>>>>,
             rev_head_hashes: &HashSet<Digest<Signed<StaticRevocation<U>>>>,
             members: HashMap<Identifier, NonEmpty<Digest<Signed<Delegation<U, M>>>>>,
         ) -> Result<(), TryFromArchiveError<U, M>> {
-            let read_dlgs = dlg_store.borrow();
-            let read_revs = rev_store.borrow();
+            let read_dlgs = dlg_store.0.borrow();
+            let read_revs = rev_store.0.borrow();
 
             for dlg_hash in dlg_head_hashes.iter() {
                 let actual_dlg: Rc<Signed<Delegation<U, M>>> = read_dlgs
@@ -1189,7 +1173,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
                 group_archive
                     .members
                     .iter()
-                    .map(|(k, v)| ((*k).into(), v.clone().map(|x| x.into())))
+                    .map(|(k, v)| (*k, v.clone().map(|x| x.into())))
                     .collect(),
             )?;
         }
@@ -1210,7 +1194,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
                     .group
                     .members
                     .iter()
-                    .map(|(k, v)| ((*k).into(), v.clone().map(|x| x.into())))
+                    .map(|(k, v)| (*k, v.clone().map(|x| x.into())))
                     .collect(),
             )?;
         }

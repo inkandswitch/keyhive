@@ -20,4 +20,5 @@ pub mod error;
 pub mod event;
 pub mod listener;
 pub mod principal;
+pub mod store;
 pub mod util;

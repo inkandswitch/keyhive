@@ -67,6 +67,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Membered<T, L> {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn members(&self) -> HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T, L>>>>> {
         match self {
             Membered::Group(group) => group.borrow().members().clone(),

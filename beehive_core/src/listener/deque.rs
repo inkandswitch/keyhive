@@ -18,7 +18,9 @@ use std::{
 };
 
 #[derive(Debug, Clone, Dupe, Default, PartialEq, Eq, From, Into)]
-pub struct Deque<T: ContentRef = [u8; 32]>(pub Rc<RefCell<VecDeque<Event<T, Deque<T>>>>>);
+pub struct Deque<T: ContentRef = [u8; 32]>(
+    #[allow(clippy::type_complexity)] pub Rc<RefCell<VecDeque<Event<T, Deque<T>>>>>,
+);
 
 impl<T: ContentRef> Deque<T> {
     pub fn push(&self, event: Event<T, Self>) {
