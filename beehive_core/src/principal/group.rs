@@ -669,7 +669,7 @@ pub enum RevokeMemberError {
 mod tests {
     use super::*;
 
-    use super::membership_operation::delegation::Delegation;
+    use super::delegation::Delegation;
     use crate::principal::active::Active;
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
@@ -711,8 +711,8 @@ mod tests {
         let alice_agent: Agent<T> = alice.into();
         let bob_agent = bob.into();
 
-        let dlg_store = Rc::new(RefCell::new(CaMap::new()));
-        let rev_store = Rc::new(RefCell::new(CaMap::new()));
+        let dlg_store = DelegationStore::new();
+        let rev_store = RevocationStore::new();
 
         let g0 = Rc::new(RefCell::new(
             Group::generate(
@@ -766,8 +766,8 @@ mod tests {
         bob: Rc<RefCell<Active>>,
         csprng: &mut R,
     ) -> [Rc<RefCell<Group<T>>>; 10] {
-        let dlg_store = Rc::new(RefCell::new(CaMap::new()));
-        let rev_store = Rc::new(RefCell::new(CaMap::new()));
+        let dlg_store = DelegationStore::new();
+        let rev_store = RevocationStore::new();
 
         let group0 = Rc::new(RefCell::new(
             Group::generate(
@@ -1064,8 +1064,8 @@ mod tests {
             Active::generate(signer, NoListener, &mut csprng).unwrap(),
         ));
 
-        let dlg_store = Rc::new(RefCell::new(CaMap::new()));
-        let rev_store = Rc::new(RefCell::new(CaMap::new()));
+        let dlg_store = DelegationStore::new();
+        let rev_store = RevocationStore::new();
 
         let g0 = Rc::new(RefCell::new(
             Group::generate(

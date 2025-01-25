@@ -1294,7 +1294,7 @@ mod tests {
         let mut csprng = rand::thread_rng();
 
         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
-        let mut hive = Beehive::generate(sk, rand::thread_rng()).unwrap();
+        let mut hive = Beehive::generate(sk, NoListener, rand::thread_rng()).unwrap();
 
         let indie_sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         let indie = Rc::new(RefCell::new(
@@ -1324,7 +1324,8 @@ mod tests {
         assert_eq!(archive.docs.len(), 1);
         assert_eq!(archive.topsorted_ops.len(), 4);
 
-        let hive_from_archive = Beehive::try_from_archive(&archive, rand::thread_rng()).unwrap();
+        let hive_from_archive =
+            Beehive::try_from_archive(&archive, NoListener, rand::thread_rng()).unwrap();
 
         assert_eq!(hive, hive_from_archive);
     }
