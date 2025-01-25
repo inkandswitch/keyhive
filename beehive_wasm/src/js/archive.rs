@@ -1,4 +1,4 @@
-use super::{beehive::JsBeehive, change_ref::JsChangeRef};
+use super::{beehive::JsBeehive, change_ref::JsChangeRef, event_handler::JsEventHandler};
 use beehive_core::{archive::Archive, beehive::Beehive, beehive::TryFromArchiveError};
 use derive_more::{Display, From, Into};
 use serde::{Deserialize, Serialize};
@@ -26,16 +26,21 @@ impl JsArchive {
     }
 
     #[wasm_bindgen(js_name = tryToBeehive)]
-    pub fn try_to_beehive(&self) -> Result<JsBeehive, JsTryFromArchiveError> {
-        Ok(Beehive::try_from_archive(&self.0, rand::thread_rng())
-            .map_err(|e| JsTryFromArchiveError(Box::new(e)))?
-            .into())
+    pub fn try_to_beehive(
+        &self,
+        event_handler: &js_sys::Function,
+    ) -> Result<JsBeehive, JsTryFromArchiveError> {
+        Ok(
+            Beehive::try_from_archive(&self.0, event_handler.clone().into(), rand::thread_rng())
+                .map_err(|e| JsTryFromArchiveError(Box::new(e)))?
+                .into(),
+        )
     }
 }
 
-#[derive(Debug, Display, PartialEq, Eq, From, Into, Error)]
+#[derive(Debug, Display, From, Into, Error)]
 #[wasm_bindgen(js_name = TryFromArchiveError)]
-pub struct JsTryFromArchiveError(pub(crate) Box<TryFromArchiveError<JsChangeRef>>);
+pub struct JsTryFromArchiveError(pub(crate) Box<TryFromArchiveError<JsChangeRef, JsEventHandler>>);
 
 #[wasm_bindgen(js_class = TryFromArchiveError)]
 impl JsTryFromArchiveError {

@@ -11,6 +11,7 @@ use crate::{
         encrypted::EncryptedContent,
         share_key::ShareKey,
         signed::{Signed, SigningError, VerificationError},
+        verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
     event::Event,
@@ -23,14 +24,11 @@ use crate::{
             EncryptedContentWithUpdate, MissingIndividualError, RevokeMemberUpdate,
         },
         group::{
+            delegation::{Delegation, DelegationError, StaticDelegation},
             error::AddError,
             id::GroupId,
-            operation::{
-                delegation::{Delegation, DelegationError, StaticDelegation},
-                revocation::{Revocation, StaticRevocation},
-                Operation, Operation as MembershipOperation, StaticOperation,
-                StaticOperation as StaticMembershipOperation,
-            },
+            membership_operation::{MembershipOperation, StaticMembershipOperation},
+            revocation::{Revocation, StaticRevocation},
             Group, RevokeMemberError,
         },
         identifier::Identifier,
@@ -42,7 +40,6 @@ use crate::{
         membered::{id::MemberedId, Membered},
         peer::Peer,
         public::Public,
-        verifiable::Verifiable,
     },
     util::content_addressed_map::CaMap,
 };
@@ -972,7 +969,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
 
         Archive {
             active,
-            topsorted_ops: Operation::<T, L>::topsort(
+            topsorted_ops: MembershipOperation::<T, L>::topsort(
                 &self.delegations.borrow(),
                 &self.revocations.borrow(),
             )
@@ -1046,7 +1043,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
 
         for (digest, static_op) in archive.topsorted_ops.iter() {
             match static_op {
-                StaticOperation::Delegation(sd) => {
+                StaticMembershipOperation::Delegation(sd) => {
                     let proof: Option<Rc<Signed<Delegation<T, L>>>> = sd
                         .payload
                         .proof
@@ -1097,7 +1094,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
                         }),
                     );
                 }
-                StaticOperation::Revocation(sr) => {
+                StaticMembershipOperation::Revocation(sr) => {
                     revocations.borrow_mut().0.insert(
                         (*digest).into(),
                         Rc::new(Signed {

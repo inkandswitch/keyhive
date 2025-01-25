@@ -2,7 +2,7 @@ use super::prekey::PrekeyListener;
 use crate::{
     content::reference::ContentRef,
     crypto::signed::Signed,
-    principal::group::operation::{delegation::Delegation, revocation::Revocation},
+    principal::group::{delegation::Delegation, revocation::Revocation},
 };
 use std::rc::Rc;
 

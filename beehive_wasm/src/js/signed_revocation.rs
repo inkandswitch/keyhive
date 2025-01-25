@@ -1,7 +1,7 @@
 use super::{change_ref::JsChangeRef, event_handler::JsEventHandler, revocation::JsRevocation};
 use beehive_core::{
-    crypto::signed::Signed,
-    principal::{group::operation::revocation::Revocation, verifiable::Verifiable},
+    crypto::{signed::Signed, verifiable::Verifiable},
+    principal::group::revocation::Revocation,
 };
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;

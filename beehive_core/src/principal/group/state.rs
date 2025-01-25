@@ -1,20 +1,15 @@
 use super::{
+    delegation::{Delegation, StaticDelegation},
     error::AddError,
     id::GroupId,
-    operation::{
-        delegation::{Delegation, StaticDelegation},
-        revocation::{Revocation, StaticRevocation},
-    },
+    revocation::{Revocation, StaticRevocation},
 };
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed},
+    crypto::{digest::Digest, signed::Signed, verifiable::Verifiable},
     listener::{membership::MembershipListener, no_listener::NoListener},
-    principal::{
-        agent::Agent, group::operation::delegation::DelegationError, identifier::Identifier,
-        verifiable::Verifiable,
-    },
+    principal::{agent::Agent, group::delegation::DelegationError, identifier::Identifier},
     util::content_addressed_map::CaMap,
 };
 use derive_where::derive_where;

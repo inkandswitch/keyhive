@@ -1,6 +1,6 @@
 //! The universally unique identifier of an [`Agent`](crate::principal::agentAgent).
 
-use super::verifiable::Verifiable;
+use crate::crypto::verifiable::Verifiable;
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 

@@ -8,7 +8,6 @@ use super::{
         op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
         Individual,
     },
-    verifiable::Verifiable,
 };
 use crate::{
     access::Access,
@@ -16,11 +15,12 @@ use crate::{
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
+        verifiable::Verifiable,
     },
     listener::{no_listener::NoListener, prekey::PrekeyListener},
     principal::{
         agent::id::AgentId,
-        group::operation::delegation::{Delegation, DelegationError},
+        group::delegation::{Delegation, DelegationError},
         membered::Membered,
     },
 };

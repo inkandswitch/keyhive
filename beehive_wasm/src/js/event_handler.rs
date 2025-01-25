@@ -4,7 +4,7 @@ use beehive_core::{
     event::Event,
     listener::{membership::MembershipListener, prekey::PrekeyListener},
     principal::{
-        group::operation::{delegation::Delegation, revocation::Revocation},
+        group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
 };

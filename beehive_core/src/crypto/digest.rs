@@ -5,10 +5,10 @@ use crate::{
     content::reference::ContentRef,
     event::Event,
     listener::membership::MembershipListener,
-    principal::group::operation::{
+    principal::group::{
         delegation::{Delegation, StaticDelegation},
+        membership_operation::{MembershipOperation, StaticMembershipOperation},
         revocation::{Revocation, StaticRevocation},
-        Operation as MembershipOperation, StaticOperation as StaticMembershipOperation,
     },
 };
 use serde::{Deserialize, Serialize};

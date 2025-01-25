@@ -4,7 +4,7 @@ use super::{
 };
 use beehive_core::{
     crypto::signed::Signed,
-    principal::{agent::Agent, group::operation::delegation::Delegation},
+    principal::{agent::Agent, group::delegation::Delegation},
 };
 use dupe::Dupe;
 use std::rc::Rc;

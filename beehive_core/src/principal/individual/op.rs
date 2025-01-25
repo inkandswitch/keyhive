@@ -3,12 +3,11 @@
 pub mod add_key;
 pub mod rotate_key;
 
-use crate::{
-    crypto::{
-        share_key::ShareKey,
-        signed::{Signed, VerificationError},
-    },
-    principal::verifiable::Verifiable,
+use self::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
+use crate::crypto::{
+    share_key::ShareKey,
+    signed::{Signed, VerificationError},
+    verifiable::Verifiable,
 };
 use derive_more::{From, TryInto};
 use dupe::Dupe;
@@ -26,10 +25,10 @@ use std::{
 #[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash, Serialize, Deserialize, From, TryInto)]
 pub enum KeyOp {
     /// Add a new key.
-    Add(Rc<Signed<add_key::AddKeyOp>>),
+    Add(Rc<Signed<AddKeyOp>>),
 
     /// Retire and replace an existing key.
-    Rotate(Rc<Signed<rotate_key::RotateKeyOp>>),
+    Rotate(Rc<Signed<RotateKeyOp>>),
 }
 
 impl KeyOp {

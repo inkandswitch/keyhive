@@ -4,7 +4,7 @@ use crate::{
     crypto::signed::Signed,
     event::Event,
     principal::{
-        group::operation::{delegation::Delegation, revocation::Revocation},
+        group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
 };

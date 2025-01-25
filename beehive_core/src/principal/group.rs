@@ -1,19 +1,24 @@
 //! Model a collection of agents with no associated content.
 
+pub mod delegation;
+pub mod dependencies;
 pub mod error;
 pub mod id;
-pub mod operation;
+pub mod membership_operation;
+pub mod revocation;
 pub mod state;
 
-use self::operation::delegation::StaticDelegation;
-
+use self::{
+    delegation::{Delegation, StaticDelegation},
+    membership_operation::MembershipOperation,
+    revocation::Revocation,
+};
 use super::{
     agent::{id::AgentId, Agent},
     document::{id::DocumentId, Document},
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
     membered::Membered,
-    verifiable::Verifiable,
 };
 use crate::{
     access::Access,
@@ -22,6 +27,7 @@ use crate::{
         digest::Digest,
         share_key::ShareKey,
         signed::{Signed, SigningError},
+        verifiable::Verifiable,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
     util::content_addressed_map::CaMap,
@@ -32,7 +38,6 @@ use derive_where::derive_where;
 use dupe::{Dupe, IterDupedExt};
 use id::GroupId;
 use nonempty::{nonempty, NonEmpty};
-use operation::{delegation::Delegation, revocation::Revocation, Operation};
 use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
@@ -501,10 +506,11 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         let mut stateful_revocations = HashSet::new();
 
         for (_, op) in
-            Operation::topsort(&self.state.delegation_heads, &self.state.revocation_heads).iter()
+            MembershipOperation::topsort(&self.state.delegation_heads, &self.state.revocation_heads)
+                .iter()
         {
             match op {
-                Operation::Delegation(d) => {
+                MembershipOperation::Delegation(d) => {
                     if stateful_revocations.contains(&d.signature.to_bytes()) {
                         continue;
                     }
@@ -531,7 +537,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
                             .insert(d.payload().delegate.id(), nonempty![d.dupe()]);
                     }
                 }
-                Operation::Revocation(r) => {
+                MembershipOperation::Revocation(r) => {
                     if let Some(mut_dlgs) = self
                         .members
                         .get(&r.payload().revoke.payload().delegate.id())
@@ -660,7 +666,7 @@ pub enum RevokeMemberError {
 mod tests {
     use super::*;
 
-    use super::operation::delegation::Delegation;
+    use super::membership_operation::delegation::Delegation;
     use crate::principal::active::Active;
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;

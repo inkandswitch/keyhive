@@ -1,6 +1,7 @@
 //! Wrap data in signatures.
 
-use crate::principal::{identifier::Identifier, verifiable::Verifiable};
+use super::verifiable::Verifiable;
+use crate::principal::identifier::Identifier;
 use derivative::Derivative;
 use dupe::Dupe;
 use ed25519_dalek::{Signer, Verifier};

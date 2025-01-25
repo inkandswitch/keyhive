@@ -1,6 +1,6 @@
 pub mod id;
 
-use super::{group::AddGroupMemberError, individual::id::IndividualId, verifiable::Verifiable};
+use super::{group::AddGroupMemberError, individual::id::IndividualId};
 use crate::{
     access::Access,
     cgka::{error::CgkaError, keys::ShareKeyMap, operation::CgkaOperation, Cgka},
@@ -10,6 +10,7 @@ use crate::{
         encrypted::EncryptedContent,
         share_key::{ShareKey, ShareSecretKey},
         signed::Signed,
+        verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
     listener::{membership::MembershipListener, no_listener::NoListener},
@@ -17,11 +18,9 @@ use crate::{
         active::Active,
         agent::{id::AgentId, Agent},
         group::{
+            delegation::{Delegation, DelegationError},
             error::AddError,
-            operation::{
-                delegation::{Delegation, DelegationError},
-                revocation::Revocation,
-            },
+            revocation::Revocation,
             Group, GroupArchive, RevokeMemberError,
         },
         identifier::Identifier,

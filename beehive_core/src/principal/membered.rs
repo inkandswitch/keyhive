@@ -4,17 +4,14 @@ use super::{
     agent::{id::AgentId, Agent},
     document::{id::DocumentId, AddMemberError, AddMemberUpdate, Document, RevokeMemberUpdate},
     group::{
-        error::AddError,
-        operation::{delegation::Delegation, revocation::Revocation},
-        Group, RevokeMemberError,
+        delegation::Delegation, error::AddError, revocation::Revocation, Group, RevokeMemberError,
     },
     identifier::Identifier,
-    verifiable::Verifiable,
 };
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed},
+    crypto::{digest::Digest, signed::Signed, verifiable::Verifiable},
     listener::{membership::MembershipListener, no_listener::NoListener},
     util::content_addressed_map::CaMap,
 };

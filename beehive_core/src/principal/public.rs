@@ -2,12 +2,12 @@ use super::{
     active::Active,
     identifier::Identifier,
     individual::{op::add_key::AddKeyOp, state::PrekeyState, Individual},
-    verifiable::Verifiable,
 };
 use crate::{
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
         signed::Signed,
+        verifiable::Verifiable,
     },
     listener::prekey::PrekeyListener,
 };

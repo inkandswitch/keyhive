@@ -3,10 +3,10 @@ use crate::{
     crypto::signed::Signed,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
-        group::operation::{
+        group::{
             delegation::{Delegation, StaticDelegation},
+            membership_operation::MembershipOperation,
             revocation::{Revocation, StaticRevocation},
-            Operation as MembershipOperation,
         },
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
     },

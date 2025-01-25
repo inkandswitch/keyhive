@@ -3,7 +3,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::signed::Signed,
     principal::{
-        group::operation::{delegation::Delegation, revocation::Revocation},
+        group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
 };

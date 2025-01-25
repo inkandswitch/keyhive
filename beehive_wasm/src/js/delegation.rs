@@ -2,7 +2,7 @@ use super::{
     access::JsAccess, agent::JsAgent, change_ref::JsChangeRef, event_handler::JsEventHandler,
     history::JsHistory, signed_delegation::JsSignedDelegation,
 };
-use beehive_core::principal::group::operation::delegation::{Delegation, DelegationError};
+use beehive_core::principal::group::delegation::{Delegation, DelegationError};
 use derive_more::{From, Into};
 use dupe::Dupe;
 use thiserror::Error;

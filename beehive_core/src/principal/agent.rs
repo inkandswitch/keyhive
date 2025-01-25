@@ -7,11 +7,10 @@ use super::{
     identifier::Identifier,
     individual::{id::IndividualId, op::KeyOp, Individual},
     membered::Membered,
-    verifiable::Verifiable,
 };
 use crate::{
     content::reference::ContentRef,
-    crypto::share_key::ShareKey,
+    crypto::{share_key::ShareKey, verifiable::Verifiable},
     listener::{membership::MembershipListener, no_listener::NoListener},
 };
 use derivative::Derivative;

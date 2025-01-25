@@ -1,7 +1,7 @@
 use super::{change_ref::JsChangeRef, delegation::JsDelegation, event_handler::JsEventHandler};
 use beehive_core::{
-    crypto::signed::Signed,
-    principal::{group::operation::delegation::Delegation, verifiable::Verifiable},
+    crypto::{signed::Signed, verifiable::Verifiable},
+    principal::group::delegation::Delegation,
 };
 use derive_more::{From, Into};
 use dupe::Dupe;

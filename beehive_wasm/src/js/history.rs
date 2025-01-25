@@ -7,9 +7,7 @@ use beehive_core::{
     crypto::signed::Signed,
     principal::{
         document::id::DocumentId,
-        group::operation::{
-            delegation::Delegation, dependencies::Dependencies, revocation::Revocation,
-        },
+        group::{delegation::Delegation, dependencies::Dependencies, revocation::Revocation},
     },
 };
 use dupe::Dupe;

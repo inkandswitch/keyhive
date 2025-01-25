@@ -1,7 +1,6 @@
 use super::{change_ref::JsChangeRef, event_handler::JsEventHandler};
 use beehive_core::principal::peer::Peer;
 use derive_more::{Deref, From, Into};
-use std::fmt::{Display, Formatter};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Peer)]

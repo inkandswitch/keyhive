@@ -2,7 +2,7 @@ use super::{
     change_ref::JsChangeRef, event_handler::JsEventHandler, history::JsHistory,
     identifier::JsIdentifier, signed_delegation::JsSignedDelegation,
 };
-use beehive_core::principal::group::operation::revocation::Revocation;
+use beehive_core::principal::group::revocation::Revocation;
 use derive_more::{From, Into};
 use dupe::Dupe;
 use wasm_bindgen::prelude::*;

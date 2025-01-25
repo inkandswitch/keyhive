@@ -4,10 +4,11 @@ pub mod id;
 pub mod op;
 pub mod state;
 
-use super::{agent::id::AgentId, document::id::DocumentId, verifiable::Verifiable};
+use super::{agent::id::AgentId, document::id::DocumentId};
 use crate::crypto::{
     share_key::ShareKey,
     signed::{Signed, SigningError},
+    verifiable::Verifiable,
 };
 use derivative::Derivative;
 use derive_more::Debug;
