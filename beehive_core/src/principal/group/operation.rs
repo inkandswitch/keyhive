@@ -333,8 +333,8 @@ pub enum StaticOperation<T: ContentRef> {
     Revocation(Signed<revocation::StaticRevocation<T>>),
 }
 
-impl<T: ContentRef> From<Operation<T>> for StaticOperation<T> {
-    fn from(op: Operation<T>) -> Self {
+impl<T: ContentRef, L: MembershipListener<T>> From<Operation<T, L>> for StaticOperation<T> {
+    fn from(op: Operation<T, L>) -> Self {
         match op {
             Operation::Delegation(d) => {
                 StaticOperation::Delegation(Rc::unwrap_or_clone(d).map(Into::into))

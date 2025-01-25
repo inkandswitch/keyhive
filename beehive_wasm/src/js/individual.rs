@@ -1,6 +1,6 @@
 use super::{
-    document_id::JsDocumentId, identifier::JsIdentifier, individual_id::JsIndividualId,
-    share_key::JsShareKey,
+    agent::JsAgent, document_id::JsDocumentId, identifier::JsIdentifier,
+    individual_id::JsIndividualId, peer::JsPeer, share_key::JsShareKey,
 };
 use beehive_core::principal::individual::Individual;
 use derive_more::{From, Into};
@@ -27,6 +27,7 @@ impl JsIndividual {
     #[wasm_bindgen(js_name = toAgent)]
     pub fn to_agent(&self) -> JsAgent {
         JsAgent(self.0.dupe().into())
+    }
 
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> JsIdentifier {

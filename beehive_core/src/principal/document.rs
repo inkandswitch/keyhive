@@ -369,6 +369,7 @@ pub struct AddMemberUpdate<T: ContentRef = [u8; 32], L: MembershipListener<T> = 
 #[error("Missing individual: {0}")]
 pub struct MissingIndividualError(pub Box<IndividualId>);
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct RevokeMemberUpdate<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
     pub(crate) revocations: Vec<Rc<Signed<Revocation<T, L>>>>,
     pub(crate) cgka_ops: Vec<CgkaOperation>,
@@ -416,8 +417,8 @@ pub(crate) struct DocumentArchive<T: ContentRef> {
     pub(crate) cgka: Cgka,
 }
 
-impl<T: ContentRef> From<Document<T>> for DocumentArchive<T> {
-    fn from(doc: Document<T>) -> Self {
+impl<T: ContentRef, L: MembershipListener<T>> From<Document<T, L>> for DocumentArchive<T> {
+    fn from(doc: Document<T, L>) -> Self {
         DocumentArchive {
             group: doc.group.into(),
             reader_keys: doc

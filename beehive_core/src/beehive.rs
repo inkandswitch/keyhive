@@ -963,8 +963,8 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
 
     pub fn into_archive(&self) -> Archive<T> {
         let active_ref = self.active.borrow();
-        let mut active = Active {
-            signing_key: active_ref.signing_key,
+        let active = Active {
+            signing_key: active_ref.signing_key.clone(),
             prekey_pairs: active_ref.prekey_pairs.clone(),
             individual: active_ref.individual.clone(),
             listener: NoListener,

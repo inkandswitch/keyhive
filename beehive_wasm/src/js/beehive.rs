@@ -33,8 +33,8 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Beehive)]
-#[derive(Debug)]
-pub struct JsBeehive(Beehive<JsChangeRef, JsEventHandler, rand::rngs::ThreadRng>);
+#[derive(Debug, From, Into)]
+pub struct JsBeehive(pub(crate) Beehive<JsChangeRef, JsEventHandler, rand::rngs::ThreadRng>);
 
 #[wasm_bindgen(js_class = Beehive)]
 impl JsBeehive {

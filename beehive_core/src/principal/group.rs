@@ -609,8 +609,8 @@ pub struct GroupArchive<T: ContentRef> {
     pub(crate) state: state::GroupStateArchive<T>,
 }
 
-impl<T: ContentRef> From<Group<T>> for GroupArchive<T> {
-    fn from(group: Group<T>) -> Self {
+impl<T: ContentRef, L: MembershipListener<T>> From<Group<T, L>> for GroupArchive<T> {
+    fn from(group: Group<T, L>) -> Self {
         GroupArchive {
             individual: group.individual.clone(),
             members: group
