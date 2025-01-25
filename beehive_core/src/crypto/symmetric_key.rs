@@ -14,8 +14,7 @@ use x25519_dalek::SharedSecret;
 /// #     crypto::{siv::Siv, symmetric_key::SymmetricKey},
 /// #     listener::no_listener::NoListener,
 /// #     principal::{agent::Agent, document::Document, individual::Individual},
-/// #     store::{delegate::DelegationStore, revocation::RevocationStore},
-/// #     util::content_addressed_map::CaMap,
+/// #     store::{delegation::DelegationStore, revocation::RevocationStore}
 /// # };
 /// # use std::{cell::RefCell, rc::Rc};
 /// # use nonempty::nonempty;
