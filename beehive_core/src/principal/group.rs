@@ -152,12 +152,11 @@ impl<T: ContentRef> Group<T> {
     }
 
     pub fn pick_individual_prekeys(&self, doc_id: DocumentId) -> HashMap<IndividualId, ShareKey> {
-        HashMap::from_iter(self.members.values().flat_map(|delegations| {
-            delegations[0]
-                .payload()
-                .delegate
-                .pick_individual_prekeys(doc_id)
-        }))
+        HashMap::from_iter(
+            self.transitive_members()
+                .values()
+                .flat_map(|(agent, _access)| agent.pick_individual_prekeys(doc_id)),
+        )
     }
 
     pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T>>>>> {
