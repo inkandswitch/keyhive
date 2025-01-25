@@ -28,7 +28,6 @@ use beehive_core::{
 use derive_more::{From, Into};
 use dupe::Dupe;
 use nonempty::NonEmpty;
-use std::ops::Deref;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -156,10 +155,10 @@ impl JsBeehive {
     ) -> Result<JsSignedDelegation, JsAddMemberError> {
         let other_docs_refs: Vec<_> = other_relevant_docs
             .iter()
-            .map(|js_doc| js_doc.0.borrow())
+            .map(|js_doc| js_doc.0.dupe())
             .collect();
 
-        let other_docs: Vec<_> = other_docs_refs.iter().map(Deref::deref).collect();
+        let other_docs: Vec<_> = other_docs_refs.into_iter().collect();
 
         let dlg = self
             .0

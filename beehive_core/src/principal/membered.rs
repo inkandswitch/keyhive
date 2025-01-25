@@ -80,7 +80,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Membered<T, L> {
         member_to_add: Agent<T, L>,
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
-        other_relevant_docs: &[&Document<T, L>],
+        other_relevant_docs: &[Rc<RefCell<Document<T, L>>>],
     ) -> Result<AddMemberUpdate<T, L>, AddMemberError> {
         match self {
             Membered::Group(group) => Ok(AddMemberUpdate {
