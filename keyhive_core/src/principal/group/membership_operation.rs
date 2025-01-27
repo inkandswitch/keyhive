@@ -21,10 +21,19 @@ use std::{
 };
 use topological_sort::TopologicalSort;
 
-#[derive(Debug, Dupe, Clone)]
+#[derive(Debug, Clone)]
 pub enum MembershipOperation<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
     Delegation(Rc<Signed<Delegation<T, L>>>),
     Revocation(Rc<Signed<Revocation<T, L>>>),
+}
+
+impl<T: ContentRef, L: MembershipListener<T>> Dupe for MembershipOperation<T, L> {
+    fn dupe(&self) -> Self {
+        match self {
+            MembershipOperation::Delegation(d) => MembershipOperation::Delegation(d.dupe()),
+            MembershipOperation::Revocation(r) => MembershipOperation::Revocation(r.dupe()),
+        }
+    }
 }
 
 impl<T: ContentRef, L: MembershipListener<T>> std::hash::Hash for MembershipOperation<T, L> {
@@ -194,13 +203,13 @@ impl<T: ContentRef, L: MembershipListener<T>> MembershipOperation<T, L> {
 
         for dlg in delegation_heads.values() {
             let op: MembershipOperation<T, L> = dlg.dupe().into();
-            leftovers.insert(op.signature().into(), op.clone());
+            leftovers.insert(op.signature().into(), op.dupe());
             explore.push(op);
         }
 
         for rev in revocation_heads.values() {
             let op: MembershipOperation<T, L> = rev.dupe().into();
-            leftovers.insert(op.signature().into(), op.clone());
+            leftovers.insert(op.signature().into(), op.dupe());
             explore.push(op);
         }
 
@@ -208,7 +217,7 @@ impl<T: ContentRef, L: MembershipListener<T>> MembershipOperation<T, L> {
             let (ancestors, longest_path) = op.ancestors();
 
             for ancestor in ancestors.values() {
-                explore.push(ancestor.as_ref().clone());
+                explore.push(ancestor.as_ref().dupe());
             }
 
             ops_with_ancestors.insert(Digest::hash(&op), (op, ancestors, longest_path));
@@ -247,7 +256,8 @@ impl<T: ContentRef, L: MembershipListener<T>> MembershipOperation<T, L> {
                     continue;
                 }
 
-                // Concurrent: if both are revocations then do extra checks to force order
+                // NOTE for concurrent case:
+                // if both are revocations then do extra checks to force order
                 // in order to ensure no revocation cycles
                 if op.is_revocation() && other_op.is_revocation() {
                     match longest_path.cmp(other_longest_path) {
@@ -276,7 +286,9 @@ impl<T: ContentRef, L: MembershipListener<T>> MembershipOperation<T, L> {
                                     (*digest, op),
                                 );
                             }
-                            Ordering::Equal => {}
+                            Ordering::Equal => {
+                                debug_assert!(false, "should not need to compare to self")
+                            }
                         },
                     }
                     continue;
