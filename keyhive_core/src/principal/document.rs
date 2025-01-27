@@ -229,15 +229,41 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
     pub fn revoke_member(
         &mut self,
         member_id: Identifier,
+        retain_all_other_members: bool,
         signing_key: &ed25519_dalek::SigningKey,
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
         after_other_doc_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
-        let revs = self
-            .group
-            .revoke_member(member_id, signing_key, after_other_doc_content)?;
+        let RevokeMemberUpdate {
+            revocations,
+            redelegations,
+            cgka_ops,
+        } = self.group.revoke_member(
+            member_id,
+            retain_all_other_members,
+            signing_key,
+            after_other_doc_content,
+        )?;
 
-        Ok(revs)
+        // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
+        // FIXME: We need to check if this has revoked the last member in our group?
+        let mut ops = cgka_ops;
+        if let Some(delegations) = self.group.members.get(&member_id) {
+            for id in delegations
+                .iter()
+                .flat_map(|d| d.payload().delegate.individual_ids())
+            {
+                if let Some(op) = self.cgka.remove(id)? {
+                    ops.push(op);
+                }
+            }
+        }
+
+        Ok(RevokeMemberUpdate {
+            revocations,
+            redelegations,
+            cgka_ops: ops,
+        })
     }
 
     pub fn remove_cgka_member(
@@ -416,15 +442,31 @@ pub struct MissingIndividualError(pub Box<IndividualId>);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RevokeMemberUpdate<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
-    pub revocations: Vec<Rc<Signed<Revocation<T, L>>>>,
-    pub cgka_ops: Vec<Signed<CgkaOperation>>,
+    pub(crate) revocations: Vec<Rc<Signed<Revocation<T, L>>>>,
+    pub(crate) redelegations: Vec<Rc<Signed<Delegation<T, L>>>>,
+    pub(crate) cgka_ops: Vec<CgkaOperation>,
+}
+
+impl<T: ContentRef, L: MembershipListener<T>> RevokeMemberUpdate<T, L> {
+    pub fn revocations(&self) -> &[Rc<Signed<Revocation<T, L>>>] {
+        &self.revocations
+    }
+
+    pub fn redelegations(&self) -> &[Rc<Signed<Delegation<T, L>>>] {
+        &self.redelegations
+    }
+
+    pub fn cgka_ops(&self) -> &[CgkaOperation] {
+        &self.cgka_ops
+    }
 }
 
 impl<T: ContentRef, L: MembershipListener<T>> Default for RevokeMemberUpdate<T, L> {
     fn default() -> Self {
         Self {
-            revocations: Vec::new(),
-            cgka_ops: Vec::new(),
+            revocations: vec![],
+            redelegations: vec![],
+            cgka_ops: vec![],
         }
     }
 }

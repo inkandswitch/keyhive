@@ -195,7 +195,9 @@ impl<T: ContentRef, L: MembershipListener<T>> GroupState<T, L> {
         }
 
         if let Some(proof) = &revocation.payload.proof {
-            if !revocation.payload.revoke.payload.is_descendant_of(proof) {
+            if revocation.payload.revoke != *proof
+                && !revocation.payload.revoke.payload.is_descendant_of(proof)
+            {
                 return Err(AddError::InvalidProofChain);
             }
 
@@ -221,17 +223,7 @@ impl<T: ContentRef, L: MembershipListener<T>> GroupState<T, L> {
             return Err(AddError::InvalidProofChain);
         }
 
-        let mut inserted = false;
-        for (head_digest, head) in self.delegation_heads.clone().iter() {
-            if revocation.payload.revoke == *head || revocation.payload.proof == Some(head.dupe()) {
-                self.delegation_heads.remove_by_hash(head_digest);
-
-                if !inserted {
-                    self.revocation_heads.insert(revocation.dupe());
-                    inserted = true;
-                }
-            }
-        }
+        self.revocation_heads.insert(revocation.dupe());
 
         let hash = self.revocations.borrow_mut().insert(revocation);
         Ok(hash)

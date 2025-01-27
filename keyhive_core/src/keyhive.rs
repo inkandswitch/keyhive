@@ -320,6 +320,7 @@ impl<
     pub fn revoke_member(
         &mut self,
         to_revoke: Identifier,
+        retain_all_other_members: bool,
         resource: &mut Membered<T, L>,
     ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
         let mut relevant_docs = BTreeMap::new();
@@ -329,6 +330,7 @@ impl<
 
         resource.revoke_member(
             to_revoke,
+            retain_all_other_members,
             &self.active.borrow().signing_key,
             &mut relevant_docs,
         )

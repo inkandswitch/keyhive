@@ -2,8 +2,10 @@
 
 name = "keyhive_core"
 version = "0.1.0"
+description = "Core Beehive types and functions"
 
 authors.workspace = true
+license.workspace = true
 edition.workspace = true
 repository.workspace = true
 rust-version.workspace = true

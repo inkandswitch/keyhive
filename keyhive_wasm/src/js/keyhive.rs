@@ -24,6 +24,7 @@ use super::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
+use dupe::IterDupedExt;
 use keyhive_core::{
     keyhive::{EncryptContentError, Keyhive},
     principal::document::DecryptError,
@@ -172,14 +173,19 @@ impl JsKeyhive {
     pub fn revoke_member(
         &mut self,
         to_revoke: &JsAgent,
+        retain_all_other_members: bool,
         membered: &mut JsMembered,
     ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
-        let res = self.0.revoke_member(to_revoke.id(), membered)?;
-        Ok(res
-            .revocations
-            .into_iter()
+        let revs = self
+            .0
+            .revoke_member(to_revoke.id(), retain_all_other_members, membered)?
+            .revocations()
+            .iter()
+            .duped()
             .map(JsSignedRevocation)
-            .collect())
+            .collect();
+
+        Ok(revs)
     }
 
     #[wasm_bindgen(js_name = reachableDocs)]
