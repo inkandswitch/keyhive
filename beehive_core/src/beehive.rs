@@ -280,7 +280,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         to_add: Agent<T, L>,
         resource: &mut Membered<T, L>,
         can: Access,
-        other_relevant_docs: &[&Document<T, L>], // FIXME make this automatic
+        other_relevant_docs: &[Rc<RefCell<Document<T, L>>>], // FIXME make this automatic
     ) -> Result<Rc<Signed<Delegation<T, L>>>, AddMemberError> {
         match resource {
             Membered::Group(group) => {

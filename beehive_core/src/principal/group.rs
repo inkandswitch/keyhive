@@ -41,6 +41,7 @@ use id::GroupId;
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     hash::{Hash, Hasher},
     rc::Rc,
@@ -324,19 +325,26 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         member_to_add: Agent<T, L>,
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[&Document<T, L>],
+        relevant_docs: &[Rc<RefCell<Document<T, L>>>],
     ) -> Result<Rc<Signed<Delegation<T, L>>>, AddGroupMemberError> {
         let after_content = relevant_docs
             .iter()
             .map(|d| {
                 (
-                    d.doc_id(),
-                    d.content_heads.iter().cloned().collect::<Vec<_>>(),
+                    d.borrow().doc_id(),
+                    d.borrow().content_heads.iter().cloned().collect::<Vec<_>>(),
                 )
             })
             .collect();
 
-        self.add_member_with_manual_content(member_to_add, can, signing_key, after_content)
+        let delegation =
+            self.add_member_with_manual_content(member_to_add, can, signing_key, after_content)?;
+
+        for doc in relevant_docs.iter() {
+            doc.borrow_mut().add_cgka_member(&delegation);
+        }
+
+        Ok(delegation)
     }
 
     pub(crate) fn add_member_with_manual_content(
@@ -481,6 +489,17 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         for r in revocations.iter() {
             self.listener.on_revocation(r);
         }
+
+        // FIXME: Return these ops at the end of this method.
+        // let mut ops = Vec::new();
+        // for r in revocations {
+        //     for id in r.payload().delegate.individual_ids() {
+        //         FIXME: Get a handle on all documents for each delegate
+        //         for doc in documents {
+        //             ops.push(doc.remove_cgka_member(id));
+        //         }
+        //     }
+        // }
 
         Ok(revocations)
     }

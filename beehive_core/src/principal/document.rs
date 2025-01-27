@@ -178,32 +178,49 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         member_to_add: Agent<T, L>,
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
-        other_relevant_docs: &[&Document<T, L>],
+        other_relevant_docs: &[Rc<RefCell<Document<T, L>>>],
     ) -> Result<AddMemberUpdate<T, L>, AddMemberError> {
         let mut after_content: BTreeMap<DocumentId, Vec<T>> = other_relevant_docs
             .iter()
-            .map(|d| (d.doc_id(), d.content_heads.iter().cloned().collect()))
+            .map(|d| {
+                (
+                    d.borrow().doc_id(),
+                    d.borrow().content_heads.iter().cloned().collect(),
+                )
+            })
             .collect();
 
         after_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
 
-        let dlgs = self.group.add_member_with_manual_content(
+        let delegation = self.group.add_member_with_manual_content(
             member_to_add.dupe(),
             can,
             signing_key,
             after_content,
         )?;
 
-        let mut ops = Vec::new();
-        for (id, pre_key) in member_to_add.pick_individual_prekeys(self.doc_id()) {
-            let op = self.cgka.add(id, pre_key)?;
-            ops.push(op);
+        for doc in other_relevant_docs.iter() {
+            doc.borrow_mut().add_cgka_member(&delegation);
         }
 
         Ok(AddMemberUpdate {
-            delegation: dlgs,
-            cgka_ops: ops,
+            cgka_ops: self.add_cgka_member(delegation.as_ref()),
+            delegation,
         })
+    }
+
+    pub fn add_cgka_member(&mut self, delegation: &Signed<Delegation<T, L>>) -> Vec<CgkaOperation> {
+        let mut ops = Vec::new();
+        for (id, pre_key) in delegation
+            .dupe()
+            .payload()
+            .delegate
+            .pick_individual_prekeys(self.doc_id())
+        {
+            let op = self.cgka.add(id, pre_key).expect("FIXME");
+            ops.push(op);
+        }
+        ops
     }
 
     pub fn revoke_member(
@@ -234,6 +251,10 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
             revocations: revs,
             cgka_ops: ops,
         })
+    }
+
+    pub fn remove_cgka_member(&mut self, id: IndividualId) -> CgkaOperation {
+        self.cgka.remove(id).expect("FIXME")
     }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T, L>) -> Vec<Rc<Signed<Revocation<T, L>>>> {
