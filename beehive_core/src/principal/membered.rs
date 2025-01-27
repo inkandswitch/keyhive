@@ -83,15 +83,12 @@ impl<T: ContentRef, L: MembershipListener<T>> Membered<T, L> {
         other_relevant_docs: &[Rc<RefCell<Document<T, L>>>],
     ) -> Result<AddMemberUpdate<T, L>, AddMemberError> {
         match self {
-            Membered::Group(group) => Ok(AddMemberUpdate {
-                delegation: group.borrow_mut().add_member(
-                    member_to_add,
-                    can,
-                    signing_key,
-                    other_relevant_docs,
-                )?,
-                cgka_ops: vec![],
-            }),
+            Membered::Group(group) => Ok(group.borrow_mut().add_member(
+                member_to_add,
+                can,
+                signing_key,
+                other_relevant_docs,
+            )?),
             Membered::Document(document) => document.borrow_mut().add_member(
                 member_to_add,
                 can,
@@ -108,14 +105,11 @@ impl<T: ContentRef, L: MembershipListener<T>> Membered<T, L> {
         relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
         match self {
-            Membered::Group(group) => Ok(RevokeMemberUpdate {
-                revocations: group.borrow_mut().revoke_member(
-                    member_id,
-                    signing_key,
-                    relevant_docs,
-                )?,
-                cgka_ops: vec![],
-            }),
+            Membered::Group(group) => {
+                Ok(group
+                    .borrow_mut()
+                    .revoke_member(member_id, signing_key, relevant_docs)?)
+            }
             Membered::Document(document) => {
                 document
                     .borrow_mut()

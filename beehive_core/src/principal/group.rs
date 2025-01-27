@@ -15,13 +15,14 @@ use self::{
 };
 use super::{
     agent::{id::AgentId, Agent},
-    document::{id::DocumentId, Document},
+    document::{id::DocumentId, AddMemberUpdate, Document, RevokeMemberUpdate},
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
     membered::Membered,
 };
 use crate::{
     access::Access,
+    cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -326,7 +327,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &[Rc<RefCell<Document<T, L>>>],
-    ) -> Result<Rc<Signed<Delegation<T, L>>>, AddGroupMemberError> {
+    ) -> Result<AddMemberUpdate<T, L>, AddGroupMemberError> {
         let after_content = relevant_docs
             .iter()
             .map(|d| {
@@ -337,14 +338,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             })
             .collect();
 
-        let delegation =
-            self.add_member_with_manual_content(member_to_add, can, signing_key, after_content)?;
-
-        for doc in relevant_docs.iter() {
-            doc.borrow_mut().add_cgka_member(&delegation);
-        }
-
-        Ok(delegation)
+        self.add_member_with_manual_content(member_to_add, can, signing_key, after_content)
     }
 
     pub(crate) fn add_member_with_manual_content(
@@ -353,7 +347,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Rc<Signed<Delegation<T, L>>>, AddGroupMemberError> {
+    ) -> Result<AddMemberUpdate<T, L>, AddGroupMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
         let agent: Agent<T, L> = indie.into();
 
@@ -388,7 +382,36 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         let rc = Rc::new(delegation);
         self.listener.on_delegation(&rc);
         let _digest = self.receive_delegation(rc.dupe())?;
-        Ok(rc)
+
+        Ok(AddMemberUpdate {
+            cgka_ops: self.add_cgka_member(rc.dupe()),
+            delegation: rc,
+        })
+    }
+
+    // FIXME: Handle errors
+    pub fn add_cgka_member(
+        &mut self,
+        delegation: Rc<Signed<Delegation<T, L>>>,
+    ) -> Vec<CgkaOperation> {
+        let mut cgka_ops = Vec::new();
+        let docs: Vec<Rc<RefCell<Document<T, L>>>> = self
+            .transitive_members()
+            .into_iter()
+            .filter_map(|(_, (agent, _))| {
+                if let Agent::Document(doc) = agent {
+                    Some(doc)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        for doc in docs {
+            for op in doc.borrow_mut().add_cgka_member(&delegation) {
+                cgka_ops.push(op);
+            }
+        }
+        cgka_ops
     }
 
     #[allow(clippy::type_complexity)]
@@ -397,7 +420,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         member_to_remove: Identifier,
         signing_key: &ed25519_dalek::SigningKey,
         after_content: &BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Vec<Rc<Signed<Revocation<T, L>>>>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
         let vk = signing_key.verifying_key();
         let mut revocations = vec![];
 
@@ -409,7 +432,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
 
         if all_to_revoke.is_empty() {
             self.members.remove(&member_to_remove);
-            return Ok(vec![]);
+            return Ok(RevokeMemberUpdate::default());
         }
 
         if vk == self.verifying_key() {
@@ -490,18 +513,37 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             self.listener.on_revocation(r);
         }
 
-        // FIXME: Return these ops at the end of this method.
-        // let mut ops = Vec::new();
-        // for r in revocations {
-        //     for id in r.payload().delegate.individual_ids() {
-        //         FIXME: Get a handle on all documents for each delegate
-        //         for doc in documents {
-        //             ops.push(doc.remove_cgka_member(id));
-        //         }
-        //     }
-        // }
+        let mut cgka_ops = Vec::new();
+        let (individuals, docs): (Vec<Agent<T, L>>, Vec<Agent<T, L>>) = self
+            .transitive_members()
+            .into_iter()
+            .filter_map(|(_, (agent, _))| {
+                if matches!(agent, Agent::Individual(_) | Agent::Document(_)) {
+                    Some(agent.clone())
+                } else {
+                    None
+                }
+            })
+            .partition(|agent| matches!(agent, Agent::Individual(_)));
+        for individual_agent in individuals {
+            let Agent::Individual(individual) = individual_agent else {
+                panic!("FIXME");
+            };
+            let id = individual.borrow().id();
+            for doc_agent in &docs {
+                let Agent::Document(doc) = doc_agent else {
+                    panic!("FIXME");
+                };
+                if let Some(op) = doc.borrow_mut().remove_cgka_member(id) {
+                    cgka_ops.push(op);
+                }
+            }
+        }
 
-        Ok(revocations)
+        Ok(RevokeMemberUpdate {
+            cgka_ops,
+            revocations,
+        })
     }
 
     fn build_revocation(

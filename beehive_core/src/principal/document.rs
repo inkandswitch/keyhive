@@ -192,21 +192,12 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
 
         after_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
 
-        let delegation = self.group.add_member_with_manual_content(
+        Ok(self.group.add_member_with_manual_content(
             member_to_add.dupe(),
             can,
             signing_key,
             after_content,
-        )?;
-
-        for doc in other_relevant_docs.iter() {
-            doc.borrow_mut().add_cgka_member(&delegation);
-        }
-
-        Ok(AddMemberUpdate {
-            cgka_ops: self.add_cgka_member(delegation.as_ref()),
-            delegation,
-        })
+        )?)
     }
 
     pub fn add_cgka_member(&mut self, delegation: &Signed<Delegation<T, L>>) -> Vec<CgkaOperation> {
@@ -217,8 +208,9 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
             .delegate
             .pick_individual_prekeys(self.doc_id())
         {
-            let op = self.cgka.add(id, pre_key).expect("FIXME");
-            ops.push(op);
+            if let Some(op) = self.cgka.add(id, pre_key).expect("FIXME") {
+                ops.push(op);
+            }
         }
         ops
     }
@@ -234,26 +226,10 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
             .group
             .revoke_member(member_id, signing_key, after_other_doc_content)?;
 
-        // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
-        // FIXME: We need to check if this has revoked the last member in our group?
-        let mut ops = Vec::new();
-        if let Some(delegations) = self.group.members.get(&member_id) {
-            for id in delegations
-                .iter()
-                .flat_map(|d| d.payload().delegate.individual_ids())
-            {
-                let op = self.cgka.remove(id).expect("FIXME");
-                ops.push(op);
-            }
-        }
-
-        Ok(RevokeMemberUpdate {
-            revocations: revs,
-            cgka_ops: ops,
-        })
+        Ok(revs)
     }
 
-    pub fn remove_cgka_member(&mut self, id: IndividualId) -> CgkaOperation {
+    pub fn remove_cgka_member(&mut self, id: IndividualId) -> Option<CgkaOperation> {
         self.cgka.remove(id).expect("FIXME")
     }
 
@@ -267,30 +243,35 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
 
     pub fn receive_delegation(
         &mut self,
-        signed_delegation: Rc<Signed<Delegation<T, L>>>,
+        delegation: Rc<Signed<Delegation<T, L>>>,
     ) -> Result<Digest<Signed<Delegation<T, L>>>, AddError> {
-        self.group.receive_delegation(signed_delegation)
+        self.group.receive_delegation(delegation)
     }
 
     pub fn receive_revocation(
         &mut self,
-        signed_revocation: Rc<Signed<Revocation<T, L>>>,
+        revocation: Rc<Signed<Revocation<T, L>>>,
     ) -> Result<Digest<Signed<Revocation<T, L>>>, AddError> {
-        self.group.receive_revocation(signed_revocation)
+        self.group.receive_revocation(revocation)
+    }
+
+    pub fn merge_cgka_op(&mut self, op: CgkaOperation) {
+        self.cgka
+            .merge_concurrent_operation(Rc::new(op))
+            .expect("FIXME");
     }
 
     pub fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         csprng: &mut R,
-    ) -> Result<(), EncryptError> {
+    ) -> Result<CgkaOperation, EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
-        let (_, _op) = self
+        let (_, op) = self
             .cgka
             .update(new_share_key, new_share_secret_key, csprng)
             .map_err(EncryptError::UnableToPcsUpdate)?;
-        // FIXME: We need to share this op over the network.
-        Ok(())
+        Ok(op)
     }
 
     pub fn try_encrypt_content<R: rand::RngCore + rand::CryptoRng>(
@@ -383,8 +364,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Hash for Document<T, L> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddMemberUpdate<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
-    pub(crate) delegation: Rc<Signed<Delegation<T, L>>>,
-    pub(crate) cgka_ops: Vec<CgkaOperation>,
+    pub delegation: Rc<Signed<Delegation<T, L>>>,
+    pub cgka_ops: Vec<CgkaOperation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -393,8 +374,17 @@ pub struct MissingIndividualError(pub Box<IndividualId>);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RevokeMemberUpdate<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
-    pub(crate) revocations: Vec<Rc<Signed<Revocation<T, L>>>>,
-    pub(crate) cgka_ops: Vec<CgkaOperation>,
+    pub revocations: Vec<Rc<Signed<Revocation<T, L>>>>,
+    pub cgka_ops: Vec<CgkaOperation>,
+}
+
+impl<T: ContentRef, L: MembershipListener<T>> Default for RevokeMemberUpdate<T, L> {
+    fn default() -> Self {
+        Self {
+            revocations: Vec::new(),
+            cgka_ops: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Error)]

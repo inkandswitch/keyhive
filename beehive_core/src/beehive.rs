@@ -4,7 +4,7 @@ use crate::{
     ability::Ability,
     access::Access,
     archive::Archive,
-    cgka::error::CgkaError,
+    cgka::{error::CgkaError, operation::CgkaOperation},
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -281,28 +281,20 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         resource: &mut Membered<T, L>,
         can: Access,
         other_relevant_docs: &[Rc<RefCell<Document<T, L>>>], // FIXME make this automatic
-    ) -> Result<Rc<Signed<Delegation<T, L>>>, AddMemberError> {
+    ) -> Result<AddMemberUpdate<T, L>, AddMemberError> {
         match resource {
-            Membered::Group(group) => {
-                let dlg = group.borrow_mut().add_member(
-                    to_add,
-                    can,
-                    &self.active.borrow().signing_key,
-                    other_relevant_docs,
-                )?;
-
-                Ok(dlg)
-            }
-            Membered::Document(doc) => {
-                let AddMemberUpdate { delegation, .. } = doc.borrow_mut().add_member(
-                    to_add,
-                    can,
-                    &self.active.borrow().signing_key,
-                    other_relevant_docs,
-                )?;
-
-                Ok(delegation)
-            }
+            Membered::Group(group) => Ok(group.borrow_mut().add_member(
+                to_add,
+                can,
+                &self.active.borrow().signing_key,
+                other_relevant_docs,
+            )?),
+            Membered::Document(doc) => doc.borrow_mut().add_member(
+                to_add,
+                can,
+                &self.active.borrow().signing_key,
+                other_relevant_docs,
+            ),
         }
     }
 
@@ -311,19 +303,17 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         &mut self,
         to_revoke: Identifier,
         resource: &mut Membered<T, L>,
-    ) -> Result<Vec<Rc<Signed<Revocation<T, L>>>>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
         let mut relevant_docs = BTreeMap::new();
         for (doc_id, Ability { doc, .. }) in self.reachable_docs() {
             relevant_docs.insert(doc_id, doc.borrow().content_heads.iter().cloned().collect());
         }
 
-        let RevokeMemberUpdate { revocations, .. } = resource.revoke_member(
+        resource.revoke_member(
             to_revoke,
             &self.active.borrow().signing_key,
             &mut relevant_docs,
-        )?;
-
-        Ok(revocations)
+        )
     }
 
     pub fn try_encrypt_content(
@@ -335,7 +325,8 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
     ) -> Result<EncryptedContent<Vec<u8>, T>, EncryptError> {
         let EncryptedContentWithUpdate {
             encrypted_content, ..
-            // FIXME: We need to handle the optional op as well
+            // FIXME: We need to handle the returned Option<CgkaOperation> as well
+            // update_op,
         } = doc.borrow_mut().try_encrypt_content(
             content_ref,
             content,
@@ -357,7 +348,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
     pub fn force_pcs_update(
         &mut self,
         doc: Rc<RefCell<Document<T, L>>>,
-    ) -> Result<(), EncryptError> {
+    ) -> Result<CgkaOperation, EncryptError> {
         doc.borrow_mut().pcs_update(&mut self.csprng)
     }
 
@@ -883,6 +874,15 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
             StaticMembershipOperation::Delegation(d) => self.receive_delegation(d),
             StaticMembershipOperation::Revocation(r) => self.receive_revocation(r),
         }
+    }
+
+    // FIXME: Handle errors
+    pub fn receive_cgka_op(&mut self, op: CgkaOperation) {
+        self.docs
+            .get(op.doc_id())
+            .expect("FIXME")
+            .borrow_mut()
+            .merge_cgka_op(op);
     }
 
     pub fn promote_individual_to_group(
@@ -1530,6 +1530,6 @@ mod tests {
             .add_member(member, &mut doc.clone().into(), Access::Read, &[])
             .unwrap();
 
-        assert_eq!(dlg.subject_id(), doc.borrow().doc_id().into());
+        assert_eq!(dlg.delegation.subject_id(), doc.borrow().doc_id().into());
     }
 }

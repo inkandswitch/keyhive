@@ -145,6 +145,7 @@ impl JsBeehive {
         Ok(self.0.try_decrypt_content(doc.0, &encrypted.0)?)
     }
 
+    // FIXME: We should probably be returning an equivalent of AddMemberUpdate
     #[wasm_bindgen(js_name = addMember)]
     pub fn add_member(
         &mut self,
@@ -160,21 +161,26 @@ impl JsBeehive {
 
         let other_docs: Vec<_> = other_docs_refs.into_iter().collect();
 
-        let dlg = self
+        let res = self
             .0
             .add_member(to_add.0.dupe(), membered, *access, other_docs.as_slice())?;
 
-        Ok(dlg.into())
+        Ok(res.delegation.into())
     }
 
+    // FIXME: We should probably be returning an equivalent of RevokeMemberUpdate
     #[wasm_bindgen(js_name = revokeMember)]
     pub fn revoke_member(
         &mut self,
         to_revoke: &JsAgent,
         membered: &mut JsMembered,
     ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
-        let revs = self.0.revoke_member(to_revoke.id(), membered)?;
-        Ok(revs.into_iter().map(JsSignedRevocation).collect())
+        let res = self.0.revoke_member(to_revoke.id(), membered)?;
+        Ok(res
+            .revocations
+            .into_iter()
+            .map(JsSignedRevocation)
+            .collect())
     }
 
     #[wasm_bindgen(js_name = reachableDocs)]
