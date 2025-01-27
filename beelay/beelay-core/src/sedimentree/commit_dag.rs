@@ -301,9 +301,9 @@ impl CommitDag {
 
     /// All the commit hashes in this dag plus the stratum in the order in which they should
     /// be bundled into strata
-    pub(crate) fn canonical_sequence<'a>(
+    pub(crate) fn canonical_sequence<'a, I: Iterator<Item = &'a Stratum> + Clone + 'a>(
         &'a self,
-        strata: &'a [Stratum],
+        strata: I,
     ) -> impl Iterator<Item = CommitHash> + 'a {
         // First find the tips of the DAG, which is the heads of the commit DAG,
         // plus the end hashes of any strata which are not contained in the
@@ -312,7 +312,7 @@ impl CommitDag {
             .heads()
             .chain(
                 strata
-                    .iter()
+                    .clone()
                     .filter_map(|s| {
                         if !self.contains_commit(&s.end()) {
                             Some(s.end())
@@ -331,6 +331,7 @@ impl CommitDag {
         heads.into_iter().flat_map(move |head| {
             let mut stack = vec![head];
             let mut visited = HashSet::new();
+            let strata = strata.clone();
             std::iter::from_fn(move || {
                 while let Some(commit) = stack.pop() {
                     if visited.contains(&commit) {
@@ -346,7 +347,7 @@ impl CommitDag {
                         stack.extend(parents);
                     } else {
                         let mut supporting_strata = strata
-                            .iter()
+                            .clone()
                             .filter(|s| s.end() == commit)
                             .collect::<Vec<_>>();
                         supporting_strata.sort_by_key(|s| s.level());
