@@ -514,26 +514,29 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         }
 
         let mut cgka_ops = Vec::new();
-        let (individuals, docs): (Vec<Agent<T, L>>, Vec<Agent<T, L>>) = self
-            .transitive_members()
-            .into_iter()
-            .filter_map(|(_, (agent, _))| {
-                if matches!(agent, Agent::Individual(_) | Agent::Document(_)) {
-                    Some(agent.clone())
-                } else {
-                    None
+        let (individuals, docs): (
+            Vec<Rc<RefCell<Individual>>>,
+            Vec<Rc<RefCell<Document<T, L>>>>,
+        ) = self.transitive_members().values().fold(
+            (vec![], vec![]),
+            |(mut indies, mut docs), (agent, _)| {
+                match agent {
+                    Agent::Individual(individual) => {
+                        indies.push(individual.dupe());
+                    }
+                    Agent::Document(doc) => {
+                        docs.push(doc.dupe());
+                    }
+                    _ => {}
                 }
-            })
-            .partition(|agent| matches!(agent, Agent::Individual(_)));
-        for individual_agent in individuals {
-            let Agent::Individual(individual) = individual_agent else {
-                panic!("FIXME");
-            };
-            let id = individual.borrow().id();
-            for doc_agent in &docs {
-                let Agent::Document(doc) = doc_agent else {
-                    panic!("FIXME");
-                };
+
+                (indies, docs)
+            },
+        );
+
+        for indie in individuals {
+            let id = indie.borrow().id();
+            for doc in &docs {
                 if let Some(op) = doc.borrow_mut().remove_cgka_member(id) {
                     cgka_ops.push(op);
                 }
