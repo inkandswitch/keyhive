@@ -10,6 +10,7 @@ use crate::{
         encrypted::EncryptedContent,
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
+        siv::Siv,
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
@@ -305,6 +306,11 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         decrypt_key
             .try_decrypt(encrypted_content.nonce, &mut plaintext)
             .map_err(DecryptError::DecryptionFailed)?;
+
+        let expected_siv = Siv::new(&decrypt_key, &plaintext, self.doc_id())?;
+        if expected_siv != encrypted_content.nonce {
+            Err(DecryptError::SivMismatch)?;
+        }
         Ok(plaintext)
     }
 
@@ -425,12 +431,19 @@ pub struct EncryptedContentWithUpdate<T: ContentRef> {
     pub(crate) update_op: Option<CgkaOperation>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
 pub enum DecryptError {
     #[error("Key not found")]
     KeyNotFound,
+
     #[error("Decryption error: {0}")]
     DecryptionFailed(chacha20poly1305::Error),
+
+    #[error("SIV mismatch versus expected")]
+    SivMismatch,
+
+    #[error("Unable to build SIV due to IO error: {0}")]
+    IoErrorOnSivBuild(#[from] std::io::Error),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
