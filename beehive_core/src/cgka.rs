@@ -147,7 +147,9 @@ impl Cgka {
                 &nonce,
                 &Digest::hash(content_ref),
                 &Digest::hash(pred_refs),
-                self.pcs_key_ops.get(&pcs_key_hash).expect("PcsKey hash should be present"),
+                self.pcs_key_ops
+                    .get(&pcs_key_hash)
+                    .expect("PcsKey hash should be present becuase we derived it above"),
             ),
             op,
         ))

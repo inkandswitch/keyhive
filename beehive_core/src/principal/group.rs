@@ -384,34 +384,33 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         let _digest = self.receive_delegation(rc.dupe())?;
 
         Ok(AddMemberUpdate {
-            cgka_ops: self.add_cgka_member(rc.dupe()),
+            cgka_ops: self.add_cgka_member(rc.dupe())?,
             delegation: rc,
         })
     }
 
-    // FIXME: Handle errors
     pub fn add_cgka_member(
         &mut self,
         delegation: Rc<Signed<Delegation<T, L>>>,
-    ) -> Vec<CgkaOperation> {
+    ) -> Result<Vec<CgkaOperation>, CgkaError> {
         let mut cgka_ops = Vec::new();
         let docs: Vec<Rc<RefCell<Document<T, L>>>> = self
             .transitive_members()
-            .into_iter()
-            .filter_map(|(_, (agent, _))| {
+            .values()
+            .filter_map(|(agent, _)| {
                 if let Agent::Document(doc) = agent {
-                    Some(doc)
+                    Some(doc.dupe())
                 } else {
                     None
                 }
             })
             .collect::<Vec<_>>();
         for doc in docs {
-            for op in doc.borrow_mut().add_cgka_member(&delegation) {
+            for op in doc.borrow_mut().add_cgka_member(&delegation)? {
                 cgka_ops.push(op);
             }
         }
-        cgka_ops
+        Ok(cgka_ops)
     }
 
     #[allow(clippy::type_complexity)]
@@ -715,6 +714,9 @@ pub enum AddGroupMemberError {
 
     #[error(transparent)]
     AddError(#[from] error::AddError),
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
 }
 
 #[derive(Debug, Error)]

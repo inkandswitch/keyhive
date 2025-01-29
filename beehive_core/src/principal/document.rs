@@ -200,7 +200,10 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         )?)
     }
 
-    pub fn add_cgka_member(&mut self, delegation: &Signed<Delegation<T, L>>) -> Vec<CgkaOperation> {
+    pub fn add_cgka_member(
+        &mut self,
+        delegation: &Signed<Delegation<T, L>>,
+    ) -> Result<Vec<CgkaOperation>, CgkaError> {
         let mut ops = Vec::new();
         for (id, pre_key) in delegation
             .dupe()
@@ -208,11 +211,11 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
             .delegate
             .pick_individual_prekeys(self.doc_id())
         {
-            if let Some(op) = self.cgka.add(id, pre_key).expect("FIXME") {
+            if let Some(op) = self.cgka.add(id, pre_key)? {
                 ops.push(op);
             }
         }
-        ops
+        Ok(ops)
     }
 
     pub fn revoke_member(
