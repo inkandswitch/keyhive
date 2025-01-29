@@ -147,7 +147,9 @@ impl Cgka {
                 &nonce,
                 &Digest::hash(content_ref),
                 &Digest::hash(pred_refs),
-                self.pcs_key_ops.get(&pcs_key_hash).expect("FIXME"),
+                self.pcs_key_ops
+                    .get(&pcs_key_hash)
+                    .expect("PcsKey hash should be present becuase we derived it above"),
             ),
             op,
         ))
@@ -182,7 +184,14 @@ impl Cgka {
     }
 
     /// Add member to group.
-    pub fn add(&mut self, id: IndividualId, pk: ShareKey) -> Result<CgkaOperation, CgkaError> {
+    pub fn add(
+        &mut self,
+        id: IndividualId,
+        pk: ShareKey,
+    ) -> Result<Option<CgkaOperation>, CgkaError> {
+        if self.tree.contains_id(&id) {
+            return Ok(None);
+        }
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
@@ -195,9 +204,10 @@ impl Cgka {
             leaf_index,
             predecessors,
             add_predecessors,
+            doc_id: self.doc_id,
         };
         self.ops_graph.add_local_op(&op);
-        Ok(op)
+        Ok(Some(op))
     }
 
     /// Add multiple members to group.
@@ -209,11 +219,14 @@ impl Cgka {
         for m in members {
             ops.push(self.add(m.0, m.1)?);
         }
-        Ok(ops)
+        Ok(ops.into_iter().flatten().collect())
     }
 
     /// Remove member from group.
-    pub fn remove(&mut self, id: IndividualId) -> Result<CgkaOperation, CgkaError> {
+    pub fn remove(&mut self, id: IndividualId) -> Result<Option<CgkaOperation>, CgkaError> {
+        if !self.tree.contains_id(&id) {
+            return Ok(None);
+        }
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
@@ -227,9 +240,10 @@ impl Cgka {
             leaf_idx,
             removed_keys,
             predecessors,
+            doc_id: self.doc_id,
         };
         self.ops_graph.add_local_op(&op);
-        Ok(op)
+        Ok(Some(op))
     }
 
     /// Update leaf key pair for this Identifier. This also triggers a tree path
@@ -253,6 +267,7 @@ impl Cgka {
                 id: self.owner_id,
                 new_path: Box::new(new_path),
                 predecessors,
+                doc_id: self.doc_id,
             };
             self.ops_graph.add_local_op(&op);
             self.insert_pcs_key(&pcs_key, Digest::hash(&op));

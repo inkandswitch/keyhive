@@ -4,10 +4,10 @@ use super::{
     agent::JsAgent,
     archive::JsArchive,
     change_ref::JsChangeRef,
-    delegation::JsDelegationError,
     document::JsDocument,
     encrypted::JsEncrypted,
     event_handler::JsEventHandler,
+    generate_doc_error::JsGenerateDocError,
     group::JsGroup,
     identifier::JsIdentifier,
     individual_id::JsIndividualId,
@@ -22,8 +22,8 @@ use super::{
     summary::Summary,
 };
 use beehive_core::{
-    beehive::Beehive,
-    principal::document::{DecryptError, EncryptError},
+    beehive::{Beehive, EncryptContentError},
+    principal::document::DecryptError,
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
@@ -86,7 +86,7 @@ impl JsBeehive {
         coparents: Vec<JsPeer>,
         initial_content_ref_head: JsChangeRef,
         more_initial_content_refs: Vec<JsChangeRef>,
-    ) -> Result<JsDocument, JsDelegationError> {
+    ) -> Result<JsDocument, JsGenerateDocError> {
         Ok(self
             .0
             .generate_doc(
@@ -160,11 +160,11 @@ impl JsBeehive {
 
         let other_docs: Vec<_> = other_docs_refs.into_iter().collect();
 
-        let dlg = self
+        let res = self
             .0
             .add_member(to_add.0.dupe(), membered, *access, other_docs.as_slice())?;
 
-        Ok(dlg.into())
+        Ok(res.delegation.into())
     }
 
     #[wasm_bindgen(js_name = revokeMember)]
@@ -173,8 +173,12 @@ impl JsBeehive {
         to_revoke: &JsAgent,
         membered: &mut JsMembered,
     ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
-        let revs = self.0.revoke_member(to_revoke.id(), membered)?;
-        Ok(revs.into_iter().map(JsSignedRevocation).collect())
+        let res = self.0.revoke_member(to_revoke.id(), membered)?;
+        Ok(res
+            .revocations
+            .into_iter()
+            .map(JsSignedRevocation)
+            .collect())
     }
 
     #[wasm_bindgen(js_name = reachableDocs)]
@@ -193,7 +197,9 @@ impl JsBeehive {
 
     #[wasm_bindgen(js_name = forcePcsUpdate)]
     pub fn force_pcs_update(&mut self, doc: &JsDocument) -> Result<(), JsEncryptError> {
-        self.0.force_pcs_update(doc.0.clone())?;
+        self.0
+            .force_pcs_update(doc.0.clone())
+            .map_err(|e| EncryptContentError::from(e))?;
         Ok(())
     }
 
@@ -223,7 +229,7 @@ impl JsBeehive {
 #[wasm_bindgen]
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsEncryptError(#[from] pub(crate) EncryptError);
+pub struct JsEncryptError(#[from] pub(crate) EncryptContentError);
 
 #[wasm_bindgen]
 #[derive(Debug, Error)]

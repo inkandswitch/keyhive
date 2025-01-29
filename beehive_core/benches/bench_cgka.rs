@@ -11,7 +11,7 @@ use beehive_core::{
     principal::document::id::DocumentId,
 };
 use divan::Bencher;
-use std::time::Duration;
+use std::{rc::Rc, time::Duration};
 
 fn main() {
     divan::main();
@@ -47,7 +47,10 @@ where
         .with_new_owner(paired_cgka.id(), sks)
         .unwrap();
     let (_pcs_key, op) = paired_cgka.update(&mut csprng).unwrap();
-    first_cgka.cgka.merge_concurrent_operation(&op).unwrap();
+    first_cgka
+        .cgka
+        .merge_concurrent_operation(Rc::new(op))
+        .unwrap();
     (first_cgka, paired_cgka)
 }
 
@@ -69,7 +72,10 @@ fn apply_100_updates_and_sibling_decrypt(bencher: Bencher, member_count: u32) {
         .bench_local_refs(|(first_cgka, sibling_cgka)| {
             for _ in 0..100 {
                 let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
-                sibling_cgka.cgka.merge_concurrent_operation(&op).unwrap();
+                sibling_cgka
+                    .cgka
+                    .merge_concurrent_operation(Rc::new(op))
+                    .unwrap();
                 sibling_cgka.cgka.secret_from_root().unwrap();
             }
         });
@@ -93,7 +99,10 @@ fn apply_100_updates_and_distant_member_decrypt(bencher: Bencher, member_count: 
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
                 let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
-                distant_cgka.cgka.merge_concurrent_operation(&op).unwrap();
+                distant_cgka
+                    .cgka
+                    .merge_concurrent_operation(Rc::new(op))
+                    .unwrap();
                 distant_cgka.cgka.secret_from_root().unwrap();
             }
         });
@@ -120,7 +129,10 @@ fn apply_100_updates_and_distant_member_decrypt_with_maximum_conflict_keys(
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
                 let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
-                distant_cgka.cgka.merge_concurrent_operation(&op).unwrap();
+                distant_cgka
+                    .cgka
+                    .merge_concurrent_operation(Rc::new(op))
+                    .unwrap();
                 distant_cgka.cgka.secret_from_root().unwrap();
             }
         });
@@ -144,7 +156,10 @@ fn apply_100_updates_and_distant_member_decrypt_after_adds(bencher: Bencher, mem
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
                 let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
-                distant_cgka.cgka.merge_concurrent_operation(&op).unwrap();
+                distant_cgka
+                    .cgka
+                    .merge_concurrent_operation(Rc::new(op))
+                    .unwrap();
                 distant_cgka.cgka.secret_from_root().unwrap();
             }
         });
@@ -171,7 +186,10 @@ fn apply_100_updates_and_distant_member_decrypt_with_blank_nodes(
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
                 let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
-                distant_cgka.cgka.merge_concurrent_operation(&op).unwrap();
+                distant_cgka
+                    .cgka
+                    .merge_concurrent_operation(Rc::new(op))
+                    .unwrap();
                 distant_cgka.cgka.secret_from_root().unwrap();
             }
         });

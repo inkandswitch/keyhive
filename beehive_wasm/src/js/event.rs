@@ -56,6 +56,8 @@ pub enum JsEventVariant {
     Delegated,
     Revoked,
 
+    CgkaOperation,
+
     PrekeyRotated,
     PrekeysExpanded,
 }
@@ -65,6 +67,9 @@ impl From<&JsEvent> for JsEventVariant {
         match event.0 {
             Event::Delegated(_) => JsEventVariant::Delegated,
             Event::Revoked(_) => JsEventVariant::Revoked,
+
+            Event::CgkaOperation { .. } => JsEventVariant::CgkaOperation,
+
             Event::PrekeyRotated { .. } => JsEventVariant::PrekeyRotated,
             Event::PrekeysExpanded { .. } => JsEventVariant::PrekeysExpanded,
         }
@@ -82,6 +87,8 @@ impl std::fmt::Display for JsEventVariant {
         match &self {
             JsEventVariant::Delegated => "DELEGATED",
             JsEventVariant::Revoked => "REVOKED",
+
+            JsEventVariant::CgkaOperation => "CGKA_OPERATION",
 
             JsEventVariant::PrekeyRotated => "PREKEY_ROTATED",
             JsEventVariant::PrekeysExpanded => "PREKEYS_EXPANDED",

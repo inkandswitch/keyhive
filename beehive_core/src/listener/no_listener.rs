@@ -1,5 +1,6 @@
-use super::{membership::MembershipListener, prekey::PrekeyListener};
+use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener};
 use crate::{
+    cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::signed::Signed,
     principal::{
@@ -23,4 +24,8 @@ impl PrekeyListener for NoListener {
 impl<T: ContentRef> MembershipListener<T> for NoListener {
     fn on_delegation(&self, _data: &Rc<Signed<Delegation<T, NoListener>>>) {}
     fn on_revocation(&self, _data: &Rc<Signed<Revocation<T, NoListener>>>) {}
+}
+
+impl CgkaListener for NoListener {
+    fn on_cgka_op(&self, _data: &Rc<Signed<CgkaOperation>>) {}
 }

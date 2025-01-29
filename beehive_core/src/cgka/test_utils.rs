@@ -220,7 +220,9 @@ pub fn setup_updated_and_synced_member_cgkas(
         let mut member_cgka = TestMemberCgka::new(m.clone(), &member_cgkas[0].cgka)?;
         let (_pcs_key, op) = member_cgka.update(&mut rand::thread_rng())?;
         ops.push(op.clone());
-        member_cgkas[0].cgka.merge_concurrent_operation(Rc::new(op))?;
+        member_cgkas[0]
+            .cgka
+            .merge_concurrent_operation(Rc::new(op))?;
         member_cgkas.push(member_cgka);
     }
     let base_cgka = member_cgkas[0].cgka.clone();
@@ -262,7 +264,9 @@ pub fn apply_test_operations(
             let m_id = member_cgkas[0].id();
             for (id, op) in &ordered_ops {
                 if *id != m_id {
-                    member_cgkas[0].cgka.merge_concurrent_operation(Rc::new(op.clone()))?;
+                    member_cgkas[0]
+                        .cgka
+                        .merge_concurrent_operation(Rc::new(op.clone()))?;
                 }
             }
             let base_cgka = member_cgkas[0].cgka.clone();
@@ -355,7 +359,7 @@ pub fn add_from_all_members() -> Box<TestOperation> {
     Box::new(move |cgkas, added_members, ops| {
         for m in cgkas.iter_mut() {
             let new_m = TestMember::generate(&mut rand::thread_rng());
-            let op = m.cgka.add(new_m.id, new_m.pk)?;
+            let op = m.cgka.add(new_m.id, new_m.pk)?.unwrap();
             ops.add(m.id(), op);
             let new_m_cgka = TestMemberCgka::new(new_m, &m.cgka)?;
             added_members.push(new_m_cgka);
@@ -370,7 +374,7 @@ pub fn add_from_last_n_members(n: usize) -> Box<TestOperation> {
         let skip_count = cgkas.len() - n;
         for m in cgkas.iter_mut().skip(skip_count) {
             let new_m = TestMember::generate(&mut rand::thread_rng());
-            let op = m.cgka.add(new_m.id, new_m.pk)?;
+            let op = m.cgka.add(new_m.id, new_m.pk)?.unwrap();
             ops.add(m.id(), op);
             let new_m_cgka = TestMemberCgka::new(new_m, &m.cgka)?;
             added_members.push(new_m_cgka);
@@ -383,7 +387,7 @@ pub fn add_from_first_member() -> Box<TestOperation> {
     Box::new(move |cgkas, added_members, ops| {
         let new_m = TestMember::generate(&mut rand::thread_rng());
         let adder = &mut cgkas[0];
-        let op = adder.cgka.add(new_m.id, new_m.pk)?;
+        let op = adder.cgka.add(new_m.id, new_m.pk)?.unwrap();
         ops.add(adder.id(), op);
         let new_m_cgka = TestMemberCgka::new(new_m, &adder.cgka)?;
         added_members.push(new_m_cgka);
@@ -408,8 +412,9 @@ pub fn remove_from_left(n: usize) -> Box<TestOperation> {
         }
         for id in ids_to_remove {
             let remover = &mut post_remove_cgkas[0];
-            let op = remover.cgka.remove(id)?;
-            ops.add(remover.id(), op);
+            if let Some(op) = remover.cgka.remove(id)? {
+                ops.add(remover.id(), op);
+            }
         }
         mem::swap(cgkas, &mut post_remove_cgkas);
         Ok(())
@@ -430,8 +435,9 @@ pub fn remove_from_right(n: usize) -> Box<TestOperation> {
         }
         for id in ids_to_remove {
             let remover = &mut cgkas[0];
-            let op = remover.cgka.remove(id)?;
-            ops.add(remover.id(), op);
+            if let Some(op) = remover.cgka.remove(id)? {
+                ops.add(remover.id(), op);
+            }
         }
         Ok(())
     })
@@ -450,8 +456,9 @@ pub fn remove_odd_members() -> Box<TestOperation> {
         }
         for id in ids_to_remove {
             let remover = &mut post_remove_cgkas[0];
-            let op = remover.cgka.remove(id)?;
-            ops.add(remover.id(), op);
+            if let Some(op) = remover.cgka.remove(id)? {
+                ops.add(remover.id(), op);
+            }
         }
         mem::swap(cgkas, &mut post_remove_cgkas);
         Ok(())

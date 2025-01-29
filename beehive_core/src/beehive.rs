@@ -4,7 +4,7 @@ use crate::{
     ability::Ability,
     access::Access,
     archive::Archive,
-    cgka::error::CgkaError,
+    cgka::{error::CgkaError, operation::CgkaOperation},
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -15,16 +15,17 @@ use crate::{
     },
     error::missing_dependency::MissingDependency,
     event::Event,
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{cgka::CgkaListener, membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
         document::{
             id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError, Document, EncryptError,
-            EncryptedContentWithUpdate, MissingIndividualError, RevokeMemberUpdate,
+            EncryptedContentWithUpdate, GenerateDocError, MissingIndividualError,
+            RevokeMemberUpdate,
         },
         group::{
-            delegation::{Delegation, DelegationError, StaticDelegation},
+            delegation::{Delegation, StaticDelegation},
             error::AddError,
             id::GroupId,
             membership_operation::{MembershipOperation, StaticMembershipOperation},
@@ -59,7 +60,7 @@ use thiserror::Error;
 #[derivative(PartialEq, Eq)]
 pub struct Beehive<
     T: ContentRef = [u8; 32],
-    L: MembershipListener<T> = NoListener,
+    L: MembershipListener<T> + CgkaListener = NoListener,
     R: rand::CryptoRng + rand::RngCore = rand::rngs::ThreadRng,
 > {
     /// The [`Active`] user agent.
@@ -88,7 +89,12 @@ pub struct Beehive<
     csprng: R,
 }
 
-impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore> Beehive<T, L, R> {
+impl<
+        T: ContentRef,
+        L: MembershipListener<T> + CgkaListener,
+        R: rand::CryptoRng + rand::RngCore,
+    > Beehive<T, L, R>
+{
     pub fn id(&self) -> IndividualId {
         self.active.borrow().id()
     }
@@ -157,7 +163,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         &mut self,
         coparents: Vec<Peer<T, L>>,
         initial_content_heads: NonEmpty<T>,
-    ) -> Result<Rc<RefCell<Document<T, L>>>, DelegationError> {
+    ) -> Result<Rc<RefCell<Document<T, L>>>, GenerateDocError> {
         for peer in coparents.iter() {
             if self.get_agent(peer.id()).is_none() {
                 self.register_peer(peer.clone());
@@ -280,29 +286,21 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         to_add: Agent<T, L>,
         resource: &mut Membered<T, L>,
         can: Access,
-        other_relevant_docs: &[Rc<RefCell<Document<T, L>>>], // FIXME make this automatic
-    ) -> Result<Rc<Signed<Delegation<T, L>>>, AddMemberError> {
+        other_relevant_docs: &[Rc<RefCell<Document<T, L>>>], // TODO make this automatic
+    ) -> Result<AddMemberUpdate<T, L>, AddMemberError> {
         match resource {
-            Membered::Group(group) => {
-                let dlg = group.borrow_mut().add_member(
-                    to_add,
-                    can,
-                    &self.active.borrow().signing_key,
-                    other_relevant_docs,
-                )?;
-
-                Ok(dlg)
-            }
-            Membered::Document(doc) => {
-                let AddMemberUpdate { delegation, .. } = doc.borrow_mut().add_member(
-                    to_add,
-                    can,
-                    &self.active.borrow().signing_key,
-                    other_relevant_docs,
-                )?;
-
-                Ok(delegation)
-            }
+            Membered::Group(group) => Ok(group.borrow_mut().add_member(
+                to_add,
+                can,
+                &self.active.borrow().signing_key,
+                other_relevant_docs,
+            )?),
+            Membered::Document(doc) => doc.borrow_mut().add_member(
+                to_add,
+                can,
+                &self.active.borrow().signing_key,
+                other_relevant_docs,
+            ),
         }
     }
 
@@ -311,19 +309,17 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         &mut self,
         to_revoke: Identifier,
         resource: &mut Membered<T, L>,
-    ) -> Result<Vec<Rc<Signed<Revocation<T, L>>>>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
         let mut relevant_docs = BTreeMap::new();
         for (doc_id, Ability { doc, .. }) in self.reachable_docs() {
             relevant_docs.insert(doc_id, doc.borrow().content_heads.iter().cloned().collect());
         }
 
-        let RevokeMemberUpdate { revocations, .. } = resource.revoke_member(
+        resource.revoke_member(
             to_revoke,
             &self.active.borrow().signing_key,
             &mut relevant_docs,
-        )?;
-
-        Ok(revocations)
+        )
     }
 
     pub fn try_encrypt_content(
@@ -332,16 +328,24 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
-    ) -> Result<EncryptedContent<Vec<u8>, T>, EncryptError> {
+    ) -> Result<EncryptedContent<Vec<u8>, T>, EncryptContentError> {
         let EncryptedContentWithUpdate {
-            encrypted_content, ..
-            // FIXME: We need to handle the optional op as well
+            encrypted_content,
+            update_op,
         } = doc.borrow_mut().try_encrypt_content(
             content_ref,
             content,
             pred_refs,
             &mut self.csprng,
         )?;
+
+        if let Some(found_update_op) = update_op {
+            let signed_op = Rc::new(
+                self.try_sign(found_update_op)
+                    .map_err(EncryptContentError::SignCgkaOpError)?,
+            );
+            self.event_listener.on_cgka_op(&signed_op);
+        }
 
         Ok(encrypted_content)
     }
@@ -357,7 +361,7 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
     pub fn force_pcs_update(
         &mut self,
         doc: Rc<RefCell<Document<T, L>>>,
-    ) -> Result<(), EncryptError> {
+    ) -> Result<CgkaOperation, EncryptError> {
         doc.borrow_mut().pcs_update(&mut self.csprng)
     }
 
@@ -885,6 +889,17 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         }
     }
 
+    pub fn receive_cgka_op(&mut self, op: CgkaOperation) -> Result<(), ReceiveCgkaOpError> {
+        let doc_id = op.doc_id();
+        self.docs
+            .get(doc_id)
+            .ok_or(ReceiveCgkaOpError::UnknownDocument(*doc_id))?
+            .borrow_mut()
+            .merge_cgka_op(op)?;
+
+        Ok(())
+    }
+
     pub fn promote_individual_to_group(
         &mut self,
         individual: Rc<RefCell<Individual>>,
@@ -1216,16 +1231,22 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
     }
 }
 
-impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore> Verifiable
-    for Beehive<T, L, R>
+impl<
+        T: ContentRef,
+        L: MembershipListener<T> + CgkaListener,
+        R: rand::CryptoRng + rand::RngCore,
+    > Verifiable for Beehive<T, L, R>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.active.borrow().verifying_key()
     }
 }
 
-impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore>
-    From<&Beehive<T, L, R>> for Agent<T, L>
+impl<
+        T: ContentRef,
+        L: MembershipListener<T> + CgkaListener,
+        R: rand::CryptoRng + rand::RngCore,
+    > From<&Beehive<T, L, R>> for Agent<T, L>
 {
     fn from(context: &Beehive<T, L, R>) -> Self {
         context.active.dupe().into()
@@ -1274,12 +1295,30 @@ pub enum TryFromArchiveError<T: ContentRef, L: MembershipListener<T>> {
     MissingAgent(Box<Identifier>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ReceiveCgkaOpError {
+    #[error("Unknown document recipient for recieved CGKA op: {0}")]
+    UnknownDocument(DocumentId),
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
+}
+
 impl<T: ContentRef, L: MembershipListener<T>> From<MissingIndividualError>
     for TryFromArchiveError<T, L>
 {
     fn from(e: MissingIndividualError) -> Self {
         TryFromArchiveError::MissingIndividual(e.0)
     }
+}
+
+#[derive(Debug, Error)]
+pub enum EncryptContentError {
+    #[error(transparent)]
+    EncryptError(#[from] EncryptError),
+
+    #[error("Error signing Cgka op: {0}")]
+    SignCgkaOpError(SigningError),
 }
 
 #[cfg(test)]
@@ -1530,6 +1569,6 @@ mod tests {
             .add_member(member, &mut doc.clone().into(), Access::Read, &[])
             .unwrap();
 
-        assert_eq!(dlg.subject_id(), doc.borrow().doc_id().into());
+        assert_eq!(dlg.delegation.subject_id(), doc.borrow().doc_id().into());
     }
 }

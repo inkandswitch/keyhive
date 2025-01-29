@@ -83,7 +83,6 @@ impl SymmetricKey {
         nonce: Siv,
         data: &mut Vec<u8>,
     ) -> Result<(), chacha20poly1305::Error> {
-        // FIXME check the siv against the plaintext
         self.to_xchacha()
             .decrypt_in_place(nonce.as_xnonce(), SEPARATOR, data)
     }

@@ -15,13 +15,14 @@ use self::{
 };
 use super::{
     agent::{id::AgentId, Agent},
-    document::{id::DocumentId, Document},
+    document::{id::DocumentId, AddMemberUpdate, Document, RevokeMemberUpdate},
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
     membered::Membered,
 };
 use crate::{
     access::Access,
+    cgka::{error::CgkaError, operation::CgkaOperation},
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -319,14 +320,13 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         Ok(digest)
     }
 
-    // FIXME make note that the best way to do this is to add_deegation after get_capability
     pub fn add_member(
         &mut self,
         member_to_add: Agent<T, L>,
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &[Rc<RefCell<Document<T, L>>>],
-    ) -> Result<Rc<Signed<Delegation<T, L>>>, AddGroupMemberError> {
+    ) -> Result<AddMemberUpdate<T, L>, AddGroupMemberError> {
         let after_content = relevant_docs
             .iter()
             .map(|d| {
@@ -337,14 +337,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             })
             .collect();
 
-        let delegation =
-            self.add_member_with_manual_content(member_to_add, can, signing_key, after_content)?;
-
-        for doc in relevant_docs.iter() {
-            doc.borrow_mut().add_cgka_member(&delegation);
-        }
-
-        Ok(delegation)
+        self.add_member_with_manual_content(member_to_add, can, signing_key, after_content)
     }
 
     pub(crate) fn add_member_with_manual_content(
@@ -353,7 +346,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         can: Access,
         signing_key: &ed25519_dalek::SigningKey,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Rc<Signed<Delegation<T, L>>>, AddGroupMemberError> {
+    ) -> Result<AddMemberUpdate<T, L>, AddGroupMemberError> {
         let indie: Individual = signing_key.verifying_key().into();
         let agent: Agent<T, L> = indie.into();
 
@@ -388,7 +381,35 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         let rc = Rc::new(delegation);
         self.listener.on_delegation(&rc);
         let _digest = self.receive_delegation(rc.dupe())?;
-        Ok(rc)
+
+        Ok(AddMemberUpdate {
+            cgka_ops: self.add_cgka_member(rc.dupe())?,
+            delegation: rc,
+        })
+    }
+
+    pub fn add_cgka_member(
+        &mut self,
+        delegation: Rc<Signed<Delegation<T, L>>>,
+    ) -> Result<Vec<CgkaOperation>, CgkaError> {
+        let mut cgka_ops = Vec::new();
+        let docs: Vec<Rc<RefCell<Document<T, L>>>> = self
+            .transitive_members()
+            .values()
+            .filter_map(|(agent, _)| {
+                if let Agent::Document(doc) = agent {
+                    Some(doc.dupe())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        for doc in docs {
+            for op in doc.borrow_mut().add_cgka_member(&delegation)? {
+                cgka_ops.push(op);
+            }
+        }
+        Ok(cgka_ops)
     }
 
     #[allow(clippy::type_complexity)]
@@ -397,7 +418,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         member_to_remove: Identifier,
         signing_key: &ed25519_dalek::SigningKey,
         after_content: &BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Vec<Rc<Signed<Revocation<T, L>>>>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
         let vk = signing_key.verifying_key();
         let mut revocations = vec![];
 
@@ -409,7 +430,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
 
         if all_to_revoke.is_empty() {
             self.members.remove(&member_to_remove);
-            return Ok(vec![]);
+            return Ok(RevokeMemberUpdate::default());
         }
 
         if vk == self.verifying_key() {
@@ -490,18 +511,40 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             self.listener.on_revocation(r);
         }
 
-        // FIXME: Return these ops at the end of this method.
-        // let mut ops = Vec::new();
-        // for r in revocations {
-        //     for id in r.payload().delegate.individual_ids() {
-        //         FIXME: Get a handle on all documents for each delegate
-        //         for doc in documents {
-        //             ops.push(doc.remove_cgka_member(id));
-        //         }
-        //     }
-        // }
+        let mut cgka_ops = Vec::new();
+        let (individuals, docs): (
+            Vec<Rc<RefCell<Individual>>>,
+            Vec<Rc<RefCell<Document<T, L>>>>,
+        ) = self.transitive_members().values().fold(
+            (vec![], vec![]),
+            |(mut indies, mut docs), (agent, _)| {
+                match agent {
+                    Agent::Individual(individual) => {
+                        indies.push(individual.dupe());
+                    }
+                    Agent::Document(doc) => {
+                        docs.push(doc.dupe());
+                    }
+                    _ => {}
+                }
 
-        Ok(revocations)
+                (indies, docs)
+            },
+        );
+
+        for indie in individuals {
+            let id = indie.borrow().id();
+            for doc in &docs {
+                if let Some(op) = doc.borrow_mut().remove_cgka_member(id)? {
+                    cgka_ops.push(op);
+                }
+            }
+        }
+
+        Ok(RevokeMemberUpdate {
+            cgka_ops,
+            revocations,
+        })
     }
 
     fn build_revocation(
@@ -670,6 +713,9 @@ pub enum AddGroupMemberError {
 
     #[error(transparent)]
     AddError(#[from] error::AddError),
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
 }
 
 #[derive(Debug, Error)]
@@ -682,6 +728,9 @@ pub enum RevokeMemberError {
 
     #[error(transparent)]
     SigningError(#[from] SigningError),
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
 }
 
 #[cfg(test)]

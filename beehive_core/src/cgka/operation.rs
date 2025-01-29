@@ -1,7 +1,7 @@
 use super::{beekem::PathChange, error::CgkaError};
 use crate::{
     crypto::{digest::Digest, share_key::ShareKey},
-    principal::individual::id::IndividualId,
+    principal::{document::id::DocumentId, individual::id::IndividualId},
     util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
@@ -43,17 +43,20 @@ pub enum CgkaOperation {
         leaf_index: u32,
         predecessors: Vec<Digest<CgkaOperation>>,
         add_predecessors: Vec<Digest<CgkaOperation>>,
+        doc_id: DocumentId,
     },
     Remove {
         id: IndividualId,
         leaf_idx: u32,
         removed_keys: Vec<ShareKey>,
         predecessors: Vec<Digest<CgkaOperation>>,
+        doc_id: DocumentId,
     },
     Update {
         id: IndividualId,
         new_path: Box<PathChange>,
         predecessors: Vec<Digest<CgkaOperation>>,
+        doc_id: DocumentId,
     },
 }
 
@@ -70,6 +73,15 @@ impl CgkaOperation {
             CgkaOperation::Update { predecessors, .. } => {
                 HashSet::from_iter(predecessors.iter().cloned())
             }
+        }
+    }
+
+    /// Document id
+    pub(crate) fn doc_id(&self) -> &DocumentId {
+        match self {
+            CgkaOperation::Add { doc_id, .. } => doc_id,
+            CgkaOperation::Remove { doc_id, .. } => doc_id,
+            CgkaOperation::Update { doc_id, .. } => doc_id,
         }
     }
 }
