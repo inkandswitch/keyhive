@@ -4,7 +4,7 @@ use derive_more::{From, Into};
 use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, From, Into)]
-#[wasm_bindgen(js_name = Invocation)]
+#[wasm_bindgen(js_name = SignedInvocation)]
 pub struct JsSignedInvocation(
     pub(crate) Signed<Invocation<JsChangeRef, JsEventHandler, JsChangeRef>>,
 );
