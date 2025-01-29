@@ -16,12 +16,14 @@ use crate::{
         identifier::Identifier,
     },
 };
+use derive_where::derive_where;
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, hash::Hash, rc::Rc};
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
+#[derive_where(PartialEq; T)]
 pub struct Delegation<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
     pub(crate) delegate: Agent<T, L>,
     pub(crate) can: Access,
@@ -30,19 +32,6 @@ pub struct Delegation<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoLis
     pub(crate) after_revocations: Vec<Rc<Signed<Revocation<T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
-
-// FIXME FIXME
-impl<T: ContentRef, L: MembershipListener<T>> PartialEq for Delegation<T, L> {
-    fn eq(&self, other: &Self) -> bool {
-        self.delegate == other.delegate
-            && self.can == other.can
-            && self.proof == other.proof
-            && self.after_revocations == other.after_revocations
-            && self.after_content == other.after_content
-    }
-}
-
-impl<T: ContentRef, L: MembershipListener<T>> Eq for Delegation<T, L> {}
 
 impl<T: ContentRef, L: MembershipListener<T>> Delegation<T, L> {
     pub fn subject_id(&self, issuer: AgentId) -> Identifier {
@@ -135,6 +124,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Delegation<T, L> {
         false
     }
 }
+
+impl<T: ContentRef, L: MembershipListener<T>> Eq for Delegation<T, L> {}
 
 impl<T: ContentRef, L: MembershipListener<T>> Signed<Delegation<T, L>> {
     pub fn subject_id(&self) -> Identifier {

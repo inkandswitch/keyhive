@@ -11,7 +11,7 @@ pub struct JsEncrypted(pub(crate) EncryptedContent<Vec<u8>, JsChangeRef>);
 impl JsEncrypted {
     #[wasm_bindgen(js_name = toBytes)]
     pub fn to_bytes(&self) -> Vec<u8> {
-        self.0.ciphertext.clone() // FIXME
+        self.0.ciphertext.clone()
     }
 
     #[wasm_bindgen(getter)]
