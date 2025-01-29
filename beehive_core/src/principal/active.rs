@@ -41,7 +41,7 @@ pub struct Active<L: PrekeyListener = NoListener> {
     )]
     pub(crate) signing_key: ed25519_dalek::SigningKey,
 
-    // FIXME generalize to use e.g. KMS
+    // TODO generalize to use e.g. KMS
     #[derivative(
         Hash(hash_with = "crate::util::hasher::keys"),
         PartialEq(compare_with = "prekey_partial_eq")

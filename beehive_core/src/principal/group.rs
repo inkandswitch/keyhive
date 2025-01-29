@@ -320,7 +320,6 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         Ok(digest)
     }
 
-    // FIXME make note that the best way to do this is to add_deegation after get_capability
     pub fn add_member(
         &mut self,
         member_to_add: Agent<T, L>,

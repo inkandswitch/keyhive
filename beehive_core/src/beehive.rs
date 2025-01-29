@@ -285,7 +285,7 @@ impl<
         to_add: Agent<T, L>,
         resource: &mut Membered<T, L>,
         can: Access,
-        other_relevant_docs: &[Rc<RefCell<Document<T, L>>>], // FIXME make this automatic
+        other_relevant_docs: &[Rc<RefCell<Document<T, L>>>], // TODO make this automatic
     ) -> Result<AddMemberUpdate<T, L>, AddMemberError> {
         match resource {
             Membered::Group(group) => Ok(group.borrow_mut().add_member(
