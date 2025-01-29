@@ -1,8 +1,9 @@
 use super::{change_ref::JsChangeRef, event::JsEvent};
 use beehive_core::{
+    cgka::operation::CgkaOperation,
     crypto::signed::Signed,
     event::Event,
-    listener::{membership::MembershipListener, prekey::PrekeyListener},
+    listener::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener},
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
@@ -45,5 +46,11 @@ impl MembershipListener<JsChangeRef> for JsEventHandler {
 
     fn on_revocation(&self, data: &Rc<Signed<Revocation<JsChangeRef, Self>>>) {
         self.call(Event::Revoked(data.dupe()).into())
+    }
+}
+
+impl CgkaListener for JsEventHandler {
+    fn on_cgka_op(&self, data: &Rc<Signed<CgkaOperation>>) {
+        self.call(Event::CgkaOperation(data.dupe()).into())
     }
 }

@@ -1,4 +1,5 @@
 use crate::{
+    cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::signed::Signed,
     listener::{membership::MembershipListener, no_listener::NoListener},
@@ -23,7 +24,7 @@ pub enum Event<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> 
     PrekeyRotated(Rc<Signed<RotateKeyOp>>),
 
     // Cgka
-    // TODO!
+    CgkaOperation(Rc<Signed<CgkaOperation>>),
 
     // Membership
     Delegated(Rc<Signed<Delegation<T, L>>>),
@@ -43,7 +44,7 @@ pub enum StaticEvent<T: ContentRef = [u8; 32]> {
     PrekeyRotated(Signed<RotateKeyOp>),
 
     // Cgka
-    // TODO!
+    CgkaOperation(Signed<CgkaOperation>),
 
     // Membership
     Delegated(Signed<StaticDelegation<T>>),
@@ -73,6 +74,9 @@ impl<T: ContentRef, L: MembershipListener<T>> From<Event<T, L>> for StaticEvent<
         match op {
             Event::Delegated(d) => StaticEvent::Delegated(Rc::unwrap_or_clone(d).map(Into::into)),
             Event::Revoked(r) => StaticEvent::Revoked(Rc::unwrap_or_clone(r).map(Into::into)),
+
+            Event::CgkaOperation(cgka) => StaticEvent::CgkaOperation(Rc::unwrap_or_clone(cgka)),
+
             Event::PrekeyRotated(pkr) => {
                 StaticEvent::PrekeyRotated(Rc::unwrap_or_clone(pkr).map(Into::into))
             }

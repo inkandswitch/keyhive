@@ -400,12 +400,14 @@ pub enum AddMemberError {
     CgkaError(#[from] CgkaError),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
 pub enum EncryptError {
     #[error("Encryption failed: {0}")]
     EncryptionFailed(chacha20poly1305::Error),
+
     #[error("Unable to PCS update: {0}")]
     UnableToPcsUpdate(CgkaError),
+
     #[error("Failed to make app secret: {0}")]
     FailedToMakeAppSecret(CgkaError),
 }

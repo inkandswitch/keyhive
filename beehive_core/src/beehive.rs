@@ -15,7 +15,7 @@ use crate::{
     },
     error::missing_dependency::MissingDependency,
     event::Event,
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{cgka::CgkaListener, membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
@@ -59,7 +59,7 @@ use thiserror::Error;
 #[derivative(PartialEq, Eq)]
 pub struct Beehive<
     T: ContentRef = [u8; 32],
-    L: MembershipListener<T> = NoListener,
+    L: MembershipListener<T> + CgkaListener = NoListener,
     R: rand::CryptoRng + rand::RngCore = rand::rngs::ThreadRng,
 > {
     /// The [`Active`] user agent.
@@ -88,7 +88,12 @@ pub struct Beehive<
     csprng: R,
 }
 
-impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore> Beehive<T, L, R> {
+impl<
+        T: ContentRef,
+        L: MembershipListener<T> + CgkaListener,
+        R: rand::CryptoRng + rand::RngCore,
+    > Beehive<T, L, R>
+{
     pub fn id(&self) -> IndividualId {
         self.active.borrow().id()
     }
@@ -322,17 +327,24 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
-    ) -> Result<EncryptedContent<Vec<u8>, T>, EncryptError> {
+    ) -> Result<EncryptedContent<Vec<u8>, T>, EncryptContentError> {
         let EncryptedContentWithUpdate {
-            encrypted_content, ..
-            // FIXME: We need to handle the returned Option<CgkaOperation> as well
-            // update_op,
+            encrypted_content,
+            update_op,
         } = doc.borrow_mut().try_encrypt_content(
             content_ref,
             content,
             pred_refs,
             &mut self.csprng,
         )?;
+
+        if let Some(found_update_op) = update_op {
+            let signed_op = Rc::new(
+                self.try_sign(found_update_op)
+                    .map_err(EncryptContentError::SignCgkaOpError)?,
+            );
+            self.event_listener.on_cgka_op(&signed_op);
+        }
 
         Ok(encrypted_content)
     }
@@ -1218,16 +1230,22 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
     }
 }
 
-impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore> Verifiable
-    for Beehive<T, L, R>
+impl<
+        T: ContentRef,
+        L: MembershipListener<T> + CgkaListener,
+        R: rand::CryptoRng + rand::RngCore,
+    > Verifiable for Beehive<T, L, R>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.active.borrow().verifying_key()
     }
 }
 
-impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore>
-    From<&Beehive<T, L, R>> for Agent<T, L>
+impl<
+        T: ContentRef,
+        L: MembershipListener<T> + CgkaListener,
+        R: rand::CryptoRng + rand::RngCore,
+    > From<&Beehive<T, L, R>> for Agent<T, L>
 {
     fn from(context: &Beehive<T, L, R>) -> Self {
         context.active.dupe().into()
@@ -1291,6 +1309,15 @@ impl<T: ContentRef, L: MembershipListener<T>> From<MissingIndividualError>
     fn from(e: MissingIndividualError) -> Self {
         TryFromArchiveError::MissingIndividual(e.0)
     }
+}
+
+#[derive(Debug, Error)]
+pub enum EncryptContentError {
+    #[error(transparent)]
+    EncryptError(#[from] EncryptError),
+
+    #[error("Error signing Cgka op: {0}")]
+    SignCgkaOpError(SigningError),
 }
 
 #[cfg(test)]

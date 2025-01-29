@@ -22,8 +22,8 @@ use super::{
     summary::Summary,
 };
 use beehive_core::{
-    beehive::Beehive,
-    principal::document::{DecryptError, EncryptError},
+    beehive::{Beehive, EncryptContentError},
+    principal::document::DecryptError,
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
@@ -199,7 +199,9 @@ impl JsBeehive {
 
     #[wasm_bindgen(js_name = forcePcsUpdate)]
     pub fn force_pcs_update(&mut self, doc: &JsDocument) -> Result<(), JsEncryptError> {
-        self.0.force_pcs_update(doc.0.clone())?;
+        self.0
+            .force_pcs_update(doc.0.clone())
+            .map_err(|e| EncryptContentError::from(e))?;
         Ok(())
     }
 
@@ -229,7 +231,7 @@ impl JsBeehive {
 #[wasm_bindgen]
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsEncryptError(#[from] pub(crate) EncryptError);
+pub struct JsEncryptError(#[from] pub(crate) EncryptContentError);
 
 #[wasm_bindgen]
 #[derive(Debug, Error)]
