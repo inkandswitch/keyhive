@@ -229,8 +229,11 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         Ok(revs)
     }
 
-    pub fn remove_cgka_member(&mut self, id: IndividualId) -> Option<CgkaOperation> {
-        self.cgka.remove(id).expect("FIXME")
+    pub fn remove_cgka_member(
+        &mut self,
+        id: IndividualId,
+    ) -> Result<Option<CgkaOperation>, CgkaError> {
+        self.cgka.remove(id)
     }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T, L>) -> Vec<Rc<Signed<Revocation<T, L>>>> {
@@ -255,10 +258,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         self.group.receive_revocation(revocation)
     }
 
-    pub fn merge_cgka_op(&mut self, op: CgkaOperation) {
-        self.cgka
-            .merge_concurrent_operation(Rc::new(op))
-            .expect("FIXME");
+    pub fn merge_cgka_op(&mut self, op: CgkaOperation) -> Result<(), CgkaError> {
+        self.cgka.merge_concurrent_operation(Rc::new(op))
     }
 
     pub fn pcs_update<R: rand::RngCore + rand::CryptoRng>(

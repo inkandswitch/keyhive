@@ -22,7 +22,7 @@ use super::{
 };
 use crate::{
     access::Access,
-    cgka::operation::CgkaOperation,
+    cgka::{error::CgkaError, operation::CgkaOperation},
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -537,7 +537,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         for indie in individuals {
             let id = indie.borrow().id();
             for doc in &docs {
-                if let Some(op) = doc.borrow_mut().remove_cgka_member(id) {
+                if let Some(op) = doc.borrow_mut().remove_cgka_member(id)? {
                     cgka_ops.push(op);
                 }
             }
@@ -727,6 +727,9 @@ pub enum RevokeMemberError {
 
     #[error(transparent)]
     SigningError(#[from] SigningError),
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
 }
 
 #[cfg(test)]

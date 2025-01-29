@@ -876,13 +876,15 @@ impl<T: ContentRef, L: MembershipListener<T>, R: rand::CryptoRng + rand::RngCore
         }
     }
 
-    // FIXME: Handle errors
-    pub fn receive_cgka_op(&mut self, op: CgkaOperation) {
+    pub fn receive_cgka_op(&mut self, op: CgkaOperation) -> Result<(), ReceiveCgkaOpError> {
+        let doc_id = op.doc_id();
         self.docs
-            .get(op.doc_id())
-            .expect("FIXME")
+            .get(doc_id)
+            .ok_or(ReceiveCgkaOpError::UnknownDocument(*doc_id))?
             .borrow_mut()
-            .merge_cgka_op(op);
+            .merge_cgka_op(op)?;
+
+        Ok(())
     }
 
     pub fn promote_individual_to_group(
@@ -1272,6 +1274,15 @@ pub enum TryFromArchiveError<T: ContentRef, L: MembershipListener<T>> {
 
     #[error("Missing agent: {0}")]
     MissingAgent(Box<Identifier>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ReceiveCgkaOpError {
+    #[error("Unknown document recipient for recieved CGKA op: {0}")]
+    UnknownDocument(DocumentId),
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
 }
 
 impl<T: ContentRef, L: MembershipListener<T>> From<MissingIndividualError>
