@@ -10,7 +10,6 @@ use crate::{
         encrypted::EncryptedContent,
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
-        siv::Siv,
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
