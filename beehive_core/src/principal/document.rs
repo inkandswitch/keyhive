@@ -9,7 +9,7 @@ use crate::{
         digest::Digest,
         encrypted::EncryptedContent,
         share_key::{ShareKey, ShareSecretKey},
-        signed::Signed,
+        signed::{Signed, SigningError},
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
@@ -117,7 +117,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         revocations: RevocationStore<T, L>,
         listener: L,
         csprng: &mut R,
-    ) -> Result<Self, DelegationError> {
+    ) -> Result<Self, GenerateDocError> {
         let sk = ed25519_dalek::SigningKey::generate(csprng);
         let group = Group::generate_after_content(
             &sk,
@@ -143,24 +143,19 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
             .collect();
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_share_key, owner_share_secret_key);
-        let mut cgka = Cgka::new(doc_id, owner_id, owner_share_key)
-            .expect("FIXME")
-            .with_new_owner(owner_id, owner_sks)
-            .expect("FIXME");
+        let mut cgka =
+            Cgka::new(doc_id, owner_id, owner_share_key)?.with_new_owner(owner_id, owner_sks)?;
         let mut ops: Vec<CgkaOperation> = Vec::new();
         if other_members.len() > 1 {
             ops.extend(
                 cgka.add_multiple(
                     NonEmpty::from_vec(other_members).expect("there to be multiple other members"),
-                )
-                .expect("FIXME")
+                )?
                 .iter()
                 .cloned(),
             );
         }
-        let (_pcs_key, update_op) = cgka
-            .update(owner_share_key, owner_share_secret_key, csprng)
-            .expect("FIXME");
+        let (_pcs_key, update_op) = cgka.update(owner_share_key, owner_share_secret_key, csprng)?;
         // FIXME: We don't currently do anything with these ops, but need to share them
         // across the network.
         ops.push(update_op);
@@ -410,6 +405,18 @@ pub enum EncryptError {
 
     #[error("Failed to make app secret: {0}")]
     FailedToMakeAppSecret(CgkaError),
+}
+
+#[derive(Debug, Error)]
+pub enum GenerateDocError {
+    #[error(transparent)]
+    DelegationError(#[from] DelegationError),
+
+    #[error(transparent)]
+    SigningError(#[from] SigningError),
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

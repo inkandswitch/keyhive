@@ -21,10 +21,11 @@ use crate::{
         agent::{id::AgentId, Agent},
         document::{
             id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError, Document, EncryptError,
-            EncryptedContentWithUpdate, MissingIndividualError, RevokeMemberUpdate,
+            EncryptedContentWithUpdate, GenerateDocError, MissingIndividualError,
+            RevokeMemberUpdate,
         },
         group::{
-            delegation::{Delegation, DelegationError, StaticDelegation},
+            delegation::{Delegation, StaticDelegation},
             error::AddError,
             id::GroupId,
             membership_operation::{MembershipOperation, StaticMembershipOperation},
@@ -162,7 +163,7 @@ impl<
         &mut self,
         coparents: Vec<Peer<T, L>>,
         initial_content_heads: NonEmpty<T>,
-    ) -> Result<Rc<RefCell<Document<T, L>>>, DelegationError> {
+    ) -> Result<Rc<RefCell<Document<T, L>>>, GenerateDocError> {
         for peer in coparents.iter() {
             if self.get_agent(peer.id()).is_none() {
                 self.register_peer(peer.clone());

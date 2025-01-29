@@ -4,10 +4,10 @@ use super::{
     agent::JsAgent,
     archive::JsArchive,
     change_ref::JsChangeRef,
-    delegation::JsDelegationError,
     document::JsDocument,
     encrypted::JsEncrypted,
     event_handler::JsEventHandler,
+    generate_doc_error::JsGenerateDocError,
     group::JsGroup,
     identifier::JsIdentifier,
     individual_id::JsIndividualId,
@@ -86,7 +86,7 @@ impl JsBeehive {
         coparents: Vec<JsPeer>,
         initial_content_ref_head: JsChangeRef,
         more_initial_content_refs: Vec<JsChangeRef>,
-    ) -> Result<JsDocument, JsDelegationError> {
+    ) -> Result<JsDocument, JsGenerateDocError> {
         Ok(self
             .0
             .generate_doc(
