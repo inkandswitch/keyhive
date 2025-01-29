@@ -145,7 +145,6 @@ impl JsBeehive {
         Ok(self.0.try_decrypt_content(doc.0, &encrypted.0)?)
     }
 
-    // FIXME: We should probably be returning an equivalent of AddMemberUpdate
     #[wasm_bindgen(js_name = addMember)]
     pub fn add_member(
         &mut self,
@@ -168,7 +167,6 @@ impl JsBeehive {
         Ok(res.delegation.into())
     }
 
-    // FIXME: We should probably be returning an equivalent of RevokeMemberUpdate
     #[wasm_bindgen(js_name = revokeMember)]
     pub fn revoke_member(
         &mut self,
