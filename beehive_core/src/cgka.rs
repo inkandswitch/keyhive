@@ -140,8 +140,11 @@ impl Cgka {
             self.pcs_key_from_tree_root()?
         };
         let pcs_key_hash = Digest::hash(&current_pcs_key);
+        // dbg!(self.doc_id);
+        // dbg!(content);
         let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id)
             .map_err(|_e| CgkaError::Conversion)?;
+        // dbg!(nonce);
         Ok((
             current_pcs_key.derive_application_secret(
                 &nonce,

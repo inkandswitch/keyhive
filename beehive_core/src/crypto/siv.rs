@@ -44,6 +44,13 @@ impl Siv {
         let mut buf = [0; 24];
         hasher.finalize_xof().read_exact(&mut buf)?;
 
+        if plaintext == b"hello world" {
+            dbg!(doc_id.as_slice());
+            dbg!(key.as_slice());
+            dbg!(plaintext);
+            dbg!(buf);
+        }
+
         Ok(Siv(buf))
     }
 
@@ -78,5 +85,22 @@ impl From<Siv> for chacha20poly1305::XNonce {
 impl From<chacha20poly1305::XNonce> for Siv {
     fn from(nonce: chacha20poly1305::XNonce) -> Self {
         Siv(nonce.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deterministic_siv() {
+        let mut csprng = rand::thread_rng();
+        let key = SymmetricKey::generate(&mut csprng);
+        let doc_id = DocumentId::generate(&mut csprng);
+
+        let siv1 = Siv::new(&key, b"hello world", doc_id).unwrap();
+        let siv2 = Siv::new(&key, b"hello world", doc_id).unwrap();
+
+        assert_eq!(siv1, siv2);
     }
 }

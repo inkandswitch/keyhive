@@ -15,7 +15,7 @@ pub struct ApplicationSecret<Cr: ContentRef> {
     key: SymmetricKey,
     pcs_key_hash: Digest<PcsKey>,
     pcs_update_op_hash: Digest<CgkaOperation>,
-    nonce: Siv,
+    pub(crate) nonce: Siv,
     content_ref: Digest<Cr>,
     pred_refs: Digest<Vec<Cr>>,
 }
