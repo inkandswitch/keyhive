@@ -26,12 +26,12 @@ pub enum JsCgkaOperationVariant {
     Update,
 }
 
-impl JsCgkaOperationVariant {
-    pub fn to_string(&self) -> String {
+impl std::fmt::Display for JsCgkaOperationVariant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            JsCgkaOperationVariant::Add => "CGKA_ADD".to_string(),
-            JsCgkaOperationVariant::Remove => "CGKA_REMOVE".to_string(),
-            JsCgkaOperationVariant::Update => "CGKA_UPDATE".to_string(),
+            JsCgkaOperationVariant::Add => write!(f, "CGKA_ADD"),
+            JsCgkaOperationVariant::Remove => write!(f, "CGKA_REMOVE"),
+            JsCgkaOperationVariant::Update => write!(f, "CGKA_UPDATE"),
         }
     }
 }
