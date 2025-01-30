@@ -5,6 +5,7 @@
 use super::{separable::Separable, symmetric_key::SymmetricKey};
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
+use signature::Keypair;
 use std::fmt;
 
 /// Newtype around [x25519_dalek::PublicKey].
@@ -77,6 +78,7 @@ impl From<x25519_dalek::PublicKey> for ShareKey {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct ShareSecretKey([u8; 32]);
 
 impl ShareSecretKey {
@@ -167,5 +169,15 @@ impl fmt::Display for ShareSecretKey {
 impl fmt::Debug for ShareSecretKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
+    }
+}
+
+#[cfg(any(test, feature = "arbitrary"))]
+impl<'a> arbitrary::Arbitrary<'a> for ShareKey {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let key_bytes = u.bytes(32)?;
+        let key_bytes_arr: [u8; 32] = key_bytes.try_into().unwrap();
+        let pubkey = x25519_dalek::PublicKey::from(key_bytes_arr);
+        Ok(ShareKey(pubkey))
     }
 }

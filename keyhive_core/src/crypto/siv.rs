@@ -27,6 +27,7 @@ use std::io::Read;
 /// [Invisible Salamanders]: https://eprint.iacr.org/2019/016.pdf
 /// [chacha20-docs]: https://docs.rs/chacha20poly1305/0.10.1/chacha20poly1305/trait.AeadCore.html#method.generate_nonce
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct Siv([u8; 24]);
 
 impl Siv {

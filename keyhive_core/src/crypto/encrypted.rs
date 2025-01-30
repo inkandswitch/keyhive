@@ -61,6 +61,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
 /// This wraps a ciphertext that includes the [`Siv`] and the type of the data
 /// that was encrypted (or that the plaintext is _expected_ to be).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct EncryptedSecret<T> {
     /// The nonce used to encrypt the data.
     pub nonce: Siv,

@@ -38,6 +38,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Serialize for Event<T, L> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, From, TryInto, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum StaticEvent<T: ContentRef = [u8; 32]> {
     // Prekeys
     PrekeysExpanded(Signed<AddKeyOp>),

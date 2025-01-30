@@ -20,6 +20,7 @@ pub type InnerNode = SecretStore;
 /// This includes both the new public keys for each node and the keys that have
 /// been removed as part of this change.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct PathChange {
     pub leaf_id: IndividualId,
     pub leaf_idx: u32,

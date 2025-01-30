@@ -44,6 +44,7 @@ impl IntoIterator for CgkaEpoch {
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum CgkaOperation {
     Add {
         added_id: IndividualId,

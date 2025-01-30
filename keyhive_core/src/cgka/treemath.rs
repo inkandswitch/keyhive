@@ -170,6 +170,17 @@ pub enum TreeNodeIndex {
     Inner(InnerNodeIndex),
 }
 
+#[cfg(any(test, feature = "arbitrary"))]
+impl<'a> arbitrary::Arbitrary<'a> for TreeNodeIndex {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        // Only half of the u32 space is used because otherwise we overflow in the
+        // to_tree_index function which is used in cmp
+        let max: u32 = (u32::MAX / 2) - 1;
+        let u = u.int_in_range(0..=max)?;
+        Ok(Self::new(u))
+    }
+}
+
 impl TreeNodeIndex {
     /// Create a new `TreeNodeIndex` from a `u32`.
     fn new(index: u32) -> Self {

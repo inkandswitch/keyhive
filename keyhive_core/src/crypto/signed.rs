@@ -89,7 +89,7 @@ impl<T: Serialize> Signed<T> {
 }
 
 #[cfg(any(test, feature = "arbitrary"))]
-mod arb {
+pub(crate) mod arb {
     use signature::SignerMut;
 
     fn arb_signing_key(
