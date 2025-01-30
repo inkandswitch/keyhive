@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+use crate::crypto::signed::SigningError;
+
+#[derive(Debug, thiserror::Error)]
 pub enum CgkaError {
     #[error("Conversion error")]
     Conversion,
@@ -56,4 +58,7 @@ pub enum CgkaError {
 
     #[error("Unknown PCS key")]
     UnknownPcsKey,
+
+    #[error(transparent)]
+    SigningError(#[from] SigningError),
 }
