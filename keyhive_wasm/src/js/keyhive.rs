@@ -6,6 +6,7 @@ use super::{
     change_ref::JsChangeRef,
     document::JsDocument,
     encrypted::JsEncrypted,
+    encrypted_content_with_update::JsEncryptedContentWithUpdate,
     event_handler::JsEventHandler,
     generate_doc_error::JsGenerateDocError,
     group::JsGroup,
@@ -114,12 +115,10 @@ impl JsKeyhive {
         content_ref: JsChangeRef,
         pred_refs: Vec<JsChangeRef>,
         content: &[u8],
-    ) -> Result<JsEncrypted, JsEncryptError> {
+    ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
         Ok(self
             .0
             .try_encrypt_content(doc.0, &content_ref, &pred_refs, content)?
-            // FIXME: We need to return the whole EncryptionWithUpdate
-            .encrypted_content
             .into())
     }
 
@@ -131,12 +130,10 @@ impl JsKeyhive {
         content_ref: JsChangeRef,
         pred_refs: Vec<JsChangeRef>,
         content: &[u8],
-    ) -> Result<JsEncrypted, JsEncryptError> {
+    ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
         Ok(self
             .0
             .try_encrypt_content(doc.0, &content_ref, &pred_refs, content)?
-            // FIXME: We need to return the whole EncryptionWithUpdate
-            .encrypted_content
             .into())
     }
 
