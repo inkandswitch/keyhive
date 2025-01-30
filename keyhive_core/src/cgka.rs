@@ -132,6 +132,7 @@ impl Cgka {
         let current_pcs_key = if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
+            println!("!@ new_app_secret update op for {}", self.owner_id);
             let (pcs_key, update_op) = self.update(new_share_key, new_share_secret_key, csprng)?;
             self.insert_pcs_key(&pcs_key, Digest::hash(&update_op));
             op = Some(update_op);
@@ -163,17 +164,21 @@ impl Cgka {
         &mut self,
         encrypted: &EncryptedContent<T, Cr>,
     ) -> Result<SymmetricKey, CgkaError> {
+        println!("!@ decryption_key_for 0");
         let pcs_key =
             self.pcs_key_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)?;
+        println!("!@ decryption_key_for 1");
         if !self.pcs_keys.contains_key(&encrypted.pcs_key_hash) {
             self.insert_pcs_key(&pcs_key, encrypted.pcs_update_op_hash);
         }
+        println!("!@ decryption_key_for 2");
         let app_secret = pcs_key.derive_application_secret(
             &encrypted.nonce,
             &encrypted.content_ref,
             &encrypted.pred_refs,
             &encrypted.pcs_update_op_hash,
         );
+        println!("!@ decryption_key_for 3");
         Ok(app_secret.key())
     }
 
@@ -192,6 +197,7 @@ impl Cgka {
         if self.tree.contains_id(&id) {
             return Ok(None);
         }
+        println!("!@ Calling Cgka::add()");
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
@@ -227,6 +233,7 @@ impl Cgka {
         if !self.tree.contains_id(&id) {
             return Ok(None);
         }
+        println!("!@ Calling Cgka::remove()");
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
@@ -254,6 +261,7 @@ impl Cgka {
         new_sk: ShareSecretKey,
         csprng: &mut R,
     ) -> Result<(PcsKey, CgkaOperation), CgkaError> {
+        println!("!@ Calling Cgka::update()");
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
@@ -269,6 +277,7 @@ impl Cgka {
                 predecessors,
                 doc_id: self.doc_id,
             };
+            println!("!@ -- Op Digest: {}", Digest::hash(&op));
             self.ops_graph.add_local_op(&op);
             self.insert_pcs_key(&pcs_key, Digest::hash(&op));
             Ok((pcs_key, op))
@@ -289,6 +298,7 @@ impl Cgka {
     /// membership changes and we receive a concurrent update, we can apply it
     /// immediately.
     pub fn merge_concurrent_operation(&mut self, op: Rc<CgkaOperation>) -> Result<(), CgkaError> {
+        println!("\nMerging operation at {}: {:?}\n", self.owner_id, op.name());
         if self.ops_graph.contains_op_hash(&Digest::hash(op.borrow())) {
             return Ok(());
         }
@@ -313,6 +323,10 @@ impl Cgka {
             self.apply_operation(op)?;
         }
         Ok(())
+    }
+
+    pub fn ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
+        self.ops_graph.topsort_graph()
     }
 
     /// Apply a [`CgkaOperation`].
@@ -397,15 +411,20 @@ impl Cgka {
         pcs_key_hash: &Digest<PcsKey>,
         update_op_hash: &Digest<CgkaOperation>,
     ) -> Result<PcsKey, CgkaError> {
+        println!("pcs_key_from_hashes 0");
         if let Some(pcs_key) = self.pcs_keys.get(pcs_key_hash) {
+            println!("pcs_key_from_hashes DONE");
             Ok(*pcs_key.clone())
         } else {
             if self.has_pcs_key() {
+                println!("pcs_key_from_hashes tree root");
                 let pcs_key = self.pcs_key_from_tree_root()?;
+                println!("pcs_key_from_hashes tree root FOUND");
                 if &Digest::hash(&pcs_key) == pcs_key_hash {
                     return Ok(pcs_key);
                 }
             }
+            println!("pcs_key_from_hashes derive pcs key");
             self.derive_pcs_key_for_op(update_op_hash)
         }
     }
@@ -415,12 +434,15 @@ impl Cgka {
         &mut self,
         op_hash: &Digest<CgkaOperation>,
     ) -> Result<PcsKey, CgkaError> {
+        println!("!@ derive_pcs_key_for_op 0");
         if !self.ops_graph.contains_op_hash(op_hash) {
             return Err(CgkaError::UnknownPcsKey);
         }
+        println!("!@ derive_pcs_key_for_op 1");
         let mut heads = HashSet::new();
         heads.insert(*op_hash);
         let ops = self.ops_graph.topsort_for_heads(&heads)?;
+        println!("!@ derive_pcs_key_for_op 2");
         self.rebuild_pcs_key(ops)
     }
 
@@ -459,12 +481,17 @@ impl Cgka {
             epochs.last()[0].borrow(),
             &CgkaOperation::Update { .. }
         ));
+        println!("rebuild_pcs_key 0");
         let mut rebuilt_cgka =
             Cgka::new(self.doc_id, self.original_member.0, self.original_member.1)?
                 .with_new_owner(self.owner_id, self.owner_sks.clone())?;
+        println!("rebuild_pcs_key 1");
         rebuilt_cgka.apply_epochs(&epochs)?;
+        println!("rebuild_pcs_key 2");
         let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
+        println!("rebuild_pcs_key 3");
         self.insert_pcs_key(&pcs_key, Digest::hash(&epochs.last()[0]));
+        println!("rebuild_pcs_key 4");
         Ok(pcs_key)
     }
 

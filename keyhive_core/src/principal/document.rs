@@ -3,7 +3,7 @@ pub mod id;
 use super::{group::AddGroupMemberError, individual::id::IndividualId};
 use crate::{
     access::Access,
-    cgka::{error::CgkaError, keys::ShareKeyMap, operation::CgkaOperation, Cgka},
+    cgka::{error::CgkaError, keys::ShareKeyMap, operation::{CgkaEpoch, CgkaOperation}, Cgka},
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -155,10 +155,6 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
                 .cloned(),
             );
         }
-        let (_pcs_key, update_op) = cgka.update(owner_share_key, owner_share_secret_key, csprng)?;
-        // FIXME: We don't currently do anything with these ops, but need to share them
-        // across the network.
-        ops.push(update_op);
         Ok(Document {
             group,
             reader_keys: HashMap::new(), // FIXME
@@ -258,6 +254,10 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
 
     pub fn merge_cgka_op(&mut self, op: CgkaOperation) -> Result<(), CgkaError> {
         self.cgka.merge_concurrent_operation(Rc::new(op))
+    }
+
+    pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
+        self.cgka.ops()
     }
 
     pub fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
@@ -430,7 +430,8 @@ pub enum GenerateDocError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptedContentWithUpdate<T: ContentRef> {
-    pub(crate) encrypted_content: EncryptedContent<Vec<u8>, T>,
+    // FIXME: Changed visibility to get tests running
+    pub encrypted_content: EncryptedContent<Vec<u8>, T>,
     pub(crate) update_op: Option<CgkaOperation>,
 }
 
