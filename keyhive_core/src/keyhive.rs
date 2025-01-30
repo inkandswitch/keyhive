@@ -331,33 +331,33 @@ impl<
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError> {
-// ) -> Result<EncryptedContent<Vec<u8>, T>, EncryptContentError> {
-//         let EncryptedContentWithUpdate {
-//             encrypted_content,
-//             update_op,
-//         } = doc.borrow_mut().try_encrypt_content(
-//             content_ref,
-//             content,
-//             pred_refs,
-//             &mut self.csprng,
-//         )?;
+        // ) -> Result<EncryptedContent<Vec<u8>, T>, EncryptContentError> {
+        //         let EncryptedContentWithUpdate {
+        //             encrypted_content,
+        //             update_op,
+        //         } = doc.borrow_mut().try_encrypt_content(
+        //             content_ref,
+        //             content,
+        //             pred_refs,
+        //             &mut self.csprng,
+        //         )?;
 
-//         if let Some(found_update_op) = update_op {
-//             let signed_op = Rc::new(
-//                 self.try_sign(found_update_op)
-//                     .map_err(EncryptContentError::SignCgkaOpError)?,
-//             );
-//             self.event_listener.on_cgka_op(&signed_op);
-//         }
+        //         if let Some(found_update_op) = update_op {
+        //             let signed_op = Rc::new(
+        //                 self.try_sign(found_update_op)
+        //                     .map_err(EncryptContentError::SignCgkaOpError)?,
+        //             );
+        //             self.event_listener.on_cgka_op(&signed_op);
+        //         }
 
-//         Ok(encrypted_content)
-//     }
+        //         Ok(encrypted_content)
+        //     }
         let res = doc.borrow_mut().try_encrypt_content(
-                content_ref,
-                content,
-                pred_refs,
-                &mut self.csprng,
-            )?;
+            content_ref,
+            content,
+            pred_refs,
+            &mut self.csprng,
+        )?;
         Ok(res)
     }
 
@@ -1607,10 +1607,7 @@ mod tests {
         keyhives.push(first);
         let indie = make_indie();
         let doc = keyhives[0]
-            .generate_doc(
-                vec![indie.dupe().into()],
-                nonempty![[0u8; 32]],
-            )
+            .generate_doc(vec![indie.dupe().into()], nonempty![[0u8; 32]])
             .unwrap();
         let cgka_epochs = doc.borrow().cgka_ops().unwrap();
         for _ in 0..count - 1 {
@@ -1633,36 +1630,45 @@ mod tests {
         (keyhives, doc_id)
     }
 
-    fn share_delegation(delegation: Rc<Signed<Delegation<[u8; 32]>>>, keyhives: &mut Vec<Keyhive>, sharer_idx: usize) {
+    fn share_delegation(
+        delegation: Rc<Signed<Delegation<[u8; 32]>>>,
+        keyhives: &mut Vec<Keyhive>,
+        sharer_idx: usize,
+    ) {
         let static_dlg = Signed {
             issuer: delegation.issuer,
             signature: delegation.signature,
-            payload: delegation.payload.clone().into()
+            payload: delegation.payload.clone().into(),
         };
         for idx in 0..keyhives.len() {
             if idx == sharer_idx {
-                continue
+                continue;
             }
             keyhives[idx].receive_delegation(&static_dlg).unwrap();
         }
     }
 
-    fn share_ops_for_agent(agent: &Agent, keyhives: &mut Vec<Keyhive>, sharer_idx: usize) {
+    fn share_ops_for_agent(agent: Agent, keyhives: &mut Vec<Keyhive>, sharer_idx: usize) -> usize {
+        let mut share_count = 0;
         for idx in 0..keyhives.len() {
             if idx == sharer_idx {
-                continue
+                continue;
             }
-            let ops = keyhives[sharer_idx].membership_ops_for_agent(agent);
-            for (_h, op) in &ops {
+            let op_store = keyhives[sharer_idx].membership_ops_for_agent(&agent);
+
+            for (_h, op) in op_store.iter() {
+                share_count += 1;
                 keyhives[idx].receive_op(&op.clone().into()).unwrap();
             }
         }
+
+        share_count
     }
 
     fn share_cgka_op(op: &CgkaOperation, keyhives: &mut Vec<Keyhive>, sharer_idx: usize) {
         for idx in 0..keyhives.len() {
             if idx == sharer_idx {
-                continue
+                continue;
             }
             keyhives[idx].receive_cgka_op(op.clone()).unwrap();
         }
@@ -1670,18 +1676,32 @@ mod tests {
 
     #[test]
     fn test_sharing_ops_to_debug() {
-        let (mut keyhives, doc_id) = initialize_keyhives_and_doc(2);
-        // let a_idx = 0;
+        let (mut keyhives, _doc_id) = initialize_keyhives_and_doc(2);
+        let a_idx = 0;
         let b_idx = 1;
-        let b_doc = keyhives[b_idx].get_document(doc_id).unwrap().dupe();
-        let second_group = keyhives[b_idx].generate_group(vec![]).unwrap();
-        share_ops_for_agent(&second_group.dupe().into(), &mut keyhives, 1);
+
+        let a_peer: Peer = Rc::new(RefCell::new(
+            keyhives[a_idx].active.borrow().individual.clone(),
+        ))
+        .into();
+
+        let second_group = keyhives[b_idx].generate_group(vec![a_peer]).unwrap();
+        let share_count =
+            share_ops_for_agent(keyhives[a_idx].active.dupe().into(), &mut keyhives, 1);
+        assert!(share_count > 0);
+
         let indie = make_indie();
         let add = keyhives[b_idx]
-            .add_member(indie.dupe().into(), &mut second_group.dupe().into(), Access::Read, &[])
+            .add_member(
+                indie.dupe().into(),
+                &mut second_group.dupe().into(),
+                Access::Read,
+                &[],
+            )
             .unwrap();
-        // share_delegation(add.delegation.dupe(), &mut keyhives, b_idx);
-        share_ops_for_agent(&indie.dupe().into(), &mut keyhives, b_idx);
+        share_delegation(add.delegation.dupe(), &mut keyhives, 1);
+        let indie_op_count = share_ops_for_agent(indie.dupe().into(), &mut keyhives, 1);
+        assert!(indie_op_count > 0);
     }
 
     // #[test]
@@ -1707,7 +1727,6 @@ mod tests {
     //     let b_doc = keyhives[b_idx].get_document(doc_id).unwrap().dupe();
     //     let b_content: String = String::from_utf8(keyhives[b_idx].try_decrypt_content(b_doc.dupe(), &encrypted).unwrap()).unwrap();
     //     assert_eq!(content, &b_content);
-
 
     //     let second_group = keyhives[b_idx].generate_group(vec![]).unwrap();
     //     share_ops_for_agent(&second_group.dupe().into(), &mut keyhives, 1);
