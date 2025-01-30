@@ -9,9 +9,10 @@ use crate::{
     serialization::Encode,
     snapshots,
     state::TaskContext,
-    streams, sync_docs, Access, Audience, BundleSpec, Commit, CommitBundle, CommitCategory,
-    CommitOrBundle, DocumentId, Forwarding, PeerAddress, SnapshotId, StorageKey, StreamId,
-    SyncDocResult,
+    streams,
+    sync_docs::{self, sync_doc, sync_root_doc},
+    Access, Audience, BundleSpec, Commit, CommitBundle, CommitCategory, CommitOrBundle, DocumentId,
+    Forwarding, PeerAddress, SnapshotId, StorageKey, StreamId, SyncDocResult,
 };
 
 mod add_commits;
@@ -49,7 +50,10 @@ pub(crate) enum Command {
     LoadDoc {
         doc_id: DocumentId,
     },
-    CreateDoc(Commit, crate::keyhive::Access),
+    CreateDoc {
+        initial_commit: Commit,
+        access: crate::keyhive::Access,
+    },
     AddLink(AddLink),
     AddBundle {
         doc_id: DocumentId,
@@ -141,9 +145,10 @@ pub(super) async fn handle_command<R: rand::Rng + rand::CryptoRng + 'static>(
         Command::LoadDoc { doc_id } => CommandResult::LoadDoc(
             load_doc_commits(&mut ctx, &doc_id, CommitCategory::Content).await,
         ),
-        Command::CreateDoc(initial_commit, access) => {
-            CommandResult::CreateDoc(create_doc(ctx, access, initial_commit).await)
-        }
+        Command::CreateDoc {
+            initial_commit,
+            access,
+        } => CommandResult::CreateDoc(create_doc(ctx, access, initial_commit).await),
         Command::AddLink(add) => {
             add_link(ctx, add).await;
             tracing::trace!("add link complete");
@@ -200,11 +205,40 @@ async fn create_doc<R: rand::Rng + rand::CryptoRng + 'static>(
     tracing::trace!(?doc_id, "creating doc");
 
     let forwarding_peers = ctx.forwarding_peers();
-    futures::future::join_all(
-        forwarding_peers
-            .into_iter()
-            .map(|peer| sync_keyhive(ctx.clone(), peer, Vec::new())),
-    )
+    for peer in &forwarding_peers {
+        if let Some(peer_id) = peer.last_known_peer_id {
+            tracing::trace!(%peer_id, "adding forwarding peer as puller for new document");
+            let agent = if let Some(agent) = ctx.keyhive().get_peer(peer_id) {
+                agent
+            } else {
+                ctx.keyhive().register_peer(peer_id)
+            };
+            ctx.keyhive()
+                .add_member(doc_id, agent, keyhive_core::access::Access::Pull);
+        } else {
+            tracing::trace!(%peer, "not adding forwarding peer as puller as we don't know their peer id");
+        }
+    }
+    futures::future::join_all(forwarding_peers.into_iter().map(|peer| {
+        let ctx = ctx.clone();
+        async move {
+            sync_keyhive(ctx.clone(), peer.clone(), Vec::new()).await;
+            let Ok(peer_id) = ctx
+                .requests()
+                .ping(peer.clone())
+                .await
+                .inspect_err(|e| tracing::error!(err=?e, "failed to ping"))
+            else {
+                return;
+            };
+            if ctx.keyhive().can_pull(peer_id, &doc_id) {
+                tracing::trace!("syncing doc with forwarding peer");
+                if let Err(e) = sync_doc(ctx, peer, doc_id).await {
+                    tracing::error!(err=?e, "error syncing doc to forwarding ")
+                };
+            }
+        }
+    }))
     .await;
 
     // Ugh, this is really cumbersome

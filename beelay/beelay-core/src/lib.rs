@@ -49,7 +49,7 @@ pub use documents::{
     DocumentHeads, DocumentId,
 };
 mod keyhive;
-pub use keyhive::{Access, KeyhiveCommandResult};
+pub use keyhive::{Access, KeyhiveCommandResult, MemberAccess};
 mod event;
 mod jobs;
 pub mod loading;

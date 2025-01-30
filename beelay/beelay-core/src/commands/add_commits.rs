@@ -65,8 +65,8 @@ pub(super) async fn add_commits<R: rand::Rng + rand::CryptoRng + 'static>(
                                 peer_id
                             }
                         };
-                        if !ctx.keyhive().can_read(peer_id, &doc_id) {
-                            tracing::trace!(%peer_id, "not uploading as they don't have read permission");
+                        if !ctx.keyhive().can_pull(peer_id, &doc_id) {
+                            tracing::trace!(%peer_id, "not uploading as they don't have pull permission");
                             return;
                         } else{
                             tracing::trace!(%peer_id, "read check passed");

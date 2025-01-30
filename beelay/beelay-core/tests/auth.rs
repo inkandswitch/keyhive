@@ -1,4 +1,4 @@
-use beelay_core::{Access, Commit};
+use beelay_core::{Access, Commit, MemberAccess};
 use network::{ConnForwarding, ConnectedPair, Network};
 use test_utils::init_logging;
 
@@ -35,7 +35,10 @@ fn giving_access_to_peer_enables_reading() {
     assert_eq!(synced_to_3.found, false);
 
     // Now give access to peer2
-    network.beelay(&peer1).add_member(doc, peer2).unwrap();
+    network
+        .beelay(&peer1)
+        .add_member(doc, peer2, MemberAccess::Pull)
+        .unwrap();
 
     // Syncing from peer2 should now work
     let synced_to_2 = network.beelay(&peer2).sync_doc(doc, peer2_to_peer1);
@@ -46,7 +49,10 @@ fn giving_access_to_peer_enables_reading() {
     assert_eq!(synced_to_3.found, false);
 
     // Now add peer3
-    network.beelay(&peer1).add_member(doc, peer3).unwrap();
+    network
+        .beelay(&peer1)
+        .add_member(doc, peer3, MemberAccess::Pull)
+        .unwrap();
 
     // Now the sync should work
     let synced_to_3 = network.beelay(&peer3).sync_doc(doc, peer3_to_peer2);
@@ -74,4 +80,27 @@ fn giving_access_to_peer_enables_reading() {
         commits_on_3_before_revocation,
         commits_on_3_after_revocation
     );
+}
+
+#[test]
+fn syncing_private_doc_sends_doc_to_server() {
+    init_logging();
+    let mut network = Network::new();
+    let peer1 = network.create_peer("peer1");
+    let peer2 = network.create_peer("peer2");
+
+    let ConnectedPair {
+        left_to_right: peer1_to_peer2,
+        right_to_left: peer2_to_peer1,
+    } = network.connect_stream(&peer1, &peer2, ConnForwarding::Both);
+
+    let doc = network
+        .beelay(&peer1)
+        .create_doc_with_contents(Access::Private, "somedoc".into());
+
+    network.beelay(&peer1).sync_doc(doc, peer1_to_peer2);
+
+    let doc_on_peer2 = network.beelay(&peer2).load_doc(doc).unwrap();
+    let doc_on_peer1 = network.beelay(&peer1).load_doc(doc).unwrap();
+    assert_eq!(doc_on_peer2, doc_on_peer1);
 }

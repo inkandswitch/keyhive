@@ -7,7 +7,7 @@ use futures::{
 };
 
 use super::connection::{self, ConnRequestId};
-use crate::{OutboundRequestId, Request};
+use crate::{serialization::hex, OutboundRequestId, Request};
 
 use super::{InnerRpcResponse, StreamDirection, StreamError, StreamEvent, StreamId, TaskContext};
 
@@ -188,7 +188,7 @@ impl<R: rand::Rng + rand::CryptoRng + 'static> StreamToRun<R> {
             tracing::debug!("beginning handshake");
             let mut connection = loop {
                 if let Some(msg) = handshake_step.next_msg.take() {
-                    tracing::trace!(?msg, "sending handshake message");
+                    tracing::trace!(msg = hex::encode(&msg), "sending handshake message");
                     if let Err(e) = out_tx.send(StreamEvent::Send(msg)).await {
                         tracing::debug!(?e, "stream closed in handshake");
                         return;
@@ -214,7 +214,10 @@ impl<R: rand::Rng + rand::CryptoRng + 'static> StreamToRun<R> {
                                 return;
                             }
                         };
-                        tracing::trace!(?received, "received message in handshake");
+                        tracing::trace!(
+                            received = hex::encode(&received),
+                            "received message in handshake"
+                        );
                         match h.receive_message(&ctx, received) {
                             Ok(next_step) => handshake_step = next_step,
                             Err(e) => {

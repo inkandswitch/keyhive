@@ -1,7 +1,7 @@
 use crate::{
     commands::{AddLink, Command},
     io::{self, IoResult},
-    keyhive,
+    keyhive::{self, MemberAccess},
     network::InnerRpcResponse,
     Access, Audience, CommandId, Commit, CommitBundle, DocumentId, EndpointId, Forwarding,
     OutboundRequestId, PeerAddress, PeerId, RpcResponse, SignedMessage, SnapshotId,
@@ -71,7 +71,10 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::CreateDoc(initial_commit, access),
+            Command::CreateDoc {
+                initial_commit,
+                access,
+            },
         ));
         (command_id, event)
     }
@@ -172,11 +175,15 @@ impl Event {
         Event(EventInner::BeginCommand(command_id, Command::Stop))
     }
 
-    pub fn add_member(doc_id: DocumentId, peer: PeerId) -> (CommandId, Event) {
+    pub fn add_member(
+        doc_id: DocumentId,
+        peer: PeerId,
+        access: MemberAccess,
+    ) -> (CommandId, Event) {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::Keyhive(keyhive::KeyhiveCommand::AddMember(doc_id, peer)),
+            Command::Keyhive(keyhive::KeyhiveCommand::AddMember(doc_id, peer, access)),
         ));
         (command_id, event)
     }

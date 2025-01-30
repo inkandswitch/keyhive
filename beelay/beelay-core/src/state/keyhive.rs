@@ -3,11 +3,11 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use dupe::Dupe;
 use keyhive_core::{
     access::Access as KeyhiveAccess,
-    crypto::digest::Digest,
-    crypto::verifiable::Verifiable,
+    crypto::{digest::Digest, verifiable::Verifiable},
     event::StaticEvent,
     listener::no_listener::NoListener,
     principal::{
+        agent::Agent,
         document::id::DocumentId as KeyhiveDocumentId,
         group::{
             id::GroupId,
@@ -81,6 +81,10 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         self.can_do(peer_id, doc_id, KeyhiveAccess::Read)
     }
 
+    pub(crate) fn can_pull(&self, peer_id: PeerId, doc_id: &DocumentId) -> bool {
+        self.can_do(peer_id, doc_id, KeyhiveAccess::Pull)
+    }
+
     /// Apply the given keyhive ops locally
     pub(crate) fn apply_keyhive_ops(
         &self,
@@ -94,6 +98,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             let mut ingested = false;
             while let Some(op) = ops.pop() {
                 if let Ok(()) = keyhive.receive_op(&op) {
+                    tracing::trace!(?op, "processing membership op");
                     ingested = true;
                 } else {
                     try_later.push(op);
@@ -318,10 +323,16 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         keyhive.get_agent(agent.as_key().into())
     }
 
+    pub(crate) fn get_agent(&self, agent: Identifier) -> Option<Agent<CommitHash>> {
+        let keyhive = &self.state.borrow().keyhive;
+        keyhive.get_agent(agent)
+    }
+
     pub(crate) fn add_member(
         &self,
         doc_id: DocumentId,
         agent: keyhive_core::principal::agent::Agent<CommitHash>,
+        access: keyhive_core::access::Access,
     ) {
         let keyhive = &mut self.state.borrow_mut().keyhive;
         if let Some(doc) =
@@ -334,12 +345,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             let doc = doc.clone();
             tracing::trace!("adding member");
             keyhive
-                .add_member(
-                    agent,
-                    &mut doc.clone().into(),
-                    keyhive_core::access::Access::Write,
-                    &[],
-                )
+                .add_member(agent, &mut doc.clone().into(), access, &[])
                 .unwrap();
         } else {
             tracing::warn!("no such doc");
@@ -364,7 +370,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
                 ))
         {
             let mut membered = Membered::from(doc.clone());
-            keyhive.revoke_member(agent.agent_id().into(), &mut membered)?;
+            keyhive.revoke_member(agent.agent_id().into(), true, &mut membered)?;
             Ok(())
         } else {
             tracing::warn!("attepmting to remove a peer from a doc we don't have (in keyhive)");
@@ -419,8 +425,17 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             .remove_session(session);
     }
 
-    pub(crate) fn register_peer(&self, peer_id: PeerId) {
+    pub(crate) fn register_peer(
+        &self,
+        peer_id: PeerId,
+    ) -> keyhive_core::principal::agent::Agent<CommitHash> {
         let keyhive = &mut self.state.borrow_mut().keyhive;
-        keyhive.register_individual(Rc::new(RefCell::new((*peer_id.as_key()).into())));
+        let indie = Rc::new(RefCell::new((*peer_id.as_key()).into()));
+        keyhive.register_individual(indie.clone());
+        indie.into()
+    }
+
+    pub(crate) fn local_peer(&self) -> keyhive_core::principal::agent::Agent<CommitHash> {
+        self.state.borrow().keyhive.active().borrow().clone().into()
     }
 }

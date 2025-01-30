@@ -21,6 +21,7 @@ use crate::{
 #[error("auth failed")]
 pub struct AuthenticationFailed;
 
+#[tracing::instrument(skip(ctx, request, receive_audience), fields(from_peer))]
 pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
     ctx: crate::state::TaskContext<R>,
     request: auth::Signed<auth::Message>,
@@ -34,13 +35,16 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             return Err(AuthenticationFailed);
         }
     };
+    tracing::Span::current().record("from_peer", from.to_string());
     let response = match request {
         crate::Request::UploadCommits {
             doc,
             data,
             category,
         } => {
+            tracing::debug!(doc=%doc, "upload commits");
             if !ctx.keyhive().can_write(from, &doc) {
+                tracing::trace!("not authorized to write to doc");
                 return Ok(OutgoingResponse {
                     audience: Audience::peer(&from),
                     response: Response::AuthorizationFailed,
@@ -50,7 +54,9 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             Response::UploadCommits
         }
         crate::Request::FetchSedimentree(doc_id) => {
+            tracing::debug!(doc=%doc_id, "fetch sedimentree");
             if !ctx.keyhive().can_read(from, &doc_id) {
+                tracing::trace!("not authorized to read doc");
                 // TODO: Return an empty response rather than an authorization failure?
                 return Ok(OutgoingResponse {
                     audience: Audience::peer(&from),
@@ -65,6 +71,7 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             offset,
             length,
         } => {
+            tracing::debug!("fetch blob part");
             // TODO: Scope the fetchblob by document ID so we can check permissions
             match ctx.storage().load(StorageKey::blob(blob)).await {
                 None => Response::Error("no such blob".to_string()),
@@ -80,6 +87,7 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             root_doc,
             source_snapshot,
         } => {
+            tracing::debug!(%root_doc, "create snapshot");
             let (snapshot_id, first_symbols) =
                 create_snapshot(ctx, from, source_snapshot, root_doc).await;
             Response::CreateSnapshot {
@@ -88,6 +96,7 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             }
         }
         crate::Request::SnapshotSymbols { snapshot_id } => {
+            tracing::debug!("snapshot symbols");
             if let Some(symbols) = ctx.snapshots().next_snapshot_symbols(snapshot_id, 100) {
                 Response::SnapshotSymbols(symbols)
             } else {
@@ -95,6 +104,7 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             }
         }
         crate::Request::Listen(snapshot_id, from_offset) => {
+            tracing::debug!(%snapshot_id, ?from_offset, "listen");
             let result = handle_listen(ctx, from, snapshot_id, from_offset).await;
             match result {
                 Ok((events, remote_offset)) => Response::Listen {
@@ -105,6 +115,7 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             }
         }
         messages::Request::BeginAuthSync => {
+            tracing::debug!("begin auth sync");
             let (session_id, first_symbols) =
                 ctx.keyhive().new_keyhive_sync_session(from, Vec::new());
             Response::BeginAuthSync {
@@ -113,16 +124,15 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             }
         }
         messages::Request::KeyhiveSymbols { session_id } => {
+            tracing::debug!(%session_id, "keyhive symbols");
             if let Some(symbols) = ctx.keyhive().next_n_keyhive_sync_symbols(session_id, 100) {
                 Response::KeyhiveSymbols(symbols)
             } else {
                 Response::Error("no such session".to_string())
             }
         }
-        messages::Request::RequestKeyhiveOps {
-            session: _,
-            op_hashes,
-        } => {
+        messages::Request::RequestKeyhiveOps { session, op_hashes } => {
+            tracing::debug!(%session, "keyhive ops");
             let ops = ctx
                 .keyhive()
                 .get_keyhive_ops(op_hashes.into_iter().map(|o| o.into()).collect());
@@ -136,6 +146,7 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             source_session,
             ops,
         } => {
+            tracing::debug!(%source_session, "upload keyhive ops");
             ctx.keyhive().apply_keyhive_ops(ops.clone()).expect("FIXME");
             if !ctx.keyhive().has_agent_session(source_session) {
                 tracing::trace!("uploading ops to forwarding peers");
@@ -160,8 +171,12 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             }
             Response::UploadKeyhiveOps
         }
-        messages::Request::Ping => Response::Pong,
+        messages::Request::Ping => {
+            tracing::debug!("ping");
+            Response::Pong
+        }
         messages::Request::RequestKeyhiveOpsForAgent { sync_id, agent } => {
+            tracing::debug!(%agent, "keyhive ops for agent");
             Response::RequestKeyhiveOpsForAgent(fetch_keyhive_ops(ctx, sync_id, agent).await)
         }
     };
@@ -181,10 +196,19 @@ async fn fetch_keyhive_ops<R: rand::Rng + rand::CryptoRng + 'static>(
         tracing::trace!("we're already forwarding this session, returning nothing");
         return Vec::new();
     }
-    tracing::trace!(%agent, "agent not found locally, requesting from forwarding peers");
-    ctx.keyhive().track_agent_session(sync_id);
-    keyhive_sync::request_agent_ops_from_forwarding_peers(ctx.clone(), agent, Some(sync_id)).await;
-    ctx.keyhive().end_agent_session(sync_id);
+    if let Some(agent) = ctx.keyhive().get_agent(agent) {
+        if agent != ctx.keyhive().local_peer() {
+            tracing::trace!(%agent, "requesting from forwarding peers");
+            ctx.keyhive().track_agent_session(sync_id);
+            keyhive_sync::request_agent_ops_from_forwarding_peers(
+                ctx.clone(),
+                agent.agent_id().into(),
+                Some(sync_id),
+            )
+            .await;
+            ctx.keyhive().end_agent_session(sync_id);
+        }
+    }
     ctx.keyhive()
         .events_for_agent(agent)
         .unwrap_or_default()
@@ -282,14 +306,14 @@ async fn upload_commits<R: rand::Rng + rand::CryptoRng + 'static>(
                     }
                 };
                 tracing::trace!(to_peer=%peer_id, "forwarding uploaded commits");
-                if !ctx.keyhive().can_read(peer_id, &doc) {
-                    tracing::trace!("not forwarding to peer without access");
-                    continue;
-                }
                 let ctx = ctx.clone();
                 let d = d.clone();
                 ctx.spawn(move |ctx| async move {
                     keyhive_sync::sync_keyhive(ctx.clone(), peer.clone(), Vec::new()).await;
+                    if !ctx.keyhive().can_pull(peer_id, &doc) {
+                        tracing::trace!("not forwarding to peer without access");
+                        return;
+                    }
                     if let Err(e) = ctx
                         .requests()
                         .upload_commits(peer, doc, vec![d], content)

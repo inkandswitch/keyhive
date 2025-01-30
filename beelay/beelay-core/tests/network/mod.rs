@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use beelay_core::{
     io::{IoAction, IoResult},
-    BundleSpec, CommitHash, CommitOrBundle, DocEvent, DocumentId, Forwarding, PeerId, SnapshotId,
-    SyncDocResult, UnixTimestamp,
+    BundleSpec, CommitHash, CommitOrBundle, DocEvent, DocumentId, Forwarding, MemberAccess, PeerId,
+    SnapshotId, SyncDocResult, UnixTimestamp,
 };
 
 pub struct BeelayHandle<'a> {
@@ -199,9 +199,10 @@ impl BeelayHandle<'_> {
         &mut self,
         doc: DocumentId,
         peer: PeerId,
+        access: MemberAccess,
     ) -> Result<(), beelay_core::error::AddMember> {
         let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
-        let (command_id, event) = beelay_core::Event::add_member(doc, peer);
+        let (command_id, event) = beelay_core::Event::add_member(doc, peer, access);
         beelay.inbox.push_back(event);
         self.network.run_until_quiescent();
         let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();

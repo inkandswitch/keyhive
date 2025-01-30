@@ -125,7 +125,7 @@ async fn find_out_of_sync_docs<R: rand::Rng + rand::CryptoRng + 'static>(
     })
 }
 
-async fn sync_doc<R: rand::Rng + rand::CryptoRng + 'static>(
+pub(crate) async fn sync_doc<R: rand::Rng + rand::CryptoRng + 'static>(
     ctx: crate::state::TaskContext<R>,
     peer: TargetNodeInfo,
     doc: DocumentId,

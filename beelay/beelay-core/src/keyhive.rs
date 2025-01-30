@@ -4,7 +4,7 @@ use crate::{keyhive_sync::sync_keyhive, state::TaskContext, DocumentId, PeerId};
 
 #[derive(Debug)]
 pub enum KeyhiveCommand {
-    AddMember(DocumentId, PeerId),
+    AddMember(DocumentId, PeerId, MemberAccess),
     RemoveMember(DocumentId, PeerId),
 }
 
@@ -20,13 +20,32 @@ pub enum Access {
     Private,
 }
 
+#[derive(Debug)]
+pub enum MemberAccess {
+    Pull,
+    Read,
+    Write,
+    Admin,
+}
+
+impl From<MemberAccess> for keyhive_core::access::Access {
+    fn from(access: MemberAccess) -> Self {
+        match access {
+            MemberAccess::Pull => keyhive_core::access::Access::Pull,
+            MemberAccess::Read => keyhive_core::access::Access::Read,
+            MemberAccess::Write => keyhive_core::access::Access::Write,
+            MemberAccess::Admin => keyhive_core::access::Access::Admin,
+        }
+    }
+}
+
 pub(crate) async fn handle_keyhive_command<R: rand::Rng + rand::CryptoRng + 'static>(
     ctx: TaskContext<R>,
     command: KeyhiveCommand,
 ) -> KeyhiveCommandResult {
     match command {
-        KeyhiveCommand::AddMember(doc_id, peer_id) => {
-            let result = add_member(ctx, doc_id, peer_id).await;
+        KeyhiveCommand::AddMember(doc_id, peer_id, access) => {
+            let result = add_member(ctx, doc_id, peer_id, access).await;
             KeyhiveCommandResult::AddMember(result)
         }
         KeyhiveCommand::RemoveMember(doc_id, peer_id) => {
@@ -41,10 +60,12 @@ async fn add_member<R: rand::Rng + rand::CryptoRng + 'static>(
     ctx: TaskContext<R>,
     doc_id: DocumentId,
     peer_id: PeerId,
+    access: MemberAccess,
 ) -> Result<(), error::AddMember> {
     tracing::debug!("adding member to document");
+    ctx.keyhive().register_peer(peer_id);
     if let Some(agent) = ctx.keyhive().get_peer(peer_id) {
-        ctx.keyhive().add_member(doc_id, agent);
+        ctx.keyhive().add_member(doc_id, agent, access.into());
         // Spawn tasks to upload new ops to forwarding peers
         let forwarding_peers = ctx.forwarding_peers();
         tracing::trace!("uploading new events to forwarding peers");
@@ -64,7 +85,8 @@ async fn add_member<R: rand::Rng + rand::CryptoRng + 'static>(
     .await;
     if let Some(agent) = ctx.keyhive().get_peer(peer_id) {
         tracing::trace!("agent found after requesting, adding to document");
-        ctx.keyhive().add_member(doc_id, agent);
+        ctx.keyhive()
+            .add_member(doc_id, agent, keyhive_core::access::Access::Write);
         // Spawn tasks to upload new ops to forwarding peers
         let forwarding_peers = ctx.forwarding_peers();
         tracing::trace!("uploading new events to forwarding peers");
@@ -88,11 +110,12 @@ async fn remove_member<R: rand::Rng + rand::CryptoRng + 'static>(
         .map_err(|e| error::RemoveMember(e.to_string()))?;
     let forwarding_peers = ctx.forwarding_peers();
     tracing::trace!("uploading new events to forwarding peers");
-    for peer in forwarding_peers {
-        ctx.spawn(move |ctx| async move {
-            sync_keyhive(ctx, peer, vec![peer_id]).await;
-        })
-    }
+    let upload = futures::future::join_all(
+        forwarding_peers
+            .into_iter()
+            .map(|peer| sync_keyhive(ctx.clone(), peer, Vec::new())),
+    );
+    upload.await;
     Ok(())
 }
 
