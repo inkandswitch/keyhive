@@ -15,6 +15,7 @@ use crate::{
         digest::Digest,
         encrypted::EncryptedContent,
         share_key::{ShareKey, ShareSecretKey},
+        signed::Signed,
         siv::Siv,
         symmetric_key::SymmetricKey,
     },
@@ -66,7 +67,7 @@ pub struct Cgka {
 
     /// The update operations for each PCS key.
     #[derivative(Hash(hash_with = "hashed_key_bytes"))]
-    pcs_key_ops: HashMap<Digest<PcsKey>, Digest<CgkaOperation>>,
+    pcs_key_ops: HashMap<Digest<PcsKey>, Digest<Signed<CgkaOperation>>>,
 
     original_member: (IndividualId, ShareKey),
 }
@@ -126,13 +127,15 @@ impl Cgka {
         content_ref: &T,
         content: &[u8],
         pred_refs: &Vec<T>,
+        signing_key: &ed25519_dalek::SigningKey,
         csprng: &mut R,
-    ) -> Result<(ApplicationSecret<T>, Option<CgkaOperation>), CgkaError> {
+    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
         let mut op = None;
         let current_pcs_key = if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
-            let (pcs_key, update_op) = self.update(new_share_key, new_share_secret_key, csprng)?;
+            let (pcs_key, update_op) =
+                self.update(new_share_key, new_share_secret_key, signing_key, csprng)?;
             self.insert_pcs_key(&pcs_key, Digest::hash(&update_op));
             op = Some(update_op);
             pcs_key
@@ -188,7 +191,8 @@ impl Cgka {
         &mut self,
         id: IndividualId,
         pk: ShareKey,
-    ) -> Result<Option<CgkaOperation>, CgkaError> {
+        sk: &ed25519_dalek::SigningKey,
+    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         if self.tree.contains_id(&id) {
             return Ok(None);
         }
@@ -206,24 +210,31 @@ impl Cgka {
             add_predecessors,
             doc_id: self.doc_id,
         };
-        self.ops_graph.add_local_op(&op);
-        Ok(Some(op))
+
+        let signed_op = Signed::try_sign(op, sk)?;
+        self.ops_graph.add_local_op(&signed_op);
+        Ok(Some(signed_op))
     }
 
     /// Add multiple members to group.
     pub fn add_multiple(
         &mut self,
         members: NonEmpty<(IndividualId, ShareKey)>,
-    ) -> Result<Vec<CgkaOperation>, CgkaError> {
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut ops = Vec::new();
         for m in members {
-            ops.push(self.add(m.0, m.1)?);
+            ops.push(self.add(m.0, m.1, signing_key)?);
         }
         Ok(ops.into_iter().flatten().collect())
     }
 
     /// Remove member from group.
-    pub fn remove(&mut self, id: IndividualId) -> Result<Option<CgkaOperation>, CgkaError> {
+    pub fn remove(
+        &mut self,
+        id: IndividualId,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         if !self.tree.contains_id(&id) {
             return Ok(None);
         }
@@ -242,8 +253,9 @@ impl Cgka {
             predecessors,
             doc_id: self.doc_id,
         };
-        self.ops_graph.add_local_op(&op);
-        Ok(Some(op))
+        let signed_op = Signed::try_sign(op, signing_key)?;
+        self.ops_graph.add_local_op(&signed_op);
+        Ok(Some(signed_op))
     }
 
     /// Update leaf key pair for this Identifier. This also triggers a tree path
@@ -252,8 +264,9 @@ impl Cgka {
         &mut self,
         new_pk: ShareKey,
         new_sk: ShareSecretKey,
+        signing_key: &ed25519_dalek::SigningKey,
         csprng: &mut R,
-    ) -> Result<(PcsKey, CgkaOperation), CgkaError> {
+    ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
@@ -269,9 +282,11 @@ impl Cgka {
                 predecessors,
                 doc_id: self.doc_id,
             };
-            self.ops_graph.add_local_op(&op);
-            self.insert_pcs_key(&pcs_key, Digest::hash(&op));
-            Ok((pcs_key, op))
+
+            let signed_op = Signed::try_sign(op, signing_key)?;
+            self.ops_graph.add_local_op(&signed_op);
+            self.insert_pcs_key(&pcs_key, Digest::hash(&signed_op));
+            Ok((pcs_key, signed_op))
         } else {
             Err(CgkaError::IdentifierNotFound)
         }
@@ -288,17 +303,20 @@ impl Cgka {
     /// we add it to our ops graph but don't apply it yet. If there are no outstanding
     /// membership changes and we receive a concurrent update, we can apply it
     /// immediately.
-    pub fn merge_concurrent_operation(&mut self, op: Rc<CgkaOperation>) -> Result<(), CgkaError> {
+    pub fn merge_concurrent_operation(
+        &mut self,
+        op: Rc<Signed<CgkaOperation>>,
+    ) -> Result<(), CgkaError> {
         if self.ops_graph.contains_op_hash(&Digest::hash(op.borrow())) {
             return Ok(());
         }
-        let predecessors = op.predecessors();
+        let predecessors = op.payload.predecessors();
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
             if self.pending_ops_for_structural_change {
                 self.ops_graph.add_op(op.borrow(), &predecessors);
             } else if matches!(
-                op.borrow(),
+                op.payload,
                 CgkaOperation::Add { .. } | CgkaOperation::Remove { .. }
             ) {
                 self.pending_ops_for_structural_change = true;
@@ -320,22 +338,23 @@ impl Cgka {
     }
 
     /// Apply a [`CgkaOperation`].
-    fn apply_operation(&mut self, op: Rc<CgkaOperation>) -> Result<(), CgkaError> {
+    fn apply_operation(&mut self, op: Rc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
         if self.ops_graph.contains_op_hash(&Digest::hash(op.borrow())) {
             return Ok(());
         }
-        match op.borrow() {
+        match op.payload {
             CgkaOperation::Add { added_id, pk, .. } => {
-                self.tree.push_leaf(*added_id, (*pk).into());
+                self.tree.push_leaf(added_id, pk.into());
             }
             CgkaOperation::Remove { id, .. } => {
-                self.tree.remove_id(*id)?;
+                self.tree.remove_id(id)?;
             }
-            CgkaOperation::Update { new_path, .. } => {
+            CgkaOperation::Update { ref new_path, .. } => {
                 self.tree.apply_path(new_path);
             }
         }
-        self.ops_graph.add_op(op.borrow(), &op.predecessors());
+        self.ops_graph
+            .add_op(op.borrow(), &op.payload.predecessors());
         Ok(())
     }
 
@@ -350,7 +369,7 @@ impl Cgka {
                 // directly and move on to the next epoch.
                 if epoch
                     .iter()
-                    .all(|op| matches!(op.borrow(), CgkaOperation::Update { .. }))
+                    .all(|op| matches!(op.payload, CgkaOperation::Update { .. }))
                 {
                     for op in epoch.iter() {
                         self.apply_operation(op.dupe())?;
@@ -363,12 +382,12 @@ impl Cgka {
                 let mut added_ids = HashSet::new();
                 let mut removed_ids = HashSet::new();
                 for op in epoch.iter() {
-                    match op.borrow() {
+                    match op.payload {
                         CgkaOperation::Add { added_id, .. } => {
-                            added_ids.insert(*added_id);
+                            added_ids.insert(added_id);
                         }
                         CgkaOperation::Remove { id, leaf_idx, .. } => {
-                            removed_ids.insert((*id, *leaf_idx));
+                            removed_ids.insert((id, leaf_idx));
                         }
                         _ => {}
                     }
@@ -399,7 +418,7 @@ impl Cgka {
     fn pcs_key_from_hashes(
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
-        update_op_hash: &Digest<CgkaOperation>,
+        update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
         if let Some(pcs_key) = self.pcs_keys.get(pcs_key_hash) {
             Ok(*pcs_key.clone())
@@ -417,7 +436,7 @@ impl Cgka {
     /// Derive [`PcsKey`] for this operation hash.
     fn derive_pcs_key_for_op(
         &mut self,
-        op_hash: &Digest<CgkaOperation>,
+        op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
         if !self.ops_graph.contains_op_hash(op_hash) {
             return Err(CgkaError::UnknownPcsKey);
@@ -460,8 +479,8 @@ impl Cgka {
     /// list of [`CgkaEpoch`]s.
     fn rebuild_pcs_key(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<PcsKey, CgkaError> {
         debug_assert!(matches!(
-            epochs.last()[0].borrow(),
-            &CgkaOperation::Update { .. }
+            epochs.last()[0].payload,
+            CgkaOperation::Update { .. }
         ));
         let mut rebuilt_cgka =
             Cgka::new(self.doc_id, self.original_member.0, self.original_member.1)?
@@ -472,7 +491,7 @@ impl Cgka {
         Ok(pcs_key)
     }
 
-    fn insert_pcs_key(&mut self, pcs_key: &PcsKey, op_hash: Digest<CgkaOperation>) {
+    fn insert_pcs_key(&mut self, pcs_key: &PcsKey, op_hash: Digest<Signed<CgkaOperation>>) {
         self.pcs_key_ops.insert(Digest::hash(pcs_key), op_hash);
         self.pcs_keys.insert((*pcs_key).into());
     }
@@ -501,7 +520,7 @@ impl Cgka {
     pub fn secret(
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
-        update_op_hash: &Digest<CgkaOperation>,
+        update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
         self.pcs_key_from_hashes(pcs_key_hash, update_op_hash)
     }
@@ -522,13 +541,14 @@ mod tests {
     #[test]
     fn test_root_key_after_update_is_not_leaf_sk() -> Result<(), CgkaError> {
         let csprng = &mut rand::thread_rng();
+        let signing_key = ed25519_dalek::SigningKey::generate(csprng);
         let doc_id = DocumentId::generate(csprng);
         let members = setup_members(2);
-        let (mut cgka, _ops) = setup_cgka(doc_id, &members, 0);
+        let (mut cgka, _ops) = setup_cgka(doc_id, &members, 0, &signing_key);
         let sk = ShareSecretKey::generate(csprng);
         let sk_pcs_key: PcsKey = sk.clone().into();
         let pk = sk.share_key();
-        let (pcs_key, op) = cgka.update(pk, sk.clone(), csprng)?;
+        let (pcs_key, op) = cgka.update(pk, sk.clone(), &signing_key, csprng)?;
         assert_ne!(
             sk_pcs_key,
             cgka.secret(&Digest::hash(&pcs_key), &Digest::hash(&op))?
@@ -539,13 +559,14 @@ mod tests {
     #[test]
     fn test_simple_add() -> Result<(), CgkaError> {
         let csprng = &mut rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(csprng);
         let doc_id = DocumentId::generate(csprng);
         let members = setup_members(2);
         let initial_member_count = members.len();
-        let (mut cgka, _ops) = setup_cgka(doc_id, &members, 0);
+        let (mut cgka, _ops) = setup_cgka(doc_id, &members, 0, &sk);
         assert!(cgka.has_pcs_key());
         let new_m = TestMember::generate(csprng);
-        cgka.add(new_m.id, new_m.pk)?;
+        cgka.add(new_m.id, new_m.pk, &sk)?;
         assert!(!cgka.has_pcs_key());
         assert_eq!(cgka.tree.member_count(), initial_member_count as u32 + 1);
         Ok(())
@@ -554,12 +575,13 @@ mod tests {
     #[test]
     fn test_simple_remove() -> Result<(), CgkaError> {
         let csprng = &mut rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(csprng);
         let doc_id = DocumentId::generate(csprng);
         let members = setup_members(2);
         let initial_member_count = members.len();
-        let (mut cgka, _ops) = setup_cgka(doc_id, &members, 0);
+        let (mut cgka, _ops) = setup_cgka(doc_id, &members, 0, &sk);
         assert!(cgka.has_pcs_key());
-        cgka.remove(members[1].id)?;
+        cgka.remove(members[1].id, &sk)?;
         assert!(!cgka.has_pcs_key());
         assert_eq!(cgka.group_size(), initial_member_count as u32 - 1);
         Ok(())
@@ -568,12 +590,13 @@ mod tests {
     #[test]
     fn test_no_root_key_after_concurrent_updates() -> Result<(), CgkaError> {
         let csprng = &mut rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(csprng);
         let doc_id = DocumentId::generate(csprng);
-        let (mut cgkas, _ops) = setup_member_cgkas(doc_id, 7)?;
+        let (mut cgkas, _ops) = setup_member_cgkas(doc_id, 7, &sk)?;
         assert!(cgkas[0].cgka.has_pcs_key());
-        let (_pcs_key, op1) = cgkas[1].update(csprng)?;
+        let (_pcs_key, op1) = cgkas[1].update(&sk, csprng)?;
         cgkas[0].cgka.merge_concurrent_operation(Rc::new(op1))?;
-        let (_pcs_key, op6) = cgkas[6].update(csprng)?;
+        let (_pcs_key, op6) = cgkas[6].update(&sk, csprng)?;
         cgkas[0].cgka.merge_concurrent_operation(Rc::new(op6))?;
         assert!(!cgkas[0].cgka.has_pcs_key());
         Ok(())
@@ -581,10 +604,11 @@ mod tests {
 
     fn update_merge_and_compare_secrets<R: rand::CryptoRng + rand::RngCore>(
         member_cgkas: &mut Vec<TestMemberCgka>,
+        signing_key: &ed25519_dalek::SigningKey,
         csprng: &mut R,
     ) -> Result<(), CgkaError> {
         let m_idx = if member_cgkas.len() > 1 { 1 } else { 0 };
-        let (post_update_pcs_key, update_op) = member_cgkas[m_idx].update(csprng)?;
+        let (post_update_pcs_key, update_op) = member_cgkas[m_idx].update(signing_key, csprng)?;
         for (idx, m) in member_cgkas.iter_mut().enumerate() {
             if idx == m_idx {
                 continue;
@@ -612,11 +636,12 @@ mod tests {
     fn run_test_rounds<R: rand::CryptoRng + rand::RngCore>(
         member_count: u32,
         test_rounds: &[Vec<Box<TestOperation>>],
+        signing_key: &ed25519_dalek::SigningKey,
         csprng: &mut R,
     ) -> Result<(), CgkaError> {
         assert!(member_count >= 1);
         let doc_id = DocumentId::generate(csprng);
-        let (mut member_cgkas, ops) = setup_member_cgkas(doc_id, member_count)?;
+        let (mut member_cgkas, ops) = setup_member_cgkas(doc_id, member_count, signing_key)?;
         let mut initial_cgka = member_cgkas[0].cgka.clone();
         let initial_pcs_key = initial_cgka.secret_from_root()?;
         let update_op = ops.last().expect("update op");
@@ -629,17 +654,18 @@ mod tests {
         }
         for test_round in test_rounds {
             apply_test_operations_and_merge_to_all(&mut member_cgkas, test_round)?;
-            update_merge_and_compare_secrets(&mut member_cgkas, csprng)?;
+            update_merge_and_compare_secrets(&mut member_cgkas, signing_key, csprng)?;
         }
         Ok(())
     }
 
     fn run_tests_for_various_member_counts<R: rand::CryptoRng + rand::RngCore>(
         test_rounds: Vec<Vec<Box<TestOperation>>>,
+        signing_key: &ed25519_dalek::SigningKey,
         csprng: &mut R,
     ) -> Result<(), CgkaError> {
         for n in 1..16 {
-            run_test_rounds(n, &test_rounds, csprng)?;
+            run_test_rounds(n, &test_rounds, signing_key, csprng)?;
         }
         Ok(())
     }
@@ -647,42 +673,69 @@ mod tests {
     #[test]
     fn test_update_all_concurrently() -> Result<(), CgkaError> {
         let mut csprng = rand::thread_rng();
-        run_tests_for_various_member_counts(vec![vec![update_all_members()]], &mut csprng)
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
+        run_tests_for_various_member_counts(
+            vec![vec![update_all_members(sk.clone())]],
+            &sk,
+            &mut csprng,
+        )
     }
 
     #[test]
     fn test_update_even_concurrently() -> Result<(), CgkaError> {
         let mut csprng = rand::thread_rng();
-        run_tests_for_various_member_counts(vec![vec![update_even_members()]], &mut csprng)
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
+        run_tests_for_various_member_counts(
+            vec![vec![update_even_members(sk.clone())]],
+            &sk,
+            &mut csprng,
+        )
     }
 
     #[test]
     fn test_remove_odd_concurrently() -> Result<(), CgkaError> {
-        let csprng = &mut rand::thread_rng();
-        run_tests_for_various_member_counts(vec![vec![remove_odd_members()]], csprng)
+        let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
+        run_tests_for_various_member_counts(
+            vec![vec![remove_odd_members(sk.clone())]],
+            &sk,
+            &mut csprng,
+        )
     }
 
     #[test]
     fn test_remove_from_right_concurrently() -> Result<(), CgkaError> {
-        let csprng = &mut rand::thread_rng();
-        run_tests_for_various_member_counts(vec![vec![remove_from_right(1)]], csprng)
+        let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
+        run_tests_for_various_member_counts(
+            vec![vec![remove_from_right(1, sk.clone())]],
+            &sk,
+            &mut csprng,
+        )
     }
 
     #[test]
     fn test_remove_from_left_concurrently() -> Result<(), CgkaError> {
-        let csprng = &mut rand::thread_rng();
-        run_tests_for_various_member_counts(vec![vec![remove_from_left(1)]], csprng)
+        let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
+        run_tests_for_various_member_counts(
+            vec![vec![remove_from_left(1, sk.clone())]],
+            &sk,
+            &mut csprng,
+        )
     }
 
     #[test]
     fn test_update_then_remove_then_update_even_concurrently() -> Result<(), CgkaError> {
         let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         run_tests_for_various_member_counts(
             vec![
-                vec![update_all_members()],
-                vec![remove_odd_members()],
-                vec![update_even_members()],
+                vec![update_all_members(sk.clone())],
+                vec![remove_odd_members(sk.clone())],
+                vec![update_even_members(sk.clone())],
             ],
+            &sk,
             &mut csprng,
         )
     }
@@ -690,8 +743,13 @@ mod tests {
     #[test]
     fn test_update_and_remove_one_concurrently() -> Result<(), CgkaError> {
         let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         run_tests_for_various_member_counts(
-            vec![vec![remove_from_right(1), update_odd_members()]],
+            vec![vec![
+                remove_from_right(1, sk.clone()),
+                update_odd_members(sk.clone()),
+            ]],
+            &sk,
             &mut csprng,
         )
     }
@@ -699,12 +757,14 @@ mod tests {
     #[test]
     fn test_update_and_remove_odd_concurrently() -> Result<(), CgkaError> {
         let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         run_tests_for_various_member_counts(
             vec![vec![
-                update_all_members(),
-                remove_odd_members(),
-                update_even_members(),
+                update_all_members(sk.clone()),
+                remove_odd_members(sk.clone()),
+                update_even_members(sk.clone()),
             ]],
+            &sk,
             &mut csprng,
         )
     }
@@ -712,37 +772,51 @@ mod tests {
     #[test]
     fn test_update_and_add_concurrently() -> Result<(), CgkaError> {
         let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         run_tests_for_various_member_counts(
-            vec![vec![update_all_members(), add_from_all_members()]],
+            vec![vec![
+                update_all_members(sk.clone()),
+                add_from_all_members(sk.clone()),
+            ]],
+            &sk,
             &mut csprng,
         )
     }
 
     #[test]
     fn test_add_one_concurrently() -> Result<(), CgkaError> {
+        let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         run_tests_for_various_member_counts(
-            vec![vec![add_from_first_member()]],
-            &mut rand::thread_rng(),
+            vec![vec![add_from_first_member(sk.clone())]],
+            &sk,
+            &mut csprng,
         )
     }
 
     #[test]
     fn test_all_add_one_concurrently() -> Result<(), CgkaError> {
+        let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         run_tests_for_various_member_counts(
-            vec![vec![add_from_all_members()]],
-            &mut rand::thread_rng(),
+            vec![vec![add_from_all_members(sk.clone())]],
+            &sk,
+            &mut csprng,
         )
     }
 
     #[test]
     fn test_remove_then_all_add_one_then_remove_odd_concurrently() -> Result<(), CgkaError> {
+        let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         run_tests_for_various_member_counts(
             vec![
-                vec![remove_from_right(1)],
-                vec![add_from_all_members()],
-                vec![remove_odd_members()],
+                vec![remove_from_right(1, sk.clone())],
+                vec![add_from_all_members(sk.clone())],
+                vec![remove_odd_members(sk.clone())],
             ],
-            &mut rand::thread_rng(),
+            &sk,
+            &mut csprng,
         )
     }
 
@@ -750,55 +824,72 @@ mod tests {
     fn test_update_all_then_add_from_all_then_remove_odd_then_update_even_concurrently(
     ) -> Result<(), CgkaError> {
         let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         run_tests_for_various_member_counts(
             vec![
-                vec![update_all_members()],
-                vec![add_from_all_members()],
-                vec![remove_odd_members()],
-                vec![update_even_members()],
+                vec![update_all_members(sk.clone())],
+                vec![add_from_all_members(sk.clone())],
+                vec![remove_odd_members(sk.clone())],
+                vec![update_even_members(sk.clone())],
             ],
+            &sk,
             &mut csprng,
         )
     }
 
     #[test]
     fn test_all_members_add_and_update_concurrently() -> Result<(), CgkaError> {
+        let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         run_tests_for_various_member_counts(
-            vec![vec![add_from_all_members(), update_all_members()]],
-            &mut rand::thread_rng(),
+            vec![vec![
+                add_from_all_members(sk.clone()),
+                update_all_members(sk.clone()),
+            ]],
+            &sk,
+            &mut csprng,
         )
     }
 
     #[test]
     fn test_update_added_members_concurrently() -> Result<(), CgkaError> {
+        let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         run_tests_for_various_member_counts(
-            vec![vec![add_from_all_members(), update_added_members()]],
-            &mut rand::thread_rng(),
+            vec![vec![
+                add_from_all_members(sk.clone()),
+                update_added_members(sk.clone()),
+            ]],
+            &sk,
+            &mut csprng,
         )
     }
 
     #[test]
     fn test_a_bunch_of_ops_in_rounds() -> Result<(), CgkaError> {
+        let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         run_tests_for_various_member_counts(
             vec![vec![
-                update_all_members(),
-                add_from_all_members(),
-                add_from_first_member(),
-                remove_odd_members(),
-                add_from_first_member(),
-                remove_from_right(1),
-                remove_from_left(1),
-                update_even_members(),
-                add_from_first_member(),
-                update_even_members(),
-                add_from_first_member(),
-                remove_from_left(2),
-                remove_odd_members(),
-                update_all_members(),
-                add_from_first_member(),
-                remove_from_right(2),
-                update_even_members(),
+                update_all_members(sk.clone()),
+                add_from_all_members(sk.clone()),
+                add_from_first_member(sk.clone()),
+                remove_odd_members(sk.clone()),
+                add_from_first_member(sk.clone()),
+                remove_from_right(1, sk.clone()),
+                remove_from_left(1, sk.clone()),
+                update_even_members(sk.clone()),
+                add_from_first_member(sk.clone()),
+                update_even_members(sk.clone()),
+                add_from_first_member(sk.clone()),
+                remove_from_left(2, sk.clone()),
+                remove_odd_members(sk.clone()),
+                update_all_members(sk.clone()),
+                add_from_first_member(sk.clone()),
+                remove_from_right(2, sk.clone()),
+                update_even_members(sk.clone()),
             ]],
+            &sk,
             &mut rand::thread_rng(),
         )
     }

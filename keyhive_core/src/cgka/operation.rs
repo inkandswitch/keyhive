@@ -8,7 +8,6 @@ use derivative::Derivative;
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    borrow::Borrow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     hash::{Hash, Hasher},
     mem,
@@ -19,25 +18,25 @@ use topological_sort::TopologicalSort;
 
 /// An ordered [`NonEmpty`] of concurrent [`CgkaOperation`]s.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct CgkaEpoch(NonEmpty<Rc<SignedCgkaOperation>>>);
+pub struct CgkaEpoch(NonEmpty<Rc<Signed<CgkaOperation>>>);
 
-impl From<NonEmpty<Rc<CgkaOperation>>> for CgkaEpoch {
-    fn from(item: NonEmpty<Rc<CgkaOperation>>) -> Self {
+impl From<NonEmpty<Rc<Signed<CgkaOperation>>>> for CgkaEpoch {
+    fn from(item: NonEmpty<Rc<Signed<CgkaOperation>>>) -> Self {
         CgkaEpoch(item)
     }
 }
 
 impl Deref for CgkaEpoch {
-    type Target = NonEmpty<Rc<CgkaOperation>>;
+    type Target = NonEmpty<Rc<Signed<CgkaOperation>>>;
 
-    fn deref(&self) -> &NonEmpty<Rc<CgkaOperation>> {
+    fn deref(&self) -> &NonEmpty<Rc<Signed<CgkaOperation>>> {
         &self.0
     }
 }
 
 impl IntoIterator for CgkaEpoch {
-    type Item = Rc<CgkaOperation>;
-    type IntoIter = <NonEmpty<Rc<CgkaOperation>> as IntoIterator>::IntoIter;
+    type Item = Rc<Signed<CgkaOperation>>;
+    type IntoIter = <NonEmpty<Rc<Signed<CgkaOperation>>> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -50,28 +49,28 @@ pub enum CgkaOperation {
         added_id: IndividualId,
         pk: ShareKey,
         leaf_index: u32,
-        predecessors: Vec<Digest<CgkaOperation>>,
-        add_predecessors: Vec<Digest<CgkaOperation>>,
+        predecessors: Vec<Digest<Signed<CgkaOperation>>>,
+        add_predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: DocumentId,
     },
     Remove {
         id: IndividualId,
         leaf_idx: u32,
         removed_keys: Vec<ShareKey>,
-        predecessors: Vec<Digest<CgkaOperation>>,
+        predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: DocumentId,
     },
     Update {
         id: IndividualId,
         new_path: Box<PathChange>,
-        predecessors: Vec<Digest<CgkaOperation>>,
+        predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: DocumentId,
     },
 }
 
 impl CgkaOperation {
     /// The zero or more immediate causal predecessors of this operation.
-    pub(crate) fn predecessors(&self) -> HashSet<Digest<CgkaOperation>> {
+    pub(crate) fn predecessors(&self) -> HashSet<Digest<Signed<CgkaOperation>>> {
         match self {
             CgkaOperation::Add { predecessors, .. } => {
                 HashSet::from_iter(predecessors.iter().cloned())
@@ -99,21 +98,21 @@ impl CgkaOperation {
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize, Derivative)]
 #[derivative(Hash)]
 pub(crate) struct CgkaOperationGraph {
-    pub(crate) cgka_ops: CaMap<CgkaOperation>,
+    pub(crate) cgka_ops: CaMap<Signed<CgkaOperation>>,
 
     #[derivative(Hash(hash_with = "hash_cgka_ops_preds"))]
     pub(crate) cgka_ops_predecessors:
-        HashMap<Digest<CgkaOperation>, HashSet<Digest<CgkaOperation>>>,
+        HashMap<Digest<Signed<CgkaOperation>>, HashSet<Digest<Signed<CgkaOperation>>>>,
 
     #[derivative(Hash(hash_with = "crate::util::hasher::hash_set"))]
-    pub(crate) cgka_op_heads: HashSet<Digest<CgkaOperation>>,
+    pub(crate) cgka_op_heads: HashSet<Digest<Signed<CgkaOperation>>>,
 
     #[derivative(Hash(hash_with = "crate::util::hasher::hash_set"))]
-    pub(crate) add_heads: HashSet<Digest<CgkaOperation>>,
+    pub(crate) add_heads: HashSet<Digest<Signed<CgkaOperation>>>,
 }
 
 fn hash_cgka_ops_preds<H: Hasher>(
-    hmap: &HashMap<Digest<CgkaOperation>, HashSet<Digest<CgkaOperation>>>,
+    hmap: &HashMap<Digest<Signed<CgkaOperation>>, HashSet<Digest<Signed<CgkaOperation>>>>,
     state: &mut H,
 ) {
     hmap.iter()
@@ -132,7 +131,7 @@ impl CgkaOperationGraph {
         }
     }
 
-    pub(crate) fn contains_op_hash(&self, op_hash: &Digest<CgkaOperation>) -> bool {
+    pub(crate) fn contains_op_hash(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> bool {
         self.cgka_ops.contains_key(op_hash)
     }
 
@@ -143,12 +142,16 @@ impl CgkaOperationGraph {
     }
 
     /// Add an operation that was created locally to the graph.
-    pub(crate) fn add_local_op(&mut self, op: &CgkaOperation) {
+    pub(crate) fn add_local_op(&mut self, op: &Signed<CgkaOperation>) {
         self.add_op_and_update_heads(op, None);
     }
 
     /// Add an operation to the graph.
-    pub(crate) fn add_op(&mut self, op: &CgkaOperation, heads: &HashSet<Digest<CgkaOperation>>) {
+    pub(crate) fn add_op(
+        &mut self,
+        op: &Signed<CgkaOperation>,
+        heads: &HashSet<Digest<Signed<CgkaOperation>>>,
+    ) {
         self.add_op_and_update_heads(op, Some(heads));
     }
 
@@ -156,8 +159,8 @@ impl CgkaOperationGraph {
     /// were replaced by causal successors.
     fn add_op_and_update_heads(
         &mut self,
-        op: &CgkaOperation,
-        external_heads: Option<&HashSet<Digest<CgkaOperation>>>,
+        op: &Signed<CgkaOperation>,
+        external_heads: Option<&HashSet<Digest<Signed<CgkaOperation>>>>,
     ) {
         let op_hash = Digest::hash(op);
         let mut op_predecessors = HashSet::new();
@@ -170,10 +173,10 @@ impl CgkaOperationGraph {
             }
             if let CgkaOperation::Add {
                 add_predecessors, ..
-            } = op
+            } = &op.payload
             {
                 for h in add_predecessors {
-                    self.add_heads.remove(h);
+                    self.add_heads.remove(&h);
                 }
             }
         } else {
@@ -192,19 +195,22 @@ impl CgkaOperationGraph {
         self.cgka_ops_predecessors.insert(op_hash, op_predecessors);
     }
 
-    pub(crate) fn heads_contained_in(&self, heads: &HashSet<Digest<CgkaOperation>>) -> bool {
+    pub(crate) fn heads_contained_in(
+        &self,
+        heads: &HashSet<Digest<Signed<CgkaOperation>>>,
+    ) -> bool {
         self.cgka_op_heads.is_subset(heads)
     }
 
-    fn is_add_op(&self, hash: &Digest<CgkaOperation>) -> bool {
+    fn is_add_op(&self, hash: &Digest<Signed<CgkaOperation>>) -> bool {
         let op = self.cgka_ops.get(hash).expect("op to be in history");
-        matches!(op.borrow(), &CgkaOperation::Add { .. })
+        matches!(&op.payload, &CgkaOperation::Add { .. })
     }
 
     pub(crate) fn predecessors_for(
         &self,
-        op_hash: &Digest<CgkaOperation>,
-    ) -> Option<&HashSet<Digest<CgkaOperation>>> {
+        op_hash: &Digest<Signed<CgkaOperation>>,
+    ) -> Option<&HashSet<Digest<Signed<CgkaOperation>>>> {
         self.cgka_ops_predecessors.get(op_hash)
     }
 
@@ -218,13 +224,15 @@ impl CgkaOperationGraph {
     /// epoch set is then ordered and placed into a distinct [`CgkaEpoch`].
     pub(crate) fn topsort_for_heads(
         &self,
-        heads: &HashSet<Digest<CgkaOperation>>,
+        heads: &HashSet<Digest<Signed<CgkaOperation>>>,
     ) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
         debug_assert!(heads.iter().all(|head| self.cgka_ops.contains_key(head)));
         let mut op_hashes = Vec::new();
-        let mut dependencies = TopologicalSort::<Digest<CgkaOperation>>::new();
-        let mut successors: HashMap<Digest<CgkaOperation>, HashSet<Digest<CgkaOperation>>> =
-            HashMap::new();
+        let mut dependencies = TopologicalSort::<Digest<Signed<CgkaOperation>>>::new();
+        let mut successors: HashMap<
+            Digest<Signed<CgkaOperation>>,
+            HashSet<Digest<Signed<CgkaOperation>>>,
+        > = HashMap::new();
         let mut frontier = VecDeque::new();
         let mut seen = HashSet::new();
         for head in heads {
@@ -270,7 +278,7 @@ impl CgkaOperationGraph {
         // Partition heads into ordered epochs representing ordered sets of
         // concurrent operations.
         let mut epoch_heads = HashSet::new();
-        let mut next_epoch: Vec<Rc<CgkaOperation>> = Vec::new();
+        let mut next_epoch: Vec<Rc<Signed<CgkaOperation>>> = Vec::new();
         while !dependencies.is_empty() {
             let mut next_set = dependencies.pop_all();
             next_set.sort();

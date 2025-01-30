@@ -4,10 +4,7 @@ use crate::{
     ability::Ability,
     access::Access,
     archive::Archive,
-    cgka::{
-        error::CgkaError,
-        operation::{CgkaEpoch, CgkaOperation},
-    },
+    cgka::{error::CgkaError, operation::CgkaOperation},
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -182,6 +179,7 @@ impl<
             self.delegations.dupe(),
             self.revocations.dupe(),
             self.event_listener.clone(),
+            &self.active.borrow().signing_key,
             &mut self.csprng,
         )?;
 
@@ -336,6 +334,7 @@ impl<
             content_ref,
             content,
             pred_refs,
+            &self.active.borrow().signing_key,
             &mut self.csprng,
         )?)
     }
@@ -351,8 +350,9 @@ impl<
     pub fn force_pcs_update(
         &mut self,
         doc: Rc<RefCell<Document<T, L>>>,
-    ) -> Result<CgkaOperation, EncryptError> {
-        doc.borrow_mut().pcs_update(&mut self.csprng)
+    ) -> Result<Signed<CgkaOperation>, EncryptError> {
+        doc.borrow_mut()
+            .pcs_update(&self.active.borrow().signing_key, &mut self.csprng)
     }
 
     pub fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<T, L>> {
@@ -475,7 +475,7 @@ impl<
     pub fn events_for_agent(
         &self,
         agent: &Agent<T, L>,
-    ) -> HashMap<Digest<Event<T, L>>, Event<T, L>> {
+    ) -> Result<HashMap<Digest<Event<T, L>>, Event<T, L>>, CgkaError> {
         let mut ops: HashMap<_, _> = self
             .membership_ops_for_agent(agent)
             .into_iter()
@@ -494,7 +494,7 @@ impl<
             ops.insert(Digest::hash(&op), op);
         }
 
-        ops
+        Ok(ops)
     }
 
     // FIXME topsort cgka ops
@@ -923,7 +923,8 @@ impl<
         signed_op: Signed<CgkaOperation>,
     ) -> Result<(), ReceiveCgkaOpError> {
         signed_op.try_verify()?;
-        let op = signed_op.payload;
+        let rc = Rc::new(signed_op);
+        let op = &rc.dupe().payload;
 
         let doc_id = op.doc_id();
         let mut doc = self
@@ -934,16 +935,16 @@ impl<
 
         if let CgkaOperation::Add { added_id, pk, .. } = op {
             let active = self.active.borrow();
-            if active.id() == added_id {
+            if active.id() == *added_id {
                 let sk = active
                     .prekey_pairs
                     .get(&pk)
-                    .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?;
-                doc.merge_cgka_invite_op(op, sk)?;
+                    .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(*pk))?;
+                doc.merge_cgka_invite_op(rc, sk)?;
                 return Ok(());
             }
         }
-        doc.merge_cgka_op(op)?;
+        doc.merge_cgka_op(rc)?;
         Ok(())
     }
 

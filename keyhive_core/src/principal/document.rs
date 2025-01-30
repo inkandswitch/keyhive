@@ -121,6 +121,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         delegations: DelegationStore<T, L>,
         revocations: RevocationStore<T, L>,
         listener: L,
+        signing_key: &ed25519_dalek::SigningKey,
         csprng: &mut R,
     ) -> Result<Self, GenerateDocError> {
         let sk = ed25519_dalek::SigningKey::generate(csprng);
@@ -150,17 +151,23 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         owner_sks.insert(owner_share_key, owner_share_secret_key);
         let mut cgka =
             Cgka::new(doc_id, owner_id, owner_share_key)?.with_new_owner(owner_id, owner_sks)?;
-        let mut ops: Vec<CgkaOperation> = Vec::new();
+        let mut ops: Vec<Signed<CgkaOperation>> = Vec::new();
         if other_members.len() > 1 {
             ops.extend(
                 cgka.add_multiple(
                     NonEmpty::from_vec(other_members).expect("there to be multiple other members"),
+                    signing_key,
                 )?
                 .iter()
                 .cloned(),
             );
         }
-        let (_pcs_key, update_op) = cgka.update(owner_share_key, owner_share_secret_key, csprng)?;
+        let (_pcs_key, update_op) = cgka.update(
+            owner_share_key,
+            owner_share_secret_key,
+            &signing_key,
+            csprng,
+        )?;
         // FIXME: We don't currently do anything with these ops, but need to share them
         // across the network.
         ops.push(update_op);
@@ -203,7 +210,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
     pub fn add_cgka_member(
         &mut self,
         delegation: &Signed<Delegation<T, L>>,
-    ) -> Result<Vec<CgkaOperation>, CgkaError> {
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut ops = Vec::new();
         for (id, pre_key) in delegation
             .dupe()
@@ -211,7 +219,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
             .delegate
             .pick_individual_prekeys(self.doc_id())
         {
-            if let Some(op) = self.cgka.add(id, pre_key)? {
+            if let Some(op) = self.cgka.add(id, pre_key, &signing_key)? {
                 ops.push(op);
             }
         }
@@ -235,8 +243,9 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
     pub fn remove_cgka_member(
         &mut self,
         id: IndividualId,
-    ) -> Result<Option<CgkaOperation>, CgkaError> {
-        self.cgka.remove(id)
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+        self.cgka.remove(id, &signing_key)
     }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T, L>) -> Vec<Rc<Signed<Revocation<T, L>>>> {
@@ -261,16 +270,16 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         self.group.receive_revocation(revocation)
     }
 
-    pub fn merge_cgka_op(&mut self, op: CgkaOperation) -> Result<(), CgkaError> {
-        self.cgka.merge_concurrent_operation(Rc::new(op))
+    pub fn merge_cgka_op(&mut self, op: Rc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
+        self.cgka.merge_concurrent_operation(op)
     }
 
     pub fn merge_cgka_invite_op(
         &mut self,
-        op: CgkaOperation,
+        op: Rc<Signed<CgkaOperation>>,
         sk: &ShareSecretKey,
     ) -> Result<(), CgkaError> {
-        let CgkaOperation::Add { added_id, pk, .. } = op else {
+        let CgkaOperation::Add { added_id, pk, .. } = op.payload else {
             return Err(CgkaError::UnexpectedInviteOperation);
         };
         let mut owner_sks = self.cgka.owner_sks.clone();
@@ -285,13 +294,14 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
 
     pub fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
+        signing_key: &ed25519_dalek::SigningKey,
         csprng: &mut R,
-    ) -> Result<CgkaOperation, EncryptError> {
+    ) -> Result<Signed<CgkaOperation>, EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
         let (_, op) = self
             .cgka
-            .update(new_share_key, new_share_secret_key, csprng)
+            .update(new_share_key, new_share_secret_key, &signing_key, csprng)
             .map_err(EncryptError::UnableToPcsUpdate)?;
         Ok(op)
     }
@@ -301,11 +311,12 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         content_ref: &T,
         content: &[u8],
         pred_refs: &Vec<T>,
+        signing_key: &ed25519_dalek::SigningKey,
         csprng: &mut R,
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptError> {
         let (app_secret, maybe_update_op) = self
             .cgka
-            .new_app_secret_for(content_ref, content, pred_refs, csprng)
+            .new_app_secret_for(content_ref, content, pred_refs, signing_key, csprng)
             .map_err(EncryptError::FailedToMakeAppSecret)?;
 
         Ok(EncryptedContentWithUpdate {
@@ -396,7 +407,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Hash for Document<T, L> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddMemberUpdate<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
     pub delegation: Rc<Signed<Delegation<T, L>>>,
-    pub cgka_ops: Vec<CgkaOperation>,
+    pub cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -406,7 +417,7 @@ pub struct MissingIndividualError(pub Box<IndividualId>);
 #[derive(Debug, Clone, PartialEq)]
 pub struct RevokeMemberUpdate<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
     pub revocations: Vec<Rc<Signed<Revocation<T, L>>>>,
-    pub cgka_ops: Vec<CgkaOperation>,
+    pub cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
 impl<T: ContentRef, L: MembershipListener<T>> Default for RevokeMemberUpdate<T, L> {
@@ -454,7 +465,7 @@ pub enum GenerateDocError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptedContentWithUpdate<T: ContentRef> {
     pub(crate) encrypted_content: EncryptedContent<Vec<u8>, T>,
-    pub(crate) update_op: Option<CgkaOperation>,
+    pub(crate) update_op: Option<Signed<CgkaOperation>>,
 }
 
 impl<T: ContentRef> EncryptedContentWithUpdate<T> {
@@ -462,7 +473,7 @@ impl<T: ContentRef> EncryptedContentWithUpdate<T> {
         &self.encrypted_content
     }
 
-    pub fn update_op(&self) -> Option<&CgkaOperation> {
+    pub fn update_op(&self) -> Option<&Signed<CgkaOperation>> {
         self.update_op.as_ref()
     }
 }
