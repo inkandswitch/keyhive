@@ -298,7 +298,11 @@ impl Cgka {
     /// membership changes and we receive a concurrent update, we can apply it
     /// immediately.
     pub fn merge_concurrent_operation(&mut self, op: Rc<CgkaOperation>) -> Result<(), CgkaError> {
-        println!("\nMerging operation at {}: {:?}\n", self.owner_id, op.name());
+        println!(
+            "\nMerging operation at {}: {:?}\n",
+            self.owner_id,
+            op.name()
+        );
         if self.ops_graph.contains_op_hash(&Digest::hash(op.borrow())) {
             return Ok(());
         }

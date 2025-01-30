@@ -3,7 +3,12 @@ pub mod id;
 use super::{group::AddGroupMemberError, individual::id::IndividualId};
 use crate::{
     access::Access,
-    cgka::{error::CgkaError, keys::ShareKeyMap, operation::{CgkaEpoch, CgkaOperation}, Cgka},
+    cgka::{
+        error::CgkaError,
+        keys::ShareKeyMap,
+        operation::{CgkaEpoch, CgkaOperation},
+        Cgka,
+    },
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
