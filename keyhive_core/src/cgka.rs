@@ -315,6 +315,10 @@ impl Cgka {
         Ok(())
     }
 
+    pub fn ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
+        self.ops_graph.topsort_graph()
+    }
+
     /// Apply a [`CgkaOperation`].
     fn apply_operation(&mut self, op: Rc<CgkaOperation>) -> Result<(), CgkaError> {
         if self.ops_graph.contains_op_hash(&Digest::hash(op.borrow())) {

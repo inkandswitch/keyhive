@@ -1,6 +1,6 @@
 use super::{beekem::PathChange, error::CgkaError};
 use crate::{
-    crypto::{digest::Digest, share_key::ShareKey},
+    crypto::{digest::Digest, share_key::ShareKey, signed::Signed},
     principal::{document::id::DocumentId, individual::id::IndividualId},
     util::content_addressed_map::CaMap,
 };
@@ -19,7 +19,7 @@ use topological_sort::TopologicalSort;
 
 /// An ordered [`NonEmpty`] of concurrent [`CgkaOperation`]s.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct CgkaEpoch(NonEmpty<Rc<CgkaOperation>>);
+pub struct CgkaEpoch(NonEmpty<Rc<SignedCgkaOperation>>>);
 
 impl From<NonEmpty<Rc<CgkaOperation>>> for CgkaEpoch {
     fn from(item: NonEmpty<Rc<CgkaOperation>>) -> Self {
@@ -32,6 +32,15 @@ impl Deref for CgkaEpoch {
 
     fn deref(&self) -> &NonEmpty<Rc<CgkaOperation>> {
         &self.0
+    }
+}
+
+impl IntoIterator for CgkaEpoch {
+    type Item = Rc<CgkaOperation>;
+    type IntoIter = <NonEmpty<Rc<CgkaOperation>> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }
 

@@ -4,7 +4,10 @@ use crate::{
     ability::Ability,
     access::Access,
     archive::Archive,
-    cgka::{error::CgkaError, operation::CgkaOperation},
+    cgka::{
+        error::CgkaError,
+        operation::{CgkaEpoch, CgkaOperation},
+    },
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -14,7 +17,7 @@ use crate::{
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
-    event::Event,
+    event::{Event, StaticEvent},
     listener::{cgka::CgkaListener, membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
@@ -353,7 +356,7 @@ impl<
     }
 
     pub fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<T, L>> {
-        self.docs_reachable_by_agent(self.active.dupe().into())
+        self.docs_reachable_by_agent(&self.active.dupe().into())
     }
 
     pub fn reachable_members(
@@ -368,7 +371,7 @@ impl<
 
     pub fn docs_reachable_by_agent(
         &self,
-        agent: Agent<T, L>,
+        agent: &Agent<T, L>,
     ) -> BTreeMap<DocumentId, Ability<T, L>> {
         let mut caps: BTreeMap<DocumentId, Ability<T, L>> = BTreeMap::new();
         let mut seen: HashSet<AgentId> = HashSet::new();
@@ -486,7 +489,27 @@ impl<
             }
         }
 
+        for cgka_op in self.cgka_ops_reachable_by_agent(agent)?.into_iter() {
+            let op = Event::<T, L>::from(cgka_op);
+            ops.insert(Digest::hash(&op), op);
+        }
+
         ops
+    }
+
+    // FIXME topsort cgka ops
+
+    pub fn cgka_ops_reachable_by_agent(
+        &self,
+        agent: &Agent<T, L>,
+    ) -> Result<Vec<Rc<Signed<CgkaOperation>>>, CgkaError> {
+        let mut ops = vec![];
+        for (_doc_id, ability) in self.docs_reachable_by_agent(agent) {
+            for epoch in ability.doc.borrow().cgka_ops()?.iter() {
+                ops.extend(epoch.iter().cloned());
+            }
+        }
+        Ok(ops)
     }
 
     pub fn membership_ops_for_agent(
@@ -866,7 +889,26 @@ impl<
         Ok(())
     }
 
-    pub fn receive_op(
+    pub fn reveive_event(
+        &mut self,
+        static_event: StaticEvent<T>,
+    ) -> Result<(), ReceiveEventError<T, L>> {
+        match static_event {
+            StaticEvent::Delegated(d) => self.receive_delegation(&d)?,
+            StaticEvent::Revoked(r) => self.receive_revocation(&r)?,
+
+            StaticEvent::PrekeysExpanded(op) => {
+                self.receive_prekey_op(&KeyOp::from(Rc::new(op)))?
+            }
+            StaticEvent::PrekeyRotated(op) => self.receive_prekey_op(&KeyOp::from(Rc::new(op)))?,
+
+            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op)?,
+        }
+
+        Ok(())
+    }
+
+    pub fn receive_membership_op(
         &mut self,
         static_op: &StaticMembershipOperation<T>,
     ) -> Result<(), ReceieveStaticDelegationError<T, L>> {
@@ -876,7 +918,13 @@ impl<
         }
     }
 
-    pub fn receive_cgka_op(&mut self, op: CgkaOperation) -> Result<(), ReceiveCgkaOpError> {
+    pub fn receive_cgka_op(
+        &mut self,
+        signed_op: Signed<CgkaOperation>,
+    ) -> Result<(), ReceiveCgkaOpError> {
+        signed_op.try_verify()?;
+        let op = signed_op.payload;
+
         let doc_id = op.doc_id();
         let mut doc = self
             .docs
@@ -1294,10 +1342,13 @@ pub enum TryFromArchiveError<T: ContentRef, L: MembershipListener<T>> {
     MissingAgent(Box<Identifier>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
 pub enum ReceiveCgkaOpError {
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
+
+    #[error(transparent)]
+    VerificationError(#[from] VerificationError),
 
     #[error("Unknown document recipient for recieved CGKA op: {0}")]
     UnknownDocument(DocumentId),
@@ -1321,6 +1372,18 @@ pub enum EncryptContentError {
 
     #[error("Error signing Cgka op: {0}")]
     SignCgkaOpError(SigningError),
+}
+
+#[derive(Debug, Error)]
+pub enum ReceiveEventError<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+    #[error(transparent)]
+    ReceieveStaticDelegationError(#[from] ReceieveStaticDelegationError<T, L>),
+
+    #[error(transparent)]
+    ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
+
+    #[error(transparent)]
+    ReceiveCgkaOpError(#[from] ReceiveCgkaOpError),
 }
 
 #[cfg(test)]
@@ -1456,7 +1519,7 @@ mod tests {
         let left_to_mid_ops = left.membership_ops_for_agent(&Public.individual().into());
         assert_eq!(left_to_mid_ops.len(), 2);
         for (h, op) in &left_to_mid_ops {
-            middle.receive_op(&op.clone().into()).unwrap();
+            middle.receive_membership_op(&op.clone().into()).unwrap();
             assert!(middle.delegations.borrow().get(&h.into()).is_some());
         }
 
@@ -1490,7 +1553,7 @@ mod tests {
         let mid_to_right_ops = middle.membership_ops_for_agent(&Public.individual().into());
         assert_eq!(mid_to_right_ops.len(), 2);
         for (h, op) in &mid_to_right_ops {
-            right.receive_op(&op.clone().into()).unwrap();
+            right.receive_membership_op(&op.clone().into()).unwrap();
             assert!(right.delegations.borrow().get(&h.into()).is_some());
         }
 
@@ -1543,7 +1606,7 @@ mod tests {
             right.membership_ops_for_agent(&Public.individual().into());
         assert_eq!(transitive_right_to_mid_ops.len(), 4);
         for (h, op) in &transitive_right_to_mid_ops {
-            middle.receive_op(&op.clone().into()).unwrap();
+            middle.receive_membership_op(&op.clone().into()).unwrap();
             assert!(middle.delegations.borrow().get(&h.into()).is_some());
         }
         assert_eq!(middle.individuals.len(), 3); // NOTE now includes Right
