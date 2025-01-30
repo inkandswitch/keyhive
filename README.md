@@ -1,3 +1,3 @@
-# Beehive 🐝
+# Keyhive 🗝 🐝
 
-🦀 Rust workspace for Beehive and related crates
+🦀 Rust workspace for Keyhive and related crates

@@ -2,7 +2,7 @@
 
 # Abstract
 
-Beehive maintains groups with mutable membership (additions and removals). This has two main concepts: a membership op-based CRDT, and a variant of object capabilities adapted to an eventually consistent setting. Some groups are associated with Automerge documents. Membership changes and document content MAY causally depend on each other. This document describes how to maintain this group membership.
+Keyhive maintains groups with mutable membership (additions and removals). This has two main concepts: a membership op-based CRDT, and a variant of object capabilities adapted to an eventually consistent setting. Some groups are associated with Automerge documents. Membership changes and document content MAY causally depend on each other. This document describes how to maintain this group membership.
 
 # Conventions
 
@@ -24,7 +24,7 @@ flowchart
 
 # Agents
 
-"Agents" in Beehive represent some principal that is capable of receiving, delegating, and exercising authority. They are distinguished by other entities in the system by being able to cryptographically sign operations. As such, Agents MUST be represented by a "root" key pair which acts as their ID.
+"Agents" in Keyhive represent some principal that is capable of receiving, delegating, and exercising authority. They are distinguished by other entities in the system by being able to cryptographically sign operations. As such, Agents MUST be represented by a "root" key pair which acts as their ID.
 
 Agents form a subtyping hierarchy: `Document :< Stateful :< Stateless`.
 
@@ -46,7 +46,7 @@ enum Agent {
 
 ## Stateless (AKA "Singleton")
 
-The simplest Agent variant is a public key with no associated state. Almost (but not all) ops in Beehive are signed by Stateless Agents. These are typically the leaf keys in a [group hierarchy].
+The simplest Agent variant is a public key with no associated state. Almost (but not all) ops in Keyhive are signed by Stateless Agents. These are typically the leaf keys in a [group hierarchy].
 
 Some examples of Stateless Agents include Passkeys, non-extractable WebCrypto keys, hardware keys, or other keys limited by application context.
 
@@ -517,10 +517,10 @@ flowchart TB
     doc2["LaTeX Paper\n(Jacquard)"] -->|read & write| ias
     doc3["Kid's Homework\n(Patchwork)"] -->|read| alice
 
-    ias["Ink & Switch\n(Beehive Group)"] -->|all| alice
+    ias["Ink & Switch\n(Keyhive Group)"] -->|all| alice
 
     subgraph alicedomain[" "]
-        alice["''Alice''\n(Beehive Group)"]
+        alice["''Alice''\n(Keyhive Group)"]
 
         aliceLaptop[Alice's Laptop]
         aliceTablet[Alice's Tablet]
