@@ -4,7 +4,7 @@
 
 It is [conjectured][Zooko's Triangle] that having a naming scheme that is cryptographically secure, decentralized, and human readable is impossible. To work around this, many systems have adopted a layered approach where the ground truth is secure and decentralized, and some trusted authority layers on a binding of a human-readable name to one or more public keys.
 
-Since there is a large number of such binding solutions — each with their own tradeoffs — the core Beehive design intentionally leaves questions of human-readable identifiers out of scope. However, many developers are not experts in the finer distinctions between authz, authn, and identity. As such, Beehive "should" include some lightweight, loosely coupled, default identity mechanism, with the ability to replace this with a more sophisticated mechanism such as DNS, ENS, the Name Name System, etc.
+Since there is a large number of such binding solutions — each with their own tradeoffs — the core Keyhive design intentionally leaves questions of human-readable identifiers out of scope. However, many developers are not experts in the finer distinctions between authz, authn, and identity. As such, Keyhive "should" include some lightweight, loosely coupled, default identity mechanism, with the ability to replace this with a more sophisticated mechanism such as DNS, ENS, the Name Name System, etc.
 
 > [!CAUTION]
 > It is extremely important to note that edge names SHOULD NOT be considered authoritative. There is no verifiable proof behind these names other than a claim by some entity in the graph.

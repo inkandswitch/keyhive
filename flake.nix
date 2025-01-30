@@ -1,5 +1,5 @@
 {
-  description = "beehive";
+  description = "keyhive";
 
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-24.11";
@@ -95,7 +95,7 @@
         gzip = "${pkgs.gzip}/bin/gzip";
         node = "${unstable.nodejs_20}/bin/node";
         pnpm = "${unstable.pnpm}/bin/pnpm";
-        playwright = "${pnpm} --dir=./beehive_wasm exec playwright";
+        playwright = "${pnpm} --dir=./keyhive_wasm exec playwright";
         wasm-pack = "${unstable.wasm-pack}/bin/wasm-pack";
         wasm-opt = "${pkgs.binaryen}/bin/wasm-opt";
 
@@ -106,13 +106,13 @@
             "${cargo} build --release";
 
          "release:wasm:web" = cmd "Build release for wasm32-unknown-unknown with web bindings"
-           "${wasm-pack} build ./beehive_wasm --release --target=web && ${gzip} -f ./beehive_wasm/pkg/beehive_wasm_bg.wasm";
+           "${wasm-pack} build ./keyhive_wasm --release --target=web && ${gzip} -f ./keyhive_wasm/pkg/keyhive_wasm_bg.wasm";
 
          "release:wasm:bundler" = cmd "Build release for wasm32-unknown-unknown with bundler bindings"
-            "${wasm-pack} build ./beehive_wasm --release --target=bundler && ${gzip} -f ./beehive_wasm/pkg/beehive_wasm_bg.wasm";
+            "${wasm-pack} build ./keyhive_wasm --release --target=bundler && ${gzip} -f ./keyhive_wasm/pkg/keyhive_wasm_bg.wasm";
 
           "release:wasm:nodejs" = cmd "Build release for wasm32-unknown-unknown with Node.js bindgings"
-            "${wasm-pack} build ./beehive_wasm --release --target=nodejs && ${gzip} -f ./beehive_wasm/pkg/beehive_wasm_bg.wasm";
+            "${wasm-pack} build ./keyhive_wasm --release --target=nodejs && ${gzip} -f ./keyhive_wasm/pkg/keyhive_wasm_bg.wasm";
         };
 
         build = {
@@ -120,7 +120,7 @@
             "${cargo} build";
 
           "build:wasm:web" = cmd "Build for wasm32-unknown-unknown with web bindings"
-            "${wasm-pack} build ./beehive_wasm --dev --target=web";
+            "${wasm-pack} build ./keyhive_wasm --dev --target=web";
  
           "build:wasm:nodejs" = cmd "Build for wasm32-unknown-unknown with Node.js bindgings"
             "${wasm-pack} build --dev --target=nodejs";
@@ -179,22 +179,22 @@
             "test:wasm:node && test:ts:web";
 
           "test:wasm:node" = cmd "Run wasm-pack tests in Node.js"
-            "${wasm-pack} test --node beehive_wasm";
+            "${wasm-pack} test --node keyhive_wasm";
 
-          "test:ts:web" = cmd "Run beehive_wasm Typescript tests in Playwright"
+          "test:ts:web" = cmd "Run keyhive_wasm Typescript tests in Playwright"
             "build:wasm:web && ${playwright} test";
 
           "test:ts:web:report:latest" = cmd "Open the latest Playwright report"
             "${playwright} show-report";
 
           "test:wasm:chrome" = cmd "Run wasm-pack tests in headless Chrome"
-            "${wasm-pack} test --chrome beehive_wasm --features='browser_test'";
+            "${wasm-pack} test --chrome keyhive_wasm --features='browser_test'";
 
           "test:wasm:firefox" = cmd "Run wasm-pack tests in headless Chrome"
-            "${wasm-pack} test --firefox beehive_wasm --features='browser_test'";
+            "${wasm-pack} test --firefox keyhive_wasm --features='browser_test'";
 
           "test:wasm:safari" = cmd "Run wasm-pack tests in headless Chrome"
-            "${wasm-pack} test --safari beehive_wasm --features='browser_test'";
+            "${wasm-pack} test --safari keyhive_wasm --features='browser_test'";
 
           "test:docs" = cmd "Run Cargo doctests"
             "${cargo} test --doc --features='mermaid_docs,test_utils'";
@@ -219,7 +219,7 @@
 
       in rec {
         devShells.default = pkgs.mkShell {
-          name = "beehive";
+          name = "keyhive";
 
           nativeBuildInputs = with pkgs;
             [

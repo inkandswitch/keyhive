@@ -22,7 +22,7 @@ flowchart
         groceries[("Groceries")]
 
         hiking_plans[("Hiking Plans")]
-        threat_model[("Beehive\nThreat Model")]
+        threat_model[("Keyhive\nThreat Model")]
         meeting_notes[("Meeting Notes")]
 
         w32[("Week 32 Notes")]
@@ -31,7 +31,7 @@ flowchart
 
     subgraph Groups
         ias{{"Ink & Switch"}}
-        beehive{{"Beehive Team"}}
+        keyhive{{"Keyhive Team"}}
         jacquard{{"Jacquard Team"}}
 
         ajg{{"Alex"}}
@@ -76,14 +76,14 @@ flowchart
     w33 --> meeting_notes
 
     meeting_notes --> ias
-    threat_model --> beehive
+    threat_model --> keyhive
 
     ias --> pvh
-    ias --> beehive
+    ias --> keyhive
     ias --> jacquard
 
-    beehive --> ajg_work
-    beehive --> bez
+    keyhive --> ajg_work
+    keyhive --> bez
 
     jacquard --> gl
     jacquard --> ps

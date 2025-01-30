@@ -25,11 +25,11 @@ jobs:
       with:
         node-version: 22
     - name: Install dependencies
-      run: cd ./beehive_wasm && npm i
+      run: cd ./keyhive_wasm && npm i
     - name: Install Playwright Browsers
-      run: cd ./beehive_wasm && pnpm i && pnpm exec playwright install --with-deps
+      run: cd ./keyhive_wasm && pnpm i && pnpm exec playwright install --with-deps
 
     - name: Test on Wasm
-      run: wasm-pack test --node beehive_wasm
+      run: wasm-pack test --node keyhive_wasm
     - name: Test in browsers
-      run: wasm-pack build ./beehive_wasm --release --target=web && cd ./beehive_wasm && pnpm i && npm install --global http-server && pnpm exec playwright test
+      run: wasm-pack build ./keyhive_wasm --release --target=web && cd ./keyhive_wasm && pnpm i && npm install --global http-server && pnpm exec playwright test

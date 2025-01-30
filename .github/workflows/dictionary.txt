@@ -23,6 +23,7 @@ EdDSA
 FIXME
 HChaCha
 Invariants
+Keyhive
 Keyoxide
 MLS
 Memoization

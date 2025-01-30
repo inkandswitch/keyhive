@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "beehive_core",
-    "beehive_wasm",
+    "keyhive_core",
+    "keyhive_wasm",
     "beelay/beelay-core",
 ]
 
@@ -15,7 +15,7 @@ authors = [
 
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/inkandswitch/beehive"
+repository = "https://github.com/inkandswitch/keyhive"
 rust-version = "1.83.0"
 version = "0.1.0"
 
