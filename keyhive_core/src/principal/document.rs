@@ -273,7 +273,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         let CgkaOperation::Add { added_id, pk, .. } = op else {
             return Err(CgkaError::UnexpectedInviteOperation);
         };
-        let mut owner_sks = ShareKeyMap::new();
+        let mut owner_sks = self.cgka.owner_sks.clone();
         owner_sks.insert(pk.clone(), sk.clone());
         self.cgka = self.cgka.with_new_owner(added_id, owner_sks)?;
         self.merge_cgka_op(op)
