@@ -6,6 +6,7 @@ use super::{
     change_ref::JsChangeRef,
     document::JsDocument,
     encrypted::JsEncrypted,
+    encrypted_content_with_update::JsEncryptedContentWithUpdate,
     event_handler::JsEventHandler,
     generate_doc_error::JsGenerateDocError,
     group::JsGroup,
@@ -114,7 +115,7 @@ impl JsKeyhive {
         content_ref: JsChangeRef,
         pred_refs: Vec<JsChangeRef>,
         content: &[u8],
-    ) -> Result<JsEncrypted, JsEncryptError> {
+    ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
         Ok(self
             .0
             .try_encrypt_content(doc.0, &content_ref, &pred_refs, content)?
@@ -129,7 +130,7 @@ impl JsKeyhive {
         content_ref: JsChangeRef,
         pred_refs: Vec<JsChangeRef>,
         content: &[u8],
-    ) -> Result<JsEncrypted, JsEncryptError> {
+    ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
         Ok(self
             .0
             .try_encrypt_content(doc.0, &content_ref, &pred_refs, content)?
@@ -291,7 +292,7 @@ mod tests {
             let content_ref = JsChangeRef::new(vec![13, 14, 15]);
             let encrypted =
                 bh.try_encrypt(doc.clone(), content_ref.clone(), pred_refs, &content)?;
-            let decrypted = bh.try_decrypt(doc.clone(), encrypted)?;
+            let decrypted = bh.try_decrypt(doc.clone(), encrypted.encrypted_content())?;
             assert_eq!(content, decrypted);
             bh.force_pcs_update(&doc)?;
             let content_2 = vec![5, 6, 7, 8, 9];
@@ -299,7 +300,7 @@ mod tests {
             let pred_refs_2 = vec![content_ref];
             let encrypted_2 =
                 bh.try_encrypt(doc.clone(), content_ref_2, pred_refs_2, &content_2)?;
-            let decrypted_2 = bh.try_decrypt(doc.clone(), encrypted_2)?;
+            let decrypted_2 = bh.try_decrypt(doc.clone(), encrypted_2.encrypted_content())?;
             assert_eq!(content_2, decrypted_2);
             Ok(())
         }

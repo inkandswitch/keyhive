@@ -260,6 +260,20 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         self.cgka.merge_concurrent_operation(Rc::new(op))
     }
 
+    pub fn merge_cgka_invite_op(
+        &mut self,
+        op: CgkaOperation,
+        sk: &ShareSecretKey,
+    ) -> Result<(), CgkaError> {
+        let CgkaOperation::Add { added_id, pk, .. } = op else {
+            return Err(CgkaError::UnexpectedInviteOperation);
+        };
+        let mut owner_sks = self.cgka.owner_sks.clone();
+        owner_sks.insert(pk.clone(), sk.clone());
+        self.cgka = self.cgka.with_new_owner(added_id, owner_sks)?;
+        self.merge_cgka_op(op)
+    }
+
     pub fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         csprng: &mut R,
@@ -432,6 +446,16 @@ pub enum GenerateDocError {
 pub struct EncryptedContentWithUpdate<T: ContentRef> {
     pub(crate) encrypted_content: EncryptedContent<Vec<u8>, T>,
     pub(crate) update_op: Option<CgkaOperation>,
+}
+
+impl<T: ContentRef> EncryptedContentWithUpdate<T> {
+    pub fn encrypted_content(&self) -> &EncryptedContent<Vec<u8>, T> {
+        &self.encrypted_content
+    }
+
+    pub fn update_op(&self) -> Option<&CgkaOperation> {
+        self.update_op.as_ref()
+    }
 }
 
 #[derive(Debug, Error)]
