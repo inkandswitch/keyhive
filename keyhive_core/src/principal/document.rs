@@ -3,7 +3,12 @@ pub mod id;
 use super::{group::AddGroupMemberError, individual::id::IndividualId};
 use crate::{
     access::Access,
-    cgka::{error::CgkaError, keys::ShareKeyMap, operation::CgkaOperation, Cgka},
+    cgka::{
+        error::CgkaError,
+        keys::ShareKeyMap,
+        operation::CgkaOperation,
+        Cgka,
+    },
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -260,6 +265,20 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         self.cgka.merge_concurrent_operation(Rc::new(op))
     }
 
+    pub fn merge_cgka_invite_op(
+        &mut self,
+        op: CgkaOperation,
+        sk: &ShareSecretKey,
+    ) -> Result<(), CgkaError> {
+        let CgkaOperation::Add { added_id, pk, .. } = op else {
+            return Err(CgkaError::UnexpectedInviteOperation);
+        };
+        let mut owner_sks = ShareKeyMap::new();
+        owner_sks.insert(pk.clone(), sk.clone());
+        self.cgka = self.cgka.with_new_owner(added_id, owner_sks)?;
+        self.merge_cgka_op(op)
+    }
+
     pub fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         csprng: &mut R,
@@ -430,7 +449,9 @@ pub enum GenerateDocError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptedContentWithUpdate<T: ContentRef> {
-    pub(crate) encrypted_content: EncryptedContent<Vec<u8>, T>,
+    // FIXME: This visibility is a hack until we return the whole struct
+    // from JS keyhive
+    pub encrypted_content: EncryptedContent<Vec<u8>, T>,
     pub(crate) update_op: Option<CgkaOperation>,
 }
 

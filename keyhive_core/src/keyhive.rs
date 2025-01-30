@@ -328,26 +328,13 @@ impl<
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
-    ) -> Result<EncryptedContent<Vec<u8>, T>, EncryptContentError> {
-        let EncryptedContentWithUpdate {
-            encrypted_content,
-            update_op,
-        } = doc.borrow_mut().try_encrypt_content(
+    ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError> {
+        Ok(doc.borrow_mut().try_encrypt_content(
             content_ref,
             content,
             pred_refs,
             &mut self.csprng,
-        )?;
-
-        if let Some(found_update_op) = update_op {
-            let signed_op = Rc::new(
-                self.try_sign(found_update_op)
-                    .map_err(EncryptContentError::SignCgkaOpError)?,
-            );
-            self.event_listener.on_cgka_op(&signed_op);
-        }
-
-        Ok(encrypted_content)
+        )?)
     }
 
     pub fn try_decrypt_content(
@@ -891,12 +878,24 @@ impl<
 
     pub fn receive_cgka_op(&mut self, op: CgkaOperation) -> Result<(), ReceiveCgkaOpError> {
         let doc_id = op.doc_id();
-        self.docs
+        let mut doc = self
+            .docs
             .get(doc_id)
             .ok_or(ReceiveCgkaOpError::UnknownDocument(*doc_id))?
-            .borrow_mut()
-            .merge_cgka_op(op)?;
+            .borrow_mut();
 
+        if let CgkaOperation::Add { added_id, pk, .. } = op {
+            let active = self.active.borrow();
+            if active.id() == added_id {
+                let sk = active
+                    .prekey_pairs
+                    .get(&pk)
+                    .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?;
+                doc.merge_cgka_invite_op(op, sk)?;
+                return Ok(());
+            }
+        }
+        doc.merge_cgka_op(op)?;
         Ok(())
     }
 
@@ -1297,11 +1296,14 @@ pub enum TryFromArchiveError<T: ContentRef, L: MembershipListener<T>> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ReceiveCgkaOpError {
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
+
     #[error("Unknown document recipient for recieved CGKA op: {0}")]
     UnknownDocument(DocumentId),
 
-    #[error(transparent)]
-    CgkaError(#[from] CgkaError),
+    #[error("Unknown invite prekey for received CGKA add op: {0}")]
+    UnknownInvitePrekey(ShareKey),
 }
 
 impl<T: ContentRef, L: MembershipListener<T>> From<MissingIndividualError>

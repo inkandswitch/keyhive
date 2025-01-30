@@ -19,7 +19,7 @@ use topological_sort::TopologicalSort;
 
 /// An ordered [`NonEmpty`] of concurrent [`CgkaOperation`]s.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct CgkaEpoch(NonEmpty<Rc<CgkaOperation>>);
+pub struct CgkaEpoch(NonEmpty<Rc<CgkaOperation>>);
 
 impl From<NonEmpty<Rc<CgkaOperation>>> for CgkaEpoch {
     fn from(item: NonEmpty<Rc<CgkaOperation>>) -> Self {
