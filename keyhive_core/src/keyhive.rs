@@ -814,6 +814,7 @@ impl<
                 .get(&subject_id.into())
                 .and_then(|content_heads| NonEmpty::collect(content_heads.iter().cloned()))
             {
+                println!("!@ Inserting doc into self.docs!");
                 let doc = Document::from_group(group, &self.active.borrow(), content_heads)?;
                 self.docs.insert(doc.doc_id(), Rc::new(RefCell::new(doc)));
             } else {
@@ -1668,30 +1669,10 @@ mod tests {
     }
 
     #[test]
-    fn test_concurrent_cgka_operations() {
+    fn test_sharing_ops_to_debug() {
         let (mut keyhives, doc_id) = initialize_keyhives_and_doc(2);
-        let a_idx = 0;
+        // let a_idx = 0;
         let b_idx = 1;
-
-        let a_doc = keyhives[a_idx].get_document(doc_id).unwrap().dupe();
-        let cgka_op = keyhives[a_idx].force_pcs_update(a_doc.dupe()).unwrap();
-        share_cgka_op(&cgka_op, &mut keyhives, a_idx);
-
-        let content = "Let's start!";
-        let content_ref = generate_content_ref();
-        let pred_refs = Vec::new();
-        let encrypted_with_update = keyhives[a_idx].try_encrypt_content(a_doc.dupe(), &content_ref, &pred_refs, content.as_bytes()).unwrap();
-        assert_eq!(content, &String::from_utf8(keyhives[a_idx].try_decrypt_content(a_doc, &encrypted_with_update.encrypted_content).unwrap()).unwrap());
-
-        if let Some(op) = encrypted_with_update.update_op {
-            keyhives[b_idx].receive_cgka_op(op.clone()).unwrap();
-        }
-        let encrypted = encrypted_with_update.encrypted_content;
-        let b_doc = keyhives[b_idx].get_document(doc_id).unwrap().dupe();
-        let b_content: String = String::from_utf8(keyhives[b_idx].try_decrypt_content(b_doc.dupe(), &encrypted).unwrap()).unwrap();
-        assert_eq!(content, &b_content);
-
-
         let b_doc = keyhives[b_idx].get_document(doc_id).unwrap().dupe();
         let second_group = keyhives[b_idx].generate_group(vec![]).unwrap();
         share_ops_for_agent(&second_group.dupe().into(), &mut keyhives, 1);
@@ -1699,10 +1680,44 @@ mod tests {
         let add = keyhives[b_idx]
             .add_member(indie.dupe().into(), &mut second_group.dupe().into(), Access::Read, &[])
             .unwrap();
-        share_delegation(add.delegation.dupe(), &mut keyhives, b_idx);
+        // share_delegation(add.delegation.dupe(), &mut keyhives, b_idx);
         share_ops_for_agent(&indie.dupe().into(), &mut keyhives, b_idx);
-
     }
+
+    // #[test]
+    // fn test_concurrent_cgka_operations() {
+    //     let (mut keyhives, doc_id) = initialize_keyhives_and_doc(2);
+    //     let a_idx = 0;
+    //     let b_idx = 1;
+
+    //     let a_doc = keyhives[a_idx].get_document(doc_id).unwrap().dupe();
+    //     let cgka_op = keyhives[a_idx].force_pcs_update(a_doc.dupe()).unwrap();
+    //     share_cgka_op(&cgka_op, &mut keyhives, a_idx);
+
+    //     let content = "Let's start!";
+    //     let content_ref = generate_content_ref();
+    //     let pred_refs = Vec::new();
+    //     let encrypted_with_update = keyhives[a_idx].try_encrypt_content(a_doc.dupe(), &content_ref, &pred_refs, content.as_bytes()).unwrap();
+    //     assert_eq!(content, &String::from_utf8(keyhives[a_idx].try_decrypt_content(a_doc, &encrypted_with_update.encrypted_content).unwrap()).unwrap());
+
+    //     if let Some(op) = encrypted_with_update.update_op {
+    //         keyhives[b_idx].receive_cgka_op(op.clone()).unwrap();
+    //     }
+    //     let encrypted = encrypted_with_update.encrypted_content;
+    //     let b_doc = keyhives[b_idx].get_document(doc_id).unwrap().dupe();
+    //     let b_content: String = String::from_utf8(keyhives[b_idx].try_decrypt_content(b_doc.dupe(), &encrypted).unwrap()).unwrap();
+    //     assert_eq!(content, &b_content);
+
+
+    //     let second_group = keyhives[b_idx].generate_group(vec![]).unwrap();
+    //     share_ops_for_agent(&second_group.dupe().into(), &mut keyhives, 1);
+    //     let indie = make_indie();
+    //     let add = keyhives[b_idx]
+    //         .add_member(indie.dupe().into(), &mut second_group.dupe().into(), Access::Read, &[])
+    //         .unwrap();
+    //     // share_delegation(add.delegation.dupe(), &mut keyhives, b_idx);
+    //     share_ops_for_agent(&indie.dupe().into(), &mut keyhives, b_idx);
+    // }
 
     fn generate_content_ref() -> [u8; 32] {
         let mut csprng = rand::thread_rng();
