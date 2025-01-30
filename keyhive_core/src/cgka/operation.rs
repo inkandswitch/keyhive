@@ -19,7 +19,7 @@ use topological_sort::TopologicalSort;
 
 /// An ordered [`NonEmpty`] of concurrent [`CgkaOperation`]s.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct CgkaEpoch(NonEmpty<Rc<CgkaOperation>>);
+pub struct CgkaEpoch(NonEmpty<Rc<CgkaOperation>>);
 
 impl From<NonEmpty<Rc<CgkaOperation>>> for CgkaEpoch {
     fn from(item: NonEmpty<Rc<CgkaOperation>>) -> Self {
@@ -61,6 +61,15 @@ pub enum CgkaOperation {
 }
 
 impl CgkaOperation {
+    // FIXME: Remove
+    pub(crate) fn name(&self) -> String {
+        match self {
+            CgkaOperation::Add { .. } => String::from("Add"),
+            CgkaOperation::Remove { .. } => String::from("Remove"),
+            CgkaOperation::Update { .. } => String::from("Update"),
+        }
+    }
+
     /// The zero or more immediate causal predecessors of this operation.
     pub(crate) fn predecessors(&self) -> HashSet<Digest<CgkaOperation>> {
         match self {
@@ -135,11 +144,13 @@ impl CgkaOperationGraph {
 
     /// Add an operation that was created locally to the graph.
     pub(crate) fn add_local_op(&mut self, op: &CgkaOperation) {
+        println!("!@ OpsGraph: adding local {}", Digest::hash(op));
         self.add_op_and_update_heads(op, None);
     }
 
     /// Add an operation to the graph.
     pub(crate) fn add_op(&mut self, op: &CgkaOperation, heads: &HashSet<Digest<CgkaOperation>>) {
+        println!("!@ OpsGraph: adding remote {}", Digest::hash(op));
         self.add_op_and_update_heads(op, Some(heads));
     }
 
@@ -211,6 +222,7 @@ impl CgkaOperationGraph {
         &self,
         heads: &HashSet<Digest<CgkaOperation>>,
     ) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
+        println!("!@ topsort_for_heads 0");
         debug_assert!(heads.iter().all(|head| self.cgka_ops.contains_key(head)));
         let mut op_hashes = Vec::new();
         let mut dependencies = TopologicalSort::<Digest<CgkaOperation>>::new();
@@ -225,9 +237,11 @@ impl CgkaOperationGraph {
         }
         // Populate dependencies and successors with all ancestors of the initial heads.
         while let Some(op_hash) = frontier.pop_front() {
+            println!("!@ topsort_for_heads loopy op_hash: {}", op_hash);
             let preds = self
                 .predecessors_for(&op_hash)
                 .ok_or(CgkaError::OperationNotFound)?;
+            println!("!@ -- preds: {:?}", preds);
             for update_pred in preds {
                 dependencies.add_dependency(*update_pred, op_hash);
                 successors.entry(*update_pred).or_default().insert(op_hash);
@@ -304,6 +318,7 @@ impl CgkaOperationGraph {
                 }
             }
             for hash in next_set {
+                println!("!@ topsort_for_heads pushy");
                 next_epoch.push(
                     self.cgka_ops
                         .get(&hash)

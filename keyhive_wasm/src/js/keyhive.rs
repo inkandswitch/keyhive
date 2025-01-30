@@ -118,6 +118,9 @@ impl JsKeyhive {
         Ok(self
             .0
             .try_encrypt_content(doc.0, &content_ref, &pred_refs, content)?
+            // FIXME: This is based on temporary change to return type to get tests
+            // running.
+            .encrypted_content
             .into())
     }
 
@@ -133,6 +136,9 @@ impl JsKeyhive {
         Ok(self
             .0
             .try_encrypt_content(doc.0, &content_ref, &pred_refs, content)?
+            // FIXME: This is based on temporary change to return type to get tests
+            // running.
+            .encrypted_content
             .into())
     }
 

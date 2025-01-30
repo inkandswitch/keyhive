@@ -1,5 +1,5 @@
-use keyhive_core::{
 use divan::Bencher;
+use keyhive_core::{
     cgka::{
         error::CgkaError,
         test_utils::{
