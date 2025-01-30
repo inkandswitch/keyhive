@@ -3,7 +3,12 @@ pub mod id;
 use super::{group::AddGroupMemberError, individual::id::IndividualId};
 use crate::{
     access::Access,
-    cgka::{error::CgkaError, keys::ShareKeyMap, operation::CgkaOperation, Cgka},
+    cgka::{
+        error::CgkaError,
+        keys::ShareKeyMap,
+        operation::{CgkaEpoch, CgkaOperation},
+        Cgka,
+    },
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -272,6 +277,10 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         owner_sks.insert(pk.clone(), sk.clone());
         self.cgka = self.cgka.with_new_owner(added_id, owner_sks)?;
         self.merge_cgka_op(op)
+    }
+
+    pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
+        self.cgka.ops()
     }
 
     pub fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
