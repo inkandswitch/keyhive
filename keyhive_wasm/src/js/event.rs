@@ -51,7 +51,7 @@ impl Dupe for JsEvent {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum JsEventVariant {
     Delegated,
     Revoked,
@@ -73,12 +73,6 @@ impl From<&JsEvent> for JsEventVariant {
             Event::PrekeyRotated { .. } => JsEventVariant::PrekeyRotated,
             Event::PrekeysExpanded { .. } => JsEventVariant::PrekeysExpanded,
         }
-    }
-}
-
-impl std::fmt::Debug for JsEventVariant {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
     }
 }
 

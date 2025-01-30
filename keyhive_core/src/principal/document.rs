@@ -3,12 +3,7 @@ pub mod id;
 use super::{group::AddGroupMemberError, individual::id::IndividualId};
 use crate::{
     access::Access,
-    cgka::{
-        error::CgkaError,
-        keys::ShareKeyMap,
-        operation::CgkaOperation,
-        Cgka,
-    },
+    cgka::{error::CgkaError, keys::ShareKeyMap, operation::CgkaOperation, Cgka},
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -449,10 +444,18 @@ pub enum GenerateDocError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptedContentWithUpdate<T: ContentRef> {
-    // FIXME: This visibility is a hack until we return the whole struct
-    // from JS keyhive
-    pub encrypted_content: EncryptedContent<Vec<u8>, T>,
+    pub(crate) encrypted_content: EncryptedContent<Vec<u8>, T>,
     pub(crate) update_op: Option<CgkaOperation>,
+}
+
+impl<T: ContentRef> EncryptedContentWithUpdate<T> {
+    pub fn encrypted_content(&self) -> &EncryptedContent<Vec<u8>, T> {
+        &self.encrypted_content
+    }
+
+    pub fn update_op(&self) -> Option<&CgkaOperation> {
+        self.update_op.as_ref()
+    }
 }
 
 #[derive(Debug, Error)]
