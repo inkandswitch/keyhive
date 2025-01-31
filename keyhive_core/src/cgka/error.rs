@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+use crate::crypto::signed::SigningError;
+
+#[derive(Debug, thiserror::Error)]
 pub enum CgkaError {
     #[error("Conversion error")]
     Conversion,
@@ -30,8 +32,14 @@ pub enum CgkaError {
     #[error("No root key")]
     NoRootKey,
 
+    #[error("Cgka is not initialized")]
+    NotInitialized,
+
     #[error("Operation not found")]
     OperationNotFound,
+
+    #[error("Operation was not received in causal order")]
+    OutOfOrderOperation,
 
     #[error("Owner Identifier not found")]
     OwnerIdentifierNotFound,
@@ -51,9 +59,15 @@ pub enum CgkaError {
     #[error("Unexpected key conflict")]
     UnexpectedKeyConflict,
 
+    #[error("Expected CgkaOperation::Add for initial operation")]
+    UnexpectedInitialOperation,
+
     #[error("Expected CgkaOperation::Add for invite")]
     UnexpectedInviteOperation,
 
     #[error("Unknown PCS key")]
     UnknownPcsKey,
+
+    #[error(transparent)]
+    SigningError(#[from] SigningError),
 }

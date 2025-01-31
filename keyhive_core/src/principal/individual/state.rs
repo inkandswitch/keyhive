@@ -192,7 +192,7 @@ mod tests {
     use dupe::Dupe;
 
     #[test]
-    fn test_materialization() {
+    fn test_rebuild() {
         /*
          * ┌─────────────┐
          * │ share_key_5 │
@@ -290,11 +290,11 @@ mod tests {
         state.insert_op(op4).unwrap();
         state.insert_op(op5).unwrap();
 
-        let rebuildd = state.rebuild();
-        assert_eq!(rebuildd.len(), 3);
-        assert!(rebuildd.contains(&share_key_2));
-        assert!(rebuildd.contains(&share_key_3));
-        assert!(rebuildd.contains(&share_key_5));
+        let rebuilt = state.rebuild();
+        assert_eq!(rebuilt.len(), 3);
+        assert!(rebuilt.contains(&share_key_2));
+        assert!(rebuilt.contains(&share_key_3));
+        assert!(rebuilt.contains(&share_key_5));
     }
 
     #[test]

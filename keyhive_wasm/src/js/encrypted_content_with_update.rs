@@ -1,4 +1,6 @@
-use super::{cgka_operation::JsCgkaOperation, change_ref::JsChangeRef, encrypted::JsEncrypted};
+use super::{
+    change_ref::JsChangeRef, encrypted::JsEncrypted, signed_cgka_operation::JsSignedCgkaOperation,
+};
 use derive_more::{From, Into};
 use keyhive_core::principal::document::EncryptedContentWithUpdate;
 use wasm_bindgen::prelude::*;
@@ -13,7 +15,7 @@ impl JsEncryptedContentWithUpdate {
         self.0.encrypted_content().clone().into()
     }
 
-    pub fn update_op(&self) -> Option<JsCgkaOperation> {
+    pub fn update_op(&self) -> Option<JsSignedCgkaOperation> {
         self.0.update_op().map(|op| op.clone().into())
     }
 }

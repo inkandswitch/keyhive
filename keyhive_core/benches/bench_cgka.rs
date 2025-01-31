@@ -46,7 +46,8 @@ where
         .cgka
         .with_new_owner(paired_cgka.id(), sks)
         .unwrap();
-    let (_pcs_key, op) = paired_cgka.update(&mut csprng).unwrap();
+    let signing_key = ed25519_dalek::SigningKey::generate(&mut csprng);
+    let (_pcs_key, op) = paired_cgka.update(&signing_key, &mut csprng).unwrap();
     first_cgka
         .cgka
         .merge_concurrent_operation(Rc::new(op))
@@ -60,18 +61,20 @@ where
 )]
 fn apply_100_updates_and_sibling_decrypt(bencher: Bencher, member_count: u32) {
     let mut csprng = rand::thread_rng();
+    let signing_key = ed25519_dalek::SigningKey::generate(&mut csprng);
     let doc_id = DocumentId::generate(&mut csprng);
 
     bencher
         .with_inputs(|| {
             let paired_idx = 1;
             setup_group_and_two_primaries(member_count, paired_idx, |x| {
-                setup_updated_and_synced_member_cgkas(doc_id, x).map(|(ms, _ops)| ms)
+                setup_updated_and_synced_member_cgkas(doc_id, x, &signing_key).map(|(ms, _ops)| ms)
             })
         })
         .bench_local_refs(|(first_cgka, sibling_cgka)| {
             for _ in 0..100 {
-                let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
+                let signing_key = ed25519_dalek::SigningKey::generate(&mut csprng);
+                let (_pcs_key, op) = first_cgka.update(&signing_key, &mut csprng).unwrap();
                 sibling_cgka
                     .cgka
                     .merge_concurrent_operation(Rc::new(op))
@@ -87,18 +90,20 @@ fn apply_100_updates_and_sibling_decrypt(bencher: Bencher, member_count: u32) {
 )]
 fn apply_100_updates_and_distant_member_decrypt(bencher: Bencher, member_count: u32) {
     let mut csprng = rand::thread_rng();
+    let signing_key = ed25519_dalek::SigningKey::generate(&mut csprng);
     let doc_id = DocumentId::generate(&mut csprng);
 
     bencher
         .with_inputs(|| {
             let paired_idx = member_count as usize - 1;
             setup_group_and_two_primaries(member_count, paired_idx, |x| {
-                setup_updated_and_synced_member_cgkas(doc_id, x).map(|(ms, _ops)| ms)
+                setup_updated_and_synced_member_cgkas(doc_id, x, &signing_key).map(|(ms, _ops)| ms)
             })
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
+                let signing_key = ed25519_dalek::SigningKey::generate(&mut csprng);
+                let (_pcs_key, op) = first_cgka.update(&signing_key, &mut csprng).unwrap();
                 distant_cgka
                     .cgka
                     .merge_concurrent_operation(Rc::new(op))
@@ -117,18 +122,20 @@ fn apply_100_updates_and_distant_member_decrypt_with_maximum_conflict_keys(
     member_count: u32,
 ) {
     let mut csprng = rand::thread_rng();
+    let signing_key = ed25519_dalek::SigningKey::generate(&mut csprng);
     let doc_id = DocumentId::generate(&mut csprng);
 
     bencher
         .with_inputs(|| {
             let paired_idx = member_count as usize - 1;
             setup_group_and_two_primaries(member_count, paired_idx, |x| {
-                setup_member_cgkas_with_maximum_conflict_keys(doc_id, x)
+                setup_member_cgkas_with_maximum_conflict_keys(doc_id, x, &signing_key)
             })
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
+                let signing_key = ed25519_dalek::SigningKey::generate(&mut csprng);
+                let (_pcs_key, op) = first_cgka.update(&signing_key, &mut csprng).unwrap();
                 distant_cgka
                     .cgka
                     .merge_concurrent_operation(Rc::new(op))
@@ -144,18 +151,20 @@ fn apply_100_updates_and_distant_member_decrypt_with_maximum_conflict_keys(
 )]
 fn apply_100_updates_and_distant_member_decrypt_after_adds(bencher: Bencher, member_count: u32) {
     let mut csprng = rand::thread_rng();
+    let signing_key = ed25519_dalek::SigningKey::generate(&mut csprng);
     let doc_id = DocumentId::generate(&mut csprng);
 
     bencher
         .with_inputs(|| {
             let paired_idx = member_count as usize - 1;
             setup_group_and_two_primaries(member_count, paired_idx, |x| {
-                setup_member_cgkas_with_all_updated_and_10_adds(doc_id, x)
+                setup_member_cgkas_with_all_updated_and_10_adds(doc_id, x, &signing_key)
             })
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
+                let signing_key = ed25519_dalek::SigningKey::generate(&mut csprng);
+                let (_pcs_key, op) = first_cgka.update(&signing_key, &mut csprng).unwrap();
                 distant_cgka
                     .cgka
                     .merge_concurrent_operation(Rc::new(op))
@@ -174,18 +183,20 @@ fn apply_100_updates_and_distant_member_decrypt_with_blank_nodes(
     member_count: u32,
 ) {
     let mut csprng = rand::thread_rng();
+    let signing_key = ed25519_dalek::SigningKey::generate(&mut csprng);
     let doc_id = DocumentId::generate(&mut csprng);
 
     bencher
         .with_inputs(|| {
             let paired_idx = member_count as usize - 1;
             setup_group_and_two_primaries(member_count, paired_idx, |x| {
-                setup_member_cgkas(doc_id, x).map(|(ms, _ops)| ms)
+                setup_member_cgkas(doc_id, x, &signing_key).map(|(ms, _ops)| ms)
             })
         })
         .bench_local_refs(|(first_cgka, distant_cgka)| {
             for _ in 0..100 {
-                let (_pcs_key, op) = first_cgka.update(&mut csprng).unwrap();
+                let signing_key = ed25519_dalek::SigningKey::generate(&mut csprng);
+                let (_pcs_key, op) = first_cgka.update(&signing_key, &mut csprng).unwrap();
                 distant_cgka
                     .cgka
                     .merge_concurrent_operation(Rc::new(op))

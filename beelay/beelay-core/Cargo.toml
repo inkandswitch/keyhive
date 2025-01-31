@@ -14,7 +14,7 @@ num = { version = "0.4.3", features = ["num-bigint"] }
 rand = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
-tracing = "0.1.40"
+tracing = { workspace = true }
 
 # Crypto
 blake3 = { workspace = true }

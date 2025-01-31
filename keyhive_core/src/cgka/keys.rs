@@ -11,7 +11,7 @@ use super::error::CgkaError;
 /// on your path that you have encountered so far (either because you added them
 /// to your path as part of an update or decrypted them when decrypting your path).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
-pub struct ShareKeyMap(BTreeMap<ShareKey, ShareSecretKey>);
+pub struct ShareKeyMap(pub(crate) BTreeMap<ShareKey, ShareSecretKey>);
 
 impl ShareKeyMap {
     pub fn new() -> Self {

@@ -14,7 +14,7 @@ use crate::{
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
-    event::Event,
+    event::{Event, StaticEvent},
     listener::{cgka::CgkaListener, membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
@@ -179,6 +179,7 @@ impl<
             self.delegations.dupe(),
             self.revocations.dupe(),
             self.event_listener.clone(),
+            &self.active.borrow().signing_key,
             &mut self.csprng,
         )?;
 
@@ -308,6 +309,7 @@ impl<
     pub fn revoke_member(
         &mut self,
         to_revoke: Identifier,
+        retain_all_other_members: bool,
         resource: &mut Membered<T, L>,
     ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
         let mut relevant_docs = BTreeMap::new();
@@ -317,11 +319,14 @@ impl<
 
         resource.revoke_member(
             to_revoke,
+            retain_all_other_members,
             &self.active.borrow().signing_key,
             &mut relevant_docs,
         )
     }
 
+    // FIXME: I've temporarily changed this to return EncryptedContentWithUpdate
+    // to make progress on writing end-to-end decrypt/encrypt tests.
     pub fn try_encrypt_content(
         &mut self,
         doc: Rc<RefCell<Document<T, L>>>,
@@ -329,12 +334,35 @@ impl<
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError> {
-        Ok(doc.borrow_mut().try_encrypt_content(
+        // ) -> Result<EncryptedContent<Vec<u8>, T>, EncryptContentError> {
+        //         let EncryptedContentWithUpdate {
+        //             encrypted_content,
+        //             update_op,
+        //         } = doc.borrow_mut().try_encrypt_content(
+        //             content_ref,
+        //             content,
+        //             pred_refs,
+        //             &mut self.csprng,
+        //         )?;
+
+        //         if let Some(found_update_op) = update_op {
+        //             let signed_op = Rc::new(
+        //                 self.try_sign(found_update_op)
+        //                     .map_err(EncryptContentError::SignCgkaOpError)?,
+        //             );
+        //             self.event_listener.on_cgka_op(&signed_op);
+        //         }
+
+        //         Ok(encrypted_content)
+        //     }
+        let res = doc.borrow_mut().try_encrypt_content(
             content_ref,
             content,
             pred_refs,
+            &self.active.borrow().signing_key,
             &mut self.csprng,
-        )?)
+        )?;
+        Ok(res)
     }
 
     pub fn try_decrypt_content(
@@ -348,12 +376,13 @@ impl<
     pub fn force_pcs_update(
         &mut self,
         doc: Rc<RefCell<Document<T, L>>>,
-    ) -> Result<CgkaOperation, EncryptError> {
-        doc.borrow_mut().pcs_update(&mut self.csprng)
+    ) -> Result<Signed<CgkaOperation>, EncryptError> {
+        doc.borrow_mut()
+            .pcs_update(&self.active.borrow().signing_key, &mut self.csprng)
     }
 
     pub fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<T, L>> {
-        self.docs_reachable_by_agent(self.active.dupe().into())
+        self.docs_reachable_by_agent(&self.active.dupe().into())
     }
 
     pub fn reachable_members(
@@ -368,7 +397,7 @@ impl<
 
     pub fn docs_reachable_by_agent(
         &self,
-        agent: Agent<T, L>,
+        agent: &Agent<T, L>,
     ) -> BTreeMap<DocumentId, Ability<T, L>> {
         let mut caps: BTreeMap<DocumentId, Ability<T, L>> = BTreeMap::new();
         let mut seen: HashSet<AgentId> = HashSet::new();
@@ -472,7 +501,7 @@ impl<
     pub fn events_for_agent(
         &self,
         agent: &Agent<T, L>,
-    ) -> HashMap<Digest<Event<T, L>>, Event<T, L>> {
+    ) -> Result<HashMap<Digest<Event<T, L>>, Event<T, L>>, CgkaError> {
         let mut ops: HashMap<_, _> = self
             .membership_ops_for_agent(agent)
             .into_iter()
@@ -486,7 +515,25 @@ impl<
             }
         }
 
-        ops
+        for cgka_op in self.cgka_ops_reachable_by_agent(agent)?.into_iter() {
+            let op = Event::<T, L>::from(cgka_op);
+            ops.insert(Digest::hash(&op), op);
+        }
+
+        Ok(ops)
+    }
+
+    pub fn cgka_ops_reachable_by_agent(
+        &self,
+        agent: &Agent<T, L>,
+    ) -> Result<Vec<Rc<Signed<CgkaOperation>>>, CgkaError> {
+        let mut ops = vec![];
+        for (_doc_id, ability) in self.docs_reachable_by_agent(agent) {
+            for epoch in ability.doc.borrow().cgka_ops()?.iter() {
+                ops.extend(epoch.iter().cloned());
+            }
+        }
+        Ok(ops)
     }
 
     pub fn membership_ops_for_agent(
@@ -866,7 +913,26 @@ impl<
         Ok(())
     }
 
-    pub fn receive_op(
+    pub fn receive_event(
+        &mut self,
+        static_event: StaticEvent<T>,
+    ) -> Result<(), ReceiveEventError<T, L>> {
+        match static_event {
+            StaticEvent::Delegated(d) => self.receive_delegation(&d)?,
+            StaticEvent::Revoked(r) => self.receive_revocation(&r)?,
+
+            StaticEvent::PrekeysExpanded(op) => {
+                self.receive_prekey_op(&KeyOp::from(Rc::new(op)))?
+            }
+            StaticEvent::PrekeyRotated(op) => self.receive_prekey_op(&KeyOp::from(Rc::new(op)))?,
+
+            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op)?,
+        }
+
+        Ok(())
+    }
+
+    pub fn receive_membership_op(
         &mut self,
         static_op: &StaticMembershipOperation<T>,
     ) -> Result<(), ReceieveStaticDelegationError<T, L>> {
@@ -876,7 +942,15 @@ impl<
         }
     }
 
-    pub fn receive_cgka_op(&mut self, op: CgkaOperation) -> Result<(), ReceiveCgkaOpError> {
+    pub fn receive_cgka_op(
+        &mut self,
+        signed_op: Signed<CgkaOperation>,
+    ) -> Result<(), ReceiveCgkaOpError> {
+        signed_op.try_verify()?;
+
+        let rc = Rc::new(signed_op);
+        let op = &rc.dupe().payload;
+
         let doc_id = op.doc_id();
         let mut doc = self
             .docs
@@ -886,16 +960,16 @@ impl<
 
         if let CgkaOperation::Add { added_id, pk, .. } = op {
             let active = self.active.borrow();
-            if active.id() == added_id {
+            if active.id() == *added_id {
                 let sk = active
                     .prekey_pairs
-                    .get(&pk)
-                    .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?;
-                doc.merge_cgka_invite_op(op, sk)?;
+                    .get(pk)
+                    .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(*pk))?;
+                doc.merge_cgka_invite_op(rc, sk)?;
                 return Ok(());
             }
         }
-        doc.merge_cgka_op(op)?;
+        doc.merge_cgka_op(rc)?;
         Ok(())
     }
 
@@ -1294,10 +1368,13 @@ pub enum TryFromArchiveError<T: ContentRef, L: MembershipListener<T>> {
     MissingAgent(Box<Identifier>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
 pub enum ReceiveCgkaOpError {
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
+
+    #[error(transparent)]
+    VerificationError(#[from] VerificationError),
 
     #[error("Unknown document recipient for recieved CGKA op: {0}")]
     UnknownDocument(DocumentId),
@@ -1323,12 +1400,240 @@ pub enum EncryptContentError {
     SignCgkaOpError(SigningError),
 }
 
+#[derive(Debug, Error)]
+pub enum ReceiveEventError<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+    #[error(transparent)]
+    ReceieveStaticDelegationError(#[from] ReceieveStaticDelegationError<T, L>),
+
+    #[error(transparent)]
+    ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
+
+    #[error(transparent)]
+    ReceiveCgkaOpError(#[from] ReceiveCgkaOpError),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{access::Access, principal::public::Public};
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
+    use rand::RngCore;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn test_event_round_trip() {
+        let mut csprng = rand::thread_rng();
+
+        let sk1 = ed25519_dalek::SigningKey::generate(&mut csprng);
+        let sk2 = ed25519_dalek::SigningKey::generate(&mut csprng);
+
+        let mut alice = Keyhive::generate(sk1, NoListener, csprng.clone()).unwrap();
+        let mut bob = Keyhive::generate(sk2, NoListener, csprng.clone()).unwrap();
+
+        let bob_peer: Peer = Rc::new(RefCell::new(bob.active.borrow().individual.clone())).into();
+
+        let alice_doc = alice
+            .generate_doc(vec![bob_peer], nonempty![[1; 32]])
+            .unwrap();
+
+        let alice_to_bob_ops = alice.events_for_agent(&bob.active.dupe().into()).unwrap();
+        // assert_eq!(alice_to_bob_ops.len(), 19);
+
+        assert!(alice_to_bob_ops
+            .values()
+            .any(|op| matches!(op, Event::CgkaOperation(_))));
+
+        assert!(alice_to_bob_ops
+            .values()
+            .any(|op| matches!(op, Event::Delegated(_))));
+
+        assert!(!alice_to_bob_ops
+            .values()
+            .any(|op| matches!(op, Event::Revoked(_))));
+
+        let mut buf = alice_to_bob_ops
+            .values()
+            .map(|op| op.clone().into())
+            .collect::<VecDeque<StaticEvent<[u8; 32]>>>();
+
+        while let Some(op) = buf.pop_front() {
+            if bob.receive_event(op.clone()).is_err() {
+                buf.push_back(op);
+            }
+        }
+
+        let doc_id = alice_doc.borrow().doc_id();
+        let bob_doc = bob.documents().get(&doc_id).unwrap().dupe();
+        assert_eq!(bob_doc.borrow().members().len(), 2);
+
+        assert_eq!(
+            alice_doc.borrow().cgka().unwrap().ops_graph.cgka_ops.len(),
+            4
+        );
+        assert_eq!(bob_doc.borrow().cgka().unwrap().ops_graph.cgka_ops.len(), 4);
+        assert_eq!(
+            alice_doc.borrow().cgka().unwrap().ops_graph.cgka_ops,
+            bob_doc.borrow().cgka().unwrap().ops_graph.cgka_ops
+        );
+
+        let EncryptedContentWithUpdate {
+            encrypted_content, ..
+        } = alice
+            .try_encrypt_content(
+                alice_doc.dupe(),
+                &[15; 32],
+                &vec![[1; 32]],
+                b"this is a test",
+            )
+            .unwrap();
+
+        assert!(encrypted_content.ciphertext != b"this is a test");
+
+        let round_tripped = bob
+            .try_decrypt_content(bob_doc.dupe(), &encrypted_content)
+            .unwrap();
+
+        assert_eq!(round_tripped, b"this is a test");
+
+        bob.force_pcs_update(bob_doc.dupe()).unwrap();
+
+        let EncryptedContentWithUpdate {
+            encrypted_content: new_encrypted_content,
+            ..
+        } = alice
+            .try_encrypt_content(
+                alice_doc.dupe(),
+                &[14; 32],
+                &vec![[15; 32]],
+                b"this is another test",
+            )
+            .unwrap();
+
+        let round_tripped_2 = bob
+            .try_decrypt_content(bob_doc.dupe(), &new_encrypted_content)
+            .unwrap();
+
+        assert_eq!(round_tripped_2, b"this is another test");
+
+        let EncryptedContentWithUpdate {
+            encrypted_content: unintelligable,
+            ..
+        } = bob
+            .try_encrypt_content(
+                bob_doc.dupe(),
+                &[13; 32],
+                &vec![[15; 32], [14; 32]],
+                b"BOB MAKE MORE DIFFERENT TEST",
+            )
+            .unwrap();
+
+        let round_tripped_2 = alice.try_decrypt_content(alice_doc.dupe(), &unintelligable);
+        assert!(round_tripped_2.is_err());
+
+        let bob_to_alice_ops = bob.events_for_agent(&alice.active.dupe().into()).unwrap();
+        let cgkas: Vec<_> = bob_to_alice_ops
+            .iter()
+            .filter_map(|(h, op)| {
+                if let Event::CgkaOperation(op) = op {
+                    Some((h.clone(), op.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert_eq!(cgkas.len(), 5);
+        bob.force_pcs_update(bob_doc.dupe()).unwrap();
+        bob.force_pcs_update(bob_doc.dupe()).unwrap();
+        bob.force_pcs_update(bob_doc.dupe()).unwrap();
+        bob.force_pcs_update(bob_doc.dupe()).unwrap();
+
+        let bob_to_alice_ops2 = bob.events_for_agent(&alice.active.dupe().into()).unwrap();
+        let cgkas_after_force_pcses: Vec<_> = bob_to_alice_ops2
+            .iter()
+            .filter_map(|(h, op)| {
+                if let Event::CgkaOperation(op) = op {
+                    Some((h.clone(), op.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(cgkas_after_force_pcses.len(), 9);
+
+        let mut buf = bob_to_alice_ops
+            .values()
+            .map(|op| op.clone().into())
+            .collect::<VecDeque<StaticEvent<[u8; 32]>>>();
+
+        while let Some(op) = buf.pop_front() {
+            if alice.receive_event(op.clone()).is_err() {
+                buf.push_back(op);
+            }
+        }
+
+        let round_tripped_3 = alice
+            .try_decrypt_content(alice_doc.dupe(), &unintelligable)
+            .unwrap();
+        assert_eq!(round_tripped_3, b"BOB MAKE MORE DIFFERENT TEST");
+
+        let sk3 = ed25519_dalek::SigningKey::generate(&mut csprng);
+        let mut carol: Keyhive<[u8; 32]> =
+            Keyhive::generate(sk3, NoListener, csprng.clone()).unwrap();
+        let carol_peer: Peer =
+            Rc::new(RefCell::new(carol.active.borrow().individual.clone())).into();
+
+        let mut bob_doc_memed = bob_doc.dupe().into();
+        let b_to_c_dlg = bob
+            .add_member(carol_peer.into(), &mut bob_doc_memed, Access::Read, &[])
+            .unwrap();
+
+        assert!(b_to_c_dlg.cgka_ops.len() > 0);
+
+        let EncryptedContentWithUpdate {
+            encrypted_content: hi_carol,
+            ..
+        } = bob
+            .try_encrypt_content(
+                bob_doc.dupe(),
+                &[13; 32],
+                &vec![[15; 32], [14; 32]],
+                b"Hi Carol",
+            )
+            .unwrap();
+
+        let bob_to_carol_ops = bob.events_for_agent(&carol.active.dupe().into()).unwrap();
+
+        let mut bob_to_carol_buf = bob_to_carol_ops
+            .values()
+            .map(|op| op.clone().into())
+            .collect::<VecDeque<StaticEvent<[u8; 32]>>>();
+
+        assert!(bob_to_carol_ops
+            .values()
+            .any(|op| *op == Event::Delegated(b_to_c_dlg.delegation.clone())));
+
+        while let Some(op) = bob_to_carol_buf.pop_front() {
+            if carol.receive_event(op.clone()).is_err() {
+                bob_to_carol_buf.push_back(op);
+            }
+        }
+
+        let carol_doc = carol.documents().get(&doc_id).unwrap().dupe();
+
+        assert_eq!(
+            carol
+                .try_decrypt_content(carol_doc.dupe(), &hi_carol)
+                .unwrap(),
+            b"Hi Carol"
+        );
+
+        // Can't decrypt old content, since we use causal ecnryption
+        assert!(carol
+            .try_decrypt_content(carol_doc.dupe(), &unintelligable)
+            .is_err());
+    }
 
     #[test]
     fn test_archival_round_trip() {
@@ -1350,7 +1655,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(hive.active.borrow().prekey_pairs.len() > 0);
+        assert!(!hive.active.borrow().prekey_pairs.is_empty());
         assert_eq!(hive.individuals.len(), 2);
         assert_eq!(hive.groups.len(), 1);
         assert_eq!(hive.docs.len(), 1);
@@ -1456,7 +1761,7 @@ mod tests {
         let left_to_mid_ops = left.membership_ops_for_agent(&Public.individual().into());
         assert_eq!(left_to_mid_ops.len(), 2);
         for (h, op) in &left_to_mid_ops {
-            middle.receive_op(&op.clone().into()).unwrap();
+            middle.receive_membership_op(&op.clone().into()).unwrap();
             assert!(middle.delegations.borrow().get(&h.into()).is_some());
         }
 
@@ -1490,7 +1795,7 @@ mod tests {
         let mid_to_right_ops = middle.membership_ops_for_agent(&Public.individual().into());
         assert_eq!(mid_to_right_ops.len(), 2);
         for (h, op) in &mid_to_right_ops {
-            right.receive_op(&op.clone().into()).unwrap();
+            right.receive_membership_op(&op.clone().into()).unwrap();
             assert!(right.delegations.borrow().get(&h.into()).is_some());
         }
 
@@ -1543,7 +1848,7 @@ mod tests {
             right.membership_ops_for_agent(&Public.individual().into());
         assert_eq!(transitive_right_to_mid_ops.len(), 4);
         for (h, op) in &transitive_right_to_mid_ops {
-            middle.receive_op(&op.clone().into()).unwrap();
+            middle.receive_membership_op(&op.clone().into()).unwrap();
             assert!(middle.delegations.borrow().get(&h.into()).is_some());
         }
         assert_eq!(middle.individuals.len(), 3); // NOTE now includes Right
@@ -1572,5 +1877,186 @@ mod tests {
             .unwrap();
 
         assert_eq!(dlg.delegation.subject_id(), doc.borrow().doc_id().into());
+    }
+
+    // TODO:
+    // * Replace Public with real individuals
+    // * Break out helper functions
+    // * Concurrent combinations
+    // * Add group to doc
+    // * Add group to multiple docs, then add member to that group
+
+    fn make_indie() -> Rc<RefCell<Individual>> {
+        let mut csprng = rand::thread_rng();
+        let indie_sk = ed25519_dalek::SigningKey::generate(&mut csprng);
+        Rc::new(RefCell::new(
+            Individual::generate(&indie_sk, &mut csprng).unwrap(),
+        ))
+    }
+
+    fn initialize_keyhives_and_doc(count: usize) -> (Vec<Keyhive>, DocumentId) {
+        let mut keyhives = vec![];
+        let first = make_keyhive();
+        keyhives.push(first);
+        let indie = make_indie();
+        let doc = keyhives[0]
+            .generate_doc(vec![indie.dupe().into()], nonempty![[0u8; 32]])
+            .unwrap();
+        let cgka_epochs = doc.borrow().cgka_ops().unwrap();
+        for _ in 0..count - 1 {
+            let mut next = make_keyhive();
+            let ops = keyhives[0].membership_ops_for_agent(&indie.dupe().into());
+            for op in ops.values() {
+                next.receive_membership_op(&op.clone().into()).unwrap();
+            }
+            for epoch in &cgka_epochs {
+                for op in epoch.iter() {
+                    next.receive_cgka_op((**op).clone()).unwrap();
+                }
+            }
+            keyhives.push(next);
+        }
+        let doc_id = doc.borrow().doc_id();
+        for keyhive in &mut keyhives {
+            keyhive.get_document(doc_id).unwrap();
+        }
+        (keyhives, doc_id)
+    }
+
+    fn share_delegation(
+        delegation: Rc<Signed<Delegation<[u8; 32]>>>,
+        keyhives: &mut Vec<Keyhive>,
+        sharer_idx: usize,
+    ) {
+        let static_dlg = Signed {
+            issuer: delegation.issuer,
+            signature: delegation.signature,
+            payload: delegation.payload.clone().into(),
+        };
+        for idx in 0..keyhives.len() {
+            if idx == sharer_idx {
+                continue;
+            }
+            keyhives[idx].receive_delegation(&static_dlg).unwrap();
+        }
+    }
+
+    fn share_ops_for_agent(agent: Agent, keyhives: &mut Vec<Keyhive>, sharer_idx: usize) -> usize {
+        let mut share_count = 0;
+        for idx in 0..keyhives.len() {
+            if idx == sharer_idx {
+                continue;
+            }
+            let op_store = keyhives[sharer_idx].membership_ops_for_agent(&agent);
+
+            for (_h, op) in op_store.iter() {
+                share_count += 1;
+                keyhives[idx]
+                    .receive_membership_op(&op.clone().into())
+                    .unwrap();
+            }
+        }
+
+        share_count
+    }
+
+    fn share_cgka_op(op: &Signed<CgkaOperation>, keyhives: &mut Vec<Keyhive>, sharer_idx: usize) {
+        for idx in 0..keyhives.len() {
+            if idx == sharer_idx {
+                continue;
+            }
+            keyhives[idx].receive_cgka_op(op.clone()).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_sharing_ops_to_debug() {
+        let (mut keyhives, _doc_id) = initialize_keyhives_and_doc(2);
+        let a_idx = 0;
+        let b_idx = 1;
+
+        let a_peer: Peer = Rc::new(RefCell::new(
+            keyhives[a_idx].active.borrow().individual.clone(),
+        ))
+        .into();
+
+        let second_group = keyhives[b_idx].generate_group(vec![a_peer]).unwrap();
+        let share_count =
+            share_ops_for_agent(keyhives[a_idx].active.dupe().into(), &mut keyhives, 1);
+        assert!(share_count > 0);
+
+        let indie = make_indie();
+        let add = keyhives[b_idx]
+            .add_member(
+                indie.dupe().into(),
+                &mut second_group.dupe().into(),
+                Access::Read,
+                &[],
+            )
+            .unwrap();
+        share_delegation(add.delegation.dupe(), &mut keyhives, 1);
+        let indie_op_count = share_ops_for_agent(indie.dupe().into(), &mut keyhives, 1);
+        assert!(indie_op_count > 0);
+    }
+
+    // #[test]
+    // fn test_concurrent_cgka_operations() {
+    //     let (mut keyhives, doc_id) = initialize_keyhives_and_doc(2);
+    //     let a_idx = 0;
+    //     let b_idx = 1;
+
+    //     let a_doc = keyhives[a_idx].get_document(doc_id).unwrap().dupe();
+    //     let cgka_op = keyhives[a_idx].force_pcs_update(a_doc.dupe()).unwrap();
+    //     share_cgka_op(&cgka_op, &mut keyhives, a_idx);
+
+    //     let content = "Let's start!";
+    //     let content_ref = generate_content_ref();
+    //     let pred_refs = Vec::new();
+    //     let encrypted_with_update = keyhives[a_idx]
+    //         .try_encrypt_content(a_doc.dupe(), &content_ref, &pred_refs, content.as_bytes())
+    //         .unwrap();
+    //     assert_eq!(
+    //         content,
+    //         &String::from_utf8(
+    //             keyhives[a_idx]
+    //                 .try_decrypt_content(a_doc, &encrypted_with_update.encrypted_content)
+    //                 .unwrap()
+    //         )
+    //         .unwrap()
+    //     );
+
+    //     if let Some(op) = encrypted_with_update.update_op {
+    //         keyhives[b_idx].receive_cgka_op(op.clone()).unwrap();
+    //     }
+    //     let encrypted = encrypted_with_update.encrypted_content;
+    //     let b_doc = keyhives[b_idx].get_document(doc_id).unwrap().dupe();
+    //     let b_content: String = String::from_utf8(
+    //         keyhives[b_idx]
+    //             .try_decrypt_content(b_doc.dupe(), &encrypted)
+    //             .unwrap(),
+    //     )
+    //     .unwrap();
+    //     assert_eq!(content, &b_content);
+
+    //     let second_group = keyhives[b_idx].generate_group(vec![]).unwrap();
+    //     share_ops_for_agent(second_group.dupe().into(), &mut keyhives, 1);
+    //     let indie = make_indie();
+    //     let add = keyhives[b_idx]
+    //         .add_member(
+    //             indie.dupe().into(),
+    //             &mut second_group.dupe().into(),
+    //             Access::Read,
+    //             &[],
+    //         )
+    //         .unwrap();
+    //     share_delegation(add.delegation.dupe(), &mut keyhives, b_idx);
+    //     share_ops_for_agent(indie.dupe().into(), &mut keyhives, b_idx);
+    // }
+
+    fn generate_content_ref() -> [u8; 32] {
+        let mut csprng = rand::thread_rng();
+        let mut content_ref = [0u8; 32];
+        csprng.fill_bytes(&mut content_ref);
+        content_ref
     }
 }
