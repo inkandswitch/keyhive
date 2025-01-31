@@ -963,7 +963,7 @@ impl<
             if active.id() == *added_id {
                 let sk = active
                     .prekey_pairs
-                    .get(&pk)
+                    .get(pk)
                     .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(*pk))?;
                 doc.merge_cgka_invite_op(rc, sk)?;
                 return Ok(());
@@ -1578,7 +1578,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(hive.active.borrow().prekey_pairs.len() > 0);
+        assert!(!hive.active.borrow().prekey_pairs.is_empty());
         assert_eq!(hive.individuals.len(), 2);
         assert_eq!(hive.groups.len(), 1);
         assert_eq!(hive.docs.len(), 1);
@@ -1813,7 +1813,7 @@ mod tests {
         let mut csprng = rand::thread_rng();
         let indie_sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         Rc::new(RefCell::new(
-            Individual::generate(&indie_sk.into(), &mut csprng).unwrap(),
+            Individual::generate(&indie_sk, &mut csprng).unwrap(),
         ))
     }
 
@@ -1829,7 +1829,7 @@ mod tests {
         for _ in 0..count - 1 {
             let mut next = make_keyhive();
             let ops = keyhives[0].membership_ops_for_agent(&indie.dupe().into());
-            for (_h, op) in &ops {
+            for op in ops.values() {
                 next.receive_membership_op(&op.clone().into()).unwrap();
             }
             for epoch in &cgka_epochs {

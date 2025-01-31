@@ -205,7 +205,7 @@ impl CgkaOperationGraph {
             } = &op.payload
             {
                 for h in add_predecessors {
-                    self.add_heads.remove(&h);
+                    self.add_heads.remove(h);
                 }
             }
         } else {

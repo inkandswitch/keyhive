@@ -361,7 +361,7 @@ struct BeelayHandle<'a> {
     peer_id: beelay_core::PeerId,
 }
 
-impl<'a> BeelayHandle<'a> {
+impl BeelayHandle<'_> {
     fn create_doc(&mut self) -> DocumentId {
         let story = {
             let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();

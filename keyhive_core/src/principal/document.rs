@@ -183,7 +183,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         let (_pcs_key, update_op) = cgka.update(
             owner_share_key,
             owner_share_secret_key,
-            &signing_key,
+            signing_key,
             csprng,
         )?;
         // FIXME: We don't currently do anything with these ops, but need to share them
@@ -238,7 +238,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
             .delegate
             .pick_individual_prekeys(self.doc_id())
         {
-            if let Some(op) = self.cgka_mut()?.add(id, pre_key, &signing_key)? {
+            if let Some(op) = self.cgka_mut()?.add(id, pre_key, signing_key)? {
                 ops.push(op);
             }
         }
@@ -293,7 +293,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         id: IndividualId,
         signing_key: &ed25519_dalek::SigningKey,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        self.cgka_mut()?.remove(id, &signing_key)
+        self.cgka_mut()?.remove(id, signing_key)
     }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T, L>) -> Vec<Rc<Signed<Revocation<T, L>>>> {
@@ -365,7 +365,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
             return Err(CgkaError::OutOfOrderOperation);
         }
         let mut owner_sks = self.cgka()?.owner_sks.clone();
-        owner_sks.insert(pk.clone(), sk.clone());
+        owner_sks.insert(pk, *sk);
         self.cgka = Some(self.cgka()?.with_new_owner(added_id, owner_sks)?);
         self.merge_cgka_op(op)
     }
@@ -384,7 +384,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         let (_, op) = self
             .cgka_mut()
             .map_err(EncryptError::UnableToPcsUpdate)?
-            .update(new_share_key, new_share_secret_key, &signing_key, csprng)
+            .update(new_share_key, new_share_secret_key, signing_key, csprng)
             .map_err(EncryptError::UnableToPcsUpdate)?;
         Ok(op)
     }

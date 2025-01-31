@@ -206,7 +206,7 @@ impl JsKeyhive {
     pub fn force_pcs_update(&mut self, doc: &JsDocument) -> Result<(), JsEncryptError> {
         self.0
             .force_pcs_update(doc.0.clone())
-            .map_err(|e| EncryptContentError::from(e))?;
+            .map_err(EncryptContentError::from)?;
         Ok(())
     }
 
