@@ -1412,6 +1412,55 @@ pub enum ReceiveEventError<T: ContentRef = [u8; 32], L: MembershipListener<T> = 
     ReceiveCgkaOpError(#[from] ReceiveCgkaOpError),
 }
 
+impl<T, L> ReceiveEventError<T, L>
+where
+    T: ContentRef + std::fmt::Debug,
+    L: MembershipListener<T>,
+{
+    pub fn is_missing_dependency(&self) -> bool {
+        match self {
+            ReceiveEventError::ReceieveStaticDelegationError(e) => match e {
+                ReceieveStaticDelegationError::VerificationError(_) => false,
+                ReceieveStaticDelegationError::MissingProof(_) => true,
+                ReceieveStaticDelegationError::MissingRevocationDependency(_) => true,
+                ReceieveStaticDelegationError::CgkaInitError(e) => match e {
+                    CgkaError::OutOfOrderOperation => true,
+                    CgkaError::UnexpectedInitialOperation => true,
+                    CgkaError::UnexpectedInviteOperation => true,
+                    _ => false,
+                },
+                ReceieveStaticDelegationError::GroupReceiveError(_) => false,
+            },
+            ReceiveEventError::ReceivePrekeyOpError(receive_prekey_op_error) => {
+                match receive_prekey_op_error {
+                    ReceivePrekeyOpError::IncorrectSigner => false,
+                    ReceivePrekeyOpError::NewOpError(new_op_error) => match new_op_error {
+                        crate::principal::individual::state::NewOpError::VerificationError(_) => {
+                            false
+                        }
+                        crate::principal::individual::state::NewOpError::MissingDependency(_) => {
+                            true
+                        }
+                    },
+                }
+            }
+            ReceiveEventError::ReceiveCgkaOpError(receive_cgka_op_error) => {
+                match receive_cgka_op_error {
+                    ReceiveCgkaOpError::CgkaError(cgka_error) => match cgka_error {
+                        CgkaError::OperationNotFound => true,
+                        CgkaError::OutOfOrderOperation => true,
+                        CgkaError::UnexpectedInitialOperation => true,
+                        _ => false,
+                    },
+                    ReceiveCgkaOpError::VerificationError(_) => false,
+                    ReceiveCgkaOpError::UnknownDocument(_) => true,
+                    ReceiveCgkaOpError::UnknownInvitePrekey(_) => false,
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
