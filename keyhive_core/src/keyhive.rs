@@ -497,8 +497,6 @@ impl<
         Ok(ops)
     }
 
-    // FIXME topsort cgka ops
-
     pub fn cgka_ops_reachable_by_agent(
         &self,
         agent: &Agent<T, L>,
@@ -923,6 +921,9 @@ impl<
         signed_op: Signed<CgkaOperation>,
     ) -> Result<(), ReceiveCgkaOpError> {
         signed_op.try_verify()?;
+
+        // FIXME topsort
+
         let rc = Rc::new(signed_op);
         let op = &rc.dupe().payload;
 
