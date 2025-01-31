@@ -287,9 +287,14 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DocEvent {
-    pub doc: DocumentId,
-    pub data: CommitOrBundle,
+pub enum DocEvent {
+    Data {
+        doc: DocumentId,
+        data: CommitOrBundle,
+    },
+    AccessChanged {
+        new_access: HashMap<PeerId, MemberAccess>,
+    },
 }
 
 /// Returned by [`Beelay::handle_event`] to indicate the effects of the event which was handled

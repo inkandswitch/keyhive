@@ -34,6 +34,17 @@ pub enum MemberAccess {
     Admin,
 }
 
+impl std::fmt::Display for MemberAccess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MemberAccess::Pull => write!(f, "pull"),
+            MemberAccess::Read => write!(f, "read"),
+            MemberAccess::Write => write!(f, "write"),
+            MemberAccess::Admin => write!(f, "admin"),
+        }
+    }
+}
+
 impl From<MemberAccess> for keyhive_core::access::Access {
     fn from(access: MemberAccess) -> Self {
         match access {

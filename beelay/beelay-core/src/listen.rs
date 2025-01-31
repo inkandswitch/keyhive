@@ -106,7 +106,7 @@ pub(crate) async fn persist_listen_event<R: rand::Rng + rand::CryptoRng>(
             sedimentree::storage::write_bundle(ctx.clone(), path, bundle).await;
         }
     }
-    ctx.emit_doc_event(DocEvent {
+    ctx.emit_doc_event(DocEvent::Data {
         doc,
         data: data.clone(),
     });

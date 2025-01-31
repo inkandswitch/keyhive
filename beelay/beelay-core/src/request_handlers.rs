@@ -237,7 +237,7 @@ async fn upload_commits<R: rand::Rng + rand::CryptoRng + 'static>(
             ctx.log()
                 .new_remote_commit(doc, from_peer, d.clone(), content);
             tracing::trace!("stored uploaded blobs, emitting event");
-            ctx.emit_doc_event(crate::DocEvent {
+            ctx.emit_doc_event(crate::DocEvent::Data {
                 doc,
                 data: match d.tree_part {
                     TreePart::Commit { hash, ref parents } => {
