@@ -63,11 +63,11 @@ pub struct Cgka {
     pending_ops_for_structural_change: bool,
     // TODO: Enable policies to evict older entries.
     #[derivative(Hash(hash_with = "hash_pcs_keys"))]
-    pcs_keys: CaMap<PcsKey>,
+    pub(crate) pcs_keys: CaMap<PcsKey>,
 
     /// The update operations for each PCS key.
     #[derivative(Hash(hash_with = "hashed_key_bytes"))]
-    pcs_key_ops: HashMap<Digest<PcsKey>, Digest<Signed<CgkaOperation>>>,
+    pub(crate) pcs_key_ops: HashMap<Digest<PcsKey>, Digest<Signed<CgkaOperation>>>,
 
     original_member: (IndividualId, ShareKey),
 }
@@ -465,13 +465,13 @@ impl Cgka {
     }
 
     /// Whether we have unresolved concurrency that requires a replay to resolve.
-    fn should_replay(&self) -> bool {
+    pub(crate) fn should_replay(&self) -> bool {
         !self.ops_graph.cgka_op_heads.is_empty()
             && (self.pending_ops_for_structural_change || !self.ops_graph.has_single_head())
     }
 
     /// Replay all ops in our graph in a deterministic order.
-    fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
+    pub(crate) fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
         let ordered_ops = self.ops_graph.topsort_graph()?;
         let rebuilt_cgka = self.rebuild_cgka(ordered_ops)?;
         self.update_cgka_from(&rebuilt_cgka);

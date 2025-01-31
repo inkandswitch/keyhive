@@ -1475,6 +1475,11 @@ mod tests {
             bob_doc1.borrow().cgka.ops_graph.cgka_ops
         );
 
+        assert_eq!(
+            alice_doc1.borrow().cgka.pcs_key_ops,
+            bob_doc1.borrow().cgka.pcs_key_ops
+        );
+
         let EncryptedContentWithUpdate {
             encrypted_content, ..
         } = alice
@@ -1486,8 +1491,12 @@ mod tests {
             )
             .unwrap();
 
+        dbg!(&encrypted_content);
+        dbg!(&bob_doc1.borrow().cgka.pcs_keys.len());
+        dbg!(&bob_doc1.borrow().cgka.owner_sks.0.len());
         assert!(encrypted_content.ciphertext != b"this is a test");
 
+        bob_doc1.borrow_mut().cgka.replay_ops_graph().unwrap();
         let round_tripped = bob
             .try_decrypt_content(bob_doc1.dupe(), &encrypted_content)
             .unwrap();
