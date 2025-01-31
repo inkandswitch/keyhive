@@ -253,7 +253,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
                 .iter()
                 .flat_map(|d| d.payload().delegate.individual_ids())
             {
-                if let Some(op) = self.cgka.remove(id)? {
+                if let Some(op) = self.cgka.remove(id, signing_key)? {
                     ops.push(op);
                 }
             }
@@ -444,7 +444,7 @@ pub struct MissingIndividualError(pub Box<IndividualId>);
 pub struct RevokeMemberUpdate<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
     pub(crate) revocations: Vec<Rc<Signed<Revocation<T, L>>>>,
     pub(crate) redelegations: Vec<Rc<Signed<Delegation<T, L>>>>,
-    pub(crate) cgka_ops: Vec<CgkaOperation>,
+    pub(crate) cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
 impl<T: ContentRef, L: MembershipListener<T>> RevokeMemberUpdate<T, L> {
@@ -456,7 +456,7 @@ impl<T: ContentRef, L: MembershipListener<T>> RevokeMemberUpdate<T, L> {
         &self.redelegations
     }
 
-    pub fn cgka_ops(&self) -> &[CgkaOperation] {
+    pub fn cgka_ops(&self) -> &[Signed<CgkaOperation>] {
         &self.cgka_ops
     }
 }
