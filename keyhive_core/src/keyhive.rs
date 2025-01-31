@@ -1589,6 +1589,8 @@ mod tests {
             .add_member(carol_peer.into(), &mut bob_doc_memed, Access::Read, &[])
             .unwrap();
 
+        assert!(b_to_c_dlg.cgka_ops.len() > 0);
+
         let EncryptedContentWithUpdate {
             encrypted_content: hi_carol,
             ..
