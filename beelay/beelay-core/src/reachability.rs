@@ -130,7 +130,7 @@ pub(crate) async fn load_reachable_docs<R: rand::Rng + rand::CryptoRng>(
         let index = ReachabilityIndex::load(ctx.clone(), &doc).await;
         for doc in index.into_iter() {
             if let Some(requestor) = requestor {
-                if !ctx.keyhive().can_read(requestor, &doc) {
+                if !ctx.keyhive().can_pull(requestor, &doc) {
                     continue;
                 }
             }

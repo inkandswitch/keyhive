@@ -196,6 +196,15 @@ impl Event {
         ));
         (command_id, event)
     }
+
+    pub fn query_access(doc_id: DocumentId) -> (CommandId, Event) {
+        let command_id = CommandId::new();
+        let event = Event(EventInner::BeginCommand(
+            command_id,
+            Command::Keyhive(keyhive::KeyhiveCommand::QueryAccess(doc_id)),
+        ));
+        (command_id, event)
+    }
 }
 
 #[derive(Debug)]

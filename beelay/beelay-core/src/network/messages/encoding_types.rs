@@ -15,7 +15,6 @@ pub(super) enum RequestType {
     RequestKeyhiveOps,
     UploadKeyhiveOps,
     Ping,
-    RequestKeyhiveOpsForAgent,
 }
 
 impl RequestType {
@@ -48,7 +47,6 @@ impl TryFrom<u8> for RequestType {
             9 => Ok(Self::RequestKeyhiveOps),
             10 => Ok(Self::UploadKeyhiveOps),
             11 => Ok(Self::Ping),
-            12 => Ok(Self::RequestKeyhiveOpsForAgent),
             _ => Err(error::InvalidRequestType(value)),
         }
     }
@@ -69,7 +67,6 @@ impl From<RequestType> for u8 {
             RequestType::RequestKeyhiveOps => 9,
             RequestType::UploadKeyhiveOps => 10,
             RequestType::Ping => 11,
-            RequestType::RequestKeyhiveOpsForAgent => 12,
         }
     }
 }
@@ -89,7 +86,6 @@ pub(super) enum ResponseType {
     RequestKeyhiveOps,
     UploadKeyhiveOps,
     Pong,
-    RequestKeyhiveOpsForAgent,
     AuthenticationFailed,
     AuthorizationFailed,
 }
@@ -124,9 +120,8 @@ impl TryFrom<u8> for ResponseType {
             9 => Ok(Self::RequestKeyhiveOps),
             10 => Ok(Self::UploadKeyhiveOps),
             11 => Ok(Self::Pong),
-            12 => Ok(Self::RequestKeyhiveOpsForAgent),
-            13 => Ok(Self::AuthenticationFailed),
-            14 => Ok(Self::AuthorizationFailed),
+            12 => Ok(Self::AuthenticationFailed),
+            13 => Ok(Self::AuthorizationFailed),
             _ => Err(error::InvalidResponseType(value)),
         }
     }
@@ -147,9 +142,8 @@ impl From<ResponseType> for u8 {
             ResponseType::RequestKeyhiveOps => 9,
             ResponseType::UploadKeyhiveOps => 10,
             ResponseType::Pong => 11,
-            ResponseType::RequestKeyhiveOpsForAgent => 12,
-            ResponseType::AuthenticationFailed => 13,
-            ResponseType::AuthorizationFailed => 14,
+            ResponseType::AuthenticationFailed => 12,
+            ResponseType::AuthorizationFailed => 13,
         }
     }
 }

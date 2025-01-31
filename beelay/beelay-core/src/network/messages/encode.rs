@@ -64,8 +64,9 @@ pub(super) fn encode_request(buf: &mut Vec<u8>, req: &Request) {
                 buf.push(0);
             }
         }
-        Request::BeginAuthSync => {
+        Request::BeginAuthSync { additional_peers } => {
             buf.push(RequestType::BeginAuthSync.into());
+            additional_peers.encode_into(buf);
         }
         Request::KeyhiveSymbols { session_id } => {
             buf.push(RequestType::KeyhiveSymbols.into());
@@ -86,11 +87,6 @@ pub(super) fn encode_request(buf: &mut Vec<u8>, req: &Request) {
         }
         Request::Ping => {
             buf.push(RequestType::Ping.into());
-        }
-        Request::RequestKeyhiveOpsForAgent { agent, sync_id } => {
-            buf.push(RequestType::RequestKeyhiveOpsForAgent.into());
-            buf.extend_from_slice(agent.0.as_bytes());
-            sync_id.encode_into(buf);
         }
     }
 }
@@ -160,10 +156,6 @@ pub(crate) fn encode_response(buf: &mut Vec<u8>, resp: &Response) {
             buf.push(ResponseType::UploadKeyhiveOps.into());
         }
         Response::Pong => buf.push(ResponseType::Pong.into()),
-        Response::RequestKeyhiveOpsForAgent(ops) => {
-            buf.push(ResponseType::RequestKeyhiveOpsForAgent.into());
-            ops.encode_into(buf);
-        }
         Response::AuthenticationFailed => {
             buf.push(ResponseType::AuthenticationFailed.into());
         }

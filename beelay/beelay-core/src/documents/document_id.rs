@@ -5,6 +5,13 @@ use crate::serialization::{parse, Encode, Parse};
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct DocumentId(VerifyingKey);
 
+impl From<DocumentId> for keyhive_core::principal::document::id::DocumentId {
+    fn from(value: DocumentId) -> Self {
+        let id = keyhive_core::principal::identifier::Identifier::from(value.0);
+        keyhive_core::principal::document::id::DocumentId::from(id)
+    }
+}
+
 #[cfg(test)]
 impl<'a> arbitrary::Arbitrary<'a> for DocumentId {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {

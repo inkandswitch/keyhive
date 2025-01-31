@@ -1,4 +1,5 @@
 use beelay_core::{Access, Commit, MemberAccess};
+use keyhive_core::principal::public::Public;
 use network::{ConnForwarding, ConnectedPair, Network};
 use test_utils::init_logging;
 
@@ -97,10 +98,72 @@ fn syncing_private_doc_sends_doc_to_server() {
     let doc = network
         .beelay(&peer1)
         .create_doc_with_contents(Access::Private, "somedoc".into());
+    network
+        .beelay(&peer1)
+        .add_member(doc, peer2, MemberAccess::Pull)
+        .unwrap();
 
     network.beelay(&peer1).sync_doc(doc, peer1_to_peer2);
 
     let doc_on_peer2 = network.beelay(&peer2).load_doc(doc).unwrap();
     let doc_on_peer1 = network.beelay(&peer1).load_doc(doc).unwrap();
     assert_eq!(doc_on_peer2, doc_on_peer1);
+}
+
+#[test]
+fn make_public_then_private_then_public_then_private() {
+    init_logging();
+    let mut network = Network::new();
+    let peer1 = network.create_peer("peer1");
+    let peer2 = network.create_peer("peer2");
+
+    let ConnectedPair {
+        left_to_right: peer1_to_peer2,
+        right_to_left: peer2_to_peer1,
+    } = network.connect_stream(&peer1, &peer2, ConnForwarding::Both);
+
+    let doc = network
+        .beelay(&peer1)
+        .create_doc_with_contents(Access::Private, "somedoc".into());
+
+    let access = network.beelay(&peer1).query_access(doc).unwrap();
+    assert_eq!(access.get(&Public.id().0.into()), None);
+
+    // Give peer2 pull access so we share the auth graph with them
+    network
+        .beelay(&peer1)
+        .add_member(doc, peer2, MemberAccess::Pull)
+        .unwrap();
+
+    // Make public
+    network
+        .beelay(&peer1)
+        .add_member(doc, Public.id().0.into(), MemberAccess::Write)
+        .unwrap();
+
+    // Sync the doc with peer2 just to get beehive to sync
+    network.beelay(&peer1).sync_doc(doc, peer1_to_peer2);
+
+    let access = network.beelay(&peer1).query_access(doc).unwrap();
+    assert_eq!(
+        access.get(&Public.id().0.into()),
+        Some(&MemberAccess::Write)
+    );
+    let access = network.beelay(&peer2).query_access(doc).unwrap();
+    assert_eq!(
+        access.get(&Public.id().0.into()),
+        Some(&MemberAccess::Write)
+    );
+
+    // Remove public access
+    network
+        .beelay(&peer1)
+        .remove_member(doc, Public.id().0.into())
+        .unwrap();
+
+    let access = network.beelay(&peer1).query_access(doc).unwrap();
+    assert_eq!(access.get(&Public.id().0.into()), None,);
+
+    let access = network.beelay(&peer2).query_access(doc).unwrap();
+    assert_eq!(access.get(&Public.id().0.into()), None,);
 }

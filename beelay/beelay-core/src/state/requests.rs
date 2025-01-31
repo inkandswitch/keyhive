@@ -4,11 +4,9 @@ use std::{
     rc::Rc,
 };
 
-use keyhive_core::principal::group::membership_operation::StaticMembershipOperation;
-
 use crate::{
     auth,
-    keyhive_sync::{self, KeyhiveSyncId},
+    keyhive_sync::{self},
     network::{
         messages::{self, Response},
         InnerRpcResponse,
@@ -178,6 +176,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng + 'static> Requests<'a, R> {
     pub(crate) fn begin_auth_sync(
         &self,
         to_peer: crate::TargetNodeInfo,
+        additional_peers: Vec<keyhive_core::principal::identifier::Identifier>,
     ) -> impl Future<
         Output = Result<
             (
@@ -187,7 +186,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng + 'static> Requests<'a, R> {
             crate::state::RpcError,
         >,
     > + 'static {
-        let request = crate::Request::BeginAuthSync;
+        let request = crate::Request::BeginAuthSync { additional_peers };
         let task = self.request(to_peer, request);
         async move {
             let response = task.await?;
@@ -227,8 +226,9 @@ impl<'a, R: rand::Rng + rand::CryptoRng + 'static> Requests<'a, R> {
         from_peer: crate::TargetNodeInfo,
         session_id: crate::keyhive_sync::KeyhiveSyncId,
         op_hashes: Vec<crate::keyhive_sync::OpHash>,
-    ) -> impl Future<Output = Result<Vec<crate::keyhive_sync::KeyhiveOp>, crate::state::RpcError>>
-           + 'static {
+    ) -> impl Future<
+        Output = Result<Vec<keyhive_core::event::StaticEvent<CommitHash>>, crate::state::RpcError>,
+    > + 'static {
         let request = crate::Request::RequestKeyhiveOps {
             session: session_id,
             op_hashes,
@@ -246,7 +246,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng + 'static> Requests<'a, R> {
     pub(crate) fn upload_keyhive_ops(
         &self,
         to_peer: crate::TargetNodeInfo,
-        ops: Vec<StaticMembershipOperation<CommitHash>>,
+        ops: Vec<keyhive_core::event::StaticEvent<CommitHash>>,
         source_session: crate::keyhive_sync::KeyhiveSyncId,
     ) -> impl Future<Output = Result<(), crate::state::RpcError>> + 'static {
         let request = crate::Request::UploadKeyhiveOps {
@@ -259,27 +259,6 @@ impl<'a, R: rand::Rng + rand::CryptoRng + 'static> Requests<'a, R> {
             match response.content {
                 NonErrorPayload::UploadKeyhiveOps => Ok(()),
                 _ => Err(crate::state::RpcError::IncorrectResponseType),
-            }
-        }
-    }
-
-    pub(crate) fn request_keyhive_ops_for_agent(
-        &self,
-        from_peer: crate::TargetNodeInfo,
-        agent: keyhive_core::principal::identifier::Identifier,
-        session: KeyhiveSyncId,
-    ) -> impl Future<Output = Result<Vec<keyhive_core::event::StaticEvent<CommitHash>>, RpcError>>
-           + 'static {
-        let request = crate::Request::RequestKeyhiveOpsForAgent {
-            agent,
-            sync_id: session,
-        };
-        let task = self.request(from_peer, request);
-        async move {
-            let response = task.await?;
-            match response.content {
-                NonErrorPayload::RequestKeyhiveOpsForAgent(ops) => Ok(ops),
-                _ => Err(RpcError::IncorrectResponseType),
             }
         }
     }
@@ -437,7 +416,7 @@ enum NonErrorPayload {
         first_symbols: Vec<riblt::CodedSymbol<crate::keyhive_sync::OpHash>>,
     },
     KeyhiveSymbols(Vec<riblt::CodedSymbol<keyhive_sync::OpHash>>),
-    RequestKeyhiveOps(Vec<keyhive_sync::KeyhiveOp>),
+    RequestKeyhiveOps(Vec<keyhive_core::event::StaticEvent<CommitHash>>),
     RequestKeyhiveOpsForAgent(Vec<keyhive_core::event::StaticEvent<CommitHash>>),
     UploadKeyhiveOps,
     Pong,
@@ -478,9 +457,6 @@ impl TryFrom<Response> for NonErrorPayload {
             }),
             Response::KeyhiveSymbols(symbols) => Ok(NonErrorPayload::KeyhiveSymbols(symbols)),
             Response::RequestKeyhiveOps(ops) => Ok(NonErrorPayload::RequestKeyhiveOps(ops)),
-            Response::RequestKeyhiveOpsForAgent(ops) => {
-                Ok(NonErrorPayload::RequestKeyhiveOpsForAgent(ops))
-            }
             Response::UploadKeyhiveOps => Ok(NonErrorPayload::UploadKeyhiveOps),
             Response::Pong => Ok(NonErrorPayload::Pong),
             Response::AuthenticationFailed => Err(RpcError::AuthenticatedFailed),

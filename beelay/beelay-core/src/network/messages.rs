@@ -1,5 +1,3 @@
-use keyhive_core::principal::group::membership_operation::StaticMembershipOperation;
-
 use crate::{
     keyhive_sync, riblt,
     sedimentree::SedimentreeSummary,
@@ -32,8 +30,7 @@ pub(crate) enum Response {
         first_symbols: Vec<riblt::CodedSymbol<crate::keyhive_sync::OpHash>>,
     },
     KeyhiveSymbols(Vec<riblt::CodedSymbol<keyhive_sync::OpHash>>),
-    RequestKeyhiveOps(Vec<keyhive_sync::KeyhiveOp>),
-    RequestKeyhiveOpsForAgent(Vec<keyhive_core::event::StaticEvent<CommitHash>>),
+    RequestKeyhiveOps(Vec<keyhive_core::event::StaticEvent<CommitHash>>),
     UploadKeyhiveOps,
     Pong,
     AuthenticationFailed,
@@ -100,9 +97,6 @@ impl std::fmt::Display for Response {
             }
             Response::RequestKeyhiveOps(hashes) => {
                 write!(f, "RequestKeyhiveOps({} ops)", hashes.len())
-            }
-            Response::RequestKeyhiveOpsForAgent(ops) => {
-                write!(f, "RequestKeyhiveOpsForAgent({} ops)", ops.len())
             }
             Response::UploadKeyhiveOps => write!(f, "UploadKeyhiveOps"),
             Response::Pong => write!(f, "Pong"),
@@ -191,7 +185,9 @@ pub(crate) enum Request {
         snapshot_id: SnapshotId,
     },
     Listen(SnapshotId, Option<u64>),
-    BeginAuthSync,
+    BeginAuthSync {
+        additional_peers: Vec<keyhive_core::principal::identifier::Identifier>,
+    },
     KeyhiveSymbols {
         session_id: keyhive_sync::KeyhiveSyncId,
     },
@@ -201,13 +197,9 @@ pub(crate) enum Request {
     },
     UploadKeyhiveOps {
         source_session: keyhive_sync::KeyhiveSyncId,
-        ops: Vec<StaticMembershipOperation<CommitHash>>,
+        ops: Vec<keyhive_core::event::StaticEvent<CommitHash>>,
     },
     Ping,
-    RequestKeyhiveOpsForAgent {
-        agent: keyhive_core::principal::identifier::Identifier,
-        sync_id: keyhive_sync::KeyhiveSyncId,
-    },
 }
 
 impl Parse<'_> for Request {
@@ -257,7 +249,15 @@ impl std::fmt::Display for Request {
             Request::Listen(snapshot_id, from_offset) => {
                 write!(f, "Listen({}, {:?})", snapshot_id, from_offset)
             }
-            Request::BeginAuthSync => write!(f, "BeginAuthSync"),
+            Request::BeginAuthSync { additional_peers } => write!(
+                f,
+                "BeginAuthSync {{ additional_peers: {} }}",
+                additional_peers
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             Request::KeyhiveSymbols { session_id } => {
                 write!(f, "KeyhiveSymbols({})", session_id)
             }
@@ -271,9 +271,6 @@ impl std::fmt::Display for Request {
                 write!(f, "UploadKeyhiveOps({} ops)", ops.len())
             }
             Request::Ping => write!(f, "Ping"),
-            Request::RequestKeyhiveOpsForAgent { agent, sync_id } => {
-                write!(f, "RequestKeyhiveOpsForAgent({}, {})", agent, sync_id)
-            }
         }
     }
 }

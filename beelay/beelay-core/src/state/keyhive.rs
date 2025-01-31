@@ -1,33 +1,20 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use dupe::Dupe;
 use keyhive_core::{
     access::Access as KeyhiveAccess,
     crypto::{digest::Digest, verifiable::Verifiable},
     event::StaticEvent,
-    listener::no_listener::NoListener,
     principal::{
-        agent::Agent,
-        document::id::DocumentId as KeyhiveDocumentId,
-        group::{
-            id::GroupId,
-            membership_operation::{
-                MembershipOperation as KeyhiveOperation, StaticMembershipOperation,
-            },
-            RevokeMemberError,
-        },
-        identifier::Identifier,
-        individual::op::KeyOp,
-        membered::Membered,
-        public::Public,
+        agent::Agent, document::id::DocumentId as KeyhiveDocumentId, group::RevokeMemberError,
+        identifier::Identifier, membered::Membered, public::Public,
     },
 };
 use nonempty::NonEmpty;
 
 use crate::{
     keyhive::error,
-    keyhive_sync::{self, KeyhiveSyncId},
-    Access, CommitHash, DocumentId, PeerId,
+    keyhive_sync::{self, KeyhiveSyncId, OpHash},
+    Access, CommitHash, DocumentId, MemberAccess, PeerId,
 };
 
 pub(crate) struct KeyhiveCtx<'a, R: rand::Rng + rand::CryptoRng> {
@@ -85,76 +72,31 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         self.can_do(peer_id, doc_id, KeyhiveAccess::Pull)
     }
 
-    /// Apply the given keyhive ops locally
-    pub(crate) fn apply_keyhive_ops(
-        &self,
-        mut ops: Vec<StaticMembershipOperation<CommitHash>>,
-    ) -> Result<(), Vec<StaticMembershipOperation<CommitHash>>> {
-        let keyhive = &mut self.state.borrow_mut().keyhive;
-        let mut try_later = vec![];
-
-        // Out of order & deduplicated ingestion
-        loop {
-            let mut ingested = false;
-            while let Some(op) = ops.pop() {
-                if let Ok(()) = keyhive.receive_op(&op) {
-                    tracing::trace!(?op, "processing membership op");
-                    ingested = true;
-                } else {
-                    try_later.push(op);
-                }
-            }
-
-            if try_later.is_empty() {
-                break;
-            } else if !ingested {
-                break;
-            } else {
-                ops = try_later;
-                try_later = vec![];
-            }
-        }
-
-        if ops.is_empty() {
-            Ok(())
-        } else {
-            Err(ops)
-        }
-    }
-
+    /// Apply the given keyhive events locally
     pub(crate) fn apply_keyhive_events(
         &self,
-        ops: Vec<keyhive_core::event::StaticEvent<CommitHash>>,
-    ) -> Result<(), &'static str> {
-        let mut member_ops = Vec::new();
-        let mut key_ops = Vec::new();
-        let mut cgka_ops = Vec::new();
-        for event in ops {
-            match event {
-                StaticEvent::PrekeysExpanded(signed) => key_ops.push(KeyOp::Add(Rc::new(signed))),
-                StaticEvent::PrekeyRotated(signed) => key_ops.push(KeyOp::Rotate(Rc::new(signed))),
-                StaticEvent::Delegated(signed) => {
-                    member_ops.push(StaticMembershipOperation::Delegation(signed))
-                }
-                StaticEvent::Revoked(signed) => {
-                    member_ops.push(StaticMembershipOperation::Revocation(signed))
-                }
-                StaticEvent::CgkaOperation(signed) => cgka_ops.push(signed),
-            }
-        }
-
+        mut events: Vec<StaticEvent<CommitHash>>,
+    ) -> Result<(), error::ReceiveEventError> {
         let keyhive = &mut self.state.borrow_mut().keyhive;
         let mut try_later = vec![];
 
         // Out of order & deduplicated ingestion
         loop {
             let mut ingested = false;
-            while let Some(op) = member_ops.pop() {
-                tracing::trace!(?op, "applying membership op");
-                if let Ok(()) = keyhive.receive_op(&op) {
-                    ingested = true;
-                } else {
-                    try_later.push(op);
+            while let Some(event) = events.pop() {
+                match keyhive.receive_event(event.clone()) {
+                    Ok(_) => {
+                        tracing::trace!(?event, "processing keyhive event");
+                        ingested = true;
+                    }
+                    Err(e) => {
+                        if e.is_missing_dependency() {
+                            try_later.push(event);
+                        } else {
+                            tracing::error!(?event, err=?e, "failed to process keyhive event");
+                            return Err(e.into());
+                        }
+                    }
                 }
             }
 
@@ -163,120 +105,68 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             } else if !ingested {
                 break;
             } else {
-                member_ops = try_later;
+                events = try_later;
                 try_later = vec![];
             }
         }
 
-        if !member_ops.is_empty() {
-            return Err("unable to apply all member ops");
+        if events.is_empty() {
+            Ok(())
+        } else {
+            Err(error::ReceiveEventError::MissingDependency)
         }
-
-        let mut try_later = vec![];
-        loop {
-            let mut ingested = false;
-            while let Some(op) = key_ops.pop() {
-                tracing::trace!(?op, "applying key op");
-                if let Ok(()) = keyhive.receive_prekey_op(&op) {
-                    ingested = true;
-                } else {
-                    try_later.push(op);
-                }
-            }
-
-            if try_later.is_empty() {
-                break;
-            } else if !ingested {
-                break;
-            } else {
-                key_ops = try_later;
-                try_later = vec![];
-            }
-        }
-
-        if !member_ops.is_empty() {
-            return Err("unable to apply all key ops");
-        }
-
-        let mut try_later = vec![];
-        loop {
-            let mut ingested = false;
-            while let Some(op) = cgka_ops.pop() {
-                tracing::trace!(?op, "applying cgka op");
-                if let Ok(()) = keyhive.receive_cgka_op(op.payload().clone()) {
-                    ingested = true;
-                } else {
-                    try_later.push(op);
-                }
-            }
-
-            if try_later.is_empty() {
-                break;
-            } else if !ingested {
-                break;
-            } else {
-                cgka_ops = try_later;
-                try_later = vec![];
-            }
-        }
-
-        if !cgka_ops.is_empty() {
-            return Err("unable to apply all key ops");
-        }
-
-        Ok(())
     }
 
     /// Get the behive ops which we think the other end should have
     pub(crate) fn keyhive_ops(
         &self,
         for_sync_with_peer: ed25519_dalek::VerifyingKey,
-        additional_peers_to_send: Vec<PeerId>,
-    ) -> HashMap<
-        Digest<KeyhiveOperation<CommitHash, NoListener>>,
-        KeyhiveOperation<CommitHash, NoListener>,
-    > {
+        additional_peers_to_send: Vec<keyhive_core::principal::identifier::Identifier>,
+    ) -> HashMap<Digest<StaticEvent<CommitHash>>, StaticEvent<CommitHash>> {
         let keyhive = &self.state.borrow().keyhive;
-        let mut events = keyhive.membership_ops_for_agent(&Public.individual().into());
+        let mut events = keyhive
+            .events_for_agent(&Public.individual().into())
+            .expect("FIXME");
 
         if let Some(peer_ops) = keyhive
             .get_agent(for_sync_with_peer.into())
-            .map(|agent| keyhive.membership_ops_for_agent(&agent))
+            .map(|agent| keyhive.events_for_agent(&agent).expect("FIXME"))
         {
             events.extend(peer_ops);
         }
         for peer in additional_peers_to_send {
             if let Some(peer_ops) = keyhive
-                .get_agent(peer.as_key().into())
-                .map(|agent| keyhive.membership_ops_for_agent(&agent))
+                .get_agent(peer)
+                .map(|agent| keyhive.events_for_agent(&agent).expect("FIXME"))
             {
                 events.extend(peer_ops);
             }
         }
         events
+            .into_values()
+            .map(|e| {
+                let e = StaticEvent::from(e);
+                (Digest::hash(&e), e)
+            })
+            .collect()
     }
 
     /// Get the keyhive ops corresponding to the hashes provided
     pub(crate) fn get_keyhive_ops(
         &self,
-        op_hashes: Vec<Digest<StaticMembershipOperation<CommitHash>>>,
-    ) -> Vec<keyhive_core::principal::group::membership_operation::MembershipOperation<CommitHash>>
-    {
-        let keyhive = &self.state.borrow().keyhive;
-        op_hashes
-            .iter()
-            .map(|static_hash| {
-                keyhive
-                    .get_membership_operation(&static_hash.into())
-                    .expect("FIXME")
-            })
-            .collect()
+        session_id: KeyhiveSyncId,
+        op_hashes: Vec<OpHash>,
+    ) -> Vec<StaticEvent<CommitHash>> {
+        self.state
+            .borrow()
+            .keyhive_sync_sessions
+            .events(session_id, op_hashes)
     }
 
     pub(crate) fn new_keyhive_sync_session(
         &self,
         for_peer: PeerId,
-        additional_peers_to_send: Vec<PeerId>,
+        additional_peers_to_send: Vec<keyhive_core::principal::identifier::Identifier>,
     ) -> (
         keyhive_sync::KeyhiveSyncId,
         Vec<crate::riblt::CodedSymbol<keyhive_sync::OpHash>>,
@@ -391,38 +281,32 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         Some(
             keyhive
                 .events_for_agent(&agent)
+                .unwrap()
                 .into_values()
                 .map(|op| op.into())
                 .collect(),
         )
     }
 
-    pub(crate) fn has_agent_session(&self, session: KeyhiveSyncId) -> bool {
+    pub(crate) fn has_forwarded_session(&self, session: KeyhiveSyncId) -> bool {
         self.state
             .borrow_mut()
-            .keyhive_agent_sync_sessions
-            .has_session(session)
+            .keyhive_sync_sessions
+            .has_forwarded_session(session)
     }
 
-    pub(crate) fn begin_agent_session(&self) -> KeyhiveSyncId {
-        let mut state = self.state.borrow_mut();
-        let session_id = KeyhiveSyncId::random(&mut *state.rng.borrow_mut());
-        state.keyhive_agent_sync_sessions.new_session(session_id);
-        session_id
-    }
-
-    pub(crate) fn track_agent_session(&self, session_id: KeyhiveSyncId) {
+    pub(crate) fn track_forwarded_session(&self, session_id: KeyhiveSyncId) {
         self.state
             .borrow_mut()
-            .keyhive_agent_sync_sessions
-            .new_session(session_id);
+            .keyhive_sync_sessions
+            .track_forwarded_session(session_id);
     }
 
-    pub(crate) fn end_agent_session(&self, session: KeyhiveSyncId) {
+    pub(crate) fn untrack_forwarded_session(&self, session: KeyhiveSyncId) {
         self.state
             .borrow_mut()
-            .keyhive_agent_sync_sessions
-            .remove_session(session);
+            .keyhive_sync_sessions
+            .untrack_forwarded_session(session);
     }
 
     pub(crate) fn register_peer(
@@ -437,5 +321,19 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
 
     pub(crate) fn local_peer(&self) -> keyhive_core::principal::agent::Agent<CommitHash> {
         self.state.borrow().keyhive.active().borrow().clone().into()
+    }
+
+    pub(crate) fn query_access(&self, doc_id: DocumentId) -> Option<HashMap<PeerId, MemberAccess>> {
+        let state = self.state.borrow();
+        let Some(doc) = state.keyhive.get_document(doc_id.into()) else {
+            return None;
+        };
+        let result = doc
+            .borrow()
+            .transitive_members()
+            .into_iter()
+            .map(|(id, (_, access))| (PeerId::from(id.0), MemberAccess::from(access)))
+            .collect();
+        Some(result)
     }
 }

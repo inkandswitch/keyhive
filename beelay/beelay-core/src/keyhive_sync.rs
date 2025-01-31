@@ -1,20 +1,23 @@
-use std::{
-    collections::{HashMap, HashSet},
-    hash::{Hash, Hasher},
-};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 
-use keyhive_core::{
-    crypto::digest::Digest,
-    principal::group::membership_operation::{MembershipOperation, StaticMembershipOperation},
-};
+use keyhive_core::{crypto::digest::Digest, event::StaticEvent};
 
-pub(crate) use keyhive_sync_id::KeyhiveSyncId;
-mod keyhive_agent_sync;
-pub(crate) use keyhive_agent_sync::{
-    request_agent_ops_from_forwarding_peers, KeyhiveAgentSyncSessions,
-};
+use crate::{documents::CommitHash, network::TargetNodeInfo, riblt, state::TaskContext, PeerId};
+
 mod keyhive_sync_id;
+pub(crate) use keyhive_sync_id::KeyhiveSyncId;
+mod op_hash;
+pub(crate) use op_hash::OpHash;
 
+/// Syncs the keyhive auth graph with a peer
+///
+/// # Parameters
+/// - `ctx`:                      The task context
+/// - `peer`:                     The peer to sync with
+/// - `additional_peers_to_send`: Additional peers to requests sync for beyond the
+///                               ops reachable by the requesting peer. This is
+///                               used to request ops about a peer we haven't
+///                               seen before
 #[tracing::instrument(skip(ctx, peer))]
 pub(crate) async fn sync_keyhive<R: rand::Rng + rand::CryptoRng + 'static>(
     ctx: TaskContext<R>,
@@ -27,15 +30,23 @@ pub(crate) async fn sync_keyhive<R: rand::Rng + rand::CryptoRng + 'static>(
         Some(p) => p,
         None => ctx.requests().ping(peer.clone()).await.unwrap(),
     };
+    let additional_peers = additional_peers_to_send
+        .into_iter()
+        .map(|p| p.as_key().into())
+        .collect::<Vec<_>>();
     let local_ops = ctx
         .keyhive()
-        .keyhive_ops(*remote_peer_id.as_key(), additional_peers_to_send);
+        .keyhive_ops(*remote_peer_id.as_key(), additional_peers.clone());
     let mut decoder = riblt::Decoder::<OpHash>::new();
     for op_hash in local_ops.keys() {
         decoder.add_symbol(&OpHash::from(*op_hash));
     }
     tracing::trace!("beginning sync");
-    let Ok((session_id, first_symbols)) = ctx.requests().begin_auth_sync(peer.clone()).await else {
+    let Ok((session_id, first_symbols)) = ctx
+        .requests()
+        .begin_auth_sync(peer.clone(), additional_peers)
+        .await
+    else {
         tracing::warn!("error begining auth sync");
         return;
     };
@@ -78,9 +89,7 @@ pub(crate) async fn sync_keyhive<R: rand::Rng + rand::CryptoRng + 'static>(
             .request_keyhive_ops(peer.clone(), session_id, to_download)
             .await
             .unwrap();
-        ctx.keyhive()
-            .apply_keyhive_ops(ops.into_iter().map(|o| o.0.into()).collect())
-            .expect("FIXME");
+        ctx.keyhive().apply_keyhive_events(ops).expect("FIXME");
     } else {
         tracing::trace!("no new keyhive ops to download");
     }
@@ -94,7 +103,7 @@ pub(crate) async fn sync_keyhive<R: rand::Rng + rand::CryptoRng + 'static>(
         tracing::trace!(?hashes_to_upload, "uploading ops");
         let to_upload = hashes_to_upload
             .into_iter()
-            .map(|h| local_ops.get(&(h.into())).unwrap().clone().into())
+            .filter_map(|h| local_ops.get(&(h.into())).cloned())
             .collect();
         ctx.requests()
             .upload_keyhive_ops(peer, to_upload, session_id)
@@ -105,32 +114,39 @@ pub(crate) async fn sync_keyhive<R: rand::Rng + rand::CryptoRng + 'static>(
     }
 }
 
-use crate::{
-    documents::CommitHash,
-    network::TargetNodeInfo,
-    riblt,
-    serialization::{leb128, parse, Encode, Parse},
-    state::TaskContext,
-    PeerId,
-};
+pub(crate) async fn sync_keyhive_with_forwarding_peers<R: rand::Rng + rand::CryptoRng + 'static>(
+    ctx: TaskContext<R>,
+    additional_peers_to_send: Vec<PeerId>,
+) {
+    let tasks = ctx.forwarding_peers().into_iter().map(|peer| {
+        let ctx = ctx.clone();
+        let additional_peers = additional_peers_to_send.clone();
+        async move {
+            sync_keyhive(ctx, peer, additional_peers).await;
+        }
+    });
+    futures::future::join_all(tasks).await;
+}
 
 pub(crate) struct KeyhiveSyncSessions {
     sessions: HashMap<KeyhiveSyncId, Session>,
+    forwarded_sessions: HashMap<KeyhiveSyncId, u64>,
 }
 
 impl KeyhiveSyncSessions {
     pub(crate) fn new() -> Self {
         Self {
             sessions: HashMap::new(),
+            forwarded_sessions: HashMap::new(),
         }
     }
 
     pub(crate) fn new_session<R: rand::Rng + rand::CryptoRng>(
         &mut self,
         rng: &mut R,
-        ops: HashMap<Digest<MembershipOperation<CommitHash>>, MembershipOperation<CommitHash>>,
+        ops: HashMap<Digest<StaticEvent<CommitHash>>, StaticEvent<CommitHash>>,
     ) -> (KeyhiveSyncId, Vec<riblt::CodedSymbol<OpHash>>) {
-        tracing::trace!("creating new sync session");
+        tracing::trace!("creating new keyhive sync session");
         let session_id = KeyhiveSyncId::random(rng);
         let mut encoder = riblt::Encoder::new();
         for op_hash in ops.keys() {
@@ -152,114 +168,58 @@ impl KeyhiveSyncSessions {
         };
         Some(session.next_n_symbols(n))
     }
-}
 
-// TODO: Fill out all the ops keyhive can produce here
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KeyhiveOp(pub(crate) StaticMembershipOperation<CommitHash>);
-
-#[cfg(test)]
-impl<'a> arbitrary::Arbitrary<'a> for KeyhiveOp {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let op = u.arbitrary::<StaticMembershipOperation<CommitHash>>()?;
-        Ok(Self(op))
-    }
-}
-
-impl From<StaticMembershipOperation<CommitHash>> for KeyhiveOp {
-    fn from(op: StaticMembershipOperation<CommitHash>) -> Self {
-        Self(op)
-    }
-}
-
-impl From<MembershipOperation<CommitHash>> for KeyhiveOp {
-    fn from(op: MembershipOperation<CommitHash>) -> Self {
-        Self(op.into())
-    }
-}
-
-impl Encode for KeyhiveOp {
-    fn encode_into(&self, buf: &mut Vec<u8>) {
-        // For now just serialize to JSON
-        let encoded = bincode::serialize(&self.0).unwrap();
-        leb128::encode_uleb128(buf, encoded.len() as u64);
-        buf.extend_from_slice(&encoded);
-    }
-}
-
-impl Parse<'_> for KeyhiveOp {
-    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        let (input, raw) = parse::slice(input)?;
-        let decoded = bincode::deserialize(&raw)
-            .map_err(|e| input.error(format!("failed to parse op: {}", e)))?;
-        Ok((input, Self(decoded)))
-    }
-}
-
-impl From<KeyhiveOp> for StaticMembershipOperation<CommitHash> {
-    fn from(op: KeyhiveOp) -> Self {
-        op.0
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash, Ord)]
-#[cfg_attr(test, derive(arbitrary::Arbitrary))]
-pub(crate) struct OpHash(pub(crate) [u8; 32]);
-
-impl From<OpHash> for Digest<StaticMembershipOperation<CommitHash>> {
-    fn from(hash: OpHash) -> Self {
-        Self::from(hash.0)
-    }
-}
-
-impl From<OpHash> for Digest<MembershipOperation<CommitHash>> {
-    fn from(hash: OpHash) -> Self {
-        Self::from(hash.0)
-    }
-}
-
-impl From<Digest<MembershipOperation<CommitHash>>> for OpHash {
-    fn from(digest: Digest<MembershipOperation<CommitHash>>) -> Self {
-        Self(*digest.raw.as_bytes())
-    }
-}
-
-impl Encode for OpHash {
-    fn encode_into(&self, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&self.0);
-    }
-}
-
-impl Parse<'_> for OpHash {
-    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        let (input, hash) = parse::arr::<32>(input)?;
-        Ok((input, Self(hash)))
-    }
-}
-
-impl riblt::Symbol for OpHash {
-    fn zero() -> Self {
-        Self([0; 32])
+    pub(crate) fn events(
+        &self,
+        session_id: KeyhiveSyncId,
+        hashes: Vec<OpHash>,
+    ) -> Vec<StaticEvent<CommitHash>> {
+        let Some(session) = self.sessions.get(&session_id) else {
+            return Vec::new();
+        };
+        session.events(hashes)
     }
 
-    fn xor(&self, other: &Self) -> Self {
-        Self(std::array::from_fn(|i| self.0[i] ^ other.0[i]))
+    pub(crate) fn track_forwarded_session(&mut self, session: KeyhiveSyncId) {
+        self.forwarded_sessions.entry(session).or_insert(1);
     }
 
-    fn hash(&self) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.0.hash(&mut hasher);
-        hasher.finish()
+    pub(crate) fn has_forwarded_session(&self, session: KeyhiveSyncId) -> bool {
+        self.forwarded_sessions
+            .get(&session)
+            .map(|c| *c > 0)
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn untrack_forwarded_session(&mut self, session: KeyhiveSyncId) {
+        match self.forwarded_sessions.entry(session) {
+            Entry::Occupied(mut e) => {
+                let c = e.get_mut();
+                if *c == 1 {
+                    e.remove();
+                } else {
+                    *c -= 1;
+                }
+            }
+            Entry::Vacant(_) => {}
+        }
     }
 }
 
 struct Session {
-    ops: HashMap<Digest<MembershipOperation<CommitHash>>, MembershipOperation<CommitHash>>,
+    ops: HashMap<Digest<StaticEvent<CommitHash>>, StaticEvent<CommitHash>>,
     encoder: riblt::Encoder<OpHash>,
 }
 
 impl Session {
     fn next_n_symbols(&mut self, n: u64) -> Vec<riblt::CodedSymbol<OpHash>> {
         self.encoder.next_n_symbols(n as u64)
+    }
+
+    fn events(&self, hashes: Vec<OpHash>) -> Vec<StaticEvent<CommitHash>> {
+        hashes
+            .iter()
+            .filter_map(|h| self.ops.get(&Digest::from(*h)).cloned())
+            .collect()
     }
 }

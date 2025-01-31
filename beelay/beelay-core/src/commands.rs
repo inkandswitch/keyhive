@@ -10,7 +10,7 @@ use crate::{
     snapshots,
     state::TaskContext,
     streams,
-    sync_docs::{self, sync_doc, sync_root_doc},
+    sync_docs::{self, sync_doc},
     Access, Audience, BundleSpec, Commit, CommitBundle, CommitCategory, CommitOrBundle, DocumentId,
     Forwarding, PeerAddress, SnapshotId, StorageKey, StreamId, SyncDocResult,
 };
@@ -205,20 +205,6 @@ async fn create_doc<R: rand::Rng + rand::CryptoRng + 'static>(
     tracing::trace!(?doc_id, "creating doc");
 
     let forwarding_peers = ctx.forwarding_peers();
-    for peer in &forwarding_peers {
-        if let Some(peer_id) = peer.last_known_peer_id {
-            tracing::trace!(%peer_id, "adding forwarding peer as puller for new document");
-            let agent = if let Some(agent) = ctx.keyhive().get_peer(peer_id) {
-                agent
-            } else {
-                ctx.keyhive().register_peer(peer_id)
-            };
-            ctx.keyhive()
-                .add_member(doc_id, agent, keyhive_core::access::Access::Pull);
-        } else {
-            tracing::trace!(%peer, "not adding forwarding peer as puller as we don't know their peer id");
-        }
-    }
     futures::future::join_all(forwarding_peers.into_iter().map(|peer| {
         let ctx = ctx.clone();
         async move {

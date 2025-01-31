@@ -55,7 +55,7 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
         }
         crate::Request::FetchSedimentree(doc_id) => {
             tracing::debug!(doc=%doc_id, "fetch sedimentree");
-            if !ctx.keyhive().can_read(from, &doc_id) {
+            if !ctx.keyhive().can_pull(from, &doc_id) {
                 tracing::trace!("not authorized to read doc");
                 // TODO: Return an empty response rather than an authorization failure?
                 return Ok(OutgoingResponse {
@@ -114,10 +114,11 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
                 Err(e) => Response::Error(e.to_string()),
             }
         }
-        messages::Request::BeginAuthSync => {
+        messages::Request::BeginAuthSync { additional_peers } => {
             tracing::debug!("begin auth sync");
-            let (session_id, first_symbols) =
-                ctx.keyhive().new_keyhive_sync_session(from, Vec::new());
+            let (session_id, first_symbols) = ctx
+                .keyhive()
+                .new_keyhive_sync_session(from, additional_peers);
             Response::BeginAuthSync {
                 session_id,
                 first_symbols,
@@ -135,22 +136,20 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             tracing::debug!(%session, "keyhive ops");
             let ops = ctx
                 .keyhive()
-                .get_keyhive_ops(op_hashes.into_iter().map(|o| o.into()).collect());
-            Response::RequestKeyhiveOps(
-                ops.into_iter()
-                    .map(|o| keyhive_sync::KeyhiveOp::from(o))
-                    .collect(),
-            )
+                .get_keyhive_ops(session, op_hashes.into_iter().map(|o| o.into()).collect());
+            Response::RequestKeyhiveOps(ops)
         }
         messages::Request::UploadKeyhiveOps {
             source_session,
             ops,
         } => {
             tracing::debug!(%source_session, "upload keyhive ops");
-            ctx.keyhive().apply_keyhive_ops(ops.clone()).expect("FIXME");
-            if !ctx.keyhive().has_agent_session(source_session) {
+            ctx.keyhive()
+                .apply_keyhive_events(ops.clone())
+                .expect("FIXME");
+            if !ctx.keyhive().has_forwarded_session(source_session) {
                 tracing::trace!("uploading ops to forwarding peers");
-                ctx.keyhive().track_agent_session(source_session);
+                ctx.keyhive().track_forwarded_session(source_session);
                 let forwarding_peers = ctx.forwarding_peers();
                 let upload_tasks = forwarding_peers.into_iter().filter_map({
                     let ctx = ctx.clone();
@@ -167,7 +166,7 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
                     }
                 });
                 futures::future::join_all(upload_tasks).await;
-                ctx.keyhive().end_agent_session(source_session);
+                ctx.keyhive().untrack_forwarded_session(source_session);
             }
             Response::UploadKeyhiveOps
         }
@@ -175,46 +174,11 @@ pub(super) async fn handle_request<R: rand::Rng + rand::CryptoRng + 'static>(
             tracing::debug!("ping");
             Response::Pong
         }
-        messages::Request::RequestKeyhiveOpsForAgent { sync_id, agent } => {
-            tracing::debug!(%agent, "keyhive ops for agent");
-            Response::RequestKeyhiveOpsForAgent(fetch_keyhive_ops(ctx, sync_id, agent).await)
-        }
     };
     Ok(OutgoingResponse {
         audience: Audience::peer(&from),
         response,
     })
-}
-
-#[tracing::instrument(skip(ctx))]
-async fn fetch_keyhive_ops<R: rand::Rng + rand::CryptoRng + 'static>(
-    ctx: TaskContext<R>,
-    sync_id: KeyhiveSyncId,
-    agent: Identifier,
-) -> Vec<keyhive_core::event::StaticEvent<CommitHash>> {
-    if ctx.keyhive().has_agent_session(sync_id) {
-        tracing::trace!("we're already forwarding this session, returning nothing");
-        return Vec::new();
-    }
-    if let Some(agent) = ctx.keyhive().get_agent(agent) {
-        if agent != ctx.keyhive().local_peer() {
-            tracing::trace!(%agent, "requesting from forwarding peers");
-            ctx.keyhive().track_agent_session(sync_id);
-            keyhive_sync::request_agent_ops_from_forwarding_peers(
-                ctx.clone(),
-                agent.agent_id().into(),
-                Some(sync_id),
-            )
-            .await;
-            ctx.keyhive().end_agent_session(sync_id);
-        }
-    }
-    ctx.keyhive()
-        .events_for_agent(agent)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|e| e.into())
-        .collect()
 }
 
 async fn fetch_sedimentree<R: rand::Rng + rand::CryptoRng>(
@@ -431,7 +395,7 @@ async fn create_snapshot<R: rand::Rng + rand::CryptoRng + 'static>(
         tracing::trace!("no peers to ask");
     }
 
-    if !ctx.keyhive().can_read(requestor, &root_doc) {
+    if !ctx.keyhive().can_pull(requestor, &root_doc) {
         tracing::debug!("peer not authorized to read root doc, returning empty");
         // TODO: Have an actual empty response
         let empty = snapshots::Snapshot::empty(&mut ctx, root_doc, Some(source_snapshot));
@@ -493,7 +457,7 @@ async fn handle_listen<R: rand::Rng + rand::CryptoRng + 'static>(
                         if e.source == Source::Remote(from_peer) {
                             return false;
                         }
-                        if !ctx.keyhive().can_read(from_peer, &e.doc) {
+                        if !ctx.keyhive().can_pull(from_peer, &e.doc) {
                             return false;
                         }
                         return true

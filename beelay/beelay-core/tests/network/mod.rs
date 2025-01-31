@@ -233,6 +233,27 @@ impl BeelayHandle<'_> {
             None => panic!("no command result"),
         }
     }
+
+    pub fn query_access(
+        &mut self,
+        doc: DocumentId,
+    ) -> Result<
+        HashMap<beelay_core::PeerId, beelay_core::MemberAccess>,
+        beelay_core::error::QueryAccess,
+    > {
+        let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
+        let (command_id, event) = beelay_core::Event::query_access(doc);
+        beelay.inbox.push_back(event);
+        self.network.run_until_quiescent();
+        let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
+        match beelay.completed_commands.remove(&command_id) {
+            Some(Ok(beelay_core::CommandResult::Keyhive(
+                beelay_core::KeyhiveCommandResult::QueryAccess(r),
+            ))) => r,
+            Some(other) => panic!("unexpected command result: {:?}", other),
+            None => panic!("no command result"),
+        }
+    }
 }
 
 pub struct Network {

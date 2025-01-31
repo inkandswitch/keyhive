@@ -328,7 +328,7 @@ pub enum Forwarding {
 
 pub mod error {
     pub use crate::documents::error::{InvalidCommitHash, InvalidDocumentId};
-    pub use crate::keyhive::error::{AddMember, RemoveMember};
+    pub use crate::keyhive::error::{AddMember, QueryAccess, RemoveMember};
     pub use crate::peer_id::error::InvalidPeerId;
 
     #[derive(Debug, thiserror::Error)]

@@ -1,7 +1,4 @@
-use ed25519_dalek::VerifyingKey;
-use keyhive_core::{
-    event::StaticEvent, principal::group::membership_operation::StaticMembershipOperation,
-};
+use keyhive_core::event::StaticEvent;
 
 use crate::{
     keyhive_sync::{self, OpHash},
@@ -79,7 +76,14 @@ pub(super) fn parse_request(
             };
             Ok((input, super::Request::Listen(snapshot_id, offset)))
         }),
-        RequestType::BeginAuthSync => Ok((input, super::Request::BeginAuthSync)),
+        RequestType::BeginAuthSync => {
+            let (input, additional_peers) =
+                Vec::<keyhive_core::principal::identifier::Identifier>::parse_in_ctx(
+                    "additional peers",
+                    input,
+                )?;
+            Ok((input, super::Request::BeginAuthSync { additional_peers }))
+        }
         RequestType::KeyhiveSymbols => input.parse_in_ctx("KeyhiveSymbols", |input| {
             let (input, session_id) =
                 input.parse_in_ctx("session_id", keyhive_sync::KeyhiveSyncId::parse)?;
@@ -97,8 +101,7 @@ pub(super) fn parse_request(
         RequestType::UploadKeyhiveOps => input.parse_in_ctx("UploadKeyhiveOps", |input| {
             let (input, source_session) =
                 input.parse_in_ctx("source_session", keyhive_sync::KeyhiveSyncId::parse)?;
-            let (input, ops) =
-                input.parse_in_ctx("ops", Vec::<StaticMembershipOperation<CommitHash>>::parse)?;
+            let (input, ops) = input.parse_in_ctx("ops", Vec::<StaticEvent<CommitHash>>::parse)?;
             Ok((
                 input,
                 super::Request::UploadKeyhiveOps {
@@ -108,19 +111,6 @@ pub(super) fn parse_request(
             ))
         }),
         RequestType::Ping => Ok((input, super::Request::Ping)),
-        RequestType::RequestKeyhiveOpsForAgent => {
-            let (input, key_bytes) = parse::arr::<32>(input)?;
-            let key = VerifyingKey::from_bytes(&key_bytes)
-                .map_err(|_e| input.error("failed to parse key"))?;
-            let (input, sync_id) = keyhive_sync::KeyhiveSyncId::parse(input)?;
-            Ok((
-                input,
-                super::Request::RequestKeyhiveOpsForAgent {
-                    agent: key.into(),
-                    sync_id,
-                },
-            ))
-        }
     }
 }
 
@@ -191,19 +181,13 @@ pub(crate) fn parse_response(
             Ok((input, super::Response::KeyhiveSymbols(symbols)))
         }),
         ResponseType::RequestKeyhiveOps => input.parse_in_ctx("RequestKeyhiveOps", |input| {
-            let (input, ops) = Vec::<keyhive_sync::KeyhiveOp>::parse_in_ctx("ops", input)?;
+            let (input, ops) = Vec::<StaticEvent<CommitHash>>::parse_in_ctx("ops", input)?;
             Ok((input, super::Response::RequestKeyhiveOps(ops)))
         }),
         ResponseType::UploadKeyhiveOps => input.parse_in_ctx("UploadKeyhiveOps", |input| {
             Ok((input, super::Response::UploadKeyhiveOps))
         }),
         ResponseType::Pong => Ok((input, super::Response::Pong)),
-        ResponseType::RequestKeyhiveOpsForAgent => {
-            input.parse_in_ctx("RequestKeyhiveOpsForAgent", |input| {
-                let (input, ops) = Vec::<StaticEvent<CommitHash>>::parse_in_ctx("ops", input)?;
-                Ok((input, super::Response::RequestKeyhiveOpsForAgent(ops)))
-            })
-        }
         ResponseType::AuthenticationFailed => Ok((input, super::Response::AuthenticationFailed)),
         ResponseType::AuthorizationFailed => Ok((input, super::Response::AuthorizationFailed)),
     }?;
