@@ -8,13 +8,15 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::signed::Signed;
+
 const STATIC_CONTEXT: &str = "/automerge/keyhive/beekem/app_secret/";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ApplicationSecret<Cr: ContentRef> {
     key: SymmetricKey,
     pcs_key_hash: Digest<PcsKey>,
-    pcs_update_op_hash: Digest<CgkaOperation>,
+    pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
     nonce: Siv,
     content_ref: Digest<Cr>,
     pred_refs: Digest<Vec<Cr>>,
@@ -24,7 +26,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
     pub fn new(
         key: SymmetricKey,
         pcs_key_hash: Digest<PcsKey>,
-        pcs_update_op_hash: Digest<CgkaOperation>,
+        pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
         nonce: Siv,
         content_ref: Digest<Cr>,
         pred_refs: Digest<Vec<Cr>>,
@@ -73,7 +75,7 @@ impl PcsKey {
         nonce: &Siv,
         content_ref: &Digest<Cr>,
         pred_refs: &Digest<Vec<Cr>>,
-        pcs_update_op_hash: &Digest<CgkaOperation>,
+        pcs_update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> ApplicationSecret<Cr> {
         let pcs_hash = Digest::hash(&self.0);
         let mut app_secret_context =

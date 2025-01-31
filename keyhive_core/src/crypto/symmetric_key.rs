@@ -22,8 +22,8 @@ use x25519_dalek::SharedSecret;
 ///
 /// let mut csprng = rand::thread_rng();
 ///
-/// let mut sk = ed25519_dalek::SigningKey::generate(&mut csprng);
-/// let user = Individual::generate(&mut sk, &mut csprng).unwrap();
+/// let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
+/// let user = Individual::generate(&sk, &mut csprng).unwrap();
 /// let user_agent: Agent<String> = Rc::new(RefCell::new(user)).into();
 ///
 /// let delegation_store = DelegationStore::new();
@@ -34,6 +34,7 @@ use x25519_dalek::SharedSecret;
 ///     delegation_store,
 ///     revocation_store,
 ///     NoListener,
+///     &sk,
 ///     &mut csprng
 /// ).unwrap();
 ///
