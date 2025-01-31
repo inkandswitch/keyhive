@@ -1629,12 +1629,10 @@ mod tests {
             b"Hi Carol"
         );
 
-        assert_eq!(
-            carol
-                .try_decrypt_content(carol_doc.dupe(), &unintelligable)
-                .unwrap(),
-            b"BOB MAKE MORE DIFFERENT TEST"
-        );
+        // Can't decrypt old content, since we use causal ecnryption
+        assert!(carol
+            .try_decrypt_content(carol_doc.dupe(), &unintelligable)
+            .is_err());
     }
 
     #[test]

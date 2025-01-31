@@ -216,7 +216,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
 
         let AddMemberUpdate {
             delegation,
-            cgka_ops: group_cgka_ops, // FIXME probably should be a deifferent type
+            cgka_ops: group_cgka_ops,
         } = self.group.add_member_with_manual_content(
             member_to_add.dupe(),
             can,
@@ -241,6 +241,10 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         delegation: &Signed<Delegation<T, L>>,
         signing_key: &ed25519_dalek::SigningKey,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+        if delegation.payload.can < Access::Read {
+            panic!("FIXME");
+        }
+
         let mut ops = Vec::new();
         for (id, pre_key) in delegation
             .dupe()
