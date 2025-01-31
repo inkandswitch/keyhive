@@ -1,9 +1,9 @@
 use std::{cell::RefCell, collections::HashMap, future::Future, rc::Rc, task::Waker};
 
 use ed25519_dalek::SigningKey;
-use futures::future::LocalBoxFuture;
 use futures::FutureExt;
-use keyhive_core::{keyhive::Keyhive, listener::no_listener::NoListener};
+use futures::{channel::mpsc, future::LocalBoxFuture};
+use keyhive_core::keyhive::Keyhive;
 
 use crate::{
     io::{IoResult, IoResultPayload, IoTask},
@@ -63,14 +63,27 @@ pub struct Loading<R: rand::Rng + rand::CryptoRng + Clone> {
     rng: R,
     signing_key: SigningKey,
     tasks: Rc<RefCell<Tasks>>,
-    load_fut: LocalBoxFuture<'static, Keyhive<crate::CommitHash, NoListener, R>>,
+    load_fut: LocalBoxFuture<
+        'static,
+        (
+            Keyhive<crate::CommitHash, crate::keyhive::Listener, R>,
+            mpsc::UnboundedReceiver<
+                keyhive_core::event::Event<crate::CommitHash, crate::keyhive::Listener>,
+            >,
+        ),
+    >,
 }
 
 async fn load_keyhive<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
     ctx: LoadCtx,
     now: UnixTimestamp,
     signing_key: SigningKey,
-) -> Keyhive<crate::CommitHash, NoListener, R> {
+) -> (
+    Keyhive<crate::CommitHash, crate::keyhive::Listener, R>,
+    mpsc::UnboundedReceiver<
+        keyhive_core::event::Event<crate::CommitHash, crate::keyhive::Listener>,
+    >,
+) {
     // Load metadata from a known key
     let metadata = ctx.load(StorageKey::auth().push("metadata")).await;
 
@@ -107,11 +120,14 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Loading<R> {
             waker.wake();
         }
         let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
-        if let std::task::Poll::Ready(keyhive) = self.load_fut.poll_unpin(&mut cx) {
+        if let std::task::Poll::Ready((keyhive, rx_keyhive_events)) =
+            self.load_fut.poll_unpin(&mut cx)
+        {
             Step::Loaded(Beelay::new_with_keyhive(
                 self.rng,
                 now,
                 keyhive,
+                rx_keyhive_events,
                 Some(self.signing_key),
             ))
         } else {

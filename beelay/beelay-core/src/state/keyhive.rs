@@ -53,6 +53,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
                     .map(|cap| cap.payload().can() >= access)
                     .unwrap_or(false);
             }
+            return false;
         }
         tracing::trace!("document not found in keyhive");
         false
@@ -208,12 +209,15 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
     pub(crate) fn get_peer(
         &self,
         agent: PeerId,
-    ) -> Option<keyhive_core::principal::agent::Agent<CommitHash>> {
+    ) -> Option<keyhive_core::principal::agent::Agent<CommitHash, crate::keyhive::Listener>> {
         let keyhive = &self.state.borrow().keyhive;
         keyhive.get_agent(agent.as_key().into())
     }
 
-    pub(crate) fn get_agent(&self, agent: Identifier) -> Option<Agent<CommitHash>> {
+    pub(crate) fn get_agent(
+        &self,
+        agent: Identifier,
+    ) -> Option<Agent<CommitHash, crate::keyhive::Listener>> {
         let keyhive = &self.state.borrow().keyhive;
         keyhive.get_agent(agent)
     }
@@ -221,7 +225,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
     pub(crate) fn add_member(
         &self,
         doc_id: DocumentId,
-        agent: keyhive_core::principal::agent::Agent<CommitHash>,
+        agent: keyhive_core::principal::agent::Agent<CommitHash, crate::keyhive::Listener>,
         access: keyhive_core::access::Access,
     ) {
         let keyhive = &mut self.state.borrow_mut().keyhive;
@@ -272,7 +276,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
     pub(crate) fn events_for_agent(
         &self,
         agent_id: keyhive_core::principal::identifier::Identifier,
-    ) -> Option<Vec<keyhive_core::event::Event<CommitHash>>> {
+    ) -> Option<Vec<keyhive_core::event::Event<CommitHash, crate::keyhive::Listener>>> {
         tracing::trace!("getting events for agent");
         let keyhive = &self.state.borrow().keyhive;
         let Some(agent) = keyhive.get_agent(agent_id) else {
@@ -312,14 +316,16 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
     pub(crate) fn register_peer(
         &self,
         peer_id: PeerId,
-    ) -> keyhive_core::principal::agent::Agent<CommitHash> {
+    ) -> keyhive_core::principal::agent::Agent<CommitHash, crate::keyhive::Listener> {
         let keyhive = &mut self.state.borrow_mut().keyhive;
         let indie = Rc::new(RefCell::new((*peer_id.as_key()).into()));
         keyhive.register_individual(indie.clone());
         indie.into()
     }
 
-    pub(crate) fn local_peer(&self) -> keyhive_core::principal::agent::Agent<CommitHash> {
+    pub(crate) fn local_peer(
+        &self,
+    ) -> keyhive_core::principal::agent::Agent<CommitHash, crate::keyhive::Listener> {
         self.state.borrow().keyhive.active().borrow().clone().into()
     }
 
@@ -335,5 +341,27 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             .map(|(id, (_, access))| (PeerId::from(id.0), MemberAccess::from(access)))
             .collect();
         Some(result)
+    }
+
+    pub(crate) fn to_access_change(
+        &self,
+        evt: keyhive_core::event::Event<CommitHash, crate::keyhive::Listener>,
+    ) -> Option<(DocumentId, HashMap<PeerId, MemberAccess>)> {
+        let doc_id = match evt {
+            keyhive_core::event::Event::Delegated(signed) => signed.subject_id(),
+            keyhive_core::event::Event::Revoked(signed) => signed.subject_id(),
+            _ => return None,
+        };
+        if let Some(doc) = self.state.borrow().keyhive.get_document(doc_id.into()) {
+            let result = doc
+                .borrow()
+                .transitive_members()
+                .into_iter()
+                .map(|(id, (_, access))| (PeerId::from(id.0), MemberAccess::from(access)))
+                .collect();
+            Some((DocumentId::from(doc_id.0), result))
+        } else {
+            None
+        }
     }
 }

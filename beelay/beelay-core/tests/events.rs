@@ -24,7 +24,7 @@ fn uploaded_commits_emits_local_event() {
     assert_eq!(notis.len(), 1);
     assert_eq!(
         notis[0],
-        DocEvent {
+        DocEvent::Data {
             doc: doc_id,
             data: CommitOrBundle::Commit(commit)
         }

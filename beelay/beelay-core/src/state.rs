@@ -7,10 +7,10 @@ use std::{
 
 use ed25519_dalek::SigningKey;
 use futures::{channel::mpsc, task::LocalSpawnExt};
-use keyhive_core::{keyhive::Keyhive, listener::no_listener::NoListener};
+use keyhive_core::keyhive::Keyhive;
 
 mod auth;
-mod keyhive;
+pub(crate) mod keyhive;
 mod requests;
 pub(crate) use requests::RpcError;
 mod outbound_listens;
@@ -29,7 +29,7 @@ use crate::{
 
 pub(crate) struct State<R: rand::Rng + rand::CryptoRng> {
     auth: crate::auth::manager::Manager,
-    keyhive: Keyhive<CommitHash, NoListener, R>,
+    keyhive: Keyhive<CommitHash, crate::keyhive::Listener, R>,
     keyhive_sync_sessions: keyhive_sync::KeyhiveSyncSessions,
     snapshots: Snapshots,
     log: log::Log,
@@ -49,7 +49,7 @@ impl<R: rand::Rng + rand::CryptoRng> State<R> {
     pub(crate) fn new(
         rng: R,
         now: UnixTimestamp,
-        keyhive: Keyhive<crate::CommitHash, NoListener, R>,
+        keyhive: Keyhive<crate::CommitHash, crate::keyhive::Listener, R>,
         signing_key: SigningKey,
         streams_tx: mpsc::UnboundedSender<crate::streams::IncomingStreamEvent>,
         stopper: crate::stopper::Stopper,

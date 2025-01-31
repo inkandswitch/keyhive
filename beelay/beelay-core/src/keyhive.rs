@@ -1,9 +1,14 @@
 use std::collections::HashMap;
 
 use error::AddMember;
+use keyhive_core::{
+    event::StaticEvent,
+    listener::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener},
+};
 
 use crate::{
-    keyhive_sync::sync_keyhive, state::TaskContext, sync_docs::sync_doc, DocumentId, PeerId,
+    keyhive_sync::sync_keyhive, state::TaskContext, sync_docs::sync_doc, CommitHash, DocumentId,
+    PeerId,
 };
 
 #[derive(Debug)]
@@ -159,8 +164,6 @@ async fn remove_member<R: rand::Rng + rand::CryptoRng + 'static>(
 }
 
 pub(crate) mod error {
-    use keyhive_core::listener::no_listener::NoListener;
-
     use crate::CommitHash;
 
     #[derive(Debug, thiserror::Error)]
@@ -178,7 +181,9 @@ pub(crate) mod error {
         #[error("missing dependency")]
         MissingDependency,
         #[error(transparent)]
-        Receive(#[from] keyhive_core::keyhive::ReceiveEventError<CommitHash, NoListener>),
+        Receive(
+            #[from] keyhive_core::keyhive::ReceiveEventError<CommitHash, crate::keyhive::Listener>,
+        ),
     }
 
     #[derive(Debug, thiserror::Error)]
@@ -246,5 +251,99 @@ mod encoding {
             let id = keyhive_core::principal::identifier::Identifier::from(key);
             Ok((input, id))
         }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct Listener {
+    send: futures::channel::mpsc::UnboundedSender<keyhive_core::event::Event<CommitHash, Listener>>,
+}
+
+impl std::fmt::Debug for Listener {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Listener").finish()
+    }
+}
+
+impl Listener {
+    pub(crate) fn new(
+        send: futures::channel::mpsc::UnboundedSender<
+            keyhive_core::event::Event<CommitHash, Listener>,
+        >,
+    ) -> Self {
+        Self { send }
+    }
+}
+
+impl PrekeyListener for Listener {
+    fn on_prekeys_expanded(
+        &self,
+        new_prekey: &std::rc::Rc<
+            keyhive_core::crypto::signed::Signed<
+                keyhive_core::principal::individual::op::add_key::AddKeyOp,
+            >,
+        >,
+    ) {
+        let _ = self
+            .send
+            .unbounded_send(keyhive_core::event::Event::<CommitHash, _>::from(
+                new_prekey.clone(),
+            ));
+    }
+
+    fn on_prekey_rotated(
+        &self,
+        rotate_key: &std::rc::Rc<
+            keyhive_core::crypto::signed::Signed<
+                keyhive_core::principal::individual::op::rotate_key::RotateKeyOp,
+            >,
+        >,
+    ) {
+        let _ = self
+            .send
+            .unbounded_send(keyhive_core::event::Event::<CommitHash, _>::from(
+                rotate_key.clone(),
+            ));
+    }
+}
+
+impl MembershipListener<CommitHash> for Listener {
+    fn on_delegation(
+        &self,
+        data: &std::rc::Rc<
+            keyhive_core::crypto::signed::Signed<
+                keyhive_core::principal::group::delegation::Delegation<CommitHash, Self>,
+            >,
+        >,
+    ) {
+        let _ = self
+            .send
+            .unbounded_send(keyhive_core::event::Event::from(data.clone()));
+    }
+
+    fn on_revocation(
+        &self,
+        data: &std::rc::Rc<
+            keyhive_core::crypto::signed::Signed<
+                keyhive_core::principal::group::revocation::Revocation<CommitHash, Self>,
+            >,
+        >,
+    ) {
+        let _ = self
+            .send
+            .unbounded_send(keyhive_core::event::Event::from(data.clone()));
+    }
+}
+
+impl CgkaListener for Listener {
+    fn on_cgka_op(
+        &self,
+        data: &std::rc::Rc<
+            keyhive_core::crypto::signed::Signed<keyhive_core::cgka::operation::CgkaOperation>,
+        >,
+    ) {
+        let _ = self
+            .send
+            .unbounded_send(keyhive_core::event::Event::from(data.clone()));
     }
 }

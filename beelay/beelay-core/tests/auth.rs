@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use beelay_core::{Access, Commit, MemberAccess};
 use keyhive_core::principal::public::Public;
 use network::{ConnForwarding, ConnectedPair, Network};
@@ -84,6 +86,67 @@ fn giving_access_to_peer_enables_reading() {
 }
 
 #[test]
+fn make_public_then_remove_public_fails_write() {
+    init_logging();
+    let mut network = Network::new();
+    let peer1 = network.create_peer("peer1");
+    let peer2 = network.create_peer("peer2");
+    let peer3 = network.create_peer("peer3");
+
+    let ConnectedPair {
+        left_to_right: peer1_to_peer2,
+        right_to_left: peer2_to_peer1,
+    } = network.connect_stream(&peer1, &peer2, ConnForwarding::LeftToRight);
+    let ConnectedPair {
+        right_to_left: peer3_to_peer2,
+        ..
+    } = network.connect_stream(&peer2, &peer3, ConnForwarding::RightToLeft);
+
+    let doc = network
+        .beelay(&peer1)
+        .create_doc_with_contents(Access::Private, "somedoc".into());
+    network.beelay(&peer1).sync_doc(doc, peer1_to_peer2);
+
+    // Now give access to peer2
+    network
+        .beelay(&peer1)
+        .add_member(doc, peer2, MemberAccess::Pull)
+        .unwrap();
+
+    // Give write access to public
+    network
+        .beelay(&peer1)
+        .add_member(doc, Public.id().0.into(), MemberAccess::Write)
+        .unwrap();
+
+    // Now sync the doc to peer3
+    let synced_to_3 = network.beelay(&peer3).sync_doc(doc, peer3_to_peer2);
+    assert_eq!(synced_to_3.found, true);
+
+    // Now revoke public access
+    network
+        .beelay(&peer1)
+        .remove_member(doc, Public.id().0.into())
+        .unwrap();
+
+    // Make a change on peer3
+    network.beelay(&peer3).add_commits(
+        doc,
+        vec![Commit::new(vec![], "whooop".into(), [7; 32].into())],
+    );
+
+    // Now sync the doc to peer2
+    let synced_to_2 = network.beelay(&peer3).sync_doc(doc, peer3_to_peer2);
+
+    // Now check commits on 2 and 3 are different
+    let commits_on_2 = network.beelay(&peer2).load_doc(doc).unwrap();
+    let commits_on_3 = network.beelay(&peer3).load_doc(doc).unwrap();
+    assert_eq!(commits_on_2.len(), 1);
+    assert_eq!(commits_on_3.len(), 2);
+    assert_ne!(commits_on_2, commits_on_3);
+}
+
+#[test]
 fn syncing_private_doc_sends_doc_to_server() {
     init_logging();
     let mut network = Network::new();
@@ -166,4 +229,33 @@ fn make_public_then_private_then_public_then_private() {
 
     let access = network.beelay(&peer2).query_access(doc).unwrap();
     assert_eq!(access.get(&Public.id().0.into()), None,);
+}
+
+#[test]
+fn add_and_remove_member_notify_of_changed_access() {
+    init_logging();
+    let mut network = Network::new();
+    let peer1 = network.create_peer("peer1");
+
+    let doc = network
+        .beelay(&peer1)
+        .create_doc_with_contents(Access::Private, "somedoc".into());
+
+    // now add the public member
+    network
+        .beelay(&peer1)
+        .add_member(doc, Public.id().0.into(), MemberAccess::Write)
+        .unwrap();
+
+    let notis = network.beelay(&peer1).pop_notifications();
+    assert_eq!(
+        notis[0],
+        beelay_core::DocEvent::AccessChanged {
+            doc: doc,
+            new_access: HashMap::from_iter([
+                (Public.id().0.into(), MemberAccess::Write),
+                (peer1, MemberAccess::Admin),
+            ]),
+        }
+    );
 }

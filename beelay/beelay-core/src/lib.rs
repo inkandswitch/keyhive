@@ -8,10 +8,7 @@ use futures::{
 };
 use io::IoResult;
 use jobs::JobComplete;
-use keyhive_core::{
-    crypto::verifiable::Verifiable, keyhive::Keyhive, listener::no_listener::NoListener,
-    principal::public::Public,
-};
+use keyhive_core::{crypto::verifiable::Verifiable, keyhive::Keyhive, principal::public::Public};
 use network::messages::{Request, Response};
 use serialization::parse;
 use state::TaskContext;
@@ -113,14 +110,19 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
     pub fn new(mut rng: R, now: UnixTimestamp, signing_key: Option<SigningKey>) -> Beelay<R> {
         let signing_key =
             signing_key.unwrap_or_else(|| ed25519_dalek::SigningKey::generate(&mut rng));
-        let keyhive = Keyhive::generate(signing_key.clone(), NoListener, rng.clone()).unwrap();
-        Self::new_with_keyhive(rng, now, keyhive, Some(signing_key))
+        let (tx_keyhive_events, rx_keyhive_events) = futures::channel::mpsc::unbounded();
+        let listener = keyhive::Listener::new(tx_keyhive_events);
+        let keyhive = Keyhive::generate(signing_key.clone(), listener, rng.clone()).unwrap();
+        Self::new_with_keyhive(rng, now, keyhive, rx_keyhive_events, Some(signing_key))
     }
 
     pub(crate) fn new_with_keyhive(
         mut rng: R,
         now: UnixTimestamp,
-        keyhive: keyhive_core::keyhive::Keyhive<CommitHash, NoListener, R>,
+        keyhive: keyhive_core::keyhive::Keyhive<CommitHash, keyhive::Listener, R>,
+        rx_keyhive_events: mpsc::UnboundedReceiver<
+            keyhive_core::event::Event<CommitHash, crate::keyhive::Listener>,
+        >,
         signing_key: Option<SigningKey>,
     ) -> Beelay<R> {
         let signing_key =
@@ -141,8 +143,14 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
         let (tx_events, rx_events) = futures::channel::mpsc::unbounded();
 
         let run_span = tracing::info_span!("run", local_peer_id = %peer_id);
-        let task =
-            run(state.clone(), rx_events, rx_inbound_stream_events, stopper).instrument(run_span);
+        let task = run(
+            state.clone(),
+            rx_events,
+            rx_inbound_stream_events,
+            stopper,
+            rx_keyhive_events,
+        )
+        .instrument(run_span);
 
         executor
             .spawner()
@@ -202,12 +210,16 @@ async fn run<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
     rx_commands: mpsc::UnboundedReceiver<(CommandId, Command)>,
     rx_inbound_stream_events: mpsc::UnboundedReceiver<streams::IncomingStreamEvent>,
     stopper: crate::stopper::Stopper,
+    keyhive_events: mpsc::UnboundedReceiver<
+        keyhive_core::event::Event<CommitHash, crate::keyhive::Listener>,
+    >,
 ) {
     // Create a future that we can safely catch panics from
     let future = std::panic::AssertUnwindSafe(run_inner(
         state,
         rx_commands,
         rx_inbound_stream_events,
+        keyhive_events,
         stopper,
     ));
 
@@ -230,6 +242,9 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
     state: Rc<RefCell<state::State<R>>>,
     mut rx_commands: mpsc::UnboundedReceiver<(commands::CommandId, commands::Command)>,
     rx_inbound_stream_events: mpsc::UnboundedReceiver<streams::IncomingStreamEvent>,
+    mut keyhive_events: mpsc::UnboundedReceiver<
+        keyhive_core::event::Event<CommitHash, crate::keyhive::Listener>,
+    >,
     stopper: crate::stopper::Stopper,
 ) {
     let mut running_commands = FuturesUnordered::new();
@@ -278,6 +293,14 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
                 };
                 state.borrow_mut().emit_stream_event(stream_id, event);
             }
+            keyhive_event = keyhive_events.select_next_some() => {
+                tracing::trace!(?keyhive_event, "new keyhive event");
+                let ctx = TaskContext::new(state.clone());
+                if let Some((doc_id, access_change)) = ctx.keyhive().to_access_change(keyhive_event) {
+                    tracing::trace!(?doc_id, ?access_change, "it's an acess change");
+                    ctx.emit_doc_event(DocEvent::AccessChanged { doc: doc_id, new_access: access_change })
+                }
+            }
             finished_command = running_commands.select_next_some() => {
                 let (command_id, result) = finished_command;
                 state.borrow_mut().emit_completed_command(command_id, Ok(result));
@@ -293,6 +316,7 @@ pub enum DocEvent {
         data: CommitOrBundle,
     },
     AccessChanged {
+        doc: DocumentId,
         new_access: HashMap<PeerId, MemberAccess>,
     },
 }

@@ -114,7 +114,7 @@ fn listen() {
     assert_eq!(notifications.len(), 1);
     assert_eq!(
         notifications[0],
-        DocEvent {
+        DocEvent::Data {
             doc: doc1_id,
             data: CommitOrBundle::Commit(commit2)
         }
