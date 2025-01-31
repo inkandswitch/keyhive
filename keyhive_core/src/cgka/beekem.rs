@@ -279,6 +279,7 @@ impl BeeKem {
         sks: &mut ShareKeyMap,
         csprng: &mut R,
     ) -> Result<Option<(PcsKey, PathChange)>, CgkaError> {
+        println!("!@ encrypt_path by {}: pk {}", id, pk);
         let leaf_idx = *self.leaf_index_for_id(id)?;
         debug_assert!(self.id_for_leaf(leaf_idx).unwrap() == id);
         let mut new_path = PathChange {
@@ -330,6 +331,8 @@ impl BeeKem {
     /// Applies a [`PathChange`] representing new public and encrypted secret keys for each
     /// node on a path.
     pub(crate) fn apply_path(&mut self, new_path: &PathChange) {
+        println!("!@ apply_path received from {}", new_path.leaf_id);
+
         // If this id has been concurrently removed, it might no longer be present
         // when we try to apply the concurrent update at that id.
         if !self.id_to_leaf_idx.contains_key(&new_path.leaf_id) {

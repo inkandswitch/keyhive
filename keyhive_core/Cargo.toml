@@ -37,6 +37,7 @@ derive-where = "1.2"
 dupe = { workspace = true }
 nonempty = { workspace = true }
 topological-sort = "0.2"
+tracing = { workspace = true }
 
 # Testing
 proptest = { version = "1.5", optional = true }

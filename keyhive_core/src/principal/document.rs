@@ -162,6 +162,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
                 .cloned(),
             );
         }
+
         let (_pcs_key, update_op) = cgka.update(
             owner_share_key,
             owner_share_secret_key,
@@ -171,6 +172,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         // FIXME: We don't currently do anything with these ops, but need to share them
         // across the network.
         ops.push(update_op);
+
         Ok(Document {
             group,
             reader_keys: HashMap::new(), // FIXME
