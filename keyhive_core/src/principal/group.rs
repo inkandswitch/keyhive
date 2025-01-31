@@ -16,7 +16,7 @@ use self::{
 };
 use super::{
     agent::{id::AgentId, Agent},
-    document::{id::DocumentId, AddMemberUpdate, Document, RevokeMemberUpdate},
+    document::{id::DocumentId, AddCgkaMemberError, AddMemberUpdate, Document, RevokeMemberUpdate},
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
     membered::Membered,
@@ -393,7 +393,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         &mut self,
         delegation: Rc<Signed<Delegation<T, L>>>,
         signing_key: &ed25519_dalek::SigningKey,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, AddCgkaMemberError> {
         let mut cgka_ops = Vec::new();
         let docs: Vec<Rc<RefCell<Document<T, L>>>> = self
             .transitive_members()
@@ -817,7 +817,7 @@ pub enum AddGroupMemberError {
     AddError(#[from] error::AddError),
 
     #[error(transparent)]
-    CgkaError(#[from] CgkaError),
+    AddCgkaMemberError(#[from] AddCgkaMemberError),
 }
 
 #[derive(Debug, Error)]

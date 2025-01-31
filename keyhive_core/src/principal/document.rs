@@ -240,9 +240,9 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         &mut self,
         delegation: &Signed<Delegation<T, L>>,
         signing_key: &ed25519_dalek::SigningKey,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, AddCgkaMemberError> {
         if delegation.payload.can < Access::Read {
-            panic!("FIXME");
+            Err(AddCgkaMemberError::Unauthorized(delegation.payload.can))?;
         }
 
         let mut ops = Vec::new();
@@ -503,6 +503,15 @@ impl<T: ContentRef, L: MembershipListener<T>> Hash for Document<T, L> {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum AddCgkaMemberError {
+    #[error("Passed delegation only has {0} access, which is not enough to be in the CGKA.")]
+    Unauthorized(Access),
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddMemberUpdate<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
     pub delegation: Rc<Signed<Delegation<T, L>>>,
@@ -550,7 +559,7 @@ pub enum AddMemberError {
     AddMemberError(#[from] AddGroupMemberError),
 
     #[error(transparent)]
-    CgkaError(#[from] CgkaError),
+    AddCgkaMemberError(#[from] AddCgkaMemberError),
 }
 
 #[derive(Debug, Error)]
