@@ -1433,7 +1433,7 @@ mod tests {
 
         let bob_peer: Peer = Rc::new(RefCell::new(bob.active.borrow().individual.clone())).into();
 
-        let alice_doc1 = alice
+        let alice_doc = alice
             .generate_doc(vec![bob_peer], nonempty![[1; 32]])
             .unwrap();
 
@@ -1463,54 +1463,47 @@ mod tests {
             }
         }
 
-        let doc1_id = alice_doc1.borrow().doc_id();
-        let bob_doc1 = bob.documents().get(&doc1_id).unwrap().dupe();
-        assert_eq!(bob_doc1.borrow().members().len(), 2);
+        let doc_id = alice_doc.borrow().doc_id();
+        let bob_doc = bob.documents().get(&doc_id).unwrap().dupe();
+        assert_eq!(bob_doc.borrow().members().len(), 2);
 
         assert_eq!(
-            alice_doc1.borrow().cgka().unwrap().ops_graph.cgka_ops.len(),
+            alice_doc.borrow().cgka().unwrap().ops_graph.cgka_ops.len(),
             4
         );
+        assert_eq!(bob_doc.borrow().cgka().unwrap().ops_graph.cgka_ops.len(), 4);
         assert_eq!(
-            bob_doc1.borrow().cgka().unwrap().ops_graph.cgka_ops.len(),
-            4
-        );
-        assert_eq!(
-            alice_doc1.borrow().cgka().unwrap().ops_graph.cgka_ops,
-            bob_doc1.borrow().cgka().unwrap().ops_graph.cgka_ops
+            alice_doc.borrow().cgka().unwrap().ops_graph.cgka_ops,
+            bob_doc.borrow().cgka().unwrap().ops_graph.cgka_ops
         );
 
         let EncryptedContentWithUpdate {
             encrypted_content, ..
         } = alice
             .try_encrypt_content(
-                alice_doc1.dupe(),
+                alice_doc.dupe(),
                 &[15; 32],
                 &vec![[1; 32]],
                 b"this is a test",
             )
             .unwrap();
 
-        // dbg!(&encrypted_content);
-        // dbg!(&bob_doc1.borrow().cgka().unwrap().pcs_keys.len());
-        // dbg!(&bob_doc1.borrow().cgka().unwrap().owner_sks.0.len());
         assert!(encrypted_content.ciphertext != b"this is a test");
 
-        // bob_doc1.borrow_mut().cgka().unwrap().replay_ops_graph().unwrap();
         let round_tripped = bob
-            .try_decrypt_content(bob_doc1.dupe(), &encrypted_content)
+            .try_decrypt_content(bob_doc.dupe(), &encrypted_content)
             .unwrap();
 
         assert_eq!(round_tripped, b"this is a test");
 
-        bob.force_pcs_update(bob_doc1.dupe()).unwrap();
+        bob.force_pcs_update(bob_doc.dupe()).unwrap();
 
         let EncryptedContentWithUpdate {
             encrypted_content: new_encrypted_content,
             ..
         } = alice
             .try_encrypt_content(
-                alice_doc1.dupe(),
+                alice_doc.dupe(),
                 &[14; 32],
                 &vec![[15; 32]],
                 b"this is another test",
@@ -1518,7 +1511,7 @@ mod tests {
             .unwrap();
 
         let round_tripped_2 = bob
-            .try_decrypt_content(bob_doc1.dupe(), &new_encrypted_content)
+            .try_decrypt_content(bob_doc.dupe(), &new_encrypted_content)
             .unwrap();
 
         assert_eq!(round_tripped_2, b"this is another test");
@@ -1528,18 +1521,46 @@ mod tests {
             ..
         } = bob
             .try_encrypt_content(
-                bob_doc1.dupe(),
+                bob_doc.dupe(),
                 &[13; 32],
                 &vec![[15; 32], [14; 32]],
                 b"BOB MAKE MORE DIFFERENT TEST",
             )
             .unwrap();
 
-        let _round_tripped_2 = alice.try_decrypt_content(alice_doc1.dupe(), &unintelligable);
-        // FIXME assert!(round_tripped_2.is_err());
+        let round_tripped_2 = alice.try_decrypt_content(alice_doc.dupe(), &unintelligable);
+        assert!(round_tripped_2.is_err());
 
         let bob_to_alice_ops = bob.events_for_agent(&alice.active.dupe().into()).unwrap();
-        // FIXME assert_eq!(bob_to_alice_ops.len(), 29);
+        let cgkas: Vec<_> = bob_to_alice_ops
+            .iter()
+            .filter_map(|(h, op)| {
+                if let Event::CgkaOperation(op) = op {
+                    Some((h.clone(), op.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert_eq!(cgkas.len(), 5);
+        bob.force_pcs_update(bob_doc.dupe()).unwrap();
+        bob.force_pcs_update(bob_doc.dupe()).unwrap();
+        bob.force_pcs_update(bob_doc.dupe()).unwrap();
+        bob.force_pcs_update(bob_doc.dupe()).unwrap();
+
+        let bob_to_alice_ops2 = bob.events_for_agent(&alice.active.dupe().into()).unwrap();
+        let cgkas_after_force_pcses: Vec<_> = bob_to_alice_ops2
+            .iter()
+            .filter_map(|(h, op)| {
+                if let Event::CgkaOperation(op) = op {
+                    Some((h.clone(), op.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(cgkas_after_force_pcses.len(), 9);
 
         let mut buf = bob_to_alice_ops
             .values()
@@ -1553,9 +1574,65 @@ mod tests {
         }
 
         let round_tripped_3 = alice
-            .try_decrypt_content(alice_doc1.dupe(), &unintelligable)
+            .try_decrypt_content(alice_doc.dupe(), &unintelligable)
             .unwrap();
         assert_eq!(round_tripped_3, b"BOB MAKE MORE DIFFERENT TEST");
+
+        let sk3 = ed25519_dalek::SigningKey::generate(&mut csprng);
+        let mut carol: Keyhive<[u8; 32]> =
+            Keyhive::generate(sk3, NoListener, csprng.clone()).unwrap();
+        let carol_peer: Peer =
+            Rc::new(RefCell::new(carol.active.borrow().individual.clone())).into();
+
+        let mut bob_doc_memed = bob_doc.dupe().into();
+        let b_to_c_dlg = bob
+            .add_member(carol_peer.into(), &mut bob_doc_memed, Access::Read, &[])
+            .unwrap();
+
+        let EncryptedContentWithUpdate {
+            encrypted_content: hi_carol,
+            ..
+        } = bob
+            .try_encrypt_content(
+                bob_doc.dupe(),
+                &[13; 32],
+                &vec![[15; 32], [14; 32]],
+                b"Hi Carol",
+            )
+            .unwrap();
+
+        let bob_to_carol_ops = bob.events_for_agent(&carol.active.dupe().into()).unwrap();
+
+        let mut bob_to_carol_buf = bob_to_carol_ops
+            .values()
+            .map(|op| op.clone().into())
+            .collect::<VecDeque<StaticEvent<[u8; 32]>>>();
+
+        assert!(bob_to_carol_ops
+            .values()
+            .any(|op| *op == Event::Delegated(b_to_c_dlg.delegation.clone())));
+
+        while let Some(op) = bob_to_carol_buf.pop_front() {
+            if carol.receive_event(op.clone()).is_err() {
+                bob_to_carol_buf.push_back(op);
+            }
+        }
+
+        let carol_doc = carol.documents().get(&doc_id).unwrap().dupe();
+
+        assert_eq!(
+            carol
+                .try_decrypt_content(carol_doc.dupe(), &hi_carol)
+                .unwrap(),
+            b"Hi Carol"
+        );
+
+        assert_eq!(
+            carol
+                .try_decrypt_content(carol_doc.dupe(), &unintelligable)
+                .unwrap(),
+            b"BOB MAKE MORE DIFFERENT TEST"
+        );
     }
 
     #[test]
