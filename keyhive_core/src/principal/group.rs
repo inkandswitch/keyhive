@@ -656,10 +656,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             match op {
                 MembershipOperation::Delegation(d) => {
                     if revoked_dlgs.contains(&d.signature.to_bytes()) {
-                        dbg!("0");
+                        // dbg!("0");
                         continue;
                     }
-                    dbg!("1");
+                    // dbg!("1");
 
                     // NOTE: friendly reminder that the topsort already includes all ancestors
                     if let Some(found_proof) = &d.payload.proof {
@@ -670,7 +670,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                             })
                             .or_insert_with(|| HashSet::from_iter([d.signature.to_bytes()]));
 
-                        dbg!("2");
+                        // dbg!("2");
                         // If the proof was directly revoked, then check if they've been
                         // re-added some other way. Since `rebuild` recurses,
                         // we only need to check one level.
@@ -678,34 +678,34 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                             || !dlgs_in_play.contains_key(&found_proof.signature.to_bytes())
                         {
                             if let Some(alt_proofs) = self.members.get(&found_proof.issuer.into()) {
-                                dbg!("3");
+                                // dbg!("3");
                                 if alt_proofs.iter().filter(|d| *d != found_proof).all(
                                     |alt_proof| {
-                                        dbg!("BOP BOOP BOOOOP");
-                                        dbg!(d.payload.delegate.id());
-                                        dbg!(alt_proof.payload.delegate.id());
+                                        // dbg!("BOP BOOP BOOOOP");
+                                        // dbg!(d.payload.delegate.id());
+                                        // dbg!(alt_proof.payload.delegate.id());
 
                                         alt_proof.payload.can < found_proof.payload.can
                                     },
                                 ) {
                                     // No suitable proofs
-                                    dbg!("3.5");
+                                    // dbg!("3.5");
                                     continue;
                                 }
                             } else if found_proof.issuer != self.verifying_key() {
-                                dbg!(Identifier::from(found_proof.issuer));
-                                dbg!(d.payload.delegate.id());
-                                dbg!("4");
+                                // dbg!(Identifier::from(found_proof.issuer));
+                                // dbg!(d.payload.delegate.id());
+                                // dbg!("4");
                                 continue;
                             }
                         }
                     } else if d.issuer != self.verifying_key() {
-                        dbg!("5");
+                        // dbg!("5");
                         debug_assert!(false, "Delegation without valid root proof");
                         continue;
                     }
 
-                    dbg!("6");
+                    // dbg!("6");
                     dlgs_in_play.insert(d.signature.to_bytes(), d.dupe());
 
                     if let Some(mut_dlgs) = self.members.get_mut(&d.payload.delegate.id()) {

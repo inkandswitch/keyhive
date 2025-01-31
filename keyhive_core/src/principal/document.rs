@@ -63,23 +63,20 @@ pub struct Document<
     pub(crate) reader_keys: HashMap<IndividualId, (Rc<RefCell<Individual>>, ShareKey)>,
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
-    pub(crate) cgka: Cgka,
+    cgka: Option<Cgka>,
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, L> {
+    // FIXME: We need a signing key for initializing Cgka and we need to share
+    // the init add op.
     // NOTE doesn't register into the top-level Keyhive context
     pub fn from_group(
         group: Group<S, T, L>,
         viewer: &Active<S, L>,
         content_heads: NonEmpty<T>,
     ) -> Result<Self, CgkaError> {
-        let doc_id = DocumentId(group.verifying_key().into());
-        let doc_prekey = viewer
-            .pick_prekey(doc_id)
-            .ok_or(CgkaError::ShareKeyNotFound)?;
-
         let mut doc = Document {
-            cgka: Cgka::new(doc_id, viewer.id(), doc_prekey)?,
+            cgka: None,
             group,
             reader_keys: Default::default(),
             content_heads: content_heads.iter().cloned().collect(),
@@ -99,6 +96,20 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
 
     pub fn agent_id(&self) -> AgentId {
         self.doc_id().into()
+    }
+
+    pub fn cgka(&self) -> Result<&Cgka, CgkaError> {
+        match &self.cgka {
+            Some(cgka) => Ok(cgka),
+            None => Err(CgkaError::NotInitialized),
+        }
+    }
+
+    pub fn cgka_mut(&mut self) -> Result<&mut Cgka, CgkaError> {
+        match &mut self.cgka {
+            Some(cgka) => Ok(cgka),
+            None => Err(CgkaError::NotInitialized),
+        }
     }
 
     #[allow(clippy::type_complexity)]
@@ -162,9 +173,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             .collect();
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_share_key, owner_share_secret_key);
-        let mut cgka =
-            Cgka::new(doc_id, owner_id, owner_share_key)?.with_new_owner(owner_id, owner_sks)?;
+        let mut cgka = Cgka::new(doc_id, owner_id, owner_share_key, signer)
+            .await?
+            .with_new_owner(owner_id, owner_sks)?;
         let mut ops: Vec<Signed<CgkaOperation>> = Vec::new();
+        ops.push(cgka.init_add_op());
         if other_members.len() > 1 {
             ops.extend(
                 cgka.add_multiple(
@@ -187,7 +200,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             reader_keys: HashMap::new(), // FIXME
             content_state: HashSet::new(),
             content_heads: initial_content_heads.iter().cloned().collect(),
-            cgka,
+            cgka: Some(cgka),
         })
     }
 
@@ -229,14 +242,19 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
 
         let cell = Rc::new(RefCell::new(self));
 
-        Ok(stream::iter(prekeys.iter().map(Ok::<_, CgkaError>))
+        stream::iter(prekeys.iter().map(Ok::<_, CgkaError>))
             .try_fold(vec![], |mut acc, (id, pre_key)| async {
-                if let Some(op) = cell.borrow_mut().cgka.add(*id, *pre_key, signer).await? {
+                if let Some(op) = cell
+                    .borrow_mut()
+                    .cgka_mut()?
+                    .add(*id, *pre_key, signer)
+                    .await?
+                {
                     acc.push(op);
                 }
                 Ok::<_, CgkaError>(acc)
             })
-            .await?)
+            .await
     }
 
     pub async fn revoke_member(
@@ -262,18 +280,22 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
 
         // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
         // FIXME: We need to check if this has revoked the last member in our group?
+        let mut ids_to_remove = Vec::new();
         let mut ops = cgka_ops;
         if let Some(delegations) = self.group.members.get(&member_id) {
             for id in delegations
                 .iter()
                 .flat_map(|d| d.payload().delegate.individual_ids())
             {
-                if let Some(op) = self.cgka.remove(id, signer).await? {
-                    ops.push(op);
-                }
+                ids_to_remove.push(id);
             }
         }
 
+        for id in ids_to_remove {
+            if let Some(op) = self.cgka_mut()?.remove(id, signer).await? {
+                ops.push(op);
+            }
+        }
         Ok(RevokeMemberUpdate {
             revocations,
             redelegations,
@@ -286,7 +308,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         id: IndividualId,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        self.cgka.remove(id, signer).await
+        self.cgka_mut()?.remove(id, signer).await
     }
 
     pub fn get_agent_revocations(
@@ -315,7 +337,29 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     }
 
     pub fn merge_cgka_op(&mut self, op: Rc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
-        self.cgka.merge_concurrent_operation(op)
+        match &mut self.cgka {
+            Some(cgka) => return cgka.merge_concurrent_operation(op),
+            None => match op.payload.clone() {
+                CgkaOperation::Add {
+                    added_id,
+                    pk,
+                    ref predecessors,
+                    ..
+                } => {
+                    if !predecessors.is_empty() {
+                        return Err(CgkaError::OutOfOrderOperation);
+                    }
+                    self.cgka = Some(Cgka::new_from_init_add(
+                        self.doc_id(),
+                        added_id,
+                        pk,
+                        (*op).clone(),
+                    )?)
+                }
+                _ => return Err(CgkaError::UnexpectedInitialOperation),
+            },
+        }
+        Ok(())
     }
 
     pub fn merge_cgka_invite_op(
@@ -323,17 +367,29 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         op: Rc<Signed<CgkaOperation>>,
         sk: &ShareSecretKey,
     ) -> Result<(), CgkaError> {
-        let CgkaOperation::Add { added_id, pk, .. } = op.payload else {
+        let CgkaOperation::Add {
+            added_id,
+            pk,
+            ref predecessors,
+            ..
+        } = op.payload
+        else {
             return Err(CgkaError::UnexpectedInviteOperation);
         };
-        let mut owner_sks = self.cgka.owner_sks.clone();
+        if !self
+            .cgka()?
+            .contains_predecessors(&HashSet::from_iter(predecessors.iter().cloned()))
+        {
+            return Err(CgkaError::OutOfOrderOperation);
+        }
+        let mut owner_sks = self.cgka()?.owner_sks.clone();
         owner_sks.insert(pk.clone(), sk.clone());
-        self.cgka = self.cgka.with_new_owner(added_id, owner_sks)?;
+        self.cgka = Some(self.cgka()?.with_new_owner(added_id, owner_sks)?);
         self.merge_cgka_op(op)
     }
 
     pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
-        self.cgka.ops()
+        self.cgka()?.ops()
     }
 
     pub async fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
@@ -344,7 +400,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
         let (_, op) = self
-            .cgka
+            .cgka_mut()
+            .map_err(EncryptError::UnableToPcsUpdate)?
             .update(new_share_key, new_share_secret_key, signer, csprng)
             .await
             .map_err(EncryptError::UnableToPcsUpdate)?;
@@ -360,7 +417,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         csprng: &mut R,
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptError> {
         let (app_secret, maybe_update_op) = self
-            .cgka
+            .cgka_mut()
+            .map_err(EncryptError::FailedToMakeAppSecret)?
             .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
             .await
             .map_err(EncryptError::FailedToMakeAppSecret)?;
@@ -378,7 +436,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         encrypted_content: &EncryptedContent<Vec<u8>, T>,
     ) -> Result<Vec<u8>, DecryptError> {
         let decrypt_key = self
-            .cgka
+            .cgka_mut()
+            .map_err(|_| DecryptError::KeyNotFound)?
             .decryption_key_for(encrypted_content)
             .map_err(|_| DecryptError::KeyNotFound)?;
         let mut plaintext = encrypted_content.ciphertext.clone();

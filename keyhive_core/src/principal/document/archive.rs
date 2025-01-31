@@ -13,5 +13,5 @@ pub struct DocumentArchive<T: ContentRef> {
     pub(crate) reader_keys: HashMap<IndividualId, ShareKey>,
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
-    pub(crate) cgka: Cgka,
+    pub(crate) cgka: Option<Cgka>,
 }

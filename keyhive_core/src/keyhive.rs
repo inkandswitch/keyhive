@@ -1633,7 +1633,7 @@ mod tests {
             .is_none()); // NOTE *not* included because Public is not a member
 
         let left_to_mid_ops = left.events_for_agent(&Public.individual().into()).unwrap();
-        assert_eq!(left_to_mid_ops.len(), 13);
+        assert_eq!(left_to_mid_ops.len(), 14);
 
         middle.ingest_event_table(left_to_mid_ops).unwrap();
 
@@ -1667,7 +1667,7 @@ mod tests {
         let mid_to_right_ops = middle
             .events_for_agent(&Public.individual().into())
             .unwrap();
-        assert_eq!(mid_to_right_ops.len(), 20);
+        assert_eq!(mid_to_right_ops.len(), 21);
 
         right.ingest_event_table(mid_to_right_ops).unwrap();
 
@@ -1723,7 +1723,7 @@ mod tests {
         // Check transitivity
         let transitive_right_to_mid_ops =
             right.events_for_agent(&Public.individual().into()).unwrap();
-        assert_eq!(transitive_right_to_mid_ops.len(), 22);
+        assert_eq!(transitive_right_to_mid_ops.len(), 23);
 
         middle
             .ingest_event_table(transitive_right_to_mid_ops)
