@@ -169,8 +169,10 @@ pub fn setup_cgka(
 ) -> (Cgka, Vec<Signed<CgkaOperation>>) {
     let owner = &members[m_idx];
     let first = members.first().clone();
-    let mut cgka = Cgka::new(doc_id, first.id, first.pk).expect("CGKA construction failed");
+    let mut cgka =
+        Cgka::new(doc_id, first.id, first.pk, signing_key).expect("CGKA construction failed");
     let mut ops = Vec::new();
+    ops.push(cgka.init_add_op());
     if members.len() > 1 {
         ops = cgka
             .add_multiple(

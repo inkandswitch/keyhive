@@ -69,6 +69,17 @@ pub enum CgkaOperation {
 }
 
 impl CgkaOperation {
+    pub(crate) fn init_add(doc_id: DocumentId, added_id: IndividualId, pk: ShareKey) -> Self {
+        Self::Add {
+            added_id,
+            pk,
+            leaf_index: 0,
+            predecessors: Vec::new(),
+            add_predecessors: Vec::new(),
+            doc_id,
+        }
+    }
+
     // FIXME: Remove
     pub(crate) fn name(&self) -> String {
         match self {
@@ -142,6 +153,13 @@ impl CgkaOperationGraph {
 
     pub(crate) fn contains_op_hash(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> bool {
         self.cgka_ops.contains_key(op_hash)
+    }
+
+    pub(crate) fn contains_predecessors(
+        &self,
+        preds: &HashSet<Digest<Signed<CgkaOperation>>>,
+    ) -> bool {
+        preds.iter().all(|hash| self.cgka_ops.contains_key(hash))
     }
 
     /// Whether the causal graph has a single head. More than one head indicates
@@ -237,7 +255,6 @@ impl CgkaOperationGraph {
         &self,
         heads: &HashSet<Digest<Signed<CgkaOperation>>>,
     ) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
-        println!("!@ topsort_for_heads 0");
         debug_assert!(heads.iter().all(|head| self.cgka_ops.contains_key(head)));
         let mut op_hashes = Vec::new();
         let mut dependencies = TopologicalSort::<Digest<Signed<CgkaOperation>>>::new();
@@ -254,11 +271,9 @@ impl CgkaOperationGraph {
         }
         // Populate dependencies and successors with all ancestors of the initial heads.
         while let Some(op_hash) = frontier.pop_front() {
-            println!("!@ topsort_for_heads loopy op_hash: {}", op_hash);
             let preds = self
                 .predecessors_for(&op_hash)
                 .ok_or(CgkaError::OperationNotFound)?;
-            println!("!@ -- preds: {:?}", preds);
             for update_pred in preds {
                 dependencies.add_dependency(*update_pred, op_hash);
                 successors.entry(*update_pred).or_default().insert(op_hash);
@@ -335,7 +350,6 @@ impl CgkaOperationGraph {
                 }
             }
             for hash in next_set {
-                println!("!@ topsort_for_heads pushy");
                 next_epoch.push(
                     self.cgka_ops
                         .get(&hash)
