@@ -180,12 +180,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
             );
         }
 
-        let (_pcs_key, update_op) = cgka.update(
-            owner_share_key,
-            owner_share_secret_key,
-            signing_key,
-            csprng,
-        )?;
+        let (_pcs_key, update_op) =
+            cgka.update(owner_share_key, owner_share_secret_key, signing_key, csprng)?;
         // FIXME: We don't currently do anything with these ops, but need to share them
         // across the network.
         ops.push(update_op);
@@ -218,12 +214,26 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
 
         after_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
 
-        Ok(self.group.add_member_with_manual_content(
+        let AddMemberUpdate {
+            delegation,
+            cgka_ops: group_cgka_ops, // FIXME probably should be a deifferent type
+        } = self.group.add_member_with_manual_content(
             member_to_add.dupe(),
             can,
             signing_key,
             after_content,
-        )?)
+        )?;
+
+        let mut cgka_ops = group_cgka_ops;
+        if can >= Access::Read {
+            let new_cgka_ops = self.add_cgka_member(&delegation, signing_key)?;
+            cgka_ops.extend(new_cgka_ops);
+        }
+
+        Ok(AddMemberUpdate {
+            delegation,
+            cgka_ops,
+        })
     }
 
     pub fn add_cgka_member(
