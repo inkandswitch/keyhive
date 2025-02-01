@@ -78,6 +78,10 @@ impl BlobHash {
         bytes.copy_from_slice(hash.as_bytes());
         Self(bytes)
     }
+
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
 }
 
 impl From<[u8; 32]> for BlobHash {

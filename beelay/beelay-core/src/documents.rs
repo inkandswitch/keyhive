@@ -13,10 +13,30 @@ pub use document_heads::DocumentHeads;
 mod document_id;
 pub use document_id::DocumentId;
 
+use crate::TaskContext;
+mod encrypted;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitOrBundle {
     Commit(Commit),
     Bundle(CommitBundle),
+}
+
+impl CommitOrBundle {
+    pub(crate) fn encrypt<R: rand::Rng + rand::CryptoRng>(
+        self,
+        ctx: TaskContext<R>,
+        doc_id: DocumentId,
+    ) -> Result<encrypted::EncryptedCommitOrBundle, crate::state::keyhive::EncryptError> {
+        match self {
+            CommitOrBundle::Commit(c) => Ok(encrypted::EncryptedCommitOrBundle::Commit(
+                encrypted::EncryptedCommit::encrypt(ctx, doc_id, c)?,
+            )),
+            CommitOrBundle::Bundle(b) => Ok(encrypted::EncryptedCommitOrBundle::Bundle(
+                encrypted::EncryptedCommitBundle::encrypt(ctx, doc_id, b)?,
+            )),
+        }
+    }
 }
 
 pub(crate) mod error {

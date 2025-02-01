@@ -172,24 +172,11 @@ pub(crate) async fn write_loose_commit<R: rand::Rng + rand::CryptoRng>(
     ctx.storage().put(key, data).await;
 }
 
-pub(crate) async fn write_bundle<R: rand::Rng + rand::CryptoRng>(
+pub(crate) async fn write_stratum<R: rand::Rng + rand::CryptoRng>(
     ctx: TaskContext<R>,
     path: StorageKey,
-    bundle: CommitBundle,
+    stratum: Stratum,
 ) {
-    let blob = BlobMeta::new(bundle.bundled_commits());
-    ctx.storage()
-        .put(
-            StorageKey::blob(blob.hash()),
-            bundle.bundled_commits().to_vec(),
-        )
-        .await;
-    let stratum = Stratum::new(
-        bundle.start(),
-        bundle.end(),
-        bundle.checkpoints().to_vec(),
-        blob,
-    );
     let key = strata_path(&path, &stratum);
     let mut stratum_bytes = Vec::new();
     stratum.encode_into(&mut stratum_bytes);

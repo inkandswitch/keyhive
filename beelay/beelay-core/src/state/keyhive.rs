@@ -14,7 +14,9 @@ use nonempty::NonEmpty;
 use crate::{
     keyhive::error,
     keyhive_sync::{self, KeyhiveSyncId, OpHash},
-    Access, CommitHash, DocumentId, MemberAccess, PeerId,
+    parse::Parse,
+    serialization::Encode,
+    Access, Commit, CommitHash, DocumentId, MemberAccess, PeerId,
 };
 
 pub(crate) struct KeyhiveCtx<'a, R: rand::Rng + rand::CryptoRng> {
@@ -134,6 +136,12 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             .map(|agent| keyhive.events_for_agent(&agent).expect("FIXME"))
         {
             events.extend(peer_ops);
+        }
+        if let Some(public_ops) = keyhive
+            .get_agent(Public.id().into())
+            .map(|agent| keyhive.events_for_agent(&agent).expect("FIXME"))
+        {
+            events.extend(public_ops)
         }
         for peer in additional_peers_to_send {
             if let Some(peer_ops) = keyhive
@@ -362,6 +370,168 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             Some((DocumentId::from(doc_id.0), result))
         } else {
             None
+        }
+    }
+
+    pub(crate) fn encrypt(
+        &self,
+        doc_id: DocumentId,
+        parents: &[CommitHash],
+        hash: &CommitHash,
+        data: &[u8],
+    ) -> Result<Vec<u8>, EncryptError> {
+        let mut state = self.state.borrow_mut();
+        let Some(doc) = state.keyhive.get_document(doc_id.into()).cloned() else {
+            return Err(EncryptError::NoSuchDocument);
+        };
+
+        let enc_result =
+            state
+                .keyhive
+                .try_encrypt_content(doc.clone(), hash, &parents.to_vec(), data)?;
+        let enc_result = enc_result.encrypted_content();
+        let encrypted = encryption::EncryptionWrapper {
+            nonce: enc_result.nonce.clone(),
+            ciphertext: enc_result.ciphertext.clone(),
+            pcs_key_hash: enc_result.pcs_key_hash.clone(),
+            pcs_update_op_hash: enc_result.pcs_update_op_hash.clone(),
+        };
+        tracing::trace!(?doc_id, ?hash, wrapper=?encrypted, "encrypting");
+        Ok(encrypted.encode())
+    }
+
+    pub(crate) fn decrypt(
+        &self,
+        doc_id: DocumentId,
+        parents: &[CommitHash],
+        hash: CommitHash,
+        ciphertext: Vec<u8>,
+    ) -> Result<Vec<u8>, DecryptError> {
+        let mut state = self.state.borrow_mut();
+        let Some(doc) = state.keyhive.get_document(doc_id.into()).cloned() else {
+            return Err(DecryptError::NoSuchDocument);
+        };
+
+        let input = crate::serialization::parse::Input::new(&ciphertext);
+        let wrapper = encryption::EncryptionWrapper::parse(input)
+            .map_err(|_| DecryptError::Corrupted)?
+            .1;
+        tracing::trace!(?doc_id, ?hash, ?wrapper, "decrypting");
+
+        let enc_content = keyhive_core::crypto::encrypted::EncryptedContent::new(
+            wrapper.nonce,
+            wrapper.ciphertext,
+            wrapper.pcs_key_hash,
+            wrapper.pcs_update_op_hash,
+            Digest::hash(&hash),
+            Digest::hash(&parents.to_vec()),
+        );
+
+        Ok(state
+            .keyhive
+            .try_decrypt_content(doc.clone(), &enc_content)?)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EncryptError {
+    #[error("No such document")]
+    NoSuchDocument,
+    #[error(transparent)]
+    Encrypt(#[from] keyhive_core::keyhive::EncryptContentError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum DecryptError {
+    #[error("No such document")]
+    NoSuchDocument,
+    #[error("corrupted chunk")]
+    Corrupted,
+    #[error(transparent)]
+    Decrypt(#[from] keyhive_core::principal::document::DecryptError),
+}
+
+mod encryption {
+    use keyhive_core::{
+        cgka::operation::CgkaOperation,
+        crypto::{application_secret::PcsKey, digest::Digest, siv::Siv},
+    };
+
+    use crate::{
+        parse::{self, Parse},
+        serialization::Encode,
+    };
+
+    #[derive(Debug)]
+    pub(super) struct EncryptionWrapper {
+        pub(super) nonce: Siv,
+        pub(super) ciphertext: Vec<u8>,
+        pub(super) pcs_key_hash: Digest<PcsKey>,
+        pub(super) pcs_update_op_hash: Digest<keyhive_core::crypto::signed::Signed<CgkaOperation>>,
+    }
+
+    impl Encode for EncryptionWrapper {
+        fn encode_into(&self, buf: &mut Vec<u8>) {
+            self.nonce.encode_into(buf);
+            self.ciphertext.encode_into(buf);
+            self.pcs_key_hash.encode_into(buf);
+            self.pcs_update_op_hash.encode_into(buf);
+        }
+    }
+
+    impl Encode for Siv {
+        fn encode_into(&self, out: &mut Vec<u8>) {
+            out.extend_from_slice(self.as_bytes());
+        }
+    }
+
+    impl<T: serde::Serialize> Encode for Digest<T> {
+        fn encode_into(&self, out: &mut Vec<u8>) {
+            out.extend_from_slice(self.as_slice());
+        }
+    }
+
+    impl<'a> Parse<'a> for EncryptionWrapper {
+        fn parse(
+            input: crate::parse::Input<'a>,
+        ) -> Result<(crate::parse::Input<'a>, Self), crate::parse::ParseError> {
+            input.parse_in_ctx("EncryptionWrapper", |input| {
+                let (input, nonce) = input.parse_in_ctx("nonce", Siv::parse)?;
+                let (input, ciphertext) = input.parse_in_ctx("ciphertext", Vec::<u8>::parse)?;
+                let (input, pcs_key_hash) =
+                    input.parse_in_ctx("pcs_key_hash", Digest::<PcsKey>::parse)?;
+                let (input, pcs_update_op_hash) = input.parse_in_ctx(
+                    "pcs_update_op_hash",
+                    Digest::<keyhive_core::crypto::signed::Signed<CgkaOperation>>::parse,
+                )?;
+                Ok((
+                    input,
+                    EncryptionWrapper {
+                        nonce,
+                        ciphertext,
+                        pcs_key_hash,
+                        pcs_update_op_hash,
+                    },
+                ))
+            })
+        }
+    }
+
+    impl<'a> Parse<'a> for Siv {
+        fn parse(
+            input: crate::parse::Input<'a>,
+        ) -> Result<(crate::parse::Input<'a>, Self), crate::parse::ParseError> {
+            let (input, bytes) = parse::arr::<24>(input)?;
+            Ok((input, Siv::from(bytes)))
+        }
+    }
+
+    impl<'a, T: serde::Serialize> Parse<'a> for Digest<T> {
+        fn parse(
+            input: crate::parse::Input<'a>,
+        ) -> Result<(crate::parse::Input<'a>, Self), crate::parse::ParseError> {
+            let (input, bytes) = parse::arr::<32>(input)?;
+            Ok((input, Digest::from(bytes)))
         }
     }
 }

@@ -65,22 +65,39 @@ pub(crate) async fn persist_listen_event<R: rand::Rng + rand::CryptoRng>(
     let BlobRef::Inline(blob_data) = blob else {
         panic!("blob refs in notifications not yet supported");
     };
-    let data = match &tree_part {
+    let decrypted_data = match &tree_part {
         TreePart::Commit { hash, parents } => {
-            CommitOrBundle::Commit(Commit::new(parents.clone(), blob_data.to_vec(), *hash))
+            let Ok(decrypted) =
+                ctx.keyhive()
+                    .decrypt(doc.clone(), &parents, *hash, blob_data.clone())
+            else {
+                tracing::warn!("unable to decrypt");
+                return;
+            };
+            CommitOrBundle::Commit(Commit::new(parents.clone(), decrypted, *hash))
         }
         TreePart::Stratum {
             start,
             end,
             checkpoints,
-        } => CommitOrBundle::Bundle(
-            CommitBundle::builder()
-                .start(*start)
-                .end(*end)
-                .bundled_commits(blob_data.to_vec())
-                .checkpoints(checkpoints.clone())
-                .build(),
-        ),
+            hash,
+        } => {
+            let Ok(decrypted) =
+                ctx.keyhive()
+                    .decrypt(doc.clone(), &[*start], *hash, blob_data.clone())
+            else {
+                tracing::warn!("unable to decrypt");
+                return;
+            };
+            CommitOrBundle::Bundle(
+                CommitBundle::builder()
+                    .start(*start)
+                    .end(*end)
+                    .bundled_commits(decrypted)
+                    .checkpoints(checkpoints.clone())
+                    .build(),
+            )
+        }
     };
     let blob = BlobMeta::new(&blob_data);
     ctx.storage()
@@ -96,18 +113,14 @@ pub(crate) async fn persist_listen_event<R: rand::Rng + rand::CryptoRng>(
             start,
             end,
             checkpoints,
+            hash: _,
         } => {
-            let bundle = CommitBundle::builder()
-                .start(start)
-                .end(end)
-                .bundled_commits(blob_data)
-                .checkpoints(checkpoints)
-                .build();
-            sedimentree::storage::write_bundle(ctx.clone(), path, bundle).await;
+            let stratum = sedimentree::Stratum::new(start, end, checkpoints.clone(), blob);
+            sedimentree::storage::write_stratum(ctx.clone(), path, stratum).await;
         }
     }
     ctx.emit_doc_event(DocEvent::Data {
         doc,
-        data: data.clone(),
+        data: decrypted_data.clone(),
     });
 }

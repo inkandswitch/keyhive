@@ -90,6 +90,10 @@ fn create_and_sync() {
 #[test]
 fn create_and_sync_via_stream() {
     init_logging();
+    test_utils::add_rewrite(
+        keyhive_core::principal::public::Public.id().to_string(),
+        "<PUBLIC>",
+    );
     let mut network = Network::new();
     let peer1 = network.create_peer("peer1");
     let peer2 = network.create_peer("peer2");
@@ -108,13 +112,15 @@ fn create_and_sync_via_stream() {
     );
     network
         .beelay(&peer1)
-        .add_commits(doc1_id, vec![commit1.clone(), commit2.clone()]);
+        .add_commits(doc1_id, vec![commit1.clone(), commit2.clone()])
+        .unwrap();
 
     let doc2_id = network.beelay(&peer1).create_doc(Access::Public);
     let commit3 = beelay_core::Commit::new(vec![], vec![7, 8, 9], CommitHash::from([3; 32]));
     network
         .beelay(&peer1)
-        .add_commits(doc2_id, vec![commit3.clone()]);
+        .add_commits(doc2_id, vec![commit3.clone()])
+        .unwrap();
 
     network.beelay(&peer1).add_link(beelay_core::AddLink {
         from: doc1_id,

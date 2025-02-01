@@ -82,7 +82,7 @@ impl BeelayHandle<'_> {
         &mut self,
         doc_id: DocumentId,
         commits: Vec<beelay_core::Commit>,
-    ) -> Vec<BundleSpec> {
+    ) -> Result<Vec<BundleSpec>, beelay_core::error::AddCommits> {
         let command = {
             let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
             let (command, event) = beelay_core::Event::add_commits(doc_id, commits);

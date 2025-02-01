@@ -70,7 +70,7 @@ pub(crate) enum Command {
 #[derive(Debug)]
 pub enum CommandResult {
     SyncDoc(Result<SyncDocResult, super::error::SyncDoc>),
-    AddCommits(Vec<BundleSpec>),
+    AddCommits(Result<Vec<BundleSpec>, error::AddCommits>),
     AddLink,
     AddBundle,
     CreateDoc(DocumentId),
@@ -251,31 +251,47 @@ async fn load_doc_commits<R: rand::Rng + rand::CryptoRng>(
             .map(|t| t.minimize())?;
     let bundles = tree.strata().map(|s| {
         let ctx = ctx.clone();
+        let doc_id = doc_id.clone();
         async move {
             let blob = ctx
                 .storage()
                 .load(StorageKey::blob(s.meta().blob().hash()))
                 .await
                 .unwrap();
+            let decrypted = match ctx.keyhive().decrypt(doc_id, &[s.start()], s.hash(), blob) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::error!(err=?e, "failed to decrypt bundle");
+                    return None;
+                }
+            };
             let bundle = CommitBundle::builder()
                 .start(s.start())
                 .end(s.end())
                 .checkpoints(s.checkpoints().to_vec())
-                .bundled_commits(blob)
+                .bundled_commits(decrypted)
                 .build();
-            CommitOrBundle::Bundle(bundle)
+            Some(CommitOrBundle::Bundle(bundle))
         }
     });
     let commits = tree.loose_commits().map(|c| {
         let ctx = ctx.clone();
+        let doc_id = doc_id.clone();
         async move {
             let blob = ctx
                 .storage()
                 .load(StorageKey::blob(c.blob().hash()))
                 .await
                 .unwrap();
-            let commit = Commit::new(c.parents().to_vec(), blob, c.hash());
-            CommitOrBundle::Commit(commit)
+            let decrypted = match ctx.keyhive().decrypt(doc_id, c.parents(), c.hash(), blob) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::error!(err=?e, "failed to decrypt commit");
+                    return None;
+                }
+            };
+            let commit = Commit::new(c.parents().to_vec(), decrypted, c.hash());
+            Some(CommitOrBundle::Commit(commit))
         }
     });
     let (mut bundles, commits) = futures::future::join(
@@ -284,18 +300,45 @@ async fn load_doc_commits<R: rand::Rng + rand::CryptoRng>(
     )
     .await;
     bundles.extend(commits);
-    Some(bundles)
+    Some(bundles.into_iter().filter_map(|o| o).collect())
 }
 
 async fn add_bundle<R: rand::Rng + rand::CryptoRng>(
     ctx: TaskContext<R>,
     doc_id: DocumentId,
     bundle: CommitBundle,
-) {
-    sedimentree::storage::write_bundle(
+) -> Result<(), error::AddBundle> {
+    let encrypted = ctx.keyhive().encrypt(
+        doc_id,
+        &[bundle.start()],
+        bundle.hash(),
+        bundle.bundled_commits(),
+    )?;
+    let blob = BlobMeta::new(&encrypted);
+    let blob_path = StorageKey::blob(blob.hash());
+    ctx.storage().put(blob_path, encrypted).await;
+
+    let stratum = sedimentree::Stratum::new(
+        bundle.start(),
+        bundle.end(),
+        bundle.checkpoints().to_vec(),
+        blob,
+    );
+    sedimentree::storage::write_stratum(
         ctx,
         StorageKey::sedimentree_root(&doc_id, CommitCategory::Content),
-        bundle,
+        stratum,
     )
     .await;
+    Ok(())
+}
+
+pub(crate) mod error {
+    pub use super::add_commits::error::AddCommits;
+
+    #[derive(Debug, thiserror::Error)]
+    pub enum AddBundle {
+        #[error(transparent)]
+        Encrypt(#[from] crate::state::keyhive::EncryptError),
+    }
 }

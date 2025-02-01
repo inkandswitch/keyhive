@@ -6,6 +6,7 @@ pub struct CommitBundle {
     start: CommitHash,
     end: CommitHash,
     checkpoints: Vec<CommitHash>,
+    hash: CommitHash,
 }
 
 impl CommitBundle {
@@ -27,6 +28,10 @@ impl CommitBundle {
 
     pub fn checkpoints(&self) -> &[CommitHash] {
         &self.checkpoints
+    }
+
+    pub fn hash(&self) -> &CommitHash {
+        &self.hash
     }
 }
 
@@ -91,11 +96,21 @@ impl<T, U, V> BundleBuilder<T, U, V> {
 
 impl BundleBuilder<Set<CommitHash>, Set<CommitHash>, Set<Vec<u8>>> {
     pub fn build(self) -> CommitBundle {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.start.0.as_bytes());
+        hasher.update(&self.end.0.as_bytes());
+        hasher.update(blake3::hash(&self.commits.0).as_bytes());
+        for c in &self.checkpoints {
+            hasher.update(&c.as_bytes());
+        }
+        let hash = hasher.finalize();
+
         CommitBundle {
             start: self.start.0,
             end: self.end.0,
             bundled_commits: self.commits.0,
             checkpoints: self.checkpoints,
+            hash: hash.as_bytes().into(),
         }
     }
 }

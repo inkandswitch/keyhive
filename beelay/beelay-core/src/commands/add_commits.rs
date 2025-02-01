@@ -10,7 +10,7 @@ pub(super) async fn add_commits<R: rand::Rng + rand::CryptoRng + 'static>(
     ctx: crate::state::TaskContext<R>,
     doc_id: DocumentId,
     commits: Vec<Commit>,
-) -> Vec<BundleSpec> {
+) -> Result<Vec<BundleSpec>, error::AddCommits> {
     // TODO: This function should return an error if we are missing a chain from
     // each commit back to the last bundle boundary.
 
@@ -22,14 +22,15 @@ pub(super) async fn add_commits<R: rand::Rng + rand::CryptoRng + 'static>(
         let mut ctx = ctx.clone();
         async move {
             tracing::debug!(commit = %commit.hash(), "adding commit");
-            let blob = BlobMeta::new(commit.contents());
+            let encrypted_contents = ctx.keyhive().encrypt(doc_id, commit.parents(), &commit.hash(), commit.contents())?;
+            let blob = BlobMeta::new(&encrypted_contents);
             let key = StorageKey::blob(blob.hash());
             let have_commit = ctx.storage().load(key.clone()).await.is_some();
             if have_commit {
                 tracing::debug!(hash=%commit.hash(), "commit already exists in storage");
-                return;
+                return Ok::<_, error::AddCommits>(());
             }
-            ctx.storage().put(key, commit.contents().to_vec()).await;
+            ctx.storage().put(key, encrypted_contents).await;
 
             let loose =
                 sedimentree::LooseCommit::new(commit.hash(), commit.parents().to_vec(), blob);
@@ -84,9 +85,13 @@ pub(super) async fn add_commits<R: rand::Rng + rand::CryptoRng + 'static>(
                     });
                 }
             }
+            Ok(())
         }
     });
-    let _ = futures::future::join_all(save_tasks).await;
+    futures::future::join_all(save_tasks)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
 
     // If any of the commits might be a bundle boundary, load the sedimentree
     // and see if any new bundles are needed
@@ -97,11 +102,25 @@ pub(super) async fn add_commits<R: rand::Rng + rand::CryptoRng + 'static>(
         )
         .await;
         if let Some(tree) = tree {
-            tree.missing_bundles(doc_id)
+            Ok(tree.missing_bundles(doc_id))
         } else {
-            Vec::new()
+            Ok(Vec::new())
         }
     } else {
-        Vec::new()
+        Ok(Vec::new())
+    }
+}
+
+pub(crate) mod error {
+    #[derive(Debug, thiserror::Error)]
+    pub enum AddCommits {
+        #[error("error encrypting commit: {0}")]
+        Encrypt(String),
+    }
+
+    impl From<crate::state::keyhive::EncryptError> for AddCommits {
+        fn from(e: crate::state::keyhive::EncryptError) -> Self {
+            AddCommits::Encrypt(e.to_string())
+        }
     }
 }

@@ -269,6 +269,7 @@ async fn sync_sedimentree<R: rand::Rng + rand::CryptoRng + 'static>(
                                 start: s.start(),
                                 end: s.end(),
                                 checkpoints: s.checkpoints().to_vec(),
+                                hash: s.hash(),
                             },
                         }
                     }

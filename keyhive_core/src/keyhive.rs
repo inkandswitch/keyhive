@@ -2108,4 +2108,72 @@ mod tests {
         csprng.fill_bytes(&mut content_ref);
         content_ref
     }
+
+    #[test]
+    fn decrypt_public_message_after_sync() {
+        let mut left = make_keyhive();
+        let mut right = make_keyhive();
+
+        let doc = left.generate_doc(vec![], nonempty![[0u8; 32]]).unwrap();
+        let public = left.get_agent(Public.id().into()).unwrap();
+        left.add_member(public, &mut doc.clone().into(), Access::Write, &[])
+            .unwrap();
+
+        sync(&mut left, &mut right);
+
+        let encrypted = left
+            .try_encrypt_content(doc.clone(), &[1; 32], &Vec::new(), "hello".as_bytes())
+            .unwrap();
+
+        // Okay, now we should be in sync
+        let doc_on_right = right.get_document(doc.borrow().doc_id()).unwrap().dupe();
+
+        let decrypted = right
+            .try_decrypt_content(doc_on_right, &encrypted.encrypted_content)
+            .unwrap();
+        assert_eq!(decrypted, "hello".as_bytes());
+    }
+
+    fn sync(from: &mut Keyhive, to: &mut Keyhive) {
+        let mut events = HashMap::new();
+        events.extend(from.events_for_agent(&Public.individual().into()).unwrap());
+        events.extend(
+            from.events_for_agent(&Agent::Active(to.active().clone()))
+                .unwrap(),
+        );
+
+        // Schlep to ingest events on the right
+        let mut static_events = events
+            .into_values()
+            .map(StaticEvent::from)
+            .collect::<Vec<_>>();
+
+        let mut try_later = vec![];
+        loop {
+            let mut ingested = false;
+            while let Some(event) = static_events.pop() {
+                match to.receive_event(event.clone()) {
+                    Ok(_) => {
+                        ingested = true;
+                    }
+                    Err(e) => {
+                        if e.is_missing_dependency() {
+                            try_later.push(event);
+                        } else {
+                            panic!("error processing keyhive event: {:?}", e);
+                        }
+                    }
+                }
+            }
+
+            if try_later.is_empty() {
+                break;
+            } else if !ingested {
+                break;
+            } else {
+                static_events = try_later;
+                try_later = vec![];
+            }
+        }
+    }
 }

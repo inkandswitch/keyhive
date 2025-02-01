@@ -306,6 +306,7 @@ pub enum TreePart {
         start: CommitHash,
         end: CommitHash,
         checkpoints: Vec<CommitHash>,
+        hash: CommitHash,
     },
     Commit {
         hash: CommitHash,
@@ -320,11 +321,13 @@ impl Encode for TreePart {
                 start,
                 end,
                 checkpoints,
+                hash,
             } => {
                 out.push(0);
                 start.encode_into(out);
                 end.encode_into(out);
                 checkpoints.encode_into(out);
+                hash.encode_into(out);
             }
             TreePart::Commit { hash, parents } => {
                 out.push(1);
@@ -345,12 +348,14 @@ impl Parse<'_> for TreePart {
                     let (input, end) = input.parse_in_ctx("end", CommitHash::parse)?;
                     let (input, checkpoints) =
                         input.parse_in_ctx("checkpoints", Vec::<CommitHash>::parse)?;
+                    let (input, hash) = input.parse_in_ctx("hash", CommitHash::parse)?;
                     Ok((
                         input,
                         Self::Stratum {
                             start,
                             end,
                             checkpoints,
+                            hash,
                         },
                     ))
                 }

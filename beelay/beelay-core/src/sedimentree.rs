@@ -82,6 +82,7 @@ impl Ord for Level {
 pub(crate) struct Stratum {
     meta: StratumMeta,
     checkpoints: Vec<CommitHash>,
+    hash: CommitHash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
@@ -188,7 +189,21 @@ impl Stratum {
         blob: BlobMeta,
     ) -> Self {
         let meta = StratumMeta { start, end, blob };
-        Self { meta, checkpoints }
+        let hash = {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(&start.as_bytes());
+            hasher.update(&end.as_bytes());
+            hasher.update(blob.hash().as_bytes());
+            for checkpoint in &checkpoints {
+                hasher.update(&checkpoint.as_bytes());
+            }
+            CommitHash::from(*hasher.finalize().as_bytes())
+        };
+        Self {
+            meta,
+            checkpoints,
+            hash,
+        }
     }
 
     pub(crate) fn supports(&self, other: &StratumMeta) -> bool {
@@ -233,6 +248,10 @@ impl Stratum {
     pub(crate) fn checkpoints(&self) -> &[CommitHash] {
         &self.checkpoints
     }
+
+    pub(crate) fn hash(&self) -> CommitHash {
+        self.hash
+    }
 }
 
 impl Encode for Stratum {
@@ -241,6 +260,7 @@ impl Encode for Stratum {
         self.meta.end.encode_into(out);
         self.meta.blob.encode_into(out);
         self.checkpoints.encode_into(out);
+        self.hash.encode_into(out);
     }
 }
 
@@ -251,11 +271,13 @@ impl Parse<'_> for Stratum {
             let (input, end) = CommitHash::parse_in_ctx("end", input)?;
             let (input, blob) = BlobMeta::parse_in_ctx("blob", input)?;
             let (input, checkpoints) = Vec::<CommitHash>::parse_in_ctx("checkpoints", input)?;
+            let (input, hash) = CommitHash::parse_in_ctx("hash", input)?;
             Ok((
                 input,
                 Self {
                     meta: StratumMeta { start, end, blob },
                     checkpoints,
+                    hash,
                 },
             ))
         })

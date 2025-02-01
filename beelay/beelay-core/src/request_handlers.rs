@@ -1,20 +1,19 @@
 use std::sync::Arc;
 
 use futures::FutureExt;
-use keyhive_core::principal::identifier::Identifier;
 
 use crate::{
     auth,
     blob::BlobMeta,
-    keyhive_sync::{self, KeyhiveSyncId},
+    keyhive_sync::{self},
     log::Source,
     network::messages::{self, BlobRef, ContentAndLinks, FetchedSedimentree, TreePart, UploadItem},
     riblt,
     sedimentree::{self, LooseCommit},
     snapshots::{self, Snapshot},
     state::{RpcError, TaskContext},
-    sync_docs, Audience, Commit, CommitBundle, CommitCategory, CommitHash, CommitOrBundle,
-    DocumentId, OutgoingResponse, PeerId, Response, SnapshotId, StorageKey,
+    sync_docs, Audience, Commit, CommitBundle, CommitCategory, CommitOrBundle, DocumentId,
+    OutgoingResponse, PeerId, Response, SnapshotId, StorageKey,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -237,26 +236,45 @@ async fn upload_commits<R: rand::Rng + rand::CryptoRng + 'static>(
             ctx.log()
                 .new_remote_commit(doc, from_peer, d.clone(), content);
             tracing::trace!("stored uploaded blobs, emitting event");
-            ctx.emit_doc_event(crate::DocEvent::Data {
-                doc,
-                data: match d.tree_part {
-                    TreePart::Commit { hash, ref parents } => {
-                        CommitOrBundle::Commit(Commit::new(parents.clone(), data.clone(), hash))
+            match d.tree_part {
+                TreePart::Commit { hash, ref parents } => {
+                    if let Ok(decrypted) = ctx.keyhive().decrypt(doc, parents, hash, data.clone()) {
+                        ctx.emit_doc_event(crate::DocEvent::Data {
+                            doc,
+                            data: CommitOrBundle::Commit(Commit::new(
+                                parents.clone(),
+                                decrypted,
+                                hash,
+                            )),
+                        });
+                    } else {
+                        tracing::warn!("unable to decrypt");
                     }
-                    TreePart::Stratum {
-                        start,
-                        end,
-                        ref checkpoints,
-                    } => CommitOrBundle::Bundle(
-                        CommitBundle::builder()
+                }
+                TreePart::Stratum {
+                    start,
+                    end,
+                    ref checkpoints,
+                    hash,
+                } => {
+                    if let Ok(decrypted) = ctx.keyhive().decrypt(doc, &[start], hash, data.clone())
+                    {
+                        let bundle = CommitBundle::builder()
                             .start(start)
                             .end(end)
                             .checkpoints(checkpoints.clone())
-                            .bundled_commits(data.clone())
-                            .build(),
-                    ),
-                },
-            });
+                            .bundled_commits(decrypted)
+                            .build();
+                        ctx.emit_doc_event(crate::DocEvent::Data {
+                            doc,
+                            data: CommitOrBundle::Bundle(bundle),
+                        });
+                    } else {
+                        tracing::warn!("unable to decrypt");
+                        return;
+                    }
+                }
+            }
             for peer in ctx.forwarding_peers() {
                 if peer.is_source_of(&from_peer) {
                     continue;
@@ -301,17 +319,13 @@ async fn upload_commits<R: rand::Rng + rand::CryptoRng + 'static>(
                     start,
                     end,
                     checkpoints,
+                    hash: _,
                 } => {
-                    let bundle = CommitBundle::builder()
-                        .start(start)
-                        .end(end)
-                        .checkpoints(checkpoints)
-                        .bundled_commits(data)
-                        .build();
-                    sedimentree::storage::write_bundle(
+                    let stratum = sedimentree::Stratum::new(start, end, checkpoints, blob);
+                    sedimentree::storage::write_stratum(
                         ctx.clone(),
                         StorageKey::sedimentree_root(&doc, content),
-                        bundle,
+                        stratum,
                     )
                     .await;
                 }

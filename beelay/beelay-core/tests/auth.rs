@@ -67,10 +67,13 @@ fn giving_access_to_peer_enables_reading() {
     network.beelay(&peer1).remove_member(doc, peer3).unwrap();
 
     // Add a new commit on peer1
-    network.beelay(&peer1).add_commits(
-        doc,
-        vec![Commit::new(vec![], "whooop".into(), [7; 32].into())],
-    );
+    network
+        .beelay(&peer1)
+        .add_commits(
+            doc,
+            vec![Commit::new(vec![], "whooop".into(), [7; 32].into())],
+        )
+        .unwrap();
 
     tracing::info!("done uploading");
 
@@ -130,10 +133,13 @@ fn make_public_then_remove_public_fails_write() {
         .unwrap();
 
     // Make a change on peer3
-    network.beelay(&peer3).add_commits(
-        doc,
-        vec![Commit::new(vec![], "whooop".into(), [7; 32].into())],
-    );
+    network
+        .beelay(&peer3)
+        .add_commits(
+            doc,
+            vec![Commit::new(vec![], "whooop".into(), [7; 32].into())],
+        )
+        .unwrap();
 
     // Now sync the doc to peer2
     let synced_to_2 = network.beelay(&peer3).sync_doc(doc, peer3_to_peer2);
