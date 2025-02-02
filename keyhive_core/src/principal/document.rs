@@ -298,19 +298,27 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         // FIXME: We need to check if this has revoked the last member in our group?
         let mut ids_to_remove = Vec::new();
         let mut ops = cgka_ops;
+
         if let Some(delegations) = self.group.members.get(&member_id) {
             for id in delegations
                 .iter()
-                .flat_map(|d| d.payload().delegate.individual_ids())
+                .flat_map(|d| d.payload.delegate.individual_ids())
             {
                 ids_to_remove.push(id);
             }
         }
+
         for id in ids_to_remove {
             if let Some(op) = self.cgka_mut()?.remove(id, signing_key)? {
                 ops.push(op);
             }
         }
+
+        // TODO a bit of a hack
+        if member_id == Public.id() {
+            self.cgka_mut()?.remove(Public.id().into(), signing_key)?;
+        }
+
         Ok(RevokeMemberUpdate {
             revocations,
             redelegations,
@@ -344,8 +352,14 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
     pub fn receive_revocation(
         &mut self,
         revocation: Rc<Signed<Revocation<T, L>>>,
-    ) -> Result<Digest<Signed<Revocation<T, L>>>, AddError> {
-        self.group.receive_revocation(revocation)
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> Result<Digest<Signed<Revocation<T, L>>>, ReceiveRevocationError> {
+        let rev_digest = self.group.receive_revocation(revocation.dupe())?;
+        self.cgka_mut()?.remove(
+            revocation.payload.revoke.payload.delegate.id().into(),
+            signing_key,
+        )?;
+        Ok(rev_digest)
     }
 
     pub fn merge_cgka_op(&mut self, op: Rc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
@@ -537,6 +551,15 @@ impl<T: ContentRef, L: MembershipListener<T>> Hash for Document<T, L> {
         crate::util::hasher::hash_set(&self.content_state, state);
         self.cgka.hash(state);
     }
+}
+
+#[derive(Debug, Error)]
+pub enum ReceiveRevocationError {
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
+
+    #[error(transparent)]
+    AddError(#[from] AddError),
 }
 
 #[derive(Debug, Error)]

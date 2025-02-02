@@ -22,7 +22,7 @@ use crate::{
         document::{
             id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError, Document, EncryptError,
             EncryptedContentWithUpdate, GenerateDocError, MissingIndividualError,
-            RevokeMemberUpdate,
+            ReceiveRevocationError, RevokeMemberUpdate,
         },
         group::{
             delegation::{Delegation, StaticDelegation},
@@ -892,7 +892,8 @@ impl<
         if let Some(group) = self.groups.get(&GroupId(id)) {
             group.borrow_mut().receive_revocation(Rc::new(revocation))?;
         } else if let Some(doc) = self.docs.get(&DocumentId(id)) {
-            doc.borrow_mut().receive_revocation(Rc::new(revocation))?;
+            doc.borrow_mut()
+                .receive_revocation(Rc::new(revocation), &self.active.borrow().signing_key)?;
         } else if let Some(indie) = self.individuals.remove(&IndividualId(id)) {
             let group = self.promote_individual_to_group(indie, revocation.payload.revoke.dupe());
             group.borrow_mut().receive_revocation(Rc::new(revocation))?;
@@ -1345,6 +1346,9 @@ pub enum ReceieveStaticDelegationError<
 
     #[error(transparent)]
     GroupReceiveError(#[from] AddError),
+
+    #[error(transparent)]
+    ReceiveRevocationError(#[from] ReceiveRevocationError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -1420,6 +1424,7 @@ where
     pub fn is_missing_dependency(&self) -> bool {
         match self {
             ReceiveEventError::ReceieveStaticDelegationError(e) => match e {
+                ReceieveStaticDelegationError::ReceiveRevocationError(_) => false,
                 ReceieveStaticDelegationError::VerificationError(_) => false,
                 ReceieveStaticDelegationError::MissingProof(_) => true,
                 ReceieveStaticDelegationError::MissingRevocationDependency(_) => true,
@@ -2132,10 +2137,28 @@ mod tests {
         let doc_on_right = right.get_document(doc.borrow().doc_id()).unwrap().dupe();
 
         let decrypted = right
-            .try_decrypt_content(doc_on_right, &encrypted.encrypted_content)
+            .try_decrypt_content(doc_on_right.dupe(), &encrypted.encrypted_content)
             .unwrap();
 
-        assert!(decrypted == b"hello");
+        assert_eq!(decrypted, b"hello");
+
+        left.make_private(&mut doc.dupe().into(), true, &mut Default::default())
+            .unwrap();
+
+        let private_encrypted = left
+            .try_encrypt_content(
+                doc.clone(),
+                &[1; 32],
+                &Vec::new(),
+                b"keep it secret; keep it safe",
+            )
+            .unwrap();
+
+        sync(&mut left, &mut right);
+
+        assert!(right
+            .try_decrypt_content(doc_on_right, &private_encrypted.encrypted_content)
+            .is_err());
     }
 
     fn sync(from: &mut Keyhive, to: &mut Keyhive) {

@@ -443,7 +443,7 @@ impl Cgka {
         let key = self
             .tree
             .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)
-            .or_else(|e| {
+            .or_else(|_| {
                 self.tree
                     .decrypt_tree_secret(Public.id().into(), &mut self.owner_sks)
             })?;
