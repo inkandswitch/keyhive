@@ -242,6 +242,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
 
         let mut cgka_ops = group_cgka_ops;
         if can >= Access::Read {
+            dbg!("Adding to CGKA");
             let new_cgka_ops = self.add_cgka_member(&delegation, signing_key)?;
             cgka_ops.extend(new_cgka_ops);
         }
@@ -264,7 +265,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         let mut ops = Vec::new();
         for (id, pre_key) in delegation
             .dupe()
-            .payload()
+            .payload
             .delegate
             .pick_individual_prekeys(self.doc_id())
         {
@@ -445,11 +446,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         &mut self,
         encrypted_content: &EncryptedContent<Vec<u8>, T>,
     ) -> Result<Vec<u8>, DecryptError> {
-        let decrypt_key = self
-            .cgka_mut()?
-            .decryption_key_for(encrypted_content)
-            .map_err(|_| DecryptError::KeyNotFound)?;
-
+        let decrypt_key = self.cgka_mut()?.decryption_key_for(encrypted_content)?;
         let mut plaintext = encrypted_content.ciphertext.clone();
 
         decrypt_key

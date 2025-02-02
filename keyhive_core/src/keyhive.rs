@@ -356,35 +356,13 @@ impl<
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError> {
-        // ) -> Result<EncryptedContent<Vec<u8>, T>, EncryptContentError> {
-        //         let EncryptedContentWithUpdate {
-        //             encrypted_content,
-        //             update_op,
-        //         } = doc.borrow_mut().try_encrypt_content(
-        //             content_ref,
-        //             content,
-        //             pred_refs,
-        //             &mut self.csprng,
-        //         )?;
-
-        //         if let Some(found_update_op) = update_op {
-        //             let signed_op = Rc::new(
-        //                 self.try_sign(found_update_op)
-        //                     .map_err(EncryptContentError::SignCgkaOpError)?,
-        //             );
-        //             self.event_listener.on_cgka_op(&signed_op);
-        //         }
-
-        //         Ok(encrypted_content)
-        //     }
-        let res = doc.borrow_mut().try_encrypt_content(
+        Ok(doc.borrow_mut().try_encrypt_content(
             content_ref,
             content,
             pred_refs,
             &self.active.borrow().signing_key,
             &mut self.csprng,
-        )?;
-        Ok(res)
+        )?)
     }
 
     pub fn try_decrypt_content(
@@ -2144,11 +2122,11 @@ mod tests {
         left.make_public(&mut doc.dupe().into(), Access::Read, &[])
             .unwrap();
 
-        sync(&mut left, &mut right);
-
         let encrypted = left
-            .try_encrypt_content(doc.clone(), &[1; 32], &Vec::new(), "hello".as_bytes())
+            .try_encrypt_content(doc.clone(), &[1; 32], &Vec::new(), b"hello")
             .unwrap();
+
+        sync(&mut left, &mut right);
 
         // Okay, now we should be in sync
         let doc_on_right = right.get_document(doc.borrow().doc_id()).unwrap().dupe();
@@ -2156,7 +2134,8 @@ mod tests {
         let decrypted = right
             .try_decrypt_content(doc_on_right, &encrypted.encrypted_content)
             .unwrap();
-        assert_eq!(decrypted, "hello".as_bytes());
+
+        assert!(decrypted == b"hello");
     }
 
     fn sync(from: &mut Keyhive, to: &mut Keyhive) {

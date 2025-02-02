@@ -76,8 +76,10 @@ impl<T: ContentRef, L: MembershipListener<T>> Agent<T, L> {
             }
             Agent::Individual(i) => {
                 if let Some(prekey) = i.borrow().pick_prekey(doc_id) {
+                    dbg!("FULL", prekey);
                     HashMap::from_iter([(i.borrow().id(), prekey)])
                 } else {
+                    dbg!("EMPTY");
                     HashMap::new()
                 }
             }
