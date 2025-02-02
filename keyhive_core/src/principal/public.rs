@@ -1,18 +1,24 @@
 use super::{
     active::Active,
+    agent::Agent,
     identifier::Identifier,
     individual::{op::add_key::AddKeyOp, state::PrekeyState, Individual},
+    peer::Peer,
 };
 use crate::{
+    content::reference::ContentRef,
     crypto::{
+        application_secret::PcsKey,
+        digest::Digest,
         share_key::{ShareKey, ShareSecretKey},
         signed::Signed,
         verifiable::Verifiable,
     },
-    listener::prekey::PrekeyListener,
+    listener::{membership::MembershipListener, prekey::PrekeyListener},
 };
 use dupe::Dupe;
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, HashSet},
     rc::Rc,
 };
@@ -35,12 +41,20 @@ impl Public {
         ed25519_dalek::SigningKey::from([0; 32])
     }
 
+    pub fn share_key(&self) -> ShareKey {
+        self.share_secret_key().share_key()
+    }
+
     pub fn share_secret_key(&self) -> ShareSecretKey {
         x25519_dalek::StaticSecret::from([0; 32]).into()
     }
 
-    pub fn share_key(&self) -> ShareKey {
-        self.share_secret_key().share_key()
+    pub fn pcs_key(&self) -> PcsKey {
+        self.share_secret_key().into()
+    }
+
+    pub fn pcs_key_hash(&self) -> Digest<PcsKey> {
+        Digest::hash(&self.pcs_key())
     }
 
     pub fn individual(&self) -> Individual {
@@ -61,6 +75,14 @@ impl Public {
             prekey_state: PrekeyState::try_from_iter([op])
                 .expect("well-known prekey op should be valid"),
         }
+    }
+
+    pub fn peer<T: ContentRef, L: MembershipListener<T>>(&self) -> Peer<T, L> {
+        Rc::new(RefCell::new(self.individual())).into()
+    }
+
+    pub fn agent<T: ContentRef, L: MembershipListener<T>>(&self) -> Agent<T, L> {
+        Rc::new(RefCell::new(self.individual())).into()
     }
 
     pub fn active<L: PrekeyListener>(&self, listener: L) -> Active<L> {

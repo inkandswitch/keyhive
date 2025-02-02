@@ -305,6 +305,28 @@ impl<
         }
     }
 
+    pub fn make_public(
+        &mut self,
+        resource: &mut Membered<T, L>,
+        access: Access,
+        relevant_docs: &[Rc<RefCell<Document<T, L>>>],
+    ) -> Result<AddMemberUpdate<T, L>, AddMemberError> {
+        resource.make_public(access, &self.active.borrow().signing_key, relevant_docs)
+    }
+
+    pub fn make_private(
+        &mut self,
+        resource: &mut Membered<T, L>,
+        retain_all_other_members: bool,
+        relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
+    ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
+        resource.make_private(
+            retain_all_other_members,
+            &self.active.borrow().signing_key,
+            relevant_docs,
+        )
+    }
+
     #[allow(clippy::type_complexity)]
     pub fn revoke_member(
         &mut self,
@@ -2114,10 +2136,11 @@ mod tests {
         let mut left = make_keyhive();
         let mut right = make_keyhive();
 
-        let doc = left.generate_doc(vec![], nonempty![[0u8; 32]]).unwrap();
-        let public = left.get_agent(Public.id().into()).unwrap();
-        left.add_member(public, &mut doc.clone().into(), Access::Write, &[])
+        let doc = left
+            .generate_doc(vec![Public.peer()], nonempty![[0u8; 32]])
             .unwrap();
+        // left.add_member(public, &mut doc.clone().into(), Access::Write, &[])
+        //  .unwrap();
 
         sync(&mut left, &mut right);
 

@@ -7,6 +7,7 @@ use super::{
         delegation::Delegation, error::AddError, revocation::Revocation, Group, RevokeMemberError,
     },
     identifier::Identifier,
+    public::Public,
 };
 use crate::{
     access::Access,
@@ -119,6 +120,29 @@ impl<T: ContentRef, L: MembershipListener<T>> Membered<T, L> {
                 relevant_docs,
             ),
         }
+    }
+
+    pub fn make_public(
+        &mut self,
+        access: Access,
+        signing_key: &ed25519_dalek::SigningKey,
+        relevant_docs: &[Rc<RefCell<Document<T, L>>>],
+    ) -> Result<AddMemberUpdate<T, L>, AddMemberError> {
+        self.add_member(Public.agent(), access, signing_key, relevant_docs)
+    }
+
+    pub fn make_private(
+        &mut self,
+        retain_all_other_members: bool,
+        signing_key: &ed25519_dalek::SigningKey,
+        relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
+    ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
+        self.revoke_member(
+            Public.id(),
+            retain_all_other_members,
+            signing_key,
+            relevant_docs,
+        )
     }
 
     pub fn get_agent_revocations(&self, agent: &Agent<T, L>) -> Vec<Rc<Signed<Revocation<T, L>>>> {

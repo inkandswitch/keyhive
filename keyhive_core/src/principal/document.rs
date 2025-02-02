@@ -1,6 +1,6 @@
 pub mod id;
 
-use super::{group::AddGroupMemberError, individual::id::IndividualId};
+use super::{group::AddGroupMemberError, individual::id::IndividualId, public::Public};
 use crate::{
     access::Access,
     cgka::{
@@ -117,6 +117,22 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
 
     pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<T, L>, Access)> {
         self.group.transitive_members()
+    }
+
+    pub fn is_publicly_replicable(&self) -> bool {
+        self.group.is_publicly_replicable()
+    }
+
+    pub fn is_publicly_readable(&self) -> bool {
+        self.group.is_publicly_readable()
+    }
+
+    pub fn is_publicly_writable(&self) -> bool {
+        self.group.is_publicly_writable()
+    }
+
+    pub fn is_publicly_administratable(&self) -> bool {
+        self.group.is_publicly_administratable()
     }
 
     pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<T, L>>> {
@@ -430,11 +446,12 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         encrypted_content: &EncryptedContent<Vec<u8>, T>,
     ) -> Result<Vec<u8>, DecryptError> {
         let decrypt_key = self
-            .cgka_mut()
-            .map_err(|_| DecryptError::KeyNotFound)?
+            .cgka_mut()?
             .decryption_key_for(encrypted_content)
             .map_err(|_| DecryptError::KeyNotFound)?;
+
         let mut plaintext = encrypted_content.ciphertext.clone();
+
         decrypt_key
             .try_decrypt(encrypted_content.nonce, &mut plaintext)
             .map_err(DecryptError::DecryptionFailed)?;
@@ -448,6 +465,29 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
         //     Err(DecryptError::SivMismatch)?;
         // }
         Ok(plaintext)
+    }
+
+    pub fn make_public(
+        &mut self,
+        access: Access,
+        signing_key: &ed25519_dalek::SigningKey,
+        relevant_docs: &[Rc<RefCell<Document<T, L>>>],
+    ) -> Result<AddMemberUpdate<T, L>, AddMemberError> {
+        self.add_member(Public.agent(), access, signing_key, relevant_docs)
+    }
+
+    pub fn make_private(
+        &mut self,
+        retain_all_other_members: bool,
+        signing_key: &ed25519_dalek::SigningKey,
+        after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
+    ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
+        self.revoke_member(
+            Public.id(),
+            retain_all_other_members,
+            signing_key,
+            after_other_doc_content,
+        )
     }
 
     pub(crate) fn dummy_from_archive(
@@ -556,7 +596,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Default for RevokeMemberUpdate<T, 
 #[derive(Debug, Error)]
 pub enum AddMemberError {
     #[error(transparent)]
-    AddMemberError(#[from] AddGroupMemberError),
+    AddGroupMemberError(#[from] AddGroupMemberError),
 
     #[error(transparent)]
     AddCgkaMemberError(#[from] AddCgkaMemberError),
@@ -615,6 +655,9 @@ pub enum DecryptError {
 
     #[error("Unable to build SIV due to IO error: {0}")]
     IoErrorOnSivBuild(#[from] std::io::Error),
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

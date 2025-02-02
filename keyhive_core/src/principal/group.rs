@@ -20,6 +20,7 @@ use super::{
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
     membered::Membered,
+    public::Public,
 };
 use crate::{
     access::Access,
@@ -273,6 +274,57 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         }
 
         caps
+    }
+
+    pub fn is_publicly_replicable(&self) -> bool {
+        self.members().contains_key(&Public.id())
+    }
+
+    pub fn is_publicly_readable(&self) -> bool {
+        if let Some(dlg) = self.get_capability(&Public.id()) {
+            dlg.payload.can >= Access::Read
+        } else {
+            false
+        }
+    }
+
+    pub fn is_publicly_writable(&self) -> bool {
+        if let Some(dlg) = self.get_capability(&Public.id()) {
+            dlg.payload.can >= Access::Write
+        } else {
+            false
+        }
+    }
+
+    pub fn is_publicly_administratable(&self) -> bool {
+        if let Some(dlg) = self.get_capability(&Public.id()) {
+            dlg.payload.can >= Access::Write
+        } else {
+            false
+        }
+    }
+
+    pub fn make_public(
+        &mut self,
+        access: Access,
+        signing_key: &ed25519_dalek::SigningKey,
+        relevant_docs: &[Rc<RefCell<Document<T, L>>>],
+    ) -> Result<AddMemberUpdate<T, L>, AddGroupMemberError> {
+        self.add_member(Public.agent(), access, signing_key, relevant_docs)
+    }
+
+    pub fn make_private(
+        &mut self,
+        retain_all_other_members: bool,
+        signing_key: &ed25519_dalek::SigningKey,
+        after_content: &BTreeMap<DocumentId, Vec<T>>,
+    ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
+        self.revoke_member(
+            Public.id(),
+            retain_all_other_members,
+            signing_key,
+            after_content,
+        )
     }
 
     pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<T, L>>> {
@@ -619,10 +671,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             match op {
                 MembershipOperation::Delegation(d) => {
                     if revoked_dlgs.contains(&d.signature.to_bytes()) {
-                        // dbg!("0");
                         continue;
                     }
-                    // dbg!("1");
 
                     // NOTE: friendly reminder that the topsort already includes all ancestors
                     if let Some(found_proof) = &d.payload.proof {
@@ -633,7 +683,6 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
                             })
                             .or_insert_with(|| HashSet::from_iter([d.signature.to_bytes()]));
 
-                        // dbg!("2");
                         // If the proof was directly revoked, then check if they've been
                         // re-added some other way. Since `rebuild` recurses,
                         // we only need to check one level.
@@ -641,34 +690,21 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
                             || !dlgs_in_play.contains_key(&found_proof.signature.to_bytes())
                         {
                             if let Some(alt_proofs) = self.members.get(&found_proof.issuer.into()) {
-                                // dbg!("3");
                                 if alt_proofs.iter().filter(|d| *d != found_proof).all(
-                                    |alt_proof| {
-                                        // dbg!("BOP BOOP BOOOOP");
-                                        // dbg!(d.payload.delegate.id());
-                                        // dbg!(alt_proof.payload.delegate.id());
-
-                                        alt_proof.payload.can < found_proof.payload.can
-                                    },
+                                    |alt_proof| alt_proof.payload.can < found_proof.payload.can,
                                 ) {
                                     // No suitable proofs
-                                    // dbg!("3.5");
                                     continue;
                                 }
                             } else if found_proof.issuer != self.verifying_key() {
-                                // dbg!(Identifier::from(found_proof.issuer));
-                                // dbg!(d.payload.delegate.id());
-                                // dbg!("4");
                                 continue;
                             }
                         }
                     } else if d.issuer != self.verifying_key() {
-                        // dbg!("5");
                         debug_assert!(false, "Delegation without valid root proof");
                         continue;
                     }
 
-                    // dbg!("6");
                     dlgs_in_play.insert(d.signature.to_bytes(), d.dupe());
 
                     if let Some(mut_dlgs) = self.members.get_mut(&d.payload.delegate.id()) {

@@ -1,6 +1,9 @@
-use crate::crypto::{
-    encrypted::EncryptedSecret,
-    share_key::{ShareKey, ShareSecretKey},
+use crate::{
+    crypto::{
+        encrypted::EncryptedSecret,
+        share_key::{ShareKey, ShareSecretKey},
+    },
+    principal::public::Public,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -16,6 +19,13 @@ pub struct ShareKeyMap(pub(crate) BTreeMap<ShareKey, ShareSecretKey>);
 impl ShareKeyMap {
     pub fn new() -> Self {
         ShareKeyMap(BTreeMap::new())
+    }
+
+    pub fn new_with_public() -> Self {
+        ShareKeyMap(BTreeMap::from_iter([(
+            Public.share_key(),
+            Public.share_secret_key(),
+        )]))
     }
 
     pub fn insert(&mut self, pk: ShareKey, sk: ShareSecretKey) {

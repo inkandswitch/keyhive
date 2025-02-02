@@ -19,7 +19,7 @@ use crate::{
         siv::Siv,
         symmetric_key::SymmetricKey,
     },
-    principal::{document::id::DocumentId, individual::id::IndividualId},
+    principal::{document::id::DocumentId, individual::id::IndividualId, public::Public},
     util::content_addressed_map::CaMap,
 };
 use beekem::BeeKem;
@@ -106,7 +106,7 @@ impl Cgka {
         let mut cgka = Self {
             doc_id,
             owner_id,
-            owner_sks: ShareKeyMap::new(),
+            owner_sks: ShareKeyMap::new_with_public(),
             tree,
             ops_graph: CgkaOperationGraph::new(),
             pending_ops_for_structural_change: false,
@@ -188,15 +188,18 @@ impl Cgka {
     ) -> Result<SymmetricKey, CgkaError> {
         let pcs_key =
             self.pcs_key_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)?;
+
         if !self.pcs_keys.contains_key(&encrypted.pcs_key_hash) {
             self.insert_pcs_key(&pcs_key, encrypted.pcs_update_op_hash);
         }
+
         let app_secret = pcs_key.derive_application_secret(
             &encrypted.nonce,
             &encrypted.content_ref,
             &encrypted.pred_refs,
             &encrypted.pcs_update_op_hash,
         );
+
         Ok(app_secret.key())
     }
 
@@ -434,9 +437,16 @@ impl Cgka {
 
     /// Decrypt tree secret to derive [`PcsKey`].
     fn pcs_key_from_tree_root(&mut self) -> Result<PcsKey, CgkaError> {
-        let key = self
+        let key = if let Ok(owner_key) = self
             .tree
-            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)?;
+            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)
+        {
+            owner_key
+        } else {
+            self.tree
+                .decrypt_tree_secret(Public.id().into(), &mut self.owner_sks)?
+        };
+
         Ok(PcsKey::new(key))
     }
 
@@ -451,6 +461,8 @@ impl Cgka {
     ) -> Result<PcsKey, CgkaError> {
         if let Some(pcs_key) = self.pcs_keys.get(pcs_key_hash) {
             Ok(*pcs_key.clone())
+        } else if self.pcs_keys.get(&Public.pcs_key_hash()).is_some() {
+            Ok(Public.pcs_key())
         } else {
             if self.has_pcs_key() {
                 let pcs_key = self.pcs_key_from_tree_root()?;
