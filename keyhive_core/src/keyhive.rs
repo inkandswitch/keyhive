@@ -2136,11 +2136,13 @@ mod tests {
         let mut left = make_keyhive();
         let mut right = make_keyhive();
 
-        let doc = left
-            .generate_doc(vec![Public.peer()], nonempty![[0u8; 32]])
+        // NOTE: Alternate to adding public later, you can add them at doc creation
+        //                                  vvvvvvvvvvvvv
+        // let doc = left.generate_doc(vec![Public.peer()], nonempty![[0u8; 32]]).unwrap();
+
+        let doc = left.generate_doc(vec![], nonempty![[0u8; 32]]).unwrap();
+        left.make_public(&mut doc.dupe().into(), Access::Read, &[])
             .unwrap();
-        // left.add_member(public, &mut doc.clone().into(), Access::Write, &[])
-        //  .unwrap();
 
         sync(&mut left, &mut right);
 

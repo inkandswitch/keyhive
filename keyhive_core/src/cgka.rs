@@ -437,15 +437,13 @@ impl Cgka {
 
     /// Decrypt tree secret to derive [`PcsKey`].
     fn pcs_key_from_tree_root(&mut self) -> Result<PcsKey, CgkaError> {
-        let key = if let Ok(owner_key) = self
+        let key = self
             .tree
             .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)
-        {
-            owner_key
-        } else {
-            self.tree
-                .decrypt_tree_secret(Public.id().into(), &mut self.owner_sks)?
-        };
+            .or_else(|_| {
+                self.tree
+                    .decrypt_tree_secret(Public.id().into(), &mut self.owner_sks)
+            })?;
 
         Ok(PcsKey::new(key))
     }
@@ -461,8 +459,6 @@ impl Cgka {
     ) -> Result<PcsKey, CgkaError> {
         if let Some(pcs_key) = self.pcs_keys.get(pcs_key_hash) {
             Ok(*pcs_key.clone())
-        } else if self.pcs_keys.get(&Public.pcs_key_hash()).is_some() {
-            Ok(Public.pcs_key())
         } else {
             if self.has_pcs_key() {
                 let pcs_key = self.pcs_key_from_tree_root()?;
