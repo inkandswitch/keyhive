@@ -242,7 +242,6 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
 
         let mut cgka_ops = group_cgka_ops;
         if can >= Access::Read {
-            dbg!("Adding to CGKA");
             let new_cgka_ops = self.add_cgka_member(&delegation, signing_key)?;
             cgka_ops.extend(new_cgka_ops);
         }

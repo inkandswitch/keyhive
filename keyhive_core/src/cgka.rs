@@ -189,10 +189,8 @@ impl Cgka {
         &mut self,
         encrypted: &EncryptedContent<T, Cr>,
     ) -> Result<SymmetricKey, CgkaError> {
-        dbg!("2");
         let pcs_key =
             self.pcs_key_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)?;
-        dbg!("3");
 
         if !self.pcs_keys.contains_key(&encrypted.pcs_key_hash) {
             self.insert_pcs_key(&pcs_key, encrypted.pcs_update_op_hash);
@@ -209,9 +207,6 @@ impl Cgka {
     }
 
     pub fn has_pcs_key(&self) -> bool {
-        dbg!(self.tree.has_root_key());
-        dbg!(self.ops_graph.has_single_head());
-        dbg!(self.ops_graph.add_heads.len() < 2);
         self.tree.has_root_key()
             && self.ops_graph.has_single_head()
             && self.ops_graph.add_heads.len() < 2
@@ -449,8 +444,6 @@ impl Cgka {
             .tree
             .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)
             .or_else(|e| {
-                dbg!(e);
-                dbg!("TRYING public");
                 self.tree
                     .decrypt_tree_secret(Public.id().into(), &mut self.owner_sks)
             })?;

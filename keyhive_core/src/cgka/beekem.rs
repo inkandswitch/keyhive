@@ -383,13 +383,9 @@ impl BeeKem {
         let TreeNodeIndex::Inner(p_idx) = root_idx else {
             panic!("BeeKEM should always have a root at an inner node.")
         };
-        dbg!("has root key");
-        dbg!(root_idx);
         if let Some(r) = self.inner_node(p_idx) {
-            dbg!(">>>>>>>>>> 1");
             !r.has_conflict()
         } else {
-            dbg!(">>>>>>>>>> 2");
             false
         }
     }
@@ -536,8 +532,6 @@ impl BeeKem {
     }
 
     fn inner_node(&self, idx: InnerNodeIndex) -> &Option<InnerNode> {
-        dbg!(idx);
-        dbg!(&self.inner_nodes);
         self.inner_nodes
             .get(idx.usize())
             .expect("Inner node index should be in bounds")

@@ -69,8 +69,6 @@ impl Public {
         )
         .into();
 
-        dbg!("INNER");
-
         Individual {
             id: self.verifying_key().into(),
             prekeys: HashSet::from_iter([self.share_key()]),
