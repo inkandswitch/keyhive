@@ -145,6 +145,34 @@ impl<T: ContentRef, L: MembershipListener<T>> Membered<T, L> {
         )
     }
 
+    pub fn is_publicly_replicable(&self) -> bool {
+        self.members().contains_key(&Public.id())
+    }
+
+    pub fn is_publicly_readable(&self) -> bool {
+        if let Some(dlg) = self.get_capability(&Public.id()) {
+            dlg.payload.can >= Access::Read
+        } else {
+            false
+        }
+    }
+
+    pub fn is_publicly_writable(&self) -> bool {
+        if let Some(dlg) = self.get_capability(&Public.id()) {
+            dlg.payload.can >= Access::Write
+        } else {
+            false
+        }
+    }
+
+    pub fn is_publicly_administratable(&self) -> bool {
+        if let Some(dlg) = self.get_capability(&Public.id()) {
+            dlg.payload.can >= Access::Write
+        } else {
+            false
+        }
+    }
+
     pub fn get_agent_revocations(&self, agent: &Agent<T, L>) -> Vec<Rc<Signed<Revocation<T, L>>>> {
         match self {
             Membered::Group(group) => group.borrow().get_agent_revocations(agent),
