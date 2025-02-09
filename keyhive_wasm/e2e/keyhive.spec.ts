@@ -8,20 +8,20 @@ test.beforeEach(async ({ page }) => {
 
 test.describe("Keyhive", async () => {
   test('constructor', async ({ page }) => {
-    const out = await page.evaluate(() => {
-      const { Keyhive, SigningKey } = window.keyhive
-      return { keyhive: new Keyhive(SigningKey.generate(), console.log) }
+    const out = await page.evaluate(async () => {
+      const { Keyhive, Signer } = window.keyhive
+      return { keyhive: await new Keyhive(await new Signer(), console.log) }
     })
 
     expect(out.keyhive).toBeDefined()
   })
 
   test('id', async ({ page }) => {
-    const out = await page.evaluate(() => {
-      const { Keyhive, SigningKey } = window.keyhive
-      const sk = SigningKey.generate()
+    const out = await page.evaluate(async () => {
+      const { Keyhive, Signer } = window.keyhive
+      const sk = await new Signer()
       const vk = sk.verifyingKey
-      const keyhive = new Keyhive(sk, console.log)
+      const keyhive = await new Keyhive(sk, console.log)
       return { id: keyhive.id.bytes, vk }
     })
 
@@ -29,11 +29,11 @@ test.describe("Keyhive", async () => {
   })
 
   test.describe('idString', async () => {
-    const scenario = () => {
-      const { Keyhive, SigningKey } = window.keyhive
-      const key = SigningKey.generate()
+    const scenario = async () => {
+      const { Keyhive, Signer } = window.keyhive
+      const key = await new Signer()
       const vKey = key.verifyingKey
-      const keyhive = new Keyhive(key, console.log)
+      const keyhive = await new Keyhive(key, console.log)
       return { idString: keyhive.idString, vKey }
     }
 
@@ -49,11 +49,11 @@ test.describe("Keyhive", async () => {
   })
 
   test.describe('generateGroup', async () => {
-    const scenario = () => {
-      const { Keyhive, SigningKey } = window.keyhive
-      const keyhive = new Keyhive(SigningKey.generate(), (_) => {})
+    const scenario = async () => {
+      const { Keyhive, Signer } = window.keyhive
+      const keyhive = await new Keyhive(await new Signer(), (_) => {})
 
-      const group = keyhive.generateGroup([])
+      const group = await keyhive.generateGroup([])
       const { groupId, members } = group
       const canStr = members[0].can.toString()
       return { group, groupId, members, canStr }
@@ -81,22 +81,24 @@ test.describe("Keyhive", async () => {
   })
 
   test.describe('archive', async () => {
-    const scenario = () => {
-      const { Keyhive, SigningKey, Archive, ChangeRef } = window.keyhive
+    const scenario = async () => {
+      const { Keyhive, Signer, Archive, ChangeRef } = window.keyhive
 
-      const bh = new Keyhive(SigningKey.generate())
+      const signer = await new Signer()
+      const secondSigner = signer.clone()
+      const bh = await new Keyhive(signer, () => {})
       const changeRef = new ChangeRef(new Uint8Array([1, 2, 3]));
 
-      const g1 = bh.generateGroup([])
-      const g2 = bh.generateGroup([g1.toPeer()])
-      const d1 = bh.generateDocument([g2.toPeer()], changeRef, [])
-      bh.generateGroup([d1.toPeer()])
-      bh.generateGroup([g2.toPeer(), d1.toPeer()])
+      const g1 = await bh.generateGroup([])
+      const g2 = await bh.generateGroup([g1.toPeer()])
+      const d1 = await bh.generateDocument([g2.toPeer()], changeRef, [])
+      await bh.generateGroup([d1.toPeer()])
+      await bh.generateGroup([g2.toPeer(), d1.toPeer()])
 
       const archive = bh.intoArchive()
       const archiveBytes = archive.toBytes()
       const archiveBytesIsUint8Array = archiveBytes instanceof Uint8Array
-      const roundTrip = new Archive(archiveBytes).tryToKeyhive()
+      const roundTrip = new Archive(archiveBytes).tryToKeyhive(secondSigner)
       return { archive, archiveBytes, keyhive: bh, roundTrip, archiveBytesIsUint8Array }
     }
 
@@ -117,15 +119,15 @@ test.describe("Keyhive", async () => {
   })
 
   test.describe('event listener', async () => {
-    const scenario = () => {
-      const { Keyhive, SigningKey } = window.keyhive
+    const scenario = async () => {
+      const { Keyhive, Signer } = window.keyhive
       const events = [];
-      const keyhive = new Keyhive(SigningKey.generate(), (event) => {
+      const keyhive = await new Keyhive(await new Signer(), (event) => {
         console.log(event);
         events.push(event.variant);
       })
 
-      keyhive.expandPrekeys()
+      await keyhive.expandPrekeys()
       return { events }
     }
 

@@ -1,6 +1,6 @@
 use super::{
     access::JsAccess, agent::JsAgent, change_ref::JsChangeRef, event_handler::JsEventHandler,
-    signed_delegation::JsSignedDelegation,
+    signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use dupe::Dupe;
 use keyhive_core::{
@@ -13,15 +13,15 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 #[derive(Debug, Clone, Dupe)]
 pub struct Capability {
-    pub(crate) who: Agent<JsChangeRef, JsEventHandler>,
-    pub(crate) proof: Rc<Signed<Delegation<JsChangeRef, JsEventHandler>>>,
+    pub(crate) who: Agent<JsSigner, JsChangeRef, JsEventHandler>,
+    pub(crate) proof: Rc<Signed<Delegation<JsSigner, JsChangeRef, JsEventHandler>>>,
 }
 
 #[wasm_bindgen]
 impl Capability {
     #[wasm_bindgen(getter)]
     pub fn who(&self) -> JsAgent {
-        JsAgent(self.who.clone())
+        JsAgent(self.who.dupe())
     }
 
     #[wasm_bindgen(getter)]

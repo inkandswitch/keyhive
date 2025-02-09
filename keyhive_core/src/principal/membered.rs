@@ -11,10 +11,13 @@ use super::{
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed, verifiable::Verifiable},
+    crypto::{
+        digest::Digest, signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable,
+    },
     listener::{membership::MembershipListener, no_listener::NoListener},
     util::content_addressed_map::CaMap,
 };
+use derive_where::derive_where;
 use dupe::{Dupe, OptionDupedExt};
 use id::MemberedId;
 use nonempty::NonEmpty;
@@ -25,14 +28,19 @@ use std::{
 };
 
 /// The union of Agents that have updatable membership
-#[derive(Debug, Clone, Dupe, PartialEq, Eq)]
-pub enum Membered<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
-    Group(Rc<RefCell<Group<T, L>>>),
-    Document(Rc<RefCell<Document<T, L>>>),
+#[derive(Clone, Dupe)]
+#[derive_where(Debug, PartialEq; T)]
+pub enum Membered<
+    S: AsyncSigner,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<S, T> = NoListener,
+> {
+    Group(Rc<RefCell<Group<S, T, L>>>),
+    Document(Rc<RefCell<Document<S, T, L>>>),
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> Membered<T, L> {
-    pub fn get_capability(&self, agent_id: &Identifier) -> Option<Rc<Signed<Delegation<T, L>>>> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, L> {
+    pub fn get_capability(&self, agent_id: &Identifier) -> Option<Rc<Signed<Delegation<S, T, L>>>> {
         match self {
             Membered::Group(group) => group.borrow().get_capability(agent_id).duped(),
             Membered::Document(doc) => doc.borrow().get_capability(agent_id).duped(),
@@ -53,14 +61,14 @@ impl<T: ContentRef, L: MembershipListener<T>> Membered<T, L> {
         }
     }
 
-    pub fn delegation_heads(&self) -> CaMap<Signed<Delegation<T, L>>> {
+    pub fn delegation_heads(&self) -> CaMap<Signed<Delegation<S, T, L>>> {
         match self {
             Membered::Group(group) => group.borrow().delegation_heads().clone(),
             Membered::Document(document) => document.borrow().delegation_heads().clone(),
         }
     }
 
-    pub fn revocation_heads(&self) -> CaMap<Signed<Revocation<T, L>>> {
+    pub fn revocation_heads(&self) -> CaMap<Signed<Revocation<S, T, L>>> {
         match self {
             Membered::Group(group) => group.borrow().revocation_heads().clone(),
             Membered::Document(document) => document.borrow().revocation_heads().clone(),
@@ -68,60 +76,61 @@ impl<T: ContentRef, L: MembershipListener<T>> Membered<T, L> {
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn members(&self) -> HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T, L>>>>> {
+    pub fn members(&self) -> HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>> {
         match self {
             Membered::Group(group) => group.borrow().members().clone(),
             Membered::Document(document) => document.borrow().members().clone(),
         }
     }
 
-    pub fn add_member(
+    pub async fn add_member(
         &mut self,
-        member_to_add: Agent<T, L>,
+        member_to_add: Agent<S, T, L>,
         can: Access,
-        signing_key: &ed25519_dalek::SigningKey,
-        other_relevant_docs: &[Rc<RefCell<Document<T, L>>>],
-    ) -> Result<AddMemberUpdate<T, L>, AddMemberError> {
+        signer: &S,
+        other_relevant_docs: &[Rc<RefCell<Document<S, T, L>>>],
+    ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError> {
         match self {
-            Membered::Group(group) => Ok(group.borrow_mut().add_member(
-                member_to_add,
-                can,
-                signing_key,
-                other_relevant_docs,
-            )?),
-            Membered::Document(document) => document.borrow_mut().add_member(
-                member_to_add,
-                can,
-                signing_key,
-                other_relevant_docs,
-            ),
+            Membered::Group(group) => Ok(group
+                .borrow_mut()
+                .add_member(member_to_add, can, signer, other_relevant_docs)
+                .await?),
+            Membered::Document(document) => {
+                document
+                    .borrow_mut()
+                    .add_member(member_to_add, can, signer, other_relevant_docs)
+                    .await
+            }
         }
     }
 
-    pub fn revoke_member(
+    pub async fn revoke_member(
         &mut self,
         member_id: Identifier,
         retain_all_other_members: bool,
-        signing_key: &ed25519_dalek::SigningKey,
+        signer: &S,
         relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
         match self {
-            Membered::Group(group) => group.borrow_mut().revoke_member(
-                member_id,
-                retain_all_other_members,
-                signing_key,
-                relevant_docs,
-            ),
-            Membered::Document(document) => document.borrow_mut().revoke_member(
-                member_id,
-                retain_all_other_members,
-                signing_key,
-                relevant_docs,
-            ),
+            Membered::Group(group) => {
+                group
+                    .borrow_mut()
+                    .revoke_member(member_id, retain_all_other_members, signer, relevant_docs)
+                    .await
+            }
+            Membered::Document(document) => {
+                document
+                    .borrow_mut()
+                    .revoke_member(member_id, retain_all_other_members, signer, relevant_docs)
+                    .await
+            }
         }
     }
 
-    pub fn get_agent_revocations(&self, agent: &Agent<T, L>) -> Vec<Rc<Signed<Revocation<T, L>>>> {
+    pub fn get_agent_revocations(
+        &self,
+        agent: &Agent<S, T, L>,
+    ) -> Vec<Rc<Signed<Revocation<S, T, L>>>> {
         match self {
             Membered::Group(group) => group.borrow().get_agent_revocations(agent),
             Membered::Document(document) => document.borrow().get_agent_revocations(agent),
@@ -130,8 +139,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Membered<T, L> {
 
     pub fn receive_delegation(
         &self,
-        delegation: Rc<Signed<Delegation<T, L>>>,
-    ) -> Result<Digest<Signed<Delegation<T, L>>>, AddError> {
+        delegation: Rc<Signed<Delegation<S, T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<S, T, L>>>, AddError> {
         match self {
             Membered::Group(group) => Ok(group.borrow_mut().receive_delegation(delegation)?),
             Membered::Document(document) => {
@@ -141,19 +150,23 @@ impl<T: ContentRef, L: MembershipListener<T>> Membered<T, L> {
     }
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> From<Rc<RefCell<Group<T, L>>>> for Membered<T, L> {
-    fn from(group: Rc<RefCell<Group<T, L>>>) -> Self {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Rc<RefCell<Group<S, T, L>>>>
+    for Membered<S, T, L>
+{
+    fn from(group: Rc<RefCell<Group<S, T, L>>>) -> Self {
         Membered::Group(group)
     }
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> From<Rc<RefCell<Document<T, L>>>> for Membered<T, L> {
-    fn from(document: Rc<RefCell<Document<T, L>>>) -> Self {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+    From<Rc<RefCell<Document<S, T, L>>>> for Membered<S, T, L>
+{
+    fn from(document: Rc<RefCell<Document<S, T, L>>>) -> Self {
         Membered::Document(document)
     }
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> Verifiable for Membered<T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Membered<S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         match self {
             Membered::Group(group) => group.borrow().verifying_key(),

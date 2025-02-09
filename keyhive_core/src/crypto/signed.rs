@@ -4,7 +4,7 @@ use super::verifiable::Verifiable;
 use crate::principal::identifier::Identifier;
 use derivative::Derivative;
 use dupe::Dupe;
-use ed25519_dalek::{Signer, Verifier};
+use ed25519_dalek::Verifier;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
@@ -46,16 +46,6 @@ fn hash_signature<H: Hasher>(signature: &ed25519_dalek::Signature, state: &mut H
 }
 
 impl<T: Serialize> Signed<T> {
-    pub fn try_sign(payload: T, signer: &ed25519_dalek::SigningKey) -> Result<Self, SigningError> {
-        let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
-
-        Ok(Signed {
-            payload,
-            issuer: signer.verifying_key(),
-            signature: signer.try_sign(payload_bytes.as_slice())?,
-        })
-    }
-
     pub fn payload(&self) -> &T {
         &self.payload
     }
@@ -185,16 +175,4 @@ pub enum SigningError {
 
     #[error("Payload serialization failed: {0}")]
     SerializationFailed(#[from] bincode::Error),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_round_trip() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let signed = Signed::try_sign(vec![1, 2, 3], &sk).unwrap();
-        assert!(signed.try_verify().is_ok());
-    }
 }

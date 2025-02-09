@@ -14,7 +14,7 @@ pub struct Connecting {
 }
 
 impl Connecting {
-    pub fn generate<R: rand::RngCore + rand::CryptoRng>(
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
         my_verifying_key: ed25519_dalek::VerifyingKey,
         server_id: String,

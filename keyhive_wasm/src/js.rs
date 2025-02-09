@@ -32,5 +32,6 @@ pub mod signed_cgka_operation;
 pub mod signed_delegation;
 pub mod signed_invocation;
 pub mod signed_revocation;
-pub mod signing_key;
+pub mod signer;
+pub mod signing_error;
 pub mod summary;

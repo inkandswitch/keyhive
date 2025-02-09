@@ -1,6 +1,6 @@
 use super::{
     agent::JsAgent, change_ref::JsChangeRef, event_handler::JsEventHandler,
-    identifier::JsIdentifier, peer::JsPeer,
+    identifier::JsIdentifier, peer::JsPeer, signer::JsSigner,
 };
 use derive_more::{Deref, From, Into};
 use dupe::Dupe;
@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Document)]
 #[derive(Debug, Clone, Dupe, From, Into, Deref)]
-pub struct JsDocument(pub(crate) Rc<RefCell<Document<JsChangeRef, JsEventHandler>>>);
+pub struct JsDocument(pub(crate) Rc<RefCell<Document<JsSigner, JsChangeRef, JsEventHandler>>>);
 
 #[wasm_bindgen(js_class = Document)]
 impl JsDocument {

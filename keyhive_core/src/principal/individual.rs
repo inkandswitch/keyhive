@@ -11,6 +11,7 @@ use crate::{
     crypto::{
         share_key::ShareKey,
         signed::{Signed, SigningError},
+        signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
     },
     util::content_addressed_map::CaMap,
@@ -73,11 +74,13 @@ impl Individual {
     }
 
     #[cfg(any(feature = "test_utils", test))]
-    pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        signer: &ed25519_dalek::SigningKey,
+    pub async fn generate<R: rand::CryptoRng + rand::RngCore, S: AsyncSigner>(
+        signer: &S,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
-        let prekey_state = PrekeyState::generate(signer, NonZeroUsize::new(8).unwrap(), csprng)?;
+        let prekey_state =
+            PrekeyState::generate(signer, NonZeroUsize::new(8).unwrap(), csprng).await?;
+
         Ok(Self {
             id: IndividualId(signer.verifying_key().into()),
             prekeys: prekey_state.build(),
@@ -117,24 +120,27 @@ impl Individual {
         self.prekey_state.ops()
     }
 
-    pub(crate) fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
+    pub(crate) async fn rotate_prekey<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old_key: ShareKey,
-        signer: &ed25519_dalek::SigningKey,
+        signer: &S,
         csprng: &mut R,
     ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
-        let op = self.prekey_state.rotate_gen(old_key, signer, csprng)?;
+        let op = self
+            .prekey_state
+            .rotate_gen(old_key, signer, csprng)
+            .await?;
         self.prekeys.remove(&op.payload.old);
         self.prekeys.insert(op.payload.new);
         Ok(op)
     }
 
-    pub(crate) fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
+    pub(crate) async fn expand_prekeys<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
-        signer: &ed25519_dalek::SigningKey,
+        signer: &S,
         csprng: &mut R,
     ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
-        let op = self.prekey_state.expand(signer, csprng)?;
+        let op = self.prekey_state.expand(signer, csprng).await?;
         self.prekeys.insert(op.payload.share_key);
         Ok(op)
     }
@@ -222,12 +228,13 @@ fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::signer::sync_signer::SyncSigner;
 
     #[test]
     fn test_to_bytes() {
         let mut csprng = rand::thread_rng();
         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
-        let op = Signed::try_sign(AddKeyOp::generate(&mut csprng), &sk).unwrap();
+        let op = sk.try_sign_sync(AddKeyOp::generate(&mut csprng)).unwrap();
         let individual: Individual = Individual::new(Rc::new(op).into());
         assert_eq!(individual.id.to_bytes(), sk.verifying_key().to_bytes());
     }

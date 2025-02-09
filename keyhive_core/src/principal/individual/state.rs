@@ -3,13 +3,15 @@ use crate::{
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError, VerificationError},
+        signer::async_signer::AsyncSigner,
     },
     error::missing_dependency::MissingDependency,
     util::content_addressed_map::CaMap,
 };
 use dupe::Dupe;
+use futures::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, num::NonZeroUsize, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, num::NonZeroUsize, rc::Rc};
 use thiserror::Error;
 
 /// Low-level prekey operation store.
@@ -68,24 +70,28 @@ impl PrekeyState {
     /// # Errors
     ///
     /// Returns a [`SigningError`] if the operation could not be signed.
-    pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        signing_key: &ed25519_dalek::SigningKey,
+    pub async fn generate<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
+        signer: &S,
         size: NonZeroUsize,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
-        let ops = (0..size.get()).try_fold(CaMap::new(), |mut ops, _| {
-            let secret_key = ShareSecretKey::generate(csprng);
-            let share_key = secret_key.share_key();
+        let cell = Rc::new(RefCell::new(csprng));
+        let ops = stream::iter((0..size.into()).map(|x| Ok(x)))
+            .try_fold(CaMap::new(), |mut ops, _| async {
+                let secret_key = ShareSecretKey::generate(*cell.borrow_mut());
 
-            let add_op = KeyOp::Add(Rc::new(Signed::try_sign(
-                AddKeyOp { share_key },
-                signing_key,
-            )?));
+                let add_op = KeyOp::Add(Rc::new(
+                    signer
+                        .try_sign_async(AddKeyOp {
+                            share_key: secret_key.share_key(),
+                        })
+                        .await?,
+                ));
+                ops.insert(add_op.into());
 
-            ops.insert(add_op.into());
-
-            Ok::<CaMap<KeyOp>, SigningError>(ops)
-        })?;
+                Ok::<CaMap<KeyOp>, SigningError>(ops)
+            })
+            .await?;
 
         Ok(Self { ops })
     }
@@ -120,37 +126,37 @@ impl PrekeyState {
     }
 
     /// Rotate a [`ShareKey`] in the [`PrekeyState`].
-    pub(crate) fn rotate(
+    pub(crate) async fn rotate<S: AsyncSigner>(
         &mut self,
         old: ShareKey,
         new: ShareKey,
-        signing_key: &ed25519_dalek::SigningKey,
+        signer: &S,
     ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
-        let op = Rc::new(Signed::try_sign(RotateKeyOp { old, new }, signing_key)?);
+        let op = Rc::new(signer.try_sign_async(RotateKeyOp { old, new }).await?);
         self.ops.insert(KeyOp::from(op.dupe()).into());
         Ok(op)
     }
 
     /// Rotate a [`ShareKey`] in the [`PrekeyState`] with a randomly-generated [`ShareSecretKey`].
-    pub(crate) fn rotate_gen<R: rand::CryptoRng + rand::RngCore>(
+    pub(crate) async fn rotate_gen<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old: ShareKey,
-        signer: &ed25519_dalek::SigningKey,
+        signer: &S,
         csprng: &mut R,
     ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
-        self.rotate(old, new_secret.share_key(), signer)
+        self.rotate(old, new_secret.share_key(), signer).await
     }
 
     /// Expand the [`PrekeyState`] with a new, randomly-generated [`ShareSecretKey`].
-    pub(crate) fn expand<R: rand::CryptoRng + rand::RngCore>(
+    pub(crate) async fn expand<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
-        signing_key: &ed25519_dalek::SigningKey,
+        signer: &S,
         csprng: &mut R,
     ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
         let new = new_secret.share_key();
-        let op = Rc::new(Signed::try_sign(AddKeyOp { share_key: new }, signing_key)?);
+        let op = Rc::new(signer.try_sign_async(AddKeyOp { share_key: new }).await?);
         self.ops.insert(KeyOp::Add(op.dupe()).into());
         Ok(op)
     }
@@ -192,7 +198,7 @@ pub enum NewOpError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dupe::Dupe;
+    use crate::crypto::signer::sync_signer::SyncSigner;
 
     #[test]
     fn test_rebuild() {
@@ -228,62 +234,52 @@ mod tests {
         let share_key_5 = ShareKey::generate(&mut rando);
 
         let op1: KeyOp = Rc::new(
-            Signed::try_sign(
-                AddKeyOp {
+            signer
+                .try_sign_sync(AddKeyOp {
                     share_key: share_key_1,
-                },
-                &signer,
-            )
-            .unwrap(),
+                })
+                .unwrap(),
         )
         .into();
 
         let mut state = PrekeyState::new(op1.dupe());
 
         let op2 = Rc::new(
-            Signed::try_sign(
-                AddKeyOp {
+            signer
+                .try_sign_sync(AddKeyOp {
                     share_key: share_key_2,
-                },
-                &signer,
-            )
-            .unwrap(),
+                })
+                .unwrap(),
         )
         .into();
 
         let op3 = Rc::new(
-            Signed::try_sign(
-                RotateKeyOp {
+            signer
+                .try_sign_sync(RotateKeyOp {
                     old: share_key_1,
                     new: share_key_3,
-                },
-                &signer,
-            )
-            .unwrap(),
+                })
+                .unwrap(),
         )
         .into();
 
         let op4 = Rc::new(
-            Signed::try_sign(
-                RotateKeyOp {
+            signer
+                .try_sign_sync(RotateKeyOp {
                     old: share_key_1,
                     new: share_key_4,
-                },
-                &signer,
-            )
-            .unwrap(),
+                })
+                .unwrap(),
         )
         .into();
 
         let op5 = Rc::new(
-            Signed::try_sign(
-                RotateKeyOp {
+            signer
+                .try_sign_sync(RotateKeyOp {
                     old: share_key_4,
                     new: share_key_5,
-                },
-                &signer,
-            )
-            .unwrap(),
+                })
+                .unwrap(),
         )
         .into();
 
@@ -334,62 +330,52 @@ mod tests {
         let share_key_5 = ShareKey::generate(&mut rando);
 
         let op1: KeyOp = Rc::new(
-            Signed::try_sign(
-                AddKeyOp {
+            signer
+                .try_sign_sync(AddKeyOp {
                     share_key: share_key_1,
-                },
-                &signer,
-            )
-            .unwrap(),
+                })
+                .unwrap(),
         )
         .into();
 
         let mut state = PrekeyState::new(op1.dupe());
 
         let op2: KeyOp = Rc::new(
-            Signed::try_sign(
-                AddKeyOp {
+            signer
+                .try_sign_sync(AddKeyOp {
                     share_key: share_key_2,
-                },
-                &signer,
-            )
-            .unwrap(),
+                })
+                .unwrap(),
         )
         .into();
 
         let op3: KeyOp = Rc::new(
-            Signed::try_sign(
-                RotateKeyOp {
+            signer
+                .try_sign_sync(RotateKeyOp {
                     old: share_key_1,
                     new: share_key_3,
-                },
-                &signer,
-            )
-            .unwrap(),
+                })
+                .unwrap(),
         )
         .into();
 
         let op4: KeyOp = Rc::new(
-            Signed::try_sign(
-                RotateKeyOp {
+            signer
+                .try_sign_sync(RotateKeyOp {
                     old: share_key_1,
                     new: share_key_4,
-                },
-                &signer,
-            )
-            .unwrap(),
+                })
+                .unwrap(),
         )
         .into();
 
         let op5: KeyOp = Rc::new(
-            Signed::try_sign(
-                RotateKeyOp {
+            signer
+                .try_sign_sync(RotateKeyOp {
                     old: share_key_4,
                     new: share_key_5,
-                },
-                &signer,
-            )
-            .unwrap(),
+                })
+                .unwrap(),
         )
         .into();
 

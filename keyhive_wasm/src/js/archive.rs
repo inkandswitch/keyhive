@@ -1,4 +1,6 @@
-use super::{change_ref::JsChangeRef, event_handler::JsEventHandler, keyhive::JsKeyhive};
+use super::{
+    change_ref::JsChangeRef, event_handler::JsEventHandler, keyhive::JsKeyhive, signer::JsSigner,
+};
 use derive_more::{Display, From, Into};
 use keyhive_core::{archive::Archive, keyhive::Keyhive, keyhive::TryFromArchiveError};
 use serde::{Deserialize, Serialize};
@@ -28,19 +30,25 @@ impl JsArchive {
     #[wasm_bindgen(js_name = tryToKeyhive)]
     pub fn try_to_keyhive(
         &self,
+        signer: JsSigner,
         event_handler: &js_sys::Function,
     ) -> Result<JsKeyhive, JsTryFromArchiveError> {
-        Ok(
-            Keyhive::try_from_archive(&self.0, event_handler.clone().into(), rand::thread_rng())
-                .map_err(|e| JsTryFromArchiveError(Box::new(e)))?
-                .into(),
+        Ok(Keyhive::try_from_archive(
+            &self.0,
+            signer,
+            event_handler.clone().into(),
+            rand::thread_rng(),
         )
+        .map_err(|e| JsTryFromArchiveError(Box::new(e)))?
+        .into())
     }
 }
 
 #[derive(Debug, Display, From, Into, Error)]
 #[wasm_bindgen(js_name = TryFromArchiveError)]
-pub struct JsTryFromArchiveError(pub(crate) Box<TryFromArchiveError<JsChangeRef, JsEventHandler>>);
+pub struct JsTryFromArchiveError(
+    pub(crate) Box<TryFromArchiveError<JsSigner, JsChangeRef, JsEventHandler>>,
+);
 
 #[wasm_bindgen(js_class = TryFromArchiveError)]
 impl JsTryFromArchiveError {

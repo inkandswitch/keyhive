@@ -24,7 +24,7 @@ impl Server {
         }
     }
 
-    pub fn generate<R: rand::RngCore + rand::CryptoRng>(csprng: &mut R, id: String) -> Self {
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R, id: String) -> Self {
         let current_secret_swarm_seed = Seed::generate(csprng);
         let prior_secret_swarm_seed = Seed::generate(csprng);
 
@@ -36,7 +36,7 @@ impl Server {
         self.current_secret_swarm_seed = new_current_secret_swarm_seed;
     }
 
-    pub fn receive_hello<R: rand::RngCore + rand::CryptoRng>(
+    pub fn receive_hello<R: rand::CryptoRng + rand::RngCore>(
         &self,
         hello: Signed<Hello>,
         csprng: &mut R,

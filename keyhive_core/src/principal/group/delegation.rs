@@ -8,6 +8,7 @@ use crate::{
     crypto::{
         digest::Digest,
         signed::{Signed, SigningError},
+        signer::async_signer::AsyncSigner,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
@@ -22,20 +23,23 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, hash::Hash, rc::Rc};
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
-#[derive_where(PartialEq; T)]
-pub struct Delegation<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
-    pub(crate) delegate: Agent<T, L>,
+#[derive_where(Debug, Clone, PartialEq; T)]
+pub struct Delegation<
+    S: AsyncSigner,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<S, T> = NoListener,
+> {
+    pub(crate) delegate: Agent<S, T, L>,
     pub(crate) can: Access,
 
-    pub(crate) proof: Option<Rc<Signed<Delegation<T, L>>>>,
-    pub(crate) after_revocations: Vec<Rc<Signed<Revocation<T, L>>>>,
+    pub(crate) proof: Option<Rc<Signed<Delegation<S, T, L>>>>,
+    pub(crate) after_revocations: Vec<Rc<Signed<Revocation<S, T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> Eq for Delegation<T, L> {}
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Eq for Delegation<S, T, L> {}
 
-impl<T: ContentRef, L: MembershipListener<T>> Delegation<T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T, L> {
     pub fn subject_id(&self, issuer: AgentId) -> Identifier {
         if let Some(proof) = &self.proof {
             proof.subject_id()
@@ -44,7 +48,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Delegation<T, L> {
         }
     }
 
-    pub fn delegate(&self) -> &Agent<T, L> {
+    pub fn delegate(&self) -> &Agent<S, T, L> {
         &self.delegate
     }
 
@@ -52,15 +56,15 @@ impl<T: ContentRef, L: MembershipListener<T>> Delegation<T, L> {
         self.can
     }
 
-    pub fn proof(&self) -> Option<&Rc<Signed<Delegation<T, L>>>> {
+    pub fn proof(&self) -> Option<&Rc<Signed<Delegation<S, T, L>>>> {
         self.proof.as_ref()
     }
 
-    pub fn after_revocations(&self) -> &[Rc<Signed<Revocation<T, L>>>] {
+    pub fn after_revocations(&self) -> &[Rc<Signed<Revocation<S, T, L>>>] {
         &self.after_revocations
     }
 
-    pub fn after(&self) -> Dependencies<T, L> {
+    pub fn after(&self) -> Dependencies<S, T, L> {
         let AfterAuth {
             optional_delegation,
             revocations,
@@ -75,7 +79,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Delegation<T, L> {
         }
     }
 
-    pub fn after_auth(&self) -> AfterAuth<T, L> {
+    pub fn after_auth(&self) -> AfterAuth<S, T, L> {
         AfterAuth {
             optional_delegation: self.proof.dupe(),
             revocations: &self.after_revocations,
@@ -86,7 +90,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Delegation<T, L> {
         self.proof.is_none()
     }
 
-    pub fn proof_lineage(&self) -> Vec<Rc<Signed<Delegation<T, L>>>> {
+    pub fn proof_lineage(&self) -> Vec<Rc<Signed<Delegation<S, T, L>>>> {
         let mut lineage = vec![];
         let mut head = self;
 
@@ -98,7 +102,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Delegation<T, L> {
         lineage
     }
 
-    pub fn is_descendant_of(&self, maybe_ancestor: &Signed<Delegation<T, L>>) -> bool {
+    pub fn is_descendant_of(&self, maybe_ancestor: &Signed<Delegation<S, T, L>>) -> bool {
         let mut head = self;
 
         while let Some(proof) = &head.proof {
@@ -112,7 +116,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Delegation<T, L> {
         false
     }
 
-    pub fn is_ancestor_of(&self, maybe_descendant: &Signed<Delegation<T, L>>) -> bool {
+    pub fn is_ancestor_of(&self, maybe_descendant: &Signed<Delegation<S, T, L>>) -> bool {
         let mut head = maybe_descendant.payload();
 
         while let Some(proof) = &head.proof {
@@ -127,7 +131,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Delegation<T, L> {
     }
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> Signed<Delegation<T, L>> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Signed<Delegation<S, T, L>> {
     pub fn subject_id(&self) -> Identifier {
         let mut head = self;
 
@@ -139,8 +143,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Signed<Delegation<T, L>> {
     }
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> Serialize for Delegation<T, L> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for Delegation<S, T, L> {
+    fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticDelegation::from(self.clone()).serialize(serializer)
     }
 }
@@ -157,8 +161,10 @@ pub struct StaticDelegation<T: ContentRef> {
     pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> From<Delegation<T, L>> for StaticDelegation<T> {
-    fn from(delegation: Delegation<T, L>) -> Self {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Delegation<S, T, L>>
+    for StaticDelegation<T>
+{
+    fn from(delegation: Delegation<S, T, L>) -> Self {
         Self {
             can: delegation.can,
             proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).into()),
@@ -174,9 +180,14 @@ impl<T: ContentRef, L: MembershipListener<T>> From<Delegation<T, L>> for StaticD
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AfterAuth<'a, T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
-    pub(crate) optional_delegation: Option<Rc<Signed<Delegation<T, L>>>>,
-    pub(crate) revocations: &'a [Rc<Signed<Revocation<T, L>>>],
+pub struct AfterAuth<
+    'a,
+    S: AsyncSigner,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<S, T> = NoListener,
+> {
+    pub(crate) optional_delegation: Option<Rc<Signed<Delegation<S, T, L>>>>,
+    pub(crate) revocations: &'a [Rc<Signed<Revocation<S, T, L>>>],
 }
 
 /// Errors that can occur when using an active agent.

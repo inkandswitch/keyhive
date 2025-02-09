@@ -1,6 +1,6 @@
 use super::{
     change_ref::JsChangeRef, event_handler::JsEventHandler, signed_delegation::JsSignedDelegation,
-    signed_revocation::JsSignedRevocation,
+    signed_revocation::JsSignedRevocation, signer::JsSigner,
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, From, Into)]
 #[wasm_bindgen(js_name = Event)]
-pub struct JsEvent(pub(crate) Event<JsChangeRef, JsEventHandler>);
+pub struct JsEvent(pub(crate) Event<JsSigner, JsChangeRef, JsEventHandler>);
 
 #[wasm_bindgen(js_class = Event)]
 impl JsEvent {

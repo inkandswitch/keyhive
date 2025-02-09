@@ -1,4 +1,4 @@
-use super::{change_ref::JsChangeRef, event::JsEvent};
+use super::{change_ref::JsChangeRef, event::JsEvent, signer::JsSigner};
 use derive_more::{From, Into};
 use dupe::Dupe;
 use keyhive_core::{
@@ -30,21 +30,21 @@ impl Dupe for JsEventHandler {
 }
 
 impl PrekeyListener for JsEventHandler {
-    fn on_prekeys_expanded(&self, e: &Rc<Signed<AddKeyOp>>) {
+    async fn on_prekeys_expanded(&self, e: &Rc<Signed<AddKeyOp>>) {
         self.call(Event::PrekeysExpanded(e.dupe()).into())
     }
 
-    fn on_prekey_rotated(&self, e: &Rc<Signed<RotateKeyOp>>) {
+    async fn on_prekey_rotated(&self, e: &Rc<Signed<RotateKeyOp>>) {
         self.call(Event::PrekeyRotated(e.dupe()).into())
     }
 }
 
-impl MembershipListener<JsChangeRef> for JsEventHandler {
-    fn on_delegation(&self, data: &Rc<Signed<Delegation<JsChangeRef, Self>>>) {
+impl MembershipListener<JsSigner, JsChangeRef> for JsEventHandler {
+    async fn on_delegation(&self, data: &Rc<Signed<Delegation<JsSigner, JsChangeRef, Self>>>) {
         self.call(Event::Delegated(data.dupe()).into())
     }
 
-    fn on_revocation(&self, data: &Rc<Signed<Revocation<JsChangeRef, Self>>>) {
+    async fn on_revocation(&self, data: &Rc<Signed<Revocation<JsSigner, JsChangeRef, Self>>>) {
         self.call(Event::Revoked(data.dupe()).into())
     }
 }
