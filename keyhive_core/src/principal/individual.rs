@@ -172,6 +172,15 @@ pub enum ReceivePrekeyOpError {
     NewOpError(#[from] state::NewOpError),
 }
 
+impl ReceivePrekeyOpError {
+    pub fn is_missing_dependency(&self) -> bool {
+        matches!(
+            self,
+            Self::NewOpError(state::NewOpError::MissingDependency(_))
+        )
+    }
+}
+
 fn clamp(bytes: [u8; 8], offset_bits: u8) -> usize {
     let bound = u64::from_be_bytes(bytes)
         .checked_shl(offset_bits as u32)

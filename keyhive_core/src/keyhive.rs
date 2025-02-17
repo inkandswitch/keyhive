@@ -1383,6 +1383,17 @@ pub enum ReceiveCgkaOpError {
     UnknownInvitePrekey(ShareKey),
 }
 
+impl ReceiveCgkaOpError {
+    pub fn is_missing_dependency(&self) -> bool {
+        match self {
+            ReceiveCgkaOpError::CgkaError(e) => e.is_missing_dependency(),
+            ReceiveCgkaOpError::VerificationError(_) => false,
+            ReceiveCgkaOpError::UnknownDocument(_) => true,
+            ReceiveCgkaOpError::UnknownInvitePrekey(_) => true,
+        }
+    }
+}
+
 impl<T: ContentRef, L: MembershipListener<T>> From<MissingIndividualError>
     for TryFromArchiveError<T, L>
 {
@@ -1410,6 +1421,20 @@ pub enum ReceiveEventError<T: ContentRef = [u8; 32], L: MembershipListener<T> = 
 
     #[error(transparent)]
     ReceiveCgkaOpError(#[from] ReceiveCgkaOpError),
+}
+
+impl<T, L> ReceiveEventError<T, L>
+where
+    T: ContentRef + std::fmt::Debug,
+    L: MembershipListener<T>,
+{
+    pub fn is_missing_dependency(&self) -> bool {
+        match self {
+            ReceiveEventError::ReceieveStaticDelegationError(e) => e.is_missing_dependency(),
+            ReceiveEventError::ReceivePrekeyOpError(e) => e.is_missing_dependency(),
+            ReceiveEventError::ReceiveCgkaOpError(e) => e.is_missing_dependency(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2058,5 +2083,196 @@ mod tests {
         let mut content_ref = [0u8; 32];
         csprng.fill_bytes(&mut content_ref);
         content_ref
+    }
+
+    #[test]
+    fn decrypt_public_message_after_sync() {
+        let mut left = make_keyhive();
+        let mut right = make_keyhive();
+
+        // NOTE: Alternate to adding public later, you can add them at doc creation
+        //                                  vvvvvvvvvvvvv
+        // let doc = left.generate_doc(vec![Public.peer()], nonempty![[0u8; 32]]).unwrap();
+
+        let doc = left.generate_doc(vec![], nonempty![[0u8; 32]]).unwrap();
+        left.make_public(&mut doc.dupe().into(), Access::Read, &[])
+            .unwrap();
+
+        let encrypted = left
+            .try_encrypt_content(doc.clone(), &[1; 32], &Vec::new(), b"hello")
+            .unwrap();
+
+        sync(&mut left, &mut right);
+
+        // Okay, now we should be in sync
+        let doc_on_right = right.get_document(doc.borrow().doc_id()).unwrap().dupe();
+
+        let decrypted = right
+            .try_decrypt_content(doc_on_right.dupe(), &encrypted.encrypted_content)
+            .unwrap();
+
+        assert_eq!(decrypted, b"hello");
+
+        left.make_private(&mut doc.dupe().into(), true, &mut Default::default())
+            .unwrap();
+
+        let private_encrypted = left
+            .try_encrypt_content(
+                doc.clone(),
+                &[1; 32],
+                &Vec::new(),
+                b"keep it secret; keep it safe",
+            )
+            .unwrap();
+
+        sync(&mut left, &mut right);
+
+        assert!(right
+            .try_decrypt_content(doc_on_right, &private_encrypted.encrypted_content)
+            .is_err());
+    }
+
+    fn sync(from: &mut Keyhive, to: &mut Keyhive) {
+        // Returns true if there were any events to sync, false if not
+        fn sync_left_to_right(from: &mut Keyhive, to: &mut Keyhive) -> bool {
+            let mut events = HashMap::new();
+            events.extend(from.events_for_agent(&Public.individual().into()).unwrap());
+
+            let to_on_from = Rc::new(RefCell::new(Individual::from(to.id().0 .0)));
+            events.extend(from.events_for_agent(&to_on_from.into()).unwrap());
+
+            let from_on_to = Rc::new(RefCell::new(Individual::from(from.id().0 .0)));
+            let mut events_already_there =
+                to.events_for_agent(&Public.individual().into()).unwrap();
+            events_already_there.extend(to.events_for_agent(&from_on_to.into()).unwrap());
+            let events_already_there = events_already_there.into_keys().collect::<HashSet<_>>();
+
+            // Schlep to ingest events
+            let mut new_events = events
+                .into_iter()
+                .filter_map(|(k, event)| {
+                    if events_already_there.contains(&k) {
+                        None
+                    } else {
+                        Some(StaticEvent::from(event))
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            if new_events.is_empty() {
+                return false;
+            }
+
+            let mut try_later = vec![];
+            loop {
+                let mut ingested = false;
+                while let Some(event) = new_events.pop() {
+                    match to.receive_event(event.clone()) {
+                        Ok(_) => {
+                            ingested = true;
+                        }
+                        Err(e) => {
+                            if e.is_missing_dependency() {
+                                try_later.push(event);
+                            } else {
+                                panic!("error processing keyhive event: {:?}", e);
+                            }
+                        }
+                    }
+                }
+
+                if try_later.is_empty() {
+                    break;
+                } else if !ingested {
+                    break;
+                } else {
+                    new_events = try_later;
+                    try_later = vec![];
+                }
+            }
+            true
+        }
+        let mut sync_required = true;
+        while sync_required {
+            sync_required = sync_left_to_right(from, to) || sync_left_to_right(to, from);
+        }
+    }
+
+    #[test]
+    fn transitive_get_capability() {
+        let mut alice = make_keyhive();
+        let group = alice.generate_group(vec![]).unwrap();
+        let doc = alice.generate_doc(vec![], nonempty!([1; 32])).unwrap();
+        {
+            let mut doc = doc.clone().into();
+            alice
+                .add_member(group.clone().into(), &mut doc, Access::Read, &[])
+                .unwrap();
+        }
+
+        assert_eq!(
+            doc.borrow()
+                .get_capability(&group.borrow().id())
+                .unwrap()
+                .payload()
+                .can(),
+            Access::Read
+        );
+
+        let mut bob = make_keyhive();
+
+        sync(&mut bob, &mut alice);
+
+        let bob_on_alice = alice.get_peer(bob.id().into()).unwrap();
+        {
+            let mut group = group.clone().into();
+            alice
+                .add_member(bob_on_alice.clone().into(), &mut group, Access::Read, &[])
+                .unwrap();
+        }
+
+        assert_eq!(
+            doc.borrow()
+                .transitive_members()
+                .get(&bob_on_alice.id())
+                .unwrap()
+                .1,
+            Access::Read,
+        );
+    }
+
+    #[test]
+    fn missing_cgka_ops_after_sync() {
+        let mut alice = make_keyhive();
+        let mut bob = make_keyhive();
+        let doc = alice.generate_doc(vec![], nonempty!([1; 32])).unwrap();
+        let bob_on_alice = Rc::new(RefCell::new(Individual::from(bob.id().0 .0)));
+        alice.register_individual(bob_on_alice.clone());
+        alice
+            .add_member(
+                bob_on_alice.into(),
+                &mut doc.clone().into(),
+                Access::Write,
+                &[],
+            )
+            .unwrap();
+
+        sync(&mut alice, &mut bob);
+        sync(&mut bob, &mut alice);
+
+        let encrypted = alice
+            .try_encrypt_content(doc.clone(), &[1; 32], &Vec::new(), b"hello")
+            .unwrap();
+
+        sync(&mut bob, &mut alice);
+        sync(&mut alice, &mut bob);
+
+        println!("update: {:?}", encrypted.update_op());
+
+        let doc_on_bob = bob.get_document(doc.borrow().doc_id()).unwrap().dupe();
+        let decrypted = bob
+            .try_decrypt_content(doc_on_bob.dupe(), &encrypted.encrypted_content)
+            .unwrap();
+        assert_eq!(decrypted, b"hello");
     }
 }
