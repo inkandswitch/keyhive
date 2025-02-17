@@ -4,6 +4,8 @@ pub mod id;
 pub mod op;
 pub mod state;
 
+use self::op::KeyOp;
+
 use super::{agent::id::AgentId, document::id::DocumentId};
 use crate::crypto::{
     share_key::ShareKey,
@@ -53,11 +55,14 @@ pub struct Individual {
 }
 
 impl Individual {
-    pub fn new(id: IndividualId) -> Self {
+    pub fn new(initial_op: KeyOp) -> Self {
+        let id = IndividualId(initial_op.verifying_key().into());
+        let prekey_state = PrekeyState::new(initial_op);
+
         Self {
             id,
-            prekeys: HashSet::new(),
-            prekey_state: PrekeyState::new(),
+            prekeys: prekey_state.build(),
+            prekey_state,
         }
     }
 
@@ -66,11 +71,11 @@ impl Individual {
         signer: &ed25519_dalek::SigningKey,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
-        let state = PrekeyState::generate(signer, 8, csprng)?;
+        let prekey_state = PrekeyState::generate(signer, 8, csprng)?;
         Ok(Self {
             id: IndividualId(signer.verifying_key().into()),
-            prekeys: state.rebuild(),
-            prekey_state: state,
+            prekeys: prekey_state.build(),
+            prekey_state,
         })
     }
 
@@ -88,7 +93,7 @@ impl Individual {
         }
 
         self.prekey_state.insert_op(op)?;
-        self.prekeys = self.prekey_state.rebuild();
+        self.prekeys = self.prekey_state.build();
         Ok(())
     }
 
@@ -144,16 +149,6 @@ impl PartialOrd for Individual {
 impl Ord for Individual {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.id.to_bytes().cmp(&other.id.to_bytes())
-    }
-}
-
-impl From<VerifyingKey> for Individual {
-    fn from(id: VerifyingKey) -> Self {
-        Self {
-            id: IndividualId(id.into()),
-            prekeys: HashSet::new(),
-            prekey_state: PrekeyState::new(),
-        }
     }
 }
 
@@ -220,9 +215,11 @@ mod tests {
 
     #[test]
     fn test_to_bytes() {
-        let id = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng()).verifying_key();
-        let individual: Individual = id.into();
-        assert_eq!(individual.id.to_bytes(), id.to_bytes());
+        let mut csprng = rand::thread_rng();
+        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
+        let op = Signed::try_sign(AddKeyOp::generate(&mut csprng), &sk).unwrap();
+        let individual: Individual = Individual::new(Rc::new(op).into());
+        assert_eq!(individual.id.to_bytes(), sk.verifying_key().to_bytes());
     }
 
     #[test]

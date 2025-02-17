@@ -128,6 +128,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Document<T, L> {
                 DocumentId(sk.verifying_key().into()),
                 initial_content_heads.clone().into_iter().collect(),
             )]),
+            csprng,
             listener,
         )?;
 

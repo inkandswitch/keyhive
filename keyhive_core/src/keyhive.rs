@@ -127,8 +127,19 @@ impl<
         })
     }
 
+    /// The current [`Active`] Keyhive user.
     pub fn active(&self) -> &Rc<RefCell<Active<L>>> {
         &self.active
+    }
+
+    /// Get the [`Individual`] for the current Keyhive user.
+    ///
+    /// This is what you would share with a peer for them to
+    /// register your identity on their system.
+    ///
+    /// Importantly this includes prekeys in addition to your public key.
+    pub fn individual(&self) -> Individual {
+        self.active.borrow().individual().clone()
     }
 
     pub fn groups(&self) -> &HashMap<GroupId, Rc<RefCell<Group<T, L>>>> {
@@ -589,9 +600,14 @@ impl<
         add_many_keys(
             &mut map,
             self.active.borrow().id().into(),
-            Agent::from(self.active.dupe())
-                .key_ops()
-                .into_iter()
+            self.active
+                .dupe()
+                .borrow()
+                .individual
+                .prekey_state
+                .ops
+                .values()
+                .cloned()
                 .collect(),
         );
 
@@ -679,13 +695,9 @@ impl<
 
     pub fn receive_prekey_op(&mut self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
         let id = Identifier(*key_op.issuer());
-        let agent = if let Some(agent) = self.get_agent(id) {
-            agent
-        } else {
-            let mut indie = Individual::new(IndividualId(id));
-            indie.receive_prekey_op(key_op.clone())?;
-            indie.into()
-        };
+        let agent = self
+            .get_agent(id)
+            .unwrap_or_else(|| Individual::new(key_op.clone()).into());
 
         match agent {
             Agent::Active(active) => {
@@ -738,12 +750,9 @@ impl<
             .transpose()?;
 
         let delegate_id = static_dlg.payload().delegate;
-        let delegate: Agent<T, L> = self.get_agent(delegate_id).unwrap_or_else(|| {
-            let indie_id = IndividualId(delegate_id);
-            let indie = Rc::new(RefCell::new(Individual::new(indie_id)));
-            self.individuals.insert(indie_id, indie.dupe());
-            indie.into()
-        });
+        let delegate: Agent<T, L> = self
+            .get_agent(delegate_id)
+            .ok_or(ReceieveStaticDelegationError::UnknownAgent(delegate_id))?;
 
         let after_revocations = static_dlg.payload().after_revocations.iter().try_fold(
             vec![],
@@ -1271,6 +1280,9 @@ pub enum ReceieveStaticDelegationError<
 
     #[error(transparent)]
     GroupReceiveError(#[from] AddError),
+
+    #[error("Missing agent: {0}")]
+    UnknownAgent(Identifier),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

@@ -17,7 +17,7 @@ use super::{
     agent::{id::AgentId, Agent},
     document::{id::DocumentId, AddMemberUpdate, Document, RevokeMemberUpdate},
     identifier::Identifier,
-    individual::{id::IndividualId, Individual},
+    individual::{id::IndividualId, op::add_key::AddKeyOp, Individual},
     membered::Membered,
 };
 use crate::{
@@ -104,16 +104,18 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             delegations,
             revocations,
             Default::default(),
+            csprng,
             listener,
         )
     }
 
-    pub(crate) fn generate_after_content(
+    pub(crate) fn generate_after_content<R: rand::CryptoRng + rand::RngCore>(
         signing_key: &ed25519_dalek::SigningKey,
         parents: NonEmpty<Agent<T, L>>,
         delegations: DelegationStore<T, L>,
         revocations: RevocationStore<T, L>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
+        csprng: &mut R,
         listener: L,
     ) -> Result<Group<T, L>, SigningError> {
         let id = signing_key.verifying_key().into();
@@ -155,8 +157,10 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             revocations,
         };
 
+        let new_key_op = Rc::new(Signed::try_sign(AddKeyOp::generate(csprng), signing_key)?).into();
+
         Ok(Group {
-            individual: Individual::new(id.into()),
+            individual: Individual::new(new_key_op),
             members,
             state,
             listener,
@@ -347,14 +351,11 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         signing_key: &ed25519_dalek::SigningKey,
         after_content: BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<AddMemberUpdate<T, L>, AddGroupMemberError> {
-        let indie: Individual = signing_key.verifying_key().into();
-        let agent: Agent<T, L> = indie.into();
-
         let proof = if self.verifying_key() == signing_key.verifying_key() {
             None
         } else {
             let p = self
-                .get_capability(&agent.id())
+                .get_capability(&signing_key.verifying_key().into())
                 .ok_or(AddGroupMemberError::NoProof)?;
 
             if can > p.payload().can {
