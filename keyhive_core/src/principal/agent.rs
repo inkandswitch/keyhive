@@ -3,7 +3,7 @@ pub mod id;
 use super::{
     active::Active,
     document::{id::DocumentId, Document},
-    group::Group,
+    group::{Group, IdOrIndividual},
     identifier::Identifier,
     individual::{id::IndividualId, op::KeyOp, Individual},
     membered::Membered,
@@ -97,23 +97,20 @@ impl<T: ContentRef, L: MembershipListener<T>> Agent<T, L> {
                 .cloned()
                 .collect(),
             Agent::Individual(i) => i.borrow().prekey_state.ops.values().cloned().collect(),
-            Agent::Group(g) => g
-                .borrow()
-                .individual
-                .prekey_state
-                .ops
-                .values()
-                .cloned()
-                .collect(),
-            Agent::Document(d) => d
-                .borrow()
-                .group
-                .individual
-                .prekey_state
-                .ops
-                .values()
-                .cloned()
-                .collect(),
+            Agent::Group(g) => {
+                if let IdOrIndividual::Individual(indie) = &g.borrow().id_or_indie {
+                    indie.prekey_state.ops.values().cloned().collect()
+                } else {
+                    Default::default()
+                }
+            }
+            Agent::Document(d) => {
+                if let IdOrIndividual::Individual(indie) = &d.borrow().group.id_or_indie {
+                    indie.prekey_state.ops.values().cloned().collect()
+                } else {
+                    Default::default()
+                }
+            }
         }
     }
 }

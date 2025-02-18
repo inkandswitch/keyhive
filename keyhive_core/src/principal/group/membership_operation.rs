@@ -360,8 +360,10 @@ impl<T: ContentRef, L: MembershipListener<T>> From<MembershipOperation<T, L>>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::principal::agent::Agent;
     use crate::{access::Access, principal::individual::Individual};
     use dupe::Dupe;
+    use std::cell::RefCell;
     use std::rc::Rc;
 
     use std::sync::LazyLock;
@@ -414,8 +416,10 @@ mod tests {
                          └───────┘
     */
 
-    fn add_alice() -> Rc<Signed<Delegation<String>>> {
-        let alice: Individual = fixture(&ALICE_SIGNER).verifying_key().into();
+    fn add_alice<R: rand::CryptoRng + rand::RngCore>(
+        csprng: &mut R,
+    ) -> Rc<Signed<Delegation<String>>> {
+        let alice = Individual::generate(fixture(&ALICE_SIGNER), csprng).unwrap();
         let group_sk = LazyLock::force(&GROUP_SIGNER).clone();
 
         Rc::new(
@@ -434,109 +438,113 @@ mod tests {
         .dupe()
     }
 
-    fn add_bob() -> Rc<Signed<Delegation<String>>> {
-        let alice_sk = fixture(&ALICE_SIGNER).clone();
-        let bob: Individual = fixture(&BOB_SIGNER).verifying_key().into();
+    fn add_bob<R: rand::CryptoRng + rand::RngCore>(
+        csprng: &mut R,
+    ) -> Rc<Signed<Delegation<String>>> {
+        let bob = Individual::generate(fixture(&BOB_SIGNER), csprng).unwrap();
 
         Rc::new(
             Signed::try_sign(
                 Delegation {
-                    delegate: bob.into(),
+                    delegate: Agent::Individual(Rc::new(RefCell::new(bob))),
                     can: Access::Write,
-                    proof: Some(add_alice()),
+                    proof: Some(add_alice(csprng)),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
                 },
-                &alice_sk,
+                &fixture(&ALICE_SIGNER),
             )
             .unwrap(),
         )
     }
 
-    fn add_carol() -> Rc<Signed<Delegation<String>>> {
-        let alice_sk = fixture(&ALICE_SIGNER).clone();
-        let carol: Individual = fixture(&CAROL_SIGNER).verifying_key().into();
+    fn add_carol<R: rand::CryptoRng + rand::RngCore>(
+        csprng: &mut R,
+    ) -> Rc<Signed<Delegation<String>>> {
+        let carol = Individual::generate(fixture(&CAROL_SIGNER), csprng).unwrap();
 
         Rc::new(
             Signed::try_sign(
                 Delegation {
                     delegate: carol.into(),
                     can: Access::Write,
-                    proof: Some(add_alice()),
+                    proof: Some(add_alice(csprng)),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
                 },
-                &alice_sk,
+                fixture(&ALICE_SIGNER),
             )
             .unwrap(),
         )
     }
 
-    fn add_dan() -> Rc<Signed<Delegation<String>>> {
-        let carol_sk = fixture(&CAROL_SIGNER).clone();
-        let dan: Individual = fixture(&DAN_SIGNER).verifying_key().into();
+    fn add_dan<R: rand::CryptoRng + rand::RngCore>(
+        csprng: &mut R,
+    ) -> Rc<Signed<Delegation<String>>> {
+        let dan = Individual::generate(fixture(&DAN_SIGNER), csprng).unwrap();
 
         Rc::new(
             Signed::try_sign(
                 Delegation {
                     delegate: dan.into(),
                     can: Access::Write,
-                    proof: Some(add_carol()),
+                    proof: Some(add_carol(csprng)),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
                 },
-                &carol_sk,
+                fixture(&CAROL_SIGNER),
             )
             .unwrap(),
         )
     }
 
-    fn add_erin() -> Rc<Signed<Delegation<String>>> {
-        let bob_sk = fixture(&BOB_SIGNER).clone();
-        let erin: Individual = fixture(&ERIN_SIGNER).verifying_key().into();
+    fn add_erin<R: rand::CryptoRng + rand::RngCore>(
+        csprng: &mut R,
+    ) -> Rc<Signed<Delegation<String>>> {
+        let erin = Individual::generate(fixture(&ERIN_SIGNER), csprng).unwrap();
 
         Rc::new(
             Signed::try_sign(
                 Delegation {
                     delegate: erin.into(),
                     can: Access::Write,
-                    proof: Some(add_bob()),
+                    proof: Some(add_bob(csprng)),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
                 },
-                &bob_sk,
+                fixture(&BOB_SIGNER),
             )
             .unwrap(),
         )
     }
 
-    fn remove_carol() -> Rc<Signed<Revocation<String>>> {
-        let alice_sk = fixture(&ALICE_SIGNER).clone();
-
+    fn remove_carol<R: rand::CryptoRng + rand::RngCore>(
+        csprng: &mut R,
+    ) -> Rc<Signed<Revocation<String>>> {
         Rc::new(
             Signed::try_sign(
                 Revocation {
-                    revoke: add_carol(),
-                    proof: Some(add_alice()),
+                    revoke: add_carol(csprng),
+                    proof: Some(add_alice(csprng)),
                     after_content: BTreeMap::new(),
                 },
-                &alice_sk,
+                fixture(&ALICE_SIGNER),
             )
             .unwrap(),
         )
     }
 
-    fn remove_dan() -> Rc<Signed<Revocation<String>>> {
-        let bob_sk = fixture(&BOB_SIGNER).clone();
-
+    fn remove_dan<R: rand::CryptoRng + rand::RngCore>(
+        csprng: &mut R,
+    ) -> Rc<Signed<Revocation<String>>> {
         Rc::new(
             Signed::try_sign(
                 Revocation {
-                    revoke: add_dan(),
-                    proof: Some(add_bob()),
+                    revoke: add_dan(csprng),
+                    proof: Some(add_bob(csprng)),
                     after_content: BTreeMap::new(),
                 },
-                &bob_sk,
+                fixture(&BOB_SIGNER),
             )
             .unwrap(),
         )
@@ -551,7 +559,8 @@ mod tests {
 
         #[test]
         fn test_singleton() {
-            let alice_dlg = add_alice();
+            let csprng = &mut rand::thread_rng();
+            let alice_dlg = add_alice(csprng);
             let (ancestors, longest) = MembershipOperation::from(alice_dlg).ancestors();
             assert!(ancestors.is_empty());
             assert_eq!(longest, 1);
@@ -559,7 +568,8 @@ mod tests {
 
         #[test]
         fn test_two_direct() {
-            let bob_dlg = add_bob();
+            let csprng = &mut rand::thread_rng();
+            let bob_dlg = add_bob(csprng);
             let (ancestors, longest) = MembershipOperation::from(bob_dlg).ancestors();
             assert_eq!(ancestors.len(), 1);
             assert_eq!(longest, 2);
@@ -567,8 +577,9 @@ mod tests {
 
         #[test]
         fn test_concurrent() {
-            let bob_dlg = add_bob();
-            let carol_dlg = add_carol();
+            let csprng = &mut rand::thread_rng();
+            let bob_dlg = add_bob(csprng);
+            let carol_dlg = add_carol(csprng);
 
             let (bob_ancestors, bob_longest) = MembershipOperation::from(bob_dlg).ancestors();
             let (carol_ancestors, carol_longest) = MembershipOperation::from(carol_dlg).ancestors();
@@ -579,7 +590,8 @@ mod tests {
 
         #[test]
         fn test_longer() {
-            let erin_dlg = add_erin();
+            let csprng = &mut rand::thread_rng();
+            let erin_dlg = add_erin(csprng);
             let (ancestors, longest) = MembershipOperation::from(erin_dlg).ancestors();
             assert_eq!(ancestors.len(), 2);
             assert_eq!(longest, 2);
@@ -587,7 +599,8 @@ mod tests {
 
         #[test]
         fn test_revocation() {
-            let rev = remove_carol();
+            let csprng = &mut rand::thread_rng();
+            let rev = remove_carol(csprng);
             let (ancestors, longest) = MembershipOperation::from(rev).ancestors();
             assert_eq!(ancestors.len(), 2);
             assert_eq!(longest, 2);
@@ -608,7 +621,9 @@ mod tests {
 
         #[test]
         fn test_one_delegation() {
-            let dlg = add_alice();
+            let csprng = &mut rand::thread_rng();
+
+            let dlg = add_alice(csprng);
 
             let dlgs = CaMap::from_iter_direct([dlg.dupe()]);
             let revs = CaMap::new();
@@ -621,8 +636,10 @@ mod tests {
 
         #[test]
         fn test_delegation_sequence() {
-            let alice_dlg = add_alice();
-            let bob_dlg = add_bob();
+            let csprng = &mut rand::thread_rng();
+
+            let alice_dlg = add_alice(csprng);
+            let bob_dlg = add_bob(csprng);
 
             let dlg_heads = CaMap::from_iter_direct([bob_dlg.dupe()]);
             let rev_heads = CaMap::new();
@@ -643,9 +660,11 @@ mod tests {
 
         #[test]
         fn test_longer_delegation_chain() {
-            let alice_dlg = add_alice();
-            let carol_dlg = add_carol();
-            let dan_dlg = add_dan();
+            let csprng = &mut rand::thread_rng();
+
+            let alice_dlg = add_alice(csprng);
+            let carol_dlg = add_carol(csprng);
+            let dan_dlg = add_dan(csprng);
 
             let dlg_heads = CaMap::from_iter_direct([dan_dlg.dupe()]);
             let rev_heads = CaMap::new();
@@ -670,9 +689,10 @@ mod tests {
 
         #[test]
         fn test_one_revocation() {
+            let csprng = &mut rand::thread_rng();
             let alice_sk = fixture(&ALICE_SIGNER).clone();
-            let alice_dlg = add_alice();
-            let bob_dlg = add_bob();
+            let alice_dlg = add_alice(csprng);
+            let bob_dlg = add_bob(csprng);
 
             let alice_revokes_bob = Rc::new(
                 Signed::try_sign(
@@ -713,15 +733,17 @@ mod tests {
 
         #[test]
         fn test_many_revocations() {
-            let alice_dlg = add_alice();
-            let bob_dlg = add_bob();
+            let csprng = &mut rand::thread_rng();
 
-            let carol_dlg = add_carol();
-            let dan_dlg = add_dan();
-            let erin_dlg = add_erin();
+            let alice_dlg = add_alice(csprng);
+            let bob_dlg = add_bob(csprng);
 
-            let alice_revokes_carol = remove_carol();
-            let bob_revokes_dan = remove_dan();
+            let carol_dlg = add_carol(csprng);
+            let dan_dlg = add_dan(csprng);
+            let erin_dlg = add_erin(csprng);
+
+            let alice_revokes_carol = remove_carol(csprng);
+            let bob_revokes_dan = remove_dan(csprng);
 
             let rev_carol_op: MembershipOperation<String> = alice_revokes_carol.dupe().into();
             let rev_carol_hash = Digest::hash(&rev_carol_op);

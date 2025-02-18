@@ -9,7 +9,7 @@ use crate::{
 };
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, rc::Rc};
+use std::{collections::HashSet, num::NonZeroUsize, rc::Rc};
 use thiserror::Error;
 
 /// Low-level prekey operation store.
@@ -20,17 +20,22 @@ use thiserror::Error;
 /// of having a empty set of rebuildd keys by replacing tombstoning with
 /// rotation. The number of active prekeys can only expand, but the underlying store
 /// is the same size in both cases.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PrekeyState {
     pub(crate) ops: CaMap<KeyOp>,
+    pub(crate) initial_op: Rc<KeyOp>,
 }
 
 impl PrekeyState {
     /// Create a new, empty [`PrekeyState`].
     pub fn new(initial_op: KeyOp) -> Self {
+        let rc = Rc::new(initial_op);
         let mut ops = CaMap::new();
-        ops.insert(Rc::new(initial_op));
-        Self { ops }
+        ops.insert(rc.dupe());
+        Self {
+            ops,
+            initial_op: rc,
+        }
     }
 
     /// Extend a [`PrekeyState`] with elements of an iterator of [`Signed<KeyOp>`]s.
@@ -66,24 +71,30 @@ impl PrekeyState {
     /// Returns a [`SigningError`] if the operation could not be signed.
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
         signing_key: &ed25519_dalek::SigningKey,
-        size: usize,
+        size: NonZeroUsize,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
-        let ops = (0..size).try_fold(CaMap::new(), |mut ops, _| {
+        let ops = (0..size.get()).try_fold(CaMap::new(), |mut ops, _| {
             let secret_key = ShareSecretKey::generate(csprng);
             let share_key = secret_key.share_key();
 
-            let op = KeyOp::Add(Rc::new(Signed::try_sign(
+            let add_op = KeyOp::Add(Rc::new(Signed::try_sign(
                 AddKeyOp { share_key },
                 signing_key,
             )?));
 
-            ops.insert(op.into());
+            ops.insert(add_op.into());
 
             Ok::<CaMap<KeyOp>, SigningError>(ops)
         })?;
 
-        Ok(Self { ops })
+        let initial_op = ops
+            .values()
+            .next()
+            .expect("at least one value because size in nonzero")
+            .dupe();
+
+        Ok(Self { ops, initial_op })
     }
 
     /// A getter for the operations in the [`PrekeyState`].

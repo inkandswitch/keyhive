@@ -14,7 +14,7 @@ use crate::{
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
-    event::Event,
+    event::{Event, StaticEvent},
     listener::{cgka::CgkaListener, membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
@@ -30,7 +30,7 @@ use crate::{
             id::GroupId,
             membership_operation::{MembershipOperation, StaticMembershipOperation},
             revocation::{Revocation, StaticRevocation},
-            Group, RevokeMemberError,
+            Group, IdOrIndividual, RevokeMemberError,
         },
         identifier::Identifier,
         individual::{
@@ -266,8 +266,8 @@ impl<
             return false;
         }
 
-        let group = Rc::new(RefCell::new(Group::from_individual(
-            Individual::new(root_delegation.issuer.into()),
+        let group = Rc::new(RefCell::new(Group::new(
+            GroupId(root_delegation.issuer.into()),
             Rc::new(root_delegation),
             self.delegations.dupe(),
             self.revocations.dupe(),
@@ -710,16 +710,20 @@ impl<
                 indie.borrow_mut().receive_prekey_op(key_op.clone())?;
             }
             Agent::Group(group) => {
-                group
-                    .borrow_mut()
-                    .individual
-                    .receive_prekey_op(key_op.clone())?;
+                if let IdOrIndividual::Individual(indie) = &mut group.borrow_mut().id_or_indie {
+                    indie.receive_prekey_op(key_op.clone())?;
+                } else {
+                    let individual = Individual::new(key_op.dupe());
+                    group.borrow_mut().id_or_indie = IdOrIndividual::Individual(individual);
+                }
             }
             Agent::Document(doc) => {
-                doc.borrow_mut()
-                    .group
-                    .individual
-                    .receive_prekey_op(key_op.clone())?;
+                if let IdOrIndividual::Individual(indie) = &mut doc.borrow_mut().group.id_or_indie {
+                    indie.receive_prekey_op(key_op.clone())?;
+                } else {
+                    let individual = Individual::new(key_op.dupe());
+                    doc.borrow_mut().group.id_or_indie = IdOrIndividual::Individual(individual);
+                }
             }
         }
 
@@ -785,8 +789,8 @@ impl<
         } else if let Some(indie) = self.individuals.remove(&IndividualId(subject_id)) {
             self.promote_individual_to_group(indie, Rc::new(delegation));
         } else {
-            let group = Group::from_individual(
-                Individual::new(IndividualId(subject_id)),
+            let group = Group::new(
+                GroupId(subject_id),
                 Rc::new(delegation),
                 self.delegations.dupe(),
                 self.revocations.dupe(),
@@ -859,8 +863,8 @@ impl<
             let group = self.promote_individual_to_group(indie, revocation.payload.revoke.dupe());
             group.borrow_mut().receive_revocation(Rc::new(revocation))?;
         } else {
-            let mut group = Group::from_individual(
-                Individual::new(static_rev.issuer.into()),
+            let mut group = Group::new(
+                GroupId(static_rev.issuer.into()),
                 revocation.payload.revoke.dupe(),
                 self.delegations.dupe(),
                 self.revocations.dupe(),
@@ -875,7 +879,26 @@ impl<
         Ok(())
     }
 
-    pub fn receive_op(
+    pub fn receive_static_event(
+        &mut self,
+        static_event: StaticEvent<T>,
+    ) -> Result<(), ReceiveStaticEventError<T, L>> {
+        match static_event {
+            StaticEvent::PrekeysExpanded(add_op) => {
+                self.receive_prekey_op(&Rc::new(add_op).into())?
+            }
+            StaticEvent::PrekeyRotated(rot_op) => {
+                self.receive_prekey_op(&Rc::new(rot_op).into())?
+            }
+            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op.payload)?, // FIXME signature
+            StaticEvent::Delegated(dlg) => self.receive_delegation(&dlg)?,
+            StaticEvent::Revoked(rev) => self.receive_revocation(&rev)?,
+        }
+
+        Ok(())
+    }
+
+    pub fn receive_membership_op(
         &mut self,
         static_op: &StaticMembershipOperation<T>,
     ) -> Result<(), ReceieveStaticDelegationError<T, L>> {
@@ -1262,6 +1285,18 @@ impl<
 }
 
 #[derive(Debug, Error)]
+pub enum ReceiveStaticEventError<T: ContentRef, L: MembershipListener<T>> {
+    #[error(transparent)]
+    ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
+
+    #[error(transparent)]
+    ReceiveCgkaOpError(#[from] ReceiveCgkaOpError),
+
+    #[error(transparent)]
+    ReceieveStaticMembershipError(#[from] ReceieveStaticDelegationError<T, L>),
+}
+
+#[derive(Debug, Error)]
 pub enum ReceieveStaticDelegationError<
     T: ContentRef = [u8; 32],
     L: MembershipListener<T> = NoListener,
@@ -1390,6 +1425,8 @@ mod tests {
 
         let hive2_on_hive1 = Rc::new(RefCell::new(hive2.active.borrow().individual.clone()));
         hive1.register_individual(hive2_on_hive1.dupe());
+        let hive1_on_hive2 = Rc::new(RefCell::new(hive1.active.borrow().individual.clone()));
+        hive2.register_individual(hive1_on_hive2.dupe());
         let group1_on_hive1 = hive1.generate_group(vec![hive2_on_hive1.into()]).unwrap();
 
         assert_eq!(hive1.delegations.borrow().len(), 2);
@@ -1410,7 +1447,7 @@ mod tests {
 
         assert_eq!(hive2.delegations.borrow().len(), 0);
         assert_eq!(hive2.revocations.borrow().len(), 0);
-        assert_eq!(hive2.individuals.len(), 1); // NOTE: Public only in this case
+        assert_eq!(hive2.individuals.len(), 2);
         assert_eq!(hive2.groups.len(), 0);
         assert_eq!(hive2.docs.len(), 0);
 
@@ -1465,11 +1502,10 @@ mod tests {
             .get(&left_group.borrow().group_id().into())
             .is_none()); // NOTE *not* included because Public is not a member
 
-        let left_to_mid_ops = left.membership_ops_for_agent(&Public.individual().into());
+        let left_to_mid_ops = left.events_for_agent(&Public.individual().into());
         assert_eq!(left_to_mid_ops.len(), 2);
-        for (h, op) in &left_to_mid_ops {
-            middle.receive_op(&op.clone().into()).unwrap();
-            assert!(middle.delegations.borrow().get(&h.into()).is_some());
+        for op in left_to_mid_ops.values() {
+            middle.receive_static_event(op.clone().into()).unwrap();
         }
 
         // Left unchanged
@@ -1499,11 +1535,10 @@ mod tests {
             2
         );
 
-        let mid_to_right_ops = middle.membership_ops_for_agent(&Public.individual().into());
+        let mid_to_right_ops = middle.events_for_agent(&Public.individual().into());
         assert_eq!(mid_to_right_ops.len(), 2);
-        for (h, op) in &mid_to_right_ops {
-            right.receive_op(&op.clone().into()).unwrap();
-            assert!(right.delegations.borrow().get(&h.into()).is_some());
+        for op in mid_to_right_ops.values() {
+            right.receive_static_event(op.clone().into()).unwrap();
         }
 
         // Left unchanged
@@ -1536,7 +1571,7 @@ mod tests {
         assert_eq!(right.docs.len(), 1);
 
         // Now, the right hand side should have the same ops as the left
-        let ops_on_right = right.membership_ops_for_agent(&Public.individual().into());
+        let ops_on_right = right.events_for_agent(&Public.individual().into());
         assert_eq!(left_to_mid_ops.len(), 2);
 
         assert_eq!(
@@ -1551,12 +1586,10 @@ mod tests {
         right.generate_group(vec![left_doc.dupe().into()]).unwrap();
 
         // Check transitivity
-        let transitive_right_to_mid_ops =
-            right.membership_ops_for_agent(&Public.individual().into());
+        let transitive_right_to_mid_ops = right.events_for_agent(&Public.individual().into());
         assert_eq!(transitive_right_to_mid_ops.len(), 4);
-        for (h, op) in &transitive_right_to_mid_ops {
-            middle.receive_op(&op.clone().into()).unwrap();
-            assert!(middle.delegations.borrow().get(&h.into()).is_some());
+        for op in transitive_right_to_mid_ops.values() {
+            middle.receive_static_event(op.clone().into()).unwrap();
         }
         assert_eq!(middle.individuals.len(), 3); // NOTE now includes Right
         assert_eq!(middle.groups.len(), 1);
