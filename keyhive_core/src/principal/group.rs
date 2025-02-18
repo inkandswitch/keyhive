@@ -71,13 +71,6 @@ pub struct Group<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener
     pub(crate) listener: L,
 }
 
-// FIXME move
-#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
-pub enum IdOrIndividual {
-    GroupId(GroupId),
-    Individual(Individual),
-}
-
 impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
     pub fn new(
         group_id: GroupId,
@@ -692,6 +685,11 @@ impl<T: ContentRef, L: MembershipListener<T>> Verifiable for Group<T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }
+}
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IdOrIndividual {
+    GroupId(GroupId),
+    Individual(Individual),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
