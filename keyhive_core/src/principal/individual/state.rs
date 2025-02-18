@@ -22,20 +22,19 @@ use thiserror::Error;
 /// is the same size in both cases.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PrekeyState {
-    pub(crate) ops: CaMap<KeyOp>,
-    pub(crate) initial_op: Rc<KeyOp>,
+    /// The actual operations in the [`PrekeyState`].
+    ///
+    /// This MUST be nonempty. While not enforced at the type level,
+    /// the [`new`] constructor ensures that at least one operation is present.
+    ops: CaMap<KeyOp>,
 }
 
 impl PrekeyState {
     /// Create a new, empty [`PrekeyState`].
     pub fn new(initial_op: KeyOp) -> Self {
-        let rc = Rc::new(initial_op);
         let mut ops = CaMap::new();
-        ops.insert(rc.dupe());
-        Self {
-            ops,
-            initial_op: rc,
-        }
+        ops.insert(Rc::new(initial_op));
+        Self { ops }
     }
 
     /// Extend a [`PrekeyState`] with elements of an iterator of [`Signed<KeyOp>`]s.
@@ -88,13 +87,7 @@ impl PrekeyState {
             Ok::<CaMap<KeyOp>, SigningError>(ops)
         })?;
 
-        let initial_op = ops
-            .values()
-            .next()
-            .expect("at least one value because size in nonzero")
-            .dupe();
-
-        Ok(Self { ops, initial_op })
+        Ok(Self { ops })
     }
 
     /// A getter for the operations in the [`PrekeyState`].

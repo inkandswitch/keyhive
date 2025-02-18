@@ -604,8 +604,7 @@ impl<
                 .dupe()
                 .borrow()
                 .individual
-                .prekey_state
-                .ops
+                .prekey_ops()
                 .values()
                 .cloned()
                 .collect(),

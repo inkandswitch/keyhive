@@ -7,10 +7,13 @@ pub mod state;
 use self::op::KeyOp;
 
 use super::{agent::id::AgentId, document::id::DocumentId};
-use crate::crypto::{
-    share_key::ShareKey,
-    signed::{Signed, SigningError},
-    verifiable::Verifiable,
+use crate::{
+    crypto::{
+        share_key::ShareKey,
+        signed::{Signed, SigningError},
+        verifiable::Verifiable,
+    },
+    util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
 use derive_more::Debug;
@@ -105,6 +108,10 @@ impl Individual {
         let idx = pseudorandom_in_range(bytes.as_slice(), prekeys_len);
 
         self.prekeys.iter().nth(idx).cloned()
+    }
+
+    pub fn prekey_ops(&self) -> &CaMap<KeyOp> {
+        self.prekey_state.ops()
     }
 
     pub(crate) fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
