@@ -500,6 +500,16 @@ impl<
         ops
     }
 
+    pub fn static_events_for_agent(
+        &self,
+        agent: &Agent<T, L>,
+    ) -> HashMap<Digest<StaticEvent<T>>, StaticEvent<T>> {
+        self.events_for_agent(agent)
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect()
+    }
+
     pub fn membership_ops_for_agent(
         &self,
         agent: &Agent<T, L>,
@@ -694,9 +704,11 @@ impl<
 
     pub fn receive_prekey_op(&mut self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
         let id = Identifier(*key_op.issuer());
-        let agent = self
-            .get_agent(id)
-            .unwrap_or_else(|| Individual::new(key_op.clone()).into());
+        let agent = self.get_agent(id).unwrap_or_else(|| {
+            let indie = Rc::new(RefCell::new(Individual::new(key_op.clone())));
+            self.register_individual(indie.dupe());
+            indie.into()
+        });
 
         match agent {
             Agent::Active(active) => {
@@ -889,7 +901,7 @@ impl<
             StaticEvent::PrekeyRotated(rot_op) => {
                 self.receive_prekey_op(&Rc::new(rot_op).into())?
             }
-            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op.payload)?, // FIXME signature
+            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op)?,
             StaticEvent::Delegated(dlg) => self.receive_delegation(&dlg)?,
             StaticEvent::Revoked(rev) => self.receive_revocation(&rev)?,
         }
@@ -907,7 +919,12 @@ impl<
         }
     }
 
-    pub fn receive_cgka_op(&mut self, op: CgkaOperation) -> Result<(), ReceiveCgkaOpError> {
+    pub fn receive_cgka_op(
+        &mut self,
+        signed_op: Signed<CgkaOperation>,
+    ) -> Result<(), ReceiveCgkaOpError> {
+        signed_op.try_verify()?;
+        let op = signed_op.payload;
         let doc_id = op.doc_id();
         let mut doc = self
             .docs
@@ -1259,6 +1276,48 @@ impl<
     pub fn event_listener(&self) -> &L {
         &self.event_listener
     }
+
+    #[cfg(any(test, feature = "test_utils"))]
+    pub fn ingest_unsorted_static_events(
+        &mut self,
+        events: Vec<StaticEvent<T>>,
+    ) -> Result<(), MissingDependency<StaticEvent<T>>> {
+        let mut epoch = events;
+
+        loop {
+            let mut next_epoch = vec![];
+            let mut epoch_len = 0;
+
+            for event in epoch {
+                epoch_len += 1;
+                if self.receive_static_event(event.clone()).is_err() {
+                    next_epoch.push(event);
+                }
+            }
+
+            if next_epoch.is_empty() {
+                return Ok(());
+            }
+
+            if next_epoch.len() == epoch_len {
+                // Stuck on a fixed point
+                let exemplar = next_epoch.first().unwrap().clone();
+                Err(MissingDependency(exemplar))?;
+            }
+
+            epoch = next_epoch
+        }
+    }
+
+    #[cfg(any(test, feature = "test_utils"))]
+    pub fn ingest_event_table(
+        &mut self,
+        events: HashMap<Digest<Event<T, L>>, Event<T, L>>,
+    ) -> Result<(), MissingDependency<StaticEvent<T>>> {
+        self.ingest_unsorted_static_events(
+            events.values().cloned().map(Into::into).collect::<Vec<_>>(),
+        )
+    }
 }
 
 impl<
@@ -1340,7 +1399,7 @@ pub enum TryFromArchiveError<T: ContentRef, L: MembershipListener<T>> {
     MissingAgent(Box<Identifier>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
 pub enum ReceiveCgkaOpError {
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
@@ -1350,6 +1409,9 @@ pub enum ReceiveCgkaOpError {
 
     #[error("Unknown invite prekey for received CGKA add op: {0}")]
     UnknownInvitePrekey(ShareKey),
+
+    #[error("Invalid signature for CGKA op: {0}")]
+    VerificationError(#[from] VerificationError),
 }
 
 impl<T: ContentRef, L: MembershipListener<T>> From<MissingIndividualError>
@@ -1502,10 +1564,9 @@ mod tests {
             .is_none()); // NOTE *not* included because Public is not a member
 
         let left_to_mid_ops = left.events_for_agent(&Public.individual().into());
-        assert_eq!(left_to_mid_ops.len(), 2);
-        for op in left_to_mid_ops.values() {
-            middle.receive_static_event(op.clone().into()).unwrap();
-        }
+        assert_eq!(left_to_mid_ops.len(), 10);
+
+        middle.ingest_event_table(left_to_mid_ops).unwrap();
 
         // Left unchanged
         assert_eq!(left.groups.len(), 1);
@@ -1535,10 +1596,9 @@ mod tests {
         );
 
         let mid_to_right_ops = middle.events_for_agent(&Public.individual().into());
-        assert_eq!(mid_to_right_ops.len(), 2);
-        for op in mid_to_right_ops.values() {
-            right.receive_static_event(op.clone().into()).unwrap();
-        }
+        assert_eq!(mid_to_right_ops.len(), 17);
+
+        right.ingest_event_table(mid_to_right_ops).unwrap();
 
         // Left unchanged
         assert_eq!(left.groups.len(), 1);
@@ -1565,31 +1625,34 @@ mod tests {
             .is_some());
         assert!(right.groups.get(&left_group.borrow().group_id()).is_none()); // NOTE: *None*
 
-        assert_eq!(right.individuals.len(), 2);
+        assert_eq!(right.individuals.len(), 3);
         assert_eq!(right.groups.len(), 0);
         assert_eq!(right.docs.len(), 1);
 
-        // Now, the right hand side should have the same ops as the left
-        let ops_on_right = right.events_for_agent(&Public.individual().into());
-        assert_eq!(left_to_mid_ops.len(), 2);
-
         assert_eq!(
-            left_to_mid_ops.keys().collect::<HashSet<_>>(),
-            mid_to_right_ops.keys().collect::<HashSet<_>>()
-        );
-        assert_eq!(
-            mid_to_right_ops.keys().collect::<HashSet<_>>(),
-            ops_on_right.keys().collect::<HashSet<_>>()
+            middle
+                .events_for_agent(&Public.individual().into())
+                .iter()
+                .collect::<Vec<_>>()
+                .sort_by_key(|(k, _v)| **k),
+            right
+                .events_for_agent(&Public.individual().into())
+                .iter()
+                .collect::<Vec<_>>()
+                .sort_by_key(|(k, _v)| **k),
         );
 
         right.generate_group(vec![left_doc.dupe().into()]).unwrap();
 
         // Check transitivity
         let transitive_right_to_mid_ops = right.events_for_agent(&Public.individual().into());
-        assert_eq!(transitive_right_to_mid_ops.len(), 4);
-        for op in transitive_right_to_mid_ops.values() {
-            middle.receive_static_event(op.clone().into()).unwrap();
-        }
+
+        assert_eq!(transitive_right_to_mid_ops.len(), 19);
+
+        middle
+            .ingest_event_table(transitive_right_to_mid_ops)
+            .unwrap();
+
         assert_eq!(middle.individuals.len(), 3); // NOTE now includes Right
         assert_eq!(middle.groups.len(), 1);
         assert_eq!(middle.docs.len(), 1);
