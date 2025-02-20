@@ -22,8 +22,11 @@ use id::IndividualId;
 use op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
-use std::{collections::HashSet, num::NonZeroUsize, rc::Rc};
+use std::{collections::HashSet, rc::Rc};
 use thiserror::Error;
+
+#[cfg(any(feature = "test_utils", test))]
+use std::num::NonZeroUsize;
 
 /// Single agents with no internal membership.
 ///
