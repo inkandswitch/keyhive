@@ -9,7 +9,7 @@ use crate::{
 };
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, rc::Rc};
+use std::{collections::HashSet, num::NonZeroUsize, rc::Rc};
 use thiserror::Error;
 
 /// Low-level prekey operation store.
@@ -20,18 +20,24 @@ use thiserror::Error;
 /// of having a empty set of rebuildd keys by replacing tombstoning with
 /// rotation. The number of active prekeys can only expand, but the underlying store
 /// is the same size in both cases.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PrekeyState {
-    pub(crate) ops: CaMap<KeyOp>,
+    /// The actual operations in the [`PrekeyState`].
+    ///
+    /// This MUST be nonempty. While not enforced at the type level,
+    /// the [`new`] constructor ensures that at least one operation is present.
+    ops: CaMap<KeyOp>,
 }
 
 impl PrekeyState {
     /// Create a new, empty [`PrekeyState`].
-    pub fn new() -> Self {
-        Self { ops: CaMap::new() }
+    pub fn new(initial_op: KeyOp) -> Self {
+        let mut ops = CaMap::new();
+        ops.insert(Rc::new(initial_op));
+        Self { ops }
     }
 
-    /// Initialize a new [`PrekeyState`] from an iterator of [`Signed<KeyOp>`]s.
+    /// Extend a [`PrekeyState`] with elements of an iterator of [`Signed<KeyOp>`]s.
     ///
     /// # Arguments
     ///
@@ -40,14 +46,11 @@ impl PrekeyState {
     /// # Returns
     ///
     /// A new [`PrekeyState`] with the operations from `iter`.
-    pub fn try_from_iter(iter: impl IntoIterator<Item = KeyOp>) -> Result<Self, NewOpError> {
-        let mut s = Self::new();
-
-        for op in iter {
-            s.insert_op(op)?;
+    pub fn extend(&mut self, iterable: impl IntoIterator<Item = KeyOp>) -> Result<(), NewOpError> {
+        for op in iterable {
+            self.insert_op(op)?;
         }
-
-        Ok(s)
+        Ok(())
     }
 
     /// Initialize a [`PrekeyState`] with a set number of randomly-generated [`ShareSecretKey`]s.
@@ -67,19 +70,19 @@ impl PrekeyState {
     /// Returns a [`SigningError`] if the operation could not be signed.
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
         signing_key: &ed25519_dalek::SigningKey,
-        size: usize,
+        size: NonZeroUsize,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
-        let ops = (0..size).try_fold(CaMap::new(), |mut ops, _| {
+        let ops = (0..size.get()).try_fold(CaMap::new(), |mut ops, _| {
             let secret_key = ShareSecretKey::generate(csprng);
             let share_key = secret_key.share_key();
 
-            let op = KeyOp::Add(Rc::new(Signed::try_sign(
+            let add_op = KeyOp::Add(Rc::new(Signed::try_sign(
                 AddKeyOp { share_key },
                 signing_key,
             )?));
 
-            ops.insert(op.into());
+            ops.insert(add_op.into());
 
             Ok::<CaMap<KeyOp>, SigningError>(ops)
         })?;
@@ -153,7 +156,7 @@ impl PrekeyState {
     }
 
     /// Rebuild the most recent set of active [`ShareKey`]s in the [`PrekeyState`].
-    pub fn rebuild(&self) -> HashSet<ShareKey> {
+    pub fn build(&self) -> HashSet<ShareKey> {
         let mut keys = HashSet::new();
         let mut to_drop = vec![];
 
@@ -215,8 +218,6 @@ mod tests {
          *                      └────────────┘
          */
 
-        let mut state = PrekeyState::new();
-
         let mut rando = rand::thread_rng();
         let signer = ed25519_dalek::SigningKey::generate(&mut rando);
 
@@ -226,7 +227,7 @@ mod tests {
         let share_key_4 = ShareKey::generate(&mut rando);
         let share_key_5 = ShareKey::generate(&mut rando);
 
-        let op1 = Rc::new(
+        let op1: KeyOp = Rc::new(
             Signed::try_sign(
                 AddKeyOp {
                     share_key: share_key_1,
@@ -236,6 +237,8 @@ mod tests {
             .unwrap(),
         )
         .into();
+
+        let mut state = PrekeyState::new(op1.dupe());
 
         let op2 = Rc::new(
             Signed::try_sign(
@@ -290,7 +293,7 @@ mod tests {
         state.insert_op(op4).unwrap();
         state.insert_op(op5).unwrap();
 
-        let rebuildd = state.rebuild();
+        let rebuildd = state.build();
         assert_eq!(rebuildd.len(), 3);
         assert!(rebuildd.contains(&share_key_2));
         assert!(rebuildd.contains(&share_key_3));
@@ -321,8 +324,6 @@ mod tests {
          *                      └────────────┘
          */
 
-        let mut state = PrekeyState::new();
-
         let mut rando = rand::thread_rng();
         let signer = ed25519_dalek::SigningKey::generate(&mut rando);
 
@@ -342,6 +343,8 @@ mod tests {
             .unwrap(),
         )
         .into();
+
+        let mut state = PrekeyState::new(op1.dupe());
 
         let op2: KeyOp = Rc::new(
             Signed::try_sign(
@@ -396,7 +399,7 @@ mod tests {
         // Intentionally no inclusion of #4
         assert!(state.insert_op(op5.dupe()).is_err());
 
-        let rebuildd = state.rebuild();
+        let rebuildd = state.build();
         assert_eq!(rebuildd.len(), 2);
         assert!(rebuildd.contains(&share_key_2));
         assert!(rebuildd.contains(&share_key_3));
@@ -407,7 +410,7 @@ mod tests {
         state.insert_op(op2).unwrap();
         state.insert_op(op1).unwrap();
 
-        let rerebuildd = state.rebuild();
+        let rerebuildd = state.build();
         assert_eq!(rerebuildd.len(), 2);
         assert!(rerebuildd.contains(&share_key_2));
         assert!(rerebuildd.contains(&share_key_3));
@@ -417,7 +420,7 @@ mod tests {
         state.insert_op(op4).unwrap();
         state.insert_op(op5).unwrap();
 
-        let updated = state.rebuild();
+        let updated = state.build();
         assert_eq!(updated.len(), 3);
         assert!(updated.contains(&share_key_2));
         assert!(updated.contains(&share_key_3));

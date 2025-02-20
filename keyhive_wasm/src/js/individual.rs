@@ -14,11 +14,6 @@ pub struct JsIndividual(pub(crate) Rc<RefCell<Individual>>);
 
 #[wasm_bindgen(js_class = Individual)]
 impl JsIndividual {
-    #[wasm_bindgen(constructor)]
-    pub fn new(id: JsIndividualId) -> Self {
-        Rc::new(RefCell::new(Individual::new(id.0))).into()
-    }
-
     #[wasm_bindgen(js_name = toPeer)]
     pub fn to_peer(&self) -> JsPeer {
         JsPeer(self.0.dupe().into())

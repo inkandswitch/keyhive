@@ -57,7 +57,7 @@ use thiserror::Error;
 #[derive(Debug, Clone, Eq, Derivative)]
 #[derive_where(PartialEq; T)]
 pub struct Group<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
-    pub(crate) individual: Individual,
+    pub(crate) id_or_indie: IdOrIndividual,
 
     /// The current view of members of a group.
     #[allow(clippy::type_complexity)]
@@ -72,6 +72,23 @@ pub struct Group<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener
 }
 
 impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
+    pub fn new(
+        group_id: GroupId,
+        head: Rc<Signed<Delegation<T, L>>>,
+        delegations: DelegationStore<T, L>,
+        revocations: RevocationStore<T, L>,
+        listener: L,
+    ) -> Self {
+        let mut group = Self {
+            id_or_indie: IdOrIndividual::GroupId(group_id),
+            members: HashMap::new(),
+            state: state::GroupState::new(head, delegations, revocations),
+            listener,
+        };
+        group.rebuild();
+        group
+    }
+
     pub fn from_individual(
         individual: Individual,
         head: Rc<Signed<Delegation<T, L>>>,
@@ -80,7 +97,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         listener: L,
     ) -> Self {
         let mut group = Self {
-            individual,
+            id_or_indie: IdOrIndividual::Individual(individual),
             members: HashMap::new(),
             state: state::GroupState::new(head, delegations, revocations),
             listener,
@@ -156,7 +173,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         };
 
         Ok(Group {
-            individual: Individual::new(id.into()),
+            id_or_indie: IdOrIndividual::GroupId(group_id),
             members,
             state,
             listener,
@@ -347,14 +364,11 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         signing_key: &ed25519_dalek::SigningKey,
         after_content: BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<AddMemberUpdate<T, L>, AddGroupMemberError> {
-        let indie: Individual = signing_key.verifying_key().into();
-        let agent: Agent<T, L> = indie.into();
-
         let proof = if self.verifying_key() == signing_key.verifying_key() {
             None
         } else {
             let p = self
-                .get_capability(&agent.id())
+                .get_capability(&signing_key.verifying_key().into())
                 .ok_or(AddGroupMemberError::NoProof)?;
 
             if can > p.payload().can {
@@ -652,7 +666,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
     ) -> Self {
         Self {
             members: HashMap::new(),
-            individual: archive.individual,
+            id_or_indie: archive.id_or_indie,
             state: state::GroupState::dummy_from_archive(archive.state, delegations, revocations),
             listener,
         }
@@ -661,7 +675,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
 
 impl<T: ContentRef, L: MembershipListener<T>> Hash for Group<T, L> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.individual.hash(state);
+        self.id_or_indie.hash(state);
         self.members.iter().collect::<BTreeMap<_, _>>().hash(state);
         self.state.hash(state);
     }
@@ -672,10 +686,15 @@ impl<T: ContentRef, L: MembershipListener<T>> Verifiable for Group<T, L> {
         self.state.verifying_key()
     }
 }
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IdOrIndividual {
+    GroupId(GroupId),
+    Individual(Individual),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupArchive<T: ContentRef> {
-    pub(crate) individual: Individual,
+    pub(crate) id_or_indie: IdOrIndividual,
     pub(crate) members: HashMap<Identifier, NonEmpty<Digest<Signed<StaticDelegation<T>>>>>,
     pub(crate) state: state::GroupStateArchive<T>,
 }
@@ -683,7 +702,7 @@ pub struct GroupArchive<T: ContentRef> {
 impl<T: ContentRef, L: MembershipListener<T>> From<Group<T, L>> for GroupArchive<T> {
     fn from(group: Group<T, L>) -> Self {
         GroupArchive {
-            individual: group.individual.clone(),
+            id_or_indie: group.id_or_indie,
             members: group
                 .members
                 .iter()

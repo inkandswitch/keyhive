@@ -3,7 +3,7 @@
 use super::signed::Signed;
 use crate::{
     content::reference::ContentRef,
-    event::Event,
+    event::{Event, StaticEvent},
     listener::membership::MembershipListener,
     principal::group::{
         delegation::{Delegation, StaticDelegation},
@@ -428,6 +428,12 @@ impl<T: ContentRef, L: MembershipListener<T>> From<Digest<MembershipOperation<T,
     for Digest<Event<T, L>>
 {
     fn from(hash: Digest<MembershipOperation<T, L>>) -> Self {
+        hash.coerce()
+    }
+}
+
+impl<T: ContentRef, L: MembershipListener<T>> From<Digest<Event<T, L>>> for Digest<StaticEvent<T>> {
+    fn from(hash: Digest<Event<T, L>>) -> Self {
         hash.coerce()
     }
 }

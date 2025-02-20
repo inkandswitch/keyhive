@@ -6,6 +6,7 @@ use super::{
     individual::{
         id::IndividualId,
         op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
+        state::PrekeyState,
         Individual,
     },
 };
@@ -58,30 +59,41 @@ pub struct Active<L: PrekeyListener = NoListener> {
 }
 
 impl<L: PrekeyListener> Active<L> {
-    pub fn generate<R: rand::CryptoRng + rand::RngCore>(
+    pub(crate) fn generate<R: rand::CryptoRng + rand::RngCore>(
         signing_key: SigningKey,
         listener: L,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
-        let mut individual = Individual::new(signing_key.verifying_key().into());
+        let init_sk = ShareSecretKey::generate(csprng);
+        let init_pk = init_sk.share_key();
+        let init_op = Rc::new(Signed::try_sign(
+            AddKeyOp { share_key: init_pk },
+            &signing_key,
+        )?)
+        .into();
 
-        let mut prekey_pairs = BTreeMap::new();
+        let mut prekey_pairs = BTreeMap::from_iter([(init_pk, init_sk)]);
+        let mut prekey_state = PrekeyState::new(init_op);
 
-        (0..7).try_for_each(|_| {
+        (0..6).try_for_each(|_| {
             let sk = ShareSecretKey::generate(csprng);
             let pk = sk.share_key();
             let op = Rc::new(Signed::try_sign(AddKeyOp { share_key: pk }, &signing_key)?).into();
 
             prekey_pairs.insert(pk, sk);
-            individual
-                .receive_prekey_op(op)
-                .expect("insertion of fresh prekey by the correct signer should work");
+            prekey_state
+                .insert_op(op)
+                .expect("new prekey from generation should always work");
 
             Ok::<(), SigningError>(())
         })?;
 
         Ok(Self {
-            individual,
+            individual: Individual {
+                id: signing_key.verifying_key().into(),
+                prekeys: prekey_state.build(),
+                prekey_state,
+            },
             prekey_pairs,
             listener,
             signing_key,
@@ -94,6 +106,10 @@ impl<L: PrekeyListener> Active<L> {
 
     pub fn agent_id(&self) -> AgentId {
         AgentId::IndividualId(self.id())
+    }
+
+    pub fn individual(&self) -> &Individual {
+        &self.individual
     }
 
     pub fn pick_prekey(&self, doc_id: DocumentId) -> Option<ShareKey> {

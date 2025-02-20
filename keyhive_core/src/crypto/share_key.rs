@@ -12,7 +12,6 @@ use std::fmt;
 pub struct ShareKey(x25519_dalek::PublicKey);
 
 impl ShareKey {
-    #[cfg(any(test, feature = "test_utils"))]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         Self(x25519_dalek::PublicKey::from(
             &x25519_dalek::EphemeralSecret::random_from_rng(csprng),

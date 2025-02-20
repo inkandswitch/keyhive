@@ -12,10 +12,7 @@ use crate::{
     listener::prekey::PrekeyListener,
 };
 use dupe::Dupe;
-use std::{
-    collections::{BTreeMap, HashSet},
-    rc::Rc,
-};
+use std::{collections::BTreeMap, rc::Rc};
 
 /// A well-known agent that can be used by anyone. ⚠ USE WITH CAUTION ⚠
 ///
@@ -55,11 +52,12 @@ impl Public {
         )
         .into();
 
+        let prekey_state = PrekeyState::new(op);
+
         Individual {
             id: self.verifying_key().into(),
-            prekeys: HashSet::from_iter([self.share_key()]),
-            prekey_state: PrekeyState::try_from_iter([op])
-                .expect("well-known prekey op should be valid"),
+            prekeys: prekey_state.build(),
+            prekey_state,
         }
     }
 
