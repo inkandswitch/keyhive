@@ -190,6 +190,7 @@ impl<
             self.delegations.dupe(),
             self.revocations.dupe(),
             self.event_listener.clone(),
+            &self.active.borrow().signing_key,
             &mut self.csprng,
         )?;
 
@@ -344,6 +345,7 @@ impl<
             content_ref,
             content,
             pred_refs,
+            &self.active.borrow().signing_key,
             &mut self.csprng,
         )?)
     }
@@ -359,12 +361,13 @@ impl<
     pub fn force_pcs_update(
         &mut self,
         doc: Rc<RefCell<Document<T, L>>>,
-    ) -> Result<CgkaOperation, EncryptError> {
-        doc.borrow_mut().pcs_update(&mut self.csprng)
+    ) -> Result<Signed<CgkaOperation>, EncryptError> {
+        doc.borrow_mut()
+            .pcs_update(&self.active.borrow().signing_key, &mut self.csprng)
     }
 
     pub fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<T, L>> {
-        self.docs_reachable_by_agent(self.active.dupe().into())
+        self.docs_reachable_by_agent(&self.active.dupe().into())
     }
 
     pub fn reachable_members(
@@ -379,7 +382,7 @@ impl<
 
     pub fn docs_reachable_by_agent(
         &self,
-        agent: Agent<T, L>,
+        agent: &Agent<T, L>,
     ) -> BTreeMap<DocumentId, Ability<T, L>> {
         let mut caps: BTreeMap<DocumentId, Ability<T, L>> = BTreeMap::new();
         let mut seen: HashSet<AgentId> = HashSet::new();
@@ -483,7 +486,7 @@ impl<
     pub fn events_for_agent(
         &self,
         agent: &Agent<T, L>,
-    ) -> HashMap<Digest<Event<T, L>>, Event<T, L>> {
+    ) -> Result<HashMap<Digest<Event<T, L>>, Event<T, L>>, CgkaError> {
         let mut ops: HashMap<_, _> = self
             .membership_ops_for_agent(agent)
             .into_iter()
@@ -497,17 +500,36 @@ impl<
             }
         }
 
-        ops
+        for cgka_op in self.cgka_ops_reachable_by_agent(agent)?.into_iter() {
+            let op = Event::<T, L>::from(cgka_op);
+            ops.insert(Digest::hash(&op), op);
+        }
+
+        Ok(ops)
     }
 
     pub fn static_events_for_agent(
         &self,
         agent: &Agent<T, L>,
-    ) -> HashMap<Digest<StaticEvent<T>>, StaticEvent<T>> {
-        self.events_for_agent(agent)
+    ) -> Result<HashMap<Digest<StaticEvent<T>>, StaticEvent<T>>, CgkaError> {
+        Ok(self
+            .events_for_agent(agent)?
             .into_iter()
             .map(|(k, v)| (k.into(), v.into()))
-            .collect()
+            .collect())
+    }
+
+    pub fn cgka_ops_reachable_by_agent(
+        &self,
+        agent: &Agent<T, L>,
+    ) -> Result<Vec<Rc<Signed<CgkaOperation>>>, CgkaError> {
+        let mut ops = vec![];
+        for (_doc_id, ability) in self.docs_reachable_by_agent(agent) {
+            for epoch in ability.doc.borrow().cgka_ops()?.iter() {
+                ops.extend(epoch.iter().cloned());
+            }
+        }
+        Ok(ops)
     }
 
     pub fn membership_ops_for_agent(
@@ -924,26 +946,26 @@ impl<
         signed_op: Signed<CgkaOperation>,
     ) -> Result<(), ReceiveCgkaOpError> {
         signed_op.try_verify()?;
-        let op = signed_op.payload;
-        let doc_id = op.doc_id();
+
+        let doc_id = signed_op.payload.doc_id();
         let mut doc = self
             .docs
             .get(doc_id)
             .ok_or(ReceiveCgkaOpError::UnknownDocument(*doc_id))?
             .borrow_mut();
 
-        if let CgkaOperation::Add { added_id, pk, .. } = op {
+        if let CgkaOperation::Add { added_id, pk, .. } = signed_op.payload {
             let active = self.active.borrow();
             if active.id() == added_id {
                 let sk = active
                     .prekey_pairs
                     .get(&pk)
                     .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?;
-                doc.merge_cgka_invite_op(op, sk)?;
+                doc.merge_cgka_invite_op(Rc::new(signed_op), sk)?;
                 return Ok(());
             }
         }
-        doc.merge_cgka_op(op)?;
+        doc.merge_cgka_op(Rc::new(signed_op))?;
         Ok(())
     }
 
@@ -1404,14 +1426,14 @@ pub enum ReceiveCgkaOpError {
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
 
+    #[error(transparent)]
+    VerificationError(#[from] VerificationError),
+
     #[error("Unknown document recipient for recieved CGKA op: {0}")]
     UnknownDocument(DocumentId),
 
     #[error("Unknown invite prekey for received CGKA add op: {0}")]
     UnknownInvitePrekey(ShareKey),
-
-    #[error("Invalid signature for CGKA op: {0}")]
-    VerificationError(#[from] VerificationError),
 }
 
 impl<T: ContentRef, L: MembershipListener<T>> From<MissingIndividualError>
@@ -1429,6 +1451,18 @@ pub enum EncryptContentError {
 
     #[error("Error signing Cgka op: {0}")]
     SignCgkaOpError(SigningError),
+}
+
+#[derive(Debug, Error)]
+pub enum ReceiveEventError<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+    #[error(transparent)]
+    ReceieveStaticDelegationError(#[from] ReceieveStaticDelegationError<T, L>),
+
+    #[error(transparent)]
+    ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
+
+    #[error(transparent)]
+    ReceiveCgkaOpError(#[from] ReceiveCgkaOpError),
 }
 
 #[cfg(test)]
@@ -1563,8 +1597,8 @@ mod tests {
             .get(&left_group.borrow().group_id().into())
             .is_none()); // NOTE *not* included because Public is not a member
 
-        let left_to_mid_ops = left.events_for_agent(&Public.individual().into());
-        assert_eq!(left_to_mid_ops.len(), 10);
+        let left_to_mid_ops = left.events_for_agent(&Public.individual().into()).unwrap();
+        assert_eq!(left_to_mid_ops.len(), 13);
 
         middle.ingest_event_table(left_to_mid_ops).unwrap();
 
@@ -1595,8 +1629,10 @@ mod tests {
             2
         );
 
-        let mid_to_right_ops = middle.events_for_agent(&Public.individual().into());
-        assert_eq!(mid_to_right_ops.len(), 17);
+        let mid_to_right_ops = middle
+            .events_for_agent(&Public.individual().into())
+            .unwrap();
+        assert_eq!(mid_to_right_ops.len(), 20);
 
         right.ingest_event_table(mid_to_right_ops).unwrap();
 
@@ -1632,11 +1668,13 @@ mod tests {
         assert_eq!(
             middle
                 .events_for_agent(&Public.individual().into())
+                .unwrap()
                 .iter()
                 .collect::<Vec<_>>()
                 .sort_by_key(|(k, _v)| **k),
             right
                 .events_for_agent(&Public.individual().into())
+                .unwrap()
                 .iter()
                 .collect::<Vec<_>>()
                 .sort_by_key(|(k, _v)| **k),
@@ -1645,9 +1683,9 @@ mod tests {
         right.generate_group(vec![left_doc.dupe().into()]).unwrap();
 
         // Check transitivity
-        let transitive_right_to_mid_ops = right.events_for_agent(&Public.individual().into());
-
-        assert_eq!(transitive_right_to_mid_ops.len(), 19);
+        let transitive_right_to_mid_ops =
+            right.events_for_agent(&Public.individual().into()).unwrap();
+        assert_eq!(transitive_right_to_mid_ops.len(), 22);
 
         middle
             .ingest_event_table(transitive_right_to_mid_ops)

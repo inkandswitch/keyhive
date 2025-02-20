@@ -4,6 +4,7 @@ use super::{
     application_secret::PcsKey,
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
+    signed::Signed,
     siv::Siv,
 };
 use crate::{cgka::operation::CgkaOperation, content::reference::ContentRef};
@@ -23,7 +24,7 @@ pub struct EncryptedContent<T, Cr: ContentRef> {
     /// Hash of the PCS key used to derive the application secret for encrypting.
     pub pcs_key_hash: Digest<PcsKey>,
     /// Hash of the PCS update operation corresponding to the PCS key
-    pub pcs_update_op_hash: Digest<CgkaOperation>,
+    pub pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
     /// The content ref hash used to derive the application secret for encrypting.
     pub content_ref: Digest<Cr>,
     /// The predecessor content ref hashes used to derive the application secret
@@ -39,7 +40,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         nonce: Siv,
         ciphertext: Vec<u8>,
         pcs_key_hash: Digest<PcsKey>,
-        pcs_update_op_hash: Digest<CgkaOperation>,
+        pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
         content_ref: Digest<Cr>,
         pred_refs: Digest<Vec<Cr>>,
     ) -> EncryptedContent<T, Cr> {

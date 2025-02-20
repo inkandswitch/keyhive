@@ -397,7 +397,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         let _digest = self.receive_delegation(rc.dupe())?;
 
         Ok(AddMemberUpdate {
-            cgka_ops: self.add_cgka_member(rc.dupe())?,
+            cgka_ops: self.add_cgka_member(rc.dupe(), signing_key)?,
             delegation: rc,
         })
     }
@@ -405,7 +405,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
     pub fn add_cgka_member(
         &mut self,
         delegation: Rc<Signed<Delegation<T, L>>>,
-    ) -> Result<Vec<CgkaOperation>, CgkaError> {
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut cgka_ops = Vec::new();
         let docs: Vec<Rc<RefCell<Document<T, L>>>> = self
             .transitive_members()
@@ -419,7 +420,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             })
             .collect::<Vec<_>>();
         for doc in docs {
-            for op in doc.borrow_mut().add_cgka_member(&delegation)? {
+            for op in doc.borrow_mut().add_cgka_member(&delegation, signing_key)? {
                 cgka_ops.push(op);
             }
         }
@@ -549,7 +550,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         for indie in individuals {
             let id = indie.borrow().id();
             for doc in &docs {
-                if let Some(op) = doc.borrow_mut().remove_cgka_member(id)? {
+                if let Some(op) = doc.borrow_mut().remove_cgka_member(id, signing_key)? {
                     cgka_ops.push(op);
                 }
             }
