@@ -28,8 +28,8 @@ use std::{
 /// Immutable union over all agent types.
 ///
 /// This type is very lightweight to clone, since it only contains immutable references to the actual agents.
-#[derive(Debug, Clone, Eq, From, TryInto, Derivative)]
-#[derive_where(PartialEq ;T)]
+#[derive(Debug, Clone, From, Eq, TryInto, Derivative)]
+#[derive_where(PartialEq; T)]
 pub enum Agent<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
     Active(Rc<RefCell<Active<L>>>),
     Individual(Rc<RefCell<Individual>>),

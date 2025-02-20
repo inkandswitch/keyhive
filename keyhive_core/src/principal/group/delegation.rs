@@ -33,6 +33,8 @@ pub struct Delegation<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoLis
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
+impl<T: ContentRef, L: MembershipListener<T>> Eq for Delegation<T, L> {}
+
 impl<T: ContentRef, L: MembershipListener<T>> Delegation<T, L> {
     pub fn subject_id(&self, issuer: AgentId) -> Identifier {
         if let Some(proof) = &self.proof {
@@ -124,8 +126,6 @@ impl<T: ContentRef, L: MembershipListener<T>> Delegation<T, L> {
         false
     }
 }
-
-impl<T: ContentRef, L: MembershipListener<T>> Eq for Delegation<T, L> {}
 
 impl<T: ContentRef, L: MembershipListener<T>> Signed<Delegation<T, L>> {
     pub fn subject_id(&self) -> Identifier {

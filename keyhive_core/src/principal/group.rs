@@ -12,6 +12,7 @@ use self::{
     delegation::{Delegation, StaticDelegation},
     membership_operation::MembershipOperation,
     revocation::Revocation,
+    state::{GroupState, GroupStateArchive},
 };
 use super::{
     agent::{id::AgentId, Agent},
@@ -63,8 +64,11 @@ pub struct Group<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener
     #[allow(clippy::type_complexity)]
     pub(crate) members: HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T, L>>>>>,
 
+    /// Current view of revocations
+    pub(crate) active_revocations: HashMap<[u8; 64], Rc<Signed<Revocation<T, L>>>>,
+
     /// The `Group`'s underlying (causal) delegation state.
-    pub(crate) state: state::GroupState<T, L>,
+    pub(crate) state: GroupState<T, L>,
 
     #[debug(skip)]
     #[derive_where(skip)]
@@ -83,6 +87,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             id_or_indie: IdOrIndividual::GroupId(group_id),
             members: HashMap::new(),
             state: state::GroupState::new(head, delegations, revocations),
+            active_revocations: HashMap::new(),
             listener,
         };
         group.rebuild();
@@ -99,7 +104,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         let mut group = Self {
             id_or_indie: IdOrIndividual::Individual(individual),
             members: HashMap::new(),
-            state: state::GroupState::new(head, delegations, revocations),
+            state: GroupState::new(head, delegations, revocations),
+            active_revocations: HashMap::new(),
             listener,
         };
         group.rebuild();
@@ -136,11 +142,9 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         let id = signing_key.verifying_key().into();
         let group_id = GroupId(id);
 
-        let mut delegation_heads = CaMap::new();
-        let mut members = HashMap::new();
-
         let ds = delegations.dupe();
         let mut ds_mut = ds.borrow_mut();
+        let mut delegation_heads = CaMap::new();
 
         parents.iter().try_fold((), |_, parent| {
             let dlg = Signed::try_sign(
@@ -157,27 +161,28 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             let rc = Rc::new(dlg);
             ds_mut.insert(rc.dupe());
             delegation_heads.insert(rc.dupe());
-            members.insert(parent.id(), nonempty![rc]);
 
             Ok::<(), SigningError>(())
         })?;
 
-        let state = state::GroupState {
-            id: group_id,
+        let mut group = Group {
+            id_or_indie: IdOrIndividual::GroupId(group_id),
+            members: HashMap::new(),
+            active_revocations: HashMap::new(),
+            state: GroupState {
+                id: group_id,
 
-            delegation_heads,
-            delegations,
+                delegation_heads,
+                delegations,
 
-            revocation_heads: CaMap::new(),
-            revocations,
+                revocation_heads: CaMap::new(),
+                revocations,
+            },
+            listener,
         };
 
-        Ok(Group {
-            id_or_indie: IdOrIndividual::GroupId(group_id),
-            members,
-            state,
-            listener,
-        })
+        group.rebuild();
+        Ok(group)
     }
 
     pub fn id(&self) -> Identifier {
@@ -371,7 +376,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
                 .get_capability(&signing_key.verifying_key().into())
                 .ok_or(AddGroupMemberError::NoProof)?;
 
-            if can > p.payload().can {
+            if can > p.payload.can {
                 return Err(AddGroupMemberError::AccessEscalation {
                     wanted: can,
                     have: p.payload().can,
@@ -431,11 +436,13 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
     pub fn revoke_member(
         &mut self,
         member_to_remove: Identifier,
+        retain_all_other_members: bool,
         signing_key: &ed25519_dalek::SigningKey,
         after_content: &BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
         let vk = signing_key.verifying_key();
         let mut revocations = vec![];
+        let og_dlgs: Vec<_> = self.members.values().flatten().cloned().collect();
 
         let all_to_revoke: Vec<Rc<Signed<Delegation<T, L>>>> = self
             .members()
@@ -449,7 +456,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         }
 
         if vk == self.verifying_key() {
-            // In the unlikely case that the group signing key still exists and is doing the revocation.
+            // In the (unlikely) case that the group signing key still exists and is doing the revocation.
             // Arguably this could be made impossible, but it would likely be surprising behaviour.
             for to_revoke in all_to_revoke.iter() {
                 let r = self.build_revocation(
@@ -469,6 +476,10 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
                     // "Double up" if you're an admin in case you get concurrently demoted.
                     // We include the admin proofs as well since those could also get revoked.
                     for mem_dlg in member_dlgs.clone().iter() {
+                        if mem_dlg.payload.delegate.id() != member_to_remove {
+                            continue;
+                        }
+
                         if mem_dlg.payload().can == Access::Admin {
                             // Use your awesome & terrible admin powers!
                             //
@@ -481,6 +492,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
                                 Some(mem_dlg.dupe()), // Admin proof
                                 after_content.clone(),
                             )?;
+
                             self.receive_revocation(r.dupe())?;
                             revocations.push(r);
                             found = true;
@@ -540,7 +552,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
                     Agent::Document(doc) => {
                         docs.push(doc.dupe());
                     }
-                    _ => {}
+                    _ => (),
                 }
 
                 (indies, docs)
@@ -556,9 +568,34 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             }
         }
 
+        let mut redelegations = vec![];
+        if retain_all_other_members {
+            for dlg in og_dlgs.iter() {
+                if dlg.payload.delegate.id() == member_to_remove {
+                    // Don't retain if they've delegated to themself
+                    continue;
+                }
+                // FIXME go through entire history
+                if let Some(proof) = &dlg.payload.proof {
+                    if proof.payload.delegate.id() == member_to_remove {
+                        let AddMemberUpdate { delegation, .. } = self
+                            .add_member_with_manual_content(
+                                dlg.payload.delegate.dupe(),
+                                dlg.payload.can,
+                                signing_key,
+                                after_content.clone(),
+                            )?;
+
+                        redelegations.push(delegation);
+                    }
+                }
+            }
+        }
+
         Ok(RevokeMemberUpdate {
             cgka_ops,
             revocations,
+            redelegations,
         })
     }
 
@@ -583,71 +620,138 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
 
     pub fn rebuild(&mut self) {
         self.members.clear();
-        let mut stateful_revocations = HashSet::new();
+        self.active_revocations.clear();
 
-        for (_, op) in
-            MembershipOperation::topsort(&self.state.delegation_heads, &self.state.revocation_heads)
-                .iter()
-        {
+        let mut dlgs_in_play: HashMap<[u8; 64], Rc<Signed<Delegation<T, L>>>> = HashMap::new();
+        let mut revoked_dlgs: HashSet<[u8; 64]> = HashSet::new();
+
+        // {dlg_dep => Set<dlgs that depend on it>}
+        let mut reverse_dlg_dep_map: HashMap<[u8; 64], HashSet<[u8; 64]>> = HashMap::new();
+
+        let mut ops = MembershipOperation::topsort(
+            &self.state.delegation_heads,
+            &self.state.revocation_heads,
+        );
+
+        while let Some((_, op)) = ops.pop() {
             match op {
                 MembershipOperation::Delegation(d) => {
-                    if stateful_revocations.contains(&d.signature.to_bytes()) {
+                    if revoked_dlgs.contains(&d.signature.to_bytes()) {
+                        dbg!("0");
+                        continue;
+                    }
+                    dbg!("1");
+
+                    // NOTE: friendly reminder that the topsort already includes all ancestors
+                    if let Some(found_proof) = &d.payload.proof {
+                        reverse_dlg_dep_map
+                            .entry(found_proof.signature.to_bytes())
+                            .and_modify(|set| {
+                                set.insert(d.signature.to_bytes());
+                            })
+                            .or_insert_with(|| HashSet::from_iter([d.signature.to_bytes()]));
+
+                        dbg!("2");
+                        // If the proof was directly revoked, then check if they've been
+                        // re-added some other way. Since `rebuild` recurses,
+                        // we only need to check one level.
+                        if revoked_dlgs.contains(&found_proof.signature.to_bytes())
+                            || !dlgs_in_play.contains_key(&found_proof.signature.to_bytes())
+                        {
+                            if let Some(alt_proofs) = self.members.get(&found_proof.issuer.into()) {
+                                dbg!("3");
+                                if alt_proofs.iter().filter(|d| *d != found_proof).all(
+                                    |alt_proof| {
+                                        dbg!("BOP BOOP BOOOOP");
+                                        dbg!(d.payload.delegate.id());
+                                        dbg!(alt_proof.payload.delegate.id());
+
+                                        alt_proof.payload.can < found_proof.payload.can
+                                    },
+                                ) {
+                                    // No suitable proofs
+                                    dbg!("3.5");
+                                    continue;
+                                }
+                            } else if found_proof.issuer != self.verifying_key() {
+                                dbg!(Identifier::from(found_proof.issuer));
+                                dbg!(d.payload.delegate.id());
+                                dbg!("4");
+                                continue;
+                            }
+                        }
+                    } else if d.issuer != self.verifying_key() {
+                        dbg!("5");
+                        debug_assert!(false, "Delegation without valid root proof");
                         continue;
                     }
 
-                    if let Some(found_proof) = &d.payload.proof {
-                        if let Some(issuer_proofs) = self.members.get(&found_proof.issuer.into()) {
-                            if issuer_proofs.contains(found_proof) {
-                                // Seems okay, so proceed as normal
-                            } else {
-                                // Proof not in the current state, so skip this one
-                                continue;
-                            }
-                        } else if found_proof.issuer != self.verifying_key() {
-                            continue;
-                        };
-                    } else if d.issuer != self.verifying_key() {
-                        continue;
-                    }
+                    dbg!("6");
+                    dlgs_in_play.insert(d.signature.to_bytes(), d.dupe());
 
                     if let Some(mut_dlgs) = self.members.get_mut(&d.payload.delegate.id()) {
                         mut_dlgs.push(d.dupe());
                     } else {
                         self.members
-                            .insert(d.payload().delegate.id(), nonempty![d.dupe()]);
+                            .insert(d.payload.delegate.id(), nonempty![d.dupe()]);
                     }
                 }
                 MembershipOperation::Revocation(r) => {
-                    if let Some(mut_dlgs) = self
-                        .members
-                        .get(&r.payload().revoke.payload().delegate.id())
-                    {
-                        if let Some(found_proof) = &r.payload().proof {
-                            if let Some(issuer_proofs) =
-                                self.members.get(&found_proof.issuer.into())
-                            {
-                                if !issuer_proofs.contains(found_proof) {
+                    if let Some(found_proof) = &r.payload.proof {
+                        if revoked_dlgs.contains(&found_proof.signature.to_bytes())
+                            || !dlgs_in_play.contains_key(&found_proof.signature.to_bytes())
+                        {
+                            if let Some(alt_proofs) = self.members.get(&found_proof.issuer.into()) {
+                                if !alt_proofs
+                                    .iter()
+                                    .any(|p| p.payload.can >= found_proof.payload.can)
+                                {
                                     continue;
                                 }
-                            } else {
-                                continue;
                             }
                         }
+                    } else if r.issuer != self.verifying_key() {
+                        debug_assert!(false, "Revocation without valid root proof");
+                        continue;
+                    }
 
-                        stateful_revocations.insert(r.payload.revoked().signature.to_bytes());
+                    self.active_revocations
+                        .insert(r.signature.to_bytes(), r.dupe());
 
-                        // TODO maintain this as a CaMap for easier removals
-                        let remaining =
-                            mut_dlgs.clone().into_iter().fold(vec![], |mut acc, dlg| {
-                                if dlg.signature == r.payload().revoke.signature {
-                                    acc
-                                } else {
-                                    acc.push(dlg);
-                                    acc
+                    // { Agent => delegation to drop }
+                    let mut to_drop: Vec<(Identifier, [u8; 64])> = vec![];
+
+                    let mut next_to_revoke = vec![r.payload.revoke.signature.to_bytes()];
+                    while let Some(sig_to_revoke) = next_to_revoke.pop() {
+                        revoked_dlgs.insert(sig_to_revoke);
+
+                        if let Some(dlg) = dlgs_in_play.remove(&sig_to_revoke) {
+                            to_drop.push((dlg.payload.delegate.id(), sig_to_revoke));
+                        }
+
+                        if let Some(dlg_sigs_to_revoke) = reverse_dlg_dep_map.get(&sig_to_revoke) {
+                            for dlg_sig in dlg_sigs_to_revoke.iter() {
+                                revoked_dlgs.insert(*dlg_sig);
+
+                                if let Some(dep_dlg) = dlgs_in_play.remove(dlg_sig) {
+                                    next_to_revoke.push(dep_dlg.signature.to_bytes());
                                 }
-                            });
+                            }
+                        }
+                    }
 
-                        let id = r.payload().revoke.payload().delegate.id();
+                    for (id, sig) in to_drop {
+                        let remaining = self
+                            .members
+                            .get(&id)
+                            .map(|dlgs| {
+                                dlgs.iter()
+                                    .filter(|dlg| dlg.signature.to_bytes() != sig)
+                                    .cloned()
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+
                         if let Some(dlgs) = NonEmpty::from_vec(remaining) {
                             self.members.insert(id, dlgs);
                         } else {
@@ -668,7 +772,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         Self {
             members: HashMap::new(),
             id_or_indie: archive.id_or_indie,
-            state: state::GroupState::dummy_from_archive(archive.state, delegations, revocations),
+            state: GroupState::dummy_from_archive(archive.state, delegations, revocations),
+            active_revocations: HashMap::new(),
             listener,
         }
     }
@@ -697,7 +802,7 @@ pub enum IdOrIndividual {
 pub struct GroupArchive<T: ContentRef> {
     pub(crate) id_or_indie: IdOrIndividual,
     pub(crate) members: HashMap<Identifier, NonEmpty<Digest<Signed<StaticDelegation<T>>>>>,
-    pub(crate) state: state::GroupStateArchive<T>,
+    pub(crate) state: GroupStateArchive<T>,
 }
 
 impl<T: ContentRef, L: MembershipListener<T>> From<Group<T, L>> for GroupArchive<T> {
@@ -715,7 +820,7 @@ impl<T: ContentRef, L: MembershipListener<T>> From<Group<T, L>> for GroupArchive
                     }
                     acc
                 }),
-            state: state::GroupStateArchive::<T>::from(&group.state),
+            state: GroupStateArchive::<T>::from(&group.state),
         }
     }
 }
@@ -751,6 +856,9 @@ pub enum RevokeMemberError {
 
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
+
+    #[error("Redelagation error")]
+    RedelegationError(#[from] AddGroupMemberError),
 }
 
 #[cfg(test)]
@@ -1249,5 +1357,159 @@ mod tests {
         );
 
         assert_eq!(g2_mems.len(), 6);
+    }
+
+    #[test]
+    fn test_revoke_member() {
+        let mut csprng = rand::thread_rng();
+
+        let alice = Rc::new(RefCell::new(setup_user(&mut csprng)));
+        let alice_agent: Agent = alice.dupe().into();
+
+        let bob = Rc::new(RefCell::new(setup_user(&mut csprng)));
+        let bob_agent: Agent = bob.dupe().into();
+
+        let carol = Rc::new(RefCell::new(setup_user(&mut csprng)));
+        let carol_agent: Agent = carol.dupe().into();
+
+        let dan = Rc::new(RefCell::new(setup_user(&mut csprng)));
+        let dan_agent: Agent = dan.dupe().into();
+
+        let dlg_store = DelegationStore::new();
+        let rev_store = RevocationStore::new();
+
+        let mut g1 = Group::generate(
+            nonempty![alice_agent.dupe()],
+            dlg_store.dupe(),
+            rev_store.dupe(),
+            NoListener,
+            &mut csprng,
+        )
+        .unwrap();
+
+        g1.add_member(
+            bob_agent.dupe(),
+            Access::Write,
+            &alice.borrow().signing_key,
+            &[],
+        )
+        .unwrap();
+
+        g1.add_member(
+            carol_agent.dupe(),
+            Access::Read,
+            &bob.borrow().signing_key,
+            &[],
+        )
+        .unwrap();
+
+        dbg!(alice.borrow().id());
+        dbg!(bob.borrow().id());
+        dbg!(carol.borrow().id());
+        dbg!(dan.borrow().id());
+
+        assert!(g1.members().contains_key(&alice.borrow().id().into()));
+        assert!(g1.members().contains_key(&bob.borrow().id().into()));
+        assert!(g1.members().contains_key(&carol.borrow().id().into()));
+        assert!(!g1.members().contains_key(&dan.borrow().id().into()));
+
+        g1.add_member(
+            dan_agent.dupe(),
+            Access::Read,
+            &carol.borrow().signing_key,
+            &[],
+        )
+        .unwrap();
+
+        assert!(g1.members.contains_key(&alice.borrow().id().into()));
+        assert!(g1.members.contains_key(&bob.borrow().id().into()));
+        assert!(g1.members.contains_key(&carol.borrow().id().into()));
+        assert!(g1.members.contains_key(&dan.borrow().id().into()));
+        assert_eq!(g1.members.len(), 4);
+
+        g1.revoke_member(
+            bob.borrow().id().into(),
+            true,
+            &alice.borrow().signing_key,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        // Bob kicked out
+        assert!(!g1.members.contains_key(&bob.borrow().id().into()));
+        // Retained Carol & Dan
+        assert!(g1.members.contains_key(&carol.borrow().id().into()));
+        assert!(g1.members.contains_key(&dan.borrow().id().into()));
+
+        // g1.add_member(
+        //     bob_agent.dupe(),
+        //     Access::Read,
+        //     &carol.borrow().signing_key,
+        //     &[],
+        // )
+        // .unwrap();
+
+        // assert!(g1.members.contains_key(&bob.borrow().id().into()));
+        // assert!(g1.members.contains_key(&carol.borrow().id().into()));
+        // assert!(g1.members.contains_key(&dan.borrow().id().into()));
+
+        // g1.revoke_member(
+        //     carol.borrow().id().into(),
+        //     false,
+        //     &alice.borrow().signing_key,
+        //     &BTreeMap::new(),
+        // )
+        // .unwrap();
+
+        // // Dropped Carol, but not Dan because Dan is no longer connected to Carol
+        // assert!(!g1.members.contains_key(&carol.borrow().id().into()));
+        // assert!(g1.members.contains_key(&dan.borrow().id().into()));
+
+        // dbg!("********************");
+        // dbg!("********************");
+        // dbg!("********************");
+        // dbg!("********************");
+        // dbg!("********************");
+        // dbg!("********************");
+        // dbg!("********************");
+
+        // g1.revoke_member(
+        //     alice.borrow().id().into(),
+        //     false,
+        //     &alice.borrow().signing_key,
+        //     &BTreeMap::new(),
+        // )
+        // .unwrap();
+
+        // assert!(!g1.members.contains_key(&alice.borrow().id().into()));
+
+        // dbg!(Identifier::from(g1.id()));
+        // dbg!(Identifier::from(alice.borrow().verifying_key()));
+        // dbg!(Identifier::from(bob.borrow().verifying_key()));
+        // dbg!(Identifier::from(carol.borrow().verifying_key()));
+        // dbg!(Identifier::from(dan.borrow().verifying_key()));
+
+        // dbg!("");
+
+        // if let Some(dlgs) = g1.members.get(&carol.borrow().id().into()) {
+        //     for d in dlgs.iter() {
+        //         if d.issuer == alice.borrow().verifying_key() {
+        //             dbg!("1: BOOM BOOM BOOM");
+        //         }
+        //         dbg!(Identifier::from(d.issuer));
+        //     }
+        // }
+
+        // assert!(!g1.members.contains_key(&carol.borrow().id().into()));
+
+        // if let Some(dlgs) = g1.members.get(&dan.borrow().id().into()) {
+        //     for d in dlgs.iter() {
+        //         dbg!("2: BOOM BOOM BOOM");
+        //         dbg!("asdfgh");
+        //         dbg!(Identifier::from(d.issuer));
+        //     }
+        // }
+
+        // assert!(!g1.members.contains_key(&dan.borrow().id().into()));
     }
 }

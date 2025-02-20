@@ -101,20 +101,23 @@ impl<T: ContentRef, L: MembershipListener<T>> Membered<T, L> {
     pub fn revoke_member(
         &mut self,
         member_id: Identifier,
+        retain_all_other_members: bool,
         signing_key: &ed25519_dalek::SigningKey,
         relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
         match self {
-            Membered::Group(group) => {
-                Ok(group
-                    .borrow_mut()
-                    .revoke_member(member_id, signing_key, relevant_docs)?)
-            }
-            Membered::Document(document) => {
-                document
-                    .borrow_mut()
-                    .revoke_member(member_id, signing_key, relevant_docs)
-            }
+            Membered::Group(group) => group.borrow_mut().revoke_member(
+                member_id,
+                retain_all_other_members,
+                signing_key,
+                relevant_docs,
+            ),
+            Membered::Document(document) => document.borrow_mut().revoke_member(
+                member_id,
+                retain_all_other_members,
+                signing_key,
+                relevant_docs,
+            ),
         }
     }
 
