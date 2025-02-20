@@ -10,6 +10,7 @@ pub struct AddKeyOp {
 }
 
 impl AddKeyOp {
+    #[cfg(any(test, feature = "test_utils"))]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         Self {
             share_key: ShareKey::generate(csprng),
