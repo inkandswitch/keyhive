@@ -1648,16 +1648,21 @@ mod tests {
         }
     }
 
-    fn share_ops_for_agent(agent: &Agent, keyhives: &mut Vec<Keyhive>, sharer_idx: usize) {
+    fn share_ops_for_agent(agent: Agent, keyhives: &mut Vec<Keyhive>, sharer_idx: usize) -> usize {
+        let mut share_count = 0;
         for idx in 0..keyhives.len() {
             if idx == sharer_idx {
                 continue;
             }
-            let ops = keyhives[sharer_idx].membership_ops_for_agent(agent);
-            for (_h, op) in &ops {
+            let op_store = keyhives[sharer_idx].membership_ops_for_agent(&agent);
+
+            for (_h, op) in op_store.iter() {
+                share_count += 1;
                 keyhives[idx].receive_op(&op.clone().into()).unwrap();
             }
         }
+
+        share_count
     }
 
     fn share_cgka_op(op: &CgkaOperation, keyhives: &mut Vec<Keyhive>, sharer_idx: usize) {
@@ -1671,12 +1676,20 @@ mod tests {
 
     #[test]
     fn test_sharing_ops_to_debug() {
-        let (mut keyhives, doc_id) = initialize_keyhives_and_doc(2);
-        // let a_idx = 0;
+        let (mut keyhives, _doc_id) = initialize_keyhives_and_doc(2);
+        let a_idx = 0;
         let b_idx = 1;
-        let b_doc = keyhives[b_idx].get_document(doc_id).unwrap().dupe();
-        let second_group = keyhives[b_idx].generate_group(vec![]).unwrap();
-        share_ops_for_agent(&second_group.dupe().into(), &mut keyhives, 1);
+
+        let a_peer: Peer = Rc::new(RefCell::new(
+            keyhives[a_idx].active.borrow().individual.clone(),
+        ))
+        .into();
+
+        let second_group = keyhives[b_idx].generate_group(vec![a_peer]).unwrap();
+        let share_count =
+            share_ops_for_agent(keyhives[a_idx].active.dupe().into(), &mut keyhives, 1);
+        assert!(share_count > 0);
+
         let indie = make_indie();
         let add = keyhives[b_idx]
             .add_member(
@@ -1686,8 +1699,9 @@ mod tests {
                 &[],
             )
             .unwrap();
-        // share_delegation(add.delegation.dupe(), &mut keyhives, b_idx);
-        share_ops_for_agent(&indie.dupe().into(), &mut keyhives, b_idx);
+        share_delegation(add.delegation.dupe(), &mut keyhives, 1);
+        let indie_op_count = share_ops_for_agent(indie.dupe().into(), &mut keyhives, 1);
+        assert!(indie_op_count > 0);
     }
 
     // #[test]

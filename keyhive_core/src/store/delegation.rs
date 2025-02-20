@@ -30,6 +30,10 @@ impl<T: ContentRef, L: MembershipListener<T>> DelegationStore<T, L> {
         borrowed.get(key).cloned()
     }
 
+    pub fn len(&self) -> usize {
+        self.0.borrow().len()
+    }
+
     pub fn contains_key(&self, key: &Digest<Signed<Delegation<T, L>>>) -> bool {
         let rc = self.0.dupe();
         let borrowed = RefCell::borrow(&rc);
