@@ -294,7 +294,7 @@ mod tests {
         state.insert_op(op5).unwrap();
 
         let built = state.build();
-        assert_eq!(rebuildd.len(), 3);
+        assert_eq!(built.len(), 3);
         assert!(built.contains(&share_key_2));
         assert!(built.contains(&share_key_3));
         assert!(built.contains(&share_key_5));

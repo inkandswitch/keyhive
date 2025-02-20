@@ -87,6 +87,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             id_or_indie: IdOrIndividual::GroupId(group_id),
             members: HashMap::new(),
             state: state::GroupState::new(head, delegations, revocations),
+            active_revocations: HashMap::new(),
             listener,
         };
         group.rebuild();
