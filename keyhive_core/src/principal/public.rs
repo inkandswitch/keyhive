@@ -6,7 +6,7 @@ use super::{
 use crate::{
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
-        signed::Signed,
+        signer::{memory::MemorySigner, sync_signer::SyncSigner},
         verifiable::Verifiable,
     },
     listener::prekey::PrekeyListener,
@@ -32,6 +32,10 @@ impl Public {
         ed25519_dalek::SigningKey::from([0; 32])
     }
 
+    pub fn signer(&self) -> MemorySigner {
+        MemorySigner::from(self.signing_key())
+    }
+
     pub fn share_secret_key(&self) -> ShareSecretKey {
         x25519_dalek::StaticSecret::from([0; 32]).into()
     }
@@ -42,13 +46,11 @@ impl Public {
 
     pub fn individual(&self) -> Individual {
         let op = Rc::new(
-            Signed::try_sign(
-                AddKeyOp {
+            self.signer()
+                .try_sign_sync(AddKeyOp {
                     share_key: self.share_key(),
-                },
-                &self.signing_key(),
-            )
-            .expect("signature with well-known key should work"),
+                })
+                .expect("signature with well-known key should work"),
         )
         .into();
 
@@ -61,9 +63,9 @@ impl Public {
         }
     }
 
-    pub fn active<L: PrekeyListener>(&self, listener: L) -> Active<L> {
+    pub fn active<L: PrekeyListener>(&self, listener: L) -> Active<MemorySigner, L> {
         Active {
-            signing_key: self.signing_key(),
+            signer: self.signer(),
             prekey_pairs: BTreeMap::from_iter([(self.share_key(), self.share_secret_key())]),
             individual: self.individual(),
             listener,

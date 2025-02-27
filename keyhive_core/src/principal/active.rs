@@ -1,5 +1,8 @@
 //! The current user agent (which can sign and encrypt).
 
+pub mod archive;
+
+use self::archive::ActiveArchive;
 use super::{
     document::id::DocumentId,
     identifier::Identifier,
@@ -16,6 +19,7 @@ use crate::{
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
+        signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
     },
     listener::{no_listener::NoListener, prekey::PrekeyListener},
@@ -26,26 +30,24 @@ use crate::{
     },
 };
 use derivative::Derivative;
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use futures::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
 #[derive(Clone, Derivative, Serialize, Deserialize)]
-#[derivative(Hash, PartialEq)]
-pub struct Active<L: PrekeyListener = NoListener> {
+#[derivative(Debug, Hash, PartialEq)]
+pub struct Active<S: AsyncSigner, L: PrekeyListener = NoListener> {
     /// The signing key of the active agent.
-    #[derivative(
-        Hash(hash_with = "crate::util::hasher::signing_key"),
-        PartialEq(compare_with = "key_partial_eq")
-    )]
-    pub(crate) signing_key: ed25519_dalek::SigningKey,
+    #[derivative(Debug = "ignore")]
+    pub(crate) signer: S,
 
-    // TODO generalize to use e.g. KMS
+    // TODO generalize to use e.g. KMS for X25519 secret keys
     #[derivative(
+        Debug(format_with = "crate::util::debug::prekey_fmt"),
         Hash(hash_with = "crate::util::hasher::keys"),
-        PartialEq(compare_with = "prekey_partial_eq")
+        PartialEq(compare_with = "crate::util::partial_eq::prekey_partial_eq")
     )]
     pub(crate) prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>,
 
@@ -54,49 +56,62 @@ pub struct Active<L: PrekeyListener = NoListener> {
 
     ///The listener for prekey events.
     #[serde(skip)]
-    #[derivative(PartialEq = "ignore")]
+    #[derivative(Debug = "ignore", PartialEq = "ignore")]
     pub(crate) listener: L,
 }
 
-impl<L: PrekeyListener> Active<L> {
-    pub(crate) fn generate<R: rand::CryptoRng + rand::RngCore>(
-        signing_key: SigningKey,
+impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
+    pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
+        signer: S,
         listener: L,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
         let init_sk = ShareSecretKey::generate(csprng);
         let init_pk = init_sk.share_key();
-        let init_op = Rc::new(Signed::try_sign(
-            AddKeyOp { share_key: init_pk },
-            &signing_key,
-        )?)
+        let init_op = Rc::new(
+            signer
+                .try_sign_async(AddKeyOp { share_key: init_pk })
+                .await?,
+        )
         .into();
 
-        let mut prekey_pairs = BTreeMap::from_iter([(init_pk, init_sk)]);
         let mut prekey_state = PrekeyState::new(init_op);
+        let prekey_pairs =
+            (0..6).try_fold(BTreeMap::from_iter([(init_pk, init_sk)]), |mut acc, _| {
+                let sk = ShareSecretKey::generate(csprng);
+                let pk = sk.share_key();
+                acc.insert(pk, sk);
+                Ok::<_, SigningError>(acc)
+            })?;
 
-        (0..6).try_for_each(|_| {
-            let sk = ShareSecretKey::generate(csprng);
-            let pk = sk.share_key();
-            let op = Rc::new(Signed::try_sign(AddKeyOp { share_key: pk }, &signing_key)?).into();
+        let borrowed_signer = &signer;
+        let ops = stream::iter(prekey_pairs.keys().map(|x| Ok::<_, SigningError>(x)))
+            .try_fold(vec![], |mut acc, pk| async move {
+                acc.push(
+                    Rc::new(
+                        borrowed_signer
+                            .try_sign_async(AddKeyOp { share_key: *pk })
+                            .await?,
+                    )
+                    .into(),
+                );
+                Ok(acc)
+            })
+            .await?;
 
-            prekey_pairs.insert(pk, sk);
-            prekey_state
-                .insert_op(op)
-                .expect("new prekey from generation should always work");
-
-            Ok::<(), SigningError>(())
-        })?;
+        prekey_state
+            .extend(ops)
+            .expect("newly generated local op should be valid");
 
         Ok(Self {
             individual: Individual {
-                id: signing_key.verifying_key().into(),
+                id: signer.verifying_key().into(),
                 prekeys: prekey_state.build(),
                 prekey_state,
             },
             prekey_pairs,
             listener,
-            signing_key,
+            signer,
         })
     }
 
@@ -116,37 +131,41 @@ impl<L: PrekeyListener> Active<L> {
         self.individual.pick_prekey(doc_id)
     }
 
-    pub fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
+    pub async fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old_prekey: ShareKey,
         csprng: &mut R,
     ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
         let op = self
             .individual
-            .rotate_prekey(old_prekey, &self.signing_key, csprng)?;
-        self.listener.on_prekey_rotated(&op);
+            .rotate_prekey(old_prekey, &self.signer, csprng)
+            .await?;
+        self.listener.on_prekey_rotated(&op).await;
         Ok(op)
     }
 
-    pub fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
+    pub async fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: &mut R,
     ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
-        let op = self.individual.expand_prekeys(&self.signing_key, csprng)?;
-        self.listener.on_prekeys_expanded(&op);
+        let op = self.individual.expand_prekeys(&self.signer, csprng).await?;
+        self.listener.on_prekeys_expanded(&op).await;
         Ok(op)
     }
 
     /// Sign a payload.
-    pub fn try_sign<U: Serialize>(&self, payload: U) -> Result<Signed<U>, SigningError> {
-        Signed::<U>::try_sign(payload, &self.signing_key)
+    pub async fn try_sign_async<U: Serialize>(
+        &self,
+        payload: U,
+    ) -> Result<Signed<U>, SigningError> {
+        self.signer.try_sign_async(payload).await
     }
 
     pub fn get_capability<T: ContentRef>(
         &self,
-        subject: Membered<T>,
+        subject: Membered<S, T>,
         min: Access,
-    ) -> Option<Rc<Signed<Delegation<T>>>> {
+    ) -> Option<Rc<Signed<Delegation<S, T>>>> {
         subject.get_capability(&self.id().into()).and_then(|cap| {
             if cap.payload().can >= min {
                 Some(cap)
@@ -155,58 +174,35 @@ impl<L: PrekeyListener> Active<L> {
             }
         })
     }
+
+    pub fn into_archive(&self) -> ActiveArchive {
+        ActiveArchive {
+            prekey_pairs: self.prekey_pairs.clone(),
+            individual: self.individual.clone(),
+        }
+    }
+
+    pub fn from_archive(archive: &ActiveArchive, signer: S, listener: L) -> Self {
+        Self {
+            prekey_pairs: archive.prekey_pairs.clone(),
+            individual: archive.individual.clone(),
+            signer,
+            listener,
+        }
+    }
 }
 
-impl<L: PrekeyListener> std::fmt::Display for Active<L> {
+impl<S: AsyncSigner, L: PrekeyListener> std::fmt::Display for Active<S, L> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.id(), f)
     }
 }
 
-impl<L: PrekeyListener> Debug for Active<L> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let keypairs_hidden_secret_keys: Vec<(&ShareKey, &str)> = self
-            .prekey_pairs
-            .keys()
-            .map(|pk| (pk, "<SecretKey>"))
-            .collect();
-
-        f.debug_struct("Active")
-            .field("id", &self.id())
-            .field("signer", &"<Signer>")
-            .field("share_key_pairs", &keypairs_hidden_secret_keys)
-            .finish()
+impl<S: AsyncSigner, L: PrekeyListener> Verifiable for Active<S, L> {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.signer.verifying_key()
     }
 }
-
-impl<L: PrekeyListener> Verifiable for Active<L> {
-    fn verifying_key(&self) -> VerifyingKey {
-        self.signing_key.verifying_key()
-    }
-}
-
-impl<L: PrekeyListener> Signer<Signature> for Active<L> {
-    fn try_sign(&self, message: &[u8]) -> Result<Signature, signature::Error> {
-        self.signing_key.try_sign(message)
-    }
-}
-
-fn prekey_partial_eq(
-    xs: &BTreeMap<ShareKey, ShareSecretKey>,
-    ys: &BTreeMap<ShareKey, ShareSecretKey>,
-) -> bool {
-    xs.len() == ys.len()
-        && xs
-            .iter()
-            .zip(ys.iter())
-            .all(|((xk, xv), (yk, yv))| xk == yk && xv.to_bytes() == yv.to_bytes())
-}
-
-fn key_partial_eq(a: &ed25519_dalek::SigningKey, b: &ed25519_dalek::SigningKey) -> bool {
-    a.to_bytes() == b.to_bytes()
-}
-
-impl<L: PrekeyListener> Eq for Active<L> {}
 
 #[derive(Debug, Error)]
 pub enum ShareError {
@@ -238,14 +234,15 @@ pub enum ActiveDelegationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::signer::memory::MemorySigner;
 
-    #[test]
-    fn test_sign() {
+    #[tokio::test]
+    async fn test_seal() {
         let csprng = &mut rand::thread_rng();
-        let signer = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-        let active = Active::generate(signer, NoListener, csprng).unwrap();
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let active = Active::generate(signer, NoListener, csprng).await.unwrap();
         let message = "hello world".as_bytes();
-        let signed = active.try_sign(message).unwrap();
+        let signed = active.try_sign_async(message).await.unwrap();
 
         assert!(signed.try_verify().is_ok());
     }

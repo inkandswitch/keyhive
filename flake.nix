@@ -224,23 +224,24 @@
           nativeBuildInputs = with pkgs;
             [
               command_menu
-              direnv
-              http-server
+
               rust-toolchain
-              unstable.binaryen
-              unstable.chromedriver
               unstable.irust
-              unstable.nodePackages.pnpm
-              unstable.nodePackages_latest.webpack-cli
-              unstable.nodejs_20
-              unstable.wasm-pack
+
+              http-server
+              pkgs.binaryen
+              unstable.chromedriver
+              pkgs.nodePackages.pnpm
+              pkgs.nodePackages_latest.webpack-cli
+              pkgs.nodejs_20
+              pkgs.wasm-pack
             ]
             ++ format-pkgs
             ++ cargo-installs
             ++ lib.optionals stdenv.isDarwin darwin-installs;
 
          shellHook = ''
-            export RUSTC_WRAPPER="${pkgs.sccache}/bin/sccache"
+            # export RUSTC_WRAPPER="${pkgs.sccache}/bin/sccache"
             unset SOURCE_DATE_EPOCH
           ''
           + pkgs.lib.strings.optionalString pkgs.stdenv.isDarwin ''

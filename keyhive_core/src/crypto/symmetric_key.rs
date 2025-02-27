@@ -11,20 +11,22 @@ use x25519_dalek::SharedSecret;
 ///
 /// ```
 /// # use keyhive_core::{
-/// #     crypto::{siv::Siv, symmetric_key::SymmetricKey},
+/// #     crypto::{siv::Siv, symmetric_key::SymmetricKey, signer::memory::MemorySigner},
 /// #     listener::no_listener::NoListener,
 /// #     principal::{agent::Agent, document::Document, individual::Individual},
 /// #     store::{delegation::DelegationStore, revocation::RevocationStore}
 /// # };
 /// # use std::{cell::RefCell, rc::Rc};
 /// # use nonempty::nonempty;
+/// # #[tokio::main(flavor = "current_thread")]
+/// # async fn main() {
 /// let mut plaintext = b"hello world";
 ///
 /// let mut csprng = rand::thread_rng();
 ///
-/// let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
-/// let user = Individual::generate(&sk, &mut csprng).unwrap();
-/// let user_agent: Agent<String> = Rc::new(RefCell::new(user)).into();
+/// let sk = MemorySigner::generate(&mut csprng);
+/// let user = Individual::generate(&sk, &mut csprng).await.unwrap();
+/// let user_agent: Agent<MemorySigner, String> = Rc::new(RefCell::new(user)).into();
 ///
 /// let delegation_store = DelegationStore::new();
 /// let revocation_store = RevocationStore::new();
@@ -36,7 +38,7 @@ use x25519_dalek::SharedSecret;
 ///     NoListener,
 ///     &sk,
 ///     &mut csprng
-/// ).unwrap();
+/// ).await.unwrap();
 ///
 /// let key = SymmetricKey::generate(&mut csprng);
 /// let nonce = Siv::new(&key, plaintext, doc.doc_id()).unwrap();
@@ -46,6 +48,7 @@ use x25519_dalek::SharedSecret;
 /// key.try_decrypt(nonce, &mut roundtrip_buf).unwrap();
 ///
 /// assert_eq!(roundtrip_buf.as_slice(), plaintext);
+/// # }
 /// ```
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SymmetricKey([u8; 32]);
@@ -57,7 +60,7 @@ impl SymmetricKey {
     }
 
     /// Generate a new random symmetric key.
-    pub fn generate<R: rand::RngCore + rand::CryptoRng>(csprng: &mut R) -> Self {
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         let mut key = [0u8; 32];
         csprng.fill_bytes(&mut key);
         Self(key)

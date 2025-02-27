@@ -10,10 +10,10 @@ test.beforeEach(async ({ page }) => {
 
 test.describe("Signed", async () => {
   test('verify', async ({ page }) => {
-    const out = await page.evaluate((input) => {
-      const { SigningKey } = window.keyhive
-      const key = SigningKey.generate()
-      const signed = key.trySign(new Uint8Array(input.toSign))
+    const out = await page.evaluate(async (input) => {
+      const { Signer } = window.keyhive
+      const key = await new Signer()
+      const signed = await key.trySign(new Uint8Array(input.toSign))
       const { payload, verifyingKey, signature } = signed
       const verified = signed.verify()
       return { input, payload, verifyingKey, signature, verified, key }
@@ -23,10 +23,10 @@ test.describe("Signed", async () => {
   })
 
   test('payload', async ({ page }) => {
-    const out = await page.evaluate((input) => {
-      const { SigningKey } = window.keyhive
-      const key = SigningKey.generate()
-      const signed = key.trySign(new Uint8Array(input.toSign))
+    const out = await page.evaluate(async (input) => {
+      const { Signer } = window.keyhive
+      const key = await new Signer()
+      const signed = await key.trySign(new Uint8Array(input.toSign))
       return { payload: signed.payload }
     }, { toSign })
 
@@ -34,10 +34,10 @@ test.describe("Signed", async () => {
   })
 
   test('signature', async ({ page }) => {
-    const out = await page.evaluate((input) => {
-      const { SigningKey } = window.keyhive
-      const key = SigningKey.generate()
-      const signed = key.trySign(new Uint8Array(input.toSign))
+    const out = await page.evaluate(async (input) => {
+      const { Signer } = window.keyhive
+      const key = await new Signer()
+      const signed = await key.trySign(new Uint8Array(input.toSign))
       return { signature: signed.signature }
     }, { toSign })
 

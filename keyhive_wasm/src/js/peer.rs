@@ -1,11 +1,11 @@
-use super::{change_ref::JsChangeRef, event_handler::JsEventHandler};
+use super::{change_ref::JsChangeRef, event_handler::JsEventHandler, signer::JsSigner};
 use derive_more::{Deref, From, Into};
 use keyhive_core::principal::peer::Peer;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Peer)]
 #[derive(Debug, Clone, From, Into, Deref)]
-pub struct JsPeer(pub(crate) Peer<JsChangeRef, JsEventHandler>);
+pub struct JsPeer(pub(crate) Peer<JsSigner, JsChangeRef, JsEventHandler>);
 
 #[wasm_bindgen(js_class = Peer)]
 impl JsPeer {

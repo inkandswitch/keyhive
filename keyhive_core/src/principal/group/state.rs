@@ -1,13 +1,16 @@
-use super::{
-    delegation::{Delegation, StaticDelegation},
-    error::AddError,
-    id::GroupId,
-    revocation::{Revocation, StaticRevocation},
-};
+pub mod archive;
+
+use self::archive::GroupStateArchive;
+use super::{delegation::Delegation, error::AddError, id::GroupId, revocation::Revocation};
 use crate::{
     access::Access,
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed, verifiable::Verifiable},
+    crypto::{
+        digest::Digest,
+        signed::Signed,
+        signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSigner},
+        verifiable::Verifiable,
+    },
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::Agent, group::delegation::DelegationError, identifier::Identifier},
     store::{delegation::DelegationStore, revocation::RevocationStore},
@@ -15,33 +18,31 @@ use crate::{
 };
 use derive_where::derive_where;
 use dupe::Dupe;
-use ed25519_dalek::VerifyingKey;
-use serde::{Deserialize, Serialize};
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, HashSet},
-    rc::Rc,
-};
+use std::{cmp::Ordering, collections::BTreeMap, rc::Rc};
 
-#[derive(Debug, Clone, Eq)]
-#[derive_where(PartialEq, Hash; T)]
-pub struct GroupState<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+#[derive(Clone, Eq)]
+#[derive_where(Debug, PartialEq, Hash; T)]
+pub struct GroupState<
+    S: AsyncSigner,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<S, T> = NoListener,
+> {
     pub(crate) id: GroupId,
 
     #[derive_where(skip)]
-    pub(crate) delegations: DelegationStore<T, L>,
-    pub(crate) delegation_heads: CaMap<Signed<Delegation<T, L>>>,
+    pub(crate) delegations: DelegationStore<S, T, L>,
+    pub(crate) delegation_heads: CaMap<Signed<Delegation<S, T, L>>>,
 
     #[derive_where(skip)]
-    pub(crate) revocations: RevocationStore<T, L>,
-    pub(crate) revocation_heads: CaMap<Signed<Revocation<T, L>>>,
+    pub(crate) revocations: RevocationStore<S, T, L>,
+    pub(crate) revocation_heads: CaMap<Signed<Revocation<S, T, L>>>,
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> GroupState<T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T, L> {
     pub fn new(
-        delegation_head: Rc<Signed<Delegation<T, L>>>,
-        delegations: DelegationStore<T, L>,
-        revocations: RevocationStore<T, L>,
+        delegation_head: Rc<Signed<Delegation<S, T, L>>>,
+        delegations: DelegationStore<S, T, L>,
+        revocations: RevocationStore<S, T, L>,
     ) -> Self {
         let id = GroupId(delegation_head.verifying_key().into());
         let mut heads = vec![delegation_head.dupe()];
@@ -84,13 +85,13 @@ impl<T: ContentRef, L: MembershipListener<T>> GroupState<T, L> {
     }
 
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        parents: Vec<Agent<T, L>>,
-        delegations: DelegationStore<T, L>,
-        revocations: RevocationStore<T, L>,
+        parents: Vec<Agent<S, T, L>>,
+        delegations: DelegationStore<S, T, L>,
+        revocations: RevocationStore<S, T, L>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
-        let signing_key = ed25519_dalek::SigningKey::generate(csprng);
-        let group_id = signing_key.verifying_key().into();
+        let signer = MemorySigner::generate(csprng);
+        let group_id = signer.verifying_key().into();
 
         let group = GroupState {
             id: GroupId(group_id),
@@ -103,17 +104,14 @@ impl<T: ContentRef, L: MembershipListener<T>> GroupState<T, L> {
         };
 
         parents.iter().try_fold(group, |mut acc, parent| {
-            let dlg = Signed::try_sign(
-                Delegation {
-                    delegate: parent.dupe(),
-                    can: Access::Admin,
+            let dlg = signer.try_sign_sync(Delegation {
+                delegate: parent.dupe(),
+                can: Access::Admin,
 
-                    proof: None,
-                    after_revocations: vec![],
-                    after_content: BTreeMap::new(),
-                },
-                &signing_key,
-            )?;
+                proof: None,
+                after_revocations: vec![],
+                after_content: BTreeMap::new(),
+            })?;
 
             acc.delegation_heads.insert(Rc::new(dlg));
             Ok(acc)
@@ -128,18 +126,18 @@ impl<T: ContentRef, L: MembershipListener<T>> GroupState<T, L> {
         self.id
     }
 
-    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<T, L>>> {
+    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<S, T, L>>> {
         &self.delegation_heads
     }
 
-    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<T, L>>> {
+    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<S, T, L>>> {
         &self.revocation_heads
     }
 
     pub fn add_delegation(
         &mut self,
-        delegation: Rc<Signed<Delegation<T, L>>>,
-    ) -> Result<Digest<Signed<Delegation<T, L>>>, AddError> {
+        delegation: Rc<Signed<Delegation<S, T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<S, T, L>>>, AddError> {
         if delegation.subject_id() != self.id.into() {
             return Err(AddError::InvalidSubject(Box::new(delegation.subject_id())));
         }
@@ -188,8 +186,8 @@ impl<T: ContentRef, L: MembershipListener<T>> GroupState<T, L> {
 
     pub fn add_revocation(
         &mut self,
-        revocation: Rc<Signed<Revocation<T, L>>>,
-    ) -> Result<Digest<Signed<Revocation<T, L>>>, AddError> {
+        revocation: Rc<Signed<Revocation<S, T, L>>>,
+    ) -> Result<Digest<Signed<Revocation<S, T, L>>>, AddError> {
         if revocation.subject_id() != self.id.into() {
             return Err(AddError::InvalidSubject(Box::new(revocation.subject_id())));
         }
@@ -229,7 +227,7 @@ impl<T: ContentRef, L: MembershipListener<T>> GroupState<T, L> {
         Ok(hash)
     }
 
-    pub fn delegations_for(&self, agent: Agent<T, L>) -> Vec<Rc<Signed<Delegation<T, L>>>> {
+    pub fn delegations_for(&self, agent: Agent<S, T, L>) -> Vec<Rc<Signed<Delegation<S, T, L>>>> {
         self.delegations
             .borrow()
             .values()
@@ -245,8 +243,8 @@ impl<T: ContentRef, L: MembershipListener<T>> GroupState<T, L> {
 
     pub(crate) fn dummy_from_archive(
         archive: GroupStateArchive<T>,
-        delegations: DelegationStore<T, L>,
-        revocations: RevocationStore<T, L>,
+        delegations: DelegationStore<S, T, L>,
+        revocations: RevocationStore<S, T, L>,
     ) -> Self {
         Self {
             id: archive.id,
@@ -258,41 +256,20 @@ impl<T: ContentRef, L: MembershipListener<T>> GroupState<T, L> {
             revocations,
         }
     }
-}
 
-impl<T: ContentRef, L: MembershipListener<T>> From<VerifyingKey> for GroupState<T, L> {
-    fn from(verifier: VerifyingKey) -> Self {
-        GroupState {
-            id: GroupId(verifier.into()),
-
-            delegation_heads: CaMap::new(),
-            delegations: DelegationStore::new(),
-
-            revocation_heads: CaMap::new(),
-            revocations: RevocationStore::new(),
+    pub fn into_archive(&self) -> GroupStateArchive<T> {
+        GroupStateArchive {
+            id: self.id,
+            delegation_heads: self.delegation_heads.keys().map(Into::into).collect(),
+            revocation_heads: self.revocation_heads.keys().map(Into::into).collect(),
         }
     }
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> Verifiable for GroupState<T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
+    for GroupState<S, T, L>
+{
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.id.0.verifying_key()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct GroupStateArchive<T: ContentRef> {
-    pub(crate) id: GroupId,
-    pub(crate) delegation_heads: HashSet<Digest<Signed<StaticDelegation<T>>>>,
-    pub(crate) revocation_heads: HashSet<Digest<Signed<StaticRevocation<T>>>>,
-}
-
-impl<T: ContentRef, L: MembershipListener<T>> From<&GroupState<T, L>> for GroupStateArchive<T> {
-    fn from(state: &GroupState<T, L>) -> Self {
-        GroupStateArchive {
-            id: state.id,
-            delegation_heads: state.delegation_heads.keys().map(Into::into).collect(),
-            revocation_heads: state.revocation_heads.keys().map(Into::into).collect(),
-        }
     }
 }

@@ -1,7 +1,7 @@
 use super::{
     change_ref::JsChangeRef, doc_content_refs::DocContentRefs, document_id::JsDocumentId,
     event_handler::JsEventHandler, signed_delegation::JsSignedDelegation,
-    signed_revocation::JsSignedRevocation,
+    signed_revocation::JsSignedRevocation, signer::JsSigner,
 };
 use dupe::Dupe;
 use keyhive_core::{
@@ -17,8 +17,8 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(js_name = History)]
 #[derive(Debug, Clone)]
 pub struct JsHistory {
-    pub(crate) delegations: Vec<Rc<Signed<Delegation<JsChangeRef, JsEventHandler>>>>,
-    pub(crate) revocations: Vec<Rc<Signed<Revocation<JsChangeRef, JsEventHandler>>>>,
+    pub(crate) delegations: Vec<Rc<Signed<Delegation<JsSigner, JsChangeRef, JsEventHandler>>>>,
+    pub(crate) revocations: Vec<Rc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>>,
     pub(crate) content: BTreeMap<DocumentId, Vec<JsChangeRef>>,
 }
 
@@ -50,8 +50,8 @@ impl JsHistory {
     }
 }
 
-impl From<Dependencies<'_, JsChangeRef, JsEventHandler>> for JsHistory {
-    fn from(deps: Dependencies<JsChangeRef, JsEventHandler>) -> Self {
+impl From<Dependencies<'_, JsSigner, JsChangeRef, JsEventHandler>> for JsHistory {
+    fn from(deps: Dependencies<JsSigner, JsChangeRef, JsEventHandler>) -> Self {
         Self {
             delegations: deps.delegations,
             revocations: deps.revocations,

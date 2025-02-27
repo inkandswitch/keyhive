@@ -35,6 +35,7 @@ derivative = "2.2"
 derive_more = { workspace = true }
 derive-where = "1.2"
 dupe = { workspace = true }
+futures = { workspace = true }
 nonempty = { workspace = true }
 topological-sort = "0.2"
 tracing = { workspace = true }
@@ -46,6 +47,7 @@ arbitrary = { version = "1.4.1", features = ["derive"], optional = true }
 
 [dev-dependencies]
 arbitrary = { version = "1.4.1", features = ["derive"] }
+tokio = { version = "1.43", features = ["macros", "rt"] }
 
 # Benchmarks
 divan = "0.1.15"

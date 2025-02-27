@@ -1,4 +1,8 @@
-use super::{change_ref::JsChangeRef, event_handler::JsEventHandler, revocation::JsRevocation};
+use super::{
+    change_ref::JsChangeRef, event_handler::JsEventHandler, revocation::JsRevocation,
+    signer::JsSigner,
+};
+use dupe::Dupe;
 use keyhive_core::{
     crypto::{signed::Signed, verifiable::Verifiable},
     principal::group::revocation::Revocation,
@@ -7,7 +11,10 @@ use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = SignedRevocation)]
-pub struct JsSignedRevocation(pub(crate) Rc<Signed<Revocation<JsChangeRef, JsEventHandler>>>);
+#[derive(Debug, Dupe, Clone)]
+pub struct JsSignedRevocation(
+    pub(crate) Rc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>,
+);
 
 #[wasm_bindgen(js_class = SignedRevocation)]
 impl JsSignedRevocation {
@@ -31,13 +38,13 @@ impl JsSignedRevocation {
     }
 }
 
-impl From<Rc<Signed<Revocation<JsChangeRef, JsEventHandler>>>> for JsSignedRevocation {
-    fn from(signed: Rc<Signed<Revocation<JsChangeRef, JsEventHandler>>>) -> Self {
+impl From<Rc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>> for JsSignedRevocation {
+    fn from(signed: Rc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>) -> Self {
         Self(signed)
     }
 }
 
-impl From<JsSignedRevocation> for Rc<Signed<Revocation<JsChangeRef, JsEventHandler>>> {
+impl From<JsSignedRevocation> for Rc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>> {
     fn from(js_signed: JsSignedRevocation) -> Self {
         js_signed.0
     }

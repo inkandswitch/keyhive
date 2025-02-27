@@ -12,7 +12,7 @@ use self::{
     delegation::{Delegation, StaticDelegation},
     membership_operation::MembershipOperation,
     revocation::Revocation,
-    state::{GroupState, GroupStateArchive},
+    state::GroupState,
 };
 use super::{
     agent::{id::AgentId, Agent},
@@ -29,6 +29,11 @@ use crate::{
         digest::Digest,
         share_key::ShareKey,
         signed::{Signed, SigningError},
+        signer::{
+            async_signer::AsyncSigner,
+            ephemeral::EphemeralSigner,
+            sync_signer::{try_sign_basic, SyncSignerBasic},
+        },
         verifiable::Verifiable,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
@@ -55,32 +60,32 @@ use thiserror::Error;
 /// Groups are stateful agents. It is possible the delegate control over them,
 /// and they can be delegated to. This produces transitives lines of authority
 /// through the network of [`Agent`]s.
-#[derive(Debug, Clone, Eq, Derivative)]
-#[derive_where(PartialEq; T)]
-pub struct Group<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+#[derive(Clone, Derivative)]
+#[derive_where(Debug, PartialEq; T)]
+pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener>
+{
     pub(crate) id_or_indie: IdOrIndividual,
 
     /// The current view of members of a group.
     #[allow(clippy::type_complexity)]
-    pub(crate) members: HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T, L>>>>>,
+    pub(crate) members: HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>>,
 
     /// Current view of revocations
-    pub(crate) active_revocations: HashMap<[u8; 64], Rc<Signed<Revocation<T, L>>>>,
+    pub(crate) active_revocations: HashMap<[u8; 64], Rc<Signed<Revocation<S, T, L>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
-    pub(crate) state: GroupState<T, L>,
+    pub(crate) state: GroupState<S, T, L>,
 
-    #[debug(skip)]
     #[derive_where(skip)]
     pub(crate) listener: L,
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> {
     pub fn new(
         group_id: GroupId,
-        head: Rc<Signed<Delegation<T, L>>>,
-        delegations: DelegationStore<T, L>,
-        revocations: RevocationStore<T, L>,
+        head: Rc<Signed<Delegation<S, T, L>>>,
+        delegations: DelegationStore<S, T, L>,
+        revocations: RevocationStore<S, T, L>,
         listener: L,
     ) -> Self {
         let mut group = Self {
@@ -96,9 +101,9 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
 
     pub fn from_individual(
         individual: Individual,
-        head: Rc<Signed<Delegation<T, L>>>,
-        delegations: DelegationStore<T, L>,
-        revocations: RevocationStore<T, L>,
+        head: Rc<Signed<Delegation<S, T, L>>>,
+        delegations: DelegationStore<S, T, L>,
+        revocations: RevocationStore<S, T, L>,
         listener: L,
     ) -> Self {
         let mut group = Self {
@@ -113,41 +118,44 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
     }
 
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
-    pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        parents: NonEmpty<Agent<T, L>>,
-        delegations: DelegationStore<T, L>,
-        revocations: RevocationStore<T, L>,
+    pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
+        parents: NonEmpty<Agent<S, T, L>>,
+        delegations: DelegationStore<S, T, L>,
+        revocations: RevocationStore<S, T, L>,
         listener: L,
         csprng: &mut R,
-    ) -> Result<Group<T, L>, SigningError> {
-        let sk = ed25519_dalek::SigningKey::generate(csprng);
-        Self::generate_after_content(
-            &sk,
-            parents,
-            delegations,
-            revocations,
-            Default::default(),
-            listener,
-        )
+    ) -> Result<Group<S, T, L>, SigningError> {
+        let (group_result, _vk) = EphemeralSigner::with_signer(csprng, |verifier, signer| {
+            Self::generate_after_content(
+                signer,
+                verifier,
+                parents,
+                delegations,
+                revocations,
+                Default::default(),
+                listener,
+            )
+        });
+        group_result
     }
 
     pub(crate) fn generate_after_content(
-        signing_key: &ed25519_dalek::SigningKey,
-        parents: NonEmpty<Agent<T, L>>,
-        delegations: DelegationStore<T, L>,
-        revocations: RevocationStore<T, L>,
+        signer: Box<dyn SyncSignerBasic>,
+        verifier: ed25519_dalek::VerifyingKey,
+        parents: NonEmpty<Agent<S, T, L>>,
+        delegations: DelegationStore<S, T, L>,
+        revocations: RevocationStore<S, T, L>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
         listener: L,
-    ) -> Result<Group<T, L>, SigningError> {
-        let id = signing_key.verifying_key().into();
+    ) -> Result<Self, SigningError> {
+        let id = verifier.into();
         let group_id = GroupId(id);
-
-        let ds = delegations.dupe();
-        let mut ds_mut = ds.borrow_mut();
         let mut delegation_heads = CaMap::new();
 
-        parents.iter().try_fold((), |_, parent| {
-            let dlg = Signed::try_sign(
+        parents.iter().try_for_each(|parent| {
+            let dlg = try_sign_basic(
+                &*signer,
+                verifier,
                 Delegation {
                     delegate: parent.dupe(),
                     can: Access::Admin,
@@ -155,11 +163,10 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
                     after_revocations: vec![],
                     after_content: after_content.clone(),
                 },
-                signing_key,
             )?;
 
             let rc = Rc::new(dlg);
-            ds_mut.insert(rc.dupe());
+            delegations.borrow_mut().insert(rc.dupe());
             delegation_heads.insert(rc.dupe());
 
             Ok::<(), SigningError>(())
@@ -214,18 +221,18 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<T, L>>>>> {
+    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>> {
         &self.members
     }
 
-    pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<T, L>, Access)> {
-        struct GroupAccess<U: ContentRef, M: MembershipListener<U>> {
-            agent: Agent<U, M>,
+    pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
+        struct GroupAccess<Z: AsyncSigner, U: ContentRef, M: MembershipListener<Z, U>> {
+            agent: Agent<Z, U, M>,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess<T, L>> = vec![];
+        let mut explore: Vec<GroupAccess<S, T, L>> = vec![];
         let mut seen: HashSet<([u8; 64], Access)> = HashSet::new();
 
         for member in self.members.keys() {
@@ -242,7 +249,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             });
         }
 
-        let mut caps: HashMap<Identifier, (Agent<T, L>, Access)> = HashMap::new();
+        let mut caps: HashMap<Identifier, (Agent<S, T, L>, Access)> = HashMap::new();
 
         while let Some(GroupAccess {
             agent: member,
@@ -264,7 +271,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             caps.insert(member.id(), (member.dupe(), current_path_access));
 
             if let Some(membered) = match member {
-                Agent::Group(inner_group) => Some(Membered::<T, L>::from(inner_group)),
+                Agent::Group(inner_group) => Some(Membered::<S, T, L>::from(inner_group)),
                 Agent::Document(doc) => Some(doc.into()),
                 _ => None,
             } {
@@ -293,15 +300,18 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         caps
     }
 
-    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<T, L>>> {
+    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<S, T, L>>> {
         &self.state.delegation_heads
     }
 
-    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<T, L>>> {
+    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<S, T, L>>> {
         &self.state.revocation_heads
     }
 
-    pub fn get_capability(&self, member_id: &Identifier) -> Option<&Rc<Signed<Delegation<T, L>>>> {
+    pub fn get_capability(
+        &self,
+        member_id: &Identifier,
+    ) -> Option<&Rc<Signed<Delegation<S, T, L>>>> {
         self.members.get(member_id).and_then(|delegations| {
             delegations
                 .iter()
@@ -309,7 +319,10 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         })
     }
 
-    pub fn get_agent_revocations(&self, agent: &Agent<T, L>) -> Vec<Rc<Signed<Revocation<T, L>>>> {
+    pub fn get_agent_revocations(
+        &self,
+        agent: &Agent<S, T, L>,
+    ) -> Vec<Rc<Signed<Revocation<S, T, L>>>> {
         self.state
             .revocations
             .borrow()
@@ -326,8 +339,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
 
     pub fn receive_delegation(
         &mut self,
-        delegation: Rc<Signed<Delegation<T, L>>>,
-    ) -> Result<Digest<Signed<Delegation<T, L>>>, error::AddError> {
+        delegation: Rc<Signed<Delegation<S, T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<S, T, L>>>, error::AddError> {
         let digest = self.state.add_delegation(delegation)?;
         self.rebuild();
         Ok(digest)
@@ -335,20 +348,20 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
 
     pub fn receive_revocation(
         &mut self,
-        revocation: Rc<Signed<Revocation<T, L>>>,
-    ) -> Result<Digest<Signed<Revocation<T, L>>>, error::AddError> {
+        revocation: Rc<Signed<Revocation<S, T, L>>>,
+    ) -> Result<Digest<Signed<Revocation<S, T, L>>>, error::AddError> {
         let digest = self.state.add_revocation(revocation)?;
         self.rebuild();
         Ok(digest)
     }
 
-    pub fn add_member(
+    pub async fn add_member(
         &mut self,
-        member_to_add: Agent<T, L>,
+        member_to_add: Agent<S, T, L>,
         can: Access,
-        signing_key: &ed25519_dalek::SigningKey,
-        relevant_docs: &[Rc<RefCell<Document<T, L>>>],
-    ) -> Result<AddMemberUpdate<T, L>, AddGroupMemberError> {
+        signer: &S,
+        relevant_docs: &[Rc<RefCell<Document<S, T, L>>>],
+    ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError> {
         let after_content = relevant_docs
             .iter()
             .map(|d| {
@@ -359,21 +372,22 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             })
             .collect();
 
-        self.add_member_with_manual_content(member_to_add, can, signing_key, after_content)
+        self.add_member_with_manual_content(member_to_add, can, signer, after_content)
+            .await
     }
 
-    pub(crate) fn add_member_with_manual_content(
+    pub(crate) async fn add_member_with_manual_content(
         &mut self,
-        member_to_add: Agent<T, L>,
+        member_to_add: Agent<S, T, L>,
         can: Access,
-        signing_key: &ed25519_dalek::SigningKey,
+        signer: &S,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<AddMemberUpdate<T, L>, AddGroupMemberError> {
-        let proof = if self.verifying_key() == signing_key.verifying_key() {
+    ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError> {
+        let proof = if self.verifying_key() == signer.verifying_key() {
             None
         } else {
             let p = self
-                .get_capability(&signing_key.verifying_key().into())
+                .get_capability(&signer.verifying_key().into())
                 .ok_or(AddGroupMemberError::NoProof)?;
 
             if can > p.payload.can {
@@ -386,34 +400,33 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             Some(p.dupe())
         };
 
-        let delegation = Signed::try_sign(
-            Delegation {
+        let delegation = signer
+            .try_sign_async(Delegation {
                 delegate: member_to_add,
                 can,
                 proof,
                 after_revocations: self.state.revocation_heads.values().duped().collect(),
                 after_content,
-            },
-            signing_key,
-        )?;
+            })
+            .await?;
 
         let rc = Rc::new(delegation);
-        self.listener.on_delegation(&rc);
+        self.listener.on_delegation(&rc).await;
         let _digest = self.receive_delegation(rc.dupe())?;
 
         Ok(AddMemberUpdate {
-            cgka_ops: self.add_cgka_member(rc.dupe(), signing_key)?,
+            cgka_ops: self.add_cgka_member(rc.dupe(), signer).await?,
             delegation: rc,
         })
     }
 
-    pub fn add_cgka_member(
+    pub async fn add_cgka_member(
         &mut self,
-        delegation: Rc<Signed<Delegation<T, L>>>,
-        signing_key: &ed25519_dalek::SigningKey,
+        delegation: Rc<Signed<Delegation<S, T, L>>>,
+        signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut cgka_ops = Vec::new();
-        let docs: Vec<Rc<RefCell<Document<T, L>>>> = self
+        let docs: Vec<Rc<RefCell<Document<S, T, L>>>> = self
             .transitive_members()
             .values()
             .filter_map(|(agent, _)| {
@@ -425,7 +438,11 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             })
             .collect::<Vec<_>>();
         for doc in docs {
-            for op in doc.borrow_mut().add_cgka_member(&delegation, signing_key)? {
+            for op in doc
+                .borrow_mut()
+                .add_cgka_member(&delegation, signer)
+                .await?
+            {
                 cgka_ops.push(op);
             }
         }
@@ -433,18 +450,18 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn revoke_member(
+    pub async fn revoke_member(
         &mut self,
         member_to_remove: Identifier,
         retain_all_other_members: bool,
-        signing_key: &ed25519_dalek::SigningKey,
+        signer: &S,
         after_content: &BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<RevokeMemberUpdate<T, L>, RevokeMemberError> {
-        let vk = signing_key.verifying_key();
+    ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
+        let vk = signer.verifying_key();
         let mut revocations = vec![];
         let og_dlgs: Vec<_> = self.members.values().flatten().cloned().collect();
 
-        let all_to_revoke: Vec<Rc<Signed<Delegation<T, L>>>> = self
+        let all_to_revoke: Vec<Rc<Signed<Delegation<S, T, L>>>> = self
             .members()
             .get(&member_to_remove)
             .map(|ne| Vec::<_>::from(ne.clone())) // Semi-inexpensive because `Vec<Rc<_>>`
@@ -459,12 +476,9 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             // In the (unlikely) case that the group signing key still exists and is doing the revocation.
             // Arguably this could be made impossible, but it would likely be surprising behaviour.
             for to_revoke in all_to_revoke.iter() {
-                let r = self.build_revocation(
-                    signing_key,
-                    to_revoke.dupe(),
-                    None,
-                    after_content.clone(),
-                )?;
+                let r = self
+                    .build_revocation(signer, to_revoke.dupe(), None, after_content.clone())
+                    .await?;
                 self.receive_revocation(r.dupe())?;
                 revocations.push(r);
             }
@@ -486,13 +500,14 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
                             // NOTE we don't do admin revocation cycle checking here for a few reasons:
                             // 1. Unknown to you, the cycle may be broken with some other revocation
                             // 2. It all gets resolved at materialization time
-                            let r = self.build_revocation(
-                                signing_key,
-                                to_revoke.dupe(),
-                                Some(mem_dlg.dupe()), // Admin proof
-                                after_content.clone(),
-                            )?;
-
+                            let r = self
+                                .build_revocation(
+                                    signer,
+                                    to_revoke.dupe(),
+                                    Some(mem_dlg.dupe()), // Admin proof
+                                    after_content.clone(),
+                                )
+                                .await?;
                             self.receive_revocation(r.dupe())?;
                             revocations.push(r);
                             found = true;
@@ -501,12 +516,14 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
                 }
 
                 if to_revoke.issuer == vk {
-                    let r = self.build_revocation(
-                        signing_key,
-                        to_revoke.dupe(),
-                        Some(to_revoke.dupe()), // You issued it!
-                        after_content.clone(),
-                    )?;
+                    let r = self
+                        .build_revocation(
+                            signer,
+                            to_revoke.dupe(),
+                            Some(to_revoke.dupe()), // You issued it!
+                            after_content.clone(),
+                        )
+                        .await?;
                     self.receive_revocation(r.dupe())?;
                     revocations.push(r);
                     found = true;
@@ -515,12 +532,14 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
                     for ancestor in to_revoke.payload().proof_lineage() {
                         if ancestor.issuer == vk {
                             found = true;
-                            let r = self.build_revocation(
-                                signing_key,
-                                to_revoke.dupe(),
-                                Some(ancestor.dupe()),
-                                after_content.clone(),
-                            )?;
+                            let r = self
+                                .build_revocation(
+                                    signer,
+                                    to_revoke.dupe(),
+                                    Some(ancestor.dupe()),
+                                    after_content.clone(),
+                                )
+                                .await?;
                             revocations.push(r.dupe());
                             self.receive_revocation(r)?;
                             break;
@@ -535,13 +554,13 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         }
 
         for r in revocations.iter() {
-            self.listener.on_revocation(r);
+            self.listener.on_revocation(&r).await
         }
 
         let mut cgka_ops = Vec::new();
         let (individuals, docs): (
             Vec<Rc<RefCell<Individual>>>,
-            Vec<Rc<RefCell<Document<T, L>>>>,
+            Vec<Rc<RefCell<Document<S, T, L>>>>,
         ) = self.transitive_members().values().fold(
             (vec![], vec![]),
             |(mut indies, mut docs), (agent, _)| {
@@ -562,7 +581,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         for indie in individuals {
             let id = indie.borrow().id();
             for doc in &docs {
-                if let Some(op) = doc.borrow_mut().remove_cgka_member(id, signing_key)? {
+                if let Some(op) = doc.borrow_mut().remove_cgka_member(id, signer).await? {
                     cgka_ops.push(op);
                 }
             }
@@ -582,9 +601,10 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
                             .add_member_with_manual_content(
                                 dlg.payload.delegate.dupe(),
                                 dlg.payload.can,
-                                signing_key,
+                                signer,
                                 after_content.clone(),
-                            )?;
+                            )
+                            .await?;
 
                         redelegations.push(delegation);
                     }
@@ -599,21 +619,20 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         })
     }
 
-    fn build_revocation(
+    async fn build_revocation(
         &mut self,
-        signing_key: &ed25519_dalek::SigningKey,
-        revoke: Rc<Signed<Delegation<T, L>>>,
-        proof: Option<Rc<Signed<Delegation<T, L>>>>,
+        signer: &S,
+        revoke: Rc<Signed<Delegation<S, T, L>>>,
+        proof: Option<Rc<Signed<Delegation<S, T, L>>>>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Rc<Signed<Revocation<T, L>>>, SigningError> {
-        let revocation = Signed::try_sign(
-            Revocation {
+    ) -> Result<Rc<Signed<Revocation<S, T, L>>>, SigningError> {
+        let revocation = signer
+            .try_sign_async(Revocation {
                 revoke,
                 proof,
                 after_content,
-            },
-            signing_key,
-        )?;
+            })
+            .await?;
 
         Ok(Rc::new(revocation))
     }
@@ -622,7 +641,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
         self.members.clear();
         self.active_revocations.clear();
 
-        let mut dlgs_in_play: HashMap<[u8; 64], Rc<Signed<Delegation<T, L>>>> = HashMap::new();
+        let mut dlgs_in_play: HashMap<[u8; 64], Rc<Signed<Delegation<S, T, L>>>> = HashMap::new();
         let mut revoked_dlgs: HashSet<[u8; 64]> = HashSet::new();
 
         // {dlg_dep => Set<dlgs that depend on it>}
@@ -765,8 +784,8 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
 
     pub(crate) fn dummy_from_archive(
         archive: GroupArchive<T>,
-        delegations: DelegationStore<T, L>,
-        revocations: RevocationStore<T, L>,
+        delegations: DelegationStore<S, T, L>,
+        revocations: RevocationStore<S, T, L>,
         listener: L,
     ) -> Self {
         Self {
@@ -777,9 +796,27 @@ impl<T: ContentRef, L: MembershipListener<T>> Group<T, L> {
             listener,
         }
     }
+
+    pub fn into_archive(&self) -> GroupArchive<T> {
+        GroupArchive {
+            id_or_indie: self.id_or_indie.clone(),
+            members: self
+                .members
+                .iter()
+                .fold(HashMap::new(), |mut acc, (k, vs)| {
+                    let hashes: Vec<_> =
+                        vs.iter().map(|v| Digest::hash(v.as_ref()).into()).collect();
+                    if let Some(ne) = NonEmpty::from_vec(hashes) {
+                        acc.insert(*k, ne);
+                    }
+                    acc
+                }),
+            state: self.state.into_archive(),
+        }
+    }
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> Hash for Group<T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Group<S, T, L> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id_or_indie.hash(state);
         self.members.iter().collect::<BTreeMap<_, _>>().hash(state);
@@ -787,7 +824,7 @@ impl<T: ContentRef, L: MembershipListener<T>> Hash for Group<T, L> {
     }
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> Verifiable for Group<T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Group<S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }
@@ -802,27 +839,7 @@ pub enum IdOrIndividual {
 pub struct GroupArchive<T: ContentRef> {
     pub(crate) id_or_indie: IdOrIndividual,
     pub(crate) members: HashMap<Identifier, NonEmpty<Digest<Signed<StaticDelegation<T>>>>>,
-    pub(crate) state: GroupStateArchive<T>,
-}
-
-impl<T: ContentRef, L: MembershipListener<T>> From<Group<T, L>> for GroupArchive<T> {
-    fn from(group: Group<T, L>) -> Self {
-        GroupArchive {
-            id_or_indie: group.id_or_indie,
-            members: group
-                .members
-                .iter()
-                .fold(HashMap::new(), |mut acc, (k, vs)| {
-                    let hashes: Vec<_> =
-                        vs.iter().map(|v| Digest::hash(v.as_ref()).into()).collect();
-                    if let Some(ne) = NonEmpty::from_vec(hashes) {
-                        acc.insert(*k, ne);
-                    }
-                    acc
-                }),
-            state: GroupStateArchive::<T>::from(&group.state),
-        }
-    }
+    pub(crate) state: state::archive::GroupStateArchive<T>,
 }
 
 #[derive(Debug, Error)]
@@ -866,21 +883,24 @@ mod tests {
     use super::*;
 
     use super::delegation::Delegation;
+    use crate::crypto::signer::memory::MemorySigner;
     use crate::principal::active::Active;
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
     use std::cell::RefCell;
 
-    fn setup_user(csprng: &mut (impl rand::CryptoRng + rand::RngCore)) -> Active {
-        let sk = ed25519_dalek::SigningKey::generate(csprng);
-        Active::generate(sk, NoListener, csprng).unwrap()
+    async fn setup_user<R: rand::CryptoRng + rand::RngCore>(
+        csprng: &mut R,
+    ) -> Active<MemorySigner> {
+        let sk = MemorySigner::generate(csprng);
+        Active::generate(sk, NoListener, csprng).await.unwrap()
     }
 
-    fn setup_groups<T: ContentRef>(
-        alice: Rc<RefCell<Active>>,
-        bob: Rc<RefCell<Active>>,
-        csprng: &mut (impl rand::CryptoRng + rand::RngCore),
-    ) -> [Rc<RefCell<Group<T>>>; 4] {
+    async fn setup_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
+        alice: Rc<RefCell<Active<MemorySigner>>>,
+        bob: Rc<RefCell<Active<MemorySigner>>>,
+        csprng: &mut R,
+    ) -> [Rc<RefCell<Group<MemorySigner, T>>>; 4] {
         /*              ┌───────────┐        ┌───────────┐
                         │           │        │           │
         ╔══════════════▶│   Alice   │        │    Bob    │
@@ -904,7 +924,7 @@ mod tests {
                         │           │
                         └───────────┘ */
 
-        let alice_agent: Agent<T> = alice.into();
+        let alice_agent: Agent<MemorySigner, T> = alice.into();
         let bob_agent = bob.into();
 
         let dlg_store = DelegationStore::new();
@@ -918,6 +938,7 @@ mod tests {
                 NoListener,
                 csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -929,6 +950,7 @@ mod tests {
                 NoListener,
                 csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -940,6 +962,7 @@ mod tests {
                 NoListener,
                 csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -951,17 +974,18 @@ mod tests {
                 NoListener,
                 csprng,
             )
+            .await
             .unwrap(),
         ));
 
         [g0, g1, g2, g3]
     }
 
-    fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        alice: Rc<RefCell<Active>>,
-        bob: Rc<RefCell<Active>>,
+    async fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
+        alice: Rc<RefCell<Active<MemorySigner>>>,
+        bob: Rc<RefCell<Active<MemorySigner>>>,
         csprng: &mut R,
-    ) -> [Rc<RefCell<Group<T>>>; 10] {
+    ) -> [Rc<RefCell<Group<MemorySigner, T>>>; 10] {
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
 
@@ -973,6 +997,7 @@ mod tests {
                 NoListener,
                 csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -984,6 +1009,7 @@ mod tests {
                 NoListener,
                 csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -995,6 +1021,7 @@ mod tests {
                 NoListener,
                 csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -1006,6 +1033,7 @@ mod tests {
                 NoListener,
                 csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -1017,6 +1045,7 @@ mod tests {
                 NoListener,
                 csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -1028,6 +1057,7 @@ mod tests {
                 NoListener,
                 csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -1039,6 +1069,7 @@ mod tests {
                 NoListener,
                 csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -1050,6 +1081,7 @@ mod tests {
                 NoListener,
                 csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -1061,6 +1093,7 @@ mod tests {
                 NoListener,
                 csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -1072,6 +1105,7 @@ mod tests {
                 NoListener,
                 csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -1084,17 +1118,17 @@ mod tests {
         group0
             .borrow_mut()
             .receive_delegation(Rc::new(
-                Signed::try_sign(
-                    Delegation {
+                alice
+                    .borrow()
+                    .try_sign_async(Delegation {
                         delegate: group9.clone().into(),
                         can: Access::Admin,
                         proof: Some(proof),
                         after_revocations: vec![],
                         after_content: BTreeMap::new(),
-                    },
-                    &alice.borrow().signing_key,
-                )
-                .unwrap(),
+                    })
+                    .await
+                    .unwrap(),
             ))
             .unwrap();
 
@@ -1103,17 +1137,18 @@ mod tests {
         ]
     }
 
-    #[test]
-    fn test_transitive_self() {
+    #[tokio::test]
+    async fn test_transitive_self() {
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng)));
-        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
+        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng)));
+        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
 
-        let [g0, ..]: [Rc<RefCell<Group<String>>>; 4] = setup_groups(alice.dupe(), bob, csprng);
+        let [g0, ..]: [Rc<RefCell<Group<MemorySigner, String>>>; 4] =
+            setup_groups(alice.dupe(), bob, csprng).await;
         let g0_mems = g0.borrow().transitive_members();
 
         let expected = HashMap::from_iter([(alice_id, (alice.dupe().into(), Access::Admin))]);
@@ -1121,17 +1156,17 @@ mod tests {
         assert_eq!(g0_mems, expected);
     }
 
-    #[test]
-    fn test_transitive_one() {
+    #[tokio::test]
+    async fn test_transitive_one() {
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng)));
-        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
+        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng)));
+        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
 
-        let [g0, g1, ..] = setup_groups(alice.dupe(), bob, csprng);
+        let [g0, g1, ..] = setup_groups(alice.dupe(), bob, csprng).await;
         let g1_mems = g1.borrow().transitive_members();
 
         assert_eq!(
@@ -1139,30 +1174,36 @@ mod tests {
             HashMap::from_iter([
                 (
                     alice_id,
-                    (Agent::<String>::from(alice.dupe()), Access::Admin)
+                    (
+                        Agent::<MemorySigner, String>::from(alice.dupe()),
+                        Access::Admin
+                    )
                 ),
                 (
                     g0.borrow().id(),
-                    (Agent::<String>::from(g0.dupe()), Access::Admin)
+                    (
+                        Agent::<MemorySigner, String>::from(g0.dupe()),
+                        Access::Admin
+                    )
                 )
             ])
         );
     }
 
-    #[test]
-    fn test_transitive_two() {
+    #[tokio::test]
+    async fn test_transitive_two() {
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng)));
-        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
+        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng)));
-        let bob_agent: Agent<String> = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
+        let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, _g3]: [Rc<RefCell<Group<String>>>; 4] =
-            setup_groups(alice.dupe(), bob.dupe(), csprng);
+        let [g0, g1, g2, _g3]: [Rc<RefCell<Group<MemorySigner, String>>>; 4] =
+            setup_groups(alice.dupe(), bob.dupe(), csprng).await;
         let g1_mems = g2.borrow().transitive_members();
 
         assert_eq!(
@@ -1176,20 +1217,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_transitive_three() {
+    #[tokio::test]
+    async fn test_transitive_three() {
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng)));
-        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
+        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng)));
-        let bob_agent: Agent<String> = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
+        let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, g3]: [Rc<RefCell<Group<String>>>; 4] =
-            setup_groups(alice.dupe(), bob.dupe(), csprng);
+        let [g0, g1, g2, g3]: [Rc<RefCell<Group<MemorySigner, String>>>; 4] =
+            setup_groups(alice.dupe(), bob.dupe(), csprng).await;
         let g3_mems = g3.borrow().transitive_members();
 
         assert_eq!(g3_mems.len(), 5);
@@ -1206,20 +1247,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_transitive_cycles() {
+    #[tokio::test]
+    async fn test_transitive_cycles() {
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng)));
-        let alice_agent: Agent<String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
+        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng)));
-        let bob_agent: Agent<String> = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
+        let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]: [Rc<RefCell<Group<String>>>; 10] =
-            setup_cyclic_groups(alice.dupe(), bob.dupe(), csprng);
+        let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]: [Rc<RefCell<Group<MemorySigner, String>>>;
+            10] = setup_cyclic_groups(alice.dupe(), bob.dupe(), csprng).await;
         let g0_mems = g0.borrow().transitive_members();
 
         assert_eq!(g0_mems.len(), 11);
@@ -1242,22 +1283,24 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_add_member() {
+    #[tokio::test]
+    async fn test_add_member() {
         let mut csprng = rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(&mut csprng)));
-        let alice_agent: Agent = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let alice_agent: Agent<MemorySigner> = alice.dupe().into();
 
-        let bob = Rc::new(RefCell::new(setup_user(&mut csprng)));
-        let bob_agent: Agent = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let bob_agent: Agent<MemorySigner> = bob.dupe().into();
 
-        let carol = Rc::new(RefCell::new(setup_user(&mut csprng)));
-        let carol_agent: Agent = carol.dupe().into();
+        let carol = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let carol_agent: Agent<MemorySigner> = carol.dupe().into();
 
-        let signer = ed25519_dalek::SigningKey::generate(&mut csprng);
+        let signer = MemorySigner::generate(&mut csprng);
         let active = Rc::new(RefCell::new(
-            Active::generate(signer, NoListener, &mut csprng).unwrap(),
+            Active::generate(signer, NoListener, &mut csprng)
+                .await
+                .unwrap(),
         ));
 
         let dlg_store = DelegationStore::new();
@@ -1271,6 +1314,7 @@ mod tests {
                 NoListener,
                 &mut csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -1282,6 +1326,7 @@ mod tests {
                 NoListener,
                 &mut csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -1293,6 +1338,7 @@ mod tests {
                 NoListener,
                 &mut csprng,
             )
+            .await
             .unwrap(),
         ));
 
@@ -1300,9 +1346,10 @@ mod tests {
             .add_member(
                 carol_agent.dupe(),
                 Access::Write,
-                &active.borrow().signing_key,
+                &active.borrow().signer,
                 &[],
             )
+            .await
             .unwrap();
 
         // FIXME trasnitive add
@@ -1310,7 +1357,7 @@ mod tests {
         //     .add_member(
         //         carol_agent.dupe(),
         //         Access::Read,
-        //         active.borrow().signing_key.clone(),
+        //         active.borrow().signer.clone(),
         //         &[],
         //     )
         //     .unwrap();
@@ -1359,21 +1406,21 @@ mod tests {
         assert_eq!(g2_mems.len(), 6);
     }
 
-    #[test]
-    fn test_revoke_member() {
+    #[tokio::test]
+    async fn test_revoke_member() {
         let mut csprng = rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(&mut csprng)));
-        let alice_agent: Agent = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let alice_agent: Agent<MemorySigner> = alice.dupe().into();
 
-        let bob = Rc::new(RefCell::new(setup_user(&mut csprng)));
-        let bob_agent: Agent = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let bob_agent: Agent<MemorySigner> = bob.dupe().into();
 
-        let carol = Rc::new(RefCell::new(setup_user(&mut csprng)));
-        let carol_agent: Agent = carol.dupe().into();
+        let carol = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let carol_agent: Agent<MemorySigner> = carol.dupe().into();
 
-        let dan = Rc::new(RefCell::new(setup_user(&mut csprng)));
-        let dan_agent: Agent = dan.dupe().into();
+        let dan = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let dan_agent: Agent<MemorySigner> = dan.dupe().into();
 
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
@@ -1385,23 +1432,16 @@ mod tests {
             NoListener,
             &mut csprng,
         )
+        .await
         .unwrap();
 
-        g1.add_member(
-            bob_agent.dupe(),
-            Access::Write,
-            &alice.borrow().signing_key,
-            &[],
-        )
-        .unwrap();
+        g1.add_member(bob_agent.dupe(), Access::Write, &alice.borrow().signer, &[])
+            .await
+            .unwrap();
 
-        g1.add_member(
-            carol_agent.dupe(),
-            Access::Read,
-            &bob.borrow().signing_key,
-            &[],
-        )
-        .unwrap();
+        g1.add_member(carol_agent.dupe(), Access::Read, &bob.borrow().signer, &[])
+            .await
+            .unwrap();
 
         dbg!(alice.borrow().id());
         dbg!(bob.borrow().id());
@@ -1413,13 +1453,9 @@ mod tests {
         assert!(g1.members().contains_key(&carol.borrow().id().into()));
         assert!(!g1.members().contains_key(&dan.borrow().id().into()));
 
-        g1.add_member(
-            dan_agent.dupe(),
-            Access::Read,
-            &carol.borrow().signing_key,
-            &[],
-        )
-        .unwrap();
+        g1.add_member(dan_agent.dupe(), Access::Read, &carol.borrow().signer, &[])
+            .await
+            .unwrap();
 
         assert!(g1.members.contains_key(&alice.borrow().id().into()));
         assert!(g1.members.contains_key(&bob.borrow().id().into()));
@@ -1430,9 +1466,10 @@ mod tests {
         g1.revoke_member(
             bob.borrow().id().into(),
             true,
-            &alice.borrow().signing_key,
+            &alice.borrow().signer,
             &BTreeMap::new(),
         )
+        .await
         .unwrap();
 
         // Bob kicked out
@@ -1444,7 +1481,7 @@ mod tests {
         // g1.add_member(
         //     bob_agent.dupe(),
         //     Access::Read,
-        //     &carol.borrow().signing_key,
+        //     &carol.borrow().signer,
         //     &[],
         // )
         // .unwrap();
@@ -1456,7 +1493,7 @@ mod tests {
         // g1.revoke_member(
         //     carol.borrow().id().into(),
         //     false,
-        //     &alice.borrow().signing_key,
+        //     &alice.borrow().signer,
         //     &BTreeMap::new(),
         // )
         // .unwrap();
@@ -1476,7 +1513,7 @@ mod tests {
         // g1.revoke_member(
         //     alice.borrow().id().into(),
         //     false,
-        //     &alice.borrow().signing_key,
+        //     &alice.borrow().signer,
         //     &BTreeMap::new(),
         // )
         // .unwrap();

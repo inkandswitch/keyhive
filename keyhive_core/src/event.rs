@@ -1,24 +1,26 @@
+pub mod static_event;
+
+use self::static_event::StaticEvent;
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::signed::Signed,
+    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
         group::{
-            delegation::{Delegation, StaticDelegation},
-            membership_operation::MembershipOperation,
-            revocation::{Revocation, StaticRevocation},
+            delegation::Delegation, membership_operation::MembershipOperation,
+            revocation::Revocation,
         },
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
     },
 };
 use derive_more::{From, TryInto};
 use dupe::Dupe;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::rc::Rc;
 
-#[derive(Debug, Clone, Dupe, PartialEq, Eq, From, TryInto, Hash)]
-pub enum Event<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
+#[derive(Debug, PartialEq, Eq, From, TryInto, Hash)]
+pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
     // Prekeys
     PrekeysExpanded(Rc<Signed<AddKeyOp>>),
     PrekeyRotated(Rc<Signed<RotateKeyOp>>),
@@ -27,31 +29,11 @@ pub enum Event<T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> 
     CgkaOperation(Rc<Signed<CgkaOperation>>),
 
     // Membership
-    Delegated(Rc<Signed<Delegation<T, L>>>),
-    Revoked(Rc<Signed<Revocation<T, L>>>),
+    Delegated(Rc<Signed<Delegation<S, T, L>>>),
+    Revoked(Rc<Signed<Revocation<S, T, L>>>),
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> Serialize for Event<T, L> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        StaticEvent::from(self.clone()).serialize(serializer)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, From, TryInto, Serialize, Deserialize)]
-pub enum StaticEvent<T: ContentRef = [u8; 32]> {
-    // Prekeys
-    PrekeysExpanded(Signed<AddKeyOp>),
-    PrekeyRotated(Signed<RotateKeyOp>),
-
-    // Cgka
-    CgkaOperation(Signed<CgkaOperation>),
-
-    // Membership
-    Delegated(Signed<StaticDelegation<T>>),
-    Revoked(Signed<StaticRevocation<T>>),
-}
-
-impl<T: ContentRef, L: MembershipListener<T>> From<KeyOp> for Event<T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<KeyOp> for Event<S, T, L> {
     fn from(key_op: KeyOp) -> Self {
         match key_op {
             KeyOp::Add(add) => Event::PrekeysExpanded(add),
@@ -60,8 +42,10 @@ impl<T: ContentRef, L: MembershipListener<T>> From<KeyOp> for Event<T, L> {
     }
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> From<MembershipOperation<T, L>> for Event<T, L> {
-    fn from(op: MembershipOperation<T, L>) -> Self {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<MembershipOperation<S, T, L>>
+    for Event<S, T, L>
+{
+    fn from(op: MembershipOperation<S, T, L>) -> Self {
         match op {
             MembershipOperation::Delegation(d) => Event::Delegated(d),
             MembershipOperation::Revocation(r) => Event::Revoked(r),
@@ -69,8 +53,10 @@ impl<T: ContentRef, L: MembershipListener<T>> From<MembershipOperation<T, L>> fo
     }
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> From<Event<T, L>> for StaticEvent<T> {
-    fn from(op: Event<T, L>) -> Self {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Event<S, T, L>>
+    for StaticEvent<T>
+{
+    fn from(op: Event<S, T, L>) -> Self {
         match op {
             Event::Delegated(d) => StaticEvent::Delegated(Rc::unwrap_or_clone(d).map(Into::into)),
             Event::Revoked(r) => StaticEvent::Revoked(Rc::unwrap_or_clone(r).map(Into::into)),
@@ -84,5 +70,31 @@ impl<T: ContentRef, L: MembershipListener<T>> From<Event<T, L>> for StaticEvent<
                 StaticEvent::PrekeysExpanded(Rc::unwrap_or_clone(pke).map(Into::into))
             }
         }
+    }
+}
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for Event<S, T, L> {
+    fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
+        StaticEvent::from(self.clone()).serialize(serializer)
+    }
+}
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Event<S, T, L> {
+    fn clone(&self) -> Self {
+        match self {
+            Event::Delegated(d) => Event::Delegated(Rc::clone(d)),
+            Event::Revoked(r) => Event::Revoked(Rc::clone(r)),
+
+            Event::CgkaOperation(cgka) => Event::CgkaOperation(Rc::clone(cgka)),
+
+            Event::PrekeyRotated(pkr) => Event::PrekeyRotated(Rc::clone(pkr)),
+            Event::PrekeysExpanded(pke) => Event::PrekeysExpanded(Rc::clone(pke)),
+        }
+    }
+}
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for Event<S, T, L> {
+    fn dupe(&self) -> Self {
+        self.clone()
     }
 }

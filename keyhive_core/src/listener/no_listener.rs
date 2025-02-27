@@ -2,7 +2,7 @@ use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyLi
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::signed::Signed,
+    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
@@ -17,13 +17,13 @@ use std::rc::Rc;
 pub struct NoListener;
 
 impl PrekeyListener for NoListener {
-    fn on_prekeys_expanded(&self, _e: &Rc<Signed<AddKeyOp>>) {}
-    fn on_prekey_rotated(&self, _e: &Rc<Signed<RotateKeyOp>>) {}
+    async fn on_prekeys_expanded(&self, _e: &Rc<Signed<AddKeyOp>>) {}
+    async fn on_prekey_rotated(&self, _e: &Rc<Signed<RotateKeyOp>>) {}
 }
 
-impl<T: ContentRef> MembershipListener<T> for NoListener {
-    fn on_delegation(&self, _data: &Rc<Signed<Delegation<T, NoListener>>>) {}
-    fn on_revocation(&self, _data: &Rc<Signed<Revocation<T, NoListener>>>) {}
+impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for NoListener {
+    async fn on_delegation(&self, _data: &Rc<Signed<Delegation<S, T, NoListener>>>) {}
+    async fn on_revocation(&self, _data: &Rc<Signed<Revocation<S, T, NoListener>>>) {}
 }
 
 impl CgkaListener for NoListener {

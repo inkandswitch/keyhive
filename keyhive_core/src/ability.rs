@@ -1,19 +1,25 @@
 use crate::{
     access::Access,
     content::reference::ContentRef,
+    crypto::signer::async_signer::AsyncSigner,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::document::Document,
 };
 use std::{cell::RefCell, rc::Rc};
 
 #[derive(Debug)]
-pub struct Ability<'a, T: ContentRef = [u8; 32], L: MembershipListener<T> = NoListener> {
-    pub(crate) doc: &'a Rc<RefCell<Document<T, L>>>,
+pub struct Ability<
+    'a,
+    S: AsyncSigner,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<S, T> = NoListener,
+> {
+    pub(crate) doc: &'a Rc<RefCell<Document<S, T, L>>>,
     pub(crate) can: Access,
 }
 
-impl<T: ContentRef, L: MembershipListener<T>> Ability<'_, T, L> {
-    pub fn doc(&self) -> &Rc<RefCell<Document<T, L>>> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Ability<'_, S, T, L> {
+    pub fn doc(&self) -> &Rc<RefCell<Document<S, T, L>>> {
         self.doc
     }
 

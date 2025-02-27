@@ -1,24 +1,29 @@
 use crate::{
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed},
+    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::group::delegation::{Delegation, StaticDelegation},
 };
+use derive_where::derive_where;
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Invocation<C: ContentRef = [u8; 32], L: MembershipListener<C> = NoListener, T: Clone = C>
-{
+#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive_where(Clone; T)]
+pub struct Invocation<
+    S: AsyncSigner,
+    C: ContentRef = [u8; 32],
+    L: MembershipListener<S, C> = NoListener,
+    T: Clone = C,
+> {
     pub(crate) invoke: T,
-    pub(crate) proof: Option<Rc<Signed<Delegation<C, L>>>>,
+    pub(crate) proof: Option<Rc<Signed<Delegation<S, C, L>>>>,
 }
 
-impl<C: ContentRef, L: MembershipListener<C>, T: Clone> Serialize for Invocation<C, L, T>
-where
-    T: Serialize,
+impl<S: AsyncSigner, C: ContentRef, L: MembershipListener<S, C>, T: Clone + Serialize> Serialize
+    for Invocation<S, C, L, T>
 {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticInvocation::from(self.clone()).serialize(serializer)
     }
 }
@@ -29,10 +34,10 @@ pub struct StaticInvocation<C: ContentRef, T: Clone> {
     pub(crate) proof: Option<Digest<Signed<StaticDelegation<C>>>>,
 }
 
-impl<C: ContentRef, L: MembershipListener<C>, T: Clone> From<Invocation<C, L, T>>
-    for StaticInvocation<C, T>
+impl<S: AsyncSigner, C: ContentRef, L: MembershipListener<S, C>, T: Clone>
+    From<Invocation<S, C, L, T>> for StaticInvocation<C, T>
 {
-    fn from(invocation: Invocation<C, L, T>) -> Self {
+    fn from(invocation: Invocation<S, C, L, T>) -> Self {
         let invoke = invocation.invoke;
         let proof = invocation
             .proof

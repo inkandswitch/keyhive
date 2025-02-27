@@ -8,17 +8,17 @@ test.beforeEach(async ({ page }) => {
 
 test.describe("Document", async () => {
   test('constructor', async ({ page }) => {
-    const out = await page.evaluate(() => {
-        const { Keyhive, SigningKey, ChangeRef } = window.keyhive
+    const out = await page.evaluate(async () => {
+      const { Keyhive, Signer, ChangeRef } = window.keyhive
 
-        const bh = new Keyhive(SigningKey.generate())
-        const changeRef = new ChangeRef(new Uint8Array([1, 2, 3]));
+      const bh = await new Keyhive(await new Signer())
+      const changeRef = new ChangeRef(new Uint8Array([1, 2, 3]));
 
-        const g = bh.generateGroup([]).toPeer()
-        const doc = bh.generateDocument([g], changeRef, [])
-        const docId = doc.id
+      const g = await bh.generateGroup([])
+      const doc = await bh.generateDocument([g.toPeer()], changeRef, [])
+      const docId = doc.id
 
-        return { doc, docId }
+      return { doc, docId }
     })
 
     expect(out.doc).toBeDefined()

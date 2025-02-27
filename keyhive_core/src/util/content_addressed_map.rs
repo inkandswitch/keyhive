@@ -1,4 +1,5 @@
 use crate::crypto::digest::Digest;
+use derive_where::derive_where;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -9,7 +10,8 @@ use std::{
 ///
 /// Since all operations are referenced by their hash,
 /// a map that indexes by the same cryptographic hash is convenient.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[derive_where(Clone)]
 pub struct CaMap<T: Serialize>(pub(crate) HashMap<Digest<T>, Rc<T>>);
 
 impl<T: Serialize> CaMap<T> {
