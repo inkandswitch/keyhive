@@ -25,6 +25,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> DelegationStore
     pub fn new() -> Self {
         Self(Rc::new(RefCell::new(CaMap::new())))
     }
+
     pub fn get(
         &self,
         key: &Digest<Signed<Delegation<S, T, L>>>,
@@ -32,6 +33,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> DelegationStore
         let rc = self.0.dupe();
         let borrowed = RefCell::borrow(&rc);
         borrowed.get(key).cloned()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.borrow().len()
     }
 
     pub fn contains_key(&self, key: &Digest<Signed<Delegation<S, T, L>>>) -> bool {

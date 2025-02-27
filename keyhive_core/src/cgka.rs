@@ -58,17 +58,17 @@ pub struct Cgka {
     pub owner_sks: ShareKeyMap,
     tree: BeeKem,
     /// Graph of all operations seen (but not necessarily applied) so far.
-    ops_graph: CgkaOperationGraph,
+    pub(crate) ops_graph: CgkaOperationGraph,
     /// Whether there are ops in the graph that have not been applied to the
     ///tree due to a structural change.
     pending_ops_for_structural_change: bool,
     // TODO: Enable policies to evict older entries.
     #[derivative(Hash(hash_with = "hash_pcs_keys"))]
-    pcs_keys: CaMap<PcsKey>,
+    pub(crate) pcs_keys: CaMap<PcsKey>,
 
     /// The update operations for each PCS key.
     #[derivative(Hash(hash_with = "hashed_key_bytes"))]
-    pcs_key_ops: HashMap<Digest<PcsKey>, Digest<Signed<CgkaOperation>>>,
+    pub(crate) pcs_key_ops: HashMap<Digest<PcsKey>, Digest<Signed<CgkaOperation>>>,
 
     original_member: (IndividualId, ShareKey),
 }
@@ -85,7 +85,7 @@ fn hashed_key_bytes<T: Serialize, V, H: Hasher>(hmap: &HashMap<Digest<T>, V>, st
 }
 
 impl Cgka {
-    pub fn new(
+    pub fn new<S: AsyncSigner>(
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,

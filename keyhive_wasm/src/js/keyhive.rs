@@ -182,7 +182,7 @@ impl JsKeyhive {
 
         Ok(res
             .revocations()
-            .into_iter()
+            .iter()
             .duped()
             .map(JsSignedRevocation)
             .collect())
@@ -207,7 +207,7 @@ impl JsKeyhive {
         self.0
             .force_pcs_update(doc.0.dupe())
             .await
-            .map_err(|e| EncryptContentError::from(e))?;
+            .map_err(EncryptContentError::from)?;
         Ok(())
     }
 

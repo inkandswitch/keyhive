@@ -600,7 +600,7 @@ impl PeerId {
     }
 
     pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        crate::leb128::encode_uleb128(buf, self.0.as_bytes().len() as u64);
+        crate::leb128::encode_uleb128(buf, self.0.len() as u64);
         buf.extend_from_slice(self.0.as_bytes());
     }
 

@@ -396,10 +396,10 @@ mod tests {
         state.insert_op(op2).unwrap();
         state.insert_op(op1).unwrap();
 
-        let rerebuildd = state.build();
-        assert_eq!(rerebuildd.len(), 2);
-        assert!(rerebuildd.contains(&share_key_2));
-        assert!(rerebuildd.contains(&share_key_3));
+        let rebuilt = state.build();
+        assert_eq!(rebuilt.len(), 2);
+        assert!(rebuilt.contains(&share_key_2));
+        assert!(rebuilt.contains(&share_key_3));
 
         // Connect op 4 & 5
 

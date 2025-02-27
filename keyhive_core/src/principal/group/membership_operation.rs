@@ -209,13 +209,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
 
         for dlg in delegation_heads.values() {
             let op: MembershipOperation<S, T, L> = dlg.dupe().into();
-            leftovers.insert(op.signature().into(), op.clone());
+            leftovers.insert(op.signature().into(), op.dupe());
             explore.push(op);
         }
 
         for rev in revocation_heads.values() {
             let op: MembershipOperation<S, T, L> = rev.dupe().into();
-            leftovers.insert(op.signature().into(), op.clone());
+            leftovers.insert(op.signature().into(), op.dupe());
             explore.push(op);
         }
 
