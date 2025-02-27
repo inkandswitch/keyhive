@@ -42,7 +42,6 @@ impl<T: SyncSigner> AsyncSigner for T {
     }
 }
 
-///////-------- FIXME FIXME FIXME
 pub trait SyncSignerBasic {
     fn try_sign_bytes_sync_basic(
         &self,
