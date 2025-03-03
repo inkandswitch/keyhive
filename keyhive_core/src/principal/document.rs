@@ -63,23 +63,23 @@ pub struct Document<
     pub(crate) reader_keys: HashMap<IndividualId, (Rc<RefCell<Individual>>, ShareKey)>,
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
-    pub(crate) cgka: Cgka,
+    cgka: Option<Cgka>,
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, L> {
     // NOTE doesn't register into the top-level Keyhive context
     pub fn from_group(
         group: Group<S, T, L>,
-        viewer: &Active<S, L>,
+        _viewer: &Active<S, L>,
         content_heads: NonEmpty<T>,
     ) -> Result<Self, CgkaError> {
-        let doc_id = DocumentId(group.verifying_key().into());
-        let doc_prekey = viewer
-            .pick_prekey(doc_id)
-            .ok_or(CgkaError::ShareKeyNotFound)?;
+        // let doc_id = DocumentId(group.verifying_key().into());
+        // let doc_prekey = viewer
+        //     .pick_prekey(doc_id)
+        //     .ok_or(CgkaError::ShareKeyNotFound)?;
 
         let mut doc = Document {
-            cgka: Cgka::new(doc_id, viewer.id(), doc_prekey)?,
+            cgka: None,
             group,
             reader_keys: Default::default(),
             content_heads: content_heads.iter().cloned().collect(),
@@ -99,6 +99,20 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
 
     pub fn agent_id(&self) -> AgentId {
         self.doc_id().into()
+    }
+
+    pub fn cgka(&self) -> Result<&Cgka, CgkaError> {
+        match &self.cgka {
+            Some(cgka) => Ok(cgka),
+            None => Err(CgkaError::NotInitialized),
+        }
+    }
+
+    pub fn cgka_mut(&mut self) -> Result<&mut Cgka, CgkaError> {
+        match &mut self.cgka {
+            Some(cgka) => Ok(cgka),
+            None => Err(CgkaError::NotInitialized),
+        }
     }
 
     #[allow(clippy::type_complexity)]
@@ -164,7 +178,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         owner_sks.insert(owner_share_key, owner_share_secret_key);
         let mut cgka =
             Cgka::new(doc_id, owner_id, owner_share_key)?.with_new_owner(owner_id, owner_sks)?;
-        let mut ops: Vec<Signed<CgkaOperation>> = Vec::new();
+        let mut ops: Vec<Signed<CgkaOperation>> = vec![];
+        ops.push(cgka.init_add_op());
         if other_members.len() > 1 {
             ops.extend(
                 cgka.add_multiple(
@@ -179,15 +194,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         let (_pcs_key, update_op) = cgka
             .update(owner_share_key, owner_share_secret_key, signer, csprng)
             .await?;
-        // FIXME: We don't currently do anything with these ops, but need to share them
-        // across the network.
         ops.push(update_op);
         Ok(Document {
             group,
             reader_keys: HashMap::new(), // FIXME
             content_state: HashSet::new(),
             content_heads: initial_content_heads.iter().cloned().collect(),
-            cgka,
+            cgka: Some(cgka),
         })
     }
 
@@ -231,8 +244,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
 
         Ok(stream::iter(prekeys.iter().map(Ok::<_, CgkaError>))
             .try_fold(vec![], |mut acc, (id, pre_key)| async {
-                if let Some(op) = cell.borrow_mut().cgka.add(*id, *pre_key, signer).await? {
-                    acc.push(op);
+                if let Ok(cgka) = cell.borrow_mut().cgka_mut() {
+                    if let Some(op) = cgka.add(*id, *pre_key, signer).await? {
+                        acc.push(op);
+                    }
+                } else if let Err(CgkaError::NotInitialized) = cell.borrow_mut().cgka_mut() {
+                    // FIXME: BROOKE init me!
+                    // let mut owner_sks = ShareKeyMap::new();
+                    // owner_sks.insert(*pre_key, ShareSecretKey::generate(signer));
+                    // let mut cgka = Cgka::new(self.doc_id(), *id, *pre_key)?;
+                    // cgka = cgka.with_new_owner(*id, owner_sks)?;
+                    // cell.borrow_mut().cgka = Some(cgka);
                 }
                 Ok::<_, CgkaError>(acc)
             })

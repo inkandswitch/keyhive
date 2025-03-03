@@ -5,6 +5,9 @@ pub enum CgkaError {
     #[error("Conversion error")]
     Conversion,
 
+    #[error("Not initialized")]
+    NotInitialized,
+
     #[error("Current encrypter not found")]
     CurrentEncrypterNotFound,
 
