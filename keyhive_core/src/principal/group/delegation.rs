@@ -150,7 +150,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for D
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct StaticDelegation<T: ContentRef> {
     pub can: Access,
 
@@ -159,6 +158,27 @@ pub struct StaticDelegation<T: ContentRef> {
 
     pub after_revocations: Vec<Digest<Signed<StaticRevocation<T>>>>,
     pub after_content: BTreeMap<DocumentId, Vec<T>>,
+}
+
+#[cfg(any(test, feature = "arbitrary"))]
+impl<'a, T: ContentRef + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
+    for StaticDelegation<T>
+{
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let can = Access::arbitrary(u)?;
+        let proof = u.arbitrary()?;
+        let delegate = Identifier::arbitrary(u)?;
+        let after_revocations = u.arbitrary()?;
+        let after_content = u.arbitrary()?;
+
+        Ok(Self {
+            can,
+            proof,
+            delegate,
+            after_revocations,
+            after_content,
+        })
+    }
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Delegation<S, T, L>>

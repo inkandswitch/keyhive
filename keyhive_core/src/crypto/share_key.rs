@@ -11,6 +11,15 @@ use std::fmt;
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ShareKey(x25519_dalek::PublicKey);
 
+#[cfg(any(test, feature = "arbitrary"))]
+impl<'a> arbitrary::Arbitrary<'a> for ShareKey {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let bytes = u.bytes(32)?;
+        let arr = <[u8; 32]>::try_from(bytes).unwrap();
+        Ok(Self(x25519_dalek::PublicKey::from(arr)))
+    }
+}
+
 impl ShareKey {
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         Self(x25519_dalek::PublicKey::from(
@@ -76,6 +85,7 @@ impl From<x25519_dalek::PublicKey> for ShareKey {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct ShareSecretKey([u8; 32]);
 
 impl ShareSecretKey {

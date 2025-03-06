@@ -170,6 +170,14 @@ pub enum TreeNodeIndex {
     Inner(InnerNodeIndex),
 }
 
+#[cfg(any(test, feature = "arbitrary"))]
+impl<'a> arbitrary::Arbitrary<'_> for TreeNodeIndex {
+    fn arbitrary(g: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
+        let index = u32::arbitrary(g)?;
+        Ok(TreeNodeIndex::new(index))
+    }
+}
+
 impl TreeNodeIndex {
     /// Create a new `TreeNodeIndex` from a `u32`.
     fn new(index: u32) -> Self {
