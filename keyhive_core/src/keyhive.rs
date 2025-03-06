@@ -5,6 +5,7 @@ use crate::{
     access::Access,
     archive::Archive,
     cgka::{error::CgkaError, operation::CgkaOperation},
+    contact_card::ContactCard,
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -1373,6 +1374,10 @@ impl<
         self.ingest_unsorted_static_events(
             events.values().cloned().map(Into::into).collect::<Vec<_>>(),
         )
+    }
+
+    pub fn contact_card(&self) -> ContactCard {
+        self.active.borrow().individual().contact_card()
     }
 }
 

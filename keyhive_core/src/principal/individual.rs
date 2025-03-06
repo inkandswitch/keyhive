@@ -8,6 +8,7 @@ use self::op::KeyOp;
 
 use super::{agent::id::AgentId, document::id::DocumentId};
 use crate::{
+    contact_card::ContactCard,
     crypto::{
         share_key::ShareKey,
         signed::{Signed, SigningError},
@@ -86,6 +87,11 @@ impl Individual {
             prekeys: prekey_state.build(),
             prekey_state,
         })
+    }
+
+    pub fn contact_card(&self) -> ContactCard {
+        let op = self.prekey_state.ops().0.iter().next().unwrap().1;
+        ContactCard::from(Rc::unwrap_or_clone(op.clone()))
     }
 
     pub fn id(&self) -> IndividualId {

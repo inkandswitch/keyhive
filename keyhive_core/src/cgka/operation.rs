@@ -97,7 +97,7 @@ impl CgkaOperation {
     }
 
     /// Document id
-    pub(crate) fn doc_id(&self) -> &DocumentId {
+    pub fn doc_id(&self) -> &DocumentId {
         match self {
             CgkaOperation::Add { doc_id, .. } => doc_id,
             CgkaOperation::Remove { doc_id, .. } => doc_id,
