@@ -71,3 +71,12 @@ pub enum CgkaError {
     #[error(transparent)]
     SigningError(#[from] SigningError),
 }
+
+impl CgkaError {
+    pub fn is_missing_dependency(&self) -> bool {
+        match self {
+            Self::IdentifierNotFound => true,
+            _ => false,
+        }
+    }
+}

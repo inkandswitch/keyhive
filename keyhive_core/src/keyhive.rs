@@ -55,6 +55,7 @@ use std::{
     rc::Rc,
 };
 use thiserror::Error;
+use tracing::Instrument;
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Debug, Derivative)]
@@ -554,6 +555,20 @@ impl<
             }
         }
         Ok(ops)
+    }
+
+    pub fn cgka_ops_for_doc(
+        &self,
+        doc: &DocumentId,
+    ) -> Result<Option<Vec<Rc<Signed<CgkaOperation>>>>, CgkaError> {
+        let Some(doc) = self.docs.get(doc) else {
+            return Ok(None);
+        };
+        let mut ops = Vec::new();
+        for epoch in doc.borrow().cgka_ops()?.iter() {
+            ops.extend(epoch.iter().cloned());
+        }
+        Ok(Some(ops))
     }
 
     pub fn membership_ops_for_agent(
@@ -1397,6 +1412,21 @@ pub enum ReceiveStaticEventError<S: AsyncSigner, T: ContentRef, L: MembershipLis
     ReceieveStaticMembershipError(#[from] ReceieveStaticDelegationError<S, T, L>),
 }
 
+impl<S, T, L> ReceiveStaticEventError<S, T, L>
+where
+    S: AsyncSigner,
+    T: ContentRef,
+    L: MembershipListener<S, T>,
+{
+    pub fn is_missing_dependency(&self) -> bool {
+        match self {
+            Self::ReceivePrekeyOpError(e) => e.is_missing_dependency(),
+            Self::ReceiveCgkaOpError(e) => e.is_missing_dependency(),
+            Self::ReceieveStaticMembershipError(e) => e.is_missing_dependency(),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ReceieveStaticDelegationError<
     S: AsyncSigner,
@@ -1420,6 +1450,24 @@ pub enum ReceieveStaticDelegationError<
 
     #[error("Missing agent: {0}")]
     UnknownAgent(Identifier),
+}
+
+impl<S, T, L> ReceieveStaticDelegationError<S, T, L>
+where
+    S: AsyncSigner,
+    T: ContentRef,
+    L: MembershipListener<S, T>,
+{
+    pub fn is_missing_dependency(&self) -> bool {
+        match self {
+            Self::MissingProof(_) => true,
+            Self::MissingRevocationDependency(_) => true,
+            Self::CgkaInitError(e) => e.is_missing_dependency(),
+            Self::GroupReceiveError(_) => false,
+            Self::UnknownAgent(_) => true,
+            Self::VerificationError(_) => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -1456,6 +1504,17 @@ pub enum ReceiveCgkaOpError {
 
     #[error("Unknown invite prekey for received CGKA add op: {0}")]
     UnknownInvitePrekey(ShareKey),
+}
+
+impl ReceiveCgkaOpError {
+    pub fn is_missing_dependency(&self) -> bool {
+        match self {
+            Self::CgkaError(e) => e.is_missing_dependency(),
+            Self::VerificationError(_) => false,
+            Self::UnknownDocument(_) => false,
+            Self::UnknownInvitePrekey(_) => false,
+        }
+    }
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<MissingIndividualError>
