@@ -1760,4 +1760,64 @@ mod tests {
 
         assert_eq!(dlg.delegation.subject_id(), doc.borrow().doc_id().into());
     }
+
+    #[tokio::test]
+    async fn cgka_ops_for_doc() {
+        // Create two keyhives, run membership sync (i.e. membersip operatiosn and prekey operations)
+        // then attempt to lookup cgka operations on the other_keyhive for the doc we just synced
+
+        // First create the two keyhives
+        let mut alice = make_keyhive().await;
+        let mut bob = make_keyhive().await;
+
+        // Now make a document on alice which bob can read
+        let bob_indi = Rc::new(RefCell::new(bob.active().borrow().individual().clone()));
+        let doc = alice
+            .generate_doc(vec![bob_indi.into()], nonempty![[0u8; 32]])
+            .await
+            .unwrap();
+
+        // Now pull out all the membership operations and prekey operations from alice
+        let mut events = alice
+            .membership_ops_for_agent(&bob.active().clone().into())
+            .into_values()
+            .map(|v| StaticEvent::from(Event::from(v)))
+            .chain(
+                alice
+                    .reachable_prekey_ops_for_agent(&bob.active().clone().into())
+                    .into_iter()
+                    .flat_map(|(_, v)| {
+                        v.into_iter().map(|v| {
+                            StaticEvent::from(Event::<MemorySigner, _, NoListener>::from(
+                                Rc::unwrap_or_clone(v),
+                            ))
+                        })
+                    }),
+            )
+            .collect::<Vec<_>>();
+
+        // Now ingest all these events on bob
+        let mut iterations = 0;
+        loop {
+            iterations += 1;
+            if iterations > 100 {
+                panic!("Too many iterations");
+            }
+            let evts = std::mem::take(&mut events);
+            if evts.is_empty() {
+                break;
+            }
+            for op in evts {
+                if let Err(_) = bob.receive_static_event(op.clone()) {
+                    events.push(op);
+                }
+            }
+        }
+
+        // Check the doc exists
+        bob.get_document(doc.borrow().doc_id()).unwrap();
+
+        // This will throw an error because the heads of the cgka operation graph are empty
+        bob.cgka_ops_reachable_by_agent(&alice.active().clone().into());
+    }
 }
