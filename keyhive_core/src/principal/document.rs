@@ -223,10 +223,21 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
 
         after_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
 
-        Ok(self
+        let mut update = self
             .group
             .add_member_with_manual_content(member_to_add.dupe(), can, signer, after_content)
-            .await?)
+            .await?;
+
+        // Group::add_member_with_manual_content adds the member to the CGKA for
+        // transitive document members of the group, but not to the group itself
+        // (because the group might not be a document), so we add the member to
+        // the group here and add any extra resulting cgka ops to the update.
+        update.cgka_ops.extend(
+            self.add_cgka_member(&update.delegation, signer)
+                .await?
+                .into_iter(),
+        );
+        Ok(update)
     }
 
     pub async fn add_cgka_member(
