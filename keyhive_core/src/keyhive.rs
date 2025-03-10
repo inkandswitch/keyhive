@@ -1802,6 +1802,7 @@ mod tests {
         bob.get_document(doc.borrow().doc_id()).unwrap();
 
         // This will throw an error because the heads of the cgka operation graph are empty
-        bob.cgka_ops_reachable_by_agent(&alice.active().clone().into());
+        let result = bob.cgka_ops_reachable_by_agent(&alice.active().clone().into());
+        assert!(result.is_ok());
     }
 }
