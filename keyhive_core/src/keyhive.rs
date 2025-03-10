@@ -1773,28 +1773,12 @@ mod tests {
         // Now make a document on alice which bob can read
         let bob_indi = Rc::new(RefCell::new(bob.active().borrow().individual().clone()));
         let doc = alice
-            .generate_doc(vec![bob_indi.into()], nonempty![[0u8; 32]])
+            .generate_doc(vec![bob_indi.dupe().into()], nonempty![[0u8; 32]])
             .await
             .unwrap();
 
         // Now pull out all the membership operations and prekey operations from alice
-        let mut events = alice
-            .membership_ops_for_agent(&bob.active().clone().into())
-            .into_values()
-            .map(|v| StaticEvent::from(Event::from(v)))
-            .chain(
-                alice
-                    .reachable_prekey_ops_for_agent(&bob.active().clone().into())
-                    .into_iter()
-                    .flat_map(|(_, v)| {
-                        v.into_iter().map(|v| {
-                            StaticEvent::from(Event::<MemorySigner, _, NoListener>::from(
-                                Rc::unwrap_or_clone(v),
-                            ))
-                        })
-                    }),
-            )
-            .collect::<Vec<_>>();
+        let mut events = alice.static_events_for_agent(&bob_indi.into()).unwrap();
 
         // Now ingest all these events on bob
         let mut iterations = 0;
@@ -1807,9 +1791,9 @@ mod tests {
             if evts.is_empty() {
                 break;
             }
-            for op in evts {
+            for (digest, op) in evts {
                 if let Err(_) = bob.receive_static_event(op.clone()) {
-                    events.push(op);
+                    events.insert(digest, op);
                 }
             }
         }
