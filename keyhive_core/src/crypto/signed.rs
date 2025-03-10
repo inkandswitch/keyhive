@@ -46,22 +46,39 @@ fn hash_signature<H: Hasher>(signature: &ed25519_dalek::Signature, state: &mut H
 }
 
 impl<T: Serialize> Signed<T> {
+    /// Getter for the payload.
     pub fn payload(&self) -> &T {
         &self.payload
     }
 
+    /// Getter for the [`Identifier`] of the signer.
     pub fn id(&self) -> Identifier {
         self.verifying_key().into()
     }
 
+    /// Getter for the verifying key of the signer.
     pub fn issuer(&self) -> &ed25519_dalek::VerifyingKey {
         &self.issuer
     }
 
+    /// Getter for the verifying key of the signer.
     pub fn signature(&self) -> &ed25519_dalek::Signature {
         &self.signature
     }
 
+    /// Verify the payload and signature against the issuer's verifying key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use keyhive_core::crypto::signed::Signed;
+    /// # use keyhive_core::crypto::signer::memory::MemorySigner;
+    /// # use keyhive_core::crypto::signer::sync_signer::SyncSigner;
+    /// #
+    /// let signer = MemorySigner::generate(&mut rand::thread_rng());
+    /// let signed = signer.try_sign_sync("Hello, world!").unwrap();
+    /// assert!(signed.try_verify().is_ok());
+    /// ```
     pub fn try_verify(&self) -> Result<(), VerificationError> {
         let buf: Vec<u8> = bincode::serialize(&self.payload)?;
         Ok(self
@@ -69,7 +86,10 @@ impl<T: Serialize> Signed<T> {
             .verify(buf.as_slice(), &self.signature)?)
     }
 
-    pub fn map<U: Serialize, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
+    /// Map over the paylaod of the signed data.
+    ///
+    /// This is primarily useful if you need to
+    pub(crate) fn map<U: Serialize, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
         Signed {
             payload: f(self.payload),
             issuer: self.issuer,

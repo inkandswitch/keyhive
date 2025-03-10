@@ -1,3 +1,6 @@
+//! Encryption keys, key derivation, and associated metadata.
+
+use super::signed::Signed;
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
@@ -8,10 +11,9 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::signed::Signed;
+const STATIC_CONTEXT: &str = "/keyhive/beekem/app_secret/";
 
-const STATIC_CONTEXT: &str = "/automerge/keyhive/beekem/app_secret/";
-
+/// A [`SymmetricKey`] plus metadata needed for causal encryption.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ApplicationSecret<Cr: ContentRef> {
     key: SymmetricKey,
@@ -23,6 +25,7 @@ pub struct ApplicationSecret<Cr: ContentRef> {
 }
 
 impl<Cr: ContentRef> ApplicationSecret<Cr> {
+    /// Construct a new [`ApplicationSecret`].
     pub fn new(
         key: SymmetricKey,
         pcs_key_hash: Digest<PcsKey>,
@@ -41,10 +44,17 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
         }
     }
 
+    /// Getter for the underlying symmetric key.
     pub fn key(&self) -> SymmetricKey {
         self.key
     }
 
+    /// Encrypt some plaintext.
+    ///
+    /// # Arguments
+    ///
+    /// * `plaintext` - The plaintext to encrypt.
+    /// ```
     pub fn try_encrypt<T>(
         &self,
         plaintext: &[u8],
@@ -62,10 +72,12 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
     }
 }
 
+/// A key used to derive application secrets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PcsKey(pub ShareSecretKey);
 
 impl PcsKey {
+    /// Lift a `ShareSecretKey` into a `PcsKey`.
     pub fn new(share_secret_key: ShareSecretKey) -> Self {
         Self(share_secret_key)
     }

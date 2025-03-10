@@ -18,21 +18,22 @@ use std::{
     marker::PhantomData,
 };
 
-/// A [`blake3::Digest`] tagged with which type it is a hash of.
+/// A [`blake3::Hash`] tagged with which type it is a hash of.
 ///
-/// This makes it easy to trace hash identifiers through the system.
+/// This makes it easy to trace the origin type of hash identifiers flowing through the system.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```
 /// # use keyhive_core::crypto::digest::Digest;
+/// #
 /// let string_hash: Digest<String> = Digest::hash(&"hello world".to_string());
 /// let array_hash: Digest<[u8; 3]> = Digest::hash(&[1, 2, 3]);
 /// let bytes_hash: Digest<Vec<u8>> = Digest::hash(&vec![42, 99]);
 /// ```
 #[derive(Debug)]
 pub struct Digest<T: Serialize> {
-    /// The underlying, unparameterized [`blake3::Digest`].
+    /// The underlying, unparameterized [`blake3::Hash`].
     pub raw: blake3::Hash,
 
     /// A phantom parameter to retain the type of the preimage.
@@ -41,6 +42,15 @@ pub struct Digest<T: Serialize> {
 
 impl<T: Serialize> Digest<T> {
     /// Digest a value and retain its type as a phantom parameter.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use keyhive_core::crypto::digest::Digest;
+    /// #
+    /// let digest = Digest::hash(&vec![1u8, 2, 3]);
+    /// assert_eq!(digest.as_slice().len(), 32);
+    /// ```
     pub fn hash(preimage: &T) -> Self {
         let bytes: Vec<u8> = bincode::serialize(&preimage).expect("unable to serialize to bytes");
 
@@ -51,6 +61,21 @@ impl<T: Serialize> Digest<T> {
     }
 
     /// Get the hash as a byte slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use keyhive_core::crypto::digest::Digest;
+    /// #
+    /// let digest = Digest::hash(&vec![1u8, 2, 3]);
+    /// assert_eq!(
+    ///     digest.as_slice(),
+    ///     &[0x2A, 0x6D, 0x7F, 0x5B, 0x7F, 0x2A, 0x4A, 0x64,
+    ///       0xA0, 0x14, 0x8F, 0xFC, 0xFA, 0x96, 0x94, 0x46,
+    ///       0xEF, 0xD0, 0x95, 0xBE, 0xFE, 0x79, 0x79, 0x91,
+    ///       0x29, 0xAB, 0x54, 0x8F, 0x8F, 0xC4, 0x42, 0x2B]
+    /// );
+    /// ```
     pub fn as_slice(&self) -> &[u8] {
         self.raw.as_bytes()
     }
@@ -61,6 +86,7 @@ impl<T: Serialize> Digest<T> {
     ///
     /// ```
     /// # use keyhive_core::crypto::digest::Digest;
+    /// #
     /// let hash = Digest::hash(&"hello world!".to_string());
     /// assert_eq!(hash.trailing_zeros(), 3);
     ///
@@ -88,6 +114,7 @@ impl<T: Serialize> Digest<T> {
     ///
     /// ```
     /// # use keyhive_core::crypto::digest::Digest;
+    /// #
     /// let hash = Digest::hash(&"hello world");
     /// assert_eq!(hash.trailing_zero_bytes(), 0);
     /// ```

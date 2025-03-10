@@ -8,6 +8,9 @@ use std::fmt;
 use proptest_derive::Arbitrary;
 
 /// Access levels for a capability.
+///
+/// The access levels are ordered from least to most permissive.
+/// Later levels imply all earlier levels. For example, `Write` implies the ability to `Read`.
 #[cfg_attr(feature = "test_utils", derive(Arbitrary))]
 #[derive(
     Debug, Clone, Dupe, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
@@ -15,6 +18,15 @@ use proptest_derive::Arbitrary;
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum Access {
     /// The ability to retrieve bytes over the network.
+    ///
+    /// This is important for the defence-in-depth strategy,
+    /// keeping all Keyhive data out of the hands of unauthorized actors.
+    ///
+    /// All encryption is fallable. For example, a key may be leaked, or a cipher may be broken.
+    ///
+    /// While a Byzantine node may fail to enforce this rule,
+    /// a node with only `Pull` access does not have decryption (`Read`) access
+    /// to the underlying data.
     Pull,
 
     /// The ability to read (decrypt) the content of a document.

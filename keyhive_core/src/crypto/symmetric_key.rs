@@ -18,37 +18,38 @@ use x25519_dalek::SharedSecret;
 /// # };
 /// # use std::{cell::RefCell, rc::Rc};
 /// # use nonempty::nonempty;
-/// # #[tokio::main(flavor = "current_thread")]
-/// # async fn main() {
-/// let mut plaintext = b"hello world";
+/// #
+/// #[tokio::main(flavor = "current_thread")]
+/// async fn main() {
+///     let mut plaintext = b"hello world";
 ///
-/// let mut csprng = rand::thread_rng();
+///     let mut csprng = rand::thread_rng();
 ///
-/// let sk = MemorySigner::generate(&mut csprng);
-/// let user = Individual::generate(&sk, &mut csprng).await.unwrap();
-/// let user_agent: Agent<MemorySigner, String> = Rc::new(RefCell::new(user)).into();
+///     let sk = MemorySigner::generate(&mut csprng);
+///     let user = Individual::generate(&sk, &mut csprng).await.unwrap();
+///     let user_agent: Agent<MemorySigner, String> = Rc::new(RefCell::new(user)).into();
 ///
-/// let delegation_store = DelegationStore::new();
-/// let revocation_store = RevocationStore::new();
-/// let doc = Document::generate(
-///     nonempty![user_agent],
-///     nonempty!["commit-1".to_string()],
-///     delegation_store,
-///     revocation_store,
-///     NoListener,
-///     &sk,
-///     &mut csprng
-/// ).await.unwrap();
+///     let delegation_store = DelegationStore::new();
+///     let revocation_store = RevocationStore::new();
+///     let doc = Document::generate(
+///         nonempty![user_agent],
+///         nonempty!["commit-1".to_string()],
+///         delegation_store,
+///         revocation_store,
+///         NoListener,
+///         &sk,
+///         &mut csprng
+///     ).await.unwrap();
 ///
-/// let key = SymmetricKey::generate(&mut csprng);
-/// let nonce = Siv::new(&key, plaintext, doc.doc_id()).unwrap();
+///     let key = SymmetricKey::generate(&mut csprng);
+///     let nonce = Siv::new(&key, plaintext, doc.doc_id()).unwrap();
 ///
-/// let mut roundtrip_buf = plaintext.to_vec();
-/// key.try_encrypt(nonce, &mut roundtrip_buf).unwrap();
-/// key.try_decrypt(nonce, &mut roundtrip_buf).unwrap();
+///     let mut roundtrip_buf = plaintext.to_vec();
+///     key.try_encrypt(nonce, &mut roundtrip_buf).unwrap();
+///     key.try_decrypt(nonce, &mut roundtrip_buf).unwrap();
 ///
-/// assert_eq!(roundtrip_buf.as_slice(), plaintext);
-/// # }
+///     assert_eq!(roundtrip_buf.as_slice(), plaintext);
+/// }
 /// ```
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SymmetricKey([u8; 32]);

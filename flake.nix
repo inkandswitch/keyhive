@@ -166,6 +166,15 @@
 
           "watch:test:host" = cmd "Run all host tests on save"
             "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'test && test --doc'";
+
+          "watch:doctest:host" = cmd "Run all host doctests on save"
+            "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'test --doc'";
+
+          "watch:docs:build:host" = cmd "Refresh the docs for the host target on save"
+            "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'doc --features=mermaid_docs'";
+
+          "watch:docs:build:wasm" = cmd "Refresh the docs with the wasm32-unknown-unknown target on save"
+            "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'doc --features=mermaid_docs --target=wasm32-unknown-unknown'";
         };
 
         test = {

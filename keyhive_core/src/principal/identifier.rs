@@ -30,6 +30,7 @@ impl Identifier {
         self.0.as_bytes()
     }
 
+    /// Returns the underlying bytes as a slice.
     pub fn as_slice(&self) -> &[u8] {
         self.0.as_bytes()
     }

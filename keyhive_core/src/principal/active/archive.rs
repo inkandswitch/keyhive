@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+//! Serializable representation of an [`Active`][super::Active] agent.
 
 use crate::{
     crypto::share_key::{ShareKey, ShareSecretKey},
@@ -6,6 +6,7 @@ use crate::{
 };
 use derivative::Derivative;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Derivative, Serialize, Deserialize)]
 #[derivative(Debug, Hash, PartialEq, Eq)]

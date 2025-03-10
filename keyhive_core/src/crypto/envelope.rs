@@ -1,8 +1,12 @@
 //! The (plaintext) container for causal encryption.
 
-use super::{digest::Digest, read_capability::ReadCap, symmetric_key::SymmetricKey};
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use super::{read_capability::ReadCap, symmetric_key::SymmetricKey};
+use crate::content::reference::ContentRef;
+use serde::{Deserialize, Serialize, Serializer};
+use std::{
+    collections::{BTreeMap, HashMap},
+    hash::{DefaultHasher, Hash, Hasher},
+};
 
 #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
 /// A container for an arbitrary payload and the [`ReadCap`]s required to identify and decrypt its ancestors.
@@ -74,19 +78,42 @@ use std::collections::BTreeMap;
 ///
 /// [causal encryption]: https://github.com/inkandswitch/keyhive/blob/main/design/causal_encryption.md
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct Envelope<T: Serialize> {
+pub struct Envelope<C: ContentRef, T: Serialize> {
     /// The plaintext payload.
     pub plaintext: T,
 
     /// Any ancestors that this envelope depends on.
-    pub ancestors: BTreeMap<Digest<T>, SymmetricKey>,
+    #[serde(serialize_with = "ordered_map")]
+    pub ancestors: HashMap<C, SymmetricKey>,
 }
 
-impl<T: Serialize> Envelope<T> {
-    pub fn ancestor_read_caps(&self) -> Vec<ReadCap<Digest<T>>> {
+impl<T: Serialize, C: ContentRef> Envelope<C, T> {
+    /// Extract the [read capabilities][ReadCap] for the ancestors of this envelope.
+    pub fn ancestor_read_caps(&self) -> Vec<ReadCap<C>> {
         self.ancestors
             .iter()
-            .map(|(id, key)| ReadCap { id: *id, key: *key })
+            .map(|(id, key)| ReadCap {
+                id: id.clone(),
+                key: *key,
+            })
             .collect()
     }
+}
+
+fn ordered_map<S, K: ContentRef, V: Serialize>(
+    value: &HashMap<K, V>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let ordered: BTreeMap<_, _> = value
+        .iter()
+        .map(|(k, v)| {
+            let mut hasher = DefaultHasher::new();
+            (*k).hash(&mut hasher);
+            (hasher.finish(), (k, v))
+        })
+        .collect();
+    ordered.serialize(serializer)
 }
