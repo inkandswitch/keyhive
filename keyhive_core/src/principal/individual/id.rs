@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(
     Debug, Display, Copy, Dupe, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
 )]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct IndividualId(pub Identifier);
 
 impl IndividualId {

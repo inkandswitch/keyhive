@@ -56,6 +56,7 @@ impl std::hash::Hash for ShareKeyMap {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum NodeKey {
     ShareKey(ShareKey),
     ConflictKeys(ConflictKeys),
@@ -69,6 +70,7 @@ impl From<ShareKey> for NodeKey {
 
 /// Keys that were concurrently added to the same node.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct ConflictKeys {
     pub first: ShareKey,
     pub second: ShareKey,

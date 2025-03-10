@@ -14,6 +14,7 @@ use std::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct SecretStore {
     /// Every encrypted secret key (and hence version) corresponds to a single
     /// public key.
@@ -104,6 +105,7 @@ impl SecretStore {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub(crate) struct SecretStoreVersion {
     /// Every encrypted secret key (and hence version) corresponds to a single public
     /// key.
