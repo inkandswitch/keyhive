@@ -71,6 +71,7 @@ pub struct Cgka {
     pcs_key_ops: HashMap<Digest<PcsKey>, Digest<Signed<CgkaOperation>>>,
 
     original_member: (IndividualId, ShareKey),
+    init_add_op: Signed<CgkaOperation>,
 }
 
 fn hash_pcs_keys<H: Hasher>(pcs_keys: &CaMap<PcsKey>, state: &mut H) {
@@ -85,13 +86,25 @@ fn hashed_key_bytes<T: Serialize, V, H: Hasher>(hmap: &HashMap<Digest<T>, V>, st
 }
 
 impl Cgka {
-    pub fn new(
+    pub async fn new<S: AsyncSigner>(
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
+        signer: &S,
+    ) -> Result<Self, CgkaError> {
+        let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk);
+        let signed_op = signer.try_sign_async(init_add_op).await?;
+        Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op)
+    }
+
+    pub fn new_from_init_add(
+        doc_id: DocumentId,
+        owner_id: IndividualId,
+        owner_pk: ShareKey,
+        init_add_op: Signed<CgkaOperation>,
     ) -> Result<Self, CgkaError> {
         let tree = BeeKem::new(doc_id, owner_id, owner_pk)?;
-        let cgka = Self {
+        let mut cgka = Self {
             doc_id,
             owner_id,
             owner_sks: ShareKeyMap::new(),
@@ -101,7 +114,9 @@ impl Cgka {
             pcs_keys: CaMap::new(),
             pcs_key_ops: HashMap::new(),
             original_member: (owner_id, owner_pk),
+            init_add_op: init_add_op.clone(),
         };
+        cgka.ops_graph.add_local_op(&init_add_op);
         Ok(cgka)
     }
 
@@ -116,6 +131,10 @@ impl Cgka {
         cgka.pcs_keys = self.pcs_keys.clone();
         cgka.pcs_key_ops = self.pcs_key_ops.clone();
         Ok(cgka)
+    }
+
+    pub fn init_add_op(&self) -> Signed<CgkaOperation> {
+        self.init_add_op.clone()
     }
 
     /// Derive an [`ApplicationSecret`] from our current [`PcsKey`] for new content
@@ -317,6 +336,9 @@ impl Cgka {
             return Ok(());
         }
         let predecessors = op.payload.predecessors();
+        if !self.ops_graph.contains_predecessors(&predecessors) {
+            return Err(CgkaError::OutOfOrderOperation);
+        }
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
             if self.pending_ops_for_structural_change {
@@ -341,6 +363,10 @@ impl Cgka {
 
     pub fn ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
         self.ops_graph.topsort_graph()
+    }
+
+    pub fn contains_predecessors(&self, preds: &HashSet<Digest<Signed<CgkaOperation>>>) -> bool {
+        self.ops_graph.contains_predecessors(preds)
     }
 
     /// Apply a [`CgkaOperation`].
@@ -470,9 +496,13 @@ impl Cgka {
 
     /// Build a new [`Cgka`] for the provided non-empty list of [`CgkaEpoch`]s.
     fn rebuild_cgka(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<Cgka, CgkaError> {
-        let mut rebuilt_cgka =
-            Cgka::new(self.doc_id, self.original_member.0, self.original_member.1)?
-                .with_new_owner(self.owner_id, self.owner_sks.clone())?;
+        let mut rebuilt_cgka = Cgka::new_from_init_add(
+            self.doc_id,
+            self.original_member.0,
+            self.original_member.1,
+            self.init_add_op.clone(),
+        )?
+        .with_new_owner(self.owner_id, self.owner_sks.clone())?;
         rebuilt_cgka.apply_epochs(&epochs)?;
         if rebuilt_cgka.has_pcs_key() {
             let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
@@ -488,9 +518,13 @@ impl Cgka {
             epochs.last()[0].payload,
             CgkaOperation::Update { .. }
         ));
-        let mut rebuilt_cgka =
-            Cgka::new(self.doc_id, self.original_member.0, self.original_member.1)?
-                .with_new_owner(self.owner_id, self.owner_sks.clone())?;
+        let mut rebuilt_cgka = Cgka::new_from_init_add(
+            self.doc_id,
+            self.original_member.0,
+            self.original_member.1,
+            self.init_add_op.clone(),
+        )?
+        .with_new_owner(self.owner_id, self.owner_sks.clone())?;
         rebuilt_cgka.apply_epochs(&epochs)?;
         let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
         self.insert_pcs_key(&pcs_key, Digest::hash(&epochs.last()[0]));

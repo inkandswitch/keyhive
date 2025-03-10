@@ -69,6 +69,17 @@ pub enum CgkaOperation {
 }
 
 impl CgkaOperation {
+    pub(crate) fn init_add(doc_id: DocumentId, added_id: IndividualId, pk: ShareKey) -> Self {
+        Self::Add {
+            added_id,
+            pk,
+            leaf_index: 0,
+            predecessors: Vec::new(),
+            add_predecessors: Vec::new(),
+            doc_id,
+        }
+    }
+
     /// The zero or more immediate causal predecessors of this operation.
     pub(crate) fn predecessors(&self) -> HashSet<Digest<Signed<CgkaOperation>>> {
         match self {
@@ -133,6 +144,13 @@ impl CgkaOperationGraph {
 
     pub(crate) fn contains_op_hash(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> bool {
         self.cgka_ops.contains_key(op_hash)
+    }
+
+    pub(crate) fn contains_predecessors(
+        &self,
+        preds: &HashSet<Digest<Signed<CgkaOperation>>>,
+    ) -> bool {
+        preds.iter().all(|hash| self.cgka_ops.contains_key(hash))
     }
 
     /// Whether the causal graph has a single head. More than one head indicates
