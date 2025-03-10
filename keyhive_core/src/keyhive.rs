@@ -1801,6 +1801,7 @@ mod tests {
         // Check the doc exists
         bob.get_document(doc.borrow().doc_id()).unwrap();
 
+        // FIXME: Alex plz confirm no longer the case. Original comment as follows:
         // This will throw an error because the heads of the cgka operation graph are empty
         let result = bob.cgka_ops_reachable_by_agent(&alice.active().clone().into());
         assert!(result.is_ok());
