@@ -1778,25 +1778,10 @@ mod tests {
             .unwrap();
 
         // Now pull out all the membership operations and prekey operations from alice
-        let mut events = alice.static_events_for_agent(&bob_indi.into()).unwrap();
+        let events = alice.events_for_agent(&bob_indi.into()).unwrap();
 
         // Now ingest all these events on bob
-        let mut iterations = 0;
-        loop {
-            iterations += 1;
-            if iterations > 100 {
-                panic!("Too many iterations");
-            }
-            let evts = std::mem::take(&mut events);
-            if evts.is_empty() {
-                break;
-            }
-            for (digest, op) in evts {
-                if let Err(_) = bob.receive_static_event(op.clone()) {
-                    events.insert(digest, op);
-                }
-            }
-        }
+        bob.ingest_event_table(events).unwrap(); // Test helper
 
         // Check the doc exists
         bob.get_document(doc.borrow().doc_id()).unwrap();
