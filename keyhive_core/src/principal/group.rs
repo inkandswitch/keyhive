@@ -414,9 +414,15 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         self.listener.on_delegation(&rc).await;
         let _digest = self.receive_delegation(rc.dupe())?;
 
+        let cgka_ops = if can >= Access::Read {
+            self.add_cgka_member(rc.dupe(), signer).await?,
+        } else {
+            vec![]
+        };
+
         Ok(AddMemberUpdate {
-            cgka_ops: self.add_cgka_member(rc.dupe(), signer).await?,
             delegation: rc,
+            cgka_ops,
         })
     }
 

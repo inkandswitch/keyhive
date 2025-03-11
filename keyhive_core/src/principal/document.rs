@@ -232,11 +232,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         // transitive document members of the group, but not to the group itself
         // (because the group might not be a document), so we add the member to
         // the group here and add any extra resulting cgka ops to the update.
-        update.cgka_ops.extend(
-            self.add_cgka_member(&update.delegation, signer)
-                .await?
-                .into_iter(),
-        );
+        if can >= Access::Read {
+            update.cgka_ops.extend(
+                self.add_cgka_member(&update.delegation, signer)
+                    .await?
+                    .into_iter(),
+            );
+        }
         Ok(update)
     }
 
@@ -245,6 +247,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         delegation: &Signed<Delegation<S, T, L>>,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+        if delegation.payload.can < Access::Read {
+            return Ok(vec![]);
+        }
+
         let prekeys = delegation
             .dupe()
             .payload()
