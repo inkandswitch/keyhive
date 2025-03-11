@@ -1567,6 +1567,13 @@ mod tests {
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
 
+    async fn make_keyhive() -> Keyhive<MemorySigner> {
+        let sk = MemorySigner::generate(&mut rand::thread_rng());
+        Keyhive::generate(sk, NoListener, rand::thread_rng())
+            .await
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn test_archival_round_trip() {
         let mut csprng = rand::thread_rng();
@@ -1804,13 +1811,6 @@ mod tests {
         assert_eq!(middle.delegations.borrow().len(), 4);
     }
 
-    async fn make_keyhive() -> Keyhive<MemorySigner> {
-        let sk = MemorySigner::generate(&mut rand::thread_rng());
-        Keyhive::generate(sk, NoListener, rand::thread_rng())
-            .await
-            .unwrap()
-    }
-
     #[tokio::test]
     async fn test_add_member() {
         let mut keyhive = make_keyhive().await;
@@ -1828,5 +1828,66 @@ mod tests {
             .unwrap();
 
         assert_eq!(dlg.delegation.subject_id(), doc.borrow().doc_id().into());
+    }
+
+    #[tokio::test]
+    async fn receiving_an_event_with_added_or_rotated_prekeys_works() {
+        let mut alice = make_keyhive().await;
+        let mut bob = make_keyhive().await;
+
+        let doc = alice
+            .generate_doc(vec![], nonempty![[0u8; 32]])
+            .await
+            .unwrap();
+
+        // Create a new prekey op by expanding prekeys on bob
+        let add_bob_op = bob.expand_prekeys().await.unwrap();
+
+        // Now add bob to alices document using the new op
+        let add_op = KeyOp::Add(add_bob_op);
+        let bob_on_alice = Rc::new(RefCell::new(Individual::new(add_op.clone())));
+        assert!(alice.register_individual(bob_on_alice.clone()));
+        alice
+            .add_member(
+                bob_on_alice.into(),
+                &mut doc.clone().into(),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Now receive alices events
+        let events = alice
+            .events_for_agent(&bob.active().clone().into())
+            .unwrap();
+        // ensure that we are able to process the add op
+        bob.ingest_event_table(events).unwrap();
+
+        // Now create a new prekey op by rotating on bob
+        let rotate_op = bob.rotate_prekey(*add_op.new_key()).await.unwrap();
+
+        // Create a new document (on a new keyhive) and share it with bob using the rotated key
+        let mut charlie = make_keyhive().await;
+        let doc2 = charlie
+            .generate_doc(vec![], nonempty![[1u8; 32]])
+            .await
+            .unwrap();
+        let bob_on_charlie = Rc::new(RefCell::new(Individual::new(KeyOp::Rotate(rotate_op))));
+        assert!(charlie.register_individual(bob_on_charlie.clone()));
+        charlie
+            .add_member(
+                bob_on_charlie.into(),
+                &mut doc2.clone().into(),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let events = charlie
+            .events_for_agent(&bob.active().clone().into())
+            .unwrap();
+        bob.ingest_event_table(events).unwrap();
     }
 }
