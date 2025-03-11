@@ -8,7 +8,7 @@ use super::{
     identifier::Identifier,
     individual::{
         id::IndividualId,
-        op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
+        op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
         state::PrekeyState,
         Individual,
     },
@@ -30,6 +30,7 @@ use crate::{
     },
 };
 use derivative::Derivative;
+use dupe::Dupe;
 use futures::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
@@ -161,12 +162,29 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
         old_prekey: ShareKey,
         csprng: &mut R,
     ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
-        let op = self
-            .individual
-            .rotate_prekey(old_prekey, &self.signer, csprng)
-            .await?;
-        self.listener.on_prekey_rotated(&op).await;
-        Ok(op)
+        let new_secret = ShareSecretKey::generate(csprng);
+        let new_public = new_secret.share_key();
+
+        let rot_op = Rc::new(
+            self.try_sign_async(RotateKeyOp {
+                old: old_prekey,
+                new: new_public,
+            })
+            .await?,
+        );
+
+        self.prekey_pairs.insert(new_public, new_secret);
+
+        self.individual
+            .prekey_state
+            .insert_op(KeyOp::Rotate(rot_op.dupe()))
+            .expect("the op we just signed to be valid");
+
+        self.individual.prekeys.remove(&old_prekey);
+        self.individual.prekeys.insert(new_public);
+
+        self.listener.on_prekey_rotated(&rot_op).await;
+        Ok(rot_op)
     }
 
     /// Add a new prekey, expanding the number of currently available prekeys.
@@ -174,7 +192,21 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
         &mut self,
         csprng: &mut R,
     ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
-        let op = self.individual.expand_prekeys(&self.signer, csprng).await?;
+        let new_secret = ShareSecretKey::generate(csprng);
+        let new = new_secret.share_key();
+
+        let op = Rc::new(
+            self.signer
+                .try_sign_async(AddKeyOp { share_key: new })
+                .await?,
+        );
+
+        self.individual
+            .prekey_state
+            .insert_op(KeyOp::Add(op.dupe()).into())
+            .expect("the op we just signed to be valid");
+        self.individual.prekeys.insert(new);
+
         self.listener.on_prekeys_expanded(&op).await;
         Ok(op)
     }

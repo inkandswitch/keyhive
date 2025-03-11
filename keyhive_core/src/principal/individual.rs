@@ -5,27 +5,23 @@ pub mod op;
 pub mod state;
 
 use self::op::KeyOp;
-
 use super::{agent::id::AgentId, document::id::DocumentId};
 use crate::{
     contact_card::ContactCard,
-    crypto::{
-        share_key::ShareKey,
-        signed::{Signed, SigningError},
-        signer::async_signer::AsyncSigner,
-        verifiable::Verifiable,
-    },
+    crypto::{share_key::ShareKey, signed::VerificationError, verifiable::Verifiable},
     util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
 use derive_more::Debug;
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
-use op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
 use std::{collections::HashSet, rc::Rc};
 use thiserror::Error;
+
+#[cfg(any(feature = "test_utils", test))]
+use crate::crypto::{signed::SigningError, signer::async_signer::AsyncSigner};
 
 #[cfg(any(feature = "test_utils", test))]
 use std::num::NonZeroUsize;
@@ -125,31 +121,6 @@ impl Individual {
     pub fn prekey_ops(&self) -> &CaMap<KeyOp> {
         self.prekey_state.ops()
     }
-
-    pub(crate) async fn rotate_prekey<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
-        &mut self,
-        old_key: ShareKey,
-        signer: &S,
-        csprng: &mut R,
-    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
-        let op = self
-            .prekey_state
-            .rotate_gen(old_key, signer, csprng)
-            .await?;
-        self.prekeys.remove(&op.payload.old);
-        self.prekeys.insert(op.payload.new);
-        Ok(op)
-    }
-
-    pub(crate) async fn expand_prekeys<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
-        &mut self,
-        signer: &S,
-        csprng: &mut R,
-    ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
-        let op = self.prekey_state.expand(signer, csprng).await?;
-        self.prekeys.insert(op.payload.share_key);
-        Ok(op)
-    }
 }
 
 impl std::hash::Hash for Individual {
@@ -186,16 +157,7 @@ pub enum ReceivePrekeyOpError {
     IncorrectSigner,
 
     #[error(transparent)]
-    NewOpError(#[from] state::NewOpError),
-}
-
-impl ReceivePrekeyOpError {
-    pub fn is_missing_dependency(&self) -> bool {
-        match self {
-            Self::IncorrectSigner => false,
-            Self::NewOpError(err) => err.is_missing_dependency(),
-        }
-    }
+    VerificationError(#[from] VerificationError),
 }
 
 fn clamp(bytes: [u8; 8], offset_bits: u8) -> usize {
@@ -243,7 +205,9 @@ fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::signer::sync_signer::SyncSigner;
+    use crate::{
+        crypto::signer::sync_signer::SyncSigner, principal::individual::op::add_key::AddKeyOp,
+    };
 
     #[test]
     fn test_to_bytes() {
