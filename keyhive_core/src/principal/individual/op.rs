@@ -23,6 +23,7 @@ use std::{
 /// This prevents the case where all keys are remved and the user is unable to be
 /// added to a [`Cgka`][crate::cgka::Cgka].
 #[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash, Serialize, Deserialize, From, TryInto)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum KeyOp {
     /// Add a new key.
     Add(Rc<Signed<AddKeyOp>>),
