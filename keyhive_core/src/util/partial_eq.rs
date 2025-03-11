@@ -15,6 +15,7 @@ pub(crate) fn prekey_partial_eq(
             .all(|((xk, xv), (yk, yv))| xk == yk && xv.to_bytes() == yv.to_bytes())
 }
 
+#[allow(dead_code)] // Not dead code; just used in a macro
 pub(crate) fn hash_map_keys<K: Hash, V>(
     map1: HashMap<K, V>,
     map2: HashMap<K, V>,
