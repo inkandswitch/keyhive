@@ -8,6 +8,7 @@ use self::op::KeyOp;
 
 use super::{agent::id::AgentId, document::id::DocumentId};
 use crate::{
+    contact_card::ContactCard,
     crypto::{
         share_key::ShareKey,
         signed::{Signed, SigningError},
@@ -88,6 +89,11 @@ impl Individual {
         })
     }
 
+    pub fn contact_card(&self) -> ContactCard {
+        let op = self.prekey_state.ops().0.iter().next().unwrap().1;
+        ContactCard::from(Rc::unwrap_or_clone(op.clone()))
+    }
+
     pub fn id(&self) -> IndividualId {
         self.id
     }
@@ -106,14 +112,14 @@ impl Individual {
         Ok(())
     }
 
-    pub fn pick_prekey(&self, doc_id: DocumentId) -> Option<ShareKey> {
+    pub fn pick_prekey(&self, doc_id: DocumentId) -> &ShareKey {
         let mut bytes: Vec<u8> = self.id.to_bytes().to_vec();
         bytes.extend_from_slice(&doc_id.to_bytes());
 
         let prekeys_len = self.prekeys.len();
         let idx = pseudorandom_in_range(bytes.as_slice(), prekeys_len);
 
-        self.prekeys.iter().nth(idx).cloned()
+        self.prekeys.iter().nth(idx).expect("index to be in range")
     }
 
     pub fn prekey_ops(&self) -> &CaMap<KeyOp> {

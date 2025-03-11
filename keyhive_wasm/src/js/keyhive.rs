@@ -1,3 +1,4 @@
+use super::contact_card::JsContactCard;
 use super::{
     access::JsAccess, add_member_error::JsAddMemberError, agent::JsAgent, archive::JsArchive,
     change_ref::JsChangeRef, document::JsDocument, encrypted::JsEncrypted,
@@ -224,6 +225,15 @@ impl JsKeyhive {
     pub async fn expand_prekeys(&mut self) -> Result<JsShareKey, JsSigningError> {
         let op = self.0.expand_prekeys().await?;
         Ok(JsShareKey(op.payload().share_key))
+    }
+
+    #[wasm_bindgen(js_name = contactCard)]
+    pub async fn contact_card(&mut self) -> Result<JsContactCard, JsSigningError> {
+        self.0
+            .contact_card()
+            .await
+            .map(Into::into)
+            .map_err(Into::into)
     }
 
     #[wasm_bindgen(js_name = getAgent)]

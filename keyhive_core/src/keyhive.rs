@@ -5,6 +5,7 @@ use crate::{
     access::Access,
     archive::Archive,
     cgka::{error::CgkaError, operation::CgkaOperation},
+    contact_card::ContactCard,
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -55,7 +56,6 @@ use std::{
     rc::Rc,
 };
 use thiserror::Error;
-use tracing::Instrument;
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Debug, Derivative)]
@@ -213,6 +213,16 @@ impl<
         self.docs.insert(doc_id, doc.dupe());
 
         Ok(doc)
+    }
+
+    pub async fn contact_card(&mut self) -> Result<ContactCard, SigningError> {
+        let rot_key_op = self
+            .active
+            .borrow_mut()
+            .generate_private_prekey(&mut self.csprng)
+            .await?;
+
+        Ok(ContactCard(KeyOp::Rotate(rot_key_op)))
     }
 
     pub async fn rotate_prekey(

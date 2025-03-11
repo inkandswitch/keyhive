@@ -80,18 +80,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
     pub fn pick_individual_prekeys(&self, doc_id: DocumentId) -> HashMap<IndividualId, ShareKey> {
         match self {
             Agent::Active(a) => {
-                if let Some(prekey) = a.borrow().pick_prekey(doc_id) {
-                    HashMap::from_iter([(a.borrow().id(), prekey)])
-                } else {
-                    HashMap::new()
-                }
+                let prekey = *a.borrow().pick_prekey(doc_id);
+                HashMap::from_iter([(a.borrow().id(), prekey)])
             }
             Agent::Individual(i) => {
-                if let Some(prekey) = i.borrow().pick_prekey(doc_id) {
-                    HashMap::from_iter([(i.borrow().id(), prekey)])
-                } else {
-                    HashMap::new()
-                }
+                let prekey = *i.borrow().pick_prekey(doc_id);
+                HashMap::from_iter([(i.borrow().id(), prekey)])
             }
             Agent::Group(g) => g.borrow().pick_individual_prekeys(doc_id),
             Agent::Document(d) => d.borrow().group.pick_individual_prekeys(doc_id),

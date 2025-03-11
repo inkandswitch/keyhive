@@ -35,7 +35,7 @@ impl JsIndividual {
     }
 
     #[wasm_bindgen(js_name = pickPrekey)]
-    pub fn pick_prekey(&self, doc_id: JsDocumentId) -> Option<JsShareKey> {
-        self.0.borrow().pick_prekey(doc_id.0).map(JsShareKey)
+    pub fn pick_prekey(&self, doc_id: JsDocumentId) -> JsShareKey {
+        JsShareKey(*self.0.borrow().pick_prekey(doc_id.0))
     }
 }

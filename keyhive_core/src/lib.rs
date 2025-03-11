@@ -13,6 +13,7 @@ pub mod ability;
 pub mod access;
 pub mod archive;
 pub mod cgka;
+pub mod contact_card;
 pub mod content;
 pub mod crypto;
 pub mod error;

@@ -5,6 +5,7 @@ pub mod archive;
 pub mod capability;
 pub mod cgka_operation;
 pub mod change_ref;
+pub mod contact_card;
 pub mod delegation;
 pub mod doc_content_refs;
 pub mod document;
