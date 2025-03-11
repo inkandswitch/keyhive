@@ -2,10 +2,11 @@
 
 use super::{read_capability::ReadCap, symmetric_key::SymmetricKey};
 use crate::content::reference::ContentRef;
+use derivative::Derivative;
 use serde::{Deserialize, Serialize, Serializer};
 use std::{
     collections::{BTreeMap, HashMap},
-    hash::{DefaultHasher, Hash, Hasher},
+    hash::{DefaultHasher, Hasher},
 };
 
 #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
@@ -77,13 +78,17 @@ use std::{
 /// ```
 ///
 /// [causal encryption]: https://github.com/inkandswitch/keyhive/blob/main/design/causal_encryption.md
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Derivative, Serialize, Deserialize)]
 pub struct Envelope<C: ContentRef, T: Serialize> {
     /// The plaintext payload.
     pub plaintext: T,
 
     /// Any ancestors that this envelope depends on.
-    #[serde(serialize_with = "ordered_map")]
+    #[serde(serialize_with = "ordered_map_serializer")]
+    #[derivative(
+        PartialOrd(compare_with = "crate::util::partial_eq::hash_map_keys"),
+        Hash(hash_with = "crate::util::hash::hash_map_keys")
+    )]
     pub ancestors: HashMap<C, SymmetricKey>,
 }
 
@@ -100,14 +105,14 @@ impl<T: Serialize, C: ContentRef> Envelope<C, T> {
     }
 }
 
-fn ordered_map<S, K: ContentRef, V: Serialize>(
-    value: &HashMap<K, V>,
+fn ordered_map_serializer<S, K: ContentRef, V: Serialize>(
+    map: &HashMap<K, V>,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    let ordered: BTreeMap<_, _> = value
+    let ordered: BTreeMap<_, _> = map
         .iter()
         .map(|(k, v)| {
             let mut hasher = DefaultHasher::new();
