@@ -1846,9 +1846,7 @@ mod tests {
         // Now add bob to alices document using the new op
         let add_op = KeyOp::Add(add_bob_op);
         let bob_on_alice = Rc::new(RefCell::new(Individual::new(add_op.dupe())));
-        dbg!(&bob_on_alice);
         let og_bob = Rc::new(RefCell::new(bob.individual())); // Rc::new(RefCell::new(Individual::new(add_op.dupe())));
-        dbg!(&og_bob);
         assert!(alice.register_individual(bob_on_alice.clone()));
         alice
             .add_member(
