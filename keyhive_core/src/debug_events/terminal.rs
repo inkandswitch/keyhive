@@ -1,0 +1,231 @@
+use prettytable::{color, format, row, Attr, Cell, Table};
+
+use super::{CgkaOperationDetails, DebugEventDetails, DebugEventTable};
+
+/// Print a formatted ASCII table of events for easier debugging
+///
+/// This function creates a table with the following columns:
+/// - Index: The position in the events vector
+/// - Type: The type of event (CgkaOperation, Delegated, etc.)
+/// - Hash: The hash of the event
+/// - Issuer: A shortened hex representation of the issuer's verifying key
+/// - Details: Detailed information about the event payload
+///
+/// # Example
+/// ```
+/// use keyhive_core::event::static_event::StaticEvent;
+/// use crate::visuals::print_event_table;
+///
+/// // Print a table of events
+/// print_event_table(&events);
+///
+/// // Print a table of events with more details
+/// print_event_table_verbose(&events);
+/// ```
+pub fn print_event_table(table: DebugEventTable) {
+    print_event_table_internal(table, false)
+}
+
+/// Print a more detailed ASCII table of events for debugging
+///
+/// Similar to print_event_table but includes more detailed information about each event
+pub fn print_event_table_verbose(table: DebugEventTable) {
+    print_event_table_internal(table, true)
+}
+
+/// Internal implementation for printing event tables
+fn print_event_table_internal(debug_table: DebugEventTable, verbose: bool) {
+    println!("\n=== Event Table ===");
+
+    // Print event type counts
+    let mut count_table = Table::new();
+    count_table.set_format(*format::consts::FORMAT_NO_BORDER_LINE_SEPARATOR);
+    count_table.add_row(row!["Event Type", "Count"]);
+    for (event_type, count) in debug_table.event_counts.iter() {
+        count_table.add_row(row![event_type, count]);
+    }
+    count_table.printstd();
+    println!();
+
+    let mut table = Table::new();
+
+    // Set a clean table format
+    table.set_format(*format::consts::FORMAT_BOX_CHARS);
+
+    // Add table header
+    table.set_titles(row!["#", "Type", "Hash", "Issuer", "Details"]);
+
+    // Add rows for each event
+    for row in debug_table.rows.iter() {
+        let event_cell = match row.event_type.as_str() {
+            "PrekeysExpanded" => {
+                Cell::new("PrekeysExpanded").with_style(Attr::ForegroundColor(color::GREEN))
+            }
+            "PrekeyRotated" => {
+                Cell::new("PrekeyRotated").with_style(Attr::ForegroundColor(color::BRIGHT_GREEN))
+            }
+            "CgkaOperation" => {
+                Cell::new("CgkaOperation").with_style(Attr::ForegroundColor(color::YELLOW))
+            }
+            "Delegated" => Cell::new("Delegated").with_style(Attr::ForegroundColor(color::BLUE)),
+            "Revoked" => Cell::new("Revoked").with_style(Attr::ForegroundColor(color::RED)),
+            _ => Cell::new(&row.event_type),
+        };
+
+        let details = format_details(&row.details, verbose);
+
+        table.add_row(row![
+            row.index,
+            event_cell,
+            row.event_hash.short_hex(),
+            row.issuer.short_hex(),
+            details
+        ]);
+    }
+
+    // Print the table
+    table.printstd();
+}
+
+/// Format the event details based on the event type and verbosity level
+fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
+    match details {
+        DebugEventDetails::PrekeysExpanded { share_key } => {
+            if verbose {
+                format!("Share Key: {}", share_key.short_hex())
+            } else {
+                format!("Share Key: {}", share_key.short_hex())
+            }
+        }
+        DebugEventDetails::PrekeyRotated { old_key, new_key } => {
+            if verbose {
+                format!(
+                    "Old Key: {}\nNew Key: {}",
+                    old_key.short_hex(),
+                    new_key.short_hex()
+                )
+            } else {
+                format!(
+                    "Old Key: {}\nNew Key: {}",
+                    old_key.short_hex(),
+                    new_key.short_hex()
+                )
+            }
+        }
+        DebugEventDetails::CgkaOperation {
+            op_type,
+            doc_id,
+            op_details,
+        } => {
+            let op_details_str = match op_details {
+                CgkaOperationDetails::Add {
+                    id,
+                    prekey,
+                    leaf_index,
+                    predecessors_count,
+                } => {
+                    format!(
+                        "ID: {}\nPrekey: {}\nLeaf Index: {}\nPredecessors: {}",
+                        id.short_hex(),
+                        prekey.short_hex(),
+                        leaf_index,
+                        predecessors_count
+                    )
+                }
+                CgkaOperationDetails::Remove {
+                    id,
+                    leaf_index,
+                    removed_keys_count,
+                    predecessors_count,
+                } => {
+                    format!(
+                        "ID: {}\nLeaf Index: {}\nRemoved Keys: {}\nPredecessors: {}",
+                        id.short_hex(),
+                        leaf_index,
+                        removed_keys_count,
+                        predecessors_count
+                    )
+                }
+                CgkaOperationDetails::Update {
+                    id,
+                    new_keys,
+                    path_length,
+                    predecessors_count,
+                } => {
+                    format!(
+                        "ID: {}\nNew Key: {}\nPath Length: {}\nPredecessors: {}",
+                        id.short_hex(),
+                        new_keys
+                            .iter()
+                            .map(|k| k.short_hex())
+                            .collect::<Vec<String>>()
+                            .join(", "),
+                        path_length,
+                        predecessors_count
+                    )
+                }
+            };
+
+            if verbose {
+                format!(
+                    "Type: {}\nDoc ID: {}\n{}\nSigner: {}",
+                    op_type,
+                    doc_id.short_hex(),
+                    op_details_str,
+                    ""
+                )
+            } else {
+                format!(
+                    "Type: {}\nDoc ID: {}\n{}",
+                    op_type,
+                    doc_id.short_hex(),
+                    op_details_str
+                )
+            }
+        }
+        DebugEventDetails::Delegated {
+            can_access,
+            delegate,
+            after_revocations_count,
+            after_content_count,
+        } => {
+            if verbose {
+                format!(
+                    "Access: {}\nDelegate: {}\nAfter Revocations: {}\nAfter Content: {}",
+                    can_access,
+                    delegate.short_hex(),
+                    after_revocations_count,
+                    after_content_count
+                )
+            } else {
+                format!(
+                    "Access: {}\nDelegate: {}\nAfter Content: {}",
+                    can_access,
+                    delegate.short_hex(),
+                    after_content_count
+                )
+            }
+        }
+        DebugEventDetails::Revoked {
+            revoke,
+            has_proof,
+            after_content_count,
+        } => {
+            if verbose {
+                format!(
+                    "Revoke: {}\nProof: {}\nAfter Content: {}",
+                    revoke.short_hex(),
+                    has_proof,
+                    after_content_count
+                )
+            } else {
+                format!(
+                    "Revoke: {}\nProof: {}\nAfter Content: {}",
+                    revoke.short_hex(),
+                    has_proof,
+                    after_content_count
+                )
+            }
+        }
+    }
+}
