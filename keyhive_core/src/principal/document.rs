@@ -232,7 +232,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         // transitive document members of the group, but not to the group itself
         // (because the group might not be a document), so we add the member to
         // the group here and add any extra resulting cgka ops to the update.
-        if can >= Access::Read {
+        if can.is_reader() {
             update.cgka_ops.extend(
                 self.add_cgka_member(&update.delegation, signer)
                     .await?
