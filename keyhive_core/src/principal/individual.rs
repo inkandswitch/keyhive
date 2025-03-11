@@ -1,6 +1,7 @@
 //! A single user agent.
 
 pub mod id;
+pub mod new_share_key;
 pub mod op;
 pub mod state;
 
@@ -10,7 +11,7 @@ use super::{agent::id::AgentId, document::id::DocumentId};
 use crate::{
     contact_card::ContactCard,
     crypto::{
-        share_key::ShareKey,
+        share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
         signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
@@ -21,6 +22,7 @@ use derivative::Derivative;
 use derive_more::Debug;
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
+use new_share_key::NewShareKey;
 use op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
@@ -131,24 +133,24 @@ impl Individual {
         old_key: ShareKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
-        let op = self
+    ) -> Result<NewShareKey<Rc<Signed<RotateKeyOp>>>, SigningError> {
+        let new_share_key = self
             .prekey_state
             .rotate_gen(old_key, signer, csprng)
             .await?;
-        self.prekeys.remove(&op.payload.old);
-        self.prekeys.insert(op.payload.new);
-        Ok(op)
+        self.prekeys.remove(&new_share_key.op.payload.old);
+        self.prekeys.insert(new_share_key.op.payload.new);
+        Ok(new_share_key)
     }
 
     pub(crate) async fn expand_prekeys<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
-        let op = self.prekey_state.expand(signer, csprng).await?;
-        self.prekeys.insert(op.payload.share_key);
-        Ok(op)
+    ) -> Result<NewShareKey<Rc<Signed<AddKeyOp>>>, SigningError> {
+        let new_share_key = self.prekey_state.expand(signer, csprng).await?;
+        self.prekeys.insert(new_share_key.op.payload.share_key);
+        Ok(new_share_key)
     }
 }
 

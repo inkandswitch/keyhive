@@ -1,4 +1,7 @@
-use super::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp};
+use super::{
+    new_share_key::NewShareKey,
+    op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
+};
 use crate::{
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
@@ -143,9 +146,12 @@ impl PrekeyState {
         old: ShareKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
+    ) -> Result<NewShareKey<Rc<Signed<RotateKeyOp>>>, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
-        self.rotate(old, new_secret.share_key(), signer).await
+        Ok(NewShareKey {
+            op: self.rotate(old, new_secret.share_key(), signer).await?,
+            new_secret,
+        })
     }
 
     /// Expand the [`PrekeyState`] with a new, randomly-generated [`ShareSecretKey`].
@@ -153,12 +159,12 @@ impl PrekeyState {
         &mut self,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
+    ) -> Result<NewShareKey<Rc<Signed<AddKeyOp>>>, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
         let new = new_secret.share_key();
         let op = Rc::new(signer.try_sign_async(AddKeyOp { share_key: new }).await?);
         self.ops.insert(KeyOp::Add(op.dupe()).into());
-        Ok(op)
+        Ok(NewShareKey { new_secret, op })
     }
 
     /// Rebuild the most recent set of active [`ShareKey`]s in the [`PrekeyState`].

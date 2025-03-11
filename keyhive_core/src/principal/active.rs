@@ -8,6 +8,7 @@ use super::{
     identifier::Identifier,
     individual::{
         id::IndividualId,
+        new_share_key::NewShareKey,
         op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
         state::PrekeyState,
         Individual,
@@ -161,10 +162,11 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
         old_prekey: ShareKey,
         csprng: &mut R,
     ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
-        let op = self
+        let NewShareKey { new_secret, op } = self
             .individual
             .rotate_prekey(old_prekey, &self.signer, csprng)
             .await?;
+        self.prekey_pairs.insert(op.payload.new, new_secret);
         self.listener.on_prekey_rotated(&op).await;
         Ok(op)
     }
@@ -174,7 +176,9 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
         &mut self,
         csprng: &mut R,
     ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
-        let op = self.individual.expand_prekeys(&self.signer, csprng).await?;
+        let NewShareKey { new_secret, op } =
+            self.individual.expand_prekeys(&self.signer, csprng).await?;
+        self.prekey_pairs.insert(op.payload.share_key, new_secret);
         self.listener.on_prekeys_expanded(&op).await;
         Ok(op)
     }
