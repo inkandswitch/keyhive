@@ -195,6 +195,15 @@ pub enum NewOpError {
     MissingDependency(#[from] MissingDependency<ShareKey>),
 }
 
+impl NewOpError {
+    pub fn is_missing_dependency(&self) -> bool {
+        match self {
+            Self::VerificationError(_) => false,
+            Self::MissingDependency(_) => true,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
