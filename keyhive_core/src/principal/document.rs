@@ -41,7 +41,6 @@ use derivative::Derivative;
 use derive_where::derive_where;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
-use futures::{stream, TryStreamExt};
 use id::DocumentId;
 use nonempty::NonEmpty;
 use std::{
@@ -223,38 +222,39 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
 
         after_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
 
-        Ok(self
+        let mut update = self
             .group
             .add_member_with_manual_content(member_to_add.dupe(), can, signer, after_content)
-            .await?)
+            .await?;
+
+        if can.is_reader() {
+            // Group::add_member_with_manual_content adds the member to the CGKA for
+            // transitive document members of the group, but not to the group itself
+            // (because the group might not be a document), so we add the member to
+            // the group here and add any extra resulting cgka ops to the update.
+            let cgka_ops_for_this_doc = self.add_cgka_member(&update.delegation, signer).await?;
+            update.cgka_ops.extend(cgka_ops_for_this_doc.into_iter());
+        }
+        Ok(update)
     }
 
-    pub async fn add_cgka_member(
+    pub(crate) async fn add_cgka_member(
         &mut self,
         delegation: &Signed<Delegation<S, T, L>>,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let prekeys = delegation
-            .dupe()
-            .payload()
+            .payload
             .delegate
             .pick_individual_prekeys(self.doc_id());
 
-        let cell = Rc::new(RefCell::new(self));
-
-        stream::iter(prekeys.iter().map(Ok::<_, CgkaError>))
-            .try_fold(vec![], |mut acc, (id, pre_key)| async {
-                if let Some(op) = cell
-                    .borrow_mut()
-                    .cgka_mut()?
-                    .add(*id, *pre_key, signer)
-                    .await?
-                {
-                    acc.push(op);
-                }
-                Ok::<_, CgkaError>(acc)
-            })
-            .await
+        let mut acc = vec![];
+        for (id, prekey) in prekeys.iter() {
+            if let Some(op) = self.cgka_mut()?.add(*id, *prekey, signer).await? {
+                acc.push(op);
+            }
+        }
+        Ok(acc)
     }
 
     pub async fn revoke_member(

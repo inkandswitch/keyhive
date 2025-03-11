@@ -1347,16 +1347,17 @@ impl<
     pub fn ingest_unsorted_static_events(
         &mut self,
         events: Vec<StaticEvent<T>>,
-    ) -> Result<(), MissingDependency<StaticEvent<T>>> {
+    ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
         let mut epoch = events;
 
         loop {
             let mut next_epoch = vec![];
-            let mut epoch_len = 0;
+            let mut err = None;
+            let epoch_len = epoch.len();
 
             for event in epoch {
-                epoch_len += 1;
-                if self.receive_static_event(event.clone()).is_err() {
+                if let Err(e) = self.receive_static_event(event.clone()) {
+                    err = Some(e);
                     next_epoch.push(event);
                 }
             }
@@ -1367,8 +1368,7 @@ impl<
 
             if next_epoch.len() == epoch_len {
                 // Stuck on a fixed point
-                let exemplar = next_epoch.first().unwrap().clone();
-                Err(MissingDependency(exemplar))?;
+                return Err(err.unwrap());
             }
 
             epoch = next_epoch
@@ -1379,7 +1379,7 @@ impl<
     pub fn ingest_event_table(
         &mut self,
         events: HashMap<Digest<Event<S, T, L>>, Event<S, T, L>>,
-    ) -> Result<(), MissingDependency<StaticEvent<T>>> {
+    ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
         self.ingest_unsorted_static_events(
             events.values().cloned().map(Into::into).collect::<Vec<_>>(),
         )
@@ -1845,12 +1845,13 @@ mod tests {
 
         // Now add bob to alices document using the new op
         let add_op = KeyOp::Add(add_bob_op);
-        let bob_on_alice = Rc::new(RefCell::new(Individual::new(add_op.clone())));
+        let bob_on_alice = Rc::new(RefCell::new(Individual::new(add_op.dupe())));
+        let og_bob = Rc::new(RefCell::new(bob.individual())); // Rc::new(RefCell::new(Individual::new(add_op.dupe())));
         assert!(alice.register_individual(bob_on_alice.clone()));
         alice
             .add_member(
-                bob_on_alice.into(),
-                &mut doc.clone().into(),
+                bob_on_alice.dupe().into(),
+                &mut doc.dupe().into(),
                 Access::Read,
                 &[],
             )
@@ -1858,9 +1859,8 @@ mod tests {
             .unwrap();
 
         // Now receive alices events
-        let events = alice
-            .events_for_agent(&bob.active().clone().into())
-            .unwrap();
+        let events = alice.events_for_agent(&bob_on_alice.into()).unwrap();
+
         // ensure that we are able to process the add op
         bob.ingest_event_table(events).unwrap();
 

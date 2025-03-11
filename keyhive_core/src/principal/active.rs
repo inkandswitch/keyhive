@@ -193,11 +193,13 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
         csprng: &mut R,
     ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
-        let new = new_secret.share_key();
+        let new_public = new_secret.share_key();
 
         let op = Rc::new(
             self.signer
-                .try_sign_async(AddKeyOp { share_key: new })
+                .try_sign_async(AddKeyOp {
+                    share_key: new_public,
+                })
                 .await?,
         );
 
@@ -205,7 +207,8 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
             .prekey_state
             .insert_op(KeyOp::Add(op.dupe()).into())
             .expect("the op we just signed to be valid");
-        self.individual.prekeys.insert(new);
+        self.individual.prekeys.insert(new_public);
+        self.prekey_pairs.insert(new_public, new_secret);
 
         self.listener.on_prekeys_expanded(&op).await;
         Ok(op)

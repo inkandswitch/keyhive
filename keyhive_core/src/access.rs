@@ -39,6 +39,16 @@ pub enum Access {
     Admin,
 }
 
+impl Access {
+    pub fn is_reader(self) -> bool {
+        self >= Access::Read
+    }
+
+    pub fn is_writer(self) -> bool {
+        self >= Access::Write
+    }
+}
+
 impl fmt::Display for Access {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
