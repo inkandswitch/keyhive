@@ -1,3 +1,5 @@
+//! Serializable version of [`Event`][super::Event].
+
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
@@ -10,17 +12,26 @@ use crate::{
 use derive_more::{From, TryInto};
 use serde::{Deserialize, Serialize};
 
+/// Serailizable version of [`Event`][super::Event].
+///
+/// This is useful for sending over a network or storing to disk.
+/// However the references contained in `StaticEvent`s may be missing
+/// dependencies, unlike [`Event`][super::Event]s.
 #[derive(Debug, Clone, PartialEq, Eq, From, TryInto, Serialize, Deserialize)]
 pub enum StaticEvent<T: ContentRef = [u8; 32]> {
-    // Prekeys
+    /// Prekeys were expanded.
     PrekeysExpanded(Signed<AddKeyOp>),
+
+    /// A prekey was rotated.
     PrekeyRotated(Signed<RotateKeyOp>),
 
-    // Cgka
+    /// A CGKA operation was performed.
     CgkaOperation(Signed<CgkaOperation>),
 
-    // Membership
+    /// A delegation was created.
     Delegated(Signed<StaticDelegation<T>>),
+
+    /// A delegation was revoked.
     Revoked(Signed<StaticRevocation<T>>),
 }
 

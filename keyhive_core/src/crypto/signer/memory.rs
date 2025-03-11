@@ -1,13 +1,48 @@
+//! In-memory signer.
+
 use super::sync_signer::SyncSigner;
 use crate::crypto::{signed::SigningError, verifiable::Verifiable};
 use dupe::Dupe;
 use ed25519_dalek::Signer;
 use std::hash::Hash;
 
+/// An in-memory signer.
+///
+/// This signer is backed by an in-memory Ed25519 signing key.
+///
+/// <div class="warning">
+///
+/// While very convenient, an in-memory signing key can be leaked.
+/// It is recommended to use a non-extractable key (and thus [`AsyncSigner`])
+/// instead.
+///
+/// </div>
+///
+/// [`AsyncSigner`]: crate::crypto::signer::async_signer::AsyncSigner
 #[derive(Debug, Clone)]
-pub struct MemorySigner(pub ed25519_dalek::SigningKey);
+pub struct MemorySigner(
+    /// Raw underlying Ed25519 signing key.
+    pub ed25519_dalek::SigningKey,
+);
 
 impl MemorySigner {
+    /// Randomly generates a new in-memory signer.
+    ///
+    /// # Arguments
+    ///
+    /// * `csprng` - A cryptographically secure random number generator.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use keyhive_core::crypto::{
+    /// #    signer::memory::MemorySigner,
+    /// #    verifiable::Verifiable
+    /// # };
+    /// let signer = MemorySigner::generate(&mut rand::thread_rng());
+    /// assert_eq!(signer.0.to_bytes().len(), 32);
+    /// assert_eq!(signer.verifying_key().to_bytes().len(), 32);
+    /// ```
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         Self(ed25519_dalek::SigningKey::generate(csprng))
     }

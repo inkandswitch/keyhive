@@ -61,6 +61,13 @@ pub struct Active<S: AsyncSigner, L: PrekeyListener = NoListener> {
 }
 
 impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
+    /// Generate a new active agent.
+    ///
+    /// # Arguments
+    ///
+    /// * `signer` - The signing key of the active agent.
+    /// * `listener` - The listener for changes to this agent's prekeys.
+    /// * `csprng` - The cryptographically secure random number generator.
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
         signer: S,
         listener: L,
@@ -115,14 +122,17 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
         })
     }
 
+    /// Getter for the agent's [`IndividualId`].
     pub fn id(&self) -> IndividualId {
         self.individual.id()
     }
 
+    /// Getter for the agent's [`AgentId`].
     pub fn agent_id(&self) -> AgentId {
         AgentId::IndividualId(self.id())
     }
 
+    /// The agent's underlying [`Individual`].
     pub fn individual(&self) -> &Individual {
         &self.individual
     }
@@ -140,10 +150,12 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
         Ok(contact_key)
     }
 
+    /// Pseudorandomly select a prekey out of the current prekeys.
     pub fn pick_prekey(&self, doc_id: DocumentId) -> &ShareKey {
         self.individual.pick_prekey(doc_id)
     }
 
+    /// Replace a particular prekey with a new one.
     pub async fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old_prekey: ShareKey,
@@ -157,6 +169,7 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
         Ok(op)
     }
 
+    /// Add a new prekey, expanding the number of currently available prekeys.
     pub async fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: &mut R,
@@ -166,7 +179,7 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
         Ok(op)
     }
 
-    /// Sign a payload.
+    /// Asyncronously sign a payload.
     pub async fn try_sign_async<U: Serialize>(
         &self,
         payload: U,
@@ -174,6 +187,7 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
         self.signer.try_sign_async(payload).await
     }
 
+    /// Encrypt a payload for a member of some [`Group`] or [`Document`].
     pub fn get_capability<T: ContentRef>(
         &self,
         subject: Membered<S, T>,
@@ -188,6 +202,7 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
         })
     }
 
+    /// Serialize for storage.
     pub fn into_archive(&self) -> ActiveArchive {
         ActiveArchive {
             prekey_pairs: self.prekey_pairs.clone(),
@@ -195,6 +210,7 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
         }
     }
 
+    /// Deserialize from storage.
     pub fn from_archive(archive: &ActiveArchive, signer: S, listener: L) -> Self {
         Self {
             prekey_pairs: archive.prekey_pairs.clone(),
@@ -217,29 +233,38 @@ impl<S: AsyncSigner, L: PrekeyListener> Verifiable for Active<S, L> {
     }
 }
 
+/// Errors when sharing encrypted content.
 #[derive(Debug, Error)]
 pub enum ShareError {
+    /// The active agent cannot find a public [`ShareKey`] for themselves.
     #[error("The active agent cannot find a public ShareKey for themselves")]
     MissingYourSharePublicKey,
 
+    /// The active agent cannot find a [`ShareSecretKey`] for themselves.
     #[error("The active agent cannot find a secret ShareKey for themselves")]
     MissingYourShareSecretKey,
 
+    /// The active agent does not know the [`ShareKey`] for the recipient.
     #[error("The active agent does not know the ShareKey for the recipient: {0}")]
     MissingRecipientShareKey(Identifier),
 
+    /// Encryption failed.
     #[error("Encryption failed: {0}")]
     EncryptionFailed(chacha20poly1305::Error),
 
+    /// [`Siv`][crate::crypto::siv::Siv] construction failed with an IO error.
     #[error("Siv error: {0}")]
     SivError(std::io::Error),
 }
 
+/// Errors when looking up a delegation for the [`Active`] agent.
 #[derive(Debug, Error)]
 pub enum ActiveDelegationError {
+    /// Cannot find proof at the requested access level.
     #[error("Cannot find proof at the requested access level")]
     CannotFindProof,
 
+    /// Invalid delegation.
     #[error(transparent)]
     DelegationError(#[from] DelegationError),
 }

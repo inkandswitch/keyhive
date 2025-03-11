@@ -1,3 +1,5 @@
+//! Stub out listener functionality.
+
 use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener};
 use crate::{
     cgka::operation::CgkaOperation,
@@ -13,6 +15,9 @@ use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 
+/// Stub out listener functionality.
+///
+/// This is the default listener. Generally you don't need to manually specify this as an option.
 #[derive(Debug, Default, Clone, Dupe, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoListener;
 
@@ -27,5 +32,5 @@ impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for NoListener {
 }
 
 impl CgkaListener for NoListener {
-    fn on_cgka_op(&self, _data: &Rc<Signed<CgkaOperation>>) {}
+    async fn on_cgka_op(&self, _data: &Rc<Signed<CgkaOperation>>) {}
 }

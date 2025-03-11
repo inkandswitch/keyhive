@@ -50,7 +50,7 @@ impl MembershipListener<JsSigner, JsChangeRef> for JsEventHandler {
 }
 
 impl CgkaListener for JsEventHandler {
-    fn on_cgka_op(&self, data: &Rc<Signed<CgkaOperation>>) {
+    async fn on_cgka_op(&self, data: &Rc<Signed<CgkaOperation>>) {
         self.call(Event::CgkaOperation(data.dupe()).into())
     }
 }

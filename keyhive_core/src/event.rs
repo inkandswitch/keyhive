@@ -1,3 +1,5 @@
+//! Events that are emitted during operation of Keyhive.
+
 pub mod static_event;
 
 use self::static_event::StaticEvent;
@@ -19,17 +21,22 @@ use dupe::Dupe;
 use serde::Serialize;
 use std::rc::Rc;
 
+/// Top-level event variants.
 #[derive(Debug, PartialEq, Eq, From, TryInto, Hash)]
 pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
-    // Prekeys
+    /// Prekeys were expanded.
     PrekeysExpanded(Rc<Signed<AddKeyOp>>),
+
+    /// A prekey was rotated.
     PrekeyRotated(Rc<Signed<RotateKeyOp>>),
 
-    // Cgka
+    /// A CGKA operation was performed.
     CgkaOperation(Rc<Signed<CgkaOperation>>),
 
-    // Membership
+    /// A delegation was created.
     Delegated(Rc<Signed<Delegation<S, T, L>>>),
+
+    /// A delegation was revoked.
     Revoked(Rc<Signed<Revocation<S, T, L>>>),
 }
 

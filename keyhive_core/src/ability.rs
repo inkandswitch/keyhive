@@ -1,3 +1,5 @@
+//! Helpers for working with [`Document`] access capabilties.
+
 use crate::{
     access::Access,
     content::reference::ContentRef,
@@ -7,6 +9,7 @@ use crate::{
 };
 use std::{cell::RefCell, rc::Rc};
 
+/// [`Ability`] is a helper type for working with [`Document`] access capabilties.
 #[derive(Debug)]
 pub struct Ability<
     'a,
@@ -19,10 +22,12 @@ pub struct Ability<
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Ability<'_, S, T, L> {
+    /// Getter for the referenced [`Document`].
     pub fn doc(&self) -> &Rc<RefCell<Document<S, T, L>>> {
         self.doc
     }
 
+    /// Access level.
     pub fn can(&self) -> Access {
         self.can
     }
