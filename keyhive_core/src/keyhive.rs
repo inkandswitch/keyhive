@@ -1430,7 +1430,7 @@ where
 {
     pub fn is_missing_dependency(&self) -> bool {
         match self {
-            Self::ReceivePrekeyOpError(e) => e.is_missing_dependency(),
+            Self::ReceivePrekeyOpError(_) => false,
             Self::ReceiveCgkaOpError(e) => e.is_missing_dependency(),
             Self::ReceieveStaticMembershipError(e) => e.is_missing_dependency(),
         }

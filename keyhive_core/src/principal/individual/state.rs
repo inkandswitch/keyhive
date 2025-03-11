@@ -1,18 +1,15 @@
-use super::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp};
+use super::op::{add_key::AddKeyOp, KeyOp};
 use crate::{
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
-        signed::{Signed, SigningError, VerificationError},
+        signed::{SigningError, VerificationError},
         signer::async_signer::AsyncSigner,
     },
-    error::missing_dependency::MissingDependency,
     util::content_addressed_map::CaMap,
 };
-use dupe::Dupe;
 use futures::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, collections::HashSet, num::NonZeroUsize, rc::Rc};
-use thiserror::Error;
 
 /// Low-level prekey operation store.
 ///
@@ -48,7 +45,10 @@ impl PrekeyState {
     /// # Returns
     ///
     /// A new [`PrekeyState`] with the operations from `iter`.
-    pub fn extend(&mut self, iterable: impl IntoIterator<Item = KeyOp>) -> Result<(), NewOpError> {
+    pub fn extend(
+        &mut self,
+        iterable: impl IntoIterator<Item = KeyOp>,
+    ) -> Result<(), VerificationError> {
         for op in iterable {
             self.insert_op(op)?;
         }
@@ -107,15 +107,8 @@ impl PrekeyState {
     }
 
     /// Insert a new [`Signed<KeyOp>`] into the [`PrekeyState`].
-    pub fn insert_op(&mut self, op: KeyOp) -> Result<(), NewOpError> {
+    pub fn insert_op(&mut self, op: KeyOp) -> Result<(), VerificationError> {
         op.try_verify()?;
-
-        if let KeyOp::Rotate(ref rot) = op {
-            if !self.contains_share_key(&rot.payload.old) {
-                return Err(MissingDependency(rot.payload.old).into());
-            }
-        }
-
         self.ops.insert(Rc::new(op));
         Ok(())
     }
@@ -123,42 +116,6 @@ impl PrekeyState {
     /// Check if a [`ShareKey`] is in the [`PrekeyState`].
     pub fn contains_share_key(&self, key: &ShareKey) -> bool {
         self.ops.values().any(|op| op.new_key() == key)
-    }
-
-    /// Rotate a [`ShareKey`] in the [`PrekeyState`].
-    pub(crate) async fn rotate<S: AsyncSigner>(
-        &mut self,
-        old: ShareKey,
-        new: ShareKey,
-        signer: &S,
-    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
-        let op = Rc::new(signer.try_sign_async(RotateKeyOp { old, new }).await?);
-        self.ops.insert(KeyOp::from(op.dupe()).into());
-        Ok(op)
-    }
-
-    /// Rotate a [`ShareKey`] in the [`PrekeyState`] with a randomly-generated [`ShareSecretKey`].
-    pub(crate) async fn rotate_gen<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
-        &mut self,
-        old: ShareKey,
-        signer: &S,
-        csprng: &mut R,
-    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
-        let new_secret = ShareSecretKey::generate(csprng);
-        self.rotate(old, new_secret.share_key(), signer).await
-    }
-
-    /// Expand the [`PrekeyState`] with a new, randomly-generated [`ShareSecretKey`].
-    pub(crate) async fn expand<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
-        &mut self,
-        signer: &S,
-        csprng: &mut R,
-    ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
-        let new_secret = ShareSecretKey::generate(csprng);
-        let new = new_secret.share_key();
-        let op = Rc::new(signer.try_sign_async(AddKeyOp { share_key: new }).await?);
-        self.ops.insert(KeyOp::Add(op.dupe()).into());
-        Ok(op)
     }
 
     /// Rebuild the most recent set of active [`ShareKey`]s in the [`PrekeyState`].
@@ -186,28 +143,13 @@ impl PrekeyState {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum NewOpError {
-    #[error(transparent)]
-    VerificationError(#[from] VerificationError),
-
-    #[error(transparent)]
-    MissingDependency(#[from] MissingDependency<ShareKey>),
-}
-
-impl NewOpError {
-    pub fn is_missing_dependency(&self) -> bool {
-        match self {
-            Self::VerificationError(_) => false,
-            Self::MissingDependency(_) => true,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::signer::sync_signer::SyncSigner;
+    use crate::{
+        crypto::signer::sync_signer::SyncSigner, principal::individual::op::rotate_key::RotateKeyOp,
+    };
+    use dupe::Dupe;
 
     #[test]
     fn test_rebuild() {
