@@ -1,15 +1,8 @@
-use std::{cell::RefCell, rc::Rc};
-
-use nonempty::nonempty;
-
 use keyhive_core::{
-    access::Access,
-    crypto::signer::memory::MemorySigner,
-    event::{static_event::StaticEvent, Event},
-    keyhive::Keyhive,
+    access::Access, crypto::signer::memory::MemorySigner, keyhive::Keyhive,
     listener::no_listener::NoListener,
-    principal::individual::Individual,
 };
+use nonempty::nonempty;
 
 async fn make_keyhive() -> Keyhive<MemorySigner> {
     let sk = MemorySigner::generate(&mut rand::thread_rng());

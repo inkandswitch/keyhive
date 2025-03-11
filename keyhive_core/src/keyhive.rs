@@ -1850,7 +1850,7 @@ mod tests {
         alice
             .add_member(
                 bob_on_alice.into(),
-                &mut doc.clone().into(),
+                &mut doc.dupe().into(),
                 Access::Read,
                 &[],
             )
@@ -1861,6 +1861,9 @@ mod tests {
         let events = alice
             .events_for_agent(&bob.active().clone().into())
             .unwrap();
+
+        dbg!(events.keys().collect::<Vec<_>>());
+
         // ensure that we are able to process the add op
         bob.ingest_event_table(events).unwrap();
 

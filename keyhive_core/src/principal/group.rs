@@ -411,22 +411,22 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             .await?;
 
         let rc = Rc::new(delegation);
-        self.listener.on_delegation(&rc).await;
         let _digest = self.receive_delegation(rc.dupe())?;
+        self.listener.on_delegation(&rc).await;
 
-        let cgka_ops = if can.is_reader() {
-            self.add_cgka_member(rc.dupe(), signer).await?,
+        let cgka_ops = if rc.payload.can.is_reader() {
+            self.add_cgka_member(rc.dupe(), signer).await?
         } else {
             vec![]
         };
 
         Ok(AddMemberUpdate {
-            delegation: rc,
             cgka_ops,
+            delegation: rc,
         })
     }
 
-    pub async fn add_cgka_member(
+    pub(crate) async fn add_cgka_member(
         &mut self,
         delegation: Rc<Signed<Delegation<S, T, L>>>,
         signer: &S,
