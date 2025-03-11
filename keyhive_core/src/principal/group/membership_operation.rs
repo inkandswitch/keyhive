@@ -402,8 +402,10 @@ mod tests {
 
     use std::sync::LazyLock;
 
-    static GROUP_SIGNER: LazyLock<MemorySigner> =
-        LazyLock::new(|| MemorySigner::generate(&mut rand::thread_rng()));
+    static GROUP_SIGNER: LazyLock<MemorySigner> = LazyLock::new(|| {
+        dbg!("%%%%%");
+        MemorySigner::generate(&mut rand::thread_rng())
+    });
 
     static ALICE_SIGNER: LazyLock<MemorySigner> =
         LazyLock::new(|| MemorySigner::generate(&mut rand::thread_rng()));
@@ -715,6 +717,26 @@ mod tests {
             let d = (dan_hash, dan_op.clone());
 
             assert_eq!(observed, vec![d, c, a]);
+        }
+
+        #[tokio::test]
+        async fn test_delegation_concurrency() {
+            //             ┌─────────┐
+            //             │  Alice  │
+            //             └─────────┘
+            //      ┌───────────┴────────────┐
+            //      ▼                        ▼
+            // ┌─────────┐              ┌─────────┐
+            // │   Bob   │              │   Dan   │
+            // └─────────┘              └─────────┘
+            //      │
+            //      ▼
+            // ┌─────────┐
+            // │  Carol  │
+            // └─────────┘
+            let csprng = &mut rand::thread_rng();
+            let alice_sk = fixture(&ALICE_SIGNER).clone();
+            let alice_dlg = add_alice(csprng).await;
         }
 
         #[tokio::test]
