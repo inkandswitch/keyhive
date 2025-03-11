@@ -1,0 +1,86 @@
+name: Bug Report
+description: File a bug report.
+title: "[Bug]: "
+labels: ["bug", "triage"]
+projects: ["inkandswitch/keyhive"]
+assignees:
+  - octocat
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Also tell us, what did you expect to happen?
+      placeholder: Tell us what you see!
+      value: "A bug happened!"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What version of our software are you running?
+    validations:
+      required: true
+  - type: dropdown
+    id: libs
+    attributes:
+      label: Which librraies in this workspace are impacted?
+      multiple: true
+      options:
+        - beelay-core
+        - keyhive_core
+        - keyhive_wasm
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: On which environment did you encounter this on?
+      multiple: true
+      options:
+        - Firefox
+        - Chrome
+        - Safari
+        - Microsoft Edge
+        - Brave
+        - Electron
+        - Node.js
+        - Deno
+        - Cloudflare Workers
+        - AWS Lambda
+        - System code
+        - Other
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Which OSes have you noticed the issue on?
+      multiple: true
+      options:
+        - macOS
+        - Window
+        - Ubuntu
+        - Debian
+        - Fedora
+        - Arch
+        - NixOS
+        - Other (please include in notes)
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Please copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
+      render: shell
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      description: By submitting this issue, you agree to follow our [Code of Conduct](https://example.com). 
+      options:
+        - label: I agree to follow this project's Code of Conduct
+          required: true
+
