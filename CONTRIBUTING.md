@@ -8,7 +8,7 @@ All types of contributions are encouraged and valued. Please make sure to read t
 > - Star the project
 > - Tweet about it
 > - Refer this project in your project's README
-> - Mention the project at local meetups and tell your friends/colleagues
+> - Mention the project at local meet ups and tell your friends/colleagues
 
 ## Code of Conduct
 
@@ -31,7 +31,7 @@ We will then take care of the issue as soon as possible.
 ## I Want To Contribute
 
 > ### Legal Notice <!-- omit in toc -->
-> When contributing to this project, you must agree that you have authored 100% of the content, that you have the necessary rights to the content and that the content you contribute may be provided under the project licence.
+> When contributing to this project, you must agree that you have authored 100% of the content, that you have the necessary rights to the content and that the content you contribute may be provided under the project license.
 
 ### Reporting Bugs
 
