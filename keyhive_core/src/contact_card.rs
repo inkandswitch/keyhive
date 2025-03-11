@@ -1,10 +1,24 @@
 use crate::{
-    principal::individual::{op::KeyOp, Individual},
+    crypto::{share_key::ShareKey, verifiable::Verifiable},
+    principal::individual::{id::IndividualId, op::KeyOp, Individual},
     util::hex,
 };
+use derive_more::{From, Into};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
-pub struct ContactCard(KeyOp);
+#[derive(Debug, Clone, From, Into, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+pub struct ContactCard(pub KeyOp);
+
+impl ContactCard {
+    pub fn id(&self) -> IndividualId {
+        self.0.issuer().into()
+    }
+
+    pub fn share_key(&self) -> &ShareKey {
+        self.0.new_key()
+    }
+}
 
 impl std::fmt::Display for ContactCard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -13,14 +27,8 @@ impl std::fmt::Display for ContactCard {
     }
 }
 
-impl From<KeyOp> for ContactCard {
-    fn from(key_op: KeyOp) -> ContactCard {
-        ContactCard(key_op)
-    }
-}
-
-impl<'a> From<&'a ContactCard> for Individual {
-    fn from(contact_card: &'a ContactCard) -> Individual {
+impl From<&ContactCard> for Individual {
+    fn from(contact_card: &ContactCard) -> Individual {
         Individual::new(contact_card.0.clone())
     }
 }
@@ -28,5 +36,11 @@ impl<'a> From<&'a ContactCard> for Individual {
 impl From<ContactCard> for Individual {
     fn from(contact_card: ContactCard) -> Individual {
         Individual::new(contact_card.0)
+    }
+}
+
+impl Verifiable for ContactCard {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.0.verifying_key()
     }
 }

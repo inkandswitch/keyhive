@@ -112,14 +112,14 @@ impl Individual {
         Ok(())
     }
 
-    pub fn pick_prekey(&self, doc_id: DocumentId) -> Option<ShareKey> {
+    pub fn pick_prekey(&self, doc_id: DocumentId) -> &ShareKey {
         let mut bytes: Vec<u8> = self.id.to_bytes().to_vec();
         bytes.extend_from_slice(&doc_id.to_bytes());
 
         let prekeys_len = self.prekeys.len();
         let idx = pseudorandom_in_range(bytes.as_slice(), prekeys_len);
 
-        self.prekeys.iter().nth(idx).cloned()
+        self.prekeys.iter().nth(idx).expect("index to be in range")
     }
 
     pub fn prekey_ops(&self) -> &CaMap<KeyOp> {

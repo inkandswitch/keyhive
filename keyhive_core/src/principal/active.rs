@@ -127,7 +127,20 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
         &self.individual
     }
 
-    pub fn pick_prekey(&self, doc_id: DocumentId) -> Option<ShareKey> {
+    /// Create a [`ShareKey`] that is not broadcast via the prekey state.
+    pub async fn generate_private_prekey<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        csprng: &mut R,
+    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
+        let share_key = self.individual.pick_prekey(DocumentId(self.id().into())); // Hack
+        let contact_key = self.rotate_prekey(*share_key, csprng).await?;
+        self.rotate_prekey(contact_key.payload.new.clone(), csprng)
+            .await?;
+
+        Ok(contact_key)
+    }
+
+    pub fn pick_prekey(&self, doc_id: DocumentId) -> &ShareKey {
         self.individual.pick_prekey(doc_id)
     }
 
