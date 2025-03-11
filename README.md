@@ -19,6 +19,7 @@ If you have any questions, thoughts, or feedback, please contact the team at by 
 [Channel]: https://discord.com/channels/1200006940210757672/1347253710048333884
 [GitHub Issue]:https://github.com/inkandswitch/keyhive/issues/new 
 [Wasm]: https://webassembly.org/
+
 [`beelay-core`]: https://github.com/inkandswitch/keyhive/tree/main/beelay/beelay-core
 [`keyhive_core`]: https://github.com/inkandswitch/keyhive/tree/main/keyhive_core
 [`keyhive_wasm`]: https://github.com/inkandswitch/keyhive/tree/main/keyhive_wasm
