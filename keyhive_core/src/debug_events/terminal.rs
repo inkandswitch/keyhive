@@ -14,13 +14,13 @@ use super::{CgkaOperationDetails, DebugEventDetails, DebugEventTable};
 /// # Example
 /// ```
 /// use keyhive_core::event::static_event::StaticEvent;
-/// use crate::visuals::print_event_table;
+/// use keyhive_core::debug_events::{DebugEventTable, Nicknames, terminal::print_event_table};
+///
+/// let events: Vec<StaticEvent> = vec![];
+/// let table = DebugEventTable::from_static_events(&events, Nicknames::default());
 ///
 /// // Print a table of events
-/// print_event_table(&events);
-///
-/// // Print a table of events with more details
-/// print_event_table_verbose(&events);
+/// print_event_table(table);
 /// ```
 pub fn print_event_table(table: DebugEventTable) {
     print_event_table_internal(table, false)

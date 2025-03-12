@@ -27,3 +27,4 @@ private
 tests/report
 node_modules
 dist
+CLAUDE.md

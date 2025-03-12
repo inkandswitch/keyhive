@@ -1,80 +1,42 @@
-use futures::StreamExt;
+use crate::BlobHash;
 
-use crate::{
-    blob::BlobMeta, effects::TaskEffects, parse, Commit, CommitBundle, CommitOrBundle, StorageKey,
-};
+use super::{CommitOrStratum, Diff, LooseCommit, Sedimentree, Stratum};
+pub use error::LoadTreeData;
 
-use super::{Diff, LooseCommit, Sedimentree, Stratum};
+pub trait Storage {
+    type Error: core::error::Error;
+    async fn load_loose_commits(&self) -> Result<Vec<LooseCommit>, Self::Error>;
+    async fn load_strata(&self) -> Result<Vec<Stratum>, Self::Error>;
+    async fn save_loose_commit(&self, commit: LooseCommit) -> Result<(), Self::Error>;
+    async fn save_stratum(&self, stratum: Stratum) -> Result<(), Self::Error>;
+    async fn load_blob(&self, blob_hash: BlobHash) -> Result<Option<Vec<u8>>, Self::Error>;
+}
 
-pub(crate) async fn load<R: rand::Rng>(
-    effects: TaskEffects<R>,
-    path: StorageKey,
-) -> Option<Sedimentree> {
+#[tracing::instrument(skip(storage))]
+pub(crate) async fn load<S: Storage + Clone>(storage: S) -> Result<Option<Sedimentree>, S::Error> {
     let strata = {
-        let effects = effects.clone();
-        let path = path.with_subcomponent("strata");
-        async move {
-            let raw = effects.load_range(path).await;
-            if raw.is_empty() {
-                return None;
-            }
-            let mut result = Vec::new();
-            for (key, bytes) in raw {
-                match Stratum::parse(parse::Input::new(&bytes)) {
-                    Ok((input, stratum)) => {
-                        if !input.is_empty() {
-                            tracing::warn!(%key, "leftoever input when parsing stratum");
-                        }
-                        result.push(stratum);
-                    }
-                    Err(e) => {
-                        tracing::warn!(err=?e, %key, "error loading stratum")
-                    }
-                }
-            }
-            Some(result)
-        }
+        let storage = storage.clone();
+        async move { storage.load_strata().await }
     };
-    let commits = async move {
-        let raw = effects
-            .load_range(path.with_subcomponent("loose_commits"))
-            .await;
-        if raw.is_empty() {
-            return None;
-        }
-        let mut result = Vec::new();
-        for (key, bytes) in raw {
-            tracing::trace!(%key, "loading loose commit");
-            match LooseCommit::parse(parse::Input::new(&bytes)) {
-                Ok((input, commit)) => {
-                    if !input.is_empty() {
-                        tracing::warn!(%key, "leftoever input when parsing loose commit");
-                    }
-                    result.push(commit);
-                }
-                Err(e) => {
-                    tracing::warn!(err=?e, %key, "error loading loose commit");
-                }
-            }
-        }
-        Some(result)
-    };
-    let (stratum, commits) = futures::future::join(strata, commits).await;
-    match (stratum, commits) {
-        (None, None) => None,
-        (maybe_stratum, maybe_commits) => Some(Sedimentree::new(
-            maybe_stratum.unwrap_or_default(),
-            maybe_commits.unwrap_or_default(),
-        )),
+    let commits = storage.load_loose_commits();
+    let (stratum, commits) = futures::future::try_join(strata, commits).await?;
+    tracing::trace!(
+        num_commits = commits.len(),
+        num_stratum = stratum.len(),
+        "loading local tree"
+    );
+    if stratum.is_empty() && commits.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(Sedimentree::new(stratum, commits)))
     }
 }
 
-pub(crate) async fn update<R: rand::Rng>(
-    effects: TaskEffects<R>,
-    path: StorageKey,
+pub(crate) async fn update<S: Storage + Clone>(
+    storage: S,
     original: Option<&Sedimentree>,
     new: &Sedimentree,
-) {
+) -> Result<(), S::Error> {
     let (new_strata, new_commits) = original
         .map(|o| {
             let Diff {
@@ -87,117 +49,102 @@ pub(crate) async fn update<R: rand::Rng>(
         })
         .unwrap_or_else(|| (new.strata.iter().collect(), new.commits.iter().collect()));
 
-    let save_strata = {
-        let effects = effects.clone();
-        let path = path.clone();
-        new_strata.into_iter().map(move |s| {
-            let effects = effects.clone();
-            let path = path.clone();
-            async move {
-                let key = strata_path(&path, s);
-                let mut data = Vec::new();
-                s.encode(&mut data);
-                effects.put(key, data).await;
-            }
-        })
-    };
-
-    let save_commits = new_commits.into_iter().map(move |c| {
-        let effects = effects.clone();
-        let path = path.clone();
+    let save_strata = new_strata.into_iter().map(|stratum| {
+        let storage = storage.clone();
         async move {
-            let key = commit_path(&path, c);
-            let mut data = Vec::new();
-            c.encode(&mut data);
-            effects.put(key, data).await;
+            storage.save_stratum(stratum.clone()).await?;
+            Ok(())
         }
     });
 
-    futures::future::join(
-        futures::future::join_all(save_strata),
-        futures::future::join_all(save_commits),
+    let save_commits = new_commits.into_iter().map(|commit| {
+        let storage = storage.clone();
+        async move {
+            storage.save_loose_commit(commit.clone()).await?;
+            Ok(())
+        }
+    });
+
+    futures::future::try_join(
+        futures::future::try_join_all(save_strata),
+        futures::future::try_join_all(save_commits),
     )
-    .await;
+    .await?;
+    Ok(())
 }
 
-pub(crate) fn data<R: rand::Rng>(
-    effects: TaskEffects<R>,
+pub(crate) fn data<S: Storage + Clone>(
+    storage: S,
     tree: Sedimentree,
-) -> impl futures::Stream<Item = CommitOrBundle> {
+) -> impl futures::Stream<Item = Result<(CommitOrStratum, Vec<u8>), LoadTreeData>> {
     let items = tree.into_items().map(|item| {
-        let effects = effects.clone();
+        let storage = storage.clone();
         async move {
             match item {
                 super::CommitOrStratum::Commit(c) => {
-                    let data = effects.load(StorageKey::blob(c.blob().hash())).await?;
-                    Some(CommitOrBundle::Commit(Commit::new(
-                        c.parents().to_vec(),
-                        data,
-                        c.hash(),
-                    )))
+                    let data = storage
+                        .load_blob(c.blob().hash())
+                        .await
+                        .map_err(|e| LoadTreeData::Storage(e.to_string()))?
+                        .ok_or_else(|| LoadTreeData::MissingBlob(c.blob().hash()))?;
+                    Ok((CommitOrStratum::Commit(c), data))
                 }
                 super::CommitOrStratum::Stratum(s) => {
-                    let data = effects.load(StorageKey::blob(s.meta().blob().hash())).await;
-                    let data = data?;
-                    Some(CommitOrBundle::Bundle(
-                        CommitBundle::builder()
-                            .start(s.start())
-                            .end(s.end())
-                            .bundled_commits(data)
-                            .checkpoints(s.checkpoints().to_vec())
-                            .build(),
-                    ))
+                    let data = storage
+                        .load_blob(s.meta().blob().hash())
+                        .await
+                        .map_err(|e| LoadTreeData::Storage(e.to_string()))?
+                        .ok_or_else(|| LoadTreeData::MissingBlob(s.meta().blob().hash()))?;
+                    Ok((CommitOrStratum::Stratum(s), data))
                 }
             }
         }
     });
-    futures::stream::FuturesUnordered::from_iter(items).filter_map(futures::future::ready)
+    futures::stream::FuturesUnordered::from_iter(items)
 }
 
-pub(crate) async fn write_loose_commit<R: rand::Rng>(
-    effects: TaskEffects<R>,
-    path: StorageKey,
+pub(crate) async fn write_loose_commit<S: Storage>(
+    storage: S,
     commit: &LooseCommit,
-) {
-    let key = commit_path(&path, commit);
-    let mut data = Vec::new();
-    commit.encode(&mut data);
-    effects.put(key, data).await;
+) -> Result<(), S::Error> {
+    storage.save_loose_commit(commit.clone()).await
 }
 
-pub(crate) async fn write_bundle<R: rand::Rng>(
-    effects: TaskEffects<R>,
-    path: StorageKey,
-    bundle: CommitBundle,
-) {
-    let blob = BlobMeta::new(bundle.bundled_commits());
-    effects
-        .put(
-            StorageKey::blob(blob.hash()),
-            bundle.bundled_commits().to_vec(),
-        )
-        .await;
-    let stratum = Stratum::new(
-        bundle.start(),
-        bundle.end(),
-        bundle.checkpoints().to_vec(),
-        blob,
-    );
-    let key = strata_path(&path, &stratum);
-    let mut stratum_bytes = Vec::new();
-    stratum.encode(&mut stratum_bytes);
-    effects.put(key, stratum_bytes).await;
+pub(crate) async fn write_stratum<S: Storage>(
+    storage: S,
+    stratum: Stratum,
+) -> Result<(), S::Error> {
+    storage.save_stratum(stratum).await
 }
 
-fn strata_path(prefix: &StorageKey, s: &Stratum) -> StorageKey {
-    let stratum_name = format!("{}-{}", s.start(), s.end());
-    prefix
-        .with_subcomponent("strata")
-        .with_subcomponent(stratum_name)
+pub(crate) async fn load_loose_commit_data<S: Storage>(
+    storage: S,
+    commit: &LooseCommit,
+) -> Result<Option<Vec<u8>>, S::Error> {
+    storage
+        .load_blob(commit.blob().hash())
+        .await
+        .map_err(|e| e.into())
 }
 
-fn commit_path(prefix: &StorageKey, c: &LooseCommit) -> StorageKey {
-    prefix
-        .with_subcomponent("loose_commits")
-        .with_subcomponent(c.hash().to_string())
+pub(crate) async fn load_stratum_data<S: Storage>(
+    storage: S,
+    stratum: &Stratum,
+) -> Result<Option<Vec<u8>>, S::Error> {
+    storage
+        .load_blob(stratum.meta().blob().hash())
+        .await
+        .map_err(|e| e.into())
+}
+
+mod error {
+    use crate::BlobHash;
+
+    #[derive(Debug, thiserror::Error)]
+    pub enum LoadTreeData {
+        #[error("error from storage: {0}")]
+        Storage(String),
+        #[error("missing blob: {0}")]
+        MissingBlob(BlobHash),
+    }
 }

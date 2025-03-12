@@ -75,7 +75,11 @@ pub enum CgkaError {
 impl CgkaError {
     pub fn is_missing_dependency(&self) -> bool {
         match self {
+            Self::NotInitialized => true,
             Self::IdentifierNotFound => true,
+            Self::UnexpectedInitialOperation => true,
+            Self::UnexpectedInviteOperation => true,
+            Self::OutOfOrderOperation => true,
             _ => false,
         }
     }

@@ -1,5 +1,7 @@
 use std::vec::Vec;
 
+use crate::serialization::{leb128, parse, Encode, Parse};
+
 pub(crate) trait Symbol {
     fn zero() -> Self;
     fn xor(&self, other: &Self) -> Self;
@@ -57,11 +59,39 @@ impl<T: Symbol + Copy> HashedSymbol<T> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub(crate) struct CodedSymbol<T: Symbol + Copy> {
     pub(crate) symbol: T,
     pub(crate) hash: u64,
     pub(crate) count: i64,
+}
+
+impl<T: Encode + Symbol + Copy> Encode for CodedSymbol<T> {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.symbol.encode_into(out);
+        out.extend(self.hash.to_be_bytes());
+        leb128::signed::encode(out, self.count);
+    }
+}
+
+impl<'a, T: Parse<'a> + Copy + Symbol> Parse<'a> for CodedSymbol<T> {
+    fn parse(input: parse::Input<'a>) -> Result<(parse::Input<'a>, Self), parse::ParseError> {
+        input.parse_in_ctx("CodedSymbol", |input| {
+            let (input, symbol) = T::parse_in_ctx("symbol", input)?;
+            let (input, hash_bytes) = input.parse_in_ctx("hash", parse::arr::<8>)?;
+            let hash = u64::from_be_bytes(hash_bytes);
+            let (input, count) = input.parse_in_ctx("count", leb128::signed::parse)?;
+            Ok((
+                input,
+                Self {
+                    symbol,
+                    hash,
+                    count,
+                },
+            ))
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -70,6 +100,21 @@ pub(crate) struct Encoder<T: Symbol + Copy> {
     mappings: Vec<RandomMapping>,
     queue: Vec<SymbolMapping>,
     next_idx: u64,
+}
+
+impl<T: Symbol + Copy> Encoder<T> {
+    pub(crate) fn next_n_symbols(&mut self, n: u64) -> Vec<CodedSymbol<T>> {
+        let mut result = vec![];
+        for _ in 0..n {
+            let symbol = self.produce_next_coded_symbol();
+            result.push(CodedSymbol {
+                symbol: symbol.symbol,
+                hash: symbol.hash,
+                count: symbol.count,
+            });
+        }
+        result
+    }
 }
 
 #[derive(Clone)]
@@ -325,141 +370,5 @@ impl<T: Symbol + Copy> Decoder<T> {
 
     pub(crate) fn get_local_symbols(&self) -> Vec<HashedSymbol<T>> {
         self.local.symbols.clone()
-    }
-}
-
-pub mod doc_and_heads {
-    use std::hash::{Hash, Hasher};
-
-    use crate::{leb128, parse, sedimentree::MinimalTreeHash, DocumentId};
-
-    #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize)]
-    #[cfg_attr(test, derive(arbitrary::Arbitrary))]
-    pub(crate) struct DocAndHeadsSymbol {
-        part1: [u8; 16],
-        part2: [u8; 32],
-    }
-
-    impl DocAndHeadsSymbol {
-        pub(crate) fn new(doc: &DocumentId, hash: &MinimalTreeHash) -> Self {
-            Self {
-                part1: *doc.as_bytes(),
-                part2: *hash.as_bytes(),
-            }
-        }
-        pub(crate) fn decode(self) -> (DocumentId, MinimalTreeHash) {
-            (
-                DocumentId::from(self.part1),
-                MinimalTreeHash::from(self.part2),
-            )
-        }
-    }
-
-    impl super::Symbol for DocAndHeadsSymbol {
-        fn zero() -> Self {
-            Self {
-                part1: [0; 16],
-                part2: [0; 32],
-            }
-        }
-
-        fn xor(&self, other: &Self) -> Self {
-            Self {
-                part1: std::array::from_fn(|i| self.part1[i] ^ other.part1[i]),
-                part2: std::array::from_fn(|i| self.part2[i] ^ other.part2[i]),
-            }
-        }
-
-        fn hash(&self) -> u64 {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            self.part1.hash(&mut hasher);
-            self.part2.hash(&mut hasher);
-            hasher.finish()
-        }
-    }
-
-    impl DocAndHeadsSymbol {
-        pub(crate) fn parse(
-            input: parse::Input<'_>,
-        ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-            input.with_context("RibltSymbol", |input| {
-                let (input, part1) = parse::arr::<16>(input)?;
-                let (input, part2) = parse::arr::<32>(input)?;
-                Ok((input, Self { part1, part2 }))
-            })
-        }
-
-        pub(crate) fn encode(&self, out: &mut Vec<u8>) {
-            out.extend(&self.part1);
-            out.extend(&self.part2);
-        }
-    }
-
-    #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-    #[cfg_attr(test, derive(arbitrary::Arbitrary))]
-    pub(crate) struct CodedDocAndHeadsSymbol {
-        symbol: DocAndHeadsSymbol,
-        hash: u64,
-        count: i64,
-    }
-
-    impl CodedDocAndHeadsSymbol {
-        pub(crate) fn parse(
-            input: parse::Input<'_>,
-        ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-            let (input, symbol) = DocAndHeadsSymbol::parse(input)?;
-            let (input, hash_bytes) = parse::arr::<8>(input)?;
-            let hash = u64::from_be_bytes(hash_bytes);
-            let (input, count) = leb128::signed::parse(input)?;
-            Ok((
-                input,
-                Self {
-                    symbol,
-                    hash,
-                    count,
-                },
-            ))
-        }
-
-        pub(crate) fn encode(&self, out: &mut Vec<u8>) {
-            self.symbol.encode(out);
-            out.extend(self.hash.to_be_bytes());
-            leb128::signed::encode(out, self.count);
-        }
-
-        pub(crate) fn into_coded(self) -> super::CodedSymbol<DocAndHeadsSymbol> {
-            super::CodedSymbol {
-                symbol: self.symbol,
-                count: self.count,
-                hash: self.hash,
-            }
-        }
-    }
-
-    pub(crate) struct Encoder {
-        riblt: super::Encoder<DocAndHeadsSymbol>,
-    }
-
-    impl Encoder {
-        pub(crate) fn new(snapshot: &crate::snapshots::Snapshot) -> Self {
-            let mut enc = super::Encoder::new();
-            for (doc, heads) in snapshot.our_docs_2() {
-                enc.add_symbol(&DocAndHeadsSymbol::new(doc, heads));
-            }
-            Encoder { riblt: enc }
-        }
-
-        pub(crate) fn next_n_symbols(&mut self, n: u64) -> Vec<CodedDocAndHeadsSymbol> {
-            let mut result = vec![];
-            for _ in 0..n {
-                let symbol = self.riblt.produce_next_coded_symbol();
-                result.push(CodedDocAndHeadsSymbol {
-                    symbol: symbol.symbol,
-                    hash: symbol.hash,
-                    count: symbol.count,
-                });
-            }
-            result
-        }
     }
 }

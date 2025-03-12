@@ -1,6 +1,10 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use crate::{blob::BlobMeta, leb128::encode_uleb128, parse, BundleSpec, CommitHash, DocumentId};
+use crate::{
+    blob::BlobMeta,
+    serialization::{parse, Encode, Parse},
+    BundleSpec, CommitHash, DocumentId,
+};
 
 mod commit_dag;
 pub(crate) mod storage;
@@ -9,18 +13,18 @@ pub(crate) mod storage;
 /// equal to or lower than this level then it is a checkpoint
 pub(crate) const TOP_STRATA_LEVEL: Level = Level(2);
 
-#[derive(Clone, PartialEq, Eq, serde::Serialize, Default)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, Default, Hash)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub(crate) struct Sedimentree {
-    strata: Vec<Stratum>,
-    commits: Vec<LooseCommit>,
+    strata: BTreeSet<Stratum>,
+    commits: BTreeSet<LooseCommit>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Default, Hash)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub(crate) struct SedimentreeSummary {
-    strata: Vec<StratumMeta>,
-    commits: Vec<LooseCommit>,
+    strata: BTreeSet<StratumMeta>,
+    commits: BTreeSet<LooseCommit>,
 }
 
 impl SedimentreeSummary {
@@ -73,14 +77,15 @@ impl Ord for Level {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, PartialOrd, Ord)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub(crate) struct Stratum {
     meta: StratumMeta,
     checkpoints: Vec<CommitHash>,
+    hash: CommitHash,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, PartialOrd, Ord)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub(crate) struct StratumMeta {
     start: CommitHash,
@@ -88,7 +93,25 @@ pub(crate) struct StratumMeta {
     blob: BlobMeta,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+impl Encode for StratumMeta {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.start.encode_into(out);
+        self.end.encode_into(out);
+        self.blob.encode_into(out);
+    }
+}
+impl Parse<'_> for StratumMeta {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        input.parse_in_ctx("StratumMeta", |input| {
+            let (input, start) = CommitHash::parse_in_ctx("start", input)?;
+            let (input, end) = CommitHash::parse_in_ctx("end", input)?;
+            let (input, blob) = BlobMeta::parse_in_ctx("blob", input)?;
+            Ok((input, Self { start, end, blob }))
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, PartialOrd, Ord)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub(crate) struct LooseCommit {
     hash: CommitHash,
@@ -130,15 +153,22 @@ impl LooseCommit {
     pub(crate) fn blob(&self) -> &BlobMeta {
         &self.blob
     }
+}
 
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("LooseCommit", |input| {
-            let (input, hash) = CommitHash::parse(input)?;
-            let (input, parents) =
-                input.with_context("parents", |input| parse::many(input, CommitHash::parse))?;
-            let (input, blob) = BlobMeta::parse(input)?;
+impl Encode for LooseCommit {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.hash.encode_into(out);
+        self.parents.encode_into(out);
+        self.blob.encode_into(out);
+    }
+}
+
+impl Parse<'_> for LooseCommit {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        input.parse_in_ctx("LooseCommit", |input| {
+            let (input, hash) = CommitHash::parse_in_ctx("hash", input)?;
+            let (input, parents) = Vec::<CommitHash>::parse_in_ctx("parents", input)?;
+            let (input, blob) = BlobMeta::parse_in_ctx("blob", input)?;
             Ok((
                 input,
                 Self {
@@ -148,15 +178,6 @@ impl LooseCommit {
                 },
             ))
         })
-    }
-
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        self.hash.encode(buf);
-        encode_uleb128(buf, self.parents.len() as u64);
-        for parent in &self.parents {
-            parent.encode(buf);
-        }
-        self.blob.encode(buf);
     }
 }
 
@@ -168,34 +189,20 @@ impl Stratum {
         blob: BlobMeta,
     ) -> Self {
         let meta = StratumMeta { start, end, blob };
-        Self { meta, checkpoints }
-    }
-
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("Stratum", |input| {
-            let (input, start) = CommitHash::parse(input)?;
-            let (input, end) = CommitHash::parse(input)?;
-            let (input, blob) = BlobMeta::parse(input)?;
-            let (input, checkpoints) = parse::many(input, CommitHash::parse)?;
-            Ok((
-                input,
-                Self {
-                    meta: StratumMeta { start, end, blob },
-                    checkpoints,
-                },
-            ))
-        })
-    }
-
-    pub(crate) fn encode(&self, out: &mut Vec<u8>) {
-        self.meta.start.encode(out);
-        self.meta.end.encode(out);
-        self.meta.blob.encode(out);
-        encode_uleb128(out, self.checkpoints.len() as u64);
-        for checkpoint in &self.checkpoints {
-            checkpoint.encode(out);
+        let hash = {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(&start.as_bytes());
+            hasher.update(&end.as_bytes());
+            hasher.update(blob.hash().as_bytes());
+            for checkpoint in &checkpoints {
+                hasher.update(&checkpoint.as_bytes());
+            }
+            CommitHash::from(*hasher.finalize().as_bytes())
+        };
+        Self {
+            meta,
+            checkpoints,
+            hash,
         }
     }
 
@@ -241,6 +248,40 @@ impl Stratum {
     pub(crate) fn checkpoints(&self) -> &[CommitHash] {
         &self.checkpoints
     }
+
+    pub(crate) fn hash(&self) -> CommitHash {
+        self.hash
+    }
+}
+
+impl Encode for Stratum {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.meta.start.encode_into(out);
+        self.meta.end.encode_into(out);
+        self.meta.blob.encode_into(out);
+        self.checkpoints.encode_into(out);
+        self.hash.encode_into(out);
+    }
+}
+
+impl Parse<'_> for Stratum {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        input.parse_in_ctx("Stratum", |input| {
+            let (input, start) = CommitHash::parse_in_ctx("start", input)?;
+            let (input, end) = CommitHash::parse_in_ctx("end", input)?;
+            let (input, blob) = BlobMeta::parse_in_ctx("blob", input)?;
+            let (input, checkpoints) = Vec::<CommitHash>::parse_in_ctx("checkpoints", input)?;
+            let (input, hash) = CommitHash::parse_in_ctx("hash", input)?;
+            Ok((
+                input,
+                Self {
+                    meta: StratumMeta { start, end, blob },
+                    checkpoints,
+                    hash,
+                },
+            ))
+        })
+    }
 }
 
 impl StratumMeta {
@@ -258,28 +299,14 @@ impl StratumMeta {
     pub(crate) fn blob(&self) -> &BlobMeta {
         &self.blob
     }
-
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("StratumMeta", |input| {
-            let (input, start) = CommitHash::parse(input)?;
-            let (input, end) = CommitHash::parse(input)?;
-            let (input, blob) = BlobMeta::parse(input)?;
-            Ok((input, Self { start, end, blob }))
-        })
-    }
-
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        self.start.encode(buf);
-        self.end.encode(buf);
-        self.blob.encode(buf);
-    }
 }
 
 impl Sedimentree {
-    fn new(strata: Vec<Stratum>, commits: Vec<LooseCommit>) -> Self {
-        Self { strata, commits }
+    pub(crate) fn new(strata: Vec<Stratum>, commits: Vec<LooseCommit>) -> Self {
+        Self {
+            strata: strata.into_iter().collect(),
+            commits: commits.into_iter().collect(),
+        }
     }
 
     pub(crate) fn minimal_hash(&self) -> MinimalTreeHash {
@@ -301,12 +328,14 @@ impl Sedimentree {
         MinimalTreeHash(*hasher.finalize().as_bytes())
     }
 
-    pub(crate) fn add_stratum(&mut self, stratum: Stratum) {
-        self.strata.push(stratum);
+    // Returns true if the stratum was not already present
+    pub(crate) fn add_stratum(&mut self, stratum: Stratum) -> bool {
+        self.strata.insert(stratum)
     }
 
-    pub(crate) fn add_commit(&mut self, commit: LooseCommit) {
-        self.commits.push(commit);
+    // Returns true if the commit was not already present
+    pub(crate) fn add_commit(&mut self, commit: LooseCommit) -> bool {
+        self.commits.insert(commit)
     }
 
     pub(crate) fn diff<'a>(&'a self, other: &'a Sedimentree) -> Diff<'a> {
@@ -357,6 +386,7 @@ impl Sedimentree {
         self.strata.iter()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn loose_commits(&self) -> impl Iterator<Item = &LooseCommit> {
         self.commits.iter()
     }
@@ -365,7 +395,7 @@ impl Sedimentree {
         // First sort strata by level, then for each stratum below the lowest
         // level, discard that stratum if it is supported by any of the stratum
         // above it.
-        let mut strata = self.strata.clone();
+        let mut strata = self.strata.iter().collect::<Vec<_>>();
         strata.sort_by(|a, b| a.level().cmp(&b.level()).reverse());
 
         let mut minimized_strata = Vec::<Stratum>::new();
@@ -375,7 +405,7 @@ impl Sedimentree {
                 .iter()
                 .any(|existing| existing.supports(&stratum.meta))
             {
-                minimized_strata.push(stratum);
+                minimized_strata.push(stratum.clone());
             }
         }
 
@@ -434,7 +464,7 @@ impl Sedimentree {
         let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
         let mut runs_by_level = BTreeMap::<Level, (CommitHash, Vec<CommitHash>)>::new();
         let mut all_bundles = Vec::new();
-        for commit_hash in dag.canonical_sequence(&self.strata) {
+        for commit_hash in dag.canonical_sequence(self.strata.iter()) {
             let level = Level::from(commit_hash);
             for (run_level, (_start, checkpoints)) in runs_by_level.iter_mut() {
                 if run_level < &level {
@@ -469,32 +499,34 @@ impl Sedimentree {
     }
 }
 
-impl SedimentreeSummary {
-    pub(crate) fn parse(
-        input: parse::Input<'_>,
-    ) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.with_context("SedimentreeSummary", |input| {
-            let (input, levels) = parse::many(input, StratumMeta::parse)?;
-            let (input, commits) = parse::many(input, LooseCommit::parse)?;
+impl Parse<'_> for SedimentreeSummary {
+    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
+        input.parse_in_ctx("SedimentreeSummary", |input| {
+            let (input, strata) = Vec::<StratumMeta>::parse_in_ctx("strata", input)?;
+            let (input, commits) = Vec::<LooseCommit>::parse_in_ctx("commits", input)?;
             Ok((
                 input,
                 Self {
-                    strata: levels,
-                    commits,
+                    strata: strata.into_iter().collect(),
+                    commits: commits.into_iter().collect(),
                 },
             ))
         })
     }
+}
 
-    pub(crate) fn encode(&self, buf: &mut Vec<u8>) {
-        encode_uleb128(buf, self.strata.len() as u64);
-        for level in &self.strata {
-            level.encode(buf);
-        }
-        encode_uleb128(buf, self.commits.len() as u64);
-        for commit in &self.commits {
-            commit.encode(buf);
-        }
+impl Encode for SedimentreeSummary {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.strata
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .encode_into(out);
+        self.commits
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .encode_into(out);
     }
 }
 
@@ -553,7 +585,11 @@ mod tests {
     use num::Num;
 
     use super::{Stratum, StratumMeta};
-    use crate::{blob::BlobMeta, parse, CommitHash};
+    use crate::{
+        blob::BlobMeta,
+        serialization::{parse, Encode, Parse},
+        CommitHash,
+    };
 
     pub(crate) fn hash_with_trailing_zeros(
         unstructured: &mut arbitrary::Unstructured<'_>,
@@ -662,9 +698,8 @@ mod tests {
         bolero::check!()
             .with_arbitrary::<super::LooseCommit>()
             .for_each(|c| {
-                let mut out = Vec::new();
-                c.encode(&mut out);
-                let (_, decoded) = super::LooseCommit::parse(parse::Input::new(&out)).unwrap();
+                let encoded = c.encode();
+                let (_, decoded) = super::LooseCommit::parse(parse::Input::new(&encoded)).unwrap();
                 assert_eq!(c, &decoded);
             });
     }
