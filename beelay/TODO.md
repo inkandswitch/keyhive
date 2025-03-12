@@ -14,7 +14,6 @@
   * On each tick:
     * Expire old sessions
     * Rerun sync for sessions older than 1 minute
-* Remove `Public`
 * Ensure that when a document is loaded we have incorporated any decrypted
 events we received since the load was started into the return value so that
 callers know they only have to listen to events from the point the document is

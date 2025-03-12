@@ -82,12 +82,6 @@ pub enum KeyhiveEntityId {
     Doc(DocumentId),
 }
 
-impl KeyhiveEntityId {
-    pub fn public() -> Self {
-        Self::Peer(keyhive_core::principal::public::Public.id().0.into())
-    }
-}
-
 impl From<KeyhiveEntityId> for keyhive_core::principal::identifier::Identifier {
     fn from(id: KeyhiveEntityId) -> Self {
         match id {
