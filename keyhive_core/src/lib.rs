@@ -16,8 +16,6 @@ pub mod cgka;
 pub mod contact_card;
 pub mod content;
 pub mod crypto;
-#[cfg(feature = "debug_events")]
-pub mod debug_events;
 pub mod error;
 pub mod event;
 pub mod invocation;
@@ -26,3 +24,6 @@ pub mod listener;
 pub mod principal;
 pub mod store;
 pub mod util;
+
+#[cfg(feature = "debug_events")]
+pub mod debug_events;

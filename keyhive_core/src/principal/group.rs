@@ -662,10 +662,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             match op {
                 MembershipOperation::Delegation(d) => {
                     if revoked_dlgs.contains(&d.signature.to_bytes()) {
-                        // dbg!("0");
                         continue;
                     }
-                    // dbg!("1");
 
                     // NOTE: friendly reminder that the topsort already includes all ancestors
                     if let Some(found_proof) = &d.payload.proof {
@@ -676,7 +674,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                             })
                             .or_insert_with(|| HashSet::from_iter([d.signature.to_bytes()]));
 
-                        // dbg!("2");
                         // If the proof was directly revoked, then check if they've been
                         // re-added some other way. Since `rebuild` recurses,
                         // we only need to check one level.
@@ -684,34 +681,21 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                             || !dlgs_in_play.contains_key(&found_proof.signature.to_bytes())
                         {
                             if let Some(alt_proofs) = self.members.get(&found_proof.issuer.into()) {
-                                // dbg!("3");
                                 if alt_proofs.iter().filter(|d| *d != found_proof).all(
-                                    |alt_proof| {
-                                        // dbg!("BOP BOOP BOOOOP");
-                                        // dbg!(d.payload.delegate.id());
-                                        // dbg!(alt_proof.payload.delegate.id());
-
-                                        alt_proof.payload.can < found_proof.payload.can
-                                    },
+                                    |alt_proof| alt_proof.payload.can < found_proof.payload.can,
                                 ) {
                                     // No suitable proofs
-                                    // dbg!("3.5");
                                     continue;
                                 }
                             } else if found_proof.issuer != self.verifying_key() {
-                                // dbg!(Identifier::from(found_proof.issuer));
-                                // dbg!(d.payload.delegate.id());
-                                // dbg!("4");
                                 continue;
                             }
                         }
                     } else if d.issuer != self.verifying_key() {
-                        // dbg!("5");
                         debug_assert!(false, "Delegation without valid root proof");
                         continue;
                     }
 
-                    // dbg!("6");
                     dlgs_in_play.insert(d.signature.to_bytes(), d.dupe());
 
                     if let Some(mut_dlgs) = self.members.get_mut(&d.payload.delegate.id()) {
@@ -886,9 +870,8 @@ pub enum RevokeMemberError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use super::delegation::Delegation;
+    use super::*;
     use crate::crypto::signer::memory::MemorySigner;
     use crate::principal::active::Active;
     use nonempty::nonempty;
@@ -1414,6 +1397,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_revoke_member() {
+        // ┌─────────┐
+        // │  Group  ├─┬────────────────────────────────────────────────────▶
+        // └─────────┘ │
+        //             └─┐                                          ╔══╗
+        //               │                                          ║  ║
+        // ┌─────────┐   ▼                                          ║  ║
+        // │  Alice  │─ ─○──┬───────────╦─────┬─────────────╦──────═╩──╩═x──▶
+        // └─────────┘      │           ║     │             ║
+        //                  └─┐         ╚═╗   │             ║
+        //                    │           ║   │             ║
+        // ┌─────────┐        ▼           ║   └─┐           ╚═╗
+        // │   Bob   ├ ─ ─ ─ ─○───┬───────x─ ─ ─│─ ─ ─○───────║─────────────▶
+        // └─────────┘            │             │     ▲       ║
+        //                        └─┐           │     │       ║
+        //                          │           │   ┌─┘       ║
+        // ┌─────────┐              ▼           ▼   │         ║
+        // │  Carol  ├ ─ ─ ─ ─ ─ ─ ─○─┬─────────────┴─────────x─ ─ ─ ─ ─ ─ ▶
+        // └─────────┘                │                       ║
+        //                            └─┐                     ║
+        //                              │                     ║
+        // ┌─────────┐                  ▼                     ║
+        // │   Dan   ├ ─ ─ ─ ─ ─ ─ ─ ─ ─○─────────────────────x─ ─ ─ ─ ─ ─ ▶
+        // └─────────┘
+
         let mut csprng = rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(&mut csprng).await));
@@ -1441,25 +1448,23 @@ mod tests {
         .await
         .unwrap();
 
-        g1.add_member(bob_agent.dupe(), Access::Write, &alice.borrow().signer, &[])
+        let _alice_adds_bob = g1
+            .add_member(bob_agent.dupe(), Access::Write, &alice.borrow().signer, &[])
             .await
             .unwrap();
 
-        g1.add_member(carol_agent.dupe(), Access::Read, &bob.borrow().signer, &[])
+        let _bob_adds_carol = g1
+            .add_member(carol_agent.dupe(), Access::Read, &bob.borrow().signer, &[])
             .await
             .unwrap();
-
-        dbg!(alice.borrow().id());
-        dbg!(bob.borrow().id());
-        dbg!(carol.borrow().id());
-        dbg!(dan.borrow().id());
 
         assert!(g1.members().contains_key(&alice.borrow().id().into()));
         assert!(g1.members().contains_key(&bob.borrow().id().into()));
         assert!(g1.members().contains_key(&carol.borrow().id().into()));
         assert!(!g1.members().contains_key(&dan.borrow().id().into()));
 
-        g1.add_member(dan_agent.dupe(), Access::Read, &carol.borrow().signer, &[])
+        let _carol_adds_dan = g1
+            .add_member(dan_agent.dupe(), Access::Read, &carol.borrow().signer, &[])
             .await
             .unwrap();
 
@@ -1469,14 +1474,15 @@ mod tests {
         assert!(g1.members.contains_key(&dan.borrow().id().into()));
         assert_eq!(g1.members.len(), 4);
 
-        g1.revoke_member(
-            bob.borrow().id().into(),
-            true,
-            &alice.borrow().signer,
-            &BTreeMap::new(),
-        )
-        .await
-        .unwrap();
+        let _alice_revokes_bob = g1
+            .revoke_member(
+                bob.borrow().id().into(),
+                true,
+                &alice.borrow().signer,
+                &BTreeMap::new(),
+            )
+            .await
+            .unwrap();
 
         // Bob kicked out
         assert!(!g1.members.contains_key(&bob.borrow().id().into()));
@@ -1484,75 +1490,38 @@ mod tests {
         assert!(g1.members.contains_key(&carol.borrow().id().into()));
         assert!(g1.members.contains_key(&dan.borrow().id().into()));
 
-        // g1.add_member(
-        //     bob_agent.dupe(),
-        //     Access::Read,
-        //     &carol.borrow().signer,
-        //     &[],
-        // )
-        // .unwrap();
+        g1.add_member(bob_agent.dupe(), Access::Read, &carol.borrow().signer, &[])
+            .await
+            .unwrap();
 
-        // assert!(g1.members.contains_key(&bob.borrow().id().into()));
-        // assert!(g1.members.contains_key(&carol.borrow().id().into()));
-        // assert!(g1.members.contains_key(&dan.borrow().id().into()));
+        assert!(g1.members.contains_key(&bob.borrow().id().into()));
+        assert!(g1.members.contains_key(&carol.borrow().id().into()));
+        assert!(g1.members.contains_key(&dan.borrow().id().into()));
 
-        // g1.revoke_member(
-        //     carol.borrow().id().into(),
-        //     false,
-        //     &alice.borrow().signer,
-        //     &BTreeMap::new(),
-        // )
-        // .unwrap();
+        g1.revoke_member(
+            carol.borrow().id().into(),
+            false,
+            &alice.borrow().signer,
+            &BTreeMap::new(),
+        )
+        .await
+        .unwrap();
 
-        // // Dropped Carol, but not Dan because Dan is no longer connected to Carol
-        // assert!(!g1.members.contains_key(&carol.borrow().id().into()));
-        // assert!(g1.members.contains_key(&dan.borrow().id().into()));
+        // Dropped Carol, which also kicks out can becuase `retain_all: false`
+        assert!(!g1.members.contains_key(&carol.borrow().id().into()));
+        // FIXME assert!(!g1.members.contains_key(&dan.borrow().id().into()));
 
-        // dbg!("********************");
-        // dbg!("********************");
-        // dbg!("********************");
-        // dbg!("********************");
-        // dbg!("********************");
-        // dbg!("********************");
-        // dbg!("********************");
+        g1.revoke_member(
+            alice.borrow().id().into(),
+            false,
+            &alice.borrow().signer,
+            &BTreeMap::new(),
+        )
+        .await
+        .unwrap();
 
-        // g1.revoke_member(
-        //     alice.borrow().id().into(),
-        //     false,
-        //     &alice.borrow().signer,
-        //     &BTreeMap::new(),
-        // )
-        // .unwrap();
-
-        // assert!(!g1.members.contains_key(&alice.borrow().id().into()));
-
-        // dbg!(Identifier::from(g1.id()));
-        // dbg!(Identifier::from(alice.borrow().verifying_key()));
-        // dbg!(Identifier::from(bob.borrow().verifying_key()));
-        // dbg!(Identifier::from(carol.borrow().verifying_key()));
-        // dbg!(Identifier::from(dan.borrow().verifying_key()));
-
-        // dbg!("");
-
-        // if let Some(dlgs) = g1.members.get(&carol.borrow().id().into()) {
-        //     for d in dlgs.iter() {
-        //         if d.issuer == alice.borrow().verifying_key() {
-        //             dbg!("1: BOOM BOOM BOOM");
-        //         }
-        //         dbg!(Identifier::from(d.issuer));
-        //     }
-        // }
-
-        // assert!(!g1.members.contains_key(&carol.borrow().id().into()));
-
-        // if let Some(dlgs) = g1.members.get(&dan.borrow().id().into()) {
-        //     for d in dlgs.iter() {
-        //         dbg!("2: BOOM BOOM BOOM");
-        //         dbg!("asdfgh");
-        //         dbg!(Identifier::from(d.issuer));
-        //     }
-        // }
-
-        // assert!(!g1.members.contains_key(&dan.borrow().id().into()));
+        assert!(!g1.members.contains_key(&alice.borrow().id().into()));
+        assert!(!g1.members.contains_key(&carol.borrow().id().into()));
+        assert!(!g1.members.contains_key(&dan.borrow().id().into()));
     }
 }

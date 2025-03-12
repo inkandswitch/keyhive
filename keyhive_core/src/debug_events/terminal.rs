@@ -1,6 +1,5 @@
-use prettytable::{color, format, row, Attr, Cell, Table};
-
 use super::{CgkaOperationDetails, DebugEventDetails, DebugEventTable};
+use prettytable::{color, format, row, Attr, Cell, Table};
 
 /// Print a formatted ASCII table of events for easier debugging
 ///
