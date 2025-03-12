@@ -25,11 +25,6 @@ impl BeelayHandle<'_> {
     }
 
     #[allow(dead_code)]
-    pub fn contact_card(&self) -> ContactCard {
-        self.network.beelays[&self.peer_id].contact_card()
-    }
-
-    #[allow(dead_code)]
     pub fn create_doc_with_contents(
         &mut self,
         content: Vec<u8>,
@@ -322,6 +317,22 @@ impl BeelayHandle<'_> {
             None => panic!("no command result"),
         }
     }
+
+    pub fn contact_card(&mut self) -> Result<ContactCard, beelay_core::error::CreateContactCard> {
+        let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
+        let (command_id, event) = beelay_core::Event::create_contact_card();
+        beelay.inbox.push_back(event);
+        self.network.run_until_quiescent();
+        let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
+
+        match beelay.completed_commands.remove(&command_id) {
+            Some(Ok(beelay_core::CommandResult::Keyhive(
+                KeyhiveCommandResult::CreateContactCard(r),
+            ))) => r,
+            Some(other) => panic!("unexpected command result: {:?}", other),
+            None => panic!("no command result"),
+        }
+    }
 }
 
 pub struct Network {
@@ -557,11 +568,6 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> BeelayWrapper<R> {
             starting_streams: HashMap::new(),
             shutdown: false,
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn contact_card(&self) -> ContactCard {
-        self.core.contact_card().clone()
     }
 
     pub fn create_stream(

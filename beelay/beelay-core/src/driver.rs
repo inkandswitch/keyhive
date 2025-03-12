@@ -192,18 +192,13 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
 
         let load_docs = loading::load_docs(io.clone());
         let load_keyhive = loading::load_keyhive(io, rng.clone(), signer.clone());
-        let (docs, (mut keyhive, keyhive_rx)) =
-            futures::future::join(load_docs, load_keyhive).await;
+        let (docs, (keyhive, keyhive_rx)) = futures::future::join(load_docs, load_keyhive).await;
         let peer_id = keyhive.active().borrow().verifying_key().into();
-
-        // FIXME: return an error when loading faiils here
-        let contact_card = keyhive.contact_card().await.unwrap();
 
         let state = Rc::new(RefCell::new(State::new(rng, signer, keyhive, docs)));
         if let Err(_) = load_complete.send(loading::LoadedParts {
             state: state.clone(),
             peer_id,
-            contact_card,
         }) {
             tracing::warn!("load complete listener went away, stopping driver");
             return;

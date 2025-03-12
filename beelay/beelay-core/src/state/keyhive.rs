@@ -9,7 +9,11 @@ use keyhive_core::{
     access::Access as KeyhiveAccess,
     cgka::{error::CgkaError, operation::CgkaOperation},
     contact_card::ContactCard,
-    crypto::{digest::Digest, signed::Signed, verifiable::Verifiable},
+    crypto::{
+        digest::Digest,
+        signed::{Signed, SigningError},
+        verifiable::Verifiable,
+    },
     event::{static_event::StaticEvent, Event},
     principal::{
         document::id::DocumentId as KeyhiveDocumentId, group::RevokeMemberError,
@@ -680,6 +684,15 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             nicknames,
         );
         table
+    }
+
+    pub(crate) async fn contact_card(
+        &self,
+    ) -> Result<keyhive_core::contact_card::ContactCard, SigningError> {
+        let k_mutex = self.0.borrow().keyhive.clone();
+        let mut keyhive = k_mutex.lock().await;
+
+        keyhive.contact_card().await
     }
 }
 

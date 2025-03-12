@@ -232,6 +232,15 @@ impl Event {
         ));
         (command_id, event)
     }
+
+    pub fn create_contact_card() -> (CommandId, Event) {
+        let command_id = CommandId::new();
+        let event = Event(EventInner::BeginCommand(
+            command_id,
+            Command::Keyhive(keyhive::KeyhiveCommand::CreateContactCard),
+        ));
+        (command_id, event)
+    }
 }
 
 #[derive(Debug)]
