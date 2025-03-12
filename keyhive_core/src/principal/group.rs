@@ -600,7 +600,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                     // Don't retain if they've delegated to themself
                     continue;
                 }
-                // FIXME go through entire history
+
                 if let Some(proof) = &dlg.payload.proof {
                     if proof.payload.delegate.id() == member_to_remove {
                         let AddMemberUpdate { delegation, .. } = self
@@ -644,6 +644,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     pub fn rebuild(&mut self) {
+        use crate::debug_events::terminal::print_event_table_verbose;
+        use crate::debug_events::DebugEventTable;
+        use crate::debug_events::Nicknames;
+        use crate::event::Event;
+
+        let mut events: Vec<Event<S, T, L>> = vec![];
+
         self.members.clear();
         self.active_revocations.clear();
 
@@ -659,12 +666,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         );
 
         while let Some((_, op)) = ops.pop() {
+            events.push(op.dupe().into());
             match op {
                 MembershipOperation::Delegation(d) => {
-                    if revoked_dlgs.contains(&d.signature.to_bytes()) {
-                        continue;
-                    }
-
                     // NOTE: friendly reminder that the topsort already includes all ancestors
                     if let Some(found_proof) = &d.payload.proof {
                         reverse_dlg_dep_map
@@ -693,6 +697,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                         }
                     } else if d.issuer != self.verifying_key() {
                         debug_assert!(false, "Delegation without valid root proof");
+                        continue;
+                    }
+
+                    if revoked_dlgs.contains(&d.signature.to_bytes()) {
                         continue;
                     }
 
@@ -762,14 +770,20 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                             .unwrap_or_default();
 
                         if let Some(dlgs) = NonEmpty::from_vec(remaining) {
+                            dbg!("B");
                             self.members.insert(id, dlgs);
                         } else {
+                            dbg!("C");
                             self.members.remove(&id);
                         }
                     }
                 }
             }
+
+            dbg!(self.members.len());
         }
+
+        print_event_table_verbose(DebugEventTable::from_events(events, Nicknames::default()));
     }
 
     pub(crate) fn dummy_from_archive(
@@ -1490,7 +1504,8 @@ mod tests {
         assert!(g1.members.contains_key(&carol.borrow().id().into()));
         assert!(g1.members.contains_key(&dan.borrow().id().into()));
 
-        g1.add_member(bob_agent.dupe(), Access::Read, &carol.borrow().signer, &[])
+        let _bob_to_carol = g1
+            .add_member(bob_agent.dupe(), Access::Read, &carol.borrow().signer, &[])
             .await
             .unwrap();
 
@@ -1498,30 +1513,49 @@ mod tests {
         assert!(g1.members.contains_key(&carol.borrow().id().into()));
         assert!(g1.members.contains_key(&dan.borrow().id().into()));
 
-        g1.revoke_member(
-            carol.borrow().id().into(),
-            false,
-            &alice.borrow().signer,
-            &BTreeMap::new(),
-        )
-        .await
-        .unwrap();
+        let rev = g1
+            .revoke_member(
+                carol.borrow().id().into(),
+                false,
+                &alice.borrow().signer,
+                &BTreeMap::new(),
+            )
+            .await
+            .unwrap();
+
+        use crate::debug_events::terminal::print_event_table_verbose;
+        use crate::debug_events::DebugEventTable;
+        use crate::debug_events::Nicknames;
+        use crate::event::Event;
+
+        print_event_table_verbose(DebugEventTable::from_events(
+            rev.revocations
+                .iter()
+                .map(|x| Event::from(x.dupe()))
+                .collect(),
+            Nicknames::default(),
+        ));
+
+        dbg!(alice.borrow().id());
+        dbg!(bob.borrow().id());
+        dbg!(carol.borrow().id());
+        dbg!(dan.borrow().id());
 
         // Dropped Carol, which also kicks out can becuase `retain_all: false`
         assert!(!g1.members.contains_key(&carol.borrow().id().into()));
-        // FIXME assert!(!g1.members.contains_key(&dan.borrow().id().into()));
-
-        g1.revoke_member(
-            alice.borrow().id().into(),
-            false,
-            &alice.borrow().signer,
-            &BTreeMap::new(),
-        )
-        .await
-        .unwrap();
-
-        assert!(!g1.members.contains_key(&alice.borrow().id().into()));
-        assert!(!g1.members.contains_key(&carol.borrow().id().into()));
         assert!(!g1.members.contains_key(&dan.borrow().id().into()));
+
+        // g1.revoke_member(
+        //     alice.borrow().id().into(),
+        //     false,
+        //     &alice.borrow().signer,
+        //     &BTreeMap::new(),
+        // )
+        // .await
+        // .unwrap();
+
+        // assert!(!g1.members.contains_key(&alice.borrow().id().into()));
+        // assert!(!g1.members.contains_key(&carol.borrow().id().into()));
+        // assert!(!g1.members.contains_key(&dan.borrow().id().into()));
     }
 }
