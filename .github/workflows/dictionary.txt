@@ -38,7 +38,11 @@ PN
 PQC
 PoLA
 README
+RLE
+RPC
 SChaCha
+Sedimentree
+Sedimentrees
 SDK
 SPKI
 ShareSecretKeys
@@ -108,7 +112,10 @@ preimage
 prekey
 priori
 probabilistically
+recurse
 revoker
+sedimentree
+sedimentrees
 sexualized
 sneakernets
 socio-economic
