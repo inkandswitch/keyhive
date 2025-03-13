@@ -62,21 +62,21 @@ pub enum DebugEventDetails {
 pub enum CgkaOperationDetails {
     Add {
         id: Hash,
-        prekey: Hash,
+        sharekey: Hash,
         leaf_index: u32,
-        predecessors_count: usize,
+        predecessors: Vec<Hash>,
     },
     Remove {
         id: Hash,
         leaf_index: u32,
-        removed_keys_count: usize,
-        predecessors_count: usize,
+        removed_keys: Vec<Hash>,
+        predecessors: Vec<Hash>,
     },
     Update {
         id: Hash,
         new_keys: Vec<Hash>,
         path_length: usize,
-        predecessors_count: usize,
+        predecessors: Vec<Hash>,
     },
 }
 
@@ -182,9 +182,12 @@ impl DebugEventRow {
                     } => {
                         let op_details = CgkaOperationDetails::Add {
                             id: Hash::new(added_id.as_bytes(), nicknames),
-                            prekey: Hash::new(pk.as_bytes(), nicknames),
+                            sharekey: Hash::new(pk.as_bytes(), nicknames),
                             leaf_index: *leaf_index,
-                            predecessors_count: predecessors.len(),
+                            predecessors: predecessors
+                                .into_iter()
+                                .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
+                                .collect(),
                         };
                         ("Add", op_details)
                     }
@@ -198,8 +201,14 @@ impl DebugEventRow {
                         let op_details = CgkaOperationDetails::Remove {
                             id: Hash::new(id.as_bytes(), nicknames),
                             leaf_index: *leaf_idx,
-                            removed_keys_count: removed_keys.len(),
-                            predecessors_count: predecessors.len(),
+                            removed_keys: removed_keys
+                                .into_iter()
+                                .map(|key| Hash::new(key.as_bytes(), nicknames))
+                                .collect(),
+                            predecessors: predecessors
+                                .into_iter()
+                                .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
+                                .collect(),
                         };
                         ("Remove", op_details)
                     }
@@ -225,7 +234,10 @@ impl DebugEventRow {
                             id: Hash::new(id.as_bytes(), nicknames),
                             new_keys,
                             path_length: new_path.path.len(),
-                            predecessors_count: predecessors.len(),
+                            predecessors: predecessors
+                                .into_iter()
+                                .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
+                                .collect(),
                         };
                         ("Update", op_details)
                     }

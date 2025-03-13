@@ -120,38 +120,58 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
             let op_details_str = match op_details {
                 CgkaOperationDetails::Add {
                     id,
-                    prekey,
+                    sharekey,
                     leaf_index,
-                    predecessors_count,
+                    predecessors,
                 } => {
+                    let preds = predecessors
+                        .iter()
+                        .map(|p| p.short_hex())
+                        .collect::<Vec<String>>()
+                        .join(", ");
                     format!(
-                        "ID: {}\nPrekey: {}\nLeaf Index: {}\nPredecessors: {}",
+                        "ID: {}\nSharekey: {}\nLeaf Index: {}\nPredecessors: {}",
                         id.short_hex(),
-                        prekey.short_hex(),
+                        sharekey.short_hex(),
                         leaf_index,
-                        predecessors_count
+                        preds
                     )
                 }
                 CgkaOperationDetails::Remove {
                     id,
                     leaf_index,
-                    removed_keys_count,
-                    predecessors_count,
+                    removed_keys,
+                    predecessors,
                 } => {
+                    let removed = removed_keys
+                        .iter()
+                        .map(|k| k.short_hex())
+                        .collect::<Vec<String>>()
+                        .join(", ");
+                    let preds = predecessors
+                        .iter()
+                        .map(|p| p.short_hex())
+                        .collect::<Vec<String>>()
+                        .join(", ");
                     format!(
                         "ID: {}\nLeaf Index: {}\nRemoved Keys: {}\nPredecessors: {}",
                         id.short_hex(),
                         leaf_index,
-                        removed_keys_count,
-                        predecessors_count
+                        removed,
+                        preds
                     )
                 }
                 CgkaOperationDetails::Update {
                     id,
                     new_keys,
                     path_length,
-                    predecessors_count,
+                    predecessors,
                 } => {
+                    let preds = predecessors
+                        .iter()
+                        .map(|p| p.short_hex())
+                        .collect::<Vec<String>>()
+                        .join(", ");
                     format!(
                         "ID: {}\nNew Key: {}\nPath Length: {}\nPredecessors: {}",
                         id.short_hex(),
@@ -161,7 +181,7 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
                             .collect::<Vec<String>>()
                             .join(", "),
                         path_length,
-                        predecessors_count
+                        preds
                     )
                 }
             };
