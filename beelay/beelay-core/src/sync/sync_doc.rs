@@ -31,6 +31,20 @@ pub(crate) mod error {
         #[error(transparent)]
         Sedimentree(#[from] super::sync_sedimentree::SyncSedimentreeError),
         #[error(transparent)]
-        Cgka(#[from] super::sync_cgka::SyncCgkaError),
+        Cgka(super::sync_cgka::SyncCgkaError),
+        #[error("session expired")]
+        SessionExpired,
+        #[error("session not found")]
+        SessionNotFound,
+    }
+
+    impl From<super::sync_cgka::SyncCgkaError> for SyncDocError {
+        fn from(err: super::sync_cgka::SyncCgkaError) -> Self {
+            match err {
+                super::sync_cgka::SyncCgkaError::SessionExpired => Self::SessionExpired,
+                super::sync_cgka::SyncCgkaError::SessionNotFound => Self::SessionNotFound,
+                other => Self::Cgka(other),
+            }
+        }
     }
 }

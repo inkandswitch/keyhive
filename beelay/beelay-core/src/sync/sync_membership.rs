@@ -7,7 +7,7 @@ use std::{
 use keyhive_core::{crypto::digest::Digest, event::static_event::StaticEvent};
 
 use crate::{
-    network::RpcError,
+    network::{messages::SessionResponse, RpcError},
     parse::{self, Parse},
     riblt,
     serialization::Encode,
@@ -108,15 +108,17 @@ pub(crate) async fn sync_membership<
         if decoder.decoded() {
             break;
         }
-        symbols = effects
-            .fetch_membership_symbols(
-                session_id,
-                MakeSymbols {
-                    offset,
-                    count: BATCH_SIZE,
-                },
-            )
-            .await?;
+        symbols = unpack_session_response(
+            effects
+                .fetch_membership_symbols(
+                    session_id,
+                    MakeSymbols {
+                        offset,
+                        count: BATCH_SIZE,
+                    },
+                )
+                .await?,
+        )?;
         offset += BATCH_SIZE;
     }
 
@@ -153,9 +155,11 @@ pub(crate) async fn sync_membership<
     let download = async {
         if !to_download.is_empty() {
             tracing::trace!(num_to_download = to_download.len(), "downloading ops");
-            let ops = effects
-                .fetch_membership_ops(session_id, to_download)
-                .await?;
+            let ops = unpack_session_response(
+                effects
+                    .fetch_membership_ops(session_id, to_download)
+                    .await?,
+            )?;
             effects
                 .keyhive()
                 .ingest_membership_ops(ops)
@@ -174,6 +178,14 @@ pub(crate) async fn sync_membership<
     Ok(())
 }
 
+fn unpack_session_response<R>(resp: SessionResponse<R>) -> Result<R, error::SyncMembership> {
+    match resp {
+        SessionResponse::Ok(data) => Ok(data),
+        SessionResponse::SessionExpired => Err(error::SyncMembership::SessionExpired),
+        SessionResponse::SessionNotFound => Err(error::SyncMembership::SessionNotFound),
+    }
+}
+
 pub(crate) mod error {
     use super::RpcError;
 
@@ -183,5 +195,9 @@ pub(crate) mod error {
         IngestionFailed(String),
         #[error(transparent)]
         Rpc(#[from] RpcError),
+        #[error("session expired")]
+        SessionExpired,
+        #[error("remote said the session didn't exist")]
+        SessionNotFound,
     }
 }

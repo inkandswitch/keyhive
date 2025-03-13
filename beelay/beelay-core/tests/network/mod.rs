@@ -337,6 +337,11 @@ impl BeelayHandle<'_> {
         }
     }
 
+    pub fn num_sessions(&self) -> usize {
+        let beelay = self.network.beelays.get(&self.peer_id).unwrap();
+        beelay.core.num_sessions()
+    }
+
     pub fn advance_time(&mut self, duration: Duration) {
         let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
         beelay.now += duration;
@@ -372,6 +377,7 @@ impl Network {
             network: self,
             storage: BTreeMap::new(),
             nickname,
+            session_duration: Duration::from_secs(3600),
             signing_key: SigningKey::generate(&mut rand::thread_rng()),
         }
     }
@@ -385,10 +391,6 @@ impl Network {
     ) -> PeerId {
         let peer_id = PeerId::from(signing_key.verifying_key());
         test_utils::add_rewrite(peer_id.to_string(), nickname);
-        let mut step = beelay_core::Beelay::load(
-            beelay_core::Config::new(rand::thread_rng(), signing_key.verifying_key()),
-            UnixTimestampMillis::now(),
-        );
         let mut step = beelay_core::Beelay::load(config, UnixTimestampMillis::now());
         let mut completed_tasks = Vec::new();
         let beelay = loop {
@@ -739,11 +741,17 @@ pub struct ConnectedPair {
 pub struct PeerBuilder<'a> {
     network: &'a mut Network,
     nickname: &'static str,
+    session_duration: Duration,
     signing_key: SigningKey,
     storage: BTreeMap<beelay_core::StorageKey, Vec<u8>>,
 }
 
 impl<'a> PeerBuilder<'a> {
+    pub fn session_duration(mut self, duration: Duration) -> Self {
+        self.session_duration = duration;
+        self
+    }
+
     pub fn signing_key(mut self, key: SigningKey) -> Self {
         self.signing_key = key;
         self
@@ -755,7 +763,8 @@ impl<'a> PeerBuilder<'a> {
     }
 
     pub fn build(self) -> PeerId {
-        let config = beelay_core::Config::new(rand::thread_rng(), self.signing_key.verifying_key());
+        let config = beelay_core::Config::new(rand::thread_rng(), self.signing_key.verifying_key())
+            .session_duration(self.session_duration);
         self.network
             .load_peer(self.nickname, config, self.storage, self.signing_key)
     }

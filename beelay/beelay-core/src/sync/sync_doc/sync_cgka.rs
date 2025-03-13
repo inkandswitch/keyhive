@@ -7,7 +7,7 @@ use keyhive_core::{
 };
 
 use crate::{
-    network::RpcError,
+    network::{messages::SessionResponse, RpcError},
     parse::{self, Parse},
     riblt,
     serialization::Encode,
@@ -37,16 +37,18 @@ pub(super) async fn sync_cgka<
         decoder.add_symbol(&CgkaSymbol(*hash));
     }
 
-    let mut remote_symbols = effects
-        .fetch_cgka_symbols(
-            session_id,
-            doc_id.clone(),
-            MakeSymbols {
-                offset: 0,
-                count: 10,
-            },
-        )
-        .await?;
+    let mut remote_symbols = unpack_session_resp(
+        effects
+            .fetch_cgka_symbols(
+                session_id,
+                doc_id.clone(),
+                MakeSymbols {
+                    offset: 0,
+                    count: 10,
+                },
+            )
+            .await?,
+    )?;
     let mut offset = 0;
     const BATCH_SIZE: usize = 100;
 
@@ -59,16 +61,18 @@ pub(super) async fn sync_cgka<
         if decoder.decoded() {
             break;
         }
-        remote_symbols = effects
-            .fetch_cgka_symbols(
-                session_id,
-                doc_id.clone(),
-                MakeSymbols {
-                    offset,
-                    count: BATCH_SIZE,
-                },
-            )
-            .await?;
+        remote_symbols = unpack_session_resp(
+            effects
+                .fetch_cgka_symbols(
+                    session_id,
+                    doc_id.clone(),
+                    MakeSymbols {
+                        offset,
+                        count: BATCH_SIZE,
+                    },
+                )
+                .await?,
+        )?;
     }
 
     let to_download = decoder
@@ -80,9 +84,11 @@ pub(super) async fn sync_cgka<
     let do_download = async {
         if !to_download.is_empty() {
             tracing::trace!(num_to_download = to_download.len(), "downloading cgka ops");
-            let ops = effects
-                .fetch_cgka_ops(session_id, doc_id.clone(), to_download)
-                .await?;
+            let ops = unpack_session_resp(
+                effects
+                    .fetch_cgka_ops(session_id, doc_id.clone(), to_download)
+                    .await?,
+            )?;
             effects.keyhive().ingest_cgka_ops(ops).await?;
             effects.mark_doc_changed(&doc_id);
         } else {
@@ -168,6 +174,14 @@ impl<'a> Parse<'a> for CgkaSymbol {
     }
 }
 
+fn unpack_session_resp<R>(resp: SessionResponse<R>) -> Result<R, SyncCgkaError> {
+    match resp {
+        SessionResponse::Ok(result) => Ok(result),
+        SessionResponse::SessionExpired => Err(SyncCgkaError::SessionExpired),
+        SessionResponse::SessionNotFound => Err(SyncCgkaError::SessionNotFound),
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum SyncCgkaError {
     #[error(transparent)]
@@ -178,4 +192,8 @@ pub enum SyncCgkaError {
     IngestionFailed(#[from] Ingest),
     #[error(transparent)]
     Rpc(#[from] RpcError),
+    #[error("session expired")]
+    SessionExpired,
+    #[error("session not found")]
+    SessionNotFound,
 }

@@ -15,6 +15,8 @@ use crate::{
 mod decode;
 mod encode;
 mod encoding_types;
+mod session_response;
+pub(crate) use session_response::SessionResponse;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
@@ -31,15 +33,17 @@ pub(crate) enum Response {
         session_id: crate::sync::SessionId,
         first_symbols: Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>,
     },
-    FetchMembershipSymbols(Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>),
-    DownloadMembershipOps(Vec<StaticEvent<CommitHash>>),
+    FetchMembershipSymbols(SessionResponse<Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>>),
+    DownloadMembershipOps(SessionResponse<Vec<StaticEvent<CommitHash>>>),
     UploadMembershipOps,
-    FetchCgkaSymbols(Vec<riblt::CodedSymbol<crate::sync::CgkaSymbol>>),
+    FetchCgkaSymbols(SessionResponse<Vec<riblt::CodedSymbol<crate::sync::CgkaSymbol>>>),
     DownloadCgkaOps(
-        Vec<keyhive_core::crypto::signed::Signed<keyhive_core::cgka::operation::CgkaOperation>>,
+        SessionResponse<
+            Vec<keyhive_core::crypto::signed::Signed<keyhive_core::cgka::operation::CgkaOperation>>,
+        >,
     ),
     UploadCgkaOps,
-    FetchDocStateSymbols(Vec<riblt::CodedSymbol<crate::sync::DocStateHash>>),
+    FetchDocStateSymbols(SessionResponse<Vec<riblt::CodedSymbol<crate::sync::DocStateHash>>>),
 }
 
 impl Parse<'_> for Response {
@@ -85,21 +89,31 @@ impl std::fmt::Display for Response {
                 )
             }
             Response::FetchMembershipSymbols(s) => {
-                write!(f, "FetchMembershipSymbols({} symbols)", s.len())
+                write!(f, "FetchMembershipSymbols(")?;
+                s.fmt_contents(f, |f, contents| write!(f, "{} symbols", contents.len()))?;
+                write!(f, ")")
             }
             Response::DownloadMembershipOps(ops) => {
-                write!(f, "DownloadMembershipOps({} ops)", ops.len())
+                write!(f, "DownloadMembershipOps(")?;
+                ops.fmt_contents(f, |f, contents| write!(f, "{} ops", contents.len()))?;
+                write!(f, ")")
             }
             Response::UploadMembershipOps => write!(f, "UploadMembershipOps"),
             Response::FetchCgkaSymbols(s) => {
-                write!(f, "FetchCgkaSymbols({} symbols)", s.len())
+                write!(f, "FetchCgkaSymbols(")?;
+                s.fmt_contents(f, |f, contents| write!(f, "{} symbols", contents.len()))?;
+                write!(f, ")")
             }
             Response::DownloadCgkaOps(ops) => {
-                write!(f, "DownloadCgkaOps({} ops)", ops.len())
+                write!(f, "DownloadCgkaOps(")?;
+                ops.fmt_contents(f, |f, contents| write!(f, "{} ops", contents.len()))?;
+                write!(f, ")")
             }
             Response::UploadCgkaOps => write!(f, "UploadCgkaOps"),
             Response::FetchDocStateSymbols(s) => {
-                write!(f, "FetchDocStateSymbols({} symbols)", s.len())
+                write!(f, "FetchDocStateSymbols(")?;
+                s.fmt_contents(f, |f, contents| write!(f, "{} symbols", contents.len()))?;
+                write!(f, ")")
             }
         }
     }

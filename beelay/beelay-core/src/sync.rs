@@ -1,7 +1,7 @@
 use crate::{
     blob::BlobMeta,
     network::{
-        messages::{FetchedSedimentree, UploadItem},
+        messages::{FetchedSedimentree, SessionResponse, UploadItem},
         PeerAddress, RpcError,
     },
     riblt,
@@ -26,6 +26,8 @@ pub(crate) mod local_state;
 pub(crate) use local_state::LocalState;
 mod sync_membership;
 pub(crate) use sync_membership::MembershipSymbol;
+pub(crate) mod sessions;
+pub(crate) use sessions::Sessions;
 
 /// Combined trait for all sync operations
 pub(crate) trait SyncEffects<R: rand::Rng + rand::CryptoRng> {
@@ -62,14 +64,14 @@ pub(crate) trait SyncEffects<R: rand::Rng + rand::CryptoRng> {
         &self,
         session: SessionId,
         make_symbols: MakeSymbols,
-    ) -> Result<Vec<riblt::CodedSymbol<sync_membership::MembershipSymbol>>, RpcError>;
+    ) -> Result<SessionResponse<Vec<riblt::CodedSymbol<sync_membership::MembershipSymbol>>>, RpcError>;
 
     /// Fetch membership operations
     async fn fetch_membership_ops(
         &self,
         session_id: SessionId,
         hashes: Vec<Digest<StaticEvent<CommitHash>>>,
-    ) -> Result<Vec<StaticEvent<CommitHash>>, RpcError>;
+    ) -> Result<SessionResponse<Vec<StaticEvent<CommitHash>>>, RpcError>;
 
     /// Upload membership operations
     async fn upload_membership_ops(
@@ -84,7 +86,7 @@ pub(crate) trait SyncEffects<R: rand::Rng + rand::CryptoRng> {
         &self,
         session_id: SessionId,
         make_symbols: MakeSymbols,
-    ) -> Result<Vec<riblt::CodedSymbol<sync_docs::DocStateHash>>, RpcError>;
+    ) -> Result<SessionResponse<Vec<riblt::CodedSymbol<sync_docs::DocStateHash>>>, RpcError>;
 
     /// Fetch the remote sedimentree
     async fn fetch_remote_tree(
@@ -124,7 +126,7 @@ pub(crate) trait SyncEffects<R: rand::Rng + rand::CryptoRng> {
         session: SessionId,
         doc_id: DocumentId,
         make_symbols: MakeSymbols,
-    ) -> Result<Vec<riblt::CodedSymbol<sync_doc::CgkaSymbol>>, RpcError>;
+    ) -> Result<SessionResponse<Vec<riblt::CodedSymbol<sync_doc::CgkaSymbol>>>, RpcError>;
 
     /// Fetch CGKA operations
     async fn fetch_cgka_ops(
@@ -132,7 +134,7 @@ pub(crate) trait SyncEffects<R: rand::Rng + rand::CryptoRng> {
         session: SessionId,
         doc_id: DocumentId,
         op_hashes: Vec<Digest<Signed<CgkaOperation>>>,
-    ) -> Result<Vec<Signed<CgkaOperation>>, RpcError>;
+    ) -> Result<SessionResponse<Vec<Signed<CgkaOperation>>>, RpcError>;
 
     /// Upload CGKA operations
     async fn upload_cgka_ops(
@@ -151,12 +153,44 @@ pub(crate) trait SyncEffects<R: rand::Rng + rand::CryptoRng> {
     fn mark_doc_changed(&self, doc_id: &DocumentId);
 }
 
+const MAX_RETRIES: usize = 2;
+
 pub(crate) async fn sync<
     R: rand::Rng + rand::CryptoRng + Clone + 'static,
     E: SyncEffects<R> + Clone,
 >(
     effects: E,
 ) -> Result<(), Error> {
+    let mut retries = 0;
+    loop {
+        match sync_inner(effects.clone()).await {
+            Ok(_) => return Ok(()),
+            Err(err) => match err {
+                MaybeSessionError::Expired => {
+                    if retries < MAX_RETRIES {
+                        tracing::warn!(?retries, "session expired, retrying");
+                        retries += 1;
+                        continue;
+                    } else {
+                        tracing::warn!(?retries, "session expired, giving up");
+                    }
+                }
+                MaybeSessionError::NotFound => {
+                    tracing::warn!("the other end said the session was not found");
+                    return Err(Error::Session);
+                }
+                MaybeSessionError::Other(other) => return Err(other),
+            },
+        }
+    }
+}
+
+pub(crate) async fn sync_inner<
+    R: rand::Rng + rand::CryptoRng + Clone + 'static,
+    E: SyncEffects<R> + Clone,
+>(
+    effects: E,
+) -> Result<(), MaybeSessionError> {
     // Get local state information
     let local_state = effects.get_local_state().await?;
 
@@ -255,7 +289,8 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> SyncEffects<R> for SyncCo
         &self,
         session: SessionId,
         make_symbols: MakeSymbols,
-    ) -> Result<Vec<riblt::CodedSymbol<sync_membership::MembershipSymbol>>, RpcError> {
+    ) -> Result<SessionResponse<Vec<riblt::CodedSymbol<sync_membership::MembershipSymbol>>>, RpcError>
+    {
         self.ctx
             .requests()
             .fetch_membership_symbols(self.target.clone(), session, make_symbols)
@@ -266,7 +301,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> SyncEffects<R> for SyncCo
         &self,
         session_id: SessionId,
         hashes: Vec<Digest<StaticEvent<CommitHash>>>,
-    ) -> Result<Vec<StaticEvent<CommitHash>>, RpcError> {
+    ) -> Result<SessionResponse<Vec<StaticEvent<CommitHash>>>, RpcError> {
         self.ctx
             .requests()
             .download_membership_ops(self.target.clone(), session_id, hashes)
@@ -288,7 +323,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> SyncEffects<R> for SyncCo
         &self,
         session_id: SessionId,
         make_symbols: MakeSymbols,
-    ) -> Result<Vec<riblt::CodedSymbol<sync_docs::DocStateHash>>, RpcError> {
+    ) -> Result<SessionResponse<Vec<riblt::CodedSymbol<sync_docs::DocStateHash>>>, RpcError> {
         self.ctx
             .requests()
             .fetch_doc_state_symbols(self.target.clone(), session_id, make_symbols)
@@ -358,7 +393,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> SyncEffects<R> for SyncCo
         session: SessionId,
         doc_id: DocumentId,
         make_symbols: MakeSymbols,
-    ) -> Result<Vec<riblt::CodedSymbol<sync_doc::CgkaSymbol>>, RpcError> {
+    ) -> Result<SessionResponse<Vec<riblt::CodedSymbol<sync_doc::CgkaSymbol>>>, RpcError> {
         self.ctx
             .requests()
             .fetch_cgka_symbols(self.target.clone(), session, doc_id, make_symbols)
@@ -370,7 +405,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> SyncEffects<R> for SyncCo
         session: SessionId,
         doc_id: DocumentId,
         op_hashes: Vec<Digest<Signed<CgkaOperation>>>,
-    ) -> Result<Vec<Signed<CgkaOperation>>, RpcError> {
+    ) -> Result<SessionResponse<Vec<Signed<CgkaOperation>>>, RpcError> {
         self.ctx
             .requests()
             .download_cgka_ops(self.target.clone(), session, doc_id, op_hashes)
@@ -415,17 +450,67 @@ pub(crate) enum Error {
     #[error(transparent)]
     LoadLocalState(#[from] local_state::Error),
     #[error(transparent)]
-    Membership(#[from] sync_membership::error::SyncMembership),
+    Membership(sync_membership::error::SyncMembership),
     #[error("unable to reach peer")]
     UnableToReachPeer,
     #[error(transparent)]
     SyncDocs(#[from] sync_docs::error::SyncDocs),
     #[error(transparent)]
     SyncDoc(#[from] sync_doc::error::SyncDocError),
+    #[error("unable to get a session")]
+    Session,
 }
 
 impl Error {
     fn unable_to_reach_peer() -> Self {
         Self::UnableToReachPeer
+    }
+}
+
+pub(crate) enum MaybeSessionError {
+    Expired,
+    NotFound,
+    Other(Error),
+}
+
+impl From<local_state::Error> for MaybeSessionError {
+    fn from(err: local_state::Error) -> Self {
+        MaybeSessionError::Other(Error::LoadLocalState(err))
+    }
+}
+
+impl From<Error> for MaybeSessionError {
+    fn from(err: Error) -> Self {
+        MaybeSessionError::Other(err)
+    }
+}
+
+impl From<sync_membership::error::SyncMembership> for MaybeSessionError {
+    fn from(err: sync_membership::error::SyncMembership) -> Self {
+        match err {
+            sync_membership::error::SyncMembership::SessionExpired => MaybeSessionError::Expired,
+            sync_membership::error::SyncMembership::SessionNotFound => MaybeSessionError::NotFound,
+            other => MaybeSessionError::Other(Error::Membership(other)),
+        }
+    }
+}
+
+impl From<sync_docs::error::SyncDocs> for MaybeSessionError {
+    fn from(err: sync_docs::error::SyncDocs) -> Self {
+        match err {
+            sync_docs::error::SyncDocs::SessionExpired => MaybeSessionError::Expired,
+            sync_docs::error::SyncDocs::SessionNotFound => MaybeSessionError::NotFound,
+            other => MaybeSessionError::Other(Error::SyncDocs(other)),
+        }
+    }
+}
+
+impl From<sync_doc::error::SyncDocError> for MaybeSessionError {
+    fn from(err: sync_doc::error::SyncDocError) -> Self {
+        match err {
+            sync_doc::error::SyncDocError::SessionExpired => MaybeSessionError::Expired,
+            sync_doc::error::SyncDocError::SessionNotFound => MaybeSessionError::NotFound,
+            other => MaybeSessionError::Other(Error::SyncDoc(other)),
+        }
     }
 }

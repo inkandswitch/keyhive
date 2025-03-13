@@ -3,6 +3,7 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     rc::Rc,
+    time::Duration,
 };
 
 use keyhive::KeyhiveCtx;
@@ -20,7 +21,9 @@ pub(crate) use sessions::Sessions;
 mod streams;
 pub(crate) use streams::Streams;
 
-use crate::{doc_state::DocState, io::Signer, network::endpoint, CommitHash, DocumentId, PeerId};
+use crate::{
+    doc_state::DocState, io::Signer, network::endpoint, sync, CommitHash, DocumentId, PeerId,
+};
 
 pub(crate) struct State<R: rand::Rng + rand::CryptoRng> {
     docs: HashMap<DocumentId, DocState>,
@@ -31,7 +34,7 @@ pub(crate) struct State<R: rand::Rng + rand::CryptoRng> {
     endpoints: endpoint::Endpoints,
     rng: Rc<RefCell<R>>,
     // results: EventResults,
-    sync_sessions: HashMap<crate::sync::SessionId, crate::sync::server_session::Session>,
+    sync_sessions: sync::Sessions,
     our_peer_id: PeerId,
 }
 
@@ -41,6 +44,7 @@ impl<R: rand::Rng + rand::CryptoRng> State<R> {
         signer: Signer,
         keyhive: Keyhive<Signer, CommitHash, crate::keyhive::Listener, R>,
         docs: HashMap<DocumentId, DocState>,
+        session_duration: Duration,
     ) -> Self {
         let our_peer_id = keyhive.active().borrow().verifying_key().into();
         Self {
@@ -52,7 +56,7 @@ impl<R: rand::Rng + rand::CryptoRng> State<R> {
             streams: crate::streams::Streams::new(),
             endpoints: endpoint::Endpoints::new(),
             rng: Rc::new(RefCell::new(rng)),
-            sync_sessions: HashMap::new(),
+            sync_sessions: sync::Sessions::new(session_duration),
         }
     }
 }

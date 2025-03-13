@@ -8,7 +8,7 @@ use keyhive_core::{
 use crate::{
     auth,
     network::{
-        messages::{self, Response},
+        messages::{self, Response, SessionResponse},
         InnerRpcResponse, PeerAddress, RpcError,
     },
     riblt::{self},
@@ -146,8 +146,12 @@ where
         from_peer: PeerAddress,
         session: crate::sync::SessionId,
         MakeSymbols { count, offset }: MakeSymbols,
-    ) -> impl Future<Output = Result<Vec<riblt::CodedSymbol<crate::sync::DocStateHash>>, RpcError>>
-           + 'static {
+    ) -> impl Future<
+        Output = Result<
+            SessionResponse<Vec<riblt::CodedSymbol<crate::sync::DocStateHash>>>,
+            RpcError,
+        >,
+    > + 'static {
         let request = crate::Request::FetchDocStateSymbols {
             session_id: session,
             count,
@@ -168,8 +172,12 @@ where
         from_peer: PeerAddress,
         session_id: crate::sync::SessionId,
         MakeSymbols { count, offset }: MakeSymbols,
-    ) -> impl Future<Output = Result<Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>, RpcError>>
-           + 'static {
+    ) -> impl Future<
+        Output = Result<
+            SessionResponse<Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>>,
+            RpcError,
+        >,
+    > + 'static {
         let request = crate::Request::FetchMembershipSymbols {
             session_id,
             count,
@@ -190,7 +198,8 @@ where
         from_peer: PeerAddress,
         session_id: crate::sync::SessionId,
         op_hashes: Vec<Digest<StaticEvent<CommitHash>>>,
-    ) -> impl Future<Output = Result<Vec<StaticEvent<CommitHash>>, RpcError>> + 'static {
+    ) -> impl Future<Output = Result<SessionResponse<Vec<StaticEvent<CommitHash>>>, RpcError>> + 'static
+    {
         let request = crate::Request::DownloadMembershipOps {
             session_id,
             op_hashes,
@@ -228,8 +237,12 @@ where
         session_id: crate::sync::SessionId,
         doc_id: DocumentId,
         MakeSymbols { count, offset }: MakeSymbols,
-    ) -> impl Future<Output = Result<Vec<riblt::CodedSymbol<crate::sync::CgkaSymbol>>, RpcError>> + 'static
-    {
+    ) -> impl Future<
+        Output = Result<
+            SessionResponse<Vec<riblt::CodedSymbol<crate::sync::CgkaSymbol>>>,
+            RpcError,
+        >,
+    > + 'static {
         let request = crate::Request::FetchCgkaSymbols {
             doc_id,
             session_id,
@@ -253,7 +266,10 @@ where
         doc_id: DocumentId,
         op_hashes: Vec<Digest<keyhive_core::crypto::signed::Signed<CgkaOperation>>>,
     ) -> impl Future<
-        Output = Result<Vec<keyhive_core::crypto::signed::Signed<CgkaOperation>>, RpcError>,
+        Output = Result<
+            SessionResponse<Vec<keyhive_core::crypto::signed::Signed<CgkaOperation>>>,
+            RpcError,
+        >,
     > + 'static {
         let request = crate::Request::DownloadCgkaOps {
             session_id,
@@ -401,14 +417,16 @@ enum NonErrorPayload {
         session_id: crate::sync::SessionId,
         first_symbols: Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>,
     },
-    FetchMembershipSymbols(Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>),
-    DownloadMembershipOps(Vec<StaticEvent<CommitHash>>),
+    FetchMembershipSymbols(SessionResponse<Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>>),
+    DownloadMembershipOps(SessionResponse<Vec<StaticEvent<CommitHash>>>),
     UploadMembershipOps,
-    FetchCgkaSymbols(Vec<riblt::CodedSymbol<crate::sync::CgkaSymbol>>),
+    FetchCgkaSymbols(SessionResponse<Vec<riblt::CodedSymbol<crate::sync::CgkaSymbol>>>),
     DownloadCgkaOps(
-        Vec<keyhive_core::crypto::signed::Signed<keyhive_core::cgka::operation::CgkaOperation>>,
+        SessionResponse<
+            Vec<keyhive_core::crypto::signed::Signed<keyhive_core::cgka::operation::CgkaOperation>>,
+        >,
     ),
-    FetchDocStateSymbols(Vec<riblt::CodedSymbol<crate::sync::DocStateHash>>),
+    FetchDocStateSymbols(SessionResponse<Vec<riblt::CodedSymbol<crate::sync::DocStateHash>>>),
     UploadCgkaOps,
 }
 
