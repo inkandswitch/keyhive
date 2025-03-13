@@ -11,7 +11,6 @@
   * Handle encryption of bundles and commits at the type level
 * Implement ticks
   * On each tick:
-    * Expire old sessions
     * Rerun sync for sessions older than 1 minute
 * Ensure that when a document is loaded we have incorporated any decrypted
 events we received since the load was started into the return value so that

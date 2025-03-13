@@ -2,7 +2,6 @@ use keyhive_core::{
     cgka::operation::CgkaOperation,
     crypto::{digest::Digest, signed::Signed},
     event::static_event::StaticEvent,
-    principal::group::membership_operation::StaticMembershipOperation,
 };
 
 use crate::{
@@ -12,7 +11,7 @@ use crate::{
 
 use super::{
     encoding_types::{RequestType, ResponseType},
-    riblt, FetchedSedimentree, UploadItem,
+    riblt, FetchedSedimentree, SessionResponse, UploadItem,
 };
 
 pub(super) fn parse_request(
@@ -184,33 +183,39 @@ pub(crate) fn parse_response(
         }),
         ResponseType::FetchMembershipSymbols => {
             input.parse_in_ctx("FetchMembershipSymbols", |input| {
-                let (input, symbols) =
-                    Vec::<riblt::CodedSymbol<crate::sync::MembershipSymbol>>::parse(input)?;
+                let (input, symbols) = SessionResponse::<
+                    Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>,
+                >::parse(input)?;
                 Ok((input, super::Response::FetchMembershipSymbols(symbols)))
             })
         }
         ResponseType::DownloadMembershipOps => {
             input.parse_in_ctx("DownloadMembershipOps", |input| {
-                let (input, ops) = Vec::<StaticEvent<CommitHash>>::parse(input)?;
+                let (input, ops) = SessionResponse::<Vec<StaticEvent<CommitHash>>>::parse(input)?;
                 Ok((input, super::Response::DownloadMembershipOps(ops)))
             })
         }
         ResponseType::UploadMembershipOps => Ok((input, super::Response::UploadMembershipOps)),
         ResponseType::FetchCgkaSymbols => input.parse_in_ctx("FetchCgkaSymbols", |input| {
             let (input, symbols) =
-                Vec::<riblt::CodedSymbol<crate::sync::CgkaSymbol>>::parse(input)?;
+                SessionResponse::<Vec<riblt::CodedSymbol<crate::sync::CgkaSymbol>>>::parse(input)?;
             Ok((input, super::Response::FetchCgkaSymbols(symbols)))
         }),
         ResponseType::DownloadCgkaOps => input.parse_in_ctx("DownloadCgkaOps", |input| {
-            let (input, ops) = Vec::<
-                keyhive_core::crypto::signed::Signed<keyhive_core::cgka::operation::CgkaOperation>,
+            let (input, ops) = SessionResponse::<
+                Vec<
+                    keyhive_core::crypto::signed::Signed<
+                        keyhive_core::cgka::operation::CgkaOperation,
+                    >,
+                >,
             >::parse(input)?;
             Ok((input, super::Response::DownloadCgkaOps(ops)))
         }),
         ResponseType::UploadCgkaOps => Ok((input, super::Response::UploadCgkaOps)),
         ResponseType::FetchDocStateSymbols => input.parse_in_ctx("FetchDocStateSymbols", |input| {
-            let (input, symbols) =
-                Vec::<riblt::CodedSymbol<crate::sync::DocStateHash>>::parse(input)?;
+            let (input, symbols) = SessionResponse::<
+                Vec<riblt::CodedSymbol<crate::sync::DocStateHash>>,
+            >::parse(input)?;
             Ok((input, super::Response::FetchDocStateSymbols(symbols)))
         }),
         ResponseType::UploadBlob => Ok((input, super::Response::UploadBlob)),

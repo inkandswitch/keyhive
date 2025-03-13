@@ -33,10 +33,8 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 pub use auth::audience::Audience;
 mod sync_loops;
 use commands::Command;
-use ed25519_dalek::VerifyingKey;
 use futures::channel::oneshot;
 use io::Signer;
-use keyhive_core::contact_card::ContactCard;
 use network::messages::{Request, Response};
 use serialization::parse;
 use tracing::Instrument;
@@ -134,6 +132,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
 
                 verifying_key: config.verifying_key,
                 load_complete: tx_load_complete,
+                session_duration: config.session_duration,
             })
             .instrument(run_span)
         });
@@ -153,6 +152,14 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
 
     pub fn peer_id(&self) -> PeerId {
         self.peer_id
+    }
+
+    pub(crate) fn state(&self) -> state::StateAccessor<'_, R> {
+        state::StateAccessor::new(&self.state)
+    }
+
+    pub fn num_sessions(&self) -> usize {
+        self.state().sessions().num_sessions()
     }
 }
 

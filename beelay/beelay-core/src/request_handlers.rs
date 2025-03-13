@@ -91,7 +91,11 @@ where
 
             // Create a new session and get the initial membership symbols
             match LocalState::new(ctx.clone(), from).await {
-                Ok(local_state) => match ctx.state().sessions().create_session(local_state) {
+                Ok(local_state) => match ctx
+                    .state()
+                    .sessions()
+                    .create_session(ctx.now(), local_state)
+                {
                     Ok((session_id, first_symbols)) => Response::BeginSync {
                         session_id,
                         first_symbols,
@@ -114,17 +118,12 @@ where
         } => {
             tracing::debug!("fetch membership symbols request");
 
-            match ctx
-                .state()
-                .sessions()
-                .membership_symbols(&session_id, MakeSymbols { offset, count })
-            {
-                Some(symbols) => Response::FetchMembershipSymbols(symbols),
-                None => {
-                    tracing::warn!("No session found for id: {:?}", session_id);
-                    Response::Error(format!("No session found for id: {:?}", session_id))
-                }
-            }
+            Response::FetchMembershipSymbols(
+                ctx.state()
+                    .sessions()
+                    .membership_symbols(&session_id, MakeSymbols { offset, count })
+                    .into(),
+            )
         }
         messages::Request::FetchDocStateSymbols {
             session_id,
@@ -133,17 +132,12 @@ where
         } => {
             tracing::debug!(?count, ?offset, "fetch doc state symbols request");
 
-            match ctx
-                .state()
-                .sessions()
-                .doc_state_symbols(&session_id, MakeSymbols { offset, count })
-            {
-                Some(symbols) => Response::FetchDocStateSymbols(symbols),
-                None => {
-                    tracing::warn!("No session found for id: {:?}", session_id);
-                    Response::Error(format!("No session found for id: {:?}", session_id))
-                }
-            }
+            Response::FetchDocStateSymbols(
+                ctx.state()
+                    .sessions()
+                    .doc_state_symbols(&session_id, MakeSymbols { offset, count })
+                    .into(),
+            )
         }
         messages::Request::UploadMembershipOps { session_id, ops } => {
             tracing::debug!("upload membership ops request");
@@ -177,17 +171,12 @@ where
         } => {
             tracing::debug!("download membership ops request");
 
-            match ctx
-                .state()
-                .sessions()
-                .get_membership_ops(&session_id, op_hashes)
-            {
-                Some(ops) => Response::DownloadMembershipOps(ops),
-                None => {
-                    tracing::warn!("No session found for id: {:?}", session_id);
-                    Response::Error(format!("No session found for id: {:?}", session_id))
-                }
-            }
+            Response::DownloadMembershipOps(
+                ctx.state()
+                    .sessions()
+                    .get_membership_ops(&session_id, op_hashes)
+                    .into(),
+            )
         }
         messages::Request::FetchCgkaSymbols {
             session_id,
@@ -197,17 +186,12 @@ where
         } => {
             tracing::debug!("fetch cgka symbols request for doc: {}", doc_id);
 
-            match ctx.state().sessions().cgka_symbols(
-                &session_id,
-                &doc_id,
-                MakeSymbols { offset, count },
-            ) {
-                Some(symbols) => Response::FetchCgkaSymbols(symbols),
-                None => {
-                    tracing::warn!("No session found for id: {:?}", session_id);
-                    Response::Error(format!("No session found for id: {:?}", session_id))
-                }
-            }
+            Response::FetchCgkaSymbols(
+                ctx.state()
+                    .sessions()
+                    .cgka_symbols(&session_id, &doc_id, MakeSymbols { offset, count })
+                    .into(),
+            )
         }
         messages::Request::UploadCgkaOps { session_id, ops } => {
             tracing::debug!("upload cgka ops request");
@@ -252,7 +236,7 @@ where
                 tracing::warn!("No session found for id: {:?}", session_id);
                 return Ok(OutgoingResponse {
                     audience: Audience::peer(&from),
-                    response: Response::Error(format!("No session found for id: {:?}", session_id)),
+                    response: Response::DownloadCgkaOps(messages::SessionResponse::SessionNotFound),
                 });
             }
 
@@ -280,7 +264,7 @@ where
                         })
                         .collect();
 
-                    Response::DownloadCgkaOps(filtered_ops)
+                    Response::DownloadCgkaOps(Ok(filtered_ops).into())
                 }
                 Err(e) => {
                     tracing::error!(error = ?e, "Failed to get CGKA operations for document");

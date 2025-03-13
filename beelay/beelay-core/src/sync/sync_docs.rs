@@ -10,6 +10,7 @@ use keyhive_core::{
 };
 
 use crate::{
+    network::messages::SessionResponse,
     parse::{self, Parse},
     sedimentree::MinimalTreeHash,
     serialization::Encode,
@@ -45,15 +46,17 @@ pub(super) async fn sync_docs<
         decoder.add_symbol(&state.hash);
     }
 
-    let mut symbols = effects
-        .fetch_doc_symbols(
-            session,
-            MakeSymbols {
-                offset: 0,
-                count: 10,
-            },
-        )
-        .await?;
+    let mut symbols = unpack_session_resp(
+        effects
+            .fetch_doc_symbols(
+                session,
+                MakeSymbols {
+                    offset: 0,
+                    count: 10,
+                },
+            )
+            .await?,
+    )?;
     let mut offset = symbols.len();
     const BATCH_SIZE: usize = 100;
     let mut iterations = 0;
@@ -69,15 +72,17 @@ pub(super) async fn sync_docs<
         }
         offset += symbols.len();
         iterations += 1;
-        symbols = effects
-            .fetch_doc_symbols(
-                session,
-                MakeSymbols {
-                    count: BATCH_SIZE,
-                    offset,
-                },
-            )
-            .await?;
+        symbols = unpack_session_resp(
+            effects
+                .fetch_doc_symbols(
+                    session,
+                    MakeSymbols {
+                        count: BATCH_SIZE,
+                        offset,
+                    },
+                )
+                .await?,
+        )?;
     }
 
     tracing::trace!("RIBLT sync completed");
@@ -193,6 +198,14 @@ impl<'a> Parse<'a> for DocStateHash {
     }
 }
 
+fn unpack_session_resp<R>(resp: SessionResponse<R>) -> Result<R, error::SyncDocs> {
+    match resp {
+        SessionResponse::Ok(data) => Ok(data),
+        SessionResponse::SessionExpired => Err(error::SyncDocs::SessionExpired),
+        SessionResponse::SessionNotFound => Err(error::SyncDocs::SessionNotFound),
+    }
+}
+
 pub(crate) mod error {
     use crate::network::RpcError;
 
@@ -202,5 +215,9 @@ pub(crate) mod error {
         BadSymbol,
         #[error(transparent)]
         Rpc(#[from] RpcError),
+        #[error("session expired")]
+        SessionExpired,
+        #[error("session not found")]
+        SessionNotFound,
     }
 }

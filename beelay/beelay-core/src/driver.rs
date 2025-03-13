@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, future::Future, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, future::Future, rc::Rc, time::Duration};
 
 use ed25519_dalek::VerifyingKey;
 use futures::{
@@ -158,6 +158,7 @@ pub(crate) struct DriveBeelayArgs<R: rand::Rng + rand::CryptoRng + Clone + 'stat
     pub(crate) rx_tick: mpsc::Receiver<()>,
     pub(crate) verifying_key: VerifyingKey,
     pub(crate) load_complete: oneshot::Sender<loading::LoadedParts<R>>,
+    pub(crate) session_duration: Duration,
 }
 
 pub(crate) async fn run<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
@@ -193,6 +194,7 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         tx_driver_events,
         verifying_key,
         load_complete,
+        session_duration,
         // rx_keyhive_events: mut keyhive_events,
     }: DriveBeelayArgs<R>,
 ) {
@@ -206,7 +208,13 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         let (docs, (keyhive, keyhive_rx)) = futures::future::join(load_docs, load_keyhive).await;
         let peer_id = keyhive.active().borrow().verifying_key().into();
 
-        let state = Rc::new(RefCell::new(State::new(rng, signer, keyhive, docs)));
+        let state = Rc::new(RefCell::new(State::new(
+            rng,
+            signer,
+            keyhive,
+            docs,
+            session_duration,
+        )));
         if let Err(_) = load_complete.send(loading::LoadedParts {
             state: state.clone(),
             peer_id,
@@ -293,6 +301,7 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
             }
         }
         loops.reconcile(&ctx);
+        ctx.state().sessions().expire_sessions(now.borrow().clone());
     }
 }
 
