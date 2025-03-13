@@ -3,13 +3,15 @@
 use super::{
     application_secret::PcsKey,
     digest::Digest,
+    envelope::Envelope,
     share_key::{ShareKey, ShareSecretKey},
     signed::Signed,
     siv::Siv,
+    symmetric_key::SymmetricKey,
 };
 use crate::{cgka::operation::CgkaOperation, content::reference::ContentRef};
 use serde::{Deserialize, Serialize};
-use std::marker::PhantomData;
+use std::{collections::HashMap, marker::PhantomData};
 
 /// The public information for an encrypted content ciphertext.
 ///
@@ -53,6 +55,36 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
             pred_refs,
             _plaintext_tag: PhantomData,
         }
+    }
+
+    pub fn try_decrypt(&self, key: SymmetricKey) -> Result<Vec<u8>, chacha20poly1305::Error> {
+        let mut buf: Vec<u8> = self.ciphertext.clone();
+        key.try_decrypt(self.nonce, &mut buf)?;
+        Ok(buf)
+    }
+
+    pub fn try_causal_decrypt<'de>(
+        &self,
+        key: SymmetricKey,
+        store: HashMap<Digest<Cr>, Self>, // FIXME make a storgae trait
+    ) -> Result<(), chacha20poly1305::Error>
+    where
+        T: Serialize + Deserialize<'de>,
+        Cr: Deserialize<'de>,
+    {
+        let mut buf: Vec<u8> = self.ciphertext.clone();
+        key.try_decrypt(self.nonce, &mut buf)?;
+        let envelope: Envelope<Cr, T> = bincode::deserialize(buf.as_slice())?;
+
+        fn inner_fn() {}
+
+        for (ancestor_id, ancestor_key) in envelope.ancestors {
+            if let Some(ciphertext) = store.get(&ancestor_id) {
+                ciphertext.try_causal_decrypt(ancestor_key, store.clone())?;
+            }
+        }
+
+        Ok(())
     }
 }
 
