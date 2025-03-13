@@ -219,14 +219,29 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
             explore.push(op);
         }
 
+        // {being revoked => revocation}
+        let mut revoked_dependencies: HashMap<
+            Key,
+            (
+                Digest<MembershipOperation<S, T, L>>,
+                MembershipOperation<S, T, L>,
+            ),
+        > = HashMap::new();
+
         while let Some(op) = explore.pop() {
             let (ancestors, longest_path) = op.ancestors();
+            let digest = Digest::hash(&op);
 
             for ancestor in ancestors.values() {
                 explore.push(ancestor.as_ref().dupe());
             }
 
-            ops_with_ancestors.insert(Digest::hash(&op), (op, ancestors, longest_path));
+            if let MembershipOperation::Revocation(r) = &op {
+                revoked_dependencies
+                    .insert((*r.payload.revoke.signature()).into(), (digest, op.dupe()));
+            }
+
+            ops_with_ancestors.insert(digest, (op, ancestors, longest_path));
         }
 
         let mut adjacencies: TopologicalSort<(
@@ -235,6 +250,16 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         )> = topological_sort::TopologicalSort::new();
 
         for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
+            if let MembershipOperation::Delegation(d) = op {
+                if let Some(proof) = &d.payload.proof {
+                    if let Some((revoked_digest, revoked_op)) =
+                        revoked_dependencies.get(&Key(proof.signature))
+                    {
+                        adjacencies.add_dependency((*digest, op), (*revoked_digest, revoked_op));
+                    }
+                }
+            }
+
             for (other_digest, other_op) in op_ancestors.iter() {
                 let (_, other_ancestors, other_longest_path) = ops_with_ancestors
                     .get(other_digest)
@@ -638,6 +663,8 @@ mod tests {
     }
 
     mod topsort {
+        use crate::principal::active::Active;
+
         use super::*;
 
         #[test]
@@ -715,6 +742,118 @@ mod tests {
             let d = (dan_hash, dan_op.clone());
 
             assert_eq!(observed, vec![d, c, a]);
+        }
+
+        #[tokio::test]
+        async fn test_delegation_concurrency() {
+            //             ┌─────────┐
+            //             │  Alice  │
+            //             └─────────┘
+            //      ┌───────────┴────────────┐
+            //      │                        │
+            //   (write)                   (read)
+            //      │                        │
+            //      ▼                        ▼
+            // ┌─────────┐              ┌─────────┐
+            // │   Bob   │              │   Dan   │
+            // └─────────┘              └─────────┘
+            //      │
+            //    (pull)
+            //      │
+            //      ▼
+            // ┌─────────┐
+            // │  Carol  │
+            // └─────────┘
+            let csprng = &mut rand::thread_rng();
+
+            let alice_sk = fixture(&ALICE_SIGNER).clone();
+            let alice = Rc::new(RefCell::new(
+                Active::generate(alice_sk, NoListener, csprng)
+                    .await
+                    .unwrap(),
+            ));
+
+            let bob_sk = fixture(&BOB_SIGNER).clone();
+            let bob = Rc::new(RefCell::new(
+                Active::generate(bob_sk, NoListener, csprng).await.unwrap(),
+            ));
+
+            let carol_sk = fixture(&CAROL_SIGNER).clone();
+            let carol = Rc::new(RefCell::new(
+                Active::generate(carol_sk, NoListener, csprng)
+                    .await
+                    .unwrap(),
+            ));
+
+            let dan_sk = fixture(&DAN_SIGNER).clone();
+            let dan = Rc::new(RefCell::new(
+                Active::generate(dan_sk, NoListener, csprng).await.unwrap(),
+            ));
+
+            let alice_to_bob: Rc<Signed<Delegation<MemorySigner>>> = Rc::new(
+                alice
+                    .borrow()
+                    .signer
+                    .try_sign_sync(Delegation {
+                        delegate: bob.dupe().into(),
+                        can: Access::Write,
+                        proof: None,
+                        after_revocations: vec![],
+                        after_content: BTreeMap::new(),
+                    })
+                    .unwrap(),
+            );
+
+            let alice_to_dan = Rc::new(
+                alice
+                    .borrow()
+                    .signer
+                    .try_sign_sync(Delegation {
+                        delegate: dan.dupe().into(),
+                        can: Access::Read,
+                        proof: None,
+                        after_revocations: vec![],
+                        after_content: BTreeMap::new(),
+                    })
+                    .unwrap(),
+            );
+
+            let bob_to_carol = Rc::new(
+                bob.borrow()
+                    .signer
+                    .try_sign_sync(Delegation {
+                        delegate: carol.dupe().into(),
+                        can: Access::Pull,
+                        proof: Some(alice_to_bob.dupe()),
+                        after_revocations: vec![],
+                        after_content: BTreeMap::new(),
+                    })
+                    .unwrap(),
+            );
+
+            let dlg_heads = CaMap::from_iter_direct([alice_to_dan.dupe(), bob_to_carol.dupe()]);
+            let mut sorted = MembershipOperation::topsort(&dlg_heads, &CaMap::new());
+            sorted.reverse();
+
+            assert!(sorted.len() == 3);
+
+            let ab_idx = sorted
+                .iter()
+                .position(|(_, op)| op == &alice_to_bob.dupe().into())
+                .unwrap();
+
+            let ad_idx = sorted
+                .iter()
+                .position(|(_, op)| op == &alice_to_dan.dupe().into())
+                .unwrap();
+
+            let bc_idx = sorted
+                .iter()
+                .position(|(_, op)| op == &bob_to_carol.dupe().into())
+                .unwrap();
+
+            assert!(ab_idx < bc_idx);
+            assert!(ab_idx < ad_idx);
         }
 
         #[tokio::test]

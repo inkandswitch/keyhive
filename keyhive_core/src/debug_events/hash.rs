@@ -1,7 +1,5 @@
 use std::fmt;
 
-use crate::util;
-
 /// A wrapper around a byte array representing a hash
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Hash {

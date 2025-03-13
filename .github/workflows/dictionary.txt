@@ -41,6 +41,7 @@ README
 SChaCha
 SDK
 SPKI
+ShareSecretKeys
 Stateful
 TLS
 TODO
@@ -52,6 +53,7 @@ WebCrypto
 XChaCha
 al
 assignees
+async
 auth
 authN
 authZ
@@ -69,6 +71,7 @@ cryptographic
 cryptographically
 data's
 decrypt
+decrypted
 decrypting
 deduplicate
 delegator
@@ -102,6 +105,7 @@ petnames
 plaintext
 pre-alpha
 preimage
+prekey
 priori
 probabilistically
 revoker
