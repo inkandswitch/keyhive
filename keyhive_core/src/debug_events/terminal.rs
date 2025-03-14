@@ -204,6 +204,7 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
             }
         }
         DebugEventDetails::Delegated {
+            subject,
             can_access,
             delegate,
             after_revocations_count,
@@ -211,30 +212,34 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
         } => {
             if verbose {
                 format!(
-                    "Access: {}\nDelegate: {}\nAfter Revocations: {}\nAfter Content: {}",
+                    "Access: {}\nSubject: {}\nDelegate: {}\nAfter Revocations: {}\nAfter Content: {}",
                     can_access,
+                    subject.short_hex(),
                     delegate.short_hex(),
                     after_revocations_count,
                     after_content_count
                 )
             } else {
                 format!(
-                    "Access: {}\nDelegate: {}\nAfter Content: {}",
+                    "Access: {}\nSubject: {}\nDelegate: {}\nAfter Content: {}",
                     can_access,
+                    subject.short_hex(),
                     delegate.short_hex(),
                     after_content_count
                 )
             }
         }
         DebugEventDetails::Revoked {
+            subject,
             revoke,
             has_proof,
             after_content_count,
         } => {
             if verbose {
                 format!(
-                    "Revoke: {}\nProof: {}\nAfter Content: {}",
+                    "Revoke: {}\nSubject: {}\nProof: {}\nAfter Content: {}",
                     revoke.short_hex(),
+                    subject.short_hex(),
                     has_proof,
                     after_content_count
                 )

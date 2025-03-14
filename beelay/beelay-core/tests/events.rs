@@ -19,7 +19,7 @@ fn sync_emits_local_notifications() {
     // Now, create a document on left
     let (doc_id, initial_commit) = network
         .beelay(&peer1)
-        .create_doc(vec![peer2_contact])
+        .create_doc(vec![peer2_contact.into()])
         .unwrap();
 
     // Clear notifications
@@ -53,7 +53,7 @@ fn listen_emits_local_notifications() {
     // Now, create a document on left
     let (doc_id, initial_commit) = network
         .beelay(&peer1)
-        .create_doc(vec![peer2_contact_card])
+        .create_doc(vec![peer2_contact_card.into()])
         .unwrap();
     let peer2_contact = network.beelay(&peer2).contact_card().unwrap();
     network

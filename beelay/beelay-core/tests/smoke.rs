@@ -1,7 +1,10 @@
 use std::{collections::HashSet, time::Duration};
 
 use beelay_core::{
-    conn_info, doc_status::DocStatus, keyhive::MemberAccess, CommitHash, CommitOrBundle,
+    conn_info,
+    doc_status::DocStatus,
+    keyhive::{AddMemberToGroup, KeyhiveEntityId, MemberAccess},
+    CommitHash, CommitOrBundle,
 };
 use ed25519_dalek::SigningKey;
 use network::{ConnectedPair, Network};
@@ -52,7 +55,7 @@ fn create_and_sync_via_stream() {
     // First create the doc
     let (doc1_id, initial_commit) = network
         .beelay(&peer1)
-        .create_doc(vec![peer2_contact])
+        .create_doc(vec![peer2_contact.into()])
         .unwrap();
 
     let DocStatus {
@@ -257,4 +260,55 @@ fn sync_loops_are_rerun() {
     };
 
     assert!(second_sync > first_sync);
+}
+
+#[test]
+fn newly_created_reachable_documents_are_synced() {
+    init_logging();
+    let mut network = Network::new();
+    let peer1 = network.create_peer("peer1").build();
+    let peer2 = network.create_peer("peer2").build();
+    let peer2_contact = network.beelay(&peer2).contact_card().unwrap();
+
+    let group_id = network.beelay(&peer1).create_group().unwrap();
+    network
+        .beelay(&peer1)
+        .add_member_to_group(AddMemberToGroup {
+            group_id,
+            member: beelay_core::keyhive::KeyhiveEntityId::Individual(peer2_contact),
+            access: MemberAccess::Read,
+        })
+        .unwrap();
+
+    let (doc_id, initial_commit) = network
+        .beelay(&peer1)
+        .create_doc(vec![KeyhiveEntityId::Group(group_id)])
+        .unwrap();
+    let commit1 = beelay_core::Commit::new(
+        vec![initial_commit.hash()],
+        vec![1, 2, 3],
+        CommitHash::from([1; 32]),
+    );
+    network
+        .beelay(&peer1)
+        .add_commits(doc_id, vec![commit1.clone()])
+        .unwrap();
+
+    network.connect_stream(&peer1, &peer2);
+
+    network.advance_time(beelay_core::SYNC_INTERVAL + Duration::from_millis(10));
+
+    let table = network.beelay(&peer2).log_keyhive_events(
+        keyhive_core::debug_events::Nicknames::default()
+            .with_nickname(doc_id.as_bytes(), "doc1")
+            .with_nickname(group_id.as_bytes(), "group1")
+            .with_nickname(peer1.as_bytes(), "peer1")
+            .with_nickname(peer2.as_bytes(), "peer2"),
+    );
+    keyhive_core::debug_events::terminal::print_event_table_verbose(table);
+
+    // Sync should have run, the doc should be on peer2
+    let doc_on_two = network.beelay(&peer2).load_doc(doc_id).unwrap();
+
+    // Now create a nother
 }

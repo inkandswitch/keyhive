@@ -2,6 +2,7 @@ use crate::{
     crypto::{digest::Digest, signer::async_signer::AsyncSigner},
     event::{static_event::StaticEvent, Event},
     listener::membership::MembershipListener,
+    principal::identifier::Identifier,
 };
 use std::collections::HashMap;
 
@@ -45,12 +46,14 @@ pub enum DebugEventDetails {
         op_details: CgkaOperationDetails,
     },
     Delegated {
+        subject: Hash,
         can_access: String,
         delegate: Hash,
         after_revocations_count: usize,
         after_content_count: usize,
     },
     Revoked {
+        subject: Hash,
         revoke: Hash,
         has_proof: bool,
         after_content_count: usize,
@@ -82,9 +85,11 @@ pub enum CgkaOperationDetails {
 
 impl DebugEventTable {
     /// Create a new debug event table from a vector of events.
-    pub fn from_static_events<T>(events: &Vec<StaticEvent<T>>, nicknames: Nicknames) -> Self
+    pub fn from_events<S, T, L>(events: Vec<Event<S, T, L>>, nicknames: Nicknames) -> Self
     where
+        S: AsyncSigner,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
+        L: MembershipListener<S, T>,
     {
         if events.is_empty() {
             return Self {
@@ -95,13 +100,13 @@ impl DebugEventTable {
 
         // Count event types
         let mut event_counts: HashMap<String, usize> = HashMap::new();
-        for event in events {
+        for event in &events {
             let event_type = match event {
-                StaticEvent::PrekeysExpanded(_) => "PrekeysExpanded",
-                StaticEvent::PrekeyRotated(_) => "PrekeyRotated",
-                StaticEvent::CgkaOperation(_) => "CgkaOperation",
-                StaticEvent::Delegated(_) => "Delegated",
-                StaticEvent::Revoked(_) => "Revoked",
+                Event::PrekeysExpanded(_) => "PrekeysExpanded",
+                Event::PrekeyRotated(_) => "PrekeyRotated",
+                Event::CgkaOperation(_) => "CgkaOperation",
+                Event::Delegated(_) => "Delegated",
+                Event::Revoked(_) => "Revoked",
             };
             *event_counts.entry(event_type.to_string()).or_insert(0) += 1;
         }
@@ -114,26 +119,18 @@ impl DebugEventTable {
 
         Self { rows, event_counts }
     }
+}
 
-    pub fn from_events<S, T, L>(events: Vec<Event<S, T, L>>, nicknames: Nicknames) -> Self
+impl DebugEventRow {
+    /// Create a new debug event row from an event.
+    pub fn from_event<S, T, L>(idx: usize, event: &Event<S, T, L>, nicknames: &Nicknames) -> Self
     where
         S: AsyncSigner,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
         L: MembershipListener<S, T>,
     {
-        let static_events = events.into_iter().map(|e| StaticEvent::from(e)).collect();
-        Self::from_static_events(&static_events, nicknames)
-    }
-}
-
-impl DebugEventRow {
-    /// Create a new debug event row from an event.
-    pub fn from_event<T>(idx: usize, event: &StaticEvent<T>, nicknames: &Nicknames) -> Self
-    where
-        T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-    {
         match event {
-            StaticEvent::PrekeysExpanded(signed) => {
+            Event::PrekeysExpanded(signed) => {
                 let payload = signed.payload();
                 let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
                 let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
@@ -149,7 +146,7 @@ impl DebugEventRow {
                     details,
                 }
             }
-            StaticEvent::PrekeyRotated(signed) => {
+            Event::PrekeyRotated(signed) => {
                 let payload = signed.payload();
                 let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
                 let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
@@ -166,7 +163,7 @@ impl DebugEventRow {
                     details,
                 }
             }
-            StaticEvent::CgkaOperation(signed) => {
+            Event::CgkaOperation(signed) => {
                 let payload = signed.payload();
                 let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
                 let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
@@ -257,13 +254,19 @@ impl DebugEventRow {
                     details,
                 }
             }
-            StaticEvent::Delegated(signed) => {
+            Event::Delegated(signed) => {
                 let payload = signed.payload();
                 let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
                 let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
+                let subject = if let Some(proof) = &payload.proof {
+                    Hash::new(proof.subject_id().as_bytes(), nicknames)
+                } else {
+                    Hash::new(signed.issuer().as_bytes(), nicknames)
+                };
                 let details = DebugEventDetails::Delegated {
+                    subject,
                     can_access: format!("{:?}", payload.can),
-                    delegate: Hash::new(payload.delegate.as_bytes(), nicknames),
+                    delegate: Hash::new(payload.delegate.id().as_bytes(), nicknames),
                     after_revocations_count: payload.after_revocations.len(),
                     after_content_count: payload.after_content.len(),
                 };
@@ -276,12 +279,18 @@ impl DebugEventRow {
                     details,
                 }
             }
-            StaticEvent::Revoked(signed) => {
+            Event::Revoked(signed) => {
                 let payload = signed.payload();
                 let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
                 let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
+                let subject = if let Some(proof) = &payload.proof {
+                    Hash::new(proof.subject_id().as_bytes(), nicknames)
+                } else {
+                    Hash::new(signed.issuer().as_bytes(), nicknames)
+                };
                 let details = DebugEventDetails::Revoked {
-                    revoke: Hash::new(payload.revoke.as_slice(), nicknames),
+                    subject,
+                    revoke: Hash::new(Digest::hash(&payload.revoke).as_slice(), nicknames),
                     has_proof: payload.proof.is_some(),
                     after_content_count: payload.after_content.len(),
                 };

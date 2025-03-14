@@ -7,15 +7,15 @@ use std::{
 use keyhive_core::{crypto::digest::Digest, event::static_event::StaticEvent};
 
 use crate::{
-    network::{messages::SessionResponse, RpcError},
+    network::{messages::SessionResponse, PeerAddress, RpcError},
     parse::{self, Parse},
     riblt,
     serialization::Encode,
     sync::server_session::MakeSymbols,
-    CommitHash, PeerId,
+    CommitHash, PeerId, TaskContext,
 };
 
-use super::{SessionId, SyncEffects};
+use super::SessionId;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
@@ -76,16 +76,14 @@ impl<'a> From<&'a StaticEvent<CommitHash>> for MembershipSymbol {
     }
 }
 
-#[tracing::instrument(skip(effects, local_ops, symbols), fields(num_symbols = symbols.len()))]
-pub(crate) async fn sync_membership<
-    R: rand::Rng + rand::CryptoRng + Clone + 'static,
-    E: SyncEffects<R>,
->(
-    effects: E,
+#[tracing::instrument(skip(ctx, local_ops, symbols), fields(num_symbols = symbols.len()))]
+pub(crate) async fn sync_membership<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
+    ctx: TaskContext<R>,
     session_id: SessionId,
     mut symbols: Vec<riblt::CodedSymbol<MembershipSymbol>>,
     local_ops: HashMap<Digest<StaticEvent<CommitHash>>, StaticEvent<CommitHash>>,
     with_remote: PeerId,
+    remote_target: PeerAddress,
 ) -> Result<(), error::SyncMembership> {
     tracing::debug!(num_local_ops = local_ops.len(), "running membership sync");
 
@@ -109,8 +107,9 @@ pub(crate) async fn sync_membership<
             break;
         }
         symbols = unpack_session_response(
-            effects
+            ctx.requests()
                 .fetch_membership_symbols(
+                    remote_target,
                     session_id,
                     MakeSymbols {
                         offset,
@@ -143,7 +142,9 @@ pub(crate) async fn sync_membership<
             Ok(())
         } else {
             tracing::trace!(num_to_upload = to_upload.len(), "uploading ops");
-            effects.upload_membership_ops(session_id, to_upload).await
+            ctx.requests()
+                .upload_membership_ops(remote_target, session_id, to_upload)
+                .await
         }
     };
 
@@ -156,11 +157,11 @@ pub(crate) async fn sync_membership<
         if !to_download.is_empty() {
             tracing::trace!(num_to_download = to_download.len(), "downloading ops");
             let ops = unpack_session_response(
-                effects
-                    .fetch_membership_ops(session_id, to_download)
+                ctx.requests()
+                    .download_membership_ops(remote_target, session_id, to_download)
                     .await?,
             )?;
-            effects
+            ctx.state()
                 .keyhive()
                 .ingest_membership_ops(ops)
                 .await

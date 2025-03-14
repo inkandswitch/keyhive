@@ -17,6 +17,7 @@ mod command_id;
 pub use command_id::CommandId;
 use futures::{channel::oneshot, TryStreamExt};
 pub mod keyhive;
+use keyhive::KeyhiveEntityId;
 use keyhive_core::contact_card::ContactCard;
 
 #[derive(Debug)]
@@ -44,7 +45,7 @@ pub(crate) enum Command {
     },
     CreateDoc {
         initial_commit: Commit,
-        other_owners: Vec<ContactCard>,
+        other_owners: Vec<KeyhiveEntityId>,
     },
     AddBundle {
         doc_id: DocumentId,
@@ -163,7 +164,7 @@ where
 #[tracing::instrument(skip(ctx))]
 async fn create_doc<R>(
     ctx: TaskContext<R>,
-    other_owners: Vec<keyhive_core::contact_card::ContactCard>,
+    other_owners: Vec<KeyhiveEntityId>,
     initial_commit: Commit,
 ) -> Result<DocumentId, error::Create>
 where

@@ -60,7 +60,7 @@ impl Event {
     // Create a new document
     pub fn create_doc(
         initial_commit: Commit,
-        other_owners: Vec<keyhive_core::contact_card::ContactCard>,
+        other_owners: Vec<KeyhiveEntityId>,
     ) -> (CommandId, Event) {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(

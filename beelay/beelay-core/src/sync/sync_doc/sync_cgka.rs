@@ -7,25 +7,24 @@ use keyhive_core::{
 };
 
 use crate::{
-    network::{messages::SessionResponse, RpcError},
+    network::{messages::SessionResponse, PeerAddress, RpcError},
     parse::{self, Parse},
     riblt,
     serialization::Encode,
     state::keyhive::error::Ingest,
-    sync::{server_session::MakeSymbols, SessionId, SyncEffects},
-    DocumentId,
+    sync::{server_session::MakeSymbols, SessionId},
+    DocumentId, TaskContext,
 };
 
-pub(super) async fn sync_cgka<
-    R: rand::Rng + rand::CryptoRng + Clone + 'static,
-    E: SyncEffects<R> + Clone,
->(
-    effects: E,
+pub(super) async fn sync_cgka<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
+    ctx: TaskContext<R>,
+    peer_address: PeerAddress,
     session_id: SessionId,
     doc_id: DocumentId,
 ) -> Result<(), SyncCgkaError> {
     let mut decoder = riblt::Decoder::new();
-    let local_ops = effects
+    let local_ops = ctx
+        .state()
         .keyhive()
         .cgka_ops_for_doc(doc_id)
         .await?
@@ -38,8 +37,9 @@ pub(super) async fn sync_cgka<
     }
 
     let mut remote_symbols = unpack_session_resp(
-        effects
+        ctx.requests()
             .fetch_cgka_symbols(
+                peer_address,
                 session_id,
                 doc_id.clone(),
                 MakeSymbols {
@@ -62,8 +62,9 @@ pub(super) async fn sync_cgka<
             break;
         }
         remote_symbols = unpack_session_resp(
-            effects
+            ctx.requests()
                 .fetch_cgka_symbols(
+                    peer_address,
                     session_id,
                     doc_id.clone(),
                     MakeSymbols {
@@ -85,12 +86,12 @@ pub(super) async fn sync_cgka<
         if !to_download.is_empty() {
             tracing::trace!(num_to_download = to_download.len(), "downloading cgka ops");
             let ops = unpack_session_resp(
-                effects
-                    .fetch_cgka_ops(session_id, doc_id.clone(), to_download)
+                ctx.requests()
+                    .download_cgka_ops(peer_address, session_id, doc_id.clone(), to_download)
                     .await?,
             )?;
-            effects.keyhive().ingest_cgka_ops(ops).await?;
-            effects.mark_doc_changed(&doc_id);
+            ctx.state().keyhive().ingest_cgka_ops(ops).await?;
+            ctx.state().docs().mark_changed(&doc_id);
         } else {
             tracing::trace!("no cgka ops to download");
         }
@@ -107,8 +108,8 @@ pub(super) async fn sync_cgka<
     let upload = async {
         if !to_upload.is_empty() {
             tracing::trace!(num_to_upload = to_upload.len(), "uploading cgka ops");
-            effects
-                .upload_cgka_ops(session_id, doc_id.clone(), to_upload)
+            ctx.requests()
+                .upload_cgka_ops(peer_address, session_id, to_upload)
                 .await
                 .map_err(SyncCgkaError::from)?;
         } else {
