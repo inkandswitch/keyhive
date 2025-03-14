@@ -12,8 +12,8 @@ mod network;
 fn sync_emits_local_notifications() {
     init_logging();
     let mut network = Network::new();
-    let peer1 = network.create_peer("peer1");
-    let peer2 = network.create_peer("peer2");
+    let peer1 = network.create_peer("peer1").build();
+    let peer2 = network.create_peer("peer2").build();
     let peer2_contact = network.beelay(&peer2).contact_card().unwrap();
 
     // Now, create a document on left
@@ -46,8 +46,8 @@ fn sync_emits_local_notifications() {
 fn listen_emits_local_notifications() {
     init_logging();
     let mut network = Network::new();
-    let peer1 = network.create_peer("peer1");
-    let peer2 = network.create_peer("peer2");
+    let peer1 = network.create_peer("peer1").build();
+    let peer2 = network.create_peer("peer2").build();
     let peer2_contact_card = network.beelay(&peer2).contact_card().unwrap();
 
     // Now, create a document on left

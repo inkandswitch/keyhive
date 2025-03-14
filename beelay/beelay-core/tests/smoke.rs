@@ -11,7 +11,7 @@ mod network;
 fn create_and_load() {
     init_logging();
     let mut network = Network::new();
-    let peer1 = network.create_peer("peer1");
+    let peer1 = network.create_peer("peer1").build();
 
     let (doc_id, initial_commit) = network.beelay(&peer1).create_doc(vec![]).unwrap();
     let commit1 = beelay_core::Commit::new(
@@ -43,8 +43,8 @@ fn create_and_load() {
 fn create_and_sync_via_stream() {
     init_logging();
     let mut network = Network::new();
-    let peer1 = network.create_peer("peer1");
-    let peer2 = network.create_peer("peer2");
+    let peer1 = network.create_peer("peer1").build();
+    let peer2 = network.create_peer("peer2").build();
     let peer2_contact = network.beelay(&peer2).contact_card().unwrap();
 
     // First create the doc
@@ -126,8 +126,8 @@ fn create_and_sync_via_stream() {
 fn changes_published_after_sync() {
     init_logging();
     let mut network = Network::new();
-    let peer1 = network.create_peer("peer1");
-    let peer2 = network.create_peer("peer2");
+    let peer1 = network.create_peer("peer1").build();
+    let peer2 = network.create_peer("peer2").build();
 
     // First create the doc
     let (doc1_id, initial_commit) = network.beelay(&peer1).create_doc(vec![]).unwrap();
@@ -194,7 +194,10 @@ fn save_and_load() {
     init_logging();
     let mut network = Network::new();
     let key = SigningKey::generate(&mut rand::thread_rng());
-    let peer1 = network.create_peer_with_key("peer1", key.clone());
+    let peer1 = network
+        .create_peer("peer1")
+        .signing_key(key.clone())
+        .build();
 
     // Create a document
     let (doc1_id, _) = network.beelay(&peer1).create_doc(vec![]).unwrap();
@@ -203,11 +206,14 @@ fn save_and_load() {
     for (key, value) in network.beelay(&peer1).storage() {
         tracing::info!("Key: {}, Value: {}", key, value.len());
     }
-    // network.beelay(&peer1).shutdown();
 
     // Now creaet a new network and peer with the same storage
     let mut network2 = Network::new();
-    let peer2 = network2.load_peer("peer2", network.beelay(&peer1).storage().clone(), key);
+    let peer2 = network2
+        .create_peer("peer2")
+        .storage(network.beelay(&peer1).storage().clone())
+        .signing_key(key)
+        .build();
 
     // Check that the document is in storage
     let _doc = network2.beelay(&peer2).load_doc(doc1_id).unwrap();
