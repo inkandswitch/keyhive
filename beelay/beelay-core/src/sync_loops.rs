@@ -2,6 +2,7 @@ use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     future::Future,
     pin::Pin,
+    time::Duration,
 };
 
 use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
@@ -10,12 +11,11 @@ use crate::{
     doc_status::DocEvent,
     network::{messages::UploadItem, RpcError},
     state::keyhive::batch,
-    streams::{CompletedHandshake, ResolvedDirection},
-    CommitOrBundle, DocumentId, PeerId, StreamId, TaskContext,
+    streams::{CompletedHandshake, EstablishedStream, ResolvedDirection, SyncPhase},
+    CommitOrBundle, DocumentId, PeerId, StreamId, TaskContext, SYNC_INTERVAL,
 };
 
 pub(crate) struct SyncLoops {
-    streams: HashMap<StreamId, ConnState>,
     doc_versions: HashMap<DocumentId, u64>,
     doc_events_pending_decryption: Vec<EventPendingDecryption>,
     running_sync_loops: FuturesUnordered<Pin<Box<dyn Future<Output = StreamId>>>>,
@@ -30,15 +30,9 @@ struct EventPendingDecryption {
     payload: CommitOrBundle,
 }
 
-enum ConnState {
-    Syncing,
-    Idle,
-}
-
 impl SyncLoops {
     pub(crate) fn new() -> Self {
         SyncLoops {
-            streams: HashMap::new(),
             // argh! This is horrible horrible horrible
             doc_versions: HashMap::new(),
             doc_events_pending_decryption: Vec::new(),
@@ -56,25 +50,38 @@ impl SyncLoops {
         let established = ctx.state().streams().established();
         let doc_changes = ctx.state().docs().take_doc_changes();
         if !doc_changes.is_empty() {}
-        let mut missing = self.streams.keys().cloned().collect::<HashSet<_>>();
-        for (
-            stream_id,
-            CompletedHandshake {
-                their_peer_id,
-                resolved_direction,
-            },
-        ) in established
+        for EstablishedStream {
+            their_peer_id,
+            direction,
+            id: stream_id,
+            sync_phase,
+        } in established
         {
-            missing.remove(&stream_id);
-
-            // We don't start sync loops for incoming streams
-            if resolved_direction != ResolvedDirection::Accepting {
-                if !self.streams.contains_key(&stream_id) {
-                    tracing::trace!(?stream_id, ?their_peer_id, "starting sync loop for stream");
-                    self.running_sync_loops
-                        .push(sync_loop(ctx.clone(), stream_id, their_peer_id).boxed_local());
-                    self.streams.insert(stream_id, ConnState::Syncing);
+            let should_start_sync = {
+                if direction == ResolvedDirection::Accepting {
+                    false
+                } else {
+                    // Start a sync if we haven't synced before, or it's been
+                    // more than SYNC_INTERVAL since the last sync
+                    match sync_phase {
+                        SyncPhase::Listening {
+                            last_synced_at: Some(last_synced_at),
+                        } => ctx.now() - last_synced_at > SYNC_INTERVAL,
+                        SyncPhase::Listening {
+                            last_synced_at: None,
+                        } => true,
+                        SyncPhase::Syncing { .. } => false,
+                    }
                 }
+            };
+
+            if should_start_sync {
+                tracing::trace!(?stream_id, ?their_peer_id, "starting sync loop for stream");
+                self.running_sync_loops
+                    .push(sync_loop(ctx.clone(), stream_id, their_peer_id).boxed_local());
+                ctx.state()
+                    .streams()
+                    .mark_sync_started(ctx.now(), stream_id);
             }
 
             // forward everything which has changed and which the remote has access
@@ -123,7 +130,6 @@ impl SyncLoops {
                 self.running_uploads.push(upload_task.boxed_local());
             }
         }
-        self.streams.retain(|k, _v| !missing.contains(k));
 
         let mut next_decryption_batch = Vec::new();
         for evt in std::mem::take(&mut self.doc_events_pending_decryption) {
@@ -173,7 +179,7 @@ impl SyncLoops {
         futures::select! {
             stream_id = self.running_sync_loops.select_next_some() => {
                 tracing::trace!(?stream_id, "sync loop completed");
-                self.streams.insert(stream_id, ConnState::Idle);
+                ctx.state().streams().mark_sync_complete(ctx.now(), stream_id);
             }
             _ = self.running_uploads.select_next_some() => {
                 tracing::trace!("upload completed");
@@ -213,49 +219,3 @@ async fn sync_loop<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         .unwrap();
     stream_id
 }
-
-// fn decrypt_commit_or_bundle<R: rand::Rng + rand::CryptoRng>(
-//     ctx: &TaskContext<R>,
-//     doc_id: DocumentId,
-//     commit_or_bundle: CommitOrBundle,
-// ) -> Option<CommitOrBundle> {
-//     match commit_or_bundle {
-//         CommitOrBundle::Commit(c) => {
-//             let decrypted = match ctx.state().keyhive().decrypt(
-//                 doc_id,
-//                 c.parents(),
-//                 c.hash(),
-//                 c.contents().to_vec(),
-//             ) {
-//                 Ok(d) => d,
-//                 Err(e) => {
-//                     tracing::warn!(err=?e, "failed to decrypt commit");
-//                     return None;
-//                 }
-//             };
-//             let commit = Commit::new(c.parents().to_vec(), decrypted, c.hash());
-//             Some(CommitOrBundle::Commit(commit))
-//         }
-//         CommitOrBundle::Bundle(s) => {
-//             let decrypted = match ctx.state().keyhive().decrypt(
-//                 doc_id,
-//                 &[s.start()],
-//                 *s.hash(),
-//                 s.bundled_commits().to_vec(),
-//             ) {
-//                 Ok(d) => d,
-//                 Err(e) => {
-//                     tracing::warn!(err=?e, "failed to decrypt bundle");
-//                     return None;
-//                 }
-//             };
-//             let bundle = CommitBundle::builder()
-//                 .start(s.start())
-//                 .end(s.end())
-//                 .checkpoints(s.checkpoints().to_vec())
-//                 .bundled_commits(decrypted)
-//                 .build();
-//             Some(CommitOrBundle::Bundle(bundle))
-//         }
-//     }
-// }

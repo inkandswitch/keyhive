@@ -105,7 +105,7 @@ impl Sub<Duration> for UnixTimestamp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct UnixTimestampMillis(u128);
 
 impl UnixTimestampMillis {
@@ -142,5 +142,14 @@ impl Sub<Duration> for UnixTimestampMillis {
 
     fn sub(self, rhs: Duration) -> Self::Output {
         Self(self.0 - rhs.as_millis())
+    }
+}
+
+impl Sub<UnixTimestampMillis> for UnixTimestampMillis {
+    type Output = Duration;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        let diff = self.0 as i128 - rhs.0 as i128;
+        Duration::from_millis(diff as u64)
     }
 }

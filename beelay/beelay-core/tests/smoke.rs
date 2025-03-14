@@ -1,6 +1,8 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
-use beelay_core::{doc_status::DocStatus, keyhive::MemberAccess, CommitHash, CommitOrBundle};
+use beelay_core::{
+    conn_info, doc_status::DocStatus, keyhive::MemberAccess, CommitHash, CommitOrBundle,
+};
 use ed25519_dalek::SigningKey;
 use network::{ConnectedPair, Network};
 use test_utils::init_logging;
@@ -222,4 +224,37 @@ fn save_and_load() {
     //     doc,
     //     vec![beelay_core::CommitOrBundle::Commit(initial_commit)]
     // );
+}
+
+#[test]
+fn sync_loops_are_rerun() {
+    init_logging();
+    let mut network = Network::new();
+    let peer1 = network.create_peer("peer1").build();
+    let peer2 = network.create_peer("peer2").build();
+
+    let ConnectedPair { left_to_right, .. } = network.connect_stream(&peer1, &peer2);
+
+    let conn_infos = network.beelay(&peer1).conn_info();
+    let conn_info = conn_infos.get(&left_to_right).unwrap();
+    let conn_info::ConnState::Listening {
+        last_synced_at: Some(first_sync),
+    } = conn_info.state.clone()
+    else {
+        panic!("expected Listening state");
+    };
+
+    // Now wait until longer than the sync timeout
+    network.advance_time(beelay_core::SYNC_INTERVAL + Duration::from_millis(10));
+
+    let conn_infos = network.beelay(&peer1).conn_info();
+    let conn_info = conn_infos.get(&left_to_right).unwrap();
+    let conn_info::ConnState::Listening {
+        last_synced_at: Some(second_sync),
+    } = conn_info.state.clone()
+    else {
+        panic!("expected Listening state");
+    };
+
+    assert!(second_sync > first_sync);
 }

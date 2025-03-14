@@ -28,7 +28,7 @@
 //! `Event::monitor_doc` event to [`Beelay::handle_event`]. The [`DocMonitor`]
 //! will emit events when the document's state changes.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
 
 pub use auth::audience::Audience;
 mod sync_loops;
@@ -41,6 +41,7 @@ use tracing::Instrument;
 
 mod blob;
 mod config;
+pub mod conn_info;
 pub use config::Config;
 mod driver;
 pub use blob::BlobHash;
@@ -84,6 +85,8 @@ pub use network::{
 mod serialization;
 mod stopper;
 mod sync;
+
+pub const SYNC_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The main entrypoint for this library
 ///
@@ -160,6 +163,23 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
 
     pub fn num_sessions(&self) -> usize {
         self.state().sessions().num_sessions()
+    }
+
+    pub fn connection_info(&self) -> HashMap<StreamId, conn_info::ConnectionInfo> {
+        self.state()
+            .streams()
+            .established()
+            .into_iter()
+            .map(|established| {
+                (
+                    established.id,
+                    conn_info::ConnectionInfo {
+                        peer_id: established.their_peer_id,
+                        state: established.sync_phase.into(),
+                    },
+                )
+            })
+            .collect()
     }
 }
 
