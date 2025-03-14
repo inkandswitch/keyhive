@@ -376,9 +376,8 @@ impl Network {
         let peer_id = PeerId::from(signing_key.verifying_key());
         test_utils::add_rewrite(peer_id.to_string(), nickname);
         let mut step = beelay_core::Beelay::load(
-            rand::thread_rng(),
+            beelay_core::Config::new(rand::thread_rng(), signing_key.verifying_key()),
             UnixTimestampMillis::now(),
-            signing_key.verifying_key(),
         );
         let mut completed_tasks = Vec::new();
         let beelay = loop {

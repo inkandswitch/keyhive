@@ -42,6 +42,8 @@ use serialization::parse;
 use tracing::Instrument;
 
 mod blob;
+mod config;
+pub use config::Config;
 mod driver;
 pub use blob::BlobHash;
 mod doc_state;
@@ -118,17 +120,17 @@ pub struct Beelay<R: rand::Rng + rand::CryptoRng> {
 unsafe impl<R: rand::Rng + rand::CryptoRng> Send for Beelay<R> {}
 
 impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
-    pub fn load(rng: R, now: UnixTimestampMillis, verifying_key: VerifyingKey) -> loading::Step<R> {
+    pub fn load(config: config::Config<R>, now: UnixTimestampMillis) -> loading::Step<R> {
         let (tx_load_complete, rx_load_complete) = oneshot::channel();
-        let local_peer_id = PeerId::from(verifying_key.clone());
+        let local_peer_id = PeerId::from(config.verifying_key.clone());
         let run_span = tracing::info_span!("run", %local_peer_id);
-        let driver = driver::Driver::start(rng, now, |spawn_args| {
+        let driver = driver::Driver::start(config.rng, now, |spawn_args| {
             driver::run(driver::DriveBeelayArgs {
                 rng: spawn_args.rng,
                 now: spawn_args.now,
                 rx_commands: spawn_args.rx_commands,
                 tx_driver_events: spawn_args.tx_driver_events,
-                verifying_key,
+                verifying_key: config.verifying_key,
                 load_complete: tx_load_complete,
             })
             .instrument(run_span)
