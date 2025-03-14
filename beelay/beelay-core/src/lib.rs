@@ -130,6 +130,8 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
                 now: spawn_args.now,
                 rx_commands: spawn_args.rx_commands,
                 tx_driver_events: spawn_args.tx_driver_events,
+                rx_tick: spawn_args.rx_tick,
+
                 verifying_key: config.verifying_key,
                 load_complete: tx_load_complete,
             })
@@ -171,6 +173,9 @@ impl<R: rand::Rng + rand::CryptoRng> Beelay<R> {
             }
             EventInner::BeginCommand(command_id, command) => {
                 self.driver.dispatch_command(command_id, command);
+            }
+            EventInner::Tick => {
+                self.driver.tick();
             }
         };
 

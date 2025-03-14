@@ -241,6 +241,10 @@ impl Event {
         ));
         (command_id, event)
     }
+
+    pub fn tick() -> Event {
+        Event(EventInner::Tick)
+    }
 }
 
 #[derive(Debug)]
@@ -248,4 +252,5 @@ pub(super) enum EventInner {
     IoComplete(io::IoResult),
     HandleResponse(OutboundRequestId, InnerRpcResponse),
     BeginCommand(CommandId, Command),
+    Tick,
 }

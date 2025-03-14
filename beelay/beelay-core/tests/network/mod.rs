@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::{
+    collections::{BTreeMap, HashMap, VecDeque},
+    time::Duration,
+};
 
 use beelay_core::{
     io::{IoAction, IoResult},
@@ -333,6 +336,13 @@ impl BeelayHandle<'_> {
             None => panic!("no command result"),
         }
     }
+
+    pub fn advance_time(&mut self, duration: Duration) {
+        let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
+        beelay.now += duration;
+        beelay.inbox.push_back(Event::tick());
+        self.network.run_until_quiescent();
+    }
 }
 
 pub struct Network {
@@ -548,6 +558,7 @@ pub struct BeelayWrapper<R: rand::Rng + rand::CryptoRng> {
     streams: HashMap<beelay_core::StreamId, beelay_core::PeerId>,
     starting_streams: HashMap<beelay_core::CommandId, beelay_core::PeerId>,
     shutdown: bool,
+    now: UnixTimestampMillis,
 }
 
 impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> BeelayWrapper<R> {
@@ -567,6 +578,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> BeelayWrapper<R> {
             streams: HashMap::new(),
             starting_streams: HashMap::new(),
             shutdown: false,
+            now: UnixTimestampMillis::now(),
         }
     }
 
@@ -594,10 +606,8 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> BeelayWrapper<R> {
             return;
         }
         while let Some(event) = self.inbox.pop_front() {
-            let results = self
-                .core
-                .handle_event(beelay_core::UnixTimestampMillis::now(), event)
-                .unwrap();
+            self.now += Duration::from_millis(10);
+            let results = self.core.handle_event(self.now, event).unwrap();
             for task in results.new_tasks.into_iter() {
                 let event = self.handle_task(task);
                 self.inbox.push_back(event);
