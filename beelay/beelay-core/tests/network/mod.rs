@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use beelay_core::{
     io::{IoAction, IoResult},
     keyhive::{KeyhiveCommandResult, KeyhiveEntityId, MemberAccess},
-    BundleSpec, CommitHash, CommitOrBundle, DocumentId, Event, PeerId, UnixTimestamp,
+    BundleSpec, CommitHash, CommitOrBundle, DocumentId, Event, PeerId, UnixTimestampMillis,
 };
 use ed25519_dalek::SigningKey;
 use keyhive_core::contact_card::ContactCard;
@@ -377,7 +377,7 @@ impl Network {
         test_utils::add_rewrite(peer_id.to_string(), nickname);
         let mut step = beelay_core::Beelay::load(
             rand::thread_rng(),
-            UnixTimestamp::now(),
+            UnixTimestampMillis::now(),
             signing_key.verifying_key(),
         );
         let mut completed_tasks = Vec::new();
@@ -389,7 +389,7 @@ impl Network {
                         completed_tasks.push(result);
                     }
                     if let Some(task_result) = completed_tasks.pop() {
-                        step = loading.handle_io_complete(UnixTimestamp::now(), task_result);
+                        step = loading.handle_io_complete(UnixTimestampMillis::now(), task_result);
                         continue;
                     } else {
                         panic!("no tasks completed but still loading");
@@ -596,7 +596,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> BeelayWrapper<R> {
         while let Some(event) = self.inbox.pop_front() {
             let results = self
                 .core
-                .handle_event(beelay_core::UnixTimestamp::now(), event)
+                .handle_event(beelay_core::UnixTimestampMillis::now(), event)
                 .unwrap();
             for task in results.new_tasks.into_iter() {
                 let event = self.handle_task(task);

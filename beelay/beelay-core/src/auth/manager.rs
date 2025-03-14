@@ -1,13 +1,12 @@
 use keyhive_core::crypto::verifiable::Verifiable;
 
-use crate::{Signer, TaskContext};
+use crate::{Signer, TaskContext, UnixTimestamp};
 
 use super::{
     audience::Audience,
     message::{Message, MessageValidationError},
     offset_seconds::OffsetSeconds,
     signed::Signed,
-    unix_timestamp::UnixTimestamp,
 };
 use std::{collections::HashMap, future::Future, time::Duration};
 

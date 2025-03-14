@@ -30,7 +30,7 @@
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-pub use auth::{audience::Audience, unix_timestamp::UnixTimestamp};
+pub use auth::audience::Audience;
 mod sync_loops;
 use commands::Command;
 use ed25519_dalek::VerifyingKey;
@@ -60,6 +60,8 @@ mod sedimentree;
 mod state;
 mod task_context;
 use task_context::TaskContext;
+mod unix_timestamp;
+pub use unix_timestamp::{UnixTimestamp, UnixTimestampMillis};
 
 mod peer_id;
 pub use peer_id::PeerId;
@@ -116,7 +118,7 @@ pub struct Beelay<R: rand::Rng + rand::CryptoRng> {
 unsafe impl<R: rand::Rng + rand::CryptoRng> Send for Beelay<R> {}
 
 impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
-    pub fn load(rng: R, now: UnixTimestamp, verifying_key: VerifyingKey) -> loading::Step<R> {
+    pub fn load(rng: R, now: UnixTimestampMillis, verifying_key: VerifyingKey) -> loading::Step<R> {
         let (tx_load_complete, rx_load_complete) = oneshot::channel();
         let local_peer_id = PeerId::from(verifying_key.clone());
         let run_span = tracing::info_span!("run", %local_peer_id);
@@ -154,7 +156,7 @@ impl<R: rand::Rng + rand::CryptoRng> Beelay<R> {
     #[tracing::instrument(skip(self, event), fields(local_peer=%self.peer_id))]
     pub fn handle_event(
         &mut self,
-        now: UnixTimestamp,
+        now: UnixTimestampMillis,
         event: Event,
     ) -> Result<EventResults, Stopped> {
         match event.0 {

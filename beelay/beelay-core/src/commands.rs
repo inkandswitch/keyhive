@@ -88,7 +88,7 @@ where
                 Ok(r) => InnerRpcResponse::Response(Box::new(
                     ctx.state()
                         .auth()
-                        .sign_message(ctx.now(), r.audience, r.response)
+                        .sign_message(ctx.now().as_secs(), r.audience, r.response)
                         .await,
                 )),
                 Err(_) => InnerRpcResponse::AuthFailed,

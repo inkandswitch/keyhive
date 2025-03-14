@@ -15,7 +15,7 @@ use crate::{
     state::StateAccessor,
     streams,
     sync::{server_session::MakeSymbols, SessionId},
-    CommitHash, DocumentId, OutboundRequestId, SignedMessage, UnixTimestamp,
+    CommitHash, DocumentId, OutboundRequestId, SignedMessage, UnixTimestampMillis,
 };
 
 use self::messages::FetchedSedimentree;
@@ -25,7 +25,7 @@ use super::JobFuture;
 pub(crate) struct Requests<'a, R: rand::Rng + rand::CryptoRng> {
     pub(super) state: StateAccessor<'a, R>,
     pub(super) io_handle: &'a crate::io::IoHandle,
-    pub(super) now: &'a Rc<RefCell<UnixTimestamp>>,
+    pub(super) now: &'a Rc<RefCell<UnixTimestampMillis>>,
 }
 
 impl<'a, R> Requests<'a, R>
@@ -35,7 +35,7 @@ where
     pub(crate) fn new(
         state: StateAccessor<'a, R>,
         io_handle: &'a crate::io::IoHandle,
-        now: &'a Rc<RefCell<UnixTimestamp>>,
+        now: &'a Rc<RefCell<UnixTimestampMillis>>,
     ) -> Self {
         Self {
             state,
@@ -303,7 +303,7 @@ where
                         state.endpoints().audience_of(endpoint_id).expect("FIXME");
                     let authed = state
                         .auth()
-                        .sign_message(now, endpoint_audience, request)
+                        .sign_message(now.as_secs(), endpoint_audience, request)
                         .await;
 
                     let req_id = OutboundRequestId::new();
@@ -345,7 +345,7 @@ where
                 }
                 InnerRpcResponse::Response(resp) => {
                     let resp = state.auth().authenticate_received_msg::<Response>(
-                        now.borrow().clone(),
+                        now.borrow().as_secs(),
                         *resp,
                         None,
                     );

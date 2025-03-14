@@ -19,18 +19,18 @@ use crate::{
     state::State,
     streams::{self, IncomingStreamEvent},
     sync_loops, Command, CommandId, CommandResult, DocumentId, EndpointId, EventResults, IoTaskId,
-    NewRequest, OutboundRequestId, Signer, TaskContext, UnixTimestamp,
+    NewRequest, OutboundRequestId, Signer, TaskContext, UnixTimestampMillis,
 };
 
 pub struct SpawnArgs<R> {
-    pub(crate) now: Rc<RefCell<UnixTimestamp>>,
+    pub(crate) now: Rc<RefCell<UnixTimestampMillis>>,
     pub(crate) rng: R,
     pub(crate) rx_commands: mpsc::UnboundedReceiver<(CommandId, Command)>,
     pub(crate) tx_driver_events: mpsc::UnboundedSender<DriverEvent>,
 }
 
 pub(crate) struct Driver {
-    now: Rc<RefCell<UnixTimestamp>>,
+    now: Rc<RefCell<UnixTimestampMillis>>,
     io_tasks: HashMap<IoTaskId, oneshot::Sender<IoResult>>,
     endpoint_requests: HashMap<OutboundRequestId, oneshot::Sender<network::InnerRpcResponse>>,
     rx_driver_events: mpsc::UnboundedReceiver<DriverEvent>,
@@ -39,7 +39,7 @@ pub(crate) struct Driver {
 }
 
 impl Driver {
-    pub(crate) fn start<R, F, Fut>(rng: R, now: UnixTimestamp, f: F) -> Self
+    pub(crate) fn start<R, F, Fut>(rng: R, now: UnixTimestampMillis, f: F) -> Self
     where
         F: FnOnce(SpawnArgs<R>) -> Fut,
         Fut: Future<Output = ()> + 'static,
@@ -92,7 +92,7 @@ impl Driver {
         let _ = self.tx_commands.unbounded_send((command_id, command));
     }
 
-    pub(crate) fn step(&mut self, now: UnixTimestamp) -> EventResults {
+    pub(crate) fn step(&mut self, now: UnixTimestampMillis) -> EventResults {
         *self.now.borrow_mut() = now;
         self.executor.run_until_stalled();
 
@@ -143,7 +143,7 @@ impl Driver {
 
 pub(crate) struct DriveBeelayArgs<R: rand::Rng + rand::CryptoRng + Clone + 'static> {
     pub(crate) rng: R,
-    pub(crate) now: Rc<RefCell<UnixTimestamp>>,
+    pub(crate) now: Rc<RefCell<UnixTimestampMillis>>,
     pub(crate) rx_commands: mpsc::UnboundedReceiver<(CommandId, Command)>,
     pub(crate) tx_driver_events: mpsc::UnboundedSender<DriverEvent>,
     pub(crate) verifying_key: VerifyingKey,

@@ -10,7 +10,7 @@ use crate::io::{IoHandle, IoResult};
 use crate::state::State;
 use crate::task_context::Storage;
 use crate::{driver, DocumentId, PeerId, Signer};
-use crate::{io::IoTask, task_context::DocStorage, Beelay, StorageKey, UnixTimestamp};
+use crate::{io::IoTask, task_context::DocStorage, Beelay, StorageKey, UnixTimestampMillis};
 
 pub struct Loading<R: rand::Rng + rand::CryptoRng + Clone + 'static> {
     driver: driver::Driver,
@@ -29,7 +29,7 @@ pub enum Step<R: rand::Rng + rand::CryptoRng + Clone + 'static> {
 
 impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Loading<R> {
     pub(crate) fn new(
-        now: UnixTimestamp,
+        now: UnixTimestampMillis,
         driver: driver::Driver,
         rx_loaded: oneshot::Receiver<LoadedParts<R>>,
     ) -> Step<R> {
@@ -40,7 +40,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Loading<R> {
         loading.step(now)
     }
 
-    fn step(mut self, now: UnixTimestamp) -> Step<R> {
+    fn step(mut self, now: UnixTimestampMillis) -> Step<R> {
         let new_events = self.driver.step(now);
         if let Ok(Some(parts)) = self.result.try_recv() {
             Step::Loaded(Beelay::loaded(parts, self.driver), new_events.new_tasks)
@@ -49,7 +49,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Loading<R> {
         }
     }
 
-    pub fn handle_io_complete(mut self, now: UnixTimestamp, result: IoResult) -> Step<R> {
+    pub fn handle_io_complete(mut self, now: UnixTimestampMillis, result: IoResult) -> Step<R> {
         self.driver.handle_io_complete(result);
         self.step(now)
     }
