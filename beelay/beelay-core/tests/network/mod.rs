@@ -357,19 +357,19 @@ impl Network {
     }
 
     #[allow(dead_code)]
-    pub fn create_peer(&mut self, nickname: &str) -> PeerId {
-        let signing_key = SigningKey::generate(&mut rand::thread_rng());
-        self.load_peer(nickname, BTreeMap::new(), signing_key)
-    }
-
-    #[allow(dead_code)]
-    pub fn create_peer_with_key(&mut self, nickname: &str, signing_key: SigningKey) -> PeerId {
-        self.load_peer(nickname, BTreeMap::new(), signing_key)
+    pub fn create_peer(&mut self, nickname: &'static str) -> PeerBuilder {
+        PeerBuilder {
+            network: self,
+            storage: BTreeMap::new(),
+            nickname,
+            signing_key: SigningKey::generate(&mut rand::thread_rng()),
+        }
     }
 
     pub(crate) fn load_peer(
         &mut self,
         nickname: &str,
+        config: beelay_core::Config<rand::rngs::ThreadRng>,
         mut storage: BTreeMap<beelay_core::StorageKey, Vec<u8>>,
         mut signing_key: SigningKey,
     ) -> PeerId {
@@ -379,6 +379,7 @@ impl Network {
             beelay_core::Config::new(rand::thread_rng(), signing_key.verifying_key()),
             UnixTimestampMillis::now(),
         );
+        let mut step = beelay_core::Beelay::load(config, UnixTimestampMillis::now());
         let mut completed_tasks = Vec::new();
         let beelay = loop {
             match step {
@@ -723,4 +724,29 @@ pub struct ConnectedPair {
     pub left_to_right: beelay_core::StreamId,
     #[allow(dead_code)]
     pub right_to_left: beelay_core::StreamId,
+}
+
+pub struct PeerBuilder<'a> {
+    network: &'a mut Network,
+    nickname: &'static str,
+    signing_key: SigningKey,
+    storage: BTreeMap<beelay_core::StorageKey, Vec<u8>>,
+}
+
+impl<'a> PeerBuilder<'a> {
+    pub fn signing_key(mut self, key: SigningKey) -> Self {
+        self.signing_key = key;
+        self
+    }
+
+    pub fn storage(mut self, storage: BTreeMap<beelay_core::StorageKey, Vec<u8>>) -> Self {
+        self.storage = storage;
+        self
+    }
+
+    pub fn build(self) -> PeerId {
+        let config = beelay_core::Config::new(rand::thread_rng(), self.signing_key.verifying_key());
+        self.network
+            .load_peer(self.nickname, config, self.storage, self.signing_key)
+    }
 }
