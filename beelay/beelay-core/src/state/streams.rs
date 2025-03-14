@@ -1,6 +1,9 @@
 use std::{borrow::Cow, cell::RefCell, collections::HashSet, rc::Rc};
 
-use crate::{streams::CompletedHandshake, StreamDirection, StreamError, StreamId};
+use crate::{
+    streams::{CompletedHandshake, EstablishedStream},
+    StreamDirection, StreamError, StreamId, UnixTimestampMillis,
+};
 
 pub(crate) struct Streams<'a, R: rand::Rng + rand::CryptoRng> {
     pub(super) state: Cow<'a, Rc<RefCell<super::State<R>>>>,
@@ -36,7 +39,21 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Streams<'a, R> {
             .mark_handshake_complete(stream_id, handshake);
     }
 
-    pub(crate) fn established(&self) -> HashSet<(StreamId, CompletedHandshake)> {
+    pub(crate) fn established(&self) -> Vec<EstablishedStream> {
         self.state.borrow().streams.established().collect()
+    }
+
+    pub(crate) fn mark_sync_started(&mut self, now: UnixTimestampMillis, stream_id: StreamId) {
+        self.state
+            .borrow_mut()
+            .streams
+            .mark_sync_started(now, stream_id);
+    }
+
+    pub(crate) fn mark_sync_complete(&mut self, now: UnixTimestampMillis, stream_id: StreamId) {
+        self.state
+            .borrow_mut()
+            .streams
+            .mark_sync_complete(now, stream_id);
     }
 }

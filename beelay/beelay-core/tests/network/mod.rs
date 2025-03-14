@@ -4,9 +4,11 @@ use std::{
 };
 
 use beelay_core::{
+    conn_info,
     io::{IoAction, IoResult},
     keyhive::{KeyhiveCommandResult, KeyhiveEntityId, MemberAccess},
-    BundleSpec, CommitHash, CommitOrBundle, DocumentId, Event, PeerId, UnixTimestampMillis,
+    BundleSpec, CommitHash, CommitOrBundle, DocumentId, Event, PeerId, StreamId,
+    UnixTimestampMillis,
 };
 use ed25519_dalek::SigningKey;
 use keyhive_core::contact_card::ContactCard;
@@ -348,6 +350,11 @@ impl BeelayHandle<'_> {
         beelay.inbox.push_back(Event::tick());
         self.network.run_until_quiescent();
     }
+
+    pub fn conn_info(&mut self) -> HashMap<StreamId, conn_info::ConnectionInfo> {
+        let beelay = self.network.beelays.get(&self.peer_id).unwrap();
+        beelay.core.connection_info()
+    }
 }
 
 pub struct Network {
@@ -522,6 +529,14 @@ impl Network {
                 }
             }
         }
+    }
+
+    pub fn advance_time(&mut self, duration: Duration) {
+        for (_, beelay) in self.beelays.iter_mut() {
+            beelay.now += duration;
+            beelay.inbox.push_back(Event::tick());
+        }
+        self.run_until_quiescent();
     }
 }
 

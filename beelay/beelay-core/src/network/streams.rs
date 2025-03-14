@@ -12,7 +12,7 @@ pub(crate) use run_streams::{run_streams, IncomingStreamEvent};
 
 use crate::{
     network::{messages::Request, InnerRpcResponse},
-    Audience, OutboundRequestId, PeerId, TaskContext,
+    Audience, OutboundRequestId, PeerId, TaskContext, UnixTimestampMillis,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -62,6 +62,14 @@ pub(crate) struct Streams {
 
 struct StreamMeta {
     handshake: Option<CompletedHandshake>,
+    sync_phase: SyncPhase,
+}
+
+pub(crate) struct EstablishedStream {
+    pub(crate) id: StreamId,
+    pub(crate) their_peer_id: PeerId,
+    pub(crate) direction: ResolvedDirection,
+    pub(crate) sync_phase: SyncPhase,
 }
 
 impl Streams {
@@ -74,23 +82,31 @@ impl Streams {
     pub(crate) fn new_stream(&mut self, stream_direction: StreamDirection) -> StreamId {
         let stream_id = StreamId::new();
         tracing::debug!(?stream_id, ?stream_direction, "creating new stream");
-        self.streams
-            .insert(stream_id, StreamMeta { handshake: None });
+        self.streams.insert(
+            stream_id,
+            StreamMeta {
+                handshake: None,
+                sync_phase: SyncPhase::Listening {
+                    last_synced_at: None,
+                },
+            },
+        );
         stream_id
     }
 
-    pub(crate) fn established(&self) -> impl Iterator<Item = (StreamId, CompletedHandshake)> + '_ {
-        self.streams
-            .iter()
-            .filter_map(|(id, meta)| meta.handshake.clone().map(|hs| (*id, hs)))
+    pub(crate) fn established(&self) -> impl Iterator<Item = EstablishedStream> + '_ {
+        self.streams.iter().filter_map(|(id, meta)| {
+            meta.handshake.clone().map(|hs| EstablishedStream {
+                id: *id,
+                their_peer_id: hs.their_peer_id,
+                direction: hs.resolved_direction,
+                sync_phase: meta.sync_phase,
+            })
+        })
     }
 
     pub(crate) fn remove(&mut self, stream: StreamId) {
         self.streams.remove(&stream);
-    }
-
-    pub(crate) fn add(&mut self, stream: StreamId) {
-        self.streams.insert(stream, StreamMeta { handshake: None });
     }
 
     pub(crate) fn mark_handshake_complete(
@@ -108,14 +124,28 @@ impl Streams {
         }
     }
 
-    pub(crate) fn audience_of(&self, stream_id: StreamId) -> Option<Audience> {
-        tracing::trace!(?stream_id, streams=?self.streams.keys().collect::<Vec<_>>(), "checking audience");
-        if let Some(stream) = self.streams.get(&stream_id) {
-            if let Some(CompletedHandshake { their_peer_id, .. }) = stream.handshake.as_ref() {
-                return Audience::peer(their_peer_id).into();
-            }
+    pub(crate) fn mark_sync_started(&mut self, now: UnixTimestampMillis, stream_id: StreamId) {
+        if let Some(meta) = self.streams.get_mut(&stream_id) {
+            meta.sync_phase = SyncPhase::Syncing { started_at: now };
+        } else {
+            tracing::warn!(
+                ?stream_id,
+                "attempted to mark nonexistent stream as sync started"
+            );
         }
-        return None;
+    }
+
+    pub(crate) fn mark_sync_complete(&mut self, now: UnixTimestampMillis, stream_id: StreamId) {
+        if let Some(meta) = self.streams.get_mut(&stream_id) {
+            meta.sync_phase = SyncPhase::Listening {
+                last_synced_at: Some(now),
+            };
+        } else {
+            tracing::warn!(
+                ?stream_id,
+                "attempted to mark nonexistent stream as sync complete"
+            );
+        }
     }
 }
 
@@ -138,6 +168,16 @@ pub(crate) struct CompletedHandshake {
 pub(crate) enum ResolvedDirection {
     Connecting,
     Accepting,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum SyncPhase {
+    Listening {
+        last_synced_at: Option<UnixTimestampMillis>,
+    },
+    Syncing {
+        started_at: UnixTimestampMillis,
+    },
 }
 
 pub(crate) mod error {
@@ -182,6 +222,4 @@ pub(crate) mod error {
             }
         }
     }
-
-    impl std::error::Error for EncodeResponse {}
 }
