@@ -322,7 +322,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> StreamToRun<R> {
                         }
                         tracing::debug!(?req, remote_peer=%connection.their_peer_id(), "sending outbound request");
                         let signed = ctx.state().auth().sign_message(
-                            ctx.now(),
+                            ctx.now().as_secs(),
                             crate::Audience::peer(&connection.their_peer_id()),
                             req,
                         ).await; //TODO: Move this future into a FuturesUnordered so we don't block everything evry time we sign
@@ -340,7 +340,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> StreamToRun<R> {
                         let response = match resp {
                             Ok(r) => {
                                 let signed = ctx.state().auth().sign_message(
-                                    ctx.now(),
+                                    ctx.now().as_secs(),
                                     crate::Audience::peer(&connection.their_peer_id()),
                                     r.response,
                                 ).await; // TODO: move this future into a FuturesUnordered so we don't block everything evry time we sign

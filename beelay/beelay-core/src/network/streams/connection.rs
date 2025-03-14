@@ -69,7 +69,7 @@ impl<R: rand::Rng + rand::CryptoRng> AuthCtx for TaskContext<R> {
     {
         self.state()
             .auth()
-            .authenticate_received_msg(self.now(), msg, receive_audience)
+            .authenticate_received_msg(self.now().as_secs(), msg, receive_audience)
     }
 
     async fn sign_message<T>(
@@ -82,18 +82,18 @@ impl<R: rand::Rng + rand::CryptoRng> AuthCtx for TaskContext<R> {
     {
         self.state()
             .auth()
-            .sign_message(self.now(), audience, msg)
+            .sign_message(self.now().as_secs(), audience, msg)
             .await
     }
 
     fn update_offset(&self, remote_audience: Audience, their_clock: UnixTimestamp) {
         self.state()
             .auth()
-            .update_offset(self.now(), remote_audience, their_clock)
+            .update_offset(self.now().as_secs(), remote_audience, their_clock)
     }
 
     fn now(&self) -> UnixTimestamp {
-        self.now()
+        self.now().as_secs()
     }
 
     fn our_peer_id(&self) -> crate::PeerId {

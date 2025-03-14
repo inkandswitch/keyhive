@@ -1,6 +1,9 @@
-use crate::serialization::{parse, Encode, Parse};
+use crate::{
+    serialization::{parse, Encode, Parse},
+    UnixTimestamp,
+};
 
-use super::{audience::Audience, offset_seconds::OffsetSeconds, unix_timestamp::UnixTimestamp};
+use super::{audience::Audience, offset_seconds::OffsetSeconds};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

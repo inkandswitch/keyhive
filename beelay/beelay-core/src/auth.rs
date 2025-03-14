@@ -7,7 +7,6 @@ pub(crate) use message::Message;
 pub mod offset_seconds;
 pub mod signed;
 pub(crate) use signed::Signed;
-pub mod unix_timestamp;
 
 #[derive(Debug)]
 pub(crate) struct Authenticated<T> {

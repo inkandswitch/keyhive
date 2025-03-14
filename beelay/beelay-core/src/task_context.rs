@@ -1,6 +1,6 @@
 use std::{cell::RefCell, future::Future, rc::Rc};
 
-use crate::{state::State, UnixTimestamp};
+use crate::{state::State, UnixTimestampMillis};
 
 mod requests;
 pub(crate) use requests::Requests;
@@ -11,7 +11,7 @@ mod job_future;
 pub(crate) use job_future::JobFuture;
 
 pub(crate) struct TaskContext<R: rand::Rng + rand::CryptoRng> {
-    now: Rc<RefCell<UnixTimestamp>>,
+    now: Rc<RefCell<UnixTimestampMillis>>,
     state: Rc<RefCell<State<R>>>,
     io_handle: crate::io::IoHandle,
     stopper: crate::stopper::Stopper,
@@ -30,7 +30,7 @@ impl<R: rand::Rng + rand::CryptoRng> std::clone::Clone for TaskContext<R> {
 
 impl<R: rand::Rng + rand::CryptoRng> TaskContext<R> {
     pub(crate) fn new(
-        now: Rc<RefCell<UnixTimestamp>>,
+        now: Rc<RefCell<UnixTimestampMillis>>,
         state: Rc<RefCell<State<R>>>,
         io_handle: crate::io::IoHandle,
         stopper: crate::stopper::Stopper,
@@ -43,7 +43,7 @@ impl<R: rand::Rng + rand::CryptoRng> TaskContext<R> {
         }
     }
 
-    pub(crate) fn now(&self) -> UnixTimestamp {
+    pub(crate) fn now(&self) -> UnixTimestampMillis {
         self.now.borrow().clone()
     }
 

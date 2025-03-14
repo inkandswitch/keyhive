@@ -27,7 +27,7 @@ where
         match ctx
             .state()
             .auth()
-            .authenticate_received_msg(ctx.now(), request, recv_aud)
+            .authenticate_received_msg(ctx.now().as_secs(), request, recv_aud)
         {
             Ok(authed) => (authed.content, PeerId::from(authed.from)),
             Err(e) => {
