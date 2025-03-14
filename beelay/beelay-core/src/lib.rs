@@ -36,9 +36,7 @@ use commands::Command;
 use ed25519_dalek::VerifyingKey;
 use futures::channel::oneshot;
 use io::Signer;
-use keyhive_core::{
-    contact_card::ContactCard, crypto::verifiable::Verifiable, principal::public::Public,
-};
+use keyhive_core::contact_card::ContactCard;
 use network::messages::{Request, Response};
 use serialization::parse;
 use tracing::Instrument;
@@ -155,10 +153,6 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
 
     pub fn peer_id(&self) -> PeerId {
         self.peer_id
-    }
-
-    pub fn public_peer_id(&self) -> PeerId {
-        Public.id().verifying_key().into()
     }
 
     pub fn contact_card(&self) -> &ContactCard {

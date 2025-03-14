@@ -13,7 +13,7 @@ use keyhive_core::{
     event::{static_event::StaticEvent, Event},
     principal::{
         document::id::DocumentId as KeyhiveDocumentId, group::RevokeMemberError,
-        identifier::Identifier, individual::Individual, membered::Membered, public::Public,
+        identifier::Identifier, individual::Individual, membered::Membered,
     },
 };
 use nonempty::NonEmpty;
@@ -54,13 +54,6 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         {
             let transitive = doc.borrow().transitive_members();
             if transitive
-                .get(&Public.id())
-                .map(|(_, a)| a >= &access)
-                .unwrap_or(false)
-            {
-                tracing::trace!("access granted because public access is allowed");
-                return true;
-            } else if transitive
                 .get(&peer_id.as_key().into())
                 .map(|(_, a)| a >= &access)
                 .unwrap_or(false)
@@ -262,48 +255,6 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         } else {
             panic!()
         }
-    }
-
-    /// Get the behive ops which we think the other end should have
-    pub(crate) async fn keyhive_ops(
-        &self,
-        for_sync_with_peer: ed25519_dalek::VerifyingKey,
-        additional_peers_to_send: Vec<keyhive_core::principal::identifier::Identifier>,
-    ) -> HashMap<Digest<StaticEvent<CommitHash>>, StaticEvent<CommitHash>> {
-        let k_mutex = self.0.borrow().keyhive.clone();
-        let keyhive = k_mutex.lock().await;
-
-        let mut events = keyhive
-            .events_for_agent(&Public.individual().into())
-            .expect("FIXME");
-
-        if let Some(peer_ops) = keyhive
-            .get_agent(for_sync_with_peer.into())
-            .map(|agent| keyhive.events_for_agent(&agent).expect("FIXME"))
-        {
-            events.extend(peer_ops);
-        }
-        if let Some(public_ops) = keyhive
-            .get_agent(Public.id().into())
-            .map(|agent| keyhive.events_for_agent(&agent).expect("FIXME"))
-        {
-            events.extend(public_ops)
-        }
-        for peer in additional_peers_to_send {
-            if let Some(peer_ops) = keyhive
-                .get_agent(peer)
-                .map(|agent| keyhive.events_for_agent(&agent).expect("FIXME"))
-            {
-                events.extend(peer_ops);
-            }
-        }
-        events
-            .into_values()
-            .map(|e| {
-                let e = StaticEvent::from(e);
-                (Digest::hash(&e), e)
-            })
-            .collect()
     }
 
     pub(crate) async fn create_keyhive_doc(
