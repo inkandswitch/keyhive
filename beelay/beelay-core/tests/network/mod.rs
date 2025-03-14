@@ -24,7 +24,7 @@ impl BeelayHandle<'_> {
     #[allow(dead_code)]
     pub fn create_doc(
         &mut self,
-        other_owners: Vec<ContactCard>,
+        other_owners: Vec<KeyhiveEntityId>,
     ) -> Result<(DocumentId, beelay_core::Commit), beelay_core::error::Create> {
         self.create_doc_with_contents(vec![9, 9, 9, 8, 8, 8], other_owners)
     }
@@ -33,7 +33,7 @@ impl BeelayHandle<'_> {
     pub fn create_doc_with_contents(
         &mut self,
         content: Vec<u8>,
-        other_owners: Vec<ContactCard>,
+        other_owners: Vec<KeyhiveEntityId>,
     ) -> Result<(DocumentId, beelay_core::Commit), beelay_core::error::Create> {
         let hash = CommitHash::from(blake3::hash(&content).as_bytes());
         let initial_commit = beelay_core::Commit::new(vec![], content, hash);

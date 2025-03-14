@@ -15,6 +15,7 @@ use keyhive_core::{
         verifiable::Verifiable,
     },
     event::{static_event::StaticEvent, Event},
+    keyhive::Keyhive,
     principal::{
         document::id::DocumentId as KeyhiveDocumentId, group::RevokeMemberError,
         identifier::Identifier, individual::Individual, membered::Membered,
@@ -263,7 +264,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
 
     pub(crate) async fn create_keyhive_doc(
         &self,
-        other_owners: Vec<keyhive_core::contact_card::ContactCard>,
+        other_owners: Vec<KeyhiveEntityId>,
         initial_heads: NonEmpty<CommitHash>,
     ) -> DocumentId {
         let k_mutex = self.0.borrow().keyhive.clone();
@@ -271,11 +272,8 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
 
         let parents = other_owners
             .into_iter()
-            .map(|owner_contact_card| {
-                let indi = Rc::new(RefCell::new(Individual::from(owner_contact_card)));
-                keyhive.register_individual(indi.clone());
-                indi.into()
-            })
+            .filter_map(|parent| get_peer(&mut *keyhive, parent))
+            .map(|p| p.into())
             .collect();
         let doc = keyhive.generate_doc(parents, initial_heads).await.unwrap();
         let key = doc.borrow().doc_id().verifying_key();
@@ -288,13 +286,23 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
     ) -> Option<keyhive_core::principal::agent::Agent<Signer, CommitHash, crate::keyhive::Listener>>
     {
         let k_mutex = self.0.borrow().keyhive.clone();
-        let keyhive = k_mutex.lock().await;
+        let mut keyhive = k_mutex.lock().await;
 
-        let key = match agent_id {
-            KeyhiveEntityId::Doc(d) => d.as_key().into(),
-            KeyhiveEntityId::Peer(p) | KeyhiveEntityId::Group(p) => p.as_key().into(),
-        };
-        keyhive.get_agent(key)
+        match agent_id {
+            KeyhiveEntityId::Doc(d) => {
+                let id = d.as_key().into();
+                keyhive.get_agent(id)
+            }
+            KeyhiveEntityId::Group(d) => {
+                let id = d.as_key().into();
+                keyhive.get_agent(id)
+            }
+            KeyhiveEntityId::Individual(contact_card) => {
+                let indi = Rc::new(RefCell::new(Individual::from(contact_card)));
+                keyhive.register_individual(indi.clone());
+                Some(indi.into())
+            }
+        }
     }
 
     pub(crate) async fn has_doc(&self, doc: &DocumentId) -> bool {
@@ -336,13 +344,15 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         doc_id: DocumentId,
         peer: KeyhiveEntityId,
     ) -> Result<(), RevokeMemberError> {
-        let k_mutex = self.0.borrow().keyhive.clone();
-        let mut keyhive = k_mutex.lock().await;
-
-        let Some(agent) = keyhive.get_agent(peer.into()) else {
+        let Some(agent) = self.get_agent(peer).await else {
+            // Should we error out here?
             tracing::warn!("attempting to remove an agent we dont have");
             return Ok(());
         };
+
+        let k_mutex = self.0.borrow().keyhive.clone();
+        let mut keyhive = k_mutex.lock().await;
+
         if let Some(doc) =
             keyhive
                 .documents()
@@ -384,7 +394,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
                 .await
                 .unwrap();
         } else {
-            tracing::warn!("no such doc");
+            tracing::warn!("no such group");
         }
     }
 
@@ -693,6 +703,27 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         let mut keyhive = k_mutex.lock().await;
 
         keyhive.contact_card().await
+    }
+}
+
+fn get_peer<R: rand::Rng + rand::CryptoRng>(
+    keyhive: &mut Keyhive<Signer, CommitHash, crate::keyhive::Listener, R>,
+    agent_id: KeyhiveEntityId,
+) -> Option<keyhive_core::principal::peer::Peer<Signer, CommitHash, crate::keyhive::Listener>> {
+    match agent_id {
+        KeyhiveEntityId::Doc(d) => {
+            let id = d.as_key().into();
+            keyhive.get_peer(id)
+        }
+        KeyhiveEntityId::Group(d) => {
+            let id = d.as_key().into();
+            keyhive.get_peer(id)
+        }
+        KeyhiveEntityId::Individual(contact_card) => {
+            let indi = Rc::new(RefCell::new(Individual::from(contact_card)));
+            keyhive.register_individual(indi.clone());
+            Some(indi.into())
+        }
     }
 }
 

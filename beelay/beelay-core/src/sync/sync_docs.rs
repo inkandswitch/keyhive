@@ -10,15 +10,15 @@ use keyhive_core::{
 };
 
 use crate::{
-    network::messages::SessionResponse,
+    network::{messages::SessionResponse, PeerAddress},
     parse::{self, Parse},
     sedimentree::MinimalTreeHash,
     serialization::Encode,
     sync::server_session::MakeSymbols,
-    DocumentId, PeerId,
+    DocumentId, PeerId, TaskContext,
 };
 
-use super::{local_state::DocState, riblt, SessionId, SyncEffects};
+use super::{local_state::DocState, riblt, SessionId};
 
 #[derive(Debug)]
 pub(super) struct SyncDocsResult {
@@ -27,15 +27,13 @@ pub(super) struct SyncDocsResult {
     pub in_sync: HashSet<DocumentId>,
 }
 
-#[tracing::instrument(skip(effects, local_docs), fields(remote=%remote))]
-pub(super) async fn sync_docs<
-    R: rand::Rng + rand::CryptoRng + Clone + 'static,
-    E: SyncEffects<R>,
->(
-    effects: E,
+#[tracing::instrument(skip(ctx, local_docs), fields(remote=%remote))]
+pub(super) async fn sync_docs<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
+    ctx: TaskContext<R>,
     session: SessionId,
     local_docs: HashMap<DocumentId, DocState>,
     remote: PeerId,
+    target: PeerAddress,
 ) -> Result<SyncDocsResult, error::SyncDocs> {
     tracing::trace!(
         num_local_docs = local_docs.len(),
@@ -47,8 +45,9 @@ pub(super) async fn sync_docs<
     }
 
     let mut symbols = unpack_session_resp(
-        effects
-            .fetch_doc_symbols(
+        ctx.requests()
+            .fetch_doc_state_symbols(
+                target,
                 session,
                 MakeSymbols {
                     offset: 0,
@@ -73,8 +72,9 @@ pub(super) async fn sync_docs<
         offset += symbols.len();
         iterations += 1;
         symbols = unpack_session_resp(
-            effects
-                .fetch_doc_symbols(
+            ctx.requests()
+                .fetch_doc_state_symbols(
+                    target,
                     session,
                     MakeSymbols {
                         count: BATCH_SIZE,

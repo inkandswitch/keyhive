@@ -81,30 +81,38 @@ impl From<keyhive_core::access::Access> for MemberAccess {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Hash)]
 pub enum KeyhiveEntityId {
-    Peer(PeerId),
+    Individual(ContactCard),
     Group(PeerId),
     Doc(DocumentId),
-}
-
-impl From<KeyhiveEntityId> for keyhive_core::principal::identifier::Identifier {
-    fn from(id: KeyhiveEntityId) -> Self {
-        match id {
-            KeyhiveEntityId::Peer(peer_id) => peer_id.as_key().into(),
-            KeyhiveEntityId::Group(group_id) => group_id.as_key().into(),
-            KeyhiveEntityId::Doc(doc_id) => doc_id.as_key().into(),
-        }
-    }
 }
 
 impl std::fmt::Display for KeyhiveEntityId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            KeyhiveEntityId::Peer(peer_id) => write!(f, "peer:{}", peer_id),
+            KeyhiveEntityId::Individual(peer_id) => write!(f, "peer:{}", peer_id),
             KeyhiveEntityId::Group(group_id) => write!(f, "group:{}", group_id),
             KeyhiveEntityId::Doc(doc_id) => write!(f, "doc:{}", doc_id),
         }
+    }
+}
+
+impl From<ContactCard> for KeyhiveEntityId {
+    fn from(contact_card: ContactCard) -> Self {
+        KeyhiveEntityId::Individual(contact_card)
+    }
+}
+
+impl From<PeerId> for KeyhiveEntityId {
+    fn from(peer_id: PeerId) -> Self {
+        KeyhiveEntityId::Group(peer_id)
+    }
+}
+
+impl From<DocumentId> for KeyhiveEntityId {
+    fn from(doc_id: DocumentId) -> Self {
+        KeyhiveEntityId::Doc(doc_id)
     }
 }
 
@@ -207,10 +215,10 @@ pub struct AddMemberToGroup {
     pub access: MemberAccess,
 }
 
-#[tracing::instrument(skip(ctx, _add),fields(group_id=%group_id, member_id=%member))]
+#[tracing::instrument(skip(ctx),fields(group_id=%group_id, member_id=%member))]
 async fn add_member_to_group<R>(
     ctx: TaskContext<R>,
-    _add @ AddMemberToGroup {
+    AddMemberToGroup {
         group_id,
         member,
         access,
@@ -219,7 +227,7 @@ async fn add_member_to_group<R>(
 where
     R: rand::Rng + rand::CryptoRng + 'static,
 {
-    tracing::debug!("adding member to document");
+    tracing::debug!("adding member to group");
     if let Some(agent) = ctx.state().keyhive().get_agent(member).await {
         ctx.state()
             .keyhive()

@@ -3,7 +3,10 @@
 
 
 ## The big list
+* Split the loading of membership state and doc state over two phases so that the reachable documents are loaded after the membership ops have been synced
+* Bundle peer ID in with peer address
 
+* Introduce a GroupId type instead of using PeerId for the group id
 * Make sure we are incrementally saving ShareSecretKeys
 * Find a better name than `sync_loops`
 * Move change forwarding into it's own top level thing alongside the sync loop manager in run_inner
