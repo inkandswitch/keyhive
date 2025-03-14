@@ -14,7 +14,7 @@ fn sync_emits_local_notifications() {
     let mut network = Network::new();
     let peer1 = network.create_peer("peer1");
     let peer2 = network.create_peer("peer2");
-    let peer2_contact = network.beelay(&peer2).contact_card();
+    let peer2_contact = network.beelay(&peer2).contact_card().unwrap();
 
     // Now, create a document on left
     let (doc_id, initial_commit) = network
@@ -48,14 +48,14 @@ fn listen_emits_local_notifications() {
     let mut network = Network::new();
     let peer1 = network.create_peer("peer1");
     let peer2 = network.create_peer("peer2");
-    let peer2_contact_card = network.beelay(&peer2).contact_card();
+    let peer2_contact_card = network.beelay(&peer2).contact_card().unwrap();
 
     // Now, create a document on left
     let (doc_id, initial_commit) = network
         .beelay(&peer1)
         .create_doc(vec![peer2_contact_card])
         .unwrap();
-    let peer2_contact = network.beelay(&peer2).contact_card();
+    let peer2_contact = network.beelay(&peer2).contact_card().unwrap();
     network
         .beelay(&peer1)
         .add_member_to_doc(doc_id.clone(), peer2_contact, MemberAccess::Write);

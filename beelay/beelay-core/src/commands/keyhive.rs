@@ -11,6 +11,7 @@ use crate::{io::Signer, CommitHash, DocumentId, PeerId, TaskContext};
 #[derive(Debug)]
 pub enum KeyhiveCommand {
     CreateGroup,
+    CreateContactCard,
     AddMemberToGroup(AddMemberToGroup),
     RemoveMemberFromGroup(RemoveMemberFromGroup),
     AddMemberToDoc(DocumentId, ContactCard, MemberAccess),
@@ -23,6 +24,7 @@ pub enum KeyhiveCommand {
 #[derive(Debug)]
 pub enum KeyhiveCommandResult {
     CreateGroup(Result<PeerId, error::CreateGroup>),
+    CreateContactCard(Result<ContactCard, error::CreateContactCard>),
     AddMemberToGroup(Result<(), error::AddMember>),
     RemoveMemberFromGroup(Result<(), error::RemoveMember>),
     AddMemberToDoc,
@@ -153,6 +155,15 @@ where
             let result = ctx.state().keyhive().debug_events(nicknames).await;
             KeyhiveCommandResult::DebugEvents(result)
         }
+        KeyhiveCommand::CreateContactCard => {
+            let result = ctx
+                .state()
+                .keyhive()
+                .contact_card()
+                .await
+                .map_err(error::CreateContactCard::from);
+            KeyhiveCommandResult::CreateContactCard(result)
+        }
     }
 }
 
@@ -212,7 +223,8 @@ where
     if let Some(agent) = ctx.state().keyhive().get_agent(member).await {
         ctx.state()
             .keyhive()
-            .add_member_to_group(group_id, agent, access.into());
+            .add_member_to_group(group_id, agent, access.into())
+            .await;
         Ok(())
     } else {
         tracing::error!("member not found");
@@ -278,6 +290,16 @@ pub(crate) mod error {
     pub struct CreateGroup(String);
 
     impl From<keyhive_core::crypto::signed::SigningError> for CreateGroup {
+        fn from(e: keyhive_core::crypto::signed::SigningError) -> Self {
+            Self(e.to_string())
+        }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("error creating contact card: {0}")]
+    pub struct CreateContactCard(String);
+
+    impl From<keyhive_core::crypto::signed::SigningError> for CreateContactCard {
         fn from(e: keyhive_core::crypto::signed::SigningError) -> Self {
             Self(e.to_string())
         }

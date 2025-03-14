@@ -96,7 +96,6 @@ mod sync;
 pub struct Beelay<R: rand::Rng + rand::CryptoRng> {
     #[allow(dead_code)]
     state: Rc<RefCell<state::State<R>>>,
-    contact_card: ContactCard,
     peer_id: PeerId,
     driver: driver::Driver,
 }
@@ -136,16 +135,11 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
     }
 
     pub(crate) fn loaded(
-        loading::LoadedParts {
-            state,
-            peer_id,
-            contact_card,
-        }: loading::LoadedParts<R>,
+        loading::LoadedParts { state, peer_id }: loading::LoadedParts<R>,
         driver: driver::Driver,
     ) -> Beelay<R> {
         Beelay {
             state,
-            contact_card,
             peer_id,
             driver,
         }
@@ -153,10 +147,6 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
 
     pub fn peer_id(&self) -> PeerId {
         self.peer_id
-    }
-
-    pub fn contact_card(&self) -> &ContactCard {
-        &self.contact_card
     }
 }
 
@@ -215,7 +205,9 @@ pub struct NewRequest {
 pub mod error {
     pub use crate::commands::error::{AddCommits, Create};
     pub use crate::documents::error::{InvalidCommitHash, InvalidDocumentId};
-    pub use crate::keyhive::error::{AddMember, CreateGroup, QueryAccess, RemoveMember};
+    pub use crate::keyhive::error::{
+        AddMember, CreateContactCard, CreateGroup, QueryAccess, RemoveMember,
+    };
     use crate::network::RpcError;
     pub use crate::peer_id::error::InvalidPeerId;
 

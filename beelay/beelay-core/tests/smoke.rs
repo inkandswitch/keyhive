@@ -45,7 +45,7 @@ fn create_and_sync_via_stream() {
     let mut network = Network::new();
     let peer1 = network.create_peer("peer1");
     let peer2 = network.create_peer("peer2");
-    let peer2_contact = network.beelay(&peer2).contact_card();
+    let peer2_contact = network.beelay(&peer2).contact_card().unwrap();
 
     // First create the doc
     let (doc1_id, initial_commit) = network
@@ -131,7 +131,7 @@ fn changes_published_after_sync() {
 
     // First create the doc
     let (doc1_id, initial_commit) = network.beelay(&peer1).create_doc(vec![]).unwrap();
-    let peer2_contact = network.beelay(&peer2).contact_card();
+    let peer2_contact = network.beelay(&peer2).contact_card().unwrap();
     network
         .beelay(&peer1)
         .add_member_to_doc(doc1_id, peer2_contact, MemberAccess::Read);

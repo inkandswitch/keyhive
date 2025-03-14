@@ -3,7 +3,6 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use futures::channel::mpsc;
 use futures::channel::oneshot;
-use keyhive_core::contact_card::ContactCard;
 use keyhive_core::keyhive::Keyhive;
 
 use crate::doc_state::DocState;
@@ -21,7 +20,6 @@ pub struct Loading<R: rand::Rng + rand::CryptoRng + Clone + 'static> {
 pub(crate) struct LoadedParts<R: rand::Rng + rand::CryptoRng> {
     pub(crate) state: Rc<RefCell<State<R>>>,
     pub(crate) peer_id: PeerId,
-    pub(crate) contact_card: ContactCard,
 }
 
 pub enum Step<R: rand::Rng + rand::CryptoRng + Clone + 'static> {
