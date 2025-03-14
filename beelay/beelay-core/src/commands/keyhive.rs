@@ -16,6 +16,8 @@ pub enum KeyhiveCommand {
     AddMemberToDoc(DocumentId, ContactCard, MemberAccess),
     RemoveMemberFromDoc(DocumentId, KeyhiveEntityId),
     QueryAccess(DocumentId),
+    #[cfg(feature = "debug_events")]
+    DebugEvents(keyhive_core::debug_events::Nicknames),
 }
 
 #[derive(Debug)]
@@ -26,6 +28,8 @@ pub enum KeyhiveCommandResult {
     AddMemberToDoc,
     RemoveMemberFromDoc(Result<(), error::RemoveMember>),
     QueryAccess(Result<HashMap<PeerId, MemberAccess>, error::QueryAccess>),
+    #[cfg(feature = "debug_events")]
+    DebugEvents(keyhive_core::debug_events::DebugEventTable),
 }
 
 #[derive(Debug)]
@@ -149,6 +153,11 @@ where
         KeyhiveCommand::RemoveMemberFromGroup(remove) => {
             let result = remove_member_from_group(ctx, remove).await;
             KeyhiveCommandResult::RemoveMemberFromGroup(result)
+        }
+        #[cfg(feature = "debug_events")]
+        KeyhiveCommand::DebugEvents(nicknames) => {
+            let result = ctx.state().keyhive().debug_events(nicknames).await;
+            KeyhiveCommandResult::DebugEvents(result)
         }
     }
 }

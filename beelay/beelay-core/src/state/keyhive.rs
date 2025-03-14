@@ -712,6 +712,24 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             .map(|d| d.into())
             .collect()
     }
+
+    #[cfg(feature = "debug_events")]
+    pub(crate) async fn debug_events(
+        &self,
+        nicknames: keyhive_core::debug_events::Nicknames,
+    ) -> keyhive_core::debug_events::DebugEventTable {
+        let k_mutex = self.0.borrow().keyhive.clone();
+        let keyhive = k_mutex.lock().await;
+
+        let events = keyhive
+            .events_for_agent(&keyhive.active().clone().into())
+            .unwrap();
+        let table = keyhive_core::debug_events::DebugEventTable::from_events(
+            events.into_values().collect(),
+            nicknames,
+        );
+        table
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

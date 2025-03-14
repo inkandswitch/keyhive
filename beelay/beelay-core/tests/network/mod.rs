@@ -302,6 +302,26 @@ impl BeelayHandle<'_> {
     pub fn storage(&self) -> &BTreeMap<beelay_core::StorageKey, Vec<u8>> {
         &self.network.beelays.get(&self.peer_id).unwrap().storage
     }
+
+    #[cfg(feature = "debug_events")]
+    pub fn log_keyhive_events(
+        &mut self,
+        nicknames: keyhive_core::debug_events::Nicknames,
+    ) -> keyhive_core::debug_events::DebugEventTable {
+        let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
+        let (command_id, event) = beelay_core::Event::log_keyhive_events(nicknames);
+        beelay.inbox.push_back(event);
+        self.network.run_until_quiescent();
+        let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
+
+        match beelay.completed_commands.remove(&command_id) {
+            Some(Ok(beelay_core::CommandResult::Keyhive(
+                beelay_core::keyhive::KeyhiveCommandResult::DebugEvents(events),
+            ))) => events,
+            Some(other) => panic!("unexpected command result: {:?}", other),
+            None => panic!("no command result"),
+        }
+    }
 }
 
 pub struct Network {

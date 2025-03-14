@@ -220,6 +220,18 @@ impl Event {
         ));
         (command_id, event)
     }
+
+    #[cfg(feature = "debug_events")]
+    pub fn log_keyhive_events(
+        nicknames: keyhive_core::debug_events::Nicknames,
+    ) -> (CommandId, Event) {
+        let command_id = CommandId::new();
+        let event = Event(EventInner::BeginCommand(
+            command_id,
+            Command::Keyhive(keyhive::KeyhiveCommand::DebugEvents(nicknames)),
+        ));
+        (command_id, event)
+    }
 }
 
 #[derive(Debug)]

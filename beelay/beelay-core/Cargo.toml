@@ -32,8 +32,10 @@ nonempty = { workspace = true, features = ["arbitrary"] }
 [dev-dependencies]
 keyhive_core = { path = "../../keyhive_core", features = [
     "arbitrary",
+    "debug_events",
     "test_utils",
 ] }
+beelay-core = { path = ".", features = ["debug_events"] }
 test-utils = { path = "../test-utils" }
 arbitrary = { version = "1.3.2", features = ["derive"] }
 bolero = { version = "0.11.1", features = ["arbitrary"] }
@@ -48,3 +50,6 @@ resvg = { version = "0.43.0", default-features = false, features = [
 termion = "4.0.2"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 viuer = "0.7.1"
+
+[features]
+debug_events = ["keyhive_core/debug_events"]

@@ -111,6 +111,14 @@ fn create_and_sync_via_stream() {
         .into_iter()
         .collect::<HashSet<_>>();
 
+    let table = network.beelay(&peer2).log_keyhive_events(
+        keyhive_core::debug_events::Nicknames::default()
+            .with_nickname(doc1_id.as_bytes(), "doc1")
+            .with_nickname(peer1.as_bytes(), "peer1")
+            .with_nickname(peer2.as_bytes(), "peer2"),
+    );
+    keyhive_core::debug_events::terminal::print_event_table_verbose(table);
+
     assert_eq!(commits_on_2, expected_commits);
 }
 
