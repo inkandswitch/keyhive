@@ -26,6 +26,7 @@ pub struct SpawnArgs<R> {
     pub(crate) now: Rc<RefCell<UnixTimestampMillis>>,
     pub(crate) rng: R,
     pub(crate) rx_commands: mpsc::UnboundedReceiver<(CommandId, Command)>,
+    pub(crate) rx_tick: mpsc::Receiver<()>,
     pub(crate) tx_driver_events: mpsc::UnboundedSender<DriverEvent>,
 }
 
@@ -35,6 +36,7 @@ pub(crate) struct Driver {
     endpoint_requests: HashMap<OutboundRequestId, oneshot::Sender<network::InnerRpcResponse>>,
     rx_driver_events: mpsc::UnboundedReceiver<DriverEvent>,
     tx_commands: mpsc::UnboundedSender<(CommandId, Command)>,
+    tx_tick: mpsc::Sender<()>,
     executor: futures::executor::LocalPool,
 }
 
@@ -46,6 +48,7 @@ impl Driver {
     {
         let (tx_driver_events, rx_driver_events) = mpsc::unbounded();
         let (tx_commands, rx_commands) = mpsc::unbounded();
+        let (tx_tick, rx_tick) = mpsc::channel(1);
         let now = Rc::new(RefCell::new(now));
 
         let spawn_args = SpawnArgs {
@@ -53,6 +56,7 @@ impl Driver {
             rng,
             rx_commands,
             tx_driver_events,
+            rx_tick,
         };
         let fut = f(spawn_args);
         let executor = futures::executor::LocalPool::new();
@@ -62,6 +66,7 @@ impl Driver {
             io_tasks: HashMap::new(),
             endpoint_requests: HashMap::new(),
             rx_driver_events,
+            tx_tick,
             tx_commands,
             executor,
         };
@@ -90,6 +95,10 @@ impl Driver {
 
     pub(crate) fn dispatch_command(&mut self, command_id: CommandId, command: Command) {
         let _ = self.tx_commands.unbounded_send((command_id, command));
+    }
+
+    pub(crate) fn tick(&mut self) {
+        let _ = self.tx_tick.try_send(());
     }
 
     pub(crate) fn step(&mut self, now: UnixTimestampMillis) -> EventResults {
@@ -146,6 +155,7 @@ pub(crate) struct DriveBeelayArgs<R: rand::Rng + rand::CryptoRng + Clone + 'stat
     pub(crate) now: Rc<RefCell<UnixTimestampMillis>>,
     pub(crate) rx_commands: mpsc::UnboundedReceiver<(CommandId, Command)>,
     pub(crate) tx_driver_events: mpsc::UnboundedSender<DriverEvent>,
+    pub(crate) rx_tick: mpsc::Receiver<()>,
     pub(crate) verifying_key: VerifyingKey,
     pub(crate) load_complete: oneshot::Sender<loading::LoadedParts<R>>,
 }
@@ -179,6 +189,7 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         now,
         rng,
         mut rx_commands,
+        mut rx_tick,
         tx_driver_events,
         verifying_key,
         load_complete,
@@ -218,7 +229,7 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
     });
     let stopper = crate::stopper::Stopper::new();
 
-    let ctx = TaskContext::new(now, state.clone(), io_handle, stopper.clone());
+    let ctx = TaskContext::new(now.clone(), state.clone(), io_handle, stopper.clone());
     let running_streams = streams::run_streams(ctx.clone(), rx_inbound_stream_events).fuse();
     let mut loops = sync_loops::SyncLoops::new();
     pin_mut!(running_streams);
@@ -256,6 +267,9 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
                     };
                     running_commands.push(handler);
                 }
+            }
+            _ = rx_tick.next() => {
+                tracing::trace!(now=?now.borrow().clone(), "tick");
             }
             next_stream_event = running_streams.next() => {
                 let Some((stream_id, event)) = next_stream_event else {
