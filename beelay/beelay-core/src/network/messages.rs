@@ -1,22 +1,17 @@
 use keyhive_core::{
-    cgka::operation::CgkaOperation,
-    crypto::{digest::Digest, signed::Signed},
-    event::static_event::StaticEvent,
-    principal::group::membership_operation::StaticMembershipOperation,
+    cgka::operation::CgkaOperation, crypto::signed::Signed, event::static_event::StaticEvent,
 };
 
 use crate::{
-    riblt,
     sedimentree::{self, SedimentreeSummary},
-    serialization::{leb128::encode_uleb128, parse, Encode, Parse},
-    BlobHash, CommitHash, DocumentId,
+    serialization::{parse, Encode, Parse},
+    CommitHash, DocumentId,
 };
 
 mod decode;
 mod encode;
 mod encoding_types;
-mod session_response;
-pub(crate) use session_response::SessionResponse;
+pub(crate) mod session;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
@@ -29,21 +24,9 @@ pub(crate) enum Response {
     Pong,
     AuthenticationFailed,
     AuthorizationFailed,
-    BeginSync {
-        session_id: crate::sync::SessionId,
-        first_symbols: Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>,
-    },
-    FetchMembershipSymbols(SessionResponse<Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>>),
-    DownloadMembershipOps(SessionResponse<Vec<StaticEvent<CommitHash>>>),
+    Session(session::SessionResponse),
     UploadMembershipOps,
-    FetchCgkaSymbols(SessionResponse<Vec<riblt::CodedSymbol<crate::sync::CgkaSymbol>>>),
-    DownloadCgkaOps(
-        SessionResponse<
-            Vec<keyhive_core::crypto::signed::Signed<keyhive_core::cgka::operation::CgkaOperation>>,
-        >,
-    ),
     UploadCgkaOps,
-    FetchDocStateSymbols(SessionResponse<Vec<riblt::CodedSymbol<crate::sync::DocStateHash>>>),
 }
 
 impl Parse<'_> for Response {
@@ -74,47 +57,12 @@ impl std::fmt::Display for Response {
                 }
                 write!(f, ")")
             }
+            Response::Session(response) => write!(f, "Session({:?})", response),
             Response::Pong => write!(f, "Pong"),
             Response::AuthenticationFailed => write!(f, "AuthenticationFailed"),
             Response::AuthorizationFailed => write!(f, "AuthorizationFailed"),
-            Response::BeginSync {
-                session_id,
-                first_symbols,
-            } => {
-                write!(
-                    f,
-                    "BeginSync(session_id: {:?}, first_symbols: ({} symbols))",
-                    session_id,
-                    first_symbols.len()
-                )
-            }
-            Response::FetchMembershipSymbols(s) => {
-                write!(f, "FetchMembershipSymbols(")?;
-                s.fmt_contents(f, |f, contents| write!(f, "{} symbols", contents.len()))?;
-                write!(f, ")")
-            }
-            Response::DownloadMembershipOps(ops) => {
-                write!(f, "DownloadMembershipOps(")?;
-                ops.fmt_contents(f, |f, contents| write!(f, "{} ops", contents.len()))?;
-                write!(f, ")")
-            }
             Response::UploadMembershipOps => write!(f, "UploadMembershipOps"),
-            Response::FetchCgkaSymbols(s) => {
-                write!(f, "FetchCgkaSymbols(")?;
-                s.fmt_contents(f, |f, contents| write!(f, "{} symbols", contents.len()))?;
-                write!(f, ")")
-            }
-            Response::DownloadCgkaOps(ops) => {
-                write!(f, "DownloadCgkaOps(")?;
-                ops.fmt_contents(f, |f, contents| write!(f, "{} ops", contents.len()))?;
-                write!(f, ")")
-            }
             Response::UploadCgkaOps => write!(f, "UploadCgkaOps"),
-            Response::FetchDocStateSymbols(s) => {
-                write!(f, "FetchDocStateSymbols(")?;
-                s.fmt_contents(f, |f, contents| write!(f, "{} symbols", contents.len()))?;
-                write!(f, ")")
-            }
         }
     }
 }
@@ -172,44 +120,13 @@ pub(crate) enum Request {
         blob: crate::BlobHash,
     },
     Ping,
-    BeginSync,
-    FetchMembershipSymbols {
-        session_id: crate::sync::SessionId,
-        count: usize,
-        offset: usize,
-    },
-    DownloadMembershipOps {
-        session_id: crate::sync::SessionId,
-        op_hashes: Vec<Digest<StaticEvent<CommitHash>>>,
-    },
+    Session(session::SessionRequest),
     UploadMembershipOps {
-        session_id: crate::sync::SessionId,
         ops: Vec<StaticEvent<CommitHash>>,
     },
-    FetchCgkaSymbols {
-        session_id: crate::sync::SessionId,
-        doc_id: DocumentId,
-        count: usize,
-        offset: usize,
-    },
-    DownloadCgkaOps {
-        session_id: crate::sync::SessionId,
-        doc_id: DocumentId,
-        op_hashes: Vec<
-            keyhive_core::crypto::digest::Digest<
-                keyhive_core::crypto::signed::Signed<keyhive_core::cgka::operation::CgkaOperation>,
-            >,
-        >,
-    },
     UploadCgkaOps {
-        session_id: crate::sync::SessionId,
         ops:
             Vec<keyhive_core::crypto::signed::Signed<keyhive_core::cgka::operation::CgkaOperation>>,
-    },
-    FetchDocStateSymbols {
-        session_id: crate::sync::SessionId,
-        count: usize,
-        offset: usize,
     },
 }
 
@@ -241,70 +158,12 @@ impl std::fmt::Display for Request {
             Request::FetchSedimentree(doc_id) => write!(f, "FetchSedimentree({})", doc_id),
             Request::FetchBlob { doc_id, blob } => write!(f, "FetchBlob({}, {})", doc_id, blob),
             Request::Ping => write!(f, "Ping"),
-            Request::BeginSync => write!(f, "BeginSync"),
-            Request::FetchMembershipSymbols {
-                session_id,
-                count,
-                offset,
-            } => {
-                write!(
-                    f,
-                    "FetchMembershipSymbols({}, {}, {})",
-                    session_id, count, offset
-                )
+            Request::Session(session) => write!(f, "Session({:?})", session),
+            Request::UploadMembershipOps { ops } => {
+                write!(f, "UploadMembershipOps({} ops)", ops.len())
             }
-            Request::DownloadMembershipOps {
-                session_id,
-                op_hashes,
-            } => {
-                write!(
-                    f,
-                    "DownloadMembershipOps({}, {} hashes)",
-                    session_id,
-                    op_hashes.len()
-                )
-            }
-            Request::UploadMembershipOps { session_id, ops } => {
-                write!(f, "UploadMembershipOps({}, {} ops)", session_id, ops.len())
-            }
-            Request::FetchCgkaSymbols {
-                session_id,
-                doc_id,
-                count,
-                offset,
-            } => {
-                write!(
-                    f,
-                    "FetchCgkaSymbols({}, {}, {}, {})",
-                    session_id, doc_id, count, offset
-                )
-            }
-            Request::DownloadCgkaOps {
-                session_id,
-                doc_id,
-                op_hashes,
-            } => {
-                write!(
-                    f,
-                    "DownloadCgkaOps({}, {}, {} hashes)",
-                    session_id,
-                    doc_id,
-                    op_hashes.len()
-                )
-            }
-            Request::UploadCgkaOps { session_id, ops } => {
-                write!(f, "UploadCgkaOps({}, {} ops)", session_id, ops.len())
-            }
-            Request::FetchDocStateSymbols {
-                session_id,
-                count,
-                offset,
-            } => {
-                write!(
-                    f,
-                    "FetchDocStateSymbols({}, {}, {})",
-                    session_id, count, offset
-                )
+            Request::UploadCgkaOps { ops } => {
+                write!(f, "UploadCgkaOps({} ops)", ops.len())
             }
         }
     }
@@ -447,48 +306,6 @@ impl Parse<'_> for TreePart {
                 other => Err(input.error(format!("invalid tag: {}", other))),
             }
         })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-#[cfg_attr(test, derive(arbitrary::Arbitrary))]
-pub enum BlobRef {
-    Blob(BlobHash),
-    Inline(Vec<u8>),
-}
-
-impl Parse<'_> for BlobRef {
-    fn parse(input: parse::Input<'_>) -> Result<(parse::Input<'_>, Self), parse::ParseError> {
-        input.parse_in_ctx("BlobRef", |input| {
-            let (input, tag) = input.parse_in_ctx("tag", parse::u8)?;
-            match tag {
-                0 => input.parse_in_ctx("Blob", |input| {
-                    let (input, hash) = input.parse_in_ctx("hash", BlobHash::parse)?;
-                    Ok((input, BlobRef::Blob(hash)))
-                }),
-                1 => input.parse_in_ctx("Inline", |input| {
-                    let (input, data) = input.parse_in_ctx("data", parse::slice)?;
-                    Ok((input, BlobRef::Inline(data.to_vec())))
-                }),
-                other => Err(input.error(format!("invalid tag: {}", other))),
-            }
-        })
-    }
-}
-
-impl Encode for BlobRef {
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        match self {
-            BlobRef::Blob(hash) => {
-                out.push(0);
-                hash.encode_into(out);
-            }
-            BlobRef::Inline(data) => {
-                out.push(1);
-                encode_uleb128(out, data.len() as u64);
-                out.extend(data);
-            }
-        }
     }
 }
 

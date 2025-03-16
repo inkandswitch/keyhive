@@ -3,7 +3,7 @@ use std::{cell::RefCell, future::Future, rc::Rc};
 use crate::{state::State, UnixTimestampMillis};
 
 mod requests;
-pub(crate) use requests::Requests;
+pub(crate) use requests::{Requests, SessionRpcError};
 mod storage;
 pub(crate) use storage::sedimentree::{DocStorage, Error as SedimentreeStorageError};
 pub(crate) use storage::Storage;

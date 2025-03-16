@@ -78,7 +78,22 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::LoadDoc { doc_id },
+            Command::LoadDoc {
+                doc_id,
+                decrypt: true,
+            },
+        ));
+        (command_id, event)
+    }
+
+    pub fn load_doc_encrypted(doc_id: DocumentId) -> (CommandId, Event) {
+        let command_id = CommandId::new();
+        let event = Event(EventInner::BeginCommand(
+            command_id,
+            Command::LoadDoc {
+                doc_id,
+                decrypt: false,
+            },
         ));
         (command_id, event)
     }

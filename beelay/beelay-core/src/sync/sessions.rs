@@ -3,16 +3,20 @@ use std::{
     time::Duration,
 };
 
-use keyhive_core::{crypto::digest::Digest, event::static_event::StaticEvent};
+use keyhive_core::{
+    cgka::operation::CgkaOperation,
+    crypto::{digest::Digest, signed::Signed},
+    event::static_event::StaticEvent,
+};
 
-use crate::{riblt, DocumentId, UnixTimestampMillis};
+use crate::{riblt, DocumentId, PeerId, UnixTimestampMillis};
 
 mod expiry_key;
 use expiry_key::ExpiryKey;
 
 use super::{
-    server_session::{MakeSymbols, Session},
-    CgkaSymbol, DocStateHash, LocalState, MembershipSymbol, SessionId,
+    server_session::{GraphSyncPhase, Session},
+    CgkaSymbol, DocStateHash, MembershipSymbol, ReachableDocs, SessionId,
 };
 
 pub(crate) struct Sessions {
@@ -34,20 +38,20 @@ impl Sessions {
         }
     }
 
-    pub(crate) fn create<R: rand::Rng>(
+    pub(crate) fn create<R: rand::Rng + rand::CryptoRng>(
         &mut self,
         rng: &mut R,
         now: UnixTimestampMillis,
-        local_state: LocalState,
-    ) -> (SessionId, Vec<riblt::CodedSymbol<MembershipSymbol>>) {
+        membership: super::MembershipState,
+        docs: ReachableDocs,
+        remote_membership: Vec<riblt::CodedSymbol<MembershipSymbol>>,
+        remote_docs: Vec<riblt::CodedSymbol<DocStateHash>>,
+        remote: PeerId,
+    ) -> (SessionId, GraphSyncPhase) {
         let session_id = SessionId::new(rng);
 
-        let mut session = Session::new(local_state);
-
-        let first_symbols = session.membership_symbols(MakeSymbols {
-            offset: 0,
-            count: 10,
-        });
+        let (session, phase) =
+            Session::new(remote, membership, docs, remote_membership, remote_docs);
 
         self.sessions.insert(session_id, session);
 
@@ -57,29 +61,43 @@ impl Sessions {
         };
         self.sessions_by_expiry.push(expiry_key);
 
-        (session_id, first_symbols)
+        (session_id, phase)
     }
 
     /// Get membership symbols for a session
     pub(crate) fn membership_symbols(
         &mut self,
         session_id: &SessionId,
-        make_symbols: MakeSymbols,
+        count: u32,
     ) -> Result<Vec<riblt::CodedSymbol<MembershipSymbol>>, SessionError> {
-        Ok(self
-            .get_session(session_id)?
-            .membership_symbols(make_symbols))
+        let session = self.get_session(session_id)?;
+        session.membership_symbols(count)
+    }
+
+    pub(crate) fn start_reloading(&mut self, session_id: &SessionId) -> Result<(), SessionError> {
+        let session = self.get_session(session_id)?;
+        Ok(session.start_reloading())
+    }
+
+    pub(crate) fn reload_complete(
+        &mut self,
+        session_id: &SessionId,
+        membership: super::MembershipState,
+        docs: ReachableDocs,
+        remote_membership: Vec<riblt::CodedSymbol<MembershipSymbol>>,
+    ) -> Result<GraphSyncPhase, SessionError> {
+        let session = self.get_session(session_id)?;
+        session.reload_complete(membership, docs, remote_membership)
     }
 
     /// Get document state symbols for a session
     pub(crate) fn doc_state_symbols(
         &mut self,
         session_id: &SessionId,
-        make_symbols: MakeSymbols,
+        count: u32,
     ) -> Result<Vec<riblt::CodedSymbol<DocStateHash>>, SessionError> {
-        Ok(self
-            .get_session(session_id)?
-            .collection_state_symbols(make_symbols))
+        let session = self.get_session(session_id)?;
+        session.collection_state_symbols(count)
     }
 
     /// Get CGKA symbols for a document in a session
@@ -87,11 +105,10 @@ impl Sessions {
         &mut self,
         session_id: &SessionId,
         doc_id: &DocumentId,
-        make_symbols: MakeSymbols,
+        count: u32,
     ) -> Result<Vec<riblt::CodedSymbol<CgkaSymbol>>, SessionError> {
-        Ok(self
-            .get_session(session_id)?
-            .doc_cgka_symbols(doc_id, make_symbols))
+        let session = self.get_session(session_id)?;
+        session.doc_cgka_symbols(doc_id, count)
     }
 
     /// Get membership operations for given hashes from a session
@@ -100,9 +117,18 @@ impl Sessions {
         session_id: &SessionId,
         op_hashes: Vec<Digest<StaticEvent<crate::CommitHash>>>,
     ) -> Result<Vec<StaticEvent<crate::CommitHash>>, SessionError> {
-        Ok(self
-            .get_session(session_id)?
-            .membership_and_prekey_ops(op_hashes))
+        let session = self.get_session(session_id)?;
+        session.membership_and_prekey_ops(op_hashes)
+    }
+
+    pub(crate) fn get_cgka_ops(
+        &mut self,
+        session_id: &SessionId,
+        doc_id: &DocumentId,
+        op_hashes: Vec<Digest<Signed<CgkaOperation>>>,
+    ) -> Result<Vec<Signed<CgkaOperation>>, SessionError> {
+        let session = self.get_session(session_id)?;
+        session.doc_cgka_ops(doc_id, op_hashes)
     }
 
     pub(crate) fn session_exists(&self, session_id: &SessionId) -> bool {
@@ -166,4 +192,12 @@ pub(crate) enum SessionError {
     NotFound,
     #[error("session expired")]
     Expired,
+    #[error("already begun doc collection sync")]
+    DocCollectionSyncAlreadyBegun,
+    #[error("doc collection sync not started")]
+    DocCollectionSyncNotStarted,
+    #[error("request received while loading state")]
+    Loading,
+    #[error("Invalid request")]
+    InvalidRequest,
 }

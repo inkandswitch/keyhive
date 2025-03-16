@@ -15,10 +15,15 @@ pub(crate) async fn sync_doc<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
     peer_id: PeerId,
     session_id: SessionId,
     doc_id: DocumentId,
-) -> Result<(), SyncDocError> {
+) -> Result<(), crate::sync::Error> {
     tracing::trace!("syncing document");
 
-    sync_sedimentree::sync_sedimentree(ctx.clone(), peer_address, peer_id, doc_id).await?;
+    sync_sedimentree::sync_sedimentree(ctx.clone(), peer_address, peer_id, doc_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(err=?e, "syncing sedimentree failed");
+            crate::sync::Error::Other(format!("failed to sync sedimentree: {:?}", e))
+        })?;
     sync_cgka::sync_cgka(ctx, peer_address, session_id, doc_id).await?;
 
     Ok(())
@@ -29,21 +34,9 @@ pub(crate) mod error {
     pub enum SyncDocError {
         #[error(transparent)]
         Sedimentree(#[from] super::sync_sedimentree::SyncSedimentreeError),
-        #[error(transparent)]
-        Cgka(super::sync_cgka::SyncCgkaError),
         #[error("session expired")]
         SessionExpired,
         #[error("session not found")]
         SessionNotFound,
-    }
-
-    impl From<super::sync_cgka::SyncCgkaError> for SyncDocError {
-        fn from(err: super::sync_cgka::SyncCgkaError) -> Self {
-            match err {
-                super::sync_cgka::SyncCgkaError::SessionExpired => Self::SessionExpired,
-                super::sync_cgka::SyncCgkaError::SessionNotFound => Self::SessionNotFound,
-                other => Self::Cgka(other),
-            }
-        }
     }
 }

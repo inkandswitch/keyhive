@@ -4,10 +4,11 @@ use crate::{
     network::messages::{self, FetchedSedimentree, TreePart, UploadItem},
     sedimentree::{self},
     state::DocUpdateBuilder,
-    sync::{server_session::MakeSymbols, LocalState},
     Audience, Commit, CommitBundle, CommitOrBundle, DocumentId, OutgoingResponse, PeerId, Response,
     StorageKey, TaskContext,
 };
+
+mod sync;
 
 #[derive(Debug, thiserror::Error)]
 #[error("auth failed")]
@@ -86,70 +87,9 @@ where
             tracing::debug!("ping");
             Response::Pong
         }
-        messages::Request::BeginSync => {
-            tracing::debug!("begin sync request from peer");
-
-            // Create a new session and get the initial membership symbols
-            match LocalState::new(ctx.clone(), from).await {
-                Ok(local_state) => match ctx
-                    .state()
-                    .sessions()
-                    .create_session(ctx.now(), local_state)
-                {
-                    Ok((session_id, first_symbols)) => Response::BeginSync {
-                        session_id,
-                        first_symbols,
-                    },
-                    Err(e) => {
-                        tracing::error!(error = ?e, "Failed to create session");
-                        Response::Error(format!("Failed to create session: {}", e))
-                    }
-                },
-                Err(e) => {
-                    tracing::error!(error = ?e, "Failed to create local state");
-                    Response::Error(format!("Failed to create local state: {}", e))
-                }
-            }
-        }
-        messages::Request::FetchMembershipSymbols {
-            session_id,
-            count,
-            offset,
-        } => {
-            tracing::debug!("fetch membership symbols request");
-
-            Response::FetchMembershipSymbols(
-                ctx.state()
-                    .sessions()
-                    .membership_symbols(&session_id, MakeSymbols { offset, count })
-                    .into(),
-            )
-        }
-        messages::Request::FetchDocStateSymbols {
-            session_id,
-            count,
-            offset,
-        } => {
-            tracing::debug!(?count, ?offset, "fetch doc state symbols request");
-
-            Response::FetchDocStateSymbols(
-                ctx.state()
-                    .sessions()
-                    .doc_state_symbols(&session_id, MakeSymbols { offset, count })
-                    .into(),
-            )
-        }
-        messages::Request::UploadMembershipOps { session_id, ops } => {
+        messages::Request::Session(req) => sync::handle_sync_request(ctx, req, from).await,
+        messages::Request::UploadMembershipOps { ops } => {
             tracing::debug!("upload membership ops request");
-
-            // Verify the session exists
-            if !ctx.state().sessions().session_exists(&session_id) {
-                tracing::warn!("No session found for id: {:?}", session_id);
-                return Ok(OutgoingResponse {
-                    audience: Audience::peer(&from),
-                    response: Response::Error(format!("No session found for id: {:?}", session_id)),
-                });
-            }
 
             // Process membership operations as a batch
             if let Err(e) = ctx.state().keyhive().ingest_membership_ops(ops).await {
@@ -165,45 +105,8 @@ where
 
             Response::UploadMembershipOps
         }
-        messages::Request::DownloadMembershipOps {
-            session_id,
-            op_hashes,
-        } => {
-            tracing::debug!("download membership ops request");
-
-            Response::DownloadMembershipOps(
-                ctx.state()
-                    .sessions()
-                    .get_membership_ops(&session_id, op_hashes)
-                    .into(),
-            )
-        }
-        messages::Request::FetchCgkaSymbols {
-            session_id,
-            doc_id,
-            count,
-            offset,
-        } => {
-            tracing::debug!("fetch cgka symbols request for doc: {}", doc_id);
-
-            Response::FetchCgkaSymbols(
-                ctx.state()
-                    .sessions()
-                    .cgka_symbols(&session_id, &doc_id, MakeSymbols { offset, count })
-                    .into(),
-            )
-        }
-        messages::Request::UploadCgkaOps { session_id, ops } => {
+        messages::Request::UploadCgkaOps { ops } => {
             tracing::debug!("upload cgka ops request");
-
-            // Verify the session exists
-            if !ctx.state().sessions().session_exists(&session_id) {
-                tracing::warn!("No session found for id: {:?}", session_id);
-                return Ok(OutgoingResponse {
-                    audience: Audience::peer(&from),
-                    response: Response::Error(format!("No session found for id: {:?}", session_id)),
-                });
-            }
 
             let doc_ids = ops
                 .iter()
@@ -224,56 +127,6 @@ where
             }
 
             Response::UploadCgkaOps
-        }
-        messages::Request::DownloadCgkaOps {
-            session_id,
-            doc_id,
-            op_hashes,
-        } => {
-            tracing::debug!("download cgka ops request for doc: {}", doc_id);
-
-            if !ctx.state().sessions().session_exists(&session_id) {
-                tracing::warn!("No session found for id: {:?}", session_id);
-                return Ok(OutgoingResponse {
-                    audience: Audience::peer(&from),
-                    response: Response::DownloadCgkaOps(messages::SessionResponse::SessionNotFound),
-                });
-            }
-
-            // For CGKA ops, we fetch directly from keyhive for the specified document
-            match ctx.state().keyhive().cgka_ops_for_doc(doc_id.clone()).await {
-                Ok(all_doc_ops) => {
-                    // Create a map of operation hashes to operations
-                    let mut hash_to_op = std::collections::HashMap::new();
-                    for op in all_doc_ops {
-                        let hash = keyhive_core::crypto::digest::Digest::hash(&op);
-                        hash_to_op.insert(hash, op);
-                    }
-
-                    // Filter to only the requested hashes
-                    let filtered_ops = op_hashes
-                        .iter()
-                        .filter_map(|hash| {
-                            hash_to_op.iter().find_map(|(key, value)| {
-                                if key.as_slice() == hash.as_slice() {
-                                    Some(value.clone())
-                                } else {
-                                    None
-                                }
-                            })
-                        })
-                        .collect();
-
-                    Response::DownloadCgkaOps(Ok(filtered_ops).into())
-                }
-                Err(e) => {
-                    tracing::error!(error = ?e, "Failed to get CGKA operations for document");
-                    return Ok(OutgoingResponse {
-                        audience: Audience::peer(&from),
-                        response: Response::Error(format!("Failed to get CGKA operations: {}", e)),
-                    });
-                }
-            }
         }
     };
     Ok(OutgoingResponse {

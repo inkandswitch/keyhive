@@ -8,14 +8,9 @@ pub(super) enum RequestType {
     FetchMinimalBundles,
     FetchBlob,
     Ping,
-    BeginSync,
-    FetchMembershipSymbols,
-    DownloadMembershipOps,
     UploadMembershipOps,
-    FetchCgkaSymbols,
-    DownloadCgkaOps,
     UploadCgkaOps,
-    FetchDocStateSymbols,
+    Session,
 }
 
 impl RequestType {
@@ -41,14 +36,10 @@ impl TryFrom<u8> for RequestType {
             3 => Ok(Self::UploadBlob),
             11 => Ok(Self::Ping),
             12 => Ok(Self::FetchBlob),
-            15 => Ok(Self::BeginSync),
-            16 => Ok(Self::FetchMembershipSymbols),
-            17 => Ok(Self::DownloadMembershipOps),
             18 => Ok(Self::UploadMembershipOps),
-            19 => Ok(Self::FetchCgkaSymbols),
-            20 => Ok(Self::DownloadCgkaOps),
             21 => Ok(Self::UploadCgkaOps),
-            22 => Ok(Self::FetchDocStateSymbols),
+            24 => Ok(Self::Session),
+
             _ => Err(error::InvalidRequestType(value)),
         }
     }
@@ -62,14 +53,9 @@ impl From<RequestType> for u8 {
             RequestType::UploadBlob => 3,
             RequestType::Ping => 11,
             RequestType::FetchBlob => 12,
-            RequestType::BeginSync => 15,
-            RequestType::FetchMembershipSymbols => 16,
-            RequestType::DownloadMembershipOps => 17,
             RequestType::UploadMembershipOps => 18,
-            RequestType::FetchCgkaSymbols => 19,
-            RequestType::DownloadCgkaOps => 20,
             RequestType::UploadCgkaOps => 21,
-            RequestType::FetchDocStateSymbols => 22,
+            RequestType::Session => 24,
         }
     }
 }
@@ -84,14 +70,9 @@ pub(super) enum ResponseType {
     Pong,
     AuthenticationFailed,
     AuthorizationFailed,
-    BeginSync,
-    FetchMembershipSymbols,
-    DownloadMembershipOps,
+    Session,
     UploadMembershipOps,
-    FetchCgkaSymbols,
-    DownloadCgkaOps,
     UploadCgkaOps,
-    FetchDocStateSymbols,
     UploadBlob,
 }
 
@@ -120,15 +101,11 @@ impl TryFrom<u8> for ResponseType {
             12 => Ok(Self::AuthenticationFailed),
             13 => Ok(Self::AuthorizationFailed),
             14 => Ok(Self::FetchBlob),
-            17 => Ok(Self::BeginSync),
-            18 => Ok(Self::FetchMembershipSymbols),
-            19 => Ok(Self::DownloadMembershipOps),
             20 => Ok(Self::UploadMembershipOps),
-            21 => Ok(Self::FetchCgkaSymbols),
-            22 => Ok(Self::DownloadCgkaOps),
             23 => Ok(Self::UploadCgkaOps),
-            24 => Ok(Self::FetchDocStateSymbols),
             25 => Ok(Self::UploadBlob),
+            27 => Ok(Self::Session),
+
             _ => Err(error::InvalidResponseType(value)),
         }
     }
@@ -144,15 +121,10 @@ impl From<ResponseType> for u8 {
             ResponseType::AuthenticationFailed => 12,
             ResponseType::AuthorizationFailed => 13,
             ResponseType::FetchBlob => 14,
-            ResponseType::BeginSync => 17,
-            ResponseType::FetchMembershipSymbols => 18,
-            ResponseType::DownloadMembershipOps => 19,
             ResponseType::UploadMembershipOps => 20,
-            ResponseType::FetchCgkaSymbols => 21,
-            ResponseType::DownloadCgkaOps => 22,
             ResponseType::UploadCgkaOps => 23,
-            ResponseType::FetchDocStateSymbols => 24,
             ResponseType::UploadBlob => 25,
+            ResponseType::Session => 27,
         }
     }
 }
