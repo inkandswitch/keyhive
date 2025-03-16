@@ -424,74 +424,10 @@ impl<
         agent: &Agent<S, T, L>,
     ) -> BTreeMap<DocumentId, Ability<S, T, L>> {
         let mut caps: BTreeMap<DocumentId, Ability<S, T, L>> = BTreeMap::new();
-        let mut seen: HashSet<AgentId> = HashSet::new();
-
-        #[allow(clippy::type_complexity)]
-        let mut explore: Vec<(Rc<RefCell<Group<S, T, L>>>, Access)> = vec![];
 
         for doc in self.docs.values() {
-            seen.insert(doc.clone().borrow().agent_id());
-
-            let doc_id = doc.borrow().doc_id();
-
-            if let Some(proofs) = doc.borrow().members().get(&agent.id()) {
-                for proof in proofs {
-                    caps.insert(
-                        doc_id,
-                        Ability {
-                            doc,
-                            can: proof.payload().can,
-                        },
-                    );
-                }
-            }
-        }
-
-        for group in self.groups.values() {
-            seen.insert(group.borrow().agent_id());
-
-            if let Some(proofs) = group.borrow().members().get(&agent.id()) {
-                for proof in proofs {
-                    explore.push((group.dupe(), proof.payload().can));
-                }
-            }
-        }
-
-        while let Some((group, _access)) = explore.pop() {
-            for doc in self.docs.values() {
-                if seen.contains(&doc.borrow().agent_id()) {
-                    continue;
-                }
-
-                let doc_id = doc.borrow().doc_id();
-
-                if let Some(proofs) = doc.borrow().members().get(&agent.id()) {
-                    for proof in proofs {
-                        caps.insert(
-                            doc_id,
-                            Ability {
-                                doc,
-                                can: proof.payload.can,
-                            },
-                        );
-                    }
-                }
-            }
-
-            for (group_id, focus_group) in self.groups.iter() {
-                if seen.contains(&focus_group.borrow().agent_id()) {
-                    continue;
-                }
-
-                if group.borrow().id() == (*group_id).into() {
-                    continue;
-                }
-
-                if let Some(proofs) = focus_group.borrow().members().get(&agent.id()) {
-                    for proof in proofs {
-                        explore.push((focus_group.dupe(), proof.payload.can));
-                    }
-                }
+            if let Some((_, cap)) = doc.borrow().transitive_members().get(&agent.id()) {
+                caps.insert(doc.borrow().doc_id(), Ability { doc, can: *cap });
             }
         }
 
