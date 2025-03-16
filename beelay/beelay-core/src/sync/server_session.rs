@@ -1,104 +1,298 @@
 use std::collections::HashMap;
 
-use keyhive_core::{cgka::error::CgkaError, event::static_event::StaticEvent};
+use keyhive_core::{
+    cgka::operation::CgkaOperation,
+    crypto::{digest::Digest, signed::Signed},
+    event::static_event::StaticEvent,
+};
 
-use crate::{riblt, sedimentree, CommitHash, DocumentId};
+use crate::{riblt, sedimentree, CommitHash, DocumentId, PeerId};
 
-use super::{sync_doc, sync_docs, sync_membership};
+use super::{
+    sessions::SessionError, sync_doc, sync_docs, sync_membership, CgkaSymbol, DocStateHash,
+    MembershipSymbol, ReachableDocs,
+};
 
 pub(crate) struct Session {
-    membership_riblt: RibltSession<sync_membership::MembershipSymbol>,
+    remote_peer: PeerId,
+    state: State,
+}
+
+enum State {
+    Loading,
+    Loaded {
+        docs: DocsSession,
+        membership: MembershipSession,
+    },
+}
+
+struct MembershipSession {
+    encoder: riblt::Encoder<MembershipSymbol>,
     // Store original hash-to-op mapping for direct lookups
-    membership_and_prekey_ops: HashMap<
+    ops: HashMap<
         keyhive_core::crypto::digest::Digest<StaticEvent<CommitHash>>,
         StaticEvent<CommitHash>,
     >,
-    collection_riblt: RibltSession<sync_docs::DocStateHash>,
+}
+
+struct DocsSession {
+    encoder: riblt::Encoder<sync_docs::DocStateHash>,
     trees: HashMap<
         DocumentId,
         (
-            RibltSession<sync_doc::CgkaSymbol>,
+            riblt::Encoder<sync_doc::CgkaSymbol>,
+            HashMap<Digest<Signed<CgkaOperation>>, Signed<CgkaOperation>>,
             sedimentree::SedimentreeSummary,
         ),
     >,
 }
 
-impl Session {
-    pub(crate) fn new(local_state: super::LocalState) -> Self {
-        tracing::trace!(
-            num_local_docs = local_state.doc_states.len(),
-            "creating new server session"
-        );
-        // Clone the membership ops for direct lookup
-        let membership_ops_clone = local_state.membership_and_prekey_ops.clone();
+pub(crate) enum GraphSyncPhase {
+    Membership(Vec<riblt::CodedSymbol<MembershipSymbol>>),
+    Docs(Vec<riblt::CodedSymbol<DocStateHash>>),
+    Done,
+}
 
-        // Create the RIBLT session for membership ops
-        let membership_riblt =
-            RibltSession::new(local_state.membership_and_prekey_ops.into_values());
+impl DocsSession {
+    fn new(reachable: ReachableDocs) -> (Self, riblt::Decoder<DocStateHash>) {
+        let mut decoder = riblt::Decoder::new();
+        let mut collection_riblt = riblt::Encoder::new();
+        for doc_state in reachable.doc_states.values() {
+            collection_riblt.add_symbol(&doc_state.hash);
+            decoder.add_symbol(&doc_state.hash);
+        }
 
         let mut trees = HashMap::new();
-
-        for (doc_id, doc_state) in &local_state.doc_states {
-            let cgka_riblt_session = RibltSession::new(doc_state.cgka_ops.clone().into_iter());
+        for (doc_id, doc_state) in reachable.doc_states {
+            let mut encoder = riblt::Encoder::new();
+            let mut ops = HashMap::new();
+            for op in doc_state.cgka_ops.iter() {
+                encoder.add_symbol(&CgkaSymbol::from(op));
+                ops.insert(Digest::hash(op), op.clone());
+            }
             trees.insert(
                 doc_id.clone(),
-                (cgka_riblt_session, doc_state.sedimentree.clone()),
+                (encoder, ops, doc_state.sedimentree.clone()),
             );
         }
-        let collection_riblt =
-            RibltSession::new(local_state.doc_states.into_iter().map(|(_, s)| s));
-        Self {
-            membership_riblt,
-            membership_and_prekey_ops: membership_ops_clone,
-            collection_riblt,
-            trees,
+
+        (
+            DocsSession {
+                encoder: collection_riblt,
+                trees,
+            },
+            decoder,
+        )
+    }
+}
+
+impl Session {
+    pub(crate) fn new(
+        remote_peer: PeerId,
+        membership_state: super::MembershipState,
+        docs: ReachableDocs,
+        remote_membership: Vec<riblt::CodedSymbol<MembershipSymbol>>,
+        remote_docs: Vec<riblt::CodedSymbol<DocStateHash>>,
+    ) -> (Self, GraphSyncPhase) {
+        tracing::trace!("creating new server session");
+
+        let membership_ops = membership_state.into_static_events();
+
+        let mut decoder = riblt::Decoder::new();
+        for op in membership_ops.values() {
+            decoder.add_symbol(&MembershipSymbol::from(op));
         }
+        for op in remote_membership {
+            decoder.add_coded_symbol(&op);
+            decoder.try_decode().unwrap();
+            if decoder.decoded() {
+                break;
+            }
+        }
+        let membership_in_sync = decoder.decoded()
+            && decoder.get_remote_symbols().is_empty()
+            && decoder.get_local_symbols().is_empty();
+
+        // Create the RIBLT session for membership ops
+        let mut membership_riblt = riblt::Encoder::new();
+        for op in membership_ops.values() {
+            membership_riblt.add_symbol(&MembershipSymbol::from(op));
+        }
+
+        let (mut doc_session, mut doc_decoder) = DocsSession::new(docs);
+
+        let phase = if membership_in_sync {
+            for symbol in remote_docs {
+                doc_decoder.add_coded_symbol(&symbol);
+                if doc_decoder.decoded() {
+                    break;
+                }
+            }
+            let docs_are_in_sync = doc_decoder.decoded()
+                && doc_decoder.get_local_symbols().is_empty()
+                && doc_decoder.get_remote_symbols().is_empty();
+            if !docs_are_in_sync {
+                let first_symbols = doc_session.encoder.next_n_symbols(10);
+                GraphSyncPhase::Docs(first_symbols)
+            } else {
+                GraphSyncPhase::Done
+            }
+        } else {
+            let first_symbols = membership_riblt.next_n_symbols(10);
+            GraphSyncPhase::Membership(first_symbols)
+        };
+
+        (
+            Self {
+                remote_peer,
+                state: State::Loaded {
+                    docs: doc_session,
+                    membership: MembershipSession {
+                        encoder: membership_riblt,
+                        ops: membership_ops,
+                    },
+                },
+            },
+            phase,
+        )
+    }
+
+    pub(crate) fn start_reloading(&mut self) {
+        self.state = State::Loading;
+    }
+
+    pub(crate) fn reload_complete(
+        &mut self,
+        membership: super::MembershipState,
+        docs: ReachableDocs,
+        remote_membership: Vec<riblt::CodedSymbol<MembershipSymbol>>,
+    ) -> Result<GraphSyncPhase, SessionError> {
+        assert!(matches!(self.state, State::Loading));
+
+        let membership_ops = membership.into_static_events();
+
+        // Create a decoder
+        let mut decoder = riblt::Decoder::new();
+        for op in membership_ops.values() {
+            decoder.add_symbol(&MembershipSymbol::from(op));
+        }
+
+        for sym in remote_membership {
+            decoder.add_coded_symbol(&sym);
+            decoder.try_decode().map_err(|e| {
+                tracing::warn!(err=?e, "invalid symbol");
+                SessionError::InvalidRequest
+            })?;
+            if decoder.decoded() {
+                break;
+            }
+        }
+
+        // Create the RIBLT session for membership ops
+        let mut membership_riblt = riblt::Encoder::new();
+        for op in membership_ops.values() {
+            membership_riblt.add_symbol(&MembershipSymbol::from(op));
+        }
+
+        let (mut docs, _decoder) = DocsSession::new(docs);
+
+        let phase = if decoder.decoded()
+            && decoder.get_local_symbols().is_empty()
+            && decoder.get_remote_symbols().is_empty()
+        {
+            let doc_symbols = docs.encoder.next_n_symbols(10);
+            GraphSyncPhase::Docs(doc_symbols)
+        } else {
+            let membership_symbols = membership_riblt.next_n_symbols(10);
+            GraphSyncPhase::Membership(membership_symbols)
+        };
+
+        self.state = State::Loaded {
+            docs,
+            membership: MembershipSession {
+                encoder: membership_riblt,
+                ops: membership_ops,
+            },
+        };
+
+        Ok(phase)
     }
 
     pub(crate) fn membership_symbols(
         &mut self,
-        make_symbols: MakeSymbols,
-    ) -> Vec<riblt::CodedSymbol<sync_membership::MembershipSymbol>> {
-        self.membership_riblt.symbols(make_symbols)
+        count: u32,
+    ) -> Result<Vec<riblt::CodedSymbol<sync_membership::MembershipSymbol>>, SessionError> {
+        match &mut self.state {
+            State::Loading => Err(SessionError::Loading),
+            State::Loaded { membership, .. } => Ok(membership.encoder.next_n_symbols(count as u64)),
+        }
     }
 
     pub(crate) fn membership_and_prekey_ops(
         &mut self,
         op_hashes: Vec<keyhive_core::crypto::digest::Digest<StaticEvent<CommitHash>>>,
-    ) -> Vec<StaticEvent<CommitHash>> {
-        // Look up operations directly from the hash map
-        op_hashes
-            .into_iter()
-            .filter_map(|hash| self.membership_and_prekey_ops.get(&hash).cloned())
-            .collect()
+    ) -> Result<Vec<StaticEvent<CommitHash>>, SessionError> {
+        match &mut self.state {
+            State::Loading => Err(SessionError::Loading),
+            State::Loaded { membership, .. } => Ok(op_hashes
+                .into_iter()
+                .filter_map(|hash| membership.ops.get(&hash).cloned())
+                .collect()),
+        }
     }
 
     pub(crate) fn collection_state_symbols(
         &mut self,
-        make_symbols: MakeSymbols,
-    ) -> Vec<riblt::CodedSymbol<sync_docs::DocStateHash>> {
-        self.collection_riblt.symbols(make_symbols)
+        count: u32,
+    ) -> Result<Vec<riblt::CodedSymbol<sync_docs::DocStateHash>>, SessionError> {
+        let State::Loaded { docs, .. } = &mut self.state else {
+            return Err(SessionError::Loading);
+        };
+        Ok(docs.encoder.next_n_symbols(count as u64))
     }
 
     pub(crate) fn doc_cgka_symbols(
         &mut self,
         doc: &DocumentId,
-        make_symbols: MakeSymbols,
-    ) -> Vec<riblt::CodedSymbol<sync_doc::CgkaSymbol>> {
-        if let Some((cgka_session, _)) = self.trees.get_mut(doc) {
-            cgka_session.symbols(make_symbols)
+        count: u32,
+    ) -> Result<Vec<riblt::CodedSymbol<sync_doc::CgkaSymbol>>, SessionError> {
+        let State::Loaded { docs, .. } = &mut self.state else {
+            return Err(SessionError::Loading);
+        };
+        let symbols = if let Some((cgka_session, _, _)) = docs.trees.get_mut(&doc) {
+            cgka_session.next_n_symbols(count as u64)
         } else {
             // make an empty session and return the first symbol
             let mut encoder = riblt::Encoder::new();
             encoder.next_n_symbols(1)
-        }
+        };
+        Ok(symbols)
+    }
+
+    pub(crate) fn doc_cgka_ops(
+        &self,
+        doc: &DocumentId,
+        op_hashes: Vec<keyhive_core::crypto::digest::Digest<Signed<CgkaOperation>>>,
+    ) -> Result<Vec<Signed<CgkaOperation>>, SessionError> {
+        let State::Loaded { docs, .. } = &self.state else {
+            return Err(SessionError::Loading);
+        };
+        let ops = if let Some((_, ops, _)) = docs.trees.get(&doc) {
+            op_hashes
+                .into_iter()
+                .filter_map(|h| ops.get(&h).cloned())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(ops)
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error(transparent)]
-    LoadCgkaOps(#[from] CgkaError),
+    #[error("invalid sequence number")]
+    InvalidSequenceNumber,
 }
 
 pub(crate) struct MakeSymbols {

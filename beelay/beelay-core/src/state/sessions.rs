@@ -1,21 +1,25 @@
 use std::{borrow::Cow, cell::RefCell, rc::Rc};
 
-use crate::{
-    riblt,
-    sync::{
-        local_state::LocalState, server_session::MakeSymbols, sessions::SessionError, CgkaSymbol,
-        DocStateHash, MembershipSymbol, SessionId,
-    },
-    DocumentId, UnixTimestampMillis,
+use keyhive_core::{
+    cgka::operation::CgkaOperation,
+    crypto::{digest::Digest, signed::Signed},
+    event::static_event::StaticEvent,
 };
 
-use keyhive_core::{crypto::digest::Digest, event::static_event::StaticEvent};
+use crate::{
+    riblt::{self, CodedSymbol},
+    sync::{
+        server_session::GraphSyncPhase, sessions::SessionError, CgkaSymbol, DocStateHash,
+        MembershipState, MembershipSymbol, ReachableDocs, SessionId,
+    },
+    DocumentId, PeerId, UnixTimestampMillis,
+};
 
 pub(crate) struct Sessions<'a, R: rand::Rng + rand::CryptoRng> {
     pub(super) state: Cow<'a, Rc<RefCell<super::State<R>>>>,
 }
 
-impl<'a, R: rand::Rng + rand::CryptoRng> Sessions<'a, R> {
+impl<'a, R: rand::Rng + rand::CryptoRng + Clone + 'static> Sessions<'a, R> {
     pub(crate) fn new(state: Cow<'a, Rc<RefCell<super::State<R>>>>) -> Self {
         Self { state }
     }
@@ -24,42 +28,69 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Sessions<'a, R> {
     pub(crate) fn create_session(
         &self,
         now: UnixTimestampMillis,
-        local_state: LocalState,
-        // ctx: crate::TaskContext<R>,
-    ) -> Result<
-        (SessionId, Vec<riblt::CodedSymbol<MembershipSymbol>>),
-        crate::sync::local_state::Error,
-    > {
+        membership: MembershipState,
+        docs: ReachableDocs,
+        remote: PeerId,
+        remote_membership_symbols: Vec<riblt::CodedSymbol<MembershipSymbol>>,
+        remote_doc_symbols: Vec<riblt::CodedSymbol<DocStateHash>>,
+    ) -> (SessionId, GraphSyncPhase) {
         let rng = self.state.borrow().rng.clone();
         let mut state = self.state.borrow_mut();
-        let result = state
-            .sync_sessions
-            .create(&mut *rng.borrow_mut(), now, local_state);
-        Ok(result)
+        let result = state.sync_sessions.create(
+            &mut *rng.borrow_mut(),
+            now,
+            membership,
+            docs,
+            remote_membership_symbols,
+            remote_doc_symbols,
+            remote,
+        );
+        result
     }
 
     /// Get membership symbols for a session
     pub(crate) fn membership_symbols(
         &self,
         session_id: &SessionId,
-        make_symbols: MakeSymbols,
+        count: u32,
     ) -> Result<Vec<riblt::CodedSymbol<MembershipSymbol>>, SessionError> {
         self.state
             .borrow_mut()
             .sync_sessions
-            .membership_symbols(session_id, make_symbols)
+            .membership_symbols(session_id, count)
     }
 
-    /// Get document state symbols for a session
-    pub(crate) fn doc_state_symbols(
+    pub(crate) fn start_reloading(&self, session_id: &SessionId) -> Result<(), SessionError> {
+        self.state
+            .borrow_mut()
+            .sync_sessions
+            .start_reloading(session_id)
+    }
+
+    pub(crate) fn reload_complete(
         &self,
         session_id: &SessionId,
-        make_symbols: MakeSymbols,
+        membership: MembershipState,
+        docs: ReachableDocs,
+        remote_membership: Vec<CodedSymbol<MembershipSymbol>>,
+    ) -> Result<GraphSyncPhase, SessionError> {
+        self.state.borrow_mut().sync_sessions.reload_complete(
+            session_id,
+            membership,
+            docs,
+            remote_membership,
+        )
+    }
+
+    pub(crate) fn doc_symbols(
+        &self,
+        session_id: &SessionId,
+        count: u32,
     ) -> Result<Vec<riblt::CodedSymbol<DocStateHash>>, SessionError> {
         self.state
             .borrow_mut()
             .sync_sessions
-            .doc_state_symbols(session_id, make_symbols)
+            .doc_state_symbols(session_id, count)
     }
 
     /// Get CGKA symbols for a document in a session
@@ -67,12 +98,24 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Sessions<'a, R> {
         &self,
         session_id: &SessionId,
         doc_id: &DocumentId,
-        make_symbols: MakeSymbols,
+        count: u32,
     ) -> Result<Vec<riblt::CodedSymbol<CgkaSymbol>>, SessionError> {
         self.state
             .borrow_mut()
             .sync_sessions
-            .cgka_symbols(session_id, doc_id, make_symbols)
+            .cgka_symbols(session_id, doc_id, count)
+    }
+
+    pub(crate) fn get_cgka_ops(
+        &self,
+        session_id: &SessionId,
+        doc_id: &DocumentId,
+        op_hashes: Vec<Digest<Signed<CgkaOperation>>>,
+    ) -> Result<Vec<Signed<CgkaOperation>>, SessionError> {
+        self.state
+            .borrow_mut()
+            .sync_sessions
+            .get_cgka_ops(session_id, doc_id, op_hashes)
     }
 
     /// Get membership operations for given hashes from a session

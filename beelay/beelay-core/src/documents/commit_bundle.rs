@@ -1,8 +1,4 @@
-use crate::{
-    blob::BlobMeta,
-    network::messages::{BlobRef, UploadItem},
-    sedimentree,
-};
+use crate::{blob::BlobMeta, sedimentree};
 
 use super::CommitHash;
 

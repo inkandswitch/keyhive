@@ -84,10 +84,6 @@ impl<'a, R: rand::Rng + rand::CryptoRng> StateAccessor<'a, R> {
         KeyhiveCtx::new(self.0.clone())
     }
 
-    pub(crate) fn sessions(&self) -> Sessions<'a, R> {
-        Sessions::new(self.0.clone())
-    }
-
     pub(crate) fn streams(&self) -> Streams<'a, R> {
         Streams::new(self.0.clone())
     }
@@ -98,5 +94,11 @@ impl<'a, R: rand::Rng + rand::CryptoRng> StateAccessor<'a, R> {
 
     pub(crate) fn our_peer_id(&self) -> PeerId {
         self.0.borrow().our_peer_id
+    }
+}
+
+impl<'a, R: rand::Rng + rand::CryptoRng + Clone + 'static> StateAccessor<'a, R> {
+    pub(crate) fn sessions(&self) -> Sessions<'a, R> {
+        Sessions::new(self.0.clone())
     }
 }

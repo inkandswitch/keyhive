@@ -7,7 +7,7 @@ use beelay_core::{
     conn_info,
     io::{IoAction, IoResult},
     keyhive::{KeyhiveCommandResult, KeyhiveEntityId, MemberAccess},
-    BundleSpec, CommitHash, CommitOrBundle, DocumentId, Event, PeerId, StreamId,
+    BundleSpec, CommandResult, CommitHash, CommitOrBundle, DocumentId, Event, PeerId, StreamId,
     UnixTimestampMillis,
 };
 use ed25519_dalek::SigningKey;
@@ -104,6 +104,23 @@ impl BeelayHandle<'_> {
         let command = {
             let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
             let (command, event) = beelay_core::Event::load_doc(doc_id);
+            beelay.inbox.push_back(event);
+            command
+        };
+        self.network.run_until_quiescent();
+        let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
+        match beelay.completed_commands.remove(&command) {
+            Some(Ok(beelay_core::CommandResult::LoadDoc(commits))) => commits,
+            Some(other) => panic!("unexpected command result: {:?}", other),
+            None => panic!("no command result"),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn load_doc_encrypted(&mut self, doc_id: DocumentId) -> Option<Vec<CommitOrBundle>> {
+        let command = {
+            let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
+            let (command, event) = beelay_core::Event::load_doc_encrypted(doc_id);
             beelay.inbox.push_back(event);
             command
         };
@@ -354,6 +371,40 @@ impl BeelayHandle<'_> {
     pub fn conn_info(&mut self) -> HashMap<StreamId, conn_info::ConnectionInfo> {
         let beelay = self.network.beelays.get(&self.peer_id).unwrap();
         beelay.core.connection_info()
+    }
+
+    pub fn disconnect(&mut self, stream: StreamId) {
+        let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
+        let (command_id, event) = Event::disconnect_stream(stream);
+        beelay.inbox.push_back(event);
+
+        beelay.handle_events();
+
+        let other_peer = match beelay.completed_commands.remove(&command_id) {
+            Some(Ok(CommandResult::DisconnectStream)) => beelay.streams.remove(&stream),
+            Some(other) => panic!("unexpected command result: {:?}", other),
+            None => panic!("no command result"),
+        };
+        if let Some(other_peer) = other_peer {
+            let other_beelay = self.network.beelays.get_mut(&other_peer).unwrap();
+            if let Some(other_stream_id) =
+                other_beelay
+                    .streams
+                    .iter()
+                    .find_map(|(other_stream_id, peer_id)| {
+                        if peer_id == &other_peer {
+                            Some(other_stream_id)
+                        } else {
+                            None
+                        }
+                    })
+            {
+                let (_, evt) = Event::disconnect_stream(*other_stream_id);
+                other_beelay.inbox.push_back(evt);
+            }
+        }
+
+        self.network.run_until_quiescent();
     }
 }
 

@@ -13,11 +13,12 @@ use super::{CgkaOperationDetails, DebugEventDetails, DebugEventTable};
 ///
 /// # Example
 /// ```
-/// use keyhive_core::event::static_event::StaticEvent;
+/// use keyhive_core::event::Event;
+/// use keyhive_core::crypto::signer::memory::MemorySigner;
 /// use keyhive_core::debug_events::{DebugEventTable, Nicknames, terminal::print_event_table};
 ///
-/// let events: Vec<StaticEvent> = vec![];
-/// let table = DebugEventTable::from_static_events(&events, Nicknames::default());
+/// let events: Vec<Event<MemorySigner>> = vec![];
+/// let table = DebugEventTable::from_events(events, Nicknames::default());
 ///
 /// // Print a table of events
 /// print_event_table(table);

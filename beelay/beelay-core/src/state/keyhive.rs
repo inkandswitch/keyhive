@@ -17,8 +17,11 @@ use keyhive_core::{
     event::{static_event::StaticEvent, Event},
     keyhive::Keyhive,
     principal::{
-        document::id::DocumentId as KeyhiveDocumentId, group::RevokeMemberError,
-        identifier::Identifier, individual::Individual, membered::Membered,
+        document::id::DocumentId as KeyhiveDocumentId,
+        group::{membership_operation::MembershipOperation, RevokeMemberError},
+        identifier::Identifier,
+        individual::{op::KeyOp, Individual},
+        membered::Membered,
     },
 };
 use nonempty::NonEmpty;
@@ -26,6 +29,7 @@ use nonempty::NonEmpty;
 use crate::{
     commands::keyhive::{KeyhiveEntityId, MemberAccess},
     io::Signer,
+    keyhive::Listener,
     parse::{self, Parse},
     serialization::Encode,
     CommitHash, DocumentId, PeerId,
@@ -86,6 +90,37 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
 
     pub(crate) async fn can_pull(&self, peer_id: PeerId, doc_id: &DocumentId) -> bool {
         self.can_do(peer_id, doc_id, KeyhiveAccess::Pull).await
+    }
+
+    pub(crate) async fn membership_ops_for_peer(
+        &self,
+        for_peer: PeerId,
+    ) -> HashMap<
+        Digest<MembershipOperation<Signer, CommitHash, Listener>>,
+        MembershipOperation<Signer, CommitHash, Listener>,
+    > {
+        let k_mutex = self.0.borrow().keyhive.clone();
+        let keyhive = k_mutex.lock().await;
+
+        if let Some(agent) = keyhive.get_individual(for_peer.as_key().into()) {
+            keyhive.membership_ops_for_agent(&(agent.clone().into()))
+        } else {
+            HashMap::new()
+        }
+    }
+
+    pub(crate) async fn prekey_ops_for_peer(
+        &self,
+        for_peer: PeerId,
+    ) -> HashMap<Identifier, Vec<Rc<KeyOp>>> {
+        let k_mutex = self.0.borrow().keyhive.clone();
+        let keyhive = k_mutex.lock().await;
+
+        if let Some(agent) = keyhive.get_individual(for_peer.as_key().into()) {
+            keyhive.reachable_prekey_ops_for_agent(&(agent.clone().into()))
+        } else {
+            HashMap::new()
+        }
     }
 
     pub(crate) async fn membership_and_prekey_ops_for_peer(

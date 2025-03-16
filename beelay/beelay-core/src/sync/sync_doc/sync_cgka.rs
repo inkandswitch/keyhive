@@ -7,12 +7,12 @@ use keyhive_core::{
 };
 
 use crate::{
-    network::{messages::SessionResponse, PeerAddress, RpcError},
+    network::{PeerAddress, RpcError},
     parse::{self, Parse},
     riblt,
     serialization::Encode,
     state::keyhive::error::Ingest,
-    sync::{server_session::MakeSymbols, SessionId},
+    sync::SessionId,
     DocumentId, TaskContext,
 };
 
@@ -21,13 +21,17 @@ pub(super) async fn sync_cgka<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
     peer_address: PeerAddress,
     session_id: SessionId,
     doc_id: DocumentId,
-) -> Result<(), SyncCgkaError> {
+) -> Result<(), super::super::Error> {
     let mut decoder = riblt::Decoder::new();
     let local_ops = ctx
         .state()
         .keyhive()
         .cgka_ops_for_doc(doc_id)
-        .await?
+        .await
+        .map_err(|e| {
+            tracing::warn!(err=?e, "error getting local cgka ops");
+            crate::sync::Error::Other(format!("error getting local cgka ops: {:?}", e))
+        })?
         .into_iter()
         .map(|op| (Digest::hash(&op), op))
         .collect::<HashMap<_, _>>();
@@ -36,44 +40,26 @@ pub(super) async fn sync_cgka<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         decoder.add_symbol(&CgkaSymbol(*hash));
     }
 
-    let mut remote_symbols = unpack_session_resp(
-        ctx.requests()
-            .fetch_cgka_symbols(
-                peer_address,
-                session_id,
-                doc_id.clone(),
-                MakeSymbols {
-                    offset: 0,
-                    count: 10,
-                },
-            )
-            .await?,
-    )?;
-    let mut offset = 0;
+    let mut remote_symbols = ctx
+        .requests()
+        .sessions()
+        .fetch_cgka_symbols(peer_address, session_id, doc_id.clone(), 10)
+        .await??;
     const BATCH_SIZE: usize = 100;
 
     loop {
         for symbol in remote_symbols {
             decoder.add_coded_symbol(&symbol);
             decoder.try_decode().expect("FIXME");
-            offset += 1;
         }
         if decoder.decoded() {
             break;
         }
-        remote_symbols = unpack_session_resp(
-            ctx.requests()
-                .fetch_cgka_symbols(
-                    peer_address,
-                    session_id,
-                    doc_id.clone(),
-                    MakeSymbols {
-                        offset,
-                        count: BATCH_SIZE,
-                    },
-                )
-                .await?,
-        )?;
+        remote_symbols = ctx
+            .requests()
+            .sessions()
+            .fetch_cgka_symbols(peer_address, session_id, doc_id.clone(), BATCH_SIZE as u32)
+            .await??;
     }
 
     let to_download = decoder
@@ -85,17 +71,21 @@ pub(super) async fn sync_cgka<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
     let do_download = async {
         if !to_download.is_empty() {
             tracing::trace!(num_to_download = to_download.len(), "downloading cgka ops");
-            let ops = unpack_session_resp(
-                ctx.requests()
-                    .download_cgka_ops(peer_address, session_id, doc_id.clone(), to_download)
-                    .await?,
-            )?;
-            ctx.state().keyhive().ingest_cgka_ops(ops).await?;
+            let ops = ctx
+                .requests()
+                .sessions()
+                .fetch_cgka_ops(peer_address, session_id, doc_id.clone(), to_download)
+                .await??;
+            ctx.state()
+                .keyhive()
+                .ingest_cgka_ops(ops)
+                .await
+                .map_err(|e| super::super::Error::Other(e.to_string()));
             ctx.state().docs().mark_changed(&doc_id);
         } else {
             tracing::trace!("no cgka ops to download");
         }
-        Ok::<_, SyncCgkaError>(())
+        Ok::<_, super::super::Error>(())
     };
 
     let to_upload = decoder
@@ -109,9 +99,8 @@ pub(super) async fn sync_cgka<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         if !to_upload.is_empty() {
             tracing::trace!(num_to_upload = to_upload.len(), "uploading cgka ops");
             ctx.requests()
-                .upload_cgka_ops(peer_address, session_id, to_upload)
-                .await
-                .map_err(SyncCgkaError::from)?;
+                .upload_cgka_ops(peer_address, to_upload)
+                .await?;
         } else {
             tracing::trace!("no cgka ops to upload");
         }
@@ -173,28 +162,4 @@ impl<'a> Parse<'a> for CgkaSymbol {
         let symbol = Self(bytes.into());
         Ok((input, symbol))
     }
-}
-
-fn unpack_session_resp<R>(resp: SessionResponse<R>) -> Result<R, SyncCgkaError> {
-    match resp {
-        SessionResponse::Ok(result) => Ok(result),
-        SessionResponse::SessionExpired => Err(SyncCgkaError::SessionExpired),
-        SessionResponse::SessionNotFound => Err(SyncCgkaError::SessionNotFound),
-    }
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum SyncCgkaError {
-    #[error(transparent)]
-    Cgka(#[from] CgkaError),
-    #[error(transparent)]
-    CgkaOp(#[from] ReceiveCgkaOpError),
-    #[error(transparent)]
-    IngestionFailed(#[from] Ingest),
-    #[error(transparent)]
-    Rpc(#[from] RpcError),
-    #[error("session expired")]
-    SessionExpired,
-    #[error("session not found")]
-    SessionNotFound,
 }

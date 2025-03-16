@@ -42,6 +42,7 @@ pub(crate) enum Command {
     },
     LoadDoc {
         doc_id: DocumentId,
+        decrypt: bool,
     },
     CreateDoc {
         initial_commit: Commit,
@@ -135,8 +136,8 @@ where
             let result = add_commits(ctx, dag_id, commits).await;
             CommandResult::AddCommits(result)
         }
-        Command::LoadDoc { doc_id } => {
-            CommandResult::LoadDoc(load_doc_commits(&mut ctx, &doc_id).await)
+        Command::LoadDoc { doc_id, decrypt } => {
+            CommandResult::LoadDoc(load_doc_commits(&mut ctx, &doc_id, decrypt).await)
         }
         Command::CreateDoc {
             initial_commit,
@@ -209,6 +210,7 @@ where
 async fn load_doc_commits<R>(
     ctx: &mut TaskContext<R>,
     doc_id: &DocumentId,
+    decrypt: bool,
 ) -> Option<Vec<CommitOrBundle>>
 where
     R: rand::Rng + rand::CryptoRng + Clone + 'static,
@@ -222,39 +224,47 @@ where
             let doc_id = doc_id.clone();
             match commit_or_bundle {
                 (CommitOrStratum::Commit(c), data) => {
-                    let decrypted = match ctx
-                        .state()
-                        .keyhive()
-                        .decrypt(doc_id, c.parents(), c.hash(), data)
-                        .await
-                    {
-                        Ok(d) => d,
-                        Err(e) => {
-                            tracing::error!(err=?e, "failed to decrypt commit");
-                            return Ok(None);
+                    let content = if decrypt {
+                        match ctx
+                            .state()
+                            .keyhive()
+                            .decrypt(doc_id, c.parents(), c.hash(), data)
+                            .await
+                        {
+                            Ok(d) => d,
+                            Err(e) => {
+                                tracing::error!(err=?e, "failed to decrypt commit");
+                                return Ok(None);
+                            }
                         }
+                    } else {
+                        data
                     };
-                    let commit = Commit::new(c.parents().to_vec(), decrypted, c.hash());
+                    let commit = Commit::new(c.parents().to_vec(), content, c.hash());
                     Ok(Some(CommitOrBundle::Commit(commit)))
                 }
                 (CommitOrStratum::Stratum(s), data) => {
-                    let decrypted = match ctx
-                        .state()
-                        .keyhive()
-                        .decrypt(doc_id, &[s.start()], s.hash(), data)
-                        .await
-                    {
-                        Ok(d) => d,
-                        Err(e) => {
-                            tracing::error!(err=?e, "failed to decrypt bundle");
-                            return Ok(None);
+                    let content = if decrypt {
+                        match ctx
+                            .state()
+                            .keyhive()
+                            .decrypt(doc_id, &[s.start()], s.hash(), data)
+                            .await
+                        {
+                            Ok(d) => d,
+                            Err(e) => {
+                                tracing::error!(err=?e, "failed to decrypt bundle");
+                                return Ok(None);
+                            }
                         }
+                    } else {
+                        data
                     };
                     let bundle = CommitBundle::builder()
                         .start(s.start())
                         .end(s.end())
                         .checkpoints(s.checkpoints().to_vec())
-                        .bundled_commits(decrypted)
+                        .bundled_commits(content)
                         .build();
                     Ok(Some(CommitOrBundle::Bundle(bundle)))
                 }

@@ -10,15 +10,14 @@ use keyhive_core::{
 };
 
 use crate::{
-    network::{messages::SessionResponse, PeerAddress},
+    network::PeerAddress,
     parse::{self, Parse},
     sedimentree::MinimalTreeHash,
     serialization::Encode,
-    sync::server_session::MakeSymbols,
     DocumentId, PeerId, TaskContext,
 };
 
-use super::{local_state::DocState, riblt, SessionId};
+use super::{reachable_docs::DocState, riblt, SessionId};
 
 #[derive(Debug)]
 pub(super) struct SyncDocsResult {
@@ -32,9 +31,10 @@ pub(super) async fn sync_docs<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
     ctx: TaskContext<R>,
     session: SessionId,
     local_docs: HashMap<DocumentId, DocState>,
+    init_remote_symbols: Vec<riblt::CodedSymbol<DocStateHash>>,
     remote: PeerId,
     target: PeerAddress,
-) -> Result<SyncDocsResult, error::SyncDocs> {
+) -> Result<SyncDocsResult, super::Error> {
     tracing::trace!(
         num_local_docs = local_docs.len(),
         "beginning doc collection sync"
@@ -44,19 +44,7 @@ pub(super) async fn sync_docs<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         decoder.add_symbol(&state.hash);
     }
 
-    let mut symbols = unpack_session_resp(
-        ctx.requests()
-            .fetch_doc_state_symbols(
-                target,
-                session,
-                MakeSymbols {
-                    offset: 0,
-                    count: 10,
-                },
-            )
-            .await?,
-    )?;
-    let mut offset = symbols.len();
+    let mut symbols = init_remote_symbols;
     const BATCH_SIZE: usize = 100;
     let mut iterations = 0;
 
@@ -69,20 +57,12 @@ pub(super) async fn sync_docs<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         if decoder.decoded() {
             break;
         }
-        offset += symbols.len();
         iterations += 1;
-        symbols = unpack_session_resp(
-            ctx.requests()
-                .fetch_doc_state_symbols(
-                    target,
-                    session,
-                    MakeSymbols {
-                        count: BATCH_SIZE,
-                        offset,
-                    },
-                )
-                .await?,
-        )?;
+        symbols = ctx
+            .requests()
+            .sessions()
+            .fetch_doc_symbols(target, session, BATCH_SIZE as u32)
+            .await??;
     }
 
     tracing::trace!("RIBLT sync completed");
@@ -198,14 +178,6 @@ impl<'a> Parse<'a> for DocStateHash {
     }
 }
 
-fn unpack_session_resp<R>(resp: SessionResponse<R>) -> Result<R, error::SyncDocs> {
-    match resp {
-        SessionResponse::Ok(data) => Ok(data),
-        SessionResponse::SessionExpired => Err(error::SyncDocs::SessionExpired),
-        SessionResponse::SessionNotFound => Err(error::SyncDocs::SessionNotFound),
-    }
-}
-
 pub(crate) mod error {
     use crate::network::RpcError;
 
@@ -219,5 +191,7 @@ pub(crate) mod error {
         SessionExpired,
         #[error("session not found")]
         SessionNotFound,
+        #[error("session error: {0}")]
+        Session(String),
     }
 }

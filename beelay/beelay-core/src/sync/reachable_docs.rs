@@ -2,17 +2,14 @@ use std::collections::HashMap;
 
 use keyhive_core::{
     cgka::{error::CgkaError, operation::CgkaOperation},
-    crypto::{digest::Digest, signed::Signed},
-    event::static_event::StaticEvent,
+    crypto::signed::Signed,
 };
 
-use crate::{sedimentree, task_context, CommitHash, DocumentId, PeerId, TaskContext};
+use crate::{sedimentree, task_context, DocumentId, PeerId, TaskContext};
 
 use super::DocStateHash;
 
-pub(crate) struct LocalState {
-    pub(crate) membership_and_prekey_ops:
-        HashMap<Digest<StaticEvent<CommitHash>>, StaticEvent<CommitHash>>,
+pub(crate) struct ReachableDocs {
     pub(crate) doc_states: HashMap<DocumentId, DocState>,
 }
 
@@ -29,17 +26,12 @@ impl<'a> From<&'a DocState> for DocStateHash {
     }
 }
 
-impl LocalState {
+impl ReachableDocs {
     #[tracing::instrument(level = "trace", skip(ctx))]
-    pub(crate) async fn new<R: rand::Rng + rand::CryptoRng + Clone>(
+    pub(crate) async fn load<R: rand::Rng + rand::CryptoRng + Clone>(
         ctx: TaskContext<R>,
         for_remote: PeerId,
     ) -> Result<Self, Error> {
-        let membership_and_prekey_ops = ctx
-            .state()
-            .keyhive()
-            .membership_and_prekey_ops_for_peer(for_remote)
-            .await;
         let docs = ctx
             .state()
             .keyhive()
@@ -75,7 +67,6 @@ impl LocalState {
         });
         let doc_states = futures::future::try_join_all(doc_states).await?;
         Ok(Self {
-            membership_and_prekey_ops,
             doc_states: doc_states.into_iter().filter_map(|state| state).collect(),
         })
     }

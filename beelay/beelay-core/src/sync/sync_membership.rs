@@ -7,15 +7,15 @@ use std::{
 use keyhive_core::{crypto::digest::Digest, event::static_event::StaticEvent};
 
 use crate::{
-    network::{messages::SessionResponse, PeerAddress, RpcError},
+    network::{messages::session::NextSyncPhase, PeerAddress},
     parse::{self, Parse},
-    riblt,
+    riblt::{self, CodedSymbol},
     serialization::Encode,
-    sync::server_session::MakeSymbols,
+    sync::MembershipState,
     CommitHash, PeerId, TaskContext,
 };
 
-use super::SessionId;
+use super::{DocStateHash, SessionId};
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
@@ -80,13 +80,71 @@ impl<'a> From<&'a StaticEvent<CommitHash>> for MembershipSymbol {
 pub(crate) async fn sync_membership<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
     ctx: TaskContext<R>,
     session_id: SessionId,
+    seq: &mut u32,
+    symbols: Vec<riblt::CodedSymbol<MembershipSymbol>>,
+    local_ops: HashMap<Digest<StaticEvent<CommitHash>>, StaticEvent<CommitHash>>,
+    with_remote: PeerId,
+    remote_target: PeerAddress,
+) -> Result<Option<Vec<CodedSymbol<DocStateHash>>>, super::Error> {
+    tracing::debug!(num_local_ops = local_ops.len(), "running membership sync");
+
+    run_once(
+        ctx.clone(),
+        session_id,
+        symbols,
+        local_ops,
+        with_remote,
+        remote_target,
+    )
+    .await?;
+
+    loop {
+        // Reload local state
+        let membership = MembershipState::load(ctx.clone(), with_remote).await;
+        let local_ops = membership.into_static_events();
+
+        let mut encoder = riblt::Encoder::new();
+        for op in local_ops.values() {
+            encoder.add_symbol(&MembershipSymbol::from(op));
+        }
+        let symbols = encoder.next_n_symbols(10);
+
+        let next_phase = ctx
+            .requests()
+            .sessions()
+            .finish_membership(remote_target, session_id, symbols)
+            .await??;
+        match next_phase {
+            NextSyncPhase::Membership(symbols) => {
+                run_once(
+                    ctx.clone(),
+                    session_id,
+                    symbols,
+                    local_ops,
+                    with_remote,
+                    remote_target,
+                )
+                .await?;
+            }
+            NextSyncPhase::Docs(doc_symbols) => {
+                return Ok(Some(doc_symbols));
+            }
+            NextSyncPhase::Done => {
+                return Ok(None);
+            }
+        }
+    }
+}
+
+#[tracing::instrument(skip(ctx, local_ops, symbols), fields(num_symbols = symbols.len()))]
+pub(crate) async fn run_once<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
+    ctx: TaskContext<R>,
+    session_id: SessionId,
     mut symbols: Vec<riblt::CodedSymbol<MembershipSymbol>>,
     local_ops: HashMap<Digest<StaticEvent<CommitHash>>, StaticEvent<CommitHash>>,
     with_remote: PeerId,
     remote_target: PeerAddress,
-) -> Result<(), error::SyncMembership> {
-    tracing::debug!(num_local_ops = local_ops.len(), "running membership sync");
-
+) -> Result<(), super::Error> {
     let mut decoder = riblt::Decoder::new();
     for op_hash in local_ops.keys() {
         decoder.add_symbol(&MembershipSymbol {
@@ -94,7 +152,6 @@ pub(crate) async fn sync_membership<R: rand::Rng + rand::CryptoRng + Clone + 'st
         });
     }
 
-    let mut offset = symbols.len();
     const BATCH_SIZE: usize = 100;
 
     loop {
@@ -106,19 +163,11 @@ pub(crate) async fn sync_membership<R: rand::Rng + rand::CryptoRng + Clone + 'st
         if decoder.decoded() {
             break;
         }
-        symbols = unpack_session_response(
-            ctx.requests()
-                .fetch_membership_symbols(
-                    remote_target,
-                    session_id,
-                    MakeSymbols {
-                        offset,
-                        count: BATCH_SIZE,
-                    },
-                )
-                .await?,
-        )?;
-        offset += BATCH_SIZE;
+        symbols = ctx
+            .requests()
+            .sessions()
+            .fetch_membership_symbols(remote_target, session_id, BATCH_SIZE as u32)
+            .await??;
     }
 
     let local_op_hashes = decoder
@@ -139,12 +188,14 @@ pub(crate) async fn sync_membership<R: rand::Rng + rand::CryptoRng + Clone + 'st
     let upload_fut = async {
         if to_upload.is_empty() {
             tracing::trace!("no membership ops to upload");
-            Ok(())
+            Ok::<_, super::Error>(())
         } else {
             tracing::trace!(num_to_upload = to_upload.len(), "uploading ops");
             ctx.requests()
+                .sessions()
                 .upload_membership_ops(remote_target, session_id, to_upload)
-                .await
+                .await?;
+            Ok(())
         }
     };
 
@@ -156,49 +207,26 @@ pub(crate) async fn sync_membership<R: rand::Rng + rand::CryptoRng + Clone + 'st
     let download = async {
         if !to_download.is_empty() {
             tracing::trace!(num_to_download = to_download.len(), "downloading ops");
-            let ops = unpack_session_response(
-                ctx.requests()
-                    .download_membership_ops(remote_target, session_id, to_download)
-                    .await?,
-            )?;
+            let ops = ctx
+                .requests()
+                .sessions()
+                .fetch_membership_ops(remote_target, session_id, to_download)
+                .await??;
             ctx.state()
                 .keyhive()
                 .ingest_membership_ops(ops)
                 .await
-                .map_err(|e| error::SyncMembership::IngestionFailed(e.to_string()))?;
+                .map_err(|e| super::Error::Other(format!("ingestion failed: {}", e)))?
         } else {
             tracing::trace!("no membership ops to download");
         }
-        Ok::<_, error::SyncMembership>(())
+        Ok::<_, super::Error>(())
     };
 
     let (upload_result, download_result) = futures::future::join(upload_fut, download).await;
 
     upload_result?;
     download_result?;
+
     Ok(())
-}
-
-fn unpack_session_response<R>(resp: SessionResponse<R>) -> Result<R, error::SyncMembership> {
-    match resp {
-        SessionResponse::Ok(data) => Ok(data),
-        SessionResponse::SessionExpired => Err(error::SyncMembership::SessionExpired),
-        SessionResponse::SessionNotFound => Err(error::SyncMembership::SessionNotFound),
-    }
-}
-
-pub(crate) mod error {
-    use super::RpcError;
-
-    #[derive(Debug, thiserror::Error)]
-    pub(crate) enum SyncMembership {
-        #[error("ingestion failed: {0}")]
-        IngestionFailed(String),
-        #[error(transparent)]
-        Rpc(#[from] RpcError),
-        #[error("session expired")]
-        SessionExpired,
-        #[error("remote said the session didn't exist")]
-        SessionNotFound,
-    }
 }

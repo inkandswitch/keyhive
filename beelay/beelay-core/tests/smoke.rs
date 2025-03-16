@@ -263,52 +263,82 @@ fn sync_loops_are_rerun() {
 }
 
 #[test]
-fn newly_created_reachable_documents_are_synced() {
+fn newly_accessible_documents_are_synced() {
     init_logging();
     let mut network = Network::new();
-    let peer1 = network.create_peer("peer1").build();
-    let peer2 = network.create_peer("peer2").build();
-    let peer2_contact = network.beelay(&peer2).contact_card().unwrap();
+    let alice = network.create_peer("alice").build();
+    let bob = network.create_peer("bob").build();
+    let charlie = network.create_peer("charlie").build();
 
-    let group_id = network.beelay(&peer1).create_group().unwrap();
+    // First create a group on alice with charlie as a member. Then, sync with Charlie and disconnect.
+    // Charlie now adds bob to the group. Concurrently alice creates a document in the group. bob syncs
+    // with Charlie - so he now has the membership ops proving he has access to the group. Finally, Bob
+    // syncs with Alice. He should have access to the doc.
+
+    let charlie_contact = network.beelay(&charlie).contact_card().unwrap();
+    let group = network.beelay(&alice).create_group().unwrap();
     network
-        .beelay(&peer1)
+        .beelay(&alice)
         .add_member_to_group(AddMemberToGroup {
-            group_id,
-            member: beelay_core::keyhive::KeyhiveEntityId::Individual(peer2_contact),
-            access: MemberAccess::Read,
+            group_id: group,
+            member: KeyhiveEntityId::Individual(charlie_contact),
+            access: MemberAccess::Admin,
         })
         .unwrap();
 
-    let (doc_id, initial_commit) = network
-        .beelay(&peer1)
-        .create_doc(vec![KeyhiveEntityId::Group(group_id)])
-        .unwrap();
-    let commit1 = beelay_core::Commit::new(
-        vec![initial_commit.hash()],
-        vec![1, 2, 3],
-        CommitHash::from([1; 32]),
-    );
+    // Now connect to charlie and sync
+    // Now, sync with charlie
+    let ConnectedPair {
+        left_to_right: alice_to_charlie,
+        ..
+    } = network.connect_stream(&alice, &charlie);
+
+    // Sync should have happened now as we run until quiescent
+
+    // Now disconnect from alice
+    network.beelay(&alice).disconnect(alice_to_charlie);
+
+    // Now, add bob to the group on charlie
+    let bob_contact = network.beelay(&bob).contact_card().unwrap();
     network
-        .beelay(&peer1)
-        .add_commits(doc_id, vec![commit1.clone()])
+        .beelay(&charlie)
+        .add_member_to_group(AddMemberToGroup {
+            group_id: group,
+            member: KeyhiveEntityId::Individual(bob_contact),
+            access: MemberAccess::Admin,
+        })
         .unwrap();
 
-    network.connect_stream(&peer1, &peer2);
+    // Sync bob with charlie
+    let ConnectedPair {
+        left_to_right: bob_to_charlie,
+        ..
+    } = network.connect_stream(&bob, &charlie);
+    network.beelay(&bob).disconnect(bob_to_charlie);
 
-    network.advance_time(beelay_core::SYNC_INTERVAL + Duration::from_millis(10));
+    // Concurrently create a document on Alice
+    let (doc, initial_commit) = network
+        .beelay(&alice)
+        .create_doc(vec![KeyhiveEntityId::Group(group)])
+        .unwrap();
 
-    let table = network.beelay(&peer2).log_keyhive_events(
-        keyhive_core::debug_events::Nicknames::default()
-            .with_nickname(doc_id.as_bytes(), "doc1")
-            .with_nickname(group_id.as_bytes(), "group1")
-            .with_nickname(peer1.as_bytes(), "peer1")
-            .with_nickname(peer2.as_bytes(), "peer2"),
-    );
-    keyhive_core::debug_events::terminal::print_event_table_verbose(table);
+    // Connect bob to alice
+    let ConnectedPair {
+        left_to_right: bob_to_alice,
+        ..
+    } = network.connect_stream(&bob, &alice);
 
-    // Sync should have run, the doc should be on peer2
-    let doc_on_two = network.beelay(&peer2).load_doc(doc_id).unwrap();
+    // We should now be able to download the document
 
-    // Now create a nother
+    let doc_on_bob = network.beelay(&bob).load_doc_encrypted(doc).unwrap();
+
+    // Check that the new commit is part of the doc on bob
+    let commit_hashes = doc_on_bob
+        .into_iter()
+        .map(|c| match c {
+            CommitOrBundle::Commit(c) => c.hash(),
+            CommitOrBundle::Bundle(b) => *b.hash(),
+        })
+        .collect::<HashSet<_>>();
+    assert!(commit_hashes.contains(&initial_commit.hash()));
 }

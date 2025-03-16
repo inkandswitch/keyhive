@@ -2,19 +2,21 @@ use std::{cell::RefCell, future::Future, rc::Rc};
 
 use futures::channel::oneshot;
 use keyhive_core::{
-    cgka::operation::CgkaOperation, crypto::digest::Digest, event::static_event::StaticEvent,
+    cgka::operation::CgkaOperation,
+    crypto::{digest::Digest, signed::Signed},
+    event::static_event::StaticEvent,
 };
 
 use crate::{
     auth,
     network::{
-        messages::{self, Response, SessionResponse},
+        messages::{self, session, Response},
         InnerRpcResponse, PeerAddress, RpcError,
     },
-    riblt::{self},
+    riblt::{self, CodedSymbol},
     state::StateAccessor,
     streams,
-    sync::{server_session::MakeSymbols, SessionId},
+    sync::{CgkaSymbol, DocStateHash, MembershipSymbol, SessionId},
     CommitHash, DocumentId, OutboundRequestId, SignedMessage, UnixTimestampMillis,
 };
 
@@ -115,112 +117,12 @@ where
         }
     }
 
-    pub(crate) fn begin_sync(
-        &self,
-        to_peer: PeerAddress,
-    ) -> impl Future<
-        Output = Result<
-            (
-                crate::sync::SessionId,
-                Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>,
-            ),
-            RpcError,
-        >,
-    > + 'static {
-        let request = crate::Request::BeginSync;
-        let task = self.request(to_peer, request);
-        async move {
-            let response = task.await?;
-            match response.content {
-                NonErrorPayload::BeginSync {
-                    session_id,
-                    first_symbols,
-                } => Ok((session_id, first_symbols)),
-                _ => Err(RpcError::IncorrectResponseType),
-            }
-        }
-    }
-
-    pub(crate) fn fetch_doc_state_symbols(
-        &self,
-        from_peer: PeerAddress,
-        session: crate::sync::SessionId,
-        MakeSymbols { count, offset }: MakeSymbols,
-    ) -> impl Future<
-        Output = Result<
-            SessionResponse<Vec<riblt::CodedSymbol<crate::sync::DocStateHash>>>,
-            RpcError,
-        >,
-    > + 'static {
-        let request = crate::Request::FetchDocStateSymbols {
-            session_id: session,
-            count,
-            offset,
-        };
-        let task = self.request(from_peer, request);
-        async move {
-            let response = task.await?;
-            match response.content {
-                NonErrorPayload::FetchDocStateSymbols(symbols) => Ok(symbols),
-                _ => Err(RpcError::IncorrectResponseType),
-            }
-        }
-    }
-
-    pub(crate) fn fetch_membership_symbols(
-        &self,
-        from_peer: PeerAddress,
-        session_id: crate::sync::SessionId,
-        MakeSymbols { count, offset }: MakeSymbols,
-    ) -> impl Future<
-        Output = Result<
-            SessionResponse<Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>>,
-            RpcError,
-        >,
-    > + 'static {
-        let request = crate::Request::FetchMembershipSymbols {
-            session_id,
-            count,
-            offset,
-        };
-        let task = self.request(from_peer, request);
-        async move {
-            let response = task.await?;
-            match response.content {
-                NonErrorPayload::FetchMembershipSymbols(symbols) => Ok(symbols),
-                _ => Err(RpcError::IncorrectResponseType),
-            }
-        }
-    }
-
-    pub(crate) fn download_membership_ops(
-        &self,
-        from_peer: PeerAddress,
-        session_id: crate::sync::SessionId,
-        op_hashes: Vec<Digest<StaticEvent<CommitHash>>>,
-    ) -> impl Future<Output = Result<SessionResponse<Vec<StaticEvent<CommitHash>>>, RpcError>> + 'static
-    {
-        let request = crate::Request::DownloadMembershipOps {
-            session_id,
-            op_hashes,
-        };
-        let task = self.request(from_peer, request);
-        async move {
-            let response = task.await?;
-            match response.content {
-                NonErrorPayload::DownloadMembershipOps(ops) => Ok(ops),
-                _ => Err(RpcError::IncorrectResponseType),
-            }
-        }
-    }
-
     pub(crate) fn upload_membership_ops(
         &self,
         from_peer: PeerAddress,
-        session_id: crate::sync::SessionId,
         ops: Vec<StaticEvent<CommitHash>>,
     ) -> impl Future<Output = Result<(), RpcError>> + 'static {
-        let request = crate::Request::UploadMembershipOps { session_id, ops };
+        let request = crate::Request::UploadMembershipOps { ops };
         let task = self.request(from_peer, request);
         async move {
             let response = task.await?;
@@ -231,68 +133,12 @@ where
         }
     }
 
-    pub(crate) fn fetch_cgka_symbols(
-        &self,
-        from_peer: PeerAddress,
-        session_id: crate::sync::SessionId,
-        doc_id: DocumentId,
-        MakeSymbols { count, offset }: MakeSymbols,
-    ) -> impl Future<
-        Output = Result<
-            SessionResponse<Vec<riblt::CodedSymbol<crate::sync::CgkaSymbol>>>,
-            RpcError,
-        >,
-    > + 'static {
-        let request = crate::Request::FetchCgkaSymbols {
-            doc_id,
-            session_id,
-            count,
-            offset,
-        };
-        let task = self.request(from_peer, request);
-        async move {
-            let response = task.await?;
-            match response.content {
-                NonErrorPayload::FetchCgkaSymbols(symbols) => Ok(symbols),
-                _ => Err(RpcError::IncorrectResponseType),
-            }
-        }
-    }
-
-    pub(crate) fn download_cgka_ops(
-        &self,
-        from_peer: PeerAddress,
-        session_id: crate::sync::SessionId,
-        doc_id: DocumentId,
-        op_hashes: Vec<Digest<keyhive_core::crypto::signed::Signed<CgkaOperation>>>,
-    ) -> impl Future<
-        Output = Result<
-            SessionResponse<Vec<keyhive_core::crypto::signed::Signed<CgkaOperation>>>,
-            RpcError,
-        >,
-    > + 'static {
-        let request = crate::Request::DownloadCgkaOps {
-            session_id,
-            doc_id,
-            op_hashes,
-        };
-        let task = self.request(from_peer, request);
-        async move {
-            let response = task.await?;
-            match response.content {
-                NonErrorPayload::DownloadCgkaOps(ops) => Ok(ops),
-                _ => Err(RpcError::IncorrectResponseType),
-            }
-        }
-    }
-
     pub(crate) fn upload_cgka_ops(
         &self,
         to_peer: PeerAddress,
-        session_id: SessionId,
         ops: Vec<keyhive_core::crypto::signed::Signed<CgkaOperation>>,
     ) -> impl Future<Output = Result<(), RpcError>> + 'static {
-        let request = crate::Request::UploadCgkaOps { session_id, ops };
+        let request = crate::Request::UploadCgkaOps { ops };
         let task = self.request(to_peer, request);
         async move {
             let response = task.await?;
@@ -301,6 +147,10 @@ where
                 _ => Err(RpcError::IncorrectResponseType),
             }
         }
+    }
+
+    pub(crate) fn sessions<'b>(&'b self) -> Sessions<'b, R> {
+        Sessions::new(self)
     }
 
     fn request(
@@ -413,20 +263,8 @@ enum NonErrorPayload {
     FetchSedimentree(FetchedSedimentree),
     FetchBlob(Option<Vec<u8>>),
     Pong,
-    BeginSync {
-        session_id: crate::sync::SessionId,
-        first_symbols: Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>,
-    },
-    FetchMembershipSymbols(SessionResponse<Vec<riblt::CodedSymbol<crate::sync::MembershipSymbol>>>),
-    DownloadMembershipOps(SessionResponse<Vec<StaticEvent<CommitHash>>>),
+    Session(session::SessionResponse),
     UploadMembershipOps,
-    FetchCgkaSymbols(SessionResponse<Vec<riblt::CodedSymbol<crate::sync::CgkaSymbol>>>),
-    DownloadCgkaOps(
-        SessionResponse<
-            Vec<keyhive_core::crypto::signed::Signed<keyhive_core::cgka::operation::CgkaOperation>>,
-        >,
-    ),
-    FetchDocStateSymbols(SessionResponse<Vec<riblt::CodedSymbol<crate::sync::DocStateHash>>>),
     UploadCgkaOps,
 }
 
@@ -445,24 +283,181 @@ impl TryFrom<Response> for NonErrorPayload {
             Response::Pong => Ok(NonErrorPayload::Pong),
             Response::AuthenticationFailed => Err(RpcError::AuthenticatedFailed),
             Response::AuthorizationFailed => Err(RpcError::AuthorizationFailed),
-            Response::BeginSync {
-                session_id,
-                first_symbols,
-            } => Ok(NonErrorPayload::BeginSync {
-                session_id,
-                first_symbols,
-            }),
-            Response::FetchMembershipSymbols(symbols) => {
-                Ok(NonErrorPayload::FetchMembershipSymbols(symbols))
-            }
-            Response::DownloadMembershipOps(ops) => Ok(NonErrorPayload::DownloadMembershipOps(ops)),
+            Response::Session(resp) => Ok(NonErrorPayload::Session(resp)),
             Response::UploadMembershipOps => Ok(NonErrorPayload::UploadMembershipOps),
-            Response::FetchCgkaSymbols(symbols) => Ok(NonErrorPayload::FetchCgkaSymbols(symbols)),
-            Response::DownloadCgkaOps(ops) => Ok(NonErrorPayload::DownloadCgkaOps(ops)),
             Response::UploadCgkaOps => Ok(NonErrorPayload::UploadCgkaOps),
-            Response::FetchDocStateSymbols(symbols) => {
-                Ok(NonErrorPayload::FetchDocStateSymbols(symbols))
-            }
         }
     }
+}
+
+macro_rules! extract_session_response {
+    ($fut:expr, $success_pattern:pat => $success_expr:expr) => {
+        async move {
+            match $fut.await {
+                Ok(resp) => match resp.content {
+                    NonErrorPayload::Session($success_pattern) => Ok(Ok($success_expr)),
+                    NonErrorPayload::Session(session::SessionResponse::Error(error)) => {
+                        Ok(Err(SessionRpcError::Error(error)))
+                    }
+                    NonErrorPayload::Session(session::SessionResponse::Expired) => {
+                        Ok(Err(SessionRpcError::Expired))
+                    }
+                    _ => Err(RpcError::IncorrectResponseType),
+                },
+                Err(e) => Err(e),
+            }
+        }
+    };
+}
+
+pub(crate) struct Sessions<'a, R: rand::Rng + rand::CryptoRng> {
+    requests: &'a Requests<'a, R>,
+}
+
+impl<'a, R: rand::Rng + rand::CryptoRng + 'static> Sessions<'a, R> {
+    fn new(requests: &'a Requests<'a, R>) -> Self {
+        Self { requests }
+    }
+
+    pub(crate) fn begin(
+        &self,
+        peer: PeerAddress,
+        local_membership_symbols: Vec<riblt::CodedSymbol<MembershipSymbol>>,
+        local_doc_symbols: Vec<riblt::CodedSymbol<DocStateHash>>,
+    ) -> impl Future<
+        Output = Result<Result<(SessionId, session::NextSyncPhase), SessionRpcError>, RpcError>,
+    > + 'static {
+        let request = messages::Request::Session(session::SessionRequest::Begin {
+            membership_symbols: local_membership_symbols,
+            doc_symbols: local_doc_symbols,
+        });
+        let fut = self.requests.request(peer, request);
+        extract_session_response!(fut, session::SessionResponse::Begin { id, next_phase } => (id, next_phase))
+    }
+
+    pub(crate) fn fetch_membership_symbols(
+        &self,
+        peer: PeerAddress,
+        session_id: SessionId,
+        count: u32,
+    ) -> impl Future<
+        Output = Result<
+            Result<Vec<riblt::CodedSymbol<MembershipSymbol>>, SessionRpcError>,
+            RpcError,
+        >,
+    > + 'static {
+        let request = messages::Request::Session(session::SessionRequest::Message {
+            session_id,
+            msg: session::SessionMessage::FetchMembershipSymbols { count },
+        });
+        let fut = self.requests.request(peer, request);
+        extract_session_response!(fut, session::SessionResponse::FetchMembershipSymbols(symbols) => symbols)
+    }
+
+    pub(crate) fn fetch_doc_symbols(
+        &self,
+        peer: PeerAddress,
+        session_id: SessionId,
+        count: u32,
+    ) -> impl Future<
+        Output = Result<Result<Vec<riblt::CodedSymbol<DocStateHash>>, SessionRpcError>, RpcError>,
+    > + 'static {
+        let request = messages::Request::Session(session::SessionRequest::Message {
+            session_id,
+            msg: session::SessionMessage::FetchDocSymbols { count },
+        });
+        let fut = self.requests.request(peer, request);
+        extract_session_response!(fut, session::SessionResponse::FetchDocSymbols(symbols) => symbols)
+    }
+
+    pub(crate) fn finish_membership(
+        &self,
+        peer: PeerAddress,
+        session_id: SessionId,
+        local_symbols: Vec<CodedSymbol<MembershipSymbol>>,
+    ) -> impl Future<Output = Result<Result<session::NextSyncPhase, SessionRpcError>, RpcError>> + 'static
+    {
+        let request = messages::Request::Session(session::SessionRequest::Message {
+            session_id,
+            msg: session::SessionMessage::FinishMembership {
+                local_membership: local_symbols,
+            },
+        });
+        let fut = self.requests.request(peer, request);
+        extract_session_response!(fut, session::SessionResponse::FinishMembership(phase) => phase)
+    }
+
+    pub(crate) fn fetch_membership_ops(
+        &self,
+        peer: PeerAddress,
+        session_id: SessionId,
+        op_hashes: Vec<Digest<StaticEvent<CommitHash>>>,
+    ) -> impl Future<Output = Result<Result<Vec<StaticEvent<CommitHash>>, SessionRpcError>, RpcError>>
+           + 'static {
+        let request = messages::Request::Session(session::SessionRequest::Message {
+            session_id,
+            msg: session::SessionMessage::FetchMembershipOps(op_hashes),
+        });
+        let fut = self.requests.request(peer, request);
+        extract_session_response!(fut, session::SessionResponse::FetchMembershipOps(ops) => ops)
+    }
+
+    pub(crate) fn upload_membership_ops(
+        &self,
+        from_peer: PeerAddress,
+        session_id: SessionId,
+        ops: Vec<StaticEvent<CommitHash>>,
+    ) -> impl Future<Output = Result<Result<(), SessionRpcError>, RpcError>> + 'static {
+        let request = messages::Request::Session(session::SessionRequest::Message {
+            session_id,
+            msg: session::SessionMessage::UploadMembershipOps(ops),
+        });
+        let fut = self.requests.request(from_peer, request);
+        extract_session_response!(fut, session::SessionResponse::UploadMembershipOps => ())
+    }
+
+    pub(crate) fn fetch_cgka_symbols(
+        &self,
+        peer: PeerAddress,
+        session_id: SessionId,
+        doc_id: DocumentId,
+        count: u32,
+    ) -> impl Future<
+        Output = Result<Result<Vec<riblt::CodedSymbol<CgkaSymbol>>, SessionRpcError>, RpcError>,
+    > + 'static {
+        let request = messages::Request::Session(session::SessionRequest::Message {
+            session_id,
+            msg: session::SessionMessage::FetchCgkaSymbols { doc: doc_id, count },
+        });
+        let fut = self.requests.request(peer, request);
+        extract_session_response!(fut, session::SessionResponse::FetchCgkaSymbols(symbols) => symbols)
+    }
+
+    pub(crate) fn fetch_cgka_ops(
+        &self,
+        peer: PeerAddress,
+        session_id: SessionId,
+        doc_id: DocumentId,
+        op_hashes: Vec<Digest<Signed<CgkaOperation>>>,
+    ) -> impl Future<
+        Output = Result<
+            Result<Vec<keyhive_core::crypto::signed::Signed<CgkaOperation>>, SessionRpcError>,
+            RpcError,
+        >,
+    > + 'static {
+        let request = messages::Request::Session(session::SessionRequest::Message {
+            session_id,
+            msg: session::SessionMessage::FetchCgkaOps(doc_id, op_hashes),
+        });
+        let fut = self.requests.request(peer, request);
+        extract_session_response!(fut, session::SessionResponse::FetchCgkaOps(ops) => ops)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SessionRpcError {
+    #[error("session expired")]
+    Expired,
+    #[error("session error: {0}")]
+    Error(String),
 }

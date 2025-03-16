@@ -22,6 +22,7 @@ ECDH
 EE
 EdDSA
 FIXME
+GroupId
 HChaCha
 Invariants
 Keyhive
@@ -33,6 +34,7 @@ Nonces
 OCAP's
 OCap
 OpenPGP
+PeerId
 PKI
 PN
 PQC
