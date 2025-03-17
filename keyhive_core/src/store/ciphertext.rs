@@ -7,10 +7,11 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use thiserror::Error;
 
-#[allow(async_fn_in_trait)]
 pub trait CiphertextStore<T, Cr: ContentRef> {
+    #[allow(async_fn_in_trait)]
     async fn get(&self, id: &Cr) -> Option<EncryptedContent<T, Cr>>;
 
+    #[allow(async_fn_in_trait)]
     async fn try_causal_decrypt(
         &self,
         to_decrypt: &mut Vec<(EncryptedContent<T, Cr>, SymmetricKey)>,
@@ -65,7 +66,9 @@ pub trait CiphertextStore<T, Cr: ContentRef> {
     }
 }
 
-pub trait SendableCiphertextStore<T: Send, Cr: ContentRef + Send>: CiphertextStore<T, Cr> {
+pub trait SendableCiphertextStore<T: Send, Cr: ContentRef + Send>:
+    CiphertextStore<T, Cr> + Sync
+{
     fn get_sendable(&self, id: &Cr)
         -> impl Future<Output = Option<EncryptedContent<T, Cr>>> + Send;
 
