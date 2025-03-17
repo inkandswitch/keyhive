@@ -27,7 +27,7 @@ pub struct EncryptedContent<T, Cr: ContentRef> {
     /// Hash of the PCS update operation corresponding to the PCS key
     pub pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
     /// The content ref hash used to derive the application secret for encrypting.
-    pub content_ref: Digest<Cr>, // FIXME make obsfucating hash?
+    pub content_ref: Cr,
     /// The predecessor content ref hashes used to derive the application secret
     /// for encrypting.
     pub pred_refs: Digest<Vec<Cr>>,
@@ -42,7 +42,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         ciphertext: Vec<u8>,
         pcs_key_hash: Digest<PcsKey>,
         pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
-        content_ref: Digest<Cr>,
+        content_ref: Cr,
         pred_refs: Digest<Vec<Cr>>,
     ) -> EncryptedContent<T, Cr> {
         EncryptedContent {

@@ -11,7 +11,7 @@ use thiserror::Error;
 
 #[trait_variant::make(SendableCiphertextStore: Send)]
 pub trait CiphertextStore<T, Cr: ContentRef> {
-    async fn get(&self, id: &Digest<Cr>) -> Option<EncryptedContent<T, Cr>>;
+    async fn get(&self, id: &Cr) -> Option<EncryptedContent<T, Cr>>;
 }
 
 pub async fn try_sendable_causal_decrypt<
@@ -41,7 +41,7 @@ where
     let mut seen = HashSet::new();
 
     while let Some((ciphertext, key)) = to_decrypt.pop() {
-        if !seen.insert(ciphertext.content_ref) {
+        if !seen.insert(ciphertext.content_ref.clone()) {
             continue;
         }
 
@@ -50,23 +50,22 @@ where
                 bincode::deserialize(decrypted.as_slice()).map_err(|e| CausalDecryptionError {
                     progress: acc.clone(),
                     cannot: HashMap::from_iter([(
-                        ciphertext.content_ref,
+                        ciphertext.content_ref.clone(),
                         ErrorReason::DeserializationFailed(e.into()),
                     )]),
                 })?;
 
-            for (ancestor_hash, ancestor_key) in envelope.ancestors.iter() {
-                let ancestor =
-                    store
-                        .get(&Digest::hash(ancestor_hash))
-                        .await
-                        .ok_or(CausalDecryptionError {
-                            progress: acc.clone(),
-                            cannot: HashMap::from_iter([(
-                                ciphertext.content_ref,
-                                ErrorReason::CannotFindCiphertext(ancestor_hash.clone()),
-                            )]),
-                        })?;
+            for (ancestor_ref, ancestor_key) in envelope.ancestors.iter() {
+                let ancestor = store
+                    .get(&ancestor_ref)
+                    .await
+                    .ok_or(CausalDecryptionError {
+                        progress: acc.clone(),
+                        cannot: HashMap::from_iter([(
+                            ciphertext.content_ref.clone(),
+                            ErrorReason::CannotFindCiphertext(ancestor_ref.clone()),
+                        )]),
+                    })?;
                 to_decrypt.push((ancestor, *ancestor_key));
             }
 
@@ -88,9 +87,9 @@ where
 
 #[derive(Debug, Clone)]
 pub struct CausalDecryptionState<T, Cr: ContentRef> {
-    pub complete: Vec<(Digest<Cr>, T)>,
-    pub keys: HashMap<Digest<Cr>, SymmetricKey>,
-    pub next: HashMap<Digest<Cr>, SymmetricKey>,
+    pub complete: Vec<(Cr, T)>,
+    pub keys: HashMap<Cr, SymmetricKey>,
+    pub next: HashMap<Cr, SymmetricKey>,
 }
 
 impl<T, Cr: ContentRef> CausalDecryptionState<T, Cr> {
@@ -106,7 +105,7 @@ impl<T, Cr: ContentRef> CausalDecryptionState<T, Cr> {
 #[derive(Debug, Error)]
 #[error("Causal decryption error: {cannot}")]
 pub struct CausalDecryptionError<T, Cr: ContentRef> {
-    pub cannot: HashMap<Digest<Cr>, ErrorReason<Cr>>,
+    pub cannot: HashMap<Cr, ErrorReason<Cr>>,
     pub progress: CausalDecryptionState<T, Cr>,
 }
 
@@ -118,6 +117,6 @@ pub enum ErrorReason<Cr: ContentRef> {
     #[error(transparent)]
     DeserializationFailed(Box<bincode::Error>),
 
-    #[error("Cannot find ciphertext: {0}")]
+    #[error("Cannot find ciphertext for ref")]
     CannotFindCiphertext(Cr),
 }
