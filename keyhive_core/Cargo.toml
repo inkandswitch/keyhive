@@ -39,6 +39,7 @@ futures = { workspace = true }
 nonempty = { workspace = true }
 topological-sort = "0.2"
 tracing = { workspace = true }
+trait-variant = "0.1.2"
 
 # Testing
 proptest = { version = "1.5", optional = true }
