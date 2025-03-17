@@ -1,88 +1,130 @@
 use crate::{
     content::reference::ContentRef,
-    crypto::{
-        digest::Digest, encrypted::EncryptedContent, envelope::Envelope,
-        symmetric_key::SymmetricKey,
-    },
+    crypto::{encrypted::EncryptedContent, envelope::Envelope, symmetric_key::SymmetricKey},
 };
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use thiserror::Error;
 
-#[trait_variant::make(SendableCiphertextStore: Send)]
+#[allow(async_fn_in_trait)]
 pub trait CiphertextStore<T, Cr: ContentRef> {
     async fn get(&self, id: &Cr) -> Option<EncryptedContent<T, Cr>>;
-}
 
-pub async fn try_sendable_causal_decrypt<
-    T: Send,
-    Cr: ContentRef + Send,
-    S: SendableCiphertextStore<T, Cr>,
->(
-    store: &S,
-    to_decrypt: &mut Vec<(EncryptedContent<T, Cr>, SymmetricKey)>,
-) -> Result<CausalDecryptionState<T, Cr>, CausalDecryptionError<T, Cr>>
-where
-    T: Serialize + DeserializeOwned + Clone,
-    Cr: DeserializeOwned,
-{
-    try_causal_decrypt(store, to_decrypt).await
-}
+    async fn try_causal_decrypt(
+        &self,
+        to_decrypt: &mut Vec<(EncryptedContent<T, Cr>, SymmetricKey)>,
+    ) -> Result<CausalDecryptionState<T, Cr>, CausalDecryptionError<T, Cr>>
+    where
+        T: Serialize + DeserializeOwned + Clone,
+        Cr: DeserializeOwned,
+    {
+        let mut acc = CausalDecryptionState::new();
+        let mut seen = HashSet::new();
 
-pub async fn try_causal_decrypt<T, Cr: ContentRef, S: CiphertextStore<T, Cr>>(
-    store: &S,
-    to_decrypt: &mut Vec<(EncryptedContent<T, Cr>, SymmetricKey)>,
-) -> Result<CausalDecryptionState<T, Cr>, CausalDecryptionError<T, Cr>>
-where
-    T: Serialize + DeserializeOwned + Clone,
-    Cr: DeserializeOwned,
-{
-    let mut acc = CausalDecryptionState::new();
-    let mut seen = HashSet::new();
+        while let Some((ciphertext, key)) = to_decrypt.pop() {
+            if !seen.insert(ciphertext.content_ref.clone()) {
+                continue;
+            }
 
-    while let Some((ciphertext, key)) = to_decrypt.pop() {
-        if !seen.insert(ciphertext.content_ref.clone()) {
-            continue;
-        }
+            if let Ok(decrypted) = ciphertext.try_decrypt(key) {
+                let envelope: Envelope<Cr, T> = bincode::deserialize(decrypted.as_slice())
+                    .map_err(|e| CausalDecryptionError {
+                        progress: acc.clone(),
+                        cannot: HashMap::from_iter([(
+                            ciphertext.content_ref.clone(),
+                            ErrorReason::DeserializationFailed(e.into()),
+                        )]),
+                    })?;
 
-        if let Ok(decrypted) = ciphertext.try_decrypt(key) {
-            let envelope: Envelope<Cr, T> =
-                bincode::deserialize(decrypted.as_slice()).map_err(|e| CausalDecryptionError {
-                    progress: acc.clone(),
-                    cannot: HashMap::from_iter([(
-                        ciphertext.content_ref.clone(),
-                        ErrorReason::DeserializationFailed(e.into()),
-                    )]),
-                })?;
-
-            for (ancestor_ref, ancestor_key) in envelope.ancestors.iter() {
-                let ancestor = store
-                    .get(&ancestor_ref)
-                    .await
-                    .ok_or(CausalDecryptionError {
+                for (ancestor_ref, ancestor_key) in envelope.ancestors.iter() {
+                    let ancestor = self.get(&ancestor_ref).await.ok_or(CausalDecryptionError {
                         progress: acc.clone(),
                         cannot: HashMap::from_iter([(
                             ciphertext.content_ref.clone(),
                             ErrorReason::CannotFindCiphertext(ancestor_ref.clone()),
                         )]),
                     })?;
-                to_decrypt.push((ancestor, *ancestor_key));
+                    to_decrypt.push((ancestor, *ancestor_key));
+                }
+
+                acc.complete
+                    .push((ciphertext.content_ref, envelope.plaintext));
+            } else {
+                Err(CausalDecryptionError {
+                    progress: acc.clone(),
+                    cannot: HashMap::from_iter([(
+                        ciphertext.content_ref,
+                        ErrorReason::DecryptionFailed(key),
+                    )]),
+                })?;
+            }
+        }
+
+        Ok(acc)
+    }
+}
+
+pub trait SendableCiphertextStore<T: Send, Cr: ContentRef + Send>: CiphertextStore<T, Cr> {
+    fn get_sendable(&self, id: &Cr)
+        -> impl Future<Output = Option<EncryptedContent<T, Cr>>> + Send;
+
+    #[allow(async_fn_in_trait)]
+    async fn try_sendable_causal_decrypt(
+        &self,
+        to_decrypt: &mut Vec<(EncryptedContent<T, Cr>, SymmetricKey)>,
+    ) -> Result<CausalDecryptionState<T, Cr>, CausalDecryptionError<T, Cr>>
+    where
+        T: Serialize + DeserializeOwned + Clone,
+        Cr: DeserializeOwned,
+    {
+        let mut acc = CausalDecryptionState::new();
+        let mut seen = HashSet::new();
+
+        while let Some((ciphertext, key)) = to_decrypt.pop() {
+            if !seen.insert(ciphertext.content_ref.clone()) {
+                continue;
             }
 
-            acc.complete
-                .push((ciphertext.content_ref, envelope.plaintext));
-        } else {
-            Err(CausalDecryptionError {
-                progress: acc.clone(),
-                cannot: HashMap::from_iter([(
-                    ciphertext.content_ref,
-                    ErrorReason::DecryptionFailed(key),
-                )]),
-            })?;
-        }
-    }
+            if let Ok(decrypted) = ciphertext.try_decrypt(key) {
+                let envelope: Envelope<Cr, T> = bincode::deserialize(decrypted.as_slice())
+                    .map_err(|e| CausalDecryptionError {
+                        progress: acc.clone(),
+                        cannot: HashMap::from_iter([(
+                            ciphertext.content_ref.clone(),
+                            ErrorReason::DeserializationFailed(e.into()),
+                        )]),
+                    })?;
 
-    Ok(acc)
+                for (ancestor_ref, ancestor_key) in envelope.ancestors.iter() {
+                    let ancestor =
+                        self.get_sendable(&ancestor_ref)
+                            .await
+                            .ok_or(CausalDecryptionError {
+                                progress: acc.clone(),
+                                cannot: HashMap::from_iter([(
+                                    ciphertext.content_ref.clone(),
+                                    ErrorReason::CannotFindCiphertext(ancestor_ref.clone()),
+                                )]),
+                            })?;
+                    to_decrypt.push((ancestor, *ancestor_key));
+                }
+
+                acc.complete
+                    .push((ciphertext.content_ref, envelope.plaintext));
+            } else {
+                Err(CausalDecryptionError {
+                    progress: acc.clone(),
+                    cannot: HashMap::from_iter([(
+                        ciphertext.content_ref,
+                        ErrorReason::DecryptionFailed(key),
+                    )]),
+                })?;
+            }
+        }
+
+        Ok(acc)
+    }
 }
 
 #[derive(Debug, Clone)]
