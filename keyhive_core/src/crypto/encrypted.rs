@@ -3,20 +3,14 @@
 use super::{
     application_secret::PcsKey,
     digest::Digest,
-    envelope::Envelope,
     share_key::{ShareKey, ShareSecretKey},
     signed::Signed,
     siv::Siv,
     symmetric_key::SymmetricKey,
 };
 use crate::{cgka::operation::CgkaOperation, content::reference::ContentRef};
-use nonempty::{nonempty, NonEmpty};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    marker::PhantomData,
-};
-use thiserror::Error;
+use serde::{Deserialize, Serialize};
+use std::marker::PhantomData;
 
 /// The public information for an encrypted content ciphertext.
 ///
@@ -67,39 +61,6 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         key.try_decrypt(self.nonce, &mut buf)?;
         Ok(buf)
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct CausalDecryptionState<T, Cr: ContentRef> {
-    pub complete: Vec<(Digest<Cr>, T)>,
-    pub keys: HashMap<Digest<Cr>, SymmetricKey>,
-    pub next: HashMap<Digest<Cr>, SymmetricKey>,
-}
-
-impl<T, Cr: ContentRef> CausalDecryptionState<T, Cr> {
-    pub fn new() -> Self {
-        CausalDecryptionState {
-            complete: vec![],
-            keys: HashMap::new(),
-            next: HashMap::new(),
-        }
-    }
-}
-
-#[derive(Debug, Error)]
-#[error("Causal decryption error: {cannot}")]
-pub struct CausalDecryptionError<T, Cr: ContentRef> {
-    pub cannot: HashMap<Digest<Cr>, Reason>,
-    pub progress: CausalDecryptionState<T, Cr>,
-}
-
-#[derive(Debug, Error)]
-pub enum Reason {
-    #[error("Decryption failed")]
-    DecryptionFailed(SymmetricKey),
-
-    #[error(transparent)]
-    DeserializationFailed(Box<bincode::Error>),
 }
 
 /// The public information for an encrypted secret ciphertext.

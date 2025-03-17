@@ -67,7 +67,6 @@ mermaid_docs = ["aquamarine"]
 test_utils = ["proptest", "proptest-derive"]
 
 [[bench]]
-
 name = "bench_cgka"
 harness = false
 required-features = ["test_utils"]
