@@ -39,9 +39,9 @@
           config.allowUnfree = true;
         };
 
-        rustVersion = "1.83.0";
+        rustVersion = "1.85.0";
 
-        rust-toolchain = pkgs.rust-bin.stable.${rustVersion}.default.override {
+        rust-toolchain = unstable.rust-bin.stable.${rustVersion}.default.override {
           extensions = [
             "cargo"
             "clippy"
@@ -59,7 +59,6 @@
             "aarch64-unknown-linux-musl"
 
             "wasm32-unknown-unknown"
-            "wasm32-wasi"
           ];
         };
 
@@ -91,7 +90,7 @@
           wasm-tools
         ];
 
-        cargo = "${pkgs.cargo}/bin/cargo";
+        cargo = "${unstable.cargo}/bin/cargo";
         gzip = "${pkgs.gzip}/bin/gzip";
         node = "${unstable.nodejs_20}/bin/node";
         pnpm = "${unstable.pnpm}/bin/pnpm";
