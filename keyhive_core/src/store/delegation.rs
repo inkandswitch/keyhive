@@ -105,17 +105,3 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
         self.0.borrow().hash(state);
     }
 }
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
-    for DelegationStore<S, T, L>
-{
-    type Forked = Box<Self>;
-
-    fn fork(&self) -> Self::Forked {
-        Box::new(self.clone())
-    }
-
-    fn merge(&mut self, other: Self::Forked) {
-        // noop
-    }
-}

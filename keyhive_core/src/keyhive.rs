@@ -17,7 +17,7 @@ use crate::{
     },
     error::missing_dependency::MissingDependency,
     event::{static_event::StaticEvent, Event},
-    join_semilattice::JoinSemilattice,
+    join_semilattice::{Forkable, JoinSemilattice},
     listener::{cgka::CgkaListener, membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
@@ -1390,14 +1390,12 @@ impl<
 impl<
         S: AsyncSigner + Clone,
         T: ContentRef,
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T> + CgkaListener + Clone,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > JoinSemilattice for Keyhive<S, T, L, R>
+    > Forkable for Keyhive<S, T, L, R>
 {
-    type Forked = Box<Self>;
-
-    fn fork(&self) -> Self::Forked {
-        Box::new(Self {
+    fn fork(&self) -> Self {
+        Self {
             active: self.active.dupe(),
             individuals: self.individuals.clone(),
             groups: self.groups.clone(),
@@ -1406,10 +1404,18 @@ impl<
             revocations: self.revocations.dupe(),
             csprng: self.csprng.clone(),
             event_listener: self.event_listener.clone(),
-        })
+        }
     }
+}
 
-    fn merge(&mut self, mut other: Self::Forked) {
+impl<
+        S: AsyncSigner + Clone,
+        T: ContentRef + Clone,
+        L: MembershipListener<S, T> + CgkaListener + Clone,
+        R: rand::CryptoRng + rand::RngCore + Clone,
+    > JoinSemilattice for Keyhive<S, T, L, R>
+{
+    fn merge(&mut self, mut other: Self) {
         self.active.merge(other.active);
         self.individuals.extend(other.individuals.drain());
         self.groups.extend(other.groups.drain());

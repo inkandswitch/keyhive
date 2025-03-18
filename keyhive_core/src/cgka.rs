@@ -553,14 +553,8 @@ impl Cgka {
 }
 
 impl JoinSemilattice for Cgka {
-    type Forked = Box<Self>;
-
-    fn fork(&self) -> Self::Forked {
-        Box::new(self.clone())
-    }
-
-    fn merge(&mut self, mut other: Self::Forked) {
-        self.owner_sks.merge(Box::new(other.owner_sks));
+    fn merge(&mut self, mut other: Self) {
+        self.owner_sks.merge(other.owner_sks);
         self.ops_graph.merge(other.ops_graph);
         self.pcs_keys.merge(other.pcs_keys);
         self.replay_ops_graph().expect("FIXME")

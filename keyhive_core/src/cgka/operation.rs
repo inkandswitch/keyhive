@@ -125,13 +125,7 @@ pub(crate) struct CgkaOperationGraph {
 }
 
 impl JoinSemilattice for CgkaOperationGraph {
-    type Forked = Self;
-
-    fn fork(&self) -> Self::Forked {
-        self.clone()
-    }
-
-    fn merge(&mut self, mut other: Self::Forked) {
+    fn merge(&mut self, mut other: Self) {
         self.cgka_ops.merge(other.cgka_ops);
         self.cgka_ops_predecessors
             .extend(other.cgka_ops_predecessors.into_iter());

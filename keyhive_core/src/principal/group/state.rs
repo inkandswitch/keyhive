@@ -278,15 +278,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
 impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
     for GroupState<S, T, L>
 {
-    type Forked = Box<Self>;
-
-    fn fork(&self) -> Self::Forked {
-        Box::new(self.clone())
-    }
-
-    fn merge(&mut self, other: Self::Forked) {
+    fn merge(&mut self, other: Self) {
         // FIXME actually compare the heads
-        self.delegation_heads.merge(*other.delegation_heads.fork());
-        self.revocation_heads.merge(*other.revocation_heads.fork());
+        self.delegation_heads.merge(other.delegation_heads);
+        self.revocation_heads.merge(other.revocation_heads);
     }
 }

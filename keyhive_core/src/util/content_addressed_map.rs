@@ -104,14 +104,8 @@ impl<T: Serialize> CaMap<T> {
 }
 
 impl<T: Serialize> JoinSemilattice for CaMap<T> {
-    type Forked = Box<Self>;
-
-    fn fork(&self) -> Self::Forked {
-        Box::new(self.clone())
-    }
-
-    fn merge(&mut self, other: Self::Forked) {
-        for (k, v) in (*other).0 {
+    fn merge(&mut self, other: Self) {
+        for (k, v) in other.0 {
             self.0.entry(k).or_insert(v);
         }
     }

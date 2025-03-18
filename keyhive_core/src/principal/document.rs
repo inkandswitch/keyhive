@@ -325,7 +325,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     }
 
     pub fn rebuild(&mut self) {
-        self.group.rebuild()
+        self.group.rebuild();
+        // FIXME also rebuild CGKA?
     }
 
     pub fn receive_delegation(
@@ -538,15 +539,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Docume
 impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
     for Document<S, T, L>
 {
-    type Forked = Box<Self>;
-
-    fn fork(&self) -> Self::Forked {
-        Box::new(self.clone())
-    }
-
-    fn merge(&mut self, other: Self::Forked) {
-        self.group.merge(Box::new(other.group));
-        self.reader_keys.merge(Box::new(other.reader_keys)); // FIXME hmm
+    fn merge(&mut self, other: Self) {
+        self.group.merge(other.group);
+        self.reader_keys.merge(other.reader_keys); // FIXME hmm
 
         self.content_heads.extend(other.content_heads);
         self.content_state.extend(other.content_state);
@@ -556,11 +551,13 @@ impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSem
 
         if let Some(ref mut cgka) = &mut self.cgka {
             if let Some(other_cgka) = other.cgka {
-                cgka.merge(Box::new(other_cgka));
+                cgka.merge(other_cgka);
             }
         } else {
             self.cgka = other.cgka;
         }
+
+        self.rebuild()
     }
 }
 

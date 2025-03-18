@@ -54,13 +54,7 @@ impl ShareKeyMap {
 }
 
 impl JoinSemilattice for ShareKeyMap {
-    type Forked = Box<Self>;
-
-    fn fork(&self) -> Self::Forked {
-        Box::new(self.clone())
-    }
-
-    fn merge(&mut self, mut other: Self::Forked) {
+    fn merge(&mut self, mut other: Self) {
         self.0.extend(other.0.into_iter())
     }
 }
