@@ -31,7 +31,7 @@ impl JsEncrypted {
 
     #[wasm_bindgen(getter)]
     pub fn content_ref(&self) -> Vec<u8> {
-        self.0.content_ref.raw.as_bytes().to_vec()
+        self.0.content_ref.bytes().to_vec()
     }
 
     #[wasm_bindgen(getter)]

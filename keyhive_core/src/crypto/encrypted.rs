@@ -6,6 +6,7 @@ use super::{
     share_key::{ShareKey, ShareSecretKey},
     signed::Signed,
     siv::Siv,
+    symmetric_key::SymmetricKey,
 };
 use crate::{cgka::operation::CgkaOperation, content::reference::ContentRef};
 use serde::{Deserialize, Serialize};
@@ -22,11 +23,11 @@ pub struct EncryptedContent<T, Cr: ContentRef> {
     /// The encrypted data.
     pub ciphertext: Vec<u8>,
     /// Hash of the PCS key used to derive the application secret for encrypting.
-    pub pcs_key_hash: Digest<PcsKey>,
+    pub pcs_key_hash: Digest<PcsKey>, // FIXME use pubkey instead of hash?
     /// Hash of the PCS update operation corresponding to the PCS key
     pub pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
     /// The content ref hash used to derive the application secret for encrypting.
-    pub content_ref: Digest<Cr>,
+    pub content_ref: Cr,
     /// The predecessor content ref hashes used to derive the application secret
     /// for encrypting.
     pub pred_refs: Digest<Vec<Cr>>,
@@ -41,7 +42,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         ciphertext: Vec<u8>,
         pcs_key_hash: Digest<PcsKey>,
         pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
-        content_ref: Digest<Cr>,
+        content_ref: Cr,
         pred_refs: Digest<Vec<Cr>>,
     ) -> EncryptedContent<T, Cr> {
         EncryptedContent {
@@ -53,6 +54,12 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
             pred_refs,
             _plaintext_tag: PhantomData,
         }
+    }
+
+    pub fn try_decrypt(&self, key: SymmetricKey) -> Result<Vec<u8>, chacha20poly1305::Error> {
+        let mut buf: Vec<u8> = self.ciphertext.clone();
+        key.try_decrypt(self.nonce, &mut buf)?;
+        Ok(buf)
     }
 }
 

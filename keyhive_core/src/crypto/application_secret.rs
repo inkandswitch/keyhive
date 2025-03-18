@@ -20,7 +20,7 @@ pub struct ApplicationSecret<Cr: ContentRef> {
     pcs_key_hash: Digest<PcsKey>,
     pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
     nonce: Siv,
-    content_ref: Digest<Cr>,
+    content_ref: Cr,
     pred_refs: Digest<Vec<Cr>>,
 }
 
@@ -31,7 +31,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
         pcs_key_hash: Digest<PcsKey>,
         pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
         nonce: Siv,
-        content_ref: Digest<Cr>,
+        content_ref: Cr,
         pred_refs: Digest<Vec<Cr>>,
     ) -> Self {
         Self {
@@ -66,7 +66,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
             ciphertext,
             self.pcs_key_hash,
             self.pcs_update_op_hash,
-            self.content_ref,
+            self.content_ref.clone(),
             self.pred_refs,
         ))
     }
@@ -85,13 +85,14 @@ impl PcsKey {
     pub(crate) fn derive_application_secret<Cr: ContentRef>(
         &self,
         nonce: &Siv,
-        content_ref: &Digest<Cr>,
+        content_ref: &Cr,
         pred_refs: &Digest<Vec<Cr>>,
         pcs_update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> ApplicationSecret<Cr> {
         let pcs_hash = Digest::hash(&self.0);
+        let display_ref = Digest::hash(&content_ref);
         let mut app_secret_context =
-            format!("epoch:{pcs_hash}/pred:{pred_refs}/content:{content_ref}").into_bytes();
+            format!("epoch:{pcs_hash}/pred:{pred_refs}/content:{display_ref}").into_bytes();
         let mut key_material = self.0.clone().as_slice().to_vec();
         key_material.append(&mut app_secret_context);
         let app_secret_bytes = blake3::derive_key(STATIC_CONTEXT, key_material.as_slice());
@@ -101,7 +102,7 @@ impl PcsKey {
             Digest::hash(self),
             *pcs_update_op_hash,
             *nonce,
-            *content_ref,
+            content_ref.clone(),
             *pred_refs,
         )
     }

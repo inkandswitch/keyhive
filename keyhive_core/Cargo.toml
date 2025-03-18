@@ -39,6 +39,7 @@ futures = { workspace = true }
 nonempty = { workspace = true }
 topological-sort = "0.2"
 tracing = { workspace = true }
+trait-variant = "0.1.2"
 
 # Testing
 proptest = { version = "1.5", optional = true }
@@ -61,12 +62,13 @@ hex = "0.4.3"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 
 [features]
+default = []
 debug_events = ["prettytable-rs"]
 mermaid_docs = ["aquamarine"]
+sendable = []
 test_utils = ["proptest", "proptest-derive"]
 
 [[bench]]
-
 name = "bench_cgka"
 harness = false
 required-features = ["test_utils"]

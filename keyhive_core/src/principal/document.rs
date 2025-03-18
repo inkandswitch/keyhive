@@ -18,6 +18,7 @@ use crate::{
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
         signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
+        symmetric_key::SymmetricKey,
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
@@ -62,6 +63,8 @@ pub struct Document<
     pub(crate) reader_keys: HashMap<IndividualId, (Rc<RefCell<Individual>>, ShareKey)>,
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
+
+    known_decryption_keys: HashMap<T, SymmetricKey>,
     cgka: Option<Cgka>,
 }
 
@@ -80,6 +83,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             reader_keys: Default::default(),
             content_heads: content_heads.iter().cloned().collect(),
             content_state: Default::default(),
+            known_decryption_keys: HashMap::new(),
         };
         doc.rebuild();
         Ok(doc)
@@ -199,6 +203,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             reader_keys: HashMap::new(), // FIXME
             content_state: HashSet::new(),
             content_heads: initial_content_heads.iter().cloned().collect(),
+            known_decryption_keys: HashMap::new(),
             cgka: Some(cgka),
         })
     }
@@ -423,6 +428,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             .await
             .map_err(EncryptError::FailedToMakeAppSecret)?;
 
+        self.known_decryption_keys
+            .insert(content_ref.clone(), app_secret.key());
+
         Ok(EncryptedContentWithUpdate {
             encrypted_content: app_secret
                 .try_encrypt(content)
@@ -448,6 +456,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         // FIXME for some reason this decrypts successfully,
         // but the bytes of the symmetric key are different,
         // so we get a different nocne.
+        //
+        // FIXME the above is beacuse the nonce is ignored due to CGKA changes. Fix this.
         //
         // let expected_siv = Siv::new(&decrypt_key, &plaintext, self.doc_id())?;
         // if expected_siv != encrypted_content.nonce {
@@ -502,6 +512,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             )?,
             content_heads: archive.content_heads,
             content_state: archive.content_state,
+            known_decryption_keys: HashMap::new(),
             cgka: archive.cgka,
         })
     }

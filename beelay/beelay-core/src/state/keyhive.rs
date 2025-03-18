@@ -565,7 +565,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             wrapper.ciphertext,
             wrapper.pcs_key_hash,
             wrapper.pcs_update_op_hash,
-            Digest::hash(&hash),
+            hash,
             Digest::hash(&parents.to_vec()),
         );
 
@@ -613,7 +613,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
                 wrapper.ciphertext,
                 wrapper.pcs_key_hash,
                 wrapper.pcs_update_op_hash,
-                Digest::hash(&hash),
+                hash,
                 Digest::hash(&parents.to_vec()),
             );
 
