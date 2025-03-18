@@ -14,72 +14,17 @@ use thiserror::Error;
 #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
 /// An async storage interface for ciphertexts.
 ///
+/// There are `!Send` and `Send` variants of this trait:
+/// if you need `Send`, enable the `sendable` feature.
+///
 /// This includes functionality for "causal decryption":
-/// the ability to decrypt a set of causally related ciphertexts.
+/// the ability to decrypt a set of causally-related ciphertexts.
+/// See [`try_causal_decrypt`] for more information.
 ///
-/// ```mermaid
-/// flowchart
-///     subgraph genesis["oUz 🔓"]
-///       a[New Doc]
-///     end
-///
-///     subgraph block1["g6z 🔓"]
-///       op1[Op 1]
-///
-///       subgraph block1ancestors[Ancestors]
-///         subgraph block1ancestor1[Ancestor 1]
-///           pointer1_1["Pointer #️⃣"]
-///           key1_1["Key 🔑"]
-///         end
-///       end
-///     end
-///
-///     pointer1_1 --> genesis
-///
-///     subgraph block2["Xa2 🔓"]
-///         op2[Op 2]
-///         op3[Op 3]
-///         op4[Op 4]
-///
-///       subgraph block2ancestors[Ancestors]
-///         subgraph block2ancestor1[Ancestor 1]
-///           pointer2_1["Pointer #️⃣"]
-///           key2_1["Key 🔑"]
-///         end
-///       end
-///     end
-///
-///     pointer2_1 --> genesis
-///
-///     subgraph block3["e9j 🔓"]
-///       op5[Op 5]
-///       op6[Op 6]
-///
-///       subgraph block3ancestors[Ancestors]
-///         subgraph block3ancestor1[Ancestor 1]
-///           pointer3_1["Pointer #️⃣"]
-///           key3_1["Key 🔑"]
-///         end
-///
-///         subgraph block3ancestor2[Ancestor 2]
-///           pointer3_2["Pointer #️⃣"]
-///           key3_2["Key 🔑"]
-///         end
-///       end
-///     end
-///
-///     pointer3_1 --> block1
-///     pointer3_2 --> block2
-///
-///     subgraph head[Read Capabilty]
-///       pointer_head["Pointer #️⃣"]
-///       key_head["Key 🔑"]
-///     end
-///
-///     pointer_head --> block3
-/// ```
-///
-/// There are `!Send` and `Send` variants: if you need `Send`, enable the `sendable` feature.
+/// The `get_ciphertext` method generally fails on items that have already been decrypted.
+/// This is generally accomplished by either removing the decrypted values from the store,
+/// or — more commonly — by tracking which values have been decrypted and simply not
+/// hitting the backing store on requests for those IDs.
 pub trait CiphertextStore<T, Cr: ContentRef> {
     #[cfg(feature = "sendable")]
     fn get_ciphertext(
@@ -90,6 +35,77 @@ pub trait CiphertextStore<T, Cr: ContentRef> {
     #[cfg(not(feature = "sendable"))]
     fn get_ciphertext(&self, id: &Cr) -> impl Future<Output = Option<EncryptedContent<T, Cr>>>;
 
+    /// Recursively decryptsa set of causally-related ciphertexts.
+    ///
+    /// Consider the following causally encrypted graph:
+    ///
+    /// ```mermaid
+    /// flowchart
+    ///     subgraph genesis["oUz 🔓"]
+    ///       a[New Doc]
+    ///     end
+    ///
+    ///     subgraph block1["g6z 🔓"]
+    ///       op1[Op 1]
+    ///
+    ///       subgraph block1ancestors[Ancestors]
+    ///         subgraph block1ancestor1[Ancestor 1]
+    ///           pointer1_1["Pointer #️⃣"]
+    ///           key1_1["Key 🔑"]
+    ///         end
+    ///       end
+    ///     end
+    ///
+    ///     pointer1_1 --> genesis
+    ///
+    ///     subgraph block2["Xa2 🔓"]
+    ///         op2[Op 2]
+    ///         op3[Op 3]
+    ///         op4[Op 4]
+    ///
+    ///       subgraph block2ancestors[Ancestors]
+    ///         subgraph block2ancestor1[Ancestor 1]
+    ///           pointer2_1["Pointer #️⃣"]
+    ///           key2_1["Key 🔑"]
+    ///         end
+    ///       end
+    ///     end
+    ///
+    ///     pointer2_1 --> genesis
+    ///
+    ///     subgraph block3["e9j 🔓"]
+    ///       op5[Op 5]
+    ///       op6[Op 6]
+    ///
+    ///       subgraph block3ancestors[Ancestors]
+    ///         subgraph block3ancestor1[Ancestor 1]
+    ///           pointer3_1["Pointer #️⃣"]
+    ///           key3_1["Key 🔑"]
+    ///         end
+    ///
+    ///         subgraph block3ancestor2[Ancestor 2]
+    ///           pointer3_2["Pointer #️⃣"]
+    ///           key3_2["Key 🔑"]
+    ///         end
+    ///       end
+    ///     end
+    ///
+    ///     pointer3_1 --> block1
+    ///     pointer3_2 --> block2
+    ///
+    ///     subgraph head[Read Capabilty]
+    ///       pointer_head["Pointer #️⃣"]
+    ///       key_head["Key 🔑"]
+    ///     end
+    ///
+    ///     pointer_head --> block3
+    /// ```
+    ///
+    /// By passing in the entrypoint, futher keys are discovered, and can be pulled out
+    /// the store, which contain more keys and references, and so on.
+    ///
+    /// It is normal for this to stop decryption if it enounters an already-decrypted
+    /// ciphertext. There is no reason to decrypt it again if you already have the plaintext.
     #[allow(async_fn_in_trait)]
     async fn try_causal_decrypt(
         &self,
