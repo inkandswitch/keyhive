@@ -11,7 +11,6 @@ use std::{
 };
 use thiserror::Error;
 
-#[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
 /// An async storage interface for ciphertexts.
 ///
 /// There are `!Send` and `Send` variants of this trait:
@@ -19,7 +18,7 @@ use thiserror::Error;
 ///
 /// This includes functionality for "causal decryption":
 /// the ability to decrypt a set of causally-related ciphertexts.
-/// See [`try_causal_decrypt`] for more information.
+/// See [`try_causal_decrypt`][CiphertextStore::try_causal_decrypt] for more information.
 ///
 /// The `get_ciphertext` method generally fails on items that have already been decrypted.
 /// This is generally accomplished by either removing the decrypted values from the store,
@@ -35,6 +34,7 @@ pub trait CiphertextStore<T, Cr: ContentRef> {
     #[cfg(not(feature = "sendable"))]
     fn get_ciphertext(&self, id: &Cr) -> impl Future<Output = Option<EncryptedContent<T, Cr>>>;
 
+    #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
     /// Recursively decryptsa set of causally-related ciphertexts.
     ///
     /// Consider the following causally encrypted graph:
