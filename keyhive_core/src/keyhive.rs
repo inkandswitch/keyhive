@@ -17,6 +17,7 @@ use crate::{
     },
     error::missing_dependency::MissingDependency,
     event::{static_event::StaticEvent, Event},
+    join_semilattice::JoinSemilattice,
     listener::{cgka::CgkaListener, membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
@@ -1383,6 +1384,27 @@ impl<
         self.ingest_unsorted_static_events(
             events.values().cloned().map(Into::into).collect::<Vec<_>>(),
         )
+    }
+}
+
+impl<
+        S: AsyncSigner,
+        T: ContentRef,
+        L: MembershipListener<S, T> + CgkaListener,
+        R: rand::CryptoRng + rand::RngCore,
+    > JoinSemilattice for Keyhive<S, T, L, R>
+{
+    type Forked = Box<Self>;
+
+    fn fork(&self) -> Self::Forked {
+        Box::new(self.dupe())
+    }
+
+    fn merge(&mut self, other: Self::Forked) {
+        self.active.merge(other.active);
+        self.individuals.extend(other.individuals.drain());
+        self.groups.extend(other.groups.drain());
+        // FIXME self.docs.extend(other.docs.drain());
     }
 }
 

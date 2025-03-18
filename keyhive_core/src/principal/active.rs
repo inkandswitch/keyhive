@@ -22,6 +22,7 @@ use crate::{
         signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
     },
+    join_semilattice::JoinSemilattice,
     listener::{no_listener::NoListener, prekey::PrekeyListener},
     principal::{
         agent::id::AgentId,
@@ -265,6 +266,19 @@ impl<S: AsyncSigner, L: PrekeyListener> std::fmt::Display for Active<S, L> {
 impl<S: AsyncSigner, L: PrekeyListener> Verifiable for Active<S, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.signer.verifying_key()
+    }
+}
+
+impl<S: AsyncSigner + Clone, L: PrekeyListener> JoinSemilattice for Active<S, L> {
+    type Forked = Box<Self>;
+
+    fn fork(&self) -> Self::Forked {
+        Box::new(self.clone())
+    }
+
+    fn merge(&mut self, other: Self::Forked) {
+        self.prekey_pairs.extend(other.prekey_pairs);
+        self.individual.merge(Box::new(other.individual));
     }
 }
 
