@@ -5,6 +5,7 @@ use crate::{
         signed::{SigningError, VerificationError},
         signer::async_signer::AsyncSigner,
     },
+    join_semilattice::JoinSemilattice,
     util::content_addressed_map::CaMap,
 };
 use futures::prelude::*;
@@ -140,6 +141,12 @@ impl PrekeyState {
         }
 
         keys
+    }
+}
+
+impl JoinSemilattice for PrekeyState {
+    fn merge(&mut self, other: Self) {
+        self.ops.merge(other.ops)
     }
 }
 

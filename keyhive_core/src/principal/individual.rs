@@ -9,6 +9,7 @@ use super::{agent::id::AgentId, document::id::DocumentId};
 use crate::{
     contact_card::ContactCard,
     crypto::{share_key::ShareKey, signed::VerificationError, verifiable::Verifiable},
+    join_semilattice::JoinSemilattice,
     util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
@@ -148,6 +149,13 @@ impl Ord for Individual {
 impl Verifiable for Individual {
     fn verifying_key(&self) -> VerifyingKey {
         self.id.verifying_key()
+    }
+}
+
+impl JoinSemilattice for Individual {
+    fn merge(&mut self, other: Self) {
+        self.prekey_state.merge(other.prekey_state);
+        self.prekeys.merge(other.prekeys);
     }
 }
 

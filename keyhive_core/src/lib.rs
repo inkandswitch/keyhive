@@ -19,6 +19,7 @@ pub mod crypto;
 pub mod error;
 pub mod event;
 pub mod invocation;
+pub mod join_semilattice;
 pub mod keyhive;
 pub mod listener;
 pub mod principal;
