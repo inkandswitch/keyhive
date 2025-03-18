@@ -3,12 +3,12 @@
 use super::{read_capability::ReadCap, symmetric_key::SymmetricKey};
 use crate::content::reference::ContentRef;
 use derivative::Derivative;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize, Serializer};
 use std::{
     collections::{BTreeMap, HashMap},
     hash::{DefaultHasher, Hasher},
 };
-
 #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
 /// A container for an arbitrary payload and the [`ReadCap`]s required to identify and decrypt its ancestors.
 ///
@@ -79,12 +79,15 @@ use std::{
 ///
 /// [causal encryption]: https://github.com/inkandswitch/keyhive/blob/main/design/causal_encryption.md
 #[derive(Debug, Clone, PartialEq, Eq, Derivative, Serialize, Deserialize)]
-pub struct Envelope<C: ContentRef, T: Serialize> {
+pub struct Envelope<C: ContentRef + DeserializeOwned, T: Serialize> {
     /// The plaintext payload.
     pub plaintext: T,
 
     /// Any ancestors that this envelope depends on.
-    #[serde(serialize_with = "ordered_map_serializer")]
+    #[serde(
+        serialize_with = "ordered_map_serializer",
+        deserialize_with = "ordered_map_deserializer"
+    )]
     #[derivative(
         PartialOrd(compare_with = "crate::util::partial_eq::hash_map_keys"),
         Hash(hash_with = "crate::util::hash::hash_map_keys")
@@ -92,7 +95,7 @@ pub struct Envelope<C: ContentRef, T: Serialize> {
     pub ancestors: HashMap<C, SymmetricKey>,
 }
 
-impl<T: Serialize, C: ContentRef> Envelope<C, T> {
+impl<T: Serialize, C: ContentRef + DeserializeOwned> Envelope<C, T> {
     /// Extract the [read capabilities][ReadCap] for the ancestors of this envelope.
     pub fn ancestor_read_caps(&self) -> Vec<ReadCap<C>> {
         self.ancestors
@@ -121,4 +124,14 @@ where
         })
         .collect();
     ordered.serialize(serializer)
+}
+
+fn ordered_map_deserializer<'de, D, K: ContentRef + Deserialize<'de>, V: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<HashMap<K, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let ordered: BTreeMap<u64, (K, V)> = Deserialize::deserialize(deserializer)?;
+    Ok(ordered.into_iter().map(|(_, (k, v))| (k, v)).collect())
 }

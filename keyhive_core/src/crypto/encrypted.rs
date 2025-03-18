@@ -23,7 +23,7 @@ pub struct EncryptedContent<T, Cr: ContentRef> {
     /// The encrypted data.
     pub ciphertext: Vec<u8>,
     /// Hash of the PCS key used to derive the application secret for encrypting.
-    pub pcs_key_hash: Digest<PcsKey>,
+    pub pcs_key_hash: Digest<PcsKey>, // FIXME use pubkey instead of hash?
     /// Hash of the PCS update operation corresponding to the PCS key
     pub pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
     /// The content ref hash used to derive the application secret for encrypting.
