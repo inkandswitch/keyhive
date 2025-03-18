@@ -11,6 +11,7 @@ use crate::{
         signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSigner},
         verifiable::Verifiable,
     },
+    join_semilattice::JoinSemilattice,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::Agent, group::delegation::DelegationError, identifier::Identifier},
     store::{delegation::DelegationStore, revocation::RevocationStore},
@@ -271,5 +272,21 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.id.0.verifying_key()
+    }
+}
+
+impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
+    for GroupState<S, T, L>
+{
+    type Forked = Box<Self>;
+
+    fn fork(&self) -> Self::Forked {
+        Box::new(self.clone())
+    }
+
+    fn merge(&mut self, other: Self::Forked) {
+        // FIXME actually compare the heads
+        self.delegation_heads.merge(*other.delegation_heads.fork());
+        self.revocation_heads.merge(*other.revocation_heads.fork());
     }
 }

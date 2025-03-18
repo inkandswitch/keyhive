@@ -3,6 +3,7 @@
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
+    join_semilattice::JoinSemilattice,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::group::revocation::Revocation,
     util::content_addressed_map::CaMap,
@@ -98,5 +99,19 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.borrow().hash(state);
+    }
+}
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
+    for RevocationStore<S, T, L>
+{
+    type Forked = Box<Self>;
+
+    fn fork(&self) -> Self::Forked {
+        Box::new(self.clone())
+    }
+
+    fn merge(&mut self, other: Self::Forked) {
+        // noop
     }
 }

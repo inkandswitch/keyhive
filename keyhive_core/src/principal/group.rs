@@ -36,6 +36,7 @@ use crate::{
         },
         verifiable::Verifiable,
     },
+    join_semilattice::JoinSemilattice,
     listener::{membership::MembershipListener, no_listener::NoListener},
     store::{delegation::DelegationStore, revocation::RevocationStore},
     util::content_addressed_map::CaMap,
@@ -823,6 +824,27 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for 
         self.state.verifying_key()
     }
 }
+
+impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
+    for Group<S, T, L>
+where
+    Group<S, T, L>: Clone,
+{
+    type Forked = Box<Self>;
+
+    fn fork(&self) -> Self::Forked {
+        Box::new(self.clone())
+    }
+
+    fn merge(&mut self, other: Self::Forked) {
+        // FIXME consider usin the listener
+        self.active_revocations
+            .merge(Box::new(other.active_revocations));
+        self.state.merge(Box::new(other.state));
+        self.rebuild()
+    }
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IdOrIndividual {
     GroupId(GroupId),

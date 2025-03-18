@@ -153,9 +153,16 @@ impl Verifiable for Individual {
 }
 
 impl JoinSemilattice for Individual {
-    fn merge(&mut self, other: Self) {
-        self.prekey_state.merge(other.prekey_state);
-        self.prekeys.merge(other.prekeys);
+    type Forked = Box<Self>;
+
+    fn fork(&self) -> Self::Forked {
+        Box::new(self.clone())
+    }
+
+    fn merge(&mut self, other: Self::Forked) {
+        let unboxed = *other;
+        self.prekey_state.merge(Box::new(unboxed.prekey_state));
+        self.prekeys.merge(Box::new(unboxed.prekeys));
     }
 }
 
