@@ -13,7 +13,7 @@ pub trait CiphertextStore<T, Cr: ContentRef> {
         Self: 'a,
         Cr: 'a;
 
-    fn get<'a>(&'a self, id: &'a Cr) -> Self::WorkFuture<'_>;
+    fn get<'a>(&'a self, id: &'a Cr) -> Self::WorkFuture<'a>;
 
     #[allow(async_fn_in_trait)]
     async fn try_causal_decrypt(
@@ -70,26 +70,6 @@ pub trait CiphertextStore<T, Cr: ContentRef> {
     }
 }
 
-use std::pin::Pin;
-use std::sync::{Arc, Mutex};
-
-#[derive(Debug, Clone)]
-pub struct Foo<T: Send, Cr: ContentRef + Send + Sync>(
-    Arc<tokio::sync::Mutex<HashMap<Cr, EncryptedContent<T, Cr>>>>,
-);
-
-impl<T: Send + Clone, Cr: ContentRef + Send + Sync> CiphertextStore<T, Cr> for Foo<T, Cr> {
-    type WorkFuture<'a>
-        = Pin<Box<dyn Future<Output = Option<EncryptedContent<T, Cr>>> + Send + 'a>>
-    where
-        Self: 'a,
-        Cr: 'a;
-
-    fn get<'a>(&'a self, id: &'a Cr) -> Self::WorkFuture<'_> {
-        Box::pin(async move { self.0.lock().await.get(&id).cloned() })
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct CausalDecryptionState<T, Cr: ContentRef> {
     pub complete: Vec<(Cr, T)>,
@@ -124,4 +104,32 @@ pub enum ErrorReason<Cr: ContentRef> {
 
     #[error("Cannot find ciphertext for ref")]
     CannotFindCiphertext(Cr),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod sendable {
+        use super::*;
+        use std::pin::Pin;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Debug, Clone)]
+        struct Foo<T: Send, Cr: ContentRef + Send + Sync>(
+            Arc<tokio::sync::Mutex<HashMap<Cr, EncryptedContent<T, Cr>>>>,
+        );
+
+        impl<T: Send + Clone, Cr: ContentRef + Send + Sync> CiphertextStore<T, Cr> for Foo<T, Cr> {
+            type WorkFuture<'a>
+                = Pin<Box<dyn Future<Output = Option<EncryptedContent<T, Cr>>> + Send + 'a>>
+            where
+                Self: 'a,
+                Cr: 'a;
+
+            fn get<'a>(&'a self, id: &'a Cr) -> Self::WorkFuture<'a> {
+                Box::pin(async move { self.0.lock().await.get(&id).cloned() })
+            }
+        }
+    }
 }
