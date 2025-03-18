@@ -535,29 +535,34 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Docume
     }
 }
 
-// FIXME
-// impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
-//     for Document<S, T, L>
-// {
-//     type Forked = Box<Self>;
-//
-//     fn fork(&self) -> Self::Forked {
-//         Box::new(self.clone())
-//     }
-//
-//     fn merge(&mut self, other: Self::Forked) {
-//         self.group.merge(other.group);
-//         self.reader_keys.merge(other.reader_keys); // FIXME hmm
-//
-//         self.content_heads.extend(other.content_heads);
-//         self.content_state.extend(other.content_state);
-//
-//         self.known_decryption_keys
-//             .extend(other.known_decryption_keys);
-//
-//         self.cgka = self.cgka.clone().or(other.cgka.clone());
-//     }
-// }
+impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
+    for Document<S, T, L>
+{
+    type Forked = Box<Self>;
+
+    fn fork(&self) -> Self::Forked {
+        Box::new(self.clone())
+    }
+
+    fn merge(&mut self, other: Self::Forked) {
+        self.group.merge(Box::new(other.group));
+        self.reader_keys.merge(Box::new(other.reader_keys)); // FIXME hmm
+
+        self.content_heads.extend(other.content_heads);
+        self.content_state.extend(other.content_state);
+
+        self.known_decryption_keys
+            .extend(other.known_decryption_keys);
+
+        if let Some(ref mut cgka) = &mut self.cgka {
+            if let Some(other_cgka) = other.cgka {
+                cgka.merge(Box::new(other_cgka));
+            }
+        } else {
+            self.cgka = other.cgka;
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddMemberUpdate<

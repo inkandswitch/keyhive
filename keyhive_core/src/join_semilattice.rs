@@ -19,15 +19,17 @@ pub trait JoinSemilattice {
 
     // Converge ; note: this needs to run _rebuold
     // // FIXME unsafe megre so that we can use it in transact and not fail?
-    fn merge(&mut self, other: Self::Forked);
+    fn merge(&mut self, mut other: Self::Forked);
 
-    // FIXME Error type
-    fn transact<F: FnMut(&mut Self::Forked) -> Result<(), String>>(
+    // FIXME fn diff?
+
+    // FIXME move to associated type and make public
+    fn transact<F: FnMut(&mut Self::Forked) -> Result<(), Error>, Error>(
         &mut self,
         mut fun: F,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let mut forked = self.fork();
-        fun(&mut forked).map_err(|_| "FIXME".to_string())?;
+        fun(&mut forked)?;
         self.merge(forked);
         Ok(())
     }
@@ -52,7 +54,7 @@ impl<K: Clone + Hash + Eq, V: Clone> JoinSemilattice for HashMap<K, V> {
         Box::new(self.clone())
     }
 
-    fn merge(&mut self, other: Self::Forked) {
+    fn merge(&mut self, mut other: Self::Forked) {
         for (k, v) in *other {
             self.entry(k).or_insert(v);
         }
@@ -60,28 +62,14 @@ impl<K: Clone + Hash + Eq, V: Clone> JoinSemilattice for HashMap<K, V> {
 }
 
 // FIXME move
-impl<T: Serialize> JoinSemilattice for CaMap<T> {
-    type Forked = Box<Self>;
-
-    fn fork(&self) -> Self::Forked {
-        Box::new(self.clone())
-    }
-
-    fn merge(&mut self, other: Self::Forked) {
-        for (k, v) in (*other).0 {
-            self.0.entry(k).or_insert(v);
-        }
-    }
-}
-
-impl<T: JoinSemilattice> JoinSemilattice for Rc<RefCell<T>> {
+impl<T> JoinSemilattice for Rc<RefCell<T>> {
     type Forked = Self;
 
     fn fork(&self) -> Self::Forked {
         self.dupe()
     }
 
-    fn merge(&mut self, other: Self::Forked) {
+    fn merge(&mut self, mut other: Self::Forked) {
         // noop
     }
 }

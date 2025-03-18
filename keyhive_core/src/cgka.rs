@@ -20,6 +20,7 @@ use crate::{
         siv::Siv,
         symmetric_key::SymmetricKey,
     },
+    join_semilattice::JoinSemilattice,
     principal::{document::id::DocumentId, individual::id::IndividualId},
     util::content_addressed_map::CaMap,
 };
@@ -548,6 +549,21 @@ impl Cgka {
         );
         self.pcs_key_ops.extend(other.pcs_key_ops.iter());
         self.pending_ops_for_structural_change = other.pending_ops_for_structural_change;
+    }
+}
+
+impl JoinSemilattice for Cgka {
+    type Forked = Box<Self>;
+
+    fn fork(&self) -> Self::Forked {
+        Box::new(self.clone())
+    }
+
+    fn merge(&mut self, mut other: Self::Forked) {
+        self.owner_sks.merge(Box::new(other.owner_sks));
+        self.ops_graph.merge(other.ops_graph);
+        self.pcs_keys.merge(other.pcs_keys);
+        self.replay_ops_graph().expect("FIXME")
     }
 }
 

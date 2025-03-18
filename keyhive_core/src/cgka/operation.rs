@@ -1,6 +1,7 @@
 use super::{beekem::PathChange, error::CgkaError};
 use crate::{
     crypto::{digest::Digest, share_key::ShareKey, signed::Signed},
+    join_semilattice::JoinSemilattice,
     principal::{document::id::DocumentId, individual::id::IndividualId},
     util::content_addressed_map::CaMap,
 };
@@ -121,6 +122,22 @@ pub(crate) struct CgkaOperationGraph {
 
     #[derivative(Hash(hash_with = "crate::util::hasher::hash_set"))]
     pub(crate) add_heads: HashSet<Digest<Signed<CgkaOperation>>>,
+}
+
+impl JoinSemilattice for CgkaOperationGraph {
+    type Forked = Self;
+
+    fn fork(&self) -> Self::Forked {
+        self.clone()
+    }
+
+    fn merge(&mut self, mut other: Self::Forked) {
+        self.cgka_ops.merge(other.cgka_ops);
+        self.cgka_ops_predecessors
+            .extend(other.cgka_ops_predecessors.into_iter());
+        self.cgka_op_heads.extend(other.cgka_op_heads.into_iter());
+        self.add_heads.extend(other.add_heads.into_iter()); // FIXME reduce heads
+    }
 }
 
 fn hash_cgka_ops_preds<H: Hasher>(

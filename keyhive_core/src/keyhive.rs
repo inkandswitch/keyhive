@@ -1388,23 +1388,32 @@ impl<
 }
 
 impl<
-        S: AsyncSigner,
+        S: AsyncSigner + Clone,
         T: ContentRef,
         L: MembershipListener<S, T> + CgkaListener,
-        R: rand::CryptoRng + rand::RngCore,
+        R: rand::CryptoRng + rand::RngCore + Clone,
     > JoinSemilattice for Keyhive<S, T, L, R>
 {
     type Forked = Box<Self>;
 
     fn fork(&self) -> Self::Forked {
-        Box::new(self.dupe())
+        Box::new(Self {
+            active: self.active.dupe(),
+            individuals: self.individuals.clone(),
+            groups: self.groups.clone(),
+            docs: self.docs.clone(),
+            delegations: self.delegations.dupe(),
+            revocations: self.revocations.dupe(),
+            csprng: self.csprng.clone(),
+            event_listener: self.event_listener.clone(),
+        })
     }
 
-    fn merge(&mut self, other: Self::Forked) {
+    fn merge(&mut self, mut other: Self::Forked) {
         self.active.merge(other.active);
         self.individuals.extend(other.individuals.drain());
         self.groups.extend(other.groups.drain());
-        // FIXME self.docs.extend(other.docs.drain());
+        self.docs.extend(other.docs.drain());
     }
 }
 

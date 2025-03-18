@@ -1,6 +1,9 @@
-use crate::crypto::{
-    encrypted::EncryptedSecret,
-    share_key::{ShareKey, ShareSecretKey},
+use crate::{
+    crypto::{
+        encrypted::EncryptedSecret,
+        share_key::{ShareKey, ShareSecretKey},
+    },
+    join_semilattice::JoinSemilattice,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -49,6 +52,19 @@ impl ShareKeyMap {
         self.0.extend(other.0.iter());
     }
 }
+
+impl JoinSemilattice for ShareKeyMap {
+    type Forked = Box<Self>;
+
+    fn fork(&self) -> Self::Forked {
+        Box::new(self.clone())
+    }
+
+    fn merge(&mut self, mut other: Self::Forked) {
+        self.0.extend(other.0.into_iter())
+    }
+}
+
 impl std::hash::Hash for ShareKeyMap {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.keys().for_each(|k| k.hash(state));
