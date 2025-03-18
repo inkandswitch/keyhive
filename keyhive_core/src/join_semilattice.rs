@@ -60,16 +60,85 @@ pub fn transact<T: JoinSemilattice, F: FnMut(&mut T) -> Result<(), Error>, Error
     Ok(())
 }
 
-pub async fn transact_async<
-    T: JoinSemilattice,
-    F: AsyncFnMut(&mut T) -> Result<(), Error>,
-    Error,
->(
-    semilattice: &mut T,
+pub async fn transact_async<T: JoinSemilattice, Error, F: AsyncFnMut(T) -> Result<T, Error>>(
+    semilattice: Rc<RefCell<T>>,
     mut fun: F,
 ) -> Result<(), Error> {
-    let mut forked = semilattice.fork();
-    fun(&mut forked).await?;
-    semilattice.merge(forked);
+    let mut forked = semilattice.borrow().fork();
+    let updated = fun(forked).await?;
+    semilattice.borrow_mut().merge(updated);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[test]
+    fn test_transact() {
+        let mut og = HashSet::from_iter([0u8, 1, 2, 3]);
+        let updated = transact(&mut og, |set| {
+            set.insert(42);
+            set.insert(99);
+            set.remove(&1);
+            Ok::<(), String>(())
+        })
+        .unwrap();
+
+        assert!(og.contains(&0));
+        assert!(og.contains(&1)); // NOTE: it's baaaack
+        assert!(og.contains(&2));
+        assert!(og.contains(&3));
+        assert!(og.contains(&42));
+        assert!(og.contains(&99));
+        assert_eq!(og.len(), 6);
+    }
+
+    #[tokio::test]
+    async fn test_transact_async() {
+        let og = Rc::new(RefCell::new(HashSet::from_iter([0u8, 1, 2, 3])));
+
+        let fut1 = transact_async(og.dupe(), |mut set: HashSet<u8>| async move {
+            set.insert(42);
+            set.insert(99);
+            set.remove(&1);
+            set.remove(&2);
+            Ok::<HashSet<u8>, String>(set)
+        });
+
+        let fut2 = transact_async(og.dupe(), |mut set: HashSet<u8>| async move {
+            set.insert(255);
+            set.insert(254);
+            set.insert(253);
+            set.remove(&254); // Remove something during the tx
+            Ok::<HashSet<u8>, String>(set)
+        });
+
+        let fut3 = transact_async(og.dupe(), |mut set: HashSet<u8>| async move {
+            set.insert(50);
+            set.insert(60);
+            Err("NOPE".to_string())
+        });
+
+        fut2.await.unwrap();
+        fut1.await.unwrap();
+
+        assert!(fut3.await.is_err());
+        assert!(!og.borrow().contains(&50));
+        assert!(!og.borrow().contains(&60));
+
+        assert!(!og.borrow().contains(&254)); // NOTE: removed during tx
+
+        assert!(og.borrow().contains(&0));
+        assert!(og.borrow().contains(&1)); // NOTE: it's baaaack
+        assert!(og.borrow().contains(&2)); // NOTE: it's baaaack
+        assert!(og.borrow().contains(&3));
+        assert!(og.borrow().contains(&42));
+        assert!(og.borrow().contains(&99));
+        assert!(og.borrow().contains(&255));
+        assert!(og.borrow().contains(&253));
+
+        assert_eq!(og.borrow().len(), 8);
+    }
 }
