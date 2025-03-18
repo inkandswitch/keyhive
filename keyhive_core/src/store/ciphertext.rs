@@ -80,41 +80,6 @@ use thiserror::Error;
 /// ```
 ///
 /// There are `!Send` and `Send` variants: if you need `Send`, enable the `sendable` feature.
-///
-/// # `!Send` Implementations
-///
-/// A `!Send` implementation is available on [`HashMap`]:
-///
-/// ```rust
-/// impl<T: Clone, Cr: ContentRef> CiphertextStore<T, Cr> for HashMap<Cr, EncryptedContent<T, Cr>> {
-///     type WorkFuture<'a>
-///         = NonSendWorkFuture<'a, dyn Future<Output = Option<EncryptedContent<T, Cr>>>>
-///     where
-///         Self: 'a,
-///         Cr: 'a;
-///
-///     fn get_ciphertext<'a>(&'a self, id: &'a Cr) -> Self::WorkFuture<'a> {
-///         HashMap::get(self, id).cloned()
-///     }
-/// }
-/// ```
-///
-/// # `Send` Implementations
-///
-/// In many ways, `Send` implementations are closer to what you'd expect:
-///
-/// ```rust
-/// #[derive(Debug, Clone)]
-/// struct Foo<T: Send, Cr: ContentRef + Send + Sync>(
-///     Arc<tokio::sync::Mutex<HashMap<Cr, EncryptedContent<T, Cr>>>>,
-/// );
-///
-/// impl<T: Send + Clone, Cr: ContentRef + Send + Sync> CiphertextStore<T, Cr> for Foo<T, Cr> {
-///     fn get_ciphertext<'a>(&'a self, id: &'a Cr) -> impl Future<Output = Option<EncryptedContent<T, Cr>>> + Send> {
-///         self.0.lock().await.get(&id).cloned()
-///     }
-/// }
-/// ```
 pub trait CiphertextStore<T, Cr: ContentRef> {
     #[cfg(feature = "sendable")]
     fn get_ciphertext(
