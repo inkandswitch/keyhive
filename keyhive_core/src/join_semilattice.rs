@@ -9,6 +9,7 @@ use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
     rc::Rc,
+    sync::{Arc, Mutex},
 };
 
 pub(crate) trait Forkable: Sized {
@@ -61,12 +62,12 @@ pub fn transact<T: JoinSemilattice, F: FnMut(&mut T) -> Result<(), Error>, Error
 }
 
 pub async fn transact_async<T: JoinSemilattice, Error, F: AsyncFnMut(T) -> Result<T, Error>>(
-    semilattice: Rc<RefCell<T>>,
+    semilattice: Arc<Mutex<T>>,
     mut fun: F,
 ) -> Result<(), Error> {
-    let mut forked = semilattice.borrow().fork();
+    let mut forked = semilattice.lock().expect("FIXME").fork();
     let updated = fun(forked).await?;
-    semilattice.borrow_mut().merge(updated);
+    semilattice.lock().expect("FIXME").merge(updated);
     Ok(())
 }
 
@@ -97,7 +98,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transact_async() {
-        let og = Rc::new(RefCell::new(HashSet::from_iter([0u8, 1, 2, 3])));
+        let og = Arc::new(Mutex::new(HashSet::from_iter([0u8, 1, 2, 3])));
 
         let fut1 = transact_async(og.dupe(), |mut set: HashSet<u8>| async move {
             set.insert(42);
@@ -125,20 +126,26 @@ mod tests {
         fut1.await.unwrap();
 
         assert!(fut3.await.is_err());
-        assert!(!og.borrow().contains(&50));
-        assert!(!og.borrow().contains(&60));
 
-        assert!(!og.borrow().contains(&254)); // NOTE: removed during tx
+        let observed = Arc::into_inner(og)
+            .expect("FIXME")
+            .into_inner()
+            .expect("FIXME");
 
-        assert!(og.borrow().contains(&0));
-        assert!(og.borrow().contains(&1)); // NOTE: it's baaaack
-        assert!(og.borrow().contains(&2)); // NOTE: it's baaaack
-        assert!(og.borrow().contains(&3));
-        assert!(og.borrow().contains(&42));
-        assert!(og.borrow().contains(&99));
-        assert!(og.borrow().contains(&255));
-        assert!(og.borrow().contains(&253));
+        assert!(!observed.contains(&50));
+        assert!(!observed.contains(&60));
 
-        assert_eq!(og.borrow().len(), 8);
+        assert!(!observed.contains(&254)); // NOTE: removed during tx
+
+        assert!(observed.contains(&0));
+        assert!(observed.contains(&1)); // NOTE: it's baaaack
+        assert!(observed.contains(&2)); // NOTE: it's baaaack
+        assert!(observed.contains(&3));
+        assert!(observed.contains(&42));
+        assert!(observed.contains(&99));
+        assert!(observed.contains(&255));
+        assert!(observed.contains(&253));
+
+        assert_eq!(observed.len(), 8);
     }
 }
