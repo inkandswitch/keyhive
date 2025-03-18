@@ -270,9 +270,15 @@ impl<S: AsyncSigner, L: PrekeyListener> Verifiable for Active<S, L> {
 }
 
 impl<S: AsyncSigner + Clone, L: PrekeyListener> JoinSemilattice for Active<S, L> {
-    fn merge(&mut self, other: Self) {
-        self.prekey_pairs.extend(other.prekey_pairs);
-        self.individual.merge(other.individual);
+    type Fork = Self;
+
+    fn fork(&self) -> Self::Fork {
+        self.clone()
+    }
+
+    fn merge(&mut self, mut fork: Self) {
+        self.prekey_pairs.extend(fork.prekey_pairs);
+        self.individual.merge(fork.individual);
     }
 }
 

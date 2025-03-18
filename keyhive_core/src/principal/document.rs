@@ -539,6 +539,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Docume
 impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
     for Document<S, T, L>
 {
+    type Fork = Self; // FIXME fresh listener
+
+    fn fork(&self) -> Self::Fork {
+        self.clone()
+    }
+
     fn merge(&mut self, other: Self) {
         self.group.merge(other.group);
         self.reader_keys.merge(other.reader_keys); // FIXME hmm

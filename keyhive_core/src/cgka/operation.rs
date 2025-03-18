@@ -125,12 +125,18 @@ pub(crate) struct CgkaOperationGraph {
 }
 
 impl JoinSemilattice for CgkaOperationGraph {
-    fn merge(&mut self, mut other: Self) {
-        self.cgka_ops.merge(other.cgka_ops);
+    type Fork = Self;
+
+    fn fork(&self) -> Self::Fork {
+        self.clone()
+    }
+
+    fn merge(&mut self, mut fork: Self) {
+        self.cgka_ops.merge(fork.cgka_ops);
         self.cgka_ops_predecessors
-            .extend(other.cgka_ops_predecessors.into_iter());
-        self.cgka_op_heads.extend(other.cgka_op_heads.into_iter());
-        self.add_heads.extend(other.add_heads.into_iter()); // FIXME reduce heads
+            .extend(fork.cgka_ops_predecessors.into_iter());
+        self.cgka_op_heads.extend(fork.cgka_op_heads.into_iter());
+        self.add_heads.extend(fork.add_heads.into_iter()); // FIXME reduce heads
     }
 }
 

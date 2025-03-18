@@ -12,46 +12,72 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-pub(crate) trait Forkable: Sized {
-    fn fork(&self) -> Self;
-}
+// FIXME rename trasnaction?
+pub(crate) trait JoinSemilattice {
+    type Fork;
 
-impl<T: Clone> Forkable for T {
-    fn fork(&self) -> Self {
-        self.clone()
-    }
-}
+    fn fork(&self) -> Self::Fork;
 
-pub(crate) trait JoinSemilattice: Forkable {
     // Converge ; note: this needs to run _rebuold
     // // FIXME unsafe megre so that we can use it in transact and not fail?
-    fn merge(&mut self, mut other: Self);
+    fn merge(&mut self, mut fork: Self::Fork);
 }
 
 impl<T: Hash + Eq + Clone> JoinSemilattice for HashSet<T> {
-    fn merge(&mut self, other: Self) {
-        self.extend(other)
+    type Fork = Self;
+
+    fn fork(&self) -> Self {
+        self.clone()
+    }
+
+    fn merge(&mut self, mut fork: Self) {
+        self.extend(fork)
     }
 }
 
 impl<K: Clone + Hash + Eq, V: Clone> JoinSemilattice for HashMap<K, V> {
-    fn merge(&mut self, mut other: Self) {
-        for (k, v) in other {
+    type Fork = Self;
+
+    fn fork(&self) -> Self {
+        self.clone()
+    }
+
+    fn merge(&mut self, mut fork: Self) {
+        for (k, v) in fork {
             self.entry(k).or_insert(v);
         }
     }
 }
 
-// FIXME move
-impl<T> JoinSemilattice for Rc<RefCell<T>> {
-    fn merge(&mut self, mut other: Self) {
-        // noop
+impl<T: JoinSemilattice> JoinSemilattice for Rc<RefCell<T>> {
+    type Fork = T::Fork;
+
+    fn fork(&self) -> Self::Fork {
+        (*self.borrow()).fork()
+    }
+
+    fn merge(&mut self, mut fork: Self::Fork) {
+        self.borrow_mut().merge(fork)
+    }
+}
+
+use std::ops::DerefMut;
+
+impl<T: JoinSemilattice> JoinSemilattice for Arc<Mutex<T>> {
+    type Fork = T::Fork;
+
+    fn fork(&self) -> Self::Fork {
+        self.lock().expect("FIXME").fork()
+    }
+
+    fn merge(&mut self, mut fork: Self::Fork) {
+        self.lock().expect("FIXME").deref_mut().merge(fork)
     }
 }
 
 // FIXME also provdide a way to compare heads
 
-pub fn transact<T: JoinSemilattice, F: FnMut(&mut T) -> Result<(), Error>, Error>(
+pub fn transact<T: JoinSemilattice, F: FnMut(&mut T::Fork) -> Result<(), Error>, Error>(
     semilattice: &mut T,
     mut fun: F,
 ) -> Result<(), Error> {
@@ -61,13 +87,17 @@ pub fn transact<T: JoinSemilattice, F: FnMut(&mut T) -> Result<(), Error>, Error
     Ok(())
 }
 
-pub async fn transact_async<T: JoinSemilattice, Error, F: AsyncFnMut(T) -> Result<T, Error>>(
-    semilattice: Arc<Mutex<T>>,
+pub async fn transact_async<
+    T: JoinSemilattice,
+    Error,
+    F: AsyncFnMut(T::Fork) -> Result<T::Fork, Error>,
+>(
+    mut semilattice: T,
     mut fun: F,
 ) -> Result<(), Error> {
-    let mut forked = semilattice.lock().expect("FIXME").fork();
+    let mut forked = semilattice.fork();
     let updated = fun(forked).await?;
-    semilattice.lock().expect("FIXME").merge(updated);
+    semilattice.merge(updated);
     Ok(())
 }
 

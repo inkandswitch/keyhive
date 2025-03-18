@@ -145,8 +145,14 @@ impl PrekeyState {
 }
 
 impl JoinSemilattice for PrekeyState {
-    fn merge(&mut self, other: Self) {
-        self.ops.merge(other.ops)
+    type Fork = Self;
+
+    fn fork(&self) -> Self::Fork {
+        self.clone()
+    }
+
+    fn merge(&mut self, mut fork: Self) {
+        self.ops.merge(fork.ops)
     }
 }
 

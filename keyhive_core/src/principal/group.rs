@@ -830,6 +830,12 @@ impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSem
 where
     Group<S, T, L>: Clone,
 {
+    type Fork = Self;
+
+    fn fork(&self) -> Self::Fork {
+        self.clone()
+    }
+
     fn merge(&mut self, other: Self) {
         // FIXME consider usin the listener
         self.active_revocations.merge(other.active_revocations);
