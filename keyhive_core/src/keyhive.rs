@@ -17,7 +17,7 @@ use crate::{
     },
     error::missing_dependency::MissingDependency,
     event::{static_event::StaticEvent, Event},
-    join_semilattice::JoinSemilattice,
+    join_semilattice::{transact, transact_async, JoinSemilattice},
     listener::{
         cgka::CgkaListener, log::Log, membership::MembershipListener, no_listener::NoListener,
         prekey::PrekeyLog,
@@ -1348,6 +1348,20 @@ impl<
 
     pub fn event_listener(&self) -> &L {
         &self.event_listener
+    }
+
+    pub fn blocking_transaction<
+        Error,
+        F: FnMut(&mut Keyhive<S, T, Log<S, T>, R>) -> Result<(), Error>,
+    >(
+        &mut self,
+        mut tx: F,
+    ) -> Result<(), Error>
+    where
+        S: Clone,
+        R: Clone,
+    {
+        transact(self, tx)
     }
 
     #[cfg(any(test, feature = "test_utils"))]

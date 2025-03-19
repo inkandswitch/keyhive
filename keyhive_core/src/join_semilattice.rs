@@ -5,6 +5,7 @@ use crate::{
 use dupe::Dupe;
 use serde::Serialize;
 use std::{
+    borrow::BorrowMut,
     cell::RefCell,
     collections::{HashMap, HashSet},
     hash::Hash,
@@ -77,27 +78,28 @@ impl<T: JoinSemilattice> JoinSemilattice for Arc<Mutex<T>> {
 
 // FIXME also provdide a way to compare heads
 
-pub fn transact<T: JoinSemilattice, F: FnMut(&mut T::Fork) -> Result<(), Error>, Error>(
-    semilattice: &mut T,
-    mut fun: F,
+pub fn transact<T: JoinSemilattice, Error, F: FnMut(&mut T::Fork) -> Result<(), Error>>(
+    trunk: &mut T,
+    mut tx: F,
 ) -> Result<(), Error> {
-    let mut forked = semilattice.fork();
-    fun(&mut forked)?;
-    semilattice.merge(forked);
+    let mut forked = trunk.fork();
+    tx(&mut forked)?;
+    trunk.merge(forked);
     Ok(())
 }
 
+// FIXME nonblocking_tansaction
 pub async fn transact_async<
-    T: JoinSemilattice,
+    T: JoinSemilattice + Clone,
     Error,
-    F: AsyncFnMut(T::Fork) -> Result<T::Fork, Error>,
+    F: AsyncFnMut(&mut T::Fork) -> Result<(), Error>,
 >(
-    mut semilattice: T,
-    mut fun: F,
+    trunk: &T,
+    mut tx: F,
 ) -> Result<(), Error> {
-    let mut forked = semilattice.fork();
-    let updated = fun(forked).await?;
-    semilattice.merge(updated);
+    let mut forked = trunk.fork();
+    tx(&mut forked).await?;
+    trunk.clone().merge(forked);
     Ok(())
 }
 
@@ -130,7 +132,7 @@ mod tests {
     async fn test_transact_async() {
         let og = Arc::new(Mutex::new(HashSet::from_iter([0u8, 1, 2, 3])));
 
-        let fut1 = transact_async(og.dupe(), |mut set: HashSet<u8>| async move {
+        let fut1 = transact_async(&og, |mut set: HashSet<u8>| async move {
             set.insert(42);
             set.insert(99);
             set.remove(&1);
@@ -138,7 +140,7 @@ mod tests {
             Ok::<HashSet<u8>, String>(set)
         });
 
-        let fut2 = transact_async(og.dupe(), |mut set: HashSet<u8>| async move {
+        let fut2 = transact_async(&og, |mut set: HashSet<u8>| async move {
             set.insert(255);
             set.insert(254);
             set.insert(253);
@@ -146,7 +148,7 @@ mod tests {
             Ok::<HashSet<u8>, String>(set)
         });
 
-        let fut3 = transact_async(og.dupe(), |mut set: HashSet<u8>| async move {
+        let fut3 = transact_async(&og, |mut set: HashSet<u8>| async move {
             set.insert(50);
             set.insert(60);
             Err("NOPE".to_string())
