@@ -1402,20 +1402,14 @@ impl<
 {
     type Fork = Keyhive<S, T, Log<S, T>, R>;
 
-    // FIXME deep clone?
     fn fork(&self) -> Self::Fork {
-        let archive = self.into_archive();
-
-        let fork = Keyhive::try_from_archive(
-            &archive,
+        Keyhive::try_from_archive(
+            &self.into_archive(),
             self.active.borrow().signer.clone(),
             Log::new(),
             self.csprng.clone(),
         )
-        .expect("FIXME");
-
-        fork.active.borrow_mut().listener = Log::new();
-        fork
+        .expect("local round trip to work")
     }
 
     fn merge(&mut self, mut fork: Self::Fork) {
@@ -1423,14 +1417,15 @@ impl<
             .borrow_mut()
             .merge(Rc::unwrap_or_clone(fork.active).into_inner());
 
-        for (id, indie) in self.individuals.iter() {
-            if let Some(fork) = fork.individuals.remove(id) {
-                indie
+        for (id, forked_indie) in fork.individuals.drain() {
+            if let Some(og_indie) = self.individuals.remove(&id) {
+                og_indie
                     .borrow_mut()
-                    .merge(Rc::unwrap_or_clone(fork).into_inner());
+                    .merge(Rc::unwrap_or_clone(forked_indie).into_inner());
+            } else {
+                self.individuals.insert(id, forked_indie);
             }
         }
-        // FIXME figure out what to do with new indies
 
         // for (id, group) in self.groups.iter() {
         //     if let Some(fork) = fork.groups.remove(id) {
