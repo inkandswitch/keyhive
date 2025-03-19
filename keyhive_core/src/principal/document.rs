@@ -23,7 +23,7 @@ use crate::{
     },
     error::missing_dependency::MissingDependency,
     join_semilattice::JoinSemilattice,
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
@@ -75,7 +75,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     // NOTE doesn't register into the top-level Keyhive context
     pub fn from_group(
         group: Group<S, T, L>,
-        viewer: &Active<S, L>,
+        viewer: &Active<S, T, L>,
         content_heads: NonEmpty<T>,
     ) -> Result<Self, CgkaError> {
         let mut doc = Document {
@@ -539,28 +539,43 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Docume
 impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
     for Document<S, T, L>
 {
-    type Fork = Self; // FIXME fresh listener
+    type Fork = Document<S, T, Log<S, T>>;
 
     fn fork(&self) -> Self::Fork {
-        self.clone()
+        todo!()
+        // let cgka = if let Some(cgka) = &self.cgka {
+        //     Some(cgka.fork())
+        // } else {
+        //     None
+        // };
+
+        // Document {
+        //     group: self.group.fork(),
+        //     cgka,
+
+        //     reader_keys: self.reader_keys.clone(),
+        //     content_heads: self.content_heads.clone(),
+        //     content_state: self.content_state.clone(),
+        //     known_decryption_keys: self.known_decryption_keys.clone(),
+        // }
     }
 
-    fn merge(&mut self, other: Self) {
-        self.group.merge(other.group);
-        self.reader_keys.merge(other.reader_keys); // FIXME hmm
+    fn merge(&mut self, mut fork: Self::Fork) {
+        self.group.merge(fork.group);
+        self.reader_keys.merge(fork.reader_keys); // FIXME hmm
 
-        self.content_heads.extend(other.content_heads);
-        self.content_state.extend(other.content_state);
+        self.content_heads.extend(fork.content_heads);
+        self.content_state.extend(fork.content_state);
 
         self.known_decryption_keys
-            .extend(other.known_decryption_keys);
+            .extend(fork.known_decryption_keys);
 
         if let Some(ref mut cgka) = &mut self.cgka {
-            if let Some(other_cgka) = other.cgka {
+            if let Some(other_cgka) = fork.cgka {
                 cgka.merge(other_cgka);
             }
         } else {
-            self.cgka = other.cgka;
+            self.cgka = fork.cgka;
         }
 
         self.rebuild()

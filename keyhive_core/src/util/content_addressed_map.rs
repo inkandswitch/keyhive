@@ -95,8 +95,7 @@ impl<T: Serialize> CaMap<T> {
         self.0.contains_key(hash)
     }
 
-    // FIXME replace with JoiNSemilattice instacne
-    pub fn merge(&mut self, other: Self) {
+    pub fn merge_sync(&mut self, other: Self) {
         for (k, v) in other.0 {
             self.0.insert(k, v);
         }

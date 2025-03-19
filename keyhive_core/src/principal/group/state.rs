@@ -12,7 +12,7 @@ use crate::{
         verifiable::Verifiable,
     },
     join_semilattice::JoinSemilattice,
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
     principal::{agent::Agent, group::delegation::DelegationError, identifier::Identifier},
     store::{delegation::DelegationStore, revocation::RevocationStore},
     util::content_addressed_map::CaMap,
@@ -278,15 +278,18 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
 impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
     for GroupState<S, T, L>
 {
-    type Fork = Self;
+    type Fork = GroupState<S, T, Log<S, T>>;
 
     fn fork(&self) -> Self::Fork {
-        self.clone()
+        let archive = self.into_archive();
+        todo!()
+        // Self::Fork::from_archive(archive)
     }
 
-    fn merge(&mut self, mut fork: Self) {
+    fn merge(&mut self, mut fork: Self::Fork) {
         // FIXME actually compare the heads
-        self.delegation_heads.merge(fork.delegation_heads);
-        self.revocation_heads.merge(fork.revocation_heads);
+        // self.delegation_heads.merge(fork.delegation_heads);
+        // self.revocation_heads.merge(fork.revocation_heads);
+        todo!()
     }
 }

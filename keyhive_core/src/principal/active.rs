@@ -22,6 +22,7 @@ use crate::{
         signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
     },
+    event::Event,
     join_semilattice::JoinSemilattice,
     listener::{
         log::Log,
@@ -38,13 +39,13 @@ use derivative::Derivative;
 use dupe::Dupe;
 use futures::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fmt::Debug, rc::Rc};
+use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, rc::Rc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
 #[derive(Clone, Derivative, Serialize, Deserialize)]
 #[derivative(Debug, Hash, PartialEq)]
-pub struct Active<S: AsyncSigner, L: PrekeyListener = NoListener> {
+pub struct Active<S: AsyncSigner, T: ContentRef = [u8; 32], L: PrekeyListener = NoListener> {
     /// The signing key of the active agent.
     #[derivative(Debug = "ignore")]
     pub(crate) signer: S,
@@ -64,9 +65,11 @@ pub struct Active<S: AsyncSigner, L: PrekeyListener = NoListener> {
     #[serde(skip)]
     #[derivative(Debug = "ignore", PartialEq = "ignore")]
     pub(crate) listener: L,
+
+    pub(crate) _phantom: PhantomData<T>,
 }
 
-impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
+impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     /// Generate a new active agent.
     ///
     /// # Arguments
@@ -125,6 +128,7 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
             prekey_pairs,
             listener,
             signer,
+            _phantom: PhantomData,
         })
     }
 
@@ -228,7 +232,7 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
     }
 
     /// Encrypt a payload for a member of some [`Group`] or [`Document`].
-    pub fn get_capability<T: ContentRef>(
+    pub fn get_capability(
         &self,
         subject: Membered<S, T>,
         min: Access,
@@ -257,43 +261,39 @@ impl<S: AsyncSigner, L: PrekeyListener> Active<S, L> {
             individual: archive.individual.clone(),
             signer,
             listener,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<S: AsyncSigner, L: PrekeyListener> std::fmt::Display for Active<S, L> {
+impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> std::fmt::Display for Active<S, T, L> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.id(), f)
     }
 }
 
-impl<S: AsyncSigner, L: PrekeyListener> Verifiable for Active<S, L> {
+impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Verifiable for Active<S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.signer.verifying_key()
     }
 }
 
-impl<S: AsyncSigner + Clone, L: PrekeyListener> JoinSemilattice for Active<S, L> {
-    type Fork = Active<S, PrekeyLog>;
+impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> JoinSemilattice for Active<S, T, L> {
+    type Fork = Active<S, T, Log<S, T>>;
 
     fn fork(&self) -> Self::Fork {
-        self.clone()
+        Active {
+            signer: self.signer.clone(),
+            prekey_pairs: self.prekey_pairs.clone(),
+            individual: self.individual.clone(),
+            listener: Log::new(),
+            _phantom: PhantomData,
+        }
     }
 
     fn merge(&mut self, mut fork: Self::Fork) {
         self.prekey_pairs.extend(fork.prekey_pairs);
         self.individual.merge(fork.individual);
-
-        for key_op in fork.listener.drain() {
-            match key_op {
-                KeyOp::Add(op) => {
-                    self.listener.on_prekeys_expanded(&op);
-                }
-                KeyOp::Rotate(op) => {
-                    self.listener.on_prekey_rotated(&op);
-                }
-            }
-        }
     }
 }
 

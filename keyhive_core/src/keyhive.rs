@@ -74,7 +74,7 @@ pub struct Keyhive<
     R: rand::CryptoRng = rand::rngs::ThreadRng,
 > {
     /// The [`Active`] user agent.
-    active: Rc<RefCell<Active<S, L>>>,
+    active: Rc<RefCell<Active<S, T, L>>>,
 
     /// The [`Individual`]s that are known to this agent.
     individuals: HashMap<IndividualId, Rc<RefCell<Individual>>>,
@@ -137,7 +137,7 @@ impl<
     }
 
     /// The current [`Active`] Keyhive user.
-    pub fn active(&self) -> &Rc<RefCell<Active<S, L>>> {
+    pub fn active(&self) -> &Rc<RefCell<Active<S, T, L>>> {
         &self.active
     }
 
@@ -1402,6 +1402,7 @@ impl<
 {
     type Fork = Keyhive<S, T, Log<S, T>, R>;
 
+    // FIXME deep clone?
     fn fork(&self) -> Self::Fork {
         let archive = self.into_archive();
 
@@ -1413,7 +1414,7 @@ impl<
         )
         .expect("FIXME");
 
-        fork.active.borrow_mut().listener = PrekeyLog::default();
+        fork.active.borrow_mut().listener = Log::new();
         fork
     }
 
@@ -1422,13 +1423,44 @@ impl<
             .borrow_mut()
             .merge(Rc::unwrap_or_clone(fork.active).into_inner());
 
-        for (id, indie) in fork.individuals.iter() {
-            todo!("FIXME")
+        for (id, indie) in self.individuals.iter() {
+            if let Some(fork) = fork.individuals.remove(id) {
+                indie
+                    .borrow_mut()
+                    .merge(Rc::unwrap_or_clone(fork).into_inner());
+            }
         }
+        // FIXME figure out what to do with new indies
 
-        self.individuals.extend(fork.individuals.drain());
-        self.groups.extend(fork.groups.drain());
-        self.docs.extend(fork.docs.drain());
+        // for (id, group) in self.groups.iter() {
+        //     if let Some(fork) = fork.groups.remove(id) {
+        //         group.borrow_mut().merge(fork.unwrap_or_clone.into_inner());
+        //     }
+        // }
+        // // FIXME figure out what to do with new groups
+
+        // for (id, doc) in self.docs.iter() {
+        //     if let Some(fork) = fork.docs.remove(id) {
+        //         doc.borrow_mut().merge(fork);
+        //     }
+        // }
+        // FIXME figure out what to do with new groups
+
+        // for event in fork.event_listener.borrow().iter() {
+        //     match event {
+        //         Event::Delegated(ev) => {
+        //             self.event_listener.on_delegation(&ev);
+        //         }
+        //         Event::Revoked(ev) => {
+        //             self.event_listener.on_revocation(&ev);
+        //         }
+        //         Event::CgkaOperation(ev) => {
+        //             self.event_listener.on_cgka_op(&ev);
+        //         }
+        //         Event::PrekeyRotated(ev) => self.event_listener.on_prekey_rotated(&ev),
+        //         Event::PrekeysExpanded(ev) => self.event_listener.on_prekeys_expanded(&ev),
+        //     }
+        // }
     }
 }
 

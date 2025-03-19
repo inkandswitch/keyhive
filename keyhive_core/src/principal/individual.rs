@@ -163,8 +163,8 @@ impl JoinSemilattice for Individual {
         self.clone()
     }
 
-    fn merge(&mut self, other: Self) {
-        self.prekey_state.merge(other.prekey_state);
+    fn merge(&mut self, fork: Self) {
+        self.prekey_state.merge(fork.prekey_state);
         self.rebuild()
     }
 }

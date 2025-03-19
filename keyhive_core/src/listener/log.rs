@@ -11,15 +11,16 @@ use crate::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
+use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
     hash::{Hash, Hasher},
     rc::Rc,
 };
 
-#[derive(Debug, Default, PartialEq, Eq, From, Into)]
+#[derive(Debug, PartialEq, Eq, From, Into)]
 pub struct Log<S: AsyncSigner, T: ContentRef = [u8; 32]>(
-    #[allow(clippy::type_complexity)] pub Rc<RefCell<Vec<Event<S, T, Log<S, T>>>>>,
+    pub Rc<RefCell<Vec<Event<S, T, Log<S, T>>>>>,
 );
 
 impl<S: AsyncSigner, T: ContentRef> Log<S, T> {

@@ -37,7 +37,7 @@ use crate::{
         verifiable::Verifiable,
     },
     join_semilattice::JoinSemilattice,
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
     store::{delegation::DelegationStore, revocation::RevocationStore},
     util::content_addressed_map::CaMap,
 };
@@ -830,16 +830,23 @@ impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSem
 where
     Group<S, T, L>: Clone,
 {
-    type Fork = Self;
+    type Fork = Group<S, T, Log<S, T>>;
 
     fn fork(&self) -> Self::Fork {
-        self.clone()
+        todo!()
+        // Group {
+        //     id_or_indie: self.id_or_indie.clone(),
+        //     members: todo!("FIXME"),
+        //     state: self.state.fork(),
+        //     active_revocations: self.active_revocations.clone(),
+        //     listener: Log::new(),
+        // }
     }
 
-    fn merge(&mut self, other: Self) {
+    fn merge(&mut self, mut fork: Self::Fork) {
         // FIXME consider usin the listener
-        self.active_revocations.merge(other.active_revocations);
-        self.state.merge(other.state);
+        // FIXME self.active_revocations.merge(fork.active_revocations);
+        self.state.merge(fork.state);
         self.rebuild()
     }
 }
