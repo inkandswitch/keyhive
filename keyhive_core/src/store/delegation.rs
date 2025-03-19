@@ -12,6 +12,7 @@ use derive_where::derive_where;
 use dupe::Dupe;
 use std::{
     cell::{Ref, RefCell, RefMut},
+    collections::HashSet,
     rc::Rc,
 };
 

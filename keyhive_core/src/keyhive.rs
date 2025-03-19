@@ -37,6 +37,7 @@ use crate::{
         },
         identifier::Identifier,
         individual::{
+            self,
             id::IndividualId,
             op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
             Individual, ReceivePrekeyOpError,
@@ -46,6 +47,7 @@ use crate::{
         public::Public,
     },
     store::{delegation::DelegationStore, revocation::RevocationStore},
+    util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
 use dupe::Dupe;
@@ -1397,26 +1399,80 @@ impl<
     type Fork = Self;
 
     fn fork(&self) -> Self {
-        Self {
-            active: self.active.dupe(),
+        // // FIXME move to fork
+        // let mut raw_delegations = HashMap::new();
+        // for (digest, dlg) in self.delegations.0.borrow().iter() {
+        //     raw_delegations.insert(*digest, dlg.dupe());
+        // }
+        // // FIXME L needs to be vec
+        // let delegations = DelegationStore::<S, T, L>(Rc::new(RefCell::new(CaMap(raw_delegations))));
 
-            individuals: self.individuals.clone(),
-            groups: self.groups.clone(),
-            docs: self.docs.clone(),
+        // let mut raw_revocations = HashMap::new();
+        // for (digest, rev) in self.revocations.0.borrow().iter() {
+        //     raw_revocations.insert(*digest, rev.dupe());
+        // }
+        // let revocations = RevocationStore::<S, T, L>(Rc::new(RefCell::new(CaMap(raw_revocations))));
 
-            delegations: self.delegations.dupe(),
-            revocations: self.revocations.dupe(),
+        // let mut individuals = HashMap::new();
+        // for (id, rc_refcell) in self.individuals.iter() {
+        //     let new_indie = rc_refcell.borrow().fork();
+        //     individuals.insert(*id, Rc::new(RefCell::new(new_indie)));
+        // }
 
-            csprng: self.csprng.clone(),
+        // let mut groups = HashMap::new();
+        // for (id, rc_refcell) in self.groups.iter() {
+        //     let mut forked_group = rc_refcell.borrow().fork();
+        //     forked_group.state.delegations = delegations.dupe();
+        //     forked_group.state.revocations = revocations.dupe();
 
-            event_listener: self.event_listener.clone(),
-        }
+        //     groups.insert(*id, Rc::new(RefCell::new(forked_group)));
+        // }
+
+        // // FIXME iterators
+        // let mut docs = HashMap::new();
+        // for (id, rc_refcell) in self.docs.iter() {
+        //     let mut forked_doc = rc_refcell.borrow().fork();
+        //     forked_doc.group.state.delegations = delegations.dupe();
+        //     forked_doc.group.state.revocations = revocations.dupe();
+
+        //     docs.insert(*id, Rc::new(RefCell::new(rc_refcell.borrow().fork())));
+        // }
+
+        // Self {
+        //     active: Rc::new(RefCell::new(self.active.borrow().fork())),
+
+        //     individuals,
+        //     groups,
+        //     docs,
+
+        //     delegations,
+        //     revocations,
+
+        //     csprng: self.csprng.clone(),
+
+        //     // FIXME make this a Vec<Event>
+        //     event_listener: self.event_listener.clone(),
+        // }
+
+        let archive = self.into_archive();
+        let fresh = Keyhive::try_from_archive(
+            &archive,
+            self.signer,
+            self.event_listener,
+            self.csprng.clone(),
+        )
+        .expect("FIXME");
+        // FIXME replace that event listener
     }
 
     fn merge(&mut self, mut fork: Self::Fork) {
         self.active
             .borrow_mut()
             .merge(Rc::unwrap_or_clone(fork.active).into_inner());
+
+        for (id, indie) in fork.individuals.iter() {
+            todo!("FIXME")
+        }
 
         self.individuals.extend(fork.individuals.drain());
         self.groups.extend(fork.groups.drain());
