@@ -23,7 +23,11 @@ use crate::{
         verifiable::Verifiable,
     },
     join_semilattice::JoinSemilattice,
-    listener::{no_listener::NoListener, prekey::PrekeyListener},
+    listener::{
+        log::Log,
+        no_listener::NoListener,
+        prekey::{PrekeyListener, PrekeyLog},
+    },
     principal::{
         agent::id::AgentId,
         group::delegation::{Delegation, DelegationError},
@@ -270,15 +274,26 @@ impl<S: AsyncSigner, L: PrekeyListener> Verifiable for Active<S, L> {
 }
 
 impl<S: AsyncSigner + Clone, L: PrekeyListener> JoinSemilattice for Active<S, L> {
-    type Fork = Self;
+    type Fork = Active<S, PrekeyLog>;
 
     fn fork(&self) -> Self::Fork {
         self.clone()
     }
 
-    fn merge(&mut self, mut fork: Self) {
+    fn merge(&mut self, mut fork: Self::Fork) {
         self.prekey_pairs.extend(fork.prekey_pairs);
         self.individual.merge(fork.individual);
+
+        for key_op in fork.listener.drain() {
+            match key_op {
+                KeyOp::Add(op) => {
+                    self.listener.on_prekeys_expanded(&op);
+                }
+                KeyOp::Rotate(op) => {
+                    self.listener.on_prekey_rotated(&op);
+                }
+            }
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 //! Trait for listening to [`Cgka`][crate::cgka::Cgka] changes.
 
 use crate::{cgka::operation::CgkaOperation, crypto::signed::Signed};
-use std::rc::Rc;
+use std::{future::Future, rc::Rc};
 
 /// Trait for listening to [`Cgka`][crate::cgka::Cgka] changes.
 ///
@@ -14,7 +14,10 @@ use std::rc::Rc;
 /// Note that we assume single-threaded async.
 ///
 /// </div>
-#[allow(async_fn_in_trait)]
 pub trait CgkaListener {
-    async fn on_cgka_op(&self, data: &Rc<Signed<CgkaOperation>>);
+    #[cfg(not(feature = "sendable"))]
+    fn on_cgka_op(&self, data: &Rc<Signed<CgkaOperation>>) -> impl Future<Output = ()>;
+
+    #[cfg(feature = "sendable")]
+    fn on_cgka_op(&self, data: &Rc<Signed<CgkaOperation>>) -> impl Future<Output = ()> + Send;
 }

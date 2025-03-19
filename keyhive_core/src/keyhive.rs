@@ -18,7 +18,10 @@ use crate::{
     error::missing_dependency::MissingDependency,
     event::{static_event::StaticEvent, Event},
     join_semilattice::JoinSemilattice,
-    listener::{cgka::CgkaListener, membership::MembershipListener, no_listener::NoListener},
+    listener::{
+        cgka::CgkaListener, log::Log, membership::MembershipListener, no_listener::NoListener,
+        prekey::PrekeyLog,
+    },
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
@@ -50,6 +53,7 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
+use derive_where::derive_where;
 use dupe::Dupe;
 use nonempty::NonEmpty;
 use serde::Serialize;
@@ -1396,73 +1400,21 @@ impl<
         R: rand::CryptoRng + rand::RngCore + Clone,
     > JoinSemilattice for Keyhive<S, T, L, R>
 {
-    type Fork = Self;
+    type Fork = Keyhive<S, T, Log<S, T>, R>;
 
-    fn fork(&self) -> Self {
-        // // FIXME move to fork
-        // let mut raw_delegations = HashMap::new();
-        // for (digest, dlg) in self.delegations.0.borrow().iter() {
-        //     raw_delegations.insert(*digest, dlg.dupe());
-        // }
-        // // FIXME L needs to be vec
-        // let delegations = DelegationStore::<S, T, L>(Rc::new(RefCell::new(CaMap(raw_delegations))));
-
-        // let mut raw_revocations = HashMap::new();
-        // for (digest, rev) in self.revocations.0.borrow().iter() {
-        //     raw_revocations.insert(*digest, rev.dupe());
-        // }
-        // let revocations = RevocationStore::<S, T, L>(Rc::new(RefCell::new(CaMap(raw_revocations))));
-
-        // let mut individuals = HashMap::new();
-        // for (id, rc_refcell) in self.individuals.iter() {
-        //     let new_indie = rc_refcell.borrow().fork();
-        //     individuals.insert(*id, Rc::new(RefCell::new(new_indie)));
-        // }
-
-        // let mut groups = HashMap::new();
-        // for (id, rc_refcell) in self.groups.iter() {
-        //     let mut forked_group = rc_refcell.borrow().fork();
-        //     forked_group.state.delegations = delegations.dupe();
-        //     forked_group.state.revocations = revocations.dupe();
-
-        //     groups.insert(*id, Rc::new(RefCell::new(forked_group)));
-        // }
-
-        // // FIXME iterators
-        // let mut docs = HashMap::new();
-        // for (id, rc_refcell) in self.docs.iter() {
-        //     let mut forked_doc = rc_refcell.borrow().fork();
-        //     forked_doc.group.state.delegations = delegations.dupe();
-        //     forked_doc.group.state.revocations = revocations.dupe();
-
-        //     docs.insert(*id, Rc::new(RefCell::new(rc_refcell.borrow().fork())));
-        // }
-
-        // Self {
-        //     active: Rc::new(RefCell::new(self.active.borrow().fork())),
-
-        //     individuals,
-        //     groups,
-        //     docs,
-
-        //     delegations,
-        //     revocations,
-
-        //     csprng: self.csprng.clone(),
-
-        //     // FIXME make this a Vec<Event>
-        //     event_listener: self.event_listener.clone(),
-        // }
-
+    fn fork(&self) -> Self::Fork {
         let archive = self.into_archive();
-        let fresh = Keyhive::try_from_archive(
+
+        let fork = Keyhive::try_from_archive(
             &archive,
-            self.signer,
-            self.event_listener,
+            self.active.borrow().signer.clone(),
+            Log::new(),
             self.csprng.clone(),
         )
         .expect("FIXME");
-        // FIXME replace that event listener
+
+        fork.active.borrow_mut().listener = PrekeyLog::default();
+        fork
     }
 
     fn merge(&mut self, mut fork: Self::Fork) {
@@ -1574,7 +1526,8 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Clone, PartialEq, Eq, Error)]
+#[derive_where(Debug)]
 pub enum TryFromArchiveError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
     #[error("Missing delegation: {0}")]
     MissingDelegation(#[from] Digest<Signed<Delegation<S, T, L>>>),

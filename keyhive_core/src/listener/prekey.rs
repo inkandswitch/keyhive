@@ -2,9 +2,10 @@
 
 use crate::{
     crypto::signed::Signed,
-    principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
+    principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
 };
-use std::rc::Rc;
+use dupe::Dupe;
+use std::{cell::RefCell, rc::Rc};
 
 /// Trait for listening to changes to [prekeys][crate::crypto::share_key::ShareKey].
 ///
@@ -24,4 +25,17 @@ pub trait PrekeyListener: Sized + Clone {
 
     /// React to rotated prekeys.
     async fn on_prekey_rotated(&self, rotate_key: &Rc<Signed<RotateKeyOp>>);
+}
+
+#[derive(Debug, Clone, Dupe, Default)]
+pub struct PrekeyLog(Rc<RefCell<Vec<KeyOp>>>);
+
+impl PrekeyListener for PrekeyLog {
+    async fn on_prekeys_expanded(&self, new_prekey: &Rc<Signed<AddKeyOp>>) {
+        self.0.borrow_mut().push(new_prekey.dupe().into());
+    }
+
+    async fn on_prekey_rotated(&self, rotate_prekey: &Rc<Signed<RotateKeyOp>>) {
+        self.0.borrow_mut().push(rotate_prekey.dupe().into());
+    }
 }
