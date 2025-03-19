@@ -61,7 +61,6 @@ pub struct Document<
     L: MembershipListener<S, T> = NoListener,
 > {
     pub(crate) group: Group<S, T, L>,
-    pub(crate) reader_keys: HashMap<IndividualId, (Rc<RefCell<Individual>>, ShareKey)>,
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
 
@@ -81,7 +80,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         let mut doc = Document {
             cgka: None,
             group,
-            reader_keys: Default::default(),
             content_heads: content_heads.iter().cloned().collect(),
             content_state: Default::default(),
             known_decryption_keys: HashMap::new(),
@@ -201,7 +199,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         ops.push(update_op);
         Ok(Document {
             group,
-            reader_keys: HashMap::new(), // FIXME
             content_state: HashSet::new(),
             content_heads: initial_content_heads.iter().cloned().collect(),
             known_decryption_keys: HashMap::new(),
@@ -471,11 +468,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     pub fn into_archive(&self) -> DocumentArchive<T> {
         DocumentArchive {
             group: self.group.into_archive(),
-            reader_keys: self
-                .reader_keys
-                .iter()
-                .map(|(id, (_, share_key))| (*id, *share_key))
-                .collect(),
             content_heads: self.content_heads.clone(),
             content_state: self.content_state.clone(),
             cgka: self.cgka.clone(),
@@ -496,22 +488,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
                 revocations,
                 listener,
             ),
-            reader_keys: archive.reader_keys.into_iter().try_fold(
-                HashMap::new(),
-                |mut acc, (id, share_key)| {
-                    acc.insert(
-                        id,
-                        (
-                            individuals
-                                .get(&id)
-                                .ok_or(MissingIndividualError(Box::new(id)))?
-                                .dupe(),
-                            share_key,
-                        ),
-                    );
-                    Ok(acc)
-                },
-            )?,
             content_heads: archive.content_heads,
             content_state: archive.content_state,
             known_decryption_keys: HashMap::new(),
@@ -529,7 +505,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Document<S, T, L> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.group.hash(state);
-        crate::util::hasher::hash_map_keys(&self.reader_keys, state);
         crate::util::hasher::hash_set(&self.content_heads, state);
         crate::util::hasher::hash_set(&self.content_state, state);
         self.cgka.hash(state);
@@ -542,27 +517,24 @@ impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSem
     type Fork = Document<S, T, Log<S, T>>;
 
     fn fork(&self) -> Self::Fork {
-        todo!()
-        // let cgka = if let Some(cgka) = &self.cgka {
-        //     Some(cgka.fork())
-        // } else {
-        //     None
-        // };
+        let cgka = if let Some(cgka) = &self.cgka {
+            Some(cgka.fork())
+        } else {
+            None
+        };
 
-        // Document {
-        //     group: self.group.fork(),
-        //     cgka,
+        Document {
+            content_heads: self.content_heads.clone(),
+            content_state: self.content_state.clone(),
+            known_decryption_keys: self.known_decryption_keys.clone(),
 
-        //     reader_keys: self.reader_keys.clone(),
-        //     content_heads: self.content_heads.clone(),
-        //     content_state: self.content_state.clone(),
-        //     known_decryption_keys: self.known_decryption_keys.clone(),
-        // }
+            cgka,
+            group: todo!(), // self.group.fork(),
+        }
     }
 
     fn merge(&mut self, mut fork: Self::Fork) {
-        self.group.merge(fork.group);
-        self.reader_keys.merge(fork.reader_keys); // FIXME hmm
+        // FIXME self.group.merge(fork.group);
 
         self.content_heads.extend(fork.content_heads);
         self.content_state.extend(fork.content_state);

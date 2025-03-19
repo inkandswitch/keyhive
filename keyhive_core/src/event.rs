@@ -17,12 +17,13 @@ use crate::{
     },
 };
 use derive_more::{From, TryInto};
+use derive_where::derive_where;
 use dupe::Dupe;
 use serde::Serialize;
-use std::rc::Rc;
+use std::{fmt, rc::Rc};
 
 /// Top-level event variants.
-#[derive(Debug, PartialEq, Eq, From, TryInto, Hash)]
+#[derive(PartialEq, Eq, From, TryInto, Hash)]
 pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
     /// Prekeys were expanded.
     PrekeysExpanded(Rc<Signed<AddKeyOp>>),
@@ -38,6 +39,18 @@ pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S
 
     /// A delegation was revoked.
     Revoked(Rc<Signed<Revocation<S, T, L>>>),
+}
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> fmt::Debug for Event<S, T, L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Event::PrekeysExpanded(_) => write!(f, "PrekeysExpanded"),
+            Event::PrekeyRotated(_) => write!(f, "PrekeyRotated"),
+            Event::CgkaOperation(_) => write!(f, "CgkaOperation"),
+            Event::Delegated(_) => write!(f, "Delegated"),
+            Event::Revoked(_) => write!(f, "Revoked"),
+        }
+    }
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<KeyOp> for Event<S, T, L> {

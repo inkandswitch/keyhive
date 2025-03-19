@@ -1427,35 +1427,22 @@ impl<
             }
         }
 
-        // for (id, group) in self.groups.iter() {
-        //     if let Some(fork) = fork.groups.remove(id) {
-        //         group.borrow_mut().merge(fork.unwrap_or_clone.into_inner());
-        //     }
-        // }
-        // // FIXME figure out what to do with new groups
+        for event in fork.event_listener.0.borrow().iter() {
+            match event {
+                Event::PrekeysExpanded(add_op) => {
+                    continue; // NOTE: handled above
+                }
+                Event::PrekeyRotated(rot_op) => {
+                    continue; // NOTE: handled above
+                }
+                _ => {}
+            }
 
-        // for (id, doc) in self.docs.iter() {
-        //     if let Some(fork) = fork.docs.remove(id) {
-        //         doc.borrow_mut().merge(fork);
-        //     }
-        // }
-        // FIXME figure out what to do with new groups
+            self.receive_static_event(event.clone().into())
+                .expect("prechecked events to work");
+        }
 
-        // for event in fork.event_listener.borrow().iter() {
-        //     match event {
-        //         Event::Delegated(ev) => {
-        //             self.event_listener.on_delegation(&ev);
-        //         }
-        //         Event::Revoked(ev) => {
-        //             self.event_listener.on_revocation(&ev);
-        //         }
-        //         Event::CgkaOperation(ev) => {
-        //             self.event_listener.on_cgka_op(&ev);
-        //         }
-        //         Event::PrekeyRotated(ev) => self.event_listener.on_prekey_rotated(&ev),
-        //         Event::PrekeysExpanded(ev) => self.event_listener.on_prekeys_expanded(&ev),
-        //     }
-        // }
+        // FIXME ^^^^^^^^^^^ skip checks to speed up; this is all trusted data
     }
 }
 
@@ -1483,7 +1470,7 @@ impl<
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Error)]
 pub enum ReceiveStaticEventError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
     #[error(transparent)]
     ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
@@ -1507,6 +1494,22 @@ where
             Self::ReceiveCgkaOpError(e) => e.is_missing_dependency(),
             Self::ReceieveStaticMembershipError(e) => e.is_missing_dependency(),
         }
+    }
+}
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::fmt::Debug
+    for ReceiveStaticEventError<S, T, L>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // FIXME
+        Ok(())
+        // match self {
+        //     Self::ReceivePrekeyOpError(e) => write!(f, "ReceivePrekeyOpError({:?})", e),
+        //     Self::ReceiveCgkaOpError(e) => write!(f, "ReceiveCgkaOpError({:?})", e),
+        //     Self::ReceieveStaticMembershipError(e) => {
+        //         write!(f, "ReceieveStaticMembershipError({:?})", e)
+        //     }
+        // }
     }
 }
 

@@ -825,31 +825,31 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for 
     }
 }
 
-impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
-    for Group<S, T, L>
-where
-    Group<S, T, L>: Clone,
-{
-    type Fork = Group<S, T, Log<S, T>>;
-
-    fn fork(&self) -> Self::Fork {
-        todo!()
-        // Group {
-        //     id_or_indie: self.id_or_indie.clone(),
-        //     members: todo!("FIXME"),
-        //     state: self.state.fork(),
-        //     active_revocations: self.active_revocations.clone(),
-        //     listener: Log::new(),
-        // }
-    }
-
-    fn merge(&mut self, mut fork: Self::Fork) {
-        // FIXME consider usin the listener
-        // FIXME self.active_revocations.merge(fork.active_revocations);
-        self.state.merge(fork.state);
-        self.rebuild()
-    }
-}
+// impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
+//     for Group<S, T, L>
+// where
+//     Group<S, T, L>: Clone,
+// {
+//     type Fork = Group<S, T, Log<S, T>>;
+//
+//     fn fork(&self) -> Self::Fork {
+//         todo!()
+//         // Group {
+//         //     id_or_indie: self.id_or_indie.clone(),
+//         //     members: todo!("FIXME"),
+//         //     state: self.state.fork(),
+//         //     active_revocations: self.active_revocations.clone(),
+//         //     listener: Log::new(),
+//         // }
+//     }
+//
+//     fn merge(&mut self, mut fork: Self::Fork) {
+//         // FIXME consider usin the listener
+//         // FIXME self.active_revocations.merge(fork.active_revocations);
+//         self.state.merge(fork.state);
+//         self.rebuild()
+//     }
+// }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IdOrIndividual {
