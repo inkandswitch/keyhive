@@ -1,3 +1,8 @@
+//! Make a clean duplicate of a data structure.
+//!
+//! Despite living under the `transact` module,
+//! the traits in this module are helpful as a deep clone variant of [`Clone`].
+
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -6,14 +11,34 @@ use std::{
     rc::Rc,
 };
 
+/// Synchronously fork a data structure.
 pub trait Fork {
+    /// The forked variant of the data structure.
+    ///
+    /// This is helpful for situations like wanting a different listener,
+    /// or to unwrap from containers like `Rc<RefCell<T>>`.
     type Forked;
+
+    /// Fork the data structure.
+    ///
+    /// This may often be implemented with `Clone`,
+    /// but it is often helpful to perform a deep clone (unwrap and clone
+    /// the inner value from an `Rc<RefCell<T>>`), or to change the listener on Keyhive.
     fn fork(&self) -> Self::Forked;
 }
 
+/// An async version of [`Fork`].
 pub trait ForkAsync {
+    /// The forked variant of the data structure.
+    ///
+    /// This is helpful for situations like wanting a different listener,
+    /// or to unwrap from containers like `Rc<RefCell<T>>`.
     type AsyncForked;
 
+    /// Asynchonously fork the data structure.
+    ///
+    /// This variant is helpful when forking a type like `tokio::sync::Mutex`,
+    /// which requires an `await` to acquire a lock.
     fn fork_async(&self) -> impl Future<Output = Self::AsyncForked> + Send;
 }
 

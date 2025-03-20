@@ -52,6 +52,7 @@ keyhive_core = { path = ".", features = ["test_utils", "debug_events"] }
 
 arbitrary = { version = "1.4.1", features = ["derive"] }
 tokio = { version = "1.43", features = ["macros", "rt", "sync", "rt-multi-thread"] }
+tokio-test = "0.4.4"
 
 # Benchmarks
 divan = "0.1.15"

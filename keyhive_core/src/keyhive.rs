@@ -1392,7 +1392,7 @@ impl<
 impl<
         S: AsyncSigner + Clone,
         T: ContentRef + Clone,
-        L: MembershipListener<S, T> + CgkaListener + Clone,
+        L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > Fork for Keyhive<S, T, L, R>
 {
@@ -1412,7 +1412,7 @@ impl<
 impl<
         S: AsyncSigner + Clone,
         T: ContentRef + Clone,
-        L: MembershipListener<S, T> + CgkaListener + Clone,
+        L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > Merge for Keyhive<S, T, L, R>
 {
@@ -1644,9 +1644,15 @@ pub enum ReceiveEventError<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{access::Access, crypto::signer::memory::MemorySigner, principal::public::Public};
+    use crate::{
+        access::Access,
+        crypto::signer::memory::MemorySigner,
+        principal::public::Public,
+        transact::{fork::ForkAsync, merge::MergeAsync, transact_nonblocking},
+    };
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
+    use std::sync::{Arc, Mutex};
 
     async fn make_keyhive() -> Keyhive<MemorySigner> {
         let sk = MemorySigner::generate(&mut rand::thread_rng());
@@ -1970,4 +1976,59 @@ mod tests {
             .unwrap();
         bob.ingest_event_table(events).unwrap();
     }
+
+    #[tokio::test]
+    async fn test_successful_transaction() {
+        let sk = MemorySigner::generate(&mut rand::thread_rng());
+        let hive = Keyhive::<_, [u8; 32], _, _>::generate(sk, NoListener, rand::rngs::OsRng)
+            .await
+            .unwrap();
+
+        let trunk = Rc::new(RefCell::new(hive));
+
+        trunk
+            .borrow_mut()
+            .generate_doc(vec![], nonempty![[0u8; 32]])
+            .await
+            .unwrap();
+
+        trunk.borrow_mut().generate_group(vec![]).await.unwrap();
+
+        assert_eq!(trunk.borrow().delegations.borrow().len(), 2);
+
+        let tx = transact_nonblocking(
+            &trunk,
+            |mut fork: Keyhive<_, _, Log<MemorySigner, _>, rand::rngs::OsRng>| async move {
+                fork.generate_group(vec![]).await.unwrap();
+                fork.generate_group(vec![]).await.unwrap();
+                fork.generate_group(vec![]).await.unwrap();
+
+                fork.generate_doc(vec![], nonempty![[1u8; 32]])
+                    .await
+                    .unwrap();
+
+                Ok::<_, String>(fork)
+            },
+        );
+
+        trunk
+            .borrow_mut()
+            .generate_doc(vec![], nonempty![[2u8; 32]])
+            .await
+            .unwrap();
+
+        tx.await;
+
+        trunk
+            .borrow_mut()
+            .generate_doc(vec![], nonempty![[3u8; 32]])
+            .await
+            .unwrap();
+
+        assert_eq!(trunk.borrow().docs.len(), 4);
+        assert_eq!(trunk.borrow().groups.len(), 4);
+    }
+
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    // async fn test_failure_transaction_is_noop() {}
 }
