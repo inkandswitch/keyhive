@@ -9,7 +9,7 @@ use super::{agent::id::AgentId, document::id::DocumentId};
 use crate::{
     contact_card::ContactCard,
     crypto::{share_key::ShareKey, signed::VerificationError, verifiable::Verifiable},
-    join_semilattice::JoinSemilattice,
+    transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
@@ -156,14 +156,16 @@ impl Verifiable for Individual {
     }
 }
 
-impl JoinSemilattice for Individual {
-    type Fork = Self;
+impl Fork for Individual {
+    type Forked = Self;
 
-    fn fork(&self) -> Self {
+    fn fork(&self) -> Self::Forked {
         self.clone()
     }
+}
 
-    fn merge(&mut self, fork: Self) {
+impl Merge for Individual {
+    fn merge(&mut self, fork: Self::Forked) {
         self.prekey_state.merge(fork.prekey_state);
         self.rebuild()
     }

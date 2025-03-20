@@ -22,13 +22,13 @@ use crate::{
         signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
     },
-    join_semilattice::JoinSemilattice,
     listener::{log::Log, no_listener::NoListener, prekey::PrekeyListener},
     principal::{
         agent::id::AgentId,
         group::delegation::{Delegation, DelegationError},
         membered::Membered,
     },
+    transact::{fork::Fork, merge::Merge},
 };
 use derivative::Derivative;
 use dupe::Dupe;
@@ -273,10 +273,10 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Verifiable for Active<S, 
     }
 }
 
-impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> JoinSemilattice for Active<S, T, L> {
-    type Fork = Active<S, T, Log<S, T>>;
+impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Fork for Active<S, T, L> {
+    type Forked = Active<S, T, Log<S, T>>;
 
-    fn fork(&self) -> Self::Fork {
+    fn fork(&self) -> Self::Forked {
         Active {
             signer: self.signer.clone(),
             prekey_pairs: self.prekey_pairs.clone(),
@@ -285,8 +285,10 @@ impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> JoinSemilattice f
             _phantom: PhantomData,
         }
     }
+}
 
-    fn merge(&mut self, fork: Self::Fork) {
+impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Merge for Active<S, T, L> {
+    fn merge(&mut self, fork: Self::Forked) {
         self.prekey_pairs.extend(fork.prekey_pairs);
         self.individual.merge(fork.individual);
     }

@@ -3,7 +3,7 @@ use crate::{
         encrypted::EncryptedSecret,
         share_key::{ShareKey, ShareSecretKey},
     },
-    join_semilattice::JoinSemilattice,
+    transact::{fork::Fork, merge::Merge},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -53,14 +53,16 @@ impl ShareKeyMap {
     }
 }
 
-impl JoinSemilattice for ShareKeyMap {
-    type Fork = Self;
+impl Fork for ShareKeyMap {
+    type Forked = Self;
 
-    fn fork(&self) -> Self::Fork {
+    fn fork(&self) -> Self::Forked {
         self.clone()
     }
+}
 
-    fn merge(&mut self, fork: Self::Fork) {
+impl Merge for ShareKeyMap {
+    fn merge(&mut self, fork: Self::Forked) {
         self.0.extend(fork.0.into_iter())
     }
 }

@@ -17,7 +17,6 @@ use crate::{
     },
     error::missing_dependency::MissingDependency,
     event::{static_event::StaticEvent, Event},
-    join_semilattice::{transact, JoinSemilattice},
     listener::{
         cgka::CgkaListener, log::Log, membership::MembershipListener, no_listener::NoListener,
     },
@@ -48,6 +47,7 @@ use crate::{
         public::Public,
     },
     store::{delegation::DelegationStore, revocation::RevocationStore},
+    transact::{fork::Fork, merge::Merge},
 };
 use derivative::Derivative;
 use derive_where::derive_where;
@@ -1346,20 +1346,6 @@ impl<
         &self.event_listener
     }
 
-    pub fn blocking_transaction<
-        Error,
-        F: FnMut(&mut Keyhive<S, T, Log<S, T>, R>) -> Result<(), Error>,
-    >(
-        &mut self,
-        tx: F,
-    ) -> Result<(), Error>
-    where
-        S: Clone,
-        R: Clone,
-    {
-        transact(self, tx)
-    }
-
     #[cfg(any(test, feature = "test_utils"))]
     pub fn ingest_unsorted_static_events(
         &mut self,
@@ -1408,11 +1394,11 @@ impl<
         T: ContentRef + Clone,
         L: MembershipListener<S, T> + CgkaListener + Clone,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > JoinSemilattice for Keyhive<S, T, L, R>
+    > Fork for Keyhive<S, T, L, R>
 {
-    type Fork = Keyhive<S, T, Log<S, T>, R>;
+    type Forked = Keyhive<S, T, Log<S, T>, R>;
 
-    fn fork(&self) -> Self::Fork {
+    fn fork(&self) -> Self::Forked {
         Keyhive::try_from_archive(
             &self.into_archive(),
             self.active.borrow().signer.clone(),
@@ -1421,8 +1407,16 @@ impl<
         )
         .expect("local round trip to work")
     }
+}
 
-    fn merge(&mut self, mut fork: Self::Fork) {
+impl<
+        S: AsyncSigner + Clone,
+        T: ContentRef + Clone,
+        L: MembershipListener<S, T> + CgkaListener + Clone,
+        R: rand::CryptoRng + rand::RngCore + Clone,
+    > Merge for Keyhive<S, T, L, R>
+{
+    fn merge(&mut self, mut fork: Self::Forked) {
         self.active
             .borrow_mut()
             .merge(Rc::unwrap_or_clone(fork.active).into_inner());

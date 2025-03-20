@@ -20,8 +20,8 @@ use crate::{
         siv::Siv,
         symmetric_key::SymmetricKey,
     },
-    join_semilattice::JoinSemilattice,
     principal::{document::id::DocumentId, individual::id::IndividualId},
+    transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
 use beekem::BeeKem;
@@ -552,14 +552,16 @@ impl Cgka {
     }
 }
 
-impl JoinSemilattice for Cgka {
-    type Fork = Self;
+impl Fork for Cgka {
+    type Forked = Self;
 
-    fn fork(&self) -> Self::Fork {
+    fn fork(&self) -> Self::Forked {
         self.clone()
     }
+}
 
-    fn merge(&mut self, fork: Self) {
+impl Merge for Cgka {
+    fn merge(&mut self, fork: Self::Forked) {
         self.owner_sks.merge(fork.owner_sks);
         self.ops_graph.merge(fork.ops_graph);
         self.pcs_keys.merge(fork.pcs_keys);
