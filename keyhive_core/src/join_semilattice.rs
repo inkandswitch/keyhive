@@ -231,7 +231,7 @@ mod tests {
         assert_eq!(observed.len(), 8);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_transact_multithreaded() {
         use core::borrow::Borrow;
 
@@ -292,7 +292,14 @@ mod tests {
         });
 
         let results = work.join_all().await;
-        assert!(results[2].is_err());
+        assert_eq!(results.len(), 3);
+        assert_eq!(
+            results
+                .into_iter()
+                .filter(|x| x.is_err())
+                .collect::<Vec<_>>(),
+            vec![Err("NOPE".to_string())]
+        );
 
         let observed = Arc::into_inner(og).expect("FIXME").into_inner();
 
