@@ -1986,24 +1986,48 @@ mod tests {
 
         let trunk = Rc::new(RefCell::new(hive));
 
+        let alice: Peer<MemorySigner, [u8; 32], NoListener> = Rc::new(RefCell::new(
+            Individual::generate(
+                &MemorySigner::generate(&mut rand::rngs::OsRng),
+                &mut rand::rngs::OsRng,
+            )
+            .await
+            .unwrap(),
+        ))
+        .into();
+
         trunk
             .borrow_mut()
-            .generate_doc(vec![], nonempty![[0u8; 32]])
+            .generate_doc(vec![alice.dupe()], nonempty![[0u8; 32]])
             .await
             .unwrap();
 
-        trunk.borrow_mut().generate_group(vec![]).await.unwrap();
+        trunk
+            .borrow_mut()
+            .generate_group(vec![alice.dupe()])
+            .await
+            .unwrap();
 
-        assert_eq!(trunk.borrow().delegations.borrow().len(), 2);
+        assert_eq!(trunk.borrow().delegations.borrow().len(), 4);
 
         let tx = transact_nonblocking(
             &trunk,
             |mut fork: Keyhive<_, _, Log<MemorySigner, _>, rand::rngs::OsRng>| async move {
-                fork.generate_group(vec![]).await.unwrap();
-                fork.generate_group(vec![]).await.unwrap();
-                fork.generate_group(vec![]).await.unwrap();
+                let bob: Peer<MemorySigner, [u8; 32], Log<MemorySigner>> = Rc::new(RefCell::new(
+                    Individual::generate(
+                        &MemorySigner::generate(&mut rand::rngs::OsRng),
+                        &mut rand::rngs::OsRng,
+                    )
+                    .await
+                    .unwrap(),
+                ))
+                .into();
 
-                fork.generate_doc(vec![], nonempty![[1u8; 32]])
+                fork.generate_group(vec![bob.dupe()]).await.unwrap();
+                fork.generate_group(vec![bob.dupe()]).await.unwrap();
+                fork.generate_group(vec![bob.dupe()]).await.unwrap();
+
+                fork.generate_doc(vec![bob], nonempty![[1u8; 32]])
                     .await
                     .unwrap();
 
@@ -2013,7 +2037,7 @@ mod tests {
 
         trunk
             .borrow_mut()
-            .generate_doc(vec![], nonempty![[2u8; 32]])
+            .generate_doc(vec![alice.dupe()], nonempty![[2u8; 32]])
             .await
             .unwrap();
 
@@ -2021,12 +2045,14 @@ mod tests {
 
         trunk
             .borrow_mut()
-            .generate_doc(vec![], nonempty![[3u8; 32]])
+            .generate_doc(vec![alice.dupe()], nonempty![[3u8; 32]])
             .await
             .unwrap();
 
-        assert_eq!(trunk.borrow().docs.len(), 4);
+        assert_eq!(trunk.borrow().delegations.borrow().len(), 8);
+
         assert_eq!(trunk.borrow().groups.len(), 4);
+        assert_eq!(trunk.borrow().docs.len(), 4);
     }
 
     // #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
