@@ -2041,7 +2041,8 @@ mod tests {
             .await
             .unwrap();
 
-        tx.await;
+        let result = tx.await;
+        assert!(result.is_ok());
 
         trunk
             .borrow_mut()
