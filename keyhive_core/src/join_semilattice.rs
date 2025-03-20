@@ -17,6 +17,28 @@ pub trait JoinSemilattice {
     fn merge(&mut self, fork: Self::Fork);
 }
 
+pub trait AsyncJoinSemilattice: Send + Sync {
+    type AsyncFork: Send + Sync;
+
+    fn fork_async(&self) -> impl std::future::Future<Output = Self::AsyncFork> + Send;
+    fn merge_async(
+        &mut self,
+        fork: Self::AsyncFork,
+    ) -> impl std::future::Future<Output = ()> + Send;
+}
+
+impl<T: JoinSemilattice<Fork = U> + Send + Sync, U: Send + Sync> AsyncJoinSemilattice for T {
+    type AsyncFork = T::Fork;
+
+    async fn fork_async(&self) -> Self::AsyncFork {
+        self.fork()
+    }
+
+    async fn merge_async(&mut self, fork: Self::AsyncFork) {
+        self.merge(fork)
+    }
+}
+
 impl<T: Hash + Eq + Clone> JoinSemilattice for HashSet<T> {
     type Fork = Self;
 
@@ -117,6 +139,20 @@ pub async fn transact_async<
     Ok(())
 }
 
+pub async fn transact_multithreaded<
+    T: AsyncJoinSemilattice + Clone,
+    Error,
+    F: AsyncFnOnce(T::AsyncFork) -> Result<T::AsyncFork, Error>,
+>(
+    trunk: &T,
+    mut tx: F,
+) -> Result<(), Error> {
+    let forked = trunk.fork_async().await;
+    let diverged = tx(forked).await?;
+    trunk.clone().merge_async(diverged).await;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,44 +190,128 @@ mod tests {
             Ok::<_, String>(set)
         });
 
-        // let fut2 = transact_async(&og, |mut set: HashSet<u8>| async move {
-        //     set.insert(255);
-        //     set.insert(254);
-        //     set.insert(253);
-        //     set.remove(&254); // Remove something during the tx
-        //     Ok::<HashSet<u8>, String>(set)
-        // });
+        let fut2 = transact_async(&og, |mut set: HashSet<u8>| async move {
+            set.insert(255);
+            set.insert(254);
+            set.insert(253);
+            set.remove(&254); // Remove something during the tx
+            Ok::<HashSet<u8>, String>(set)
+        });
 
-        // let fut3 = transact_async(&og, |mut set: HashSet<u8>| async move {
-        //     set.insert(50);
-        //     set.insert(60);
-        //     Err("NOPE".to_string())
-        // });
+        let fut3 = transact_async(&og, |mut set: HashSet<u8>| async move {
+            set.insert(50);
+            set.insert(60);
+            Err("NOPE".to_string())
+        });
 
-        // fut2.await.unwrap();
-        // fut1.await.unwrap();
+        fut2.await.unwrap();
+        fut1.await.unwrap();
 
-        // assert!(fut3.await.is_err());
+        assert!(fut3.await.is_err());
 
-        // let observed = Arc::into_inner(og)
-        //     .expect("FIXME")
-        //     .into_inner()
-        //     .expect("FIXME");
+        let observed = Arc::into_inner(og)
+            .expect("FIXME")
+            .into_inner()
+            .expect("FIXME");
 
-        // assert!(!observed.contains(&50));
-        // assert!(!observed.contains(&60));
+        assert!(!observed.contains(&50));
+        assert!(!observed.contains(&60));
 
-        // assert!(!observed.contains(&254)); // NOTE: removed during tx
+        assert!(!observed.contains(&254)); // NOTE: removed during tx
 
-        // assert!(observed.contains(&0));
-        // assert!(observed.contains(&1)); // NOTE: it's baaaack
-        // assert!(observed.contains(&2)); // NOTE: it's baaaack
-        // assert!(observed.contains(&3));
-        // assert!(observed.contains(&42));
-        // assert!(observed.contains(&99));
-        // assert!(observed.contains(&255));
-        // assert!(observed.contains(&253));
+        assert!(observed.contains(&0));
+        assert!(observed.contains(&1)); // NOTE: it's baaaack
+        assert!(observed.contains(&2)); // NOTE: it's baaaack
+        assert!(observed.contains(&3));
+        assert!(observed.contains(&42));
+        assert!(observed.contains(&99));
+        assert!(observed.contains(&255));
+        assert!(observed.contains(&253));
 
-        // assert_eq!(observed.len(), 8);
+        assert_eq!(observed.len(), 8);
+    }
+
+    #[tokio::test]
+    async fn test_transact_multithreaded() {
+        use core::borrow::Borrow;
+
+        impl<
+                T: Clone + JoinSemilattice + AsyncJoinSemilattice<AsyncFork = U>,
+                U: AsyncJoinSemilattice + Send + Sync,
+            > AsyncJoinSemilattice for Arc<tokio::sync::Mutex<T>>
+        {
+            type AsyncFork = T::AsyncFork;
+
+            async fn fork_async(&self) -> Self::AsyncFork {
+                let lock = self.lock().await;
+                lock.fork_async().await
+            }
+
+            async fn merge_async(&mut self, fork: Self::AsyncFork) {
+                let mut lock = self.lock().await;
+                lock.merge_async(fork).await
+            }
+        }
+
+        let og = Arc::new(tokio::sync::Mutex::new(HashSet::from_iter([0u8, 1, 2, 3])));
+        let mut work = tokio::task::JoinSet::new();
+
+        let og1 = og.clone();
+        work.spawn(async move {
+            transact_multithreaded(&og1, |mut set: HashSet<u8>| async move {
+                // FIXME sleep?
+                set.insert(42);
+                set.insert(99);
+                set.remove(&1);
+                set.remove(&2);
+                Ok::<_, String>(set)
+            })
+            .await
+        });
+
+        let og2 = og.clone();
+        work.spawn(async move {
+            transact_multithreaded(&og2, |mut set: HashSet<u8>| async move {
+                set.insert(255);
+                set.insert(254);
+                set.insert(253);
+                set.remove(&254); // Remove something during the tx
+                Ok::<HashSet<u8>, String>(set)
+            })
+            .await
+        });
+
+        let og3 = og.clone();
+        work.spawn(async move {
+            transact_multithreaded(&og3, |mut set: HashSet<u8>| async move {
+                set.insert(50);
+                set.insert(60);
+                Err::<HashSet<u8>, _>("NOPE".to_string())
+            })
+            .await
+        });
+
+        let results = work.join_all().await;
+        assert!(results[2].is_err());
+
+        let observed = Arc::into_inner(og).expect("FIXME").into_inner();
+
+        assert!(!observed.contains(&50));
+        assert!(!observed.contains(&60));
+
+        assert!(!observed.contains(&254)); // NOTE: removed during tx
+
+        assert!(observed.contains(&0));
+        assert!(observed.contains(&1)); // NOTE: it's baaaack
+        assert!(observed.contains(&2)); // NOTE: it's baaaack
+        assert!(observed.contains(&3));
+        assert!(observed.contains(&42));
+        assert!(observed.contains(&99));
+        assert!(observed.contains(&255));
+        assert!(observed.contains(&253));
+
+        assert_eq!(observed.len(), 8);
     }
 }
+
+// FIXME test commutativity
