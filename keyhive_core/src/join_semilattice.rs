@@ -1,4 +1,5 @@
 use std::{
+    borrow::BorrowMut,
     cell::RefCell,
     collections::{HashMap, HashSet},
     future::Future,
@@ -6,6 +7,15 @@ use std::{
     rc::Rc,
     sync::{Arc, Mutex, RwLock},
 };
+
+pub trait Forkable {
+    type Fork;
+    fn fork(&self) -> Self::Fork;
+}
+
+pub trait Mergable: Forkable {
+    fn merge(&mut self, fork: Self::Fork);
+}
 
 // FIXME rename trasnaction?
 pub trait JoinSemilattice {
@@ -148,6 +158,21 @@ pub async fn transact_multithreaded<
     let forked = trunk.fork_async().await;
     let diverged = tx(forked).await?;
     trunk.clone().merge_async(diverged).await;
+    Ok(())
+}
+
+pub async fn foo<
+    B: std::borrow::Borrow<T> + std::borrow::BorrowMut<T> + Clone,
+    T: JoinSemilattice,
+    Error,
+    F: AsyncFnOnce(T::Fork) -> Result<T::Fork, Error>,
+>(
+    trunk: &B,
+    tx: F,
+) -> Result<(), Error> {
+    let forked = trunk.borrow().fork();
+    let diverged = tx(forked).await?;
+    trunk.clone().borrow_mut().merge(diverged);
     Ok(())
 }
 
@@ -311,5 +336,3 @@ mod tests {
         assert_eq!(observed.len(), 8);
     }
 }
-
-// FIXME test commutativity
