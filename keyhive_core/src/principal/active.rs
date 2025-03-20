@@ -22,13 +22,8 @@ use crate::{
         signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
     },
-    event::Event,
     join_semilattice::JoinSemilattice,
-    listener::{
-        log::Log,
-        no_listener::NoListener,
-        prekey::{PrekeyListener, PrekeyLog},
-    },
+    listener::{log::Log, no_listener::NoListener, prekey::PrekeyListener},
     principal::{
         agent::id::AgentId,
         group::delegation::{Delegation, DelegationError},
@@ -291,7 +286,7 @@ impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> JoinSemilattice f
         }
     }
 
-    fn merge(&mut self, mut fork: Self::Fork) {
+    fn merge(&mut self, fork: Self::Fork) {
         self.prekey_pairs.extend(fork.prekey_pairs);
         self.individual.merge(fork.individual);
     }
@@ -342,7 +337,8 @@ mod tests {
     async fn test_seal() {
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let active = Active::generate(signer, NoListener, csprng).await.unwrap();
+        let active: Active<_, [u8; 32], _> =
+            Active::generate(signer, NoListener, csprng).await.unwrap();
         let message = "hello world".as_bytes();
         let signed = active.try_sign_async(message).await.unwrap();
 

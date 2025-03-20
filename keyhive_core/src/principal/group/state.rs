@@ -11,19 +11,14 @@ use crate::{
         signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSigner},
         verifiable::Verifiable,
     },
-    join_semilattice::JoinSemilattice,
-    listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
+    listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::Agent, group::delegation::DelegationError, identifier::Identifier},
     store::{delegation::DelegationStore, revocation::RevocationStore},
     util::content_addressed_map::CaMap,
 };
 use derive_where::derive_where;
 use dupe::Dupe;
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, HashMap},
-    rc::Rc,
-};
+use std::{cmp::Ordering, collections::BTreeMap, rc::Rc};
 
 #[derive(Clone, Eq)]
 #[derive_where(Debug, PartialEq, Hash; T)]
@@ -269,33 +264,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
             revocation_heads: self.revocation_heads.keys().map(Into::into).collect(),
         }
     }
-
-    // FIXME break out into own trait?
-    // pub(crate) fn fork(&self) -> GroupState<S, T, Log<S, T>> {
-    //     let archive = self.into_archive();
-    //     let delegations = self.delegations.fork();
-    //     let revocations = self.revocations.fork();
-    //     let dummy = GroupState::dummy_from_archive(archive, delegations, revocations);
-
-    //     let delegation_heads_inner = HashMap::new();
-    //     let revocation_heads_inner = HashMap::new();
-
-    //     for digest in self.delegation_heads.keys() {
-    //         delegation_heads_inner.insert(
-    //             digest,
-    //             delegations.get(digest).expect("digest not found in fork"),
-    //         );
-    //     }
-
-    //     todo!()
-    // }
-
-    // pub(crate) fn merge(&mut self, mut fork: GroupState<S, T, Log<S, T>>) {
-    //     // FIXME actually compare the heads
-    //     // self.delegation_heads.merge(fork.delegation_heads);
-    //     // self.revocation_heads.merge(fork.revocation_heads);
-    //     todo!()
-    // }
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
@@ -305,22 +273,3 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
         self.id.0.verifying_key()
     }
 }
-
-// impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
-//     for GroupState<S, T, L>
-// {
-//     type Fork = GroupState<S, T, Log<S, T>>;
-//
-//     fn fork(&self) -> Self::Fork {
-//         let archive = self.into_archive();
-//         todo!()
-//         // Self::Fork::from_archive(archive)
-//     }
-//
-//     fn merge(&mut self, mut fork: Self::Fork) {
-//         // FIXME actually compare the heads
-//         // self.delegation_heads.merge(fork.delegation_heads);
-//         // self.revocation_heads.merge(fork.revocation_heads);
-//         todo!()
-//     }
-// }

@@ -60,8 +60,8 @@ impl JoinSemilattice for ShareKeyMap {
         self.clone()
     }
 
-    fn merge(&mut self, mut other: Self) {
-        self.0.extend(other.0.into_iter())
+    fn merge(&mut self, fork: Self::Fork) {
+        self.0.extend(fork.0.into_iter())
     }
 }
 

@@ -6,12 +6,11 @@ use crate::{
     event::Event,
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
-        individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
+        individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
-use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
     hash::{Hash, Hasher},

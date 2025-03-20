@@ -22,8 +22,7 @@ use crate::{
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
-    join_semilattice::JoinSemilattice,
-    listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
+    listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
@@ -34,7 +33,6 @@ use crate::{
             Group, RevokeMemberError,
         },
         identifier::Identifier,
-        individual::Individual,
     },
     store::{delegation::DelegationStore, revocation::RevocationStore},
     util::content_addressed_map::CaMap,
@@ -476,7 +474,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
 
     pub(crate) fn dummy_from_archive(
         archive: DocumentArchive<T>,
-        individuals: &HashMap<IndividualId, Rc<RefCell<Individual>>>,
         delegations: DelegationStore<S, T, L>,
         revocations: RevocationStore<S, T, L>,
         listener: L,
@@ -508,49 +505,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Docume
         crate::util::hasher::hash_set(&self.content_heads, state);
         crate::util::hasher::hash_set(&self.content_state, state);
         self.cgka.hash(state);
-    }
-}
-
-impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
-    for Document<S, T, L>
-{
-    type Fork = Document<S, T, Log<S, T>>;
-
-    fn fork(&self) -> Self::Fork {
-        let cgka = if let Some(cgka) = &self.cgka {
-            Some(cgka.fork())
-        } else {
-            None
-        };
-
-        Document {
-            content_heads: self.content_heads.clone(),
-            content_state: self.content_state.clone(),
-            known_decryption_keys: self.known_decryption_keys.clone(),
-
-            cgka,
-            group: todo!(), // self.group.fork(),
-        }
-    }
-
-    fn merge(&mut self, mut fork: Self::Fork) {
-        // FIXME self.group.merge(fork.group);
-
-        self.content_heads.extend(fork.content_heads);
-        self.content_state.extend(fork.content_state);
-
-        self.known_decryption_keys
-            .extend(fork.known_decryption_keys);
-
-        if let Some(ref mut cgka) = &mut self.cgka {
-            if let Some(other_cgka) = fork.cgka {
-                cgka.merge(other_cgka);
-            }
-        } else {
-            self.cgka = fork.cgka;
-        }
-
-        self.rebuild()
     }
 }
 

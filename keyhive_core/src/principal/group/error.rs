@@ -1,4 +1,4 @@
-use crate::{access::Access, crypto::signed::VerificationError, principal::identifier::Identifier};
+use crate::{access::Access, principal::identifier::Identifier};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AddError {

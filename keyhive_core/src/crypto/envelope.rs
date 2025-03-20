@@ -90,7 +90,7 @@ pub struct Envelope<C: ContentRef + DeserializeOwned, T: Serialize> {
     )]
     #[derivative(
         PartialOrd(compare_with = "crate::util::partial_eq::hash_map_keys"),
-        Hash(hash_with = "crate::util::hash::hash_map_keys")
+        Hash(hash_with = "crate::util::hasher::hash_map_keys")
     )]
     pub ancestors: HashMap<C, SymmetricKey>,
 }

@@ -3,7 +3,6 @@
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    join_semilattice::JoinSemilattice,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::group::revocation::Revocation,
     util::content_addressed_map::CaMap,

@@ -1,11 +1,6 @@
-use crate::{
-    cgka::Cgka,
-    content::reference::ContentRef,
-    crypto::share_key::ShareKey,
-    principal::{group::GroupArchive, individual::id::IndividualId},
-};
+use crate::{cgka::Cgka, content::reference::ContentRef, principal::group::GroupArchive};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentArchive<T: ContentRef> {

@@ -131,7 +131,7 @@ impl JoinSemilattice for CgkaOperationGraph {
         self.clone()
     }
 
-    fn merge(&mut self, mut fork: Self::Fork) {
+    fn merge(&mut self, fork: Self::Fork) {
         self.cgka_ops.merge(fork.cgka_ops);
         self.cgka_ops_predecessors
             .extend(fork.cgka_ops_predecessors.into_iter());

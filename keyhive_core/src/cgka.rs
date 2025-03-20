@@ -559,11 +559,12 @@ impl JoinSemilattice for Cgka {
         self.clone()
     }
 
-    fn merge(&mut self, mut other: Self) {
-        self.owner_sks.merge(other.owner_sks);
-        self.ops_graph.merge(other.ops_graph);
-        self.pcs_keys.merge(other.pcs_keys);
-        self.replay_ops_graph().expect("FIXME")
+    fn merge(&mut self, fork: Self) {
+        self.owner_sks.merge(fork.owner_sks);
+        self.ops_graph.merge(fork.ops_graph);
+        self.pcs_keys.merge(fork.pcs_keys);
+        self.replay_ops_graph()
+            .expect("two valid graphs should always merge causal consistency");
     }
 }
 

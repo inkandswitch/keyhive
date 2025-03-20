@@ -3,7 +3,6 @@
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    join_semilattice::JoinSemilattice,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::group::delegation::Delegation,
     util::content_addressed_map::CaMap,
@@ -12,7 +11,6 @@ use derive_where::derive_where;
 use dupe::Dupe;
 use std::{
     cell::{Ref, RefCell, RefMut},
-    collections::HashSet,
     rc::Rc,
 };
 

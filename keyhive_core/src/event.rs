@@ -17,7 +17,6 @@ use crate::{
     },
 };
 use derive_more::{From, TryInto};
-use derive_where::derive_where;
 use dupe::Dupe;
 use serde::Serialize;
 use std::{fmt, rc::Rc};

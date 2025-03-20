@@ -17,10 +17,9 @@ use crate::{
     },
     error::missing_dependency::MissingDependency,
     event::{static_event::StaticEvent, Event},
-    join_semilattice::{transact, transact_async, JoinSemilattice},
+    join_semilattice::{transact, JoinSemilattice},
     listener::{
         cgka::CgkaListener, log::Log, membership::MembershipListener, no_listener::NoListener,
-        prekey::PrekeyLog,
     },
     principal::{
         active::Active,
@@ -40,7 +39,6 @@ use crate::{
         },
         identifier::Identifier,
         individual::{
-            self,
             id::IndividualId,
             op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
             Individual, ReceivePrekeyOpError,
@@ -50,7 +48,6 @@ use crate::{
         public::Public,
     },
     store::{delegation::DelegationStore, revocation::RevocationStore},
-    util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
 use derive_where::derive_where;
@@ -1157,7 +1154,6 @@ impl<
                 *doc_id,
                 Rc::new(RefCell::new(Document::<S, T, L>::dummy_from_archive(
                     doc_archive.clone(),
-                    &individuals,
                     delegations.dupe(),
                     revocations.dupe(),
                     listener.clone(),
@@ -1355,7 +1351,7 @@ impl<
         F: FnMut(&mut Keyhive<S, T, Log<S, T>, R>) -> Result<(), Error>,
     >(
         &mut self,
-        mut tx: F,
+        tx: F,
     ) -> Result<(), Error>
     where
         S: Clone,
@@ -1443,10 +1439,10 @@ impl<
 
         for event in fork.event_listener.0.borrow().iter() {
             match event {
-                Event::PrekeysExpanded(add_op) => {
+                Event::PrekeysExpanded(_add_op) => {
                     continue; // NOTE: handled above
                 }
-                Event::PrekeyRotated(rot_op) => {
+                Event::PrekeyRotated(_rot_op) => {
                     continue; // NOTE: handled above
                 }
                 _ => {}
@@ -1514,7 +1510,7 @@ where
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::fmt::Debug
     for ReceiveStaticEventError<S, T, L>
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // FIXME
         Ok(())
         // match self {

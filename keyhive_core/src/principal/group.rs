@@ -36,8 +36,7 @@ use crate::{
         },
         verifiable::Verifiable,
     },
-    join_semilattice::JoinSemilattice,
-    listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
+    listener::{membership::MembershipListener, no_listener::NoListener},
     store::{delegation::DelegationStore, revocation::RevocationStore},
     util::content_addressed_map::CaMap,
 };
@@ -825,32 +824,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for 
     }
 }
 
-// impl<S: AsyncSigner + Clone, T: ContentRef, L: MembershipListener<S, T>> JoinSemilattice
-//     for Group<S, T, L>
-// where
-//     Group<S, T, L>: Clone,
-// {
-//     type Fork = Group<S, T, Log<S, T>>;
-//
-//     fn fork(&self) -> Self::Fork {
-//         todo!()
-//         // Group {
-//         //     id_or_indie: self.id_or_indie.clone(),
-//         //     members: todo!("FIXME"),
-//         //     state: self.state.fork(),
-//         //     active_revocations: self.active_revocations.clone(),
-//         //     listener: Log::new(),
-//         // }
-//     }
-//
-//     fn merge(&mut self, mut fork: Self::Fork) {
-//         // FIXME consider usin the listener
-//         // FIXME self.active_revocations.merge(fork.active_revocations);
-//         self.state.merge(fork.state);
-//         self.rebuild()
-//     }
-// }
-
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IdOrIndividual {
     GroupId(GroupId),
@@ -910,16 +883,16 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::cell::RefCell;
 
-    async fn setup_user<R: rand::CryptoRng + rand::RngCore>(
+    async fn setup_user<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Active<MemorySigner> {
+    ) -> Active<MemorySigner, T> {
         let sk = MemorySigner::generate(csprng);
         Active::generate(sk, NoListener, csprng).await.unwrap()
     }
 
     async fn setup_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        alice: Rc<RefCell<Active<MemorySigner>>>,
-        bob: Rc<RefCell<Active<MemorySigner>>>,
+        alice: Rc<RefCell<Active<MemorySigner, T>>>,
+        bob: Rc<RefCell<Active<MemorySigner, T>>>,
         csprng: &mut R,
     ) -> [Rc<RefCell<Group<MemorySigner, T>>>; 4] {
         /*              ┌───────────┐        ┌───────────┐
@@ -945,7 +918,7 @@ mod tests {
                         │           │
                         └───────────┘ */
 
-        let alice_agent: Agent<MemorySigner, T> = alice.into();
+        let alice_agent: Agent<MemorySigner, T, _> = alice.into();
         let bob_agent = bob.into();
 
         let dlg_store = DelegationStore::new();
@@ -1003,8 +976,8 @@ mod tests {
     }
 
     async fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        alice: Rc<RefCell<Active<MemorySigner>>>,
-        bob: Rc<RefCell<Active<MemorySigner>>>,
+        alice: Rc<RefCell<Active<MemorySigner, T>>>,
+        bob: Rc<RefCell<Active<MemorySigner, T>>>,
         csprng: &mut R,
     ) -> [Rc<RefCell<Group<MemorySigner, T>>>; 10] {
         let dlg_store = DelegationStore::new();
@@ -1289,7 +1262,10 @@ mod tests {
         assert_eq!(
             g0_mems,
             HashMap::from_iter([
-                (alice_id, (alice.into(), Access::Admin)),
+                (
+                    alice_id,
+                    (Agent::<_, String, _>::from(alice), Access::Admin)
+                ),
                 (bob_id, (bob.into(), Access::Admin)),
                 (g1.borrow().id(), (g1.dupe().into(), Access::Admin)),
                 (g2.borrow().id(), (g2.dupe().into(), Access::Admin)),
