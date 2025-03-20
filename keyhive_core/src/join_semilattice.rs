@@ -83,7 +83,7 @@ impl<T: JoinSemilattice> JoinSemilattice for Arc<RwLock<T>> {
     fn fork(&self) -> Self::Fork {
         match self.read() {
             Ok(inner) => inner.fork(),
-            Err(_poison) => panic!("FIXME"), // FIXME make this try_fork
+            Err(poison) => panic!("rethrowing error {poison}"), // FIXME?
         }
     }
 
@@ -145,7 +145,7 @@ pub async fn transact_multithreaded<
     F: AsyncFnOnce(T::AsyncFork) -> Result<T::AsyncFork, Error>,
 >(
     trunk: &T,
-    mut tx: F,
+    tx: F,
 ) -> Result<(), Error> {
     let forked = trunk.fork_async().await;
     let diverged = tx(forked).await?;
