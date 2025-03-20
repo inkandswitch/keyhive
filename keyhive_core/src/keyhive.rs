@@ -2009,10 +2009,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(trunk.borrow().delegations.borrow().len(), 4);
+        assert_eq!(trunk.borrow().active.borrow().prekey_pairs.len(), 7);
 
         let tx = transact_nonblocking(
             &trunk,
             |mut fork: Keyhive<_, _, Log<MemorySigner, _>, rand::rngs::OsRng>| async move {
+                fork.expand_prekeys().await.unwrap();
+
                 let bob: Peer<MemorySigner, [u8; 32], Log<MemorySigner>> = Rc::new(RefCell::new(
                     Individual::generate(
                         &MemorySigner::generate(&mut rand::rngs::OsRng),
@@ -2043,6 +2046,8 @@ mod tests {
 
         let result = tx.await;
         assert!(result.is_ok());
+
+        assert_eq!(trunk.borrow().active.borrow().prekey_pairs.len(), 8);
 
         trunk
             .borrow_mut()
