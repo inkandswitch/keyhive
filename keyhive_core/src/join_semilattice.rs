@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
+    future::Future,
     hash::Hash,
     rc::Rc,
     sync::{Arc, Mutex, RwLock},
@@ -17,14 +18,11 @@ pub trait JoinSemilattice {
     fn merge(&mut self, fork: Self::Fork);
 }
 
-pub trait AsyncJoinSemilattice: Send + Sync {
-    type AsyncFork: Send + Sync;
+pub trait AsyncJoinSemilattice {
+    type AsyncFork;
 
-    fn fork_async(&self) -> impl std::future::Future<Output = Self::AsyncFork> + Send;
-    fn merge_async(
-        &mut self,
-        fork: Self::AsyncFork,
-    ) -> impl std::future::Future<Output = ()> + Send;
+    fn fork_async(&self) -> impl Future<Output = Self::AsyncFork> + Send;
+    fn merge_async(&mut self, fork: Self::AsyncFork) -> impl Future<Output = ()> + Send;
 }
 
 impl<T: JoinSemilattice<Fork = U> + Send + Sync, U: Send + Sync> AsyncJoinSemilattice for T {
@@ -209,10 +207,7 @@ mod tests {
 
         assert!(fut3.await.is_err());
 
-        let observed = Arc::into_inner(og)
-            .expect("FIXME")
-            .into_inner()
-            .expect("FIXME");
+        let observed = og.lock().unwrap();
 
         assert!(!observed.contains(&50));
         assert!(!observed.contains(&60));
@@ -233,12 +228,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_transact_multithreaded() {
-        use core::borrow::Borrow;
-
-        impl<
-                T: Clone + JoinSemilattice + AsyncJoinSemilattice<AsyncFork = U>,
-                U: AsyncJoinSemilattice + Send + Sync,
-            > AsyncJoinSemilattice for Arc<tokio::sync::Mutex<T>>
+        impl<T: AsyncJoinSemilattice<AsyncFork = U> + Send + Clone, U: Send + Sync>
+            AsyncJoinSemilattice for Arc<tokio::sync::Mutex<T>>
         {
             type AsyncFork = T::AsyncFork;
 
@@ -257,9 +248,11 @@ mod tests {
         let mut work = tokio::task::JoinSet::new();
 
         let og1 = og.clone();
+        let og2 = og.clone();
+        let og3 = og.clone();
+
         work.spawn(async move {
             transact_multithreaded(&og1, |mut set: HashSet<u8>| async move {
-                // FIXME sleep?
                 set.insert(42);
                 set.insert(99);
                 set.remove(&1);
@@ -269,7 +262,6 @@ mod tests {
             .await
         });
 
-        let og2 = og.clone();
         work.spawn(async move {
             transact_multithreaded(&og2, |mut set: HashSet<u8>| async move {
                 set.insert(255);
@@ -281,7 +273,6 @@ mod tests {
             .await
         });
 
-        let og3 = og.clone();
         work.spawn(async move {
             transact_multithreaded(&og3, |mut set: HashSet<u8>| async move {
                 set.insert(50);
@@ -301,7 +292,7 @@ mod tests {
             vec![Err("NOPE".to_string())]
         );
 
-        let observed = Arc::into_inner(og).expect("FIXME").into_inner();
+        let observed = og.lock().await;
 
         assert!(!observed.contains(&50));
         assert!(!observed.contains(&60));
