@@ -118,6 +118,10 @@ impl UnixTimestampMillis {
         )
     }
 
+    pub fn new(millis: u128) -> Self {
+        Self(millis)
+    }
+
     pub fn as_secs(&self) -> UnixTimestamp {
         UnixTimestamp((self.0 / 1000) as u64)
     }
