@@ -61,6 +61,7 @@ divan = "0.1.15"
 pretty_assertions = "1.4"
 hex = "0.4.3"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+testresult = "0.4.1"
 
 [features]
 default = []

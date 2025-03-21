@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, From, Into, Hash, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
-pub struct ContactCard(pub KeyOp);
+pub struct ContactCard(pub(crate) KeyOp);
 
 impl ContactCard {
     pub fn id(&self) -> IndividualId {
@@ -17,6 +17,10 @@ impl ContactCard {
 
     pub fn share_key(&self) -> &ShareKey {
         self.0.new_key()
+    }
+
+    pub fn op(&self) -> &KeyOp {
+        &self.0
     }
 }
 
