@@ -10,6 +10,7 @@ use crate::{
     },
 };
 use derive_more::{From, Into};
+use derive_where::derive_where;
 use dupe::Dupe;
 use std::{
     cell::RefCell,
@@ -17,7 +18,8 @@ use std::{
     rc::Rc,
 };
 
-#[derive(Debug, PartialEq, Eq, From, Into)]
+#[derive(From, Into, PartialEq, Eq)]
+#[derive_where(Debug; T)]
 pub struct Log<S: AsyncSigner, T: ContentRef = [u8; 32]>(
     pub Rc<RefCell<Vec<Event<S, T, Log<S, T>>>>>,
 );
