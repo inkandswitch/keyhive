@@ -1,11 +1,6 @@
 use dupe::Dupe;
-use keyhive_core::{
-    access::Access, crypto::signer::memory::MemorySigner, keyhive::Keyhive,
-    listener::no_listener::NoListener, principal::individual::Individual,
-    test_utils::make_simple_keyhive,
-};
+use keyhive_core::{access::Access, test_utils::make_simple_keyhive};
 use nonempty::nonempty;
-use std::{cell::RefCell, rc::Rc};
 use testresult::TestResult;
 
 #[tokio::test]
