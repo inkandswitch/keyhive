@@ -138,7 +138,7 @@ impl Merge for CgkaOperationGraph {
         self.cgka_ops_predecessors
             .extend(fork.cgka_ops_predecessors.into_iter());
         self.cgka_op_heads.extend(fork.cgka_op_heads.into_iter());
-        self.add_heads.extend(fork.add_heads.into_iter()); // FIXME reduce heads
+        self.add_heads.extend(fork.add_heads.into_iter()); // TODO reduce heads
     }
 }
 
