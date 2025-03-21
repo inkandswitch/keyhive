@@ -26,5 +26,8 @@ pub mod store;
 pub mod transact;
 pub mod util;
 
+#[cfg(any(test, feature = "test_utils"))]
+pub mod test_utils;
+
 #[cfg(feature = "debug_events")]
 pub mod debug_events;
