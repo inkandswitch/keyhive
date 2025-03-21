@@ -44,6 +44,7 @@ use derivative::Derivative;
 use derive_more::Debug;
 use derive_where::derive_where;
 use dupe::{Dupe, IterDupedExt};
+use futures::TryStreamExt;
 use id::GroupId;
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
@@ -136,10 +137,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                 listener,
             )
         });
-        group_result
+
+        group_result.await
     }
 
-    pub(crate) fn generate_after_content(
+    pub(crate) async fn generate_after_content(
         signer: Box<dyn SyncSignerBasic>,
         verifier: ed25519_dalek::VerifyingKey,
         parents: NonEmpty<Agent<S, T, L>>,
@@ -152,7 +154,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         let group_id = GroupId(id);
         let mut delegation_heads = CaMap::new();
 
-        parents.iter().try_for_each(|parent| {
+        let async_listener = Rc::new(&listener);
+        let results = parents.into_iter().map(|parent| {
             let dlg = try_sign_basic(
                 &*signer,
                 verifier,
@@ -168,9 +171,15 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             let rc = Rc::new(dlg);
             delegations.insert(rc.dupe());
             delegation_heads.insert(rc.dupe());
+            Ok::<_, SigningError>((rc, async_listener.dupe()))
+        });
 
-            Ok::<(), SigningError>(())
-        })?;
+        futures::stream::iter(results)
+            .try_for_each_concurrent(None, |(rc, listen)| async move {
+                listen.on_delegation(&rc).await;
+                Ok(())
+            })
+            .await?;
 
         let mut group = Group {
             id_or_indie: IdOrIndividual::GroupId(group_id),
