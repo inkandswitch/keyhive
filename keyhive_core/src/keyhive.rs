@@ -1043,7 +1043,7 @@ impl<
 
         for (digest, dlg) in self.delegations.borrow().iter() {
             if dlg.payload.delegate == agent {
-                self.delegations.insert(
+                self.delegations.0.borrow_mut().0.insert(
                     *digest,
                     Rc::new(Signed {
                         issuer: dlg.issuer,
@@ -1128,7 +1128,7 @@ impl<
             listener.clone(),
         )));
 
-        let delegations: DelegationStore<S, T, L> = DelegationStore::new(listener.clone());
+        let delegations: DelegationStore<S, T, L> = DelegationStore::new();
         let revocations: RevocationStore<S, T, L> = RevocationStore::new();
 
         let mut individuals = HashMap::new();

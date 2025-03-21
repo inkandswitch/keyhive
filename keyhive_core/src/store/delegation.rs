@@ -7,12 +7,14 @@ use crate::{
     principal::group::delegation::Delegation,
     util::content_addressed_map::CaMap,
 };
+use derive_where::derive_where;
 use dupe::Dupe;
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::Ref, cell::RefCell, rc::Rc};
 
 /// [`Delegation`] storage.
 #[allow(clippy::type_complexity)]
-#[derive(Debug, Default, Clone, Dupe)]
+#[derive(Default)]
+#[derive_where(Clone, Debug; T)]
 pub struct DelegationStore<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
@@ -64,6 +66,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> DelegationStore
     ) -> Digest<Signed<Delegation<S, T, L>>> {
         self.0.borrow_mut().insert(delegation)
     }
+
+    pub fn borrow(&self) -> Ref<CaMap<Signed<Delegation<S, T, L>>>> {
+        self.0.borrow()
+    }
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
@@ -81,5 +87,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.borrow().hash(state);
+    }
+}
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for DelegationStore<S, T, L> {
+    fn dupe(&self) -> Self {
+        Self(self.0.dupe())
     }
 }

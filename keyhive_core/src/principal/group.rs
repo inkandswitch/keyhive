@@ -166,7 +166,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             )?;
 
             let rc = Rc::new(dlg);
-            delegations.borrow_mut().insert(rc.dupe());
+            delegations.insert(rc.dupe());
             delegation_heads.insert(rc.dupe());
 
             Ok::<(), SigningError>(())
