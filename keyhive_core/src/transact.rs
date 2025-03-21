@@ -176,7 +176,7 @@ pub async fn transact_nonblocking<
 ///     }
 /// }
 ///
-/// # let multithreaded = tokio::runtime::Builder::new_multi_thread().worker_threads(3).build().unwrap();// async fn test_transact_nonblocking() {
+/// # let multithreaded = tokio::runtime::Builder::new_multi_thread().worker_threads(3).build().unwrap();
 /// multithreaded.block_on(async {
 ///     let og = TokioArcMutex(Arc::new(tokio::sync::Mutex::new(HashSet::from_iter([
 ///         0u8, 1, 2, 3,

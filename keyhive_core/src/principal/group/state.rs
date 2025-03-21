@@ -180,7 +180,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
             }
         }
 
-        let hash = self.delegations.borrow_mut().insert(delegation);
+        let hash = self.delegations.insert(delegation);
         Ok(hash)
     }
 

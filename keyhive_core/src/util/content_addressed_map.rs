@@ -38,6 +38,13 @@ impl<T: Serialize> CaMap<T> {
         key
     }
 
+    /// Inserts, and returns if the value was newly inserted.
+    pub fn insert_checked(&mut self, value: Rc<T>) -> (Digest<T>, bool) {
+        let key: Digest<T> = Digest::hash(&value);
+        let is_new = self.0.insert(key, value);
+        (key, is_new.is_none())
+    }
+
     /// Remove an element from the map by its [`Digest`].
     pub fn remove_by_hash(&mut self, hash: &Digest<T>) -> Option<Rc<T>> {
         self.0.remove(hash)

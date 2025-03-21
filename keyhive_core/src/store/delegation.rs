@@ -7,17 +7,12 @@ use crate::{
     principal::group::delegation::Delegation,
     util::content_addressed_map::CaMap,
 };
-use derive_where::derive_where;
 use dupe::Dupe;
-use std::{
-    cell::{Ref, RefCell, RefMut},
-    rc::Rc,
-};
+use std::{cell::RefCell, rc::Rc};
 
 /// [`Delegation`] storage.
 #[allow(clippy::type_complexity)]
-#[derive(Default)]
-#[derive_where(Debug, Clone; T)]
+#[derive(Debug, Default, Clone, Dupe)]
 pub struct DelegationStore<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
@@ -65,25 +60,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> DelegationStore
     /// Insert a [`Delegation`] into the store.
     pub fn insert(
         &self,
-        revocation: Rc<Signed<Delegation<S, T, L>>>,
+        delegation: Rc<Signed<Delegation<S, T, L>>>,
     ) -> Digest<Signed<Delegation<S, T, L>>> {
-        self.0.borrow_mut().insert(revocation)
-    }
-
-    /// Get an immutable reference to the underlying [`CaMap`].
-    pub fn borrow(&self) -> Ref<CaMap<Signed<Delegation<S, T, L>>>> {
-        self.0.borrow()
-    }
-
-    /// Get a mutable reference to the underlying [`CaMap`].
-    pub fn borrow_mut(&self) -> RefMut<CaMap<Signed<Delegation<S, T, L>>>> {
-        self.0.borrow_mut()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for DelegationStore<S, T, L> {
-    fn dupe(&self) -> Self {
-        Self(self.0.dupe())
+        self.0.borrow_mut().insert(delegation)
     }
 }
 

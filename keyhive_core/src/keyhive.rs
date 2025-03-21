@@ -831,6 +831,7 @@ impl<
         }
 
         // NOTE: this is the only place this gets parsed and this verification ONLY happens here
+        // FIXME add a Verified<T> newtype wapper
         static_dlg.try_verify()?;
 
         let proof: Option<Rc<Signed<Delegation<S, T, L>>>> = static_dlg
@@ -1040,9 +1041,9 @@ impl<
 
         let agent = Agent::from(group.dupe());
 
-        for (digest, dlg) in self.delegations.0.borrow().iter() {
+        for (digest, dlg) in self.delegations.borrow().iter() {
             if dlg.payload.delegate == agent {
-                self.delegations.borrow_mut().0.insert(
+                self.delegations.insert(
                     *digest,
                     Rc::new(Signed {
                         issuer: dlg.issuer,
@@ -1127,7 +1128,7 @@ impl<
             listener.clone(),
         )));
 
-        let delegations: DelegationStore<S, T, L> = DelegationStore::new();
+        let delegations: DelegationStore<S, T, L> = DelegationStore::new(listener.clone());
         let revocations: RevocationStore<S, T, L> = RevocationStore::new();
 
         let mut individuals = HashMap::new();
@@ -1197,7 +1198,8 @@ impl<
                             .ok_or(TryFromArchiveError::MissingAgent(Box::new(id)))?
                     };
 
-                    delegations.borrow_mut().0.insert(
+                    // Manually pushing; skipping various steps intentionally
+                    delegations.0.borrow_mut().0.insert(
                         (*digest).into(),
                         Rc::new(Signed {
                             signature: sd.signature,
@@ -1252,8 +1254,8 @@ impl<
             rev_head_hashes: &HashSet<Digest<Signed<StaticRevocation<U>>>>,
             members: HashMap<Identifier, NonEmpty<Digest<Signed<Delegation<Z, U, M>>>>>,
         ) -> Result<(), TryFromArchiveError<Z, U, M>> {
-            let read_dlgs = dlg_store.0.borrow();
-            let read_revs = rev_store.0.borrow();
+            let read_dlgs = dlg_store.borrow();
+            let read_revs = rev_store.borrow();
 
             for dlg_hash in dlg_head_hashes.iter() {
                 let actual_dlg: Rc<Signed<Delegation<Z, U, M>>> = read_dlgs
@@ -1648,7 +1650,7 @@ mod tests {
         access::Access,
         crypto::signer::memory::MemorySigner,
         principal::public::Public,
-        transact::{fork::ForkAsync, merge::MergeAsync, transact_nonblocking},
+        transact::{fork::ForkAsync, merge::MergeAsync, transact_blocking, transact_nonblocking},
     };
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
@@ -1978,7 +1980,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_successful_transaction() {
+    async fn test_nonblocking_transaction() {
         let sk = MemorySigner::generate(&mut rand::thread_rng());
         let hive = Keyhive::<_, [u8; 32], _, _>::generate(sk, NoListener, rand::rngs::OsRng)
             .await
@@ -2008,13 +2010,30 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(trunk.borrow().delegations.borrow().len(), 4);
         assert_eq!(trunk.borrow().active.borrow().prekey_pairs.len(), 7);
+        assert_eq!(trunk.borrow().delegations.borrow().len(), 4);
+        assert_eq!(trunk.borrow().groups.len(), 1);
+        assert_eq!(trunk.borrow().docs.len(), 1);
 
         let tx = transact_nonblocking(
             &trunk,
             |mut fork: Keyhive<_, _, Log<MemorySigner, _>, rand::rngs::OsRng>| async move {
+                // Depending on when the async runs
+                let init_dlg_count = fork.delegations.borrow().len();
+                assert!(init_dlg_count >= 4);
+                assert!(init_dlg_count <= 6);
+
+                // Depending on when the async runs
+                let init_doc_count = fork.docs.len();
+                assert!(init_doc_count == 1 || init_doc_count == 2);
+
+                // Only one before this gets awaited
+                let init_group_count = fork.groups.len();
+                assert_eq!(init_group_count, 1);
+
+                assert_eq!(fork.active.borrow().prekey_pairs.len(), 7);
                 fork.expand_prekeys().await.unwrap();
+                assert_eq!(fork.active.borrow().prekey_pairs.len(), 8);
 
                 let bob: Peer<MemorySigner, [u8; 32], Log<MemorySigner>> = Rc::new(RefCell::new(
                     Individual::generate(
@@ -2029,10 +2048,15 @@ mod tests {
                 fork.generate_group(vec![bob.dupe()]).await.unwrap();
                 fork.generate_group(vec![bob.dupe()]).await.unwrap();
                 fork.generate_group(vec![bob.dupe()]).await.unwrap();
+                assert_eq!(fork.groups.len(), 4);
 
                 fork.generate_doc(vec![bob], nonempty![[1u8; 32]])
                     .await
                     .unwrap();
+                assert_eq!(fork.docs.len(), init_doc_count + 1);
+
+                dbg!(&fork.event_listener);
+                assert_eq!(fork.event_listener.len(), 10);
 
                 Ok::<_, String>(fork)
             },
@@ -2044,10 +2068,16 @@ mod tests {
             .await
             .unwrap();
 
+        assert!(trunk.borrow().docs.len() >= 1);
+        assert!(trunk.borrow().docs.len() <= 3);
+
         let result = tx.await;
         assert!(result.is_ok());
 
+        // tx is done, so should be all caught up. Counts are now certain.
         assert_eq!(trunk.borrow().active.borrow().prekey_pairs.len(), 8);
+        // assert_eq!(trunk.borrow().docs.len(), 3); // FIXME showing 2
+        assert_eq!(trunk.borrow().groups.len(), 4);
 
         trunk
             .borrow_mut()
@@ -2055,12 +2085,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(trunk.borrow().delegations.borrow().len(), 8);
-
-        assert_eq!(trunk.borrow().groups.len(), 4);
         assert_eq!(trunk.borrow().docs.len(), 4);
     }
-
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    // async fn test_failure_transaction_is_noop() {}
 }

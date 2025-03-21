@@ -48,6 +48,10 @@ impl<S: AsyncSigner, T: ContentRef> Log<S, T> {
         let mut log = (*rc).borrow_mut();
         log.clear()
     }
+
+    pub fn len(&self) -> usize {
+        self.0.borrow().len()
+    }
 }
 
 impl<S: AsyncSigner, T: ContentRef> Clone for Log<S, T> {
