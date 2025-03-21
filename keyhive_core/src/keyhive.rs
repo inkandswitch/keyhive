@@ -1477,6 +1477,7 @@ impl<
 }
 
 #[derive(Error)]
+#[derive_where(Debug; T)]
 pub enum ReceiveStaticEventError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
     #[error(transparent)]
     ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
@@ -1503,23 +1504,8 @@ where
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::fmt::Debug
-    for ReceiveStaticEventError<S, T, L>
-{
-    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // FIXME
-        Ok(())
-        // match self {
-        //     Self::ReceivePrekeyOpError(e) => write!(f, "ReceivePrekeyOpError({:?})", e),
-        //     Self::ReceiveCgkaOpError(e) => write!(f, "ReceiveCgkaOpError({:?})", e),
-        //     Self::ReceieveStaticMembershipError(e) => {
-        //         write!(f, "ReceieveStaticMembershipError({:?})", e)
-        //     }
-        // }
-    }
-}
-
-#[derive(Debug, Error)]
+#[derive(Error)]
+#[derive_where(Debug; T)]
 pub enum ReceieveStaticDelegationError<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
