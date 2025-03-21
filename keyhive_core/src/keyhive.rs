@@ -1647,14 +1647,11 @@ pub enum ReceiveEventError<
 mod tests {
     use super::*;
     use crate::{
-        access::Access,
-        crypto::signer::memory::MemorySigner,
-        principal::public::Public,
-        transact::{fork::ForkAsync, merge::MergeAsync, transact_blocking, transact_nonblocking},
+        access::Access, crypto::signer::memory::MemorySigner, principal::public::Public,
+        transact::transact_nonblocking,
     };
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
-    use std::sync::{Arc, Mutex};
 
     async fn make_keyhive() -> Keyhive<MemorySigner> {
         let sk = MemorySigner::generate(&mut rand::thread_rng());
@@ -2032,7 +2029,7 @@ mod tests {
                 assert_eq!(init_group_count, 1);
 
                 assert_eq!(fork.active.borrow().prekey_pairs.len(), 7);
-                fork.expand_prekeys().await.unwrap();
+                fork.expand_prekeys().await.unwrap(); // 1 event (prekey)
                 assert_eq!(fork.active.borrow().prekey_pairs.len(), 8);
 
                 let bob: Peer<MemorySigner, [u8; 32], Log<MemorySigner>> = Rc::new(RefCell::new(
@@ -2045,18 +2042,18 @@ mod tests {
                 ))
                 .into();
 
-                fork.generate_group(vec![bob.dupe()]).await.unwrap();
-                fork.generate_group(vec![bob.dupe()]).await.unwrap();
-                fork.generate_group(vec![bob.dupe()]).await.unwrap();
+                fork.generate_group(vec![bob.dupe()]).await.unwrap(); // 2 events (dlgs)
+                fork.generate_group(vec![bob.dupe()]).await.unwrap(); // 2 events (dlgs)
+                fork.generate_group(vec![bob.dupe()]).await.unwrap(); // 2 events (dlgs)
                 assert_eq!(fork.groups.len(), 4);
 
+                // 2 events (dlgs)
                 fork.generate_doc(vec![bob], nonempty![[1u8; 32]])
                     .await
                     .unwrap();
                 assert_eq!(fork.docs.len(), init_doc_count + 1);
 
-                dbg!(&fork.event_listener);
-                assert_eq!(fork.event_listener.len(), 10);
+                assert_eq!(fork.event_listener.len(), 9); // 1 + 2 + 2 + 2 = 9
 
                 Ok::<_, String>(fork)
             },
@@ -2076,7 +2073,7 @@ mod tests {
 
         // tx is done, so should be all caught up. Counts are now certain.
         assert_eq!(trunk.borrow().active.borrow().prekey_pairs.len(), 8);
-        // assert_eq!(trunk.borrow().docs.len(), 3); // FIXME showing 2
+        assert_eq!(trunk.borrow().docs.len(), 3);
         assert_eq!(trunk.borrow().groups.len(), 4);
 
         trunk

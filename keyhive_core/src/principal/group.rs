@@ -771,17 +771,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                             .unwrap_or_default();
 
                         if let Some(dlgs) = NonEmpty::from_vec(remaining) {
-                            dbg!("B");
                             self.members.insert(id, dlgs);
                         } else {
-                            dbg!("C");
                             self.members.remove(&id);
                         }
                     }
                 }
             }
-
-            dbg!(self.members.len());
         }
     }
 
@@ -1525,11 +1521,6 @@ mod tests {
             )
             .await
             .unwrap();
-
-        dbg!(alice.borrow().id());
-        dbg!(bob.borrow().id());
-        dbg!(carol.borrow().id());
-        dbg!(dan.borrow().id());
 
         // Dropped Carol, which also kicks out can becuase `retain_all: false`
         assert!(!g1.members.contains_key(&carol.borrow().id().into()));
