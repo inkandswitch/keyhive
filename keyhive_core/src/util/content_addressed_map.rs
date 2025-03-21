@@ -1,4 +1,7 @@
-use crate::crypto::digest::Digest;
+use crate::{
+    crypto::digest::Digest,
+    transact::{fork::Fork, merge::Merge},
+};
 use derive_where::derive_where;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -33,6 +36,13 @@ impl<T: Serialize> CaMap<T> {
         let key: Digest<T> = Digest::hash(&value);
         self.0.insert(key, value);
         key
+    }
+
+    /// Inserts, and returns if the value was newly inserted.
+    pub fn insert_checked(&mut self, value: Rc<T>) -> (Digest<T>, bool) {
+        let key: Digest<T> = Digest::hash(&value);
+        let is_new = self.0.insert(key, value);
+        (key, is_new.is_none())
     }
 
     /// Remove an element from the map by its [`Digest`].
@@ -94,17 +104,27 @@ impl<T: Serialize> CaMap<T> {
     pub fn contains_key(&self, hash: &Digest<T>) -> bool {
         self.0.contains_key(hash)
     }
-
-    pub fn merge(&mut self, other: Self) {
-        for (k, v) in other.0 {
-            self.0.insert(k, v);
-        }
-    }
 }
 
 impl<T: Serialize> Default for CaMap<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<T: Serialize> Fork for CaMap<T> {
+    type Forked = Self;
+
+    fn fork(&self) -> Self::Forked {
+        self.clone()
+    }
+}
+
+impl<T: Serialize> Merge for CaMap<T> {
+    fn merge(&mut self, other: Self) {
+        for (k, v) in other.0 {
+            self.0.entry(k).or_insert(v);
+        }
     }
 }
 

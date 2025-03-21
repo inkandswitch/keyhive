@@ -44,6 +44,7 @@ use derivative::Derivative;
 use derive_more::Debug;
 use derive_where::derive_where;
 use dupe::{Dupe, IterDupedExt};
+use futures::TryStreamExt;
 use id::GroupId;
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
@@ -136,10 +137,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                 listener,
             )
         });
-        group_result
+
+        group_result.await
     }
 
-    pub(crate) fn generate_after_content(
+    pub(crate) async fn generate_after_content(
         signer: Box<dyn SyncSignerBasic>,
         verifier: ed25519_dalek::VerifyingKey,
         parents: NonEmpty<Agent<S, T, L>>,
@@ -152,7 +154,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         let group_id = GroupId(id);
         let mut delegation_heads = CaMap::new();
 
-        parents.iter().try_for_each(|parent| {
+        let async_listener = Rc::new(&listener);
+        let results = parents.into_iter().map(|parent| {
             let dlg = try_sign_basic(
                 &*signer,
                 verifier,
@@ -166,11 +169,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             )?;
 
             let rc = Rc::new(dlg);
-            delegations.borrow_mut().insert(rc.dupe());
+            delegations.insert(rc.dupe());
             delegation_heads.insert(rc.dupe());
+            Ok::<_, SigningError>((rc, async_listener.dupe()))
+        });
 
-            Ok::<(), SigningError>(())
-        })?;
+        futures::stream::iter(results)
+            .try_for_each_concurrent(None, |(rc, listen)| async move {
+                listen.on_delegation(&rc).await;
+                Ok(())
+            })
+            .await?;
 
         let mut group = Group {
             id_or_indie: IdOrIndividual::GroupId(group_id),
@@ -762,17 +771,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                             .unwrap_or_default();
 
                         if let Some(dlgs) = NonEmpty::from_vec(remaining) {
-                            dbg!("B");
                             self.members.insert(id, dlgs);
                         } else {
-                            dbg!("C");
                             self.members.remove(&id);
                         }
                     }
                 }
             }
-
-            dbg!(self.members.len());
         }
     }
 
@@ -823,6 +828,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for 
         self.state.verifying_key()
     }
 }
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IdOrIndividual {
     GroupId(GroupId),
@@ -882,16 +888,16 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::cell::RefCell;
 
-    async fn setup_user<R: rand::CryptoRng + rand::RngCore>(
+    async fn setup_user<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Active<MemorySigner> {
+    ) -> Active<MemorySigner, T> {
         let sk = MemorySigner::generate(csprng);
         Active::generate(sk, NoListener, csprng).await.unwrap()
     }
 
     async fn setup_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        alice: Rc<RefCell<Active<MemorySigner>>>,
-        bob: Rc<RefCell<Active<MemorySigner>>>,
+        alice: Rc<RefCell<Active<MemorySigner, T>>>,
+        bob: Rc<RefCell<Active<MemorySigner, T>>>,
         csprng: &mut R,
     ) -> [Rc<RefCell<Group<MemorySigner, T>>>; 4] {
         /*              ┌───────────┐        ┌───────────┐
@@ -917,7 +923,7 @@ mod tests {
                         │           │
                         └───────────┘ */
 
-        let alice_agent: Agent<MemorySigner, T> = alice.into();
+        let alice_agent: Agent<MemorySigner, T, _> = alice.into();
         let bob_agent = bob.into();
 
         let dlg_store = DelegationStore::new();
@@ -975,8 +981,8 @@ mod tests {
     }
 
     async fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        alice: Rc<RefCell<Active<MemorySigner>>>,
-        bob: Rc<RefCell<Active<MemorySigner>>>,
+        alice: Rc<RefCell<Active<MemorySigner, T>>>,
+        bob: Rc<RefCell<Active<MemorySigner, T>>>,
         csprng: &mut R,
     ) -> [Rc<RefCell<Group<MemorySigner, T>>>; 10] {
         let dlg_store = DelegationStore::new();
@@ -1261,7 +1267,10 @@ mod tests {
         assert_eq!(
             g0_mems,
             HashMap::from_iter([
-                (alice_id, (alice.into(), Access::Admin)),
+                (
+                    alice_id,
+                    (Agent::<_, String, _>::from(alice), Access::Admin)
+                ),
                 (bob_id, (bob.into(), Access::Admin)),
                 (g1.borrow().id(), (g1.dupe().into(), Access::Admin)),
                 (g2.borrow().id(), (g2.dupe().into(), Access::Admin)),
@@ -1512,11 +1521,6 @@ mod tests {
             )
             .await
             .unwrap();
-
-        dbg!(alice.borrow().id());
-        dbg!(bob.borrow().id());
-        dbg!(carol.borrow().id());
-        dbg!(dan.borrow().id());
 
         // Dropped Carol, which also kicks out can becuase `retain_all: false`
         assert!(!g1.members.contains_key(&carol.borrow().id().into()));

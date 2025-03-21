@@ -17,7 +17,9 @@ use crate::{
     },
     error::missing_dependency::MissingDependency,
     event::{static_event::StaticEvent, Event},
-    listener::{cgka::CgkaListener, membership::MembershipListener, no_listener::NoListener},
+    listener::{
+        cgka::CgkaListener, log::Log, membership::MembershipListener, no_listener::NoListener,
+    },
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
@@ -45,8 +47,10 @@ use crate::{
         public::Public,
     },
     store::{delegation::DelegationStore, revocation::RevocationStore},
+    transact::{fork::Fork, merge::Merge},
 };
 use derivative::Derivative;
+use derive_where::derive_where;
 use dupe::Dupe;
 use nonempty::NonEmpty;
 use serde::Serialize;
@@ -67,7 +71,7 @@ pub struct Keyhive<
     R: rand::CryptoRng = rand::rngs::ThreadRng,
 > {
     /// The [`Active`] user agent.
-    active: Rc<RefCell<Active<S, L>>>,
+    active: Rc<RefCell<Active<S, T, L>>>,
 
     /// The [`Individual`]s that are known to this agent.
     individuals: HashMap<IndividualId, Rc<RefCell<Individual>>>,
@@ -130,7 +134,7 @@ impl<
     }
 
     /// The current [`Active`] Keyhive user.
-    pub fn active(&self) -> &Rc<RefCell<Active<S, L>>> {
+    pub fn active(&self) -> &Rc<RefCell<Active<S, T, L>>> {
         &self.active
     }
 
@@ -827,6 +831,7 @@ impl<
         }
 
         // NOTE: this is the only place this gets parsed and this verification ONLY happens here
+        // FIXME add a Verified<T> newtype wapper
         static_dlg.try_verify()?;
 
         let proof: Option<Rc<Signed<Delegation<S, T, L>>>> = static_dlg
@@ -1036,9 +1041,9 @@ impl<
 
         let agent = Agent::from(group.dupe());
 
-        for (digest, dlg) in self.delegations.0.borrow().iter() {
+        for (digest, dlg) in self.delegations.borrow().iter() {
             if dlg.payload.delegate == agent {
-                self.delegations.borrow_mut().0.insert(
+                self.delegations.0.borrow_mut().0.insert(
                     *digest,
                     Rc::new(Signed {
                         issuer: dlg.issuer,
@@ -1150,7 +1155,6 @@ impl<
                 *doc_id,
                 Rc::new(RefCell::new(Document::<S, T, L>::dummy_from_archive(
                     doc_archive.clone(),
-                    &individuals,
                     delegations.dupe(),
                     revocations.dupe(),
                     listener.clone(),
@@ -1194,7 +1198,8 @@ impl<
                             .ok_or(TryFromArchiveError::MissingAgent(Box::new(id)))?
                     };
 
-                    delegations.borrow_mut().0.insert(
+                    // Manually pushing; skipping various steps intentionally
+                    delegations.0.borrow_mut().0.insert(
                         (*digest).into(),
                         Rc::new(Signed {
                             signature: sd.signature,
@@ -1249,8 +1254,8 @@ impl<
             rev_head_hashes: &HashSet<Digest<Signed<StaticRevocation<U>>>>,
             members: HashMap<Identifier, NonEmpty<Digest<Signed<Delegation<Z, U, M>>>>>,
         ) -> Result<(), TryFromArchiveError<Z, U, M>> {
-            let read_dlgs = dlg_store.0.borrow();
-            let read_revs = rev_store.0.borrow();
+            let read_dlgs = dlg_store.borrow();
+            let read_revs = rev_store.borrow();
 
             for dlg_hash in dlg_head_hashes.iter() {
                 let actual_dlg: Rc<Signed<Delegation<Z, U, M>>> = read_dlgs
@@ -1387,6 +1392,67 @@ impl<
 }
 
 impl<
+        S: AsyncSigner + Clone,
+        T: ContentRef + Clone,
+        L: MembershipListener<S, T> + CgkaListener,
+        R: rand::CryptoRng + rand::RngCore + Clone,
+    > Fork for Keyhive<S, T, L, R>
+{
+    type Forked = Keyhive<S, T, Log<S, T>, R>;
+
+    fn fork(&self) -> Self::Forked {
+        Keyhive::try_from_archive(
+            &self.into_archive(),
+            self.active.borrow().signer.clone(),
+            Log::new(),
+            self.csprng.clone(),
+        )
+        .expect("local round trip to work")
+    }
+}
+
+impl<
+        S: AsyncSigner + Clone,
+        T: ContentRef + Clone,
+        L: MembershipListener<S, T> + CgkaListener,
+        R: rand::CryptoRng + rand::RngCore + Clone,
+    > Merge for Keyhive<S, T, L, R>
+{
+    fn merge(&mut self, mut fork: Self::Forked) {
+        self.active
+            .borrow_mut()
+            .merge(Rc::unwrap_or_clone(fork.active).into_inner());
+
+        for (id, forked_indie) in fork.individuals.drain() {
+            if let Some(og_indie) = self.individuals.remove(&id) {
+                og_indie
+                    .borrow_mut()
+                    .merge(Rc::unwrap_or_clone(forked_indie).into_inner());
+            } else {
+                self.individuals.insert(id, forked_indie);
+            }
+        }
+
+        for event in fork.event_listener.0.borrow().iter() {
+            match event {
+                Event::PrekeysExpanded(_add_op) => {
+                    continue; // NOTE: handled above
+                }
+                Event::PrekeyRotated(_rot_op) => {
+                    continue; // NOTE: handled above
+                }
+                _ => {}
+            }
+
+            self.receive_static_event(event.clone().into())
+                .expect("prechecked events to work");
+        }
+
+        // FIXME ^^^^^^^^^^^ skip checks to speed up; this is all trusted data
+    }
+}
+
+impl<
         S: AsyncSigner,
         T: ContentRef,
         L: MembershipListener<S, T> + CgkaListener,
@@ -1410,7 +1476,8 @@ impl<
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Error)]
+#[derive_where(Debug; T)]
 pub enum ReceiveStaticEventError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
     #[error(transparent)]
     ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
@@ -1437,7 +1504,8 @@ where
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Error)]
+#[derive_where(Debug; T)]
 pub enum ReceieveStaticDelegationError<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
@@ -1480,7 +1548,8 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Clone, PartialEq, Eq, Error)]
+#[derive_where(Debug)]
 pub enum TryFromArchiveError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
     #[error("Missing delegation: {0}")]
     MissingDelegation(#[from] Digest<Signed<Delegation<S, T, L>>>),
@@ -1563,7 +1632,10 @@ pub enum ReceiveEventError<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{access::Access, crypto::signer::memory::MemorySigner, principal::public::Public};
+    use crate::{
+        access::Access, crypto::signer::memory::MemorySigner, principal::public::Public,
+        transact::transact_nonblocking,
+    };
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
 
@@ -1888,5 +1960,114 @@ mod tests {
             .events_for_agent(&bob.active().clone().into())
             .unwrap();
         bob.ingest_event_table(events).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_nonblocking_transaction() {
+        let sk = MemorySigner::generate(&mut rand::thread_rng());
+        let hive = Keyhive::<_, [u8; 32], _, _>::generate(sk, NoListener, rand::rngs::OsRng)
+            .await
+            .unwrap();
+
+        let trunk = Rc::new(RefCell::new(hive));
+
+        let alice: Peer<MemorySigner, [u8; 32], NoListener> = Rc::new(RefCell::new(
+            Individual::generate(
+                &MemorySigner::generate(&mut rand::rngs::OsRng),
+                &mut rand::rngs::OsRng,
+            )
+            .await
+            .unwrap(),
+        ))
+        .into();
+
+        trunk
+            .borrow_mut()
+            .generate_doc(vec![alice.dupe()], nonempty![[0u8; 32]])
+            .await
+            .unwrap();
+
+        trunk
+            .borrow_mut()
+            .generate_group(vec![alice.dupe()])
+            .await
+            .unwrap();
+
+        assert_eq!(trunk.borrow().active.borrow().prekey_pairs.len(), 7);
+        assert_eq!(trunk.borrow().delegations.borrow().len(), 4);
+        assert_eq!(trunk.borrow().groups.len(), 1);
+        assert_eq!(trunk.borrow().docs.len(), 1);
+
+        let tx = transact_nonblocking(
+            &trunk,
+            |mut fork: Keyhive<_, _, Log<MemorySigner, _>, rand::rngs::OsRng>| async move {
+                // Depending on when the async runs
+                let init_dlg_count = fork.delegations.borrow().len();
+                assert!(init_dlg_count >= 4);
+                assert!(init_dlg_count <= 6);
+
+                // Depending on when the async runs
+                let init_doc_count = fork.docs.len();
+                assert!(init_doc_count == 1 || init_doc_count == 2);
+
+                // Only one before this gets awaited
+                let init_group_count = fork.groups.len();
+                assert_eq!(init_group_count, 1);
+
+                assert_eq!(fork.active.borrow().prekey_pairs.len(), 7);
+                fork.expand_prekeys().await.unwrap(); // 1 event (prekey)
+                assert_eq!(fork.active.borrow().prekey_pairs.len(), 8);
+
+                let bob: Peer<MemorySigner, [u8; 32], Log<MemorySigner>> = Rc::new(RefCell::new(
+                    Individual::generate(
+                        &MemorySigner::generate(&mut rand::rngs::OsRng),
+                        &mut rand::rngs::OsRng,
+                    )
+                    .await
+                    .unwrap(),
+                ))
+                .into();
+
+                fork.generate_group(vec![bob.dupe()]).await.unwrap(); // 2 events (dlgs)
+                fork.generate_group(vec![bob.dupe()]).await.unwrap(); // 2 events (dlgs)
+                fork.generate_group(vec![bob.dupe()]).await.unwrap(); // 2 events (dlgs)
+                assert_eq!(fork.groups.len(), 4);
+
+                // 2 events (dlgs)
+                fork.generate_doc(vec![bob], nonempty![[1u8; 32]])
+                    .await
+                    .unwrap();
+                assert_eq!(fork.docs.len(), init_doc_count + 1);
+
+                assert_eq!(fork.event_listener.len(), 9); // 1 + 2 + 2 + 2 = 9
+
+                Ok::<_, String>(fork)
+            },
+        );
+
+        trunk
+            .borrow_mut()
+            .generate_doc(vec![alice.dupe()], nonempty![[2u8; 32]])
+            .await
+            .unwrap();
+
+        assert!(trunk.borrow().docs.len() >= 1);
+        assert!(trunk.borrow().docs.len() <= 3);
+
+        let result = tx.await;
+        assert!(result.is_ok());
+
+        // tx is done, so should be all caught up. Counts are now certain.
+        assert_eq!(trunk.borrow().active.borrow().prekey_pairs.len(), 8);
+        assert_eq!(trunk.borrow().docs.len(), 3);
+        assert_eq!(trunk.borrow().groups.len(), 4);
+
+        trunk
+            .borrow_mut()
+            .generate_doc(vec![alice.dupe()], nonempty![[3u8; 32]])
+            .await
+            .unwrap();
+
+        assert_eq!(trunk.borrow().docs.len(), 4);
     }
 }

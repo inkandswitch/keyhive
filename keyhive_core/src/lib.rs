@@ -23,6 +23,7 @@ pub mod keyhive;
 pub mod listener;
 pub mod principal;
 pub mod store;
+pub mod transact;
 pub mod util;
 
 #[cfg(feature = "debug_events")]

@@ -17,12 +17,14 @@ use crate::{
     },
 };
 use derive_more::{From, TryInto};
+use derive_where::derive_where;
 use dupe::Dupe;
 use serde::Serialize;
 use std::rc::Rc;
 
 /// Top-level event variants.
-#[derive(Debug, PartialEq, Eq, From, TryInto, Hash)]
+#[derive(PartialEq, Eq, From, TryInto)]
+#[derive_where(Debug, Hash; T)]
 pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
     /// Prekeys were expanded.
     PrekeysExpanded(Rc<Signed<AddKeyOp>>),

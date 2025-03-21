@@ -5,6 +5,7 @@ use crate::{
         signed::{SigningError, VerificationError},
         signer::async_signer::AsyncSigner,
     },
+    transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
 use futures::prelude::*;
@@ -140,6 +141,20 @@ impl PrekeyState {
         }
 
         keys
+    }
+}
+
+impl Fork for PrekeyState {
+    type Forked = Self;
+
+    fn fork(&self) -> Self::Forked {
+        self.clone()
+    }
+}
+
+impl Merge for PrekeyState {
+    fn merge(&mut self, fork: Self::Forked) {
+        self.ops.merge(fork.ops)
     }
 }
 

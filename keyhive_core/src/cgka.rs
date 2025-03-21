@@ -21,6 +21,7 @@ use crate::{
         symmetric_key::SymmetricKey,
     },
     principal::{document::id::DocumentId, individual::id::IndividualId},
+    transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
 use beekem::BeeKem;
@@ -548,6 +549,24 @@ impl Cgka {
         );
         self.pcs_key_ops.extend(other.pcs_key_ops.iter());
         self.pending_ops_for_structural_change = other.pending_ops_for_structural_change;
+    }
+}
+
+impl Fork for Cgka {
+    type Forked = Self;
+
+    fn fork(&self) -> Self::Forked {
+        self.clone()
+    }
+}
+
+impl Merge for Cgka {
+    fn merge(&mut self, fork: Self::Forked) {
+        self.owner_sks.merge(fork.owner_sks);
+        self.ops_graph.merge(fork.ops_graph);
+        self.pcs_keys.merge(fork.pcs_keys);
+        self.replay_ops_graph()
+            .expect("two valid graphs should always merge causal consistency");
     }
 }
 

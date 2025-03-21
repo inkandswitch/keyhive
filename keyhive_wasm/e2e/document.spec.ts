@@ -11,7 +11,7 @@ test.describe("Document", async () => {
     const out = await page.evaluate(async () => {
       const { Keyhive, Signer, ChangeRef } = window.keyhive
 
-      const bh = await new Keyhive(await new Signer())
+      const bh = await new Keyhive(await new Signer(), console.log)
       const changeRef = new ChangeRef(new Uint8Array([1, 2, 3]));
 
       const g = await bh.generateGroup([])

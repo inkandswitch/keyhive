@@ -33,7 +33,6 @@ use crate::{
             Group, RevokeMemberError,
         },
         identifier::Identifier,
-        individual::Individual,
     },
     store::{delegation::DelegationStore, revocation::RevocationStore},
     util::content_addressed_map::CaMap,
@@ -60,7 +59,6 @@ pub struct Document<
     L: MembershipListener<S, T> = NoListener,
 > {
     pub(crate) group: Group<S, T, L>,
-    pub(crate) reader_keys: HashMap<IndividualId, (Rc<RefCell<Individual>>, ShareKey)>,
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
 
@@ -74,13 +72,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     // NOTE doesn't register into the top-level Keyhive context
     pub fn from_group(
         group: Group<S, T, L>,
-        viewer: &Active<S, L>,
+        viewer: &Active<S, T, L>,
         content_heads: NonEmpty<T>,
     ) -> Result<Self, CgkaError> {
         let mut doc = Document {
             cgka: None,
             group,
-            reader_keys: Default::default(),
             content_heads: content_heads.iter().cloned().collect(),
             content_state: Default::default(),
             known_decryption_keys: HashMap::new(),
@@ -163,7 +160,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             )
         });
 
-        let group = group_result?;
+        let group = group_result.await?;
         let owner_id = IndividualId(group_vk.into());
         let doc_id = DocumentId(group.id());
         let owner_share_secret_key = ShareSecretKey::generate(csprng);
@@ -200,7 +197,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         ops.push(update_op);
         Ok(Document {
             group,
-            reader_keys: HashMap::new(), // FIXME
             content_state: HashSet::new(),
             content_heads: initial_content_heads.iter().cloned().collect(),
             known_decryption_keys: HashMap::new(),
@@ -324,7 +320,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     }
 
     pub fn rebuild(&mut self) {
-        self.group.rebuild()
+        self.group.rebuild();
+        // FIXME also rebuild CGKA?
     }
 
     pub fn receive_delegation(
@@ -469,11 +466,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     pub fn into_archive(&self) -> DocumentArchive<T> {
         DocumentArchive {
             group: self.group.into_archive(),
-            reader_keys: self
-                .reader_keys
-                .iter()
-                .map(|(id, (_, share_key))| (*id, *share_key))
-                .collect(),
             content_heads: self.content_heads.clone(),
             content_state: self.content_state.clone(),
             cgka: self.cgka.clone(),
@@ -482,7 +474,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
 
     pub(crate) fn dummy_from_archive(
         archive: DocumentArchive<T>,
-        individuals: &HashMap<IndividualId, Rc<RefCell<Individual>>>,
         delegations: DelegationStore<S, T, L>,
         revocations: RevocationStore<S, T, L>,
         listener: L,
@@ -494,22 +485,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
                 revocations,
                 listener,
             ),
-            reader_keys: archive.reader_keys.into_iter().try_fold(
-                HashMap::new(),
-                |mut acc, (id, share_key)| {
-                    acc.insert(
-                        id,
-                        (
-                            individuals
-                                .get(&id)
-                                .ok_or(MissingIndividualError(Box::new(id)))?
-                                .dupe(),
-                            share_key,
-                        ),
-                    );
-                    Ok(acc)
-                },
-            )?,
             content_heads: archive.content_heads,
             content_state: archive.content_state,
             known_decryption_keys: HashMap::new(),
@@ -527,7 +502,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Document<S, T, L> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.group.hash(state);
-        crate::util::hasher::hash_map_keys(&self.reader_keys, state);
         crate::util::hasher::hash_set(&self.content_heads, state);
         crate::util::hasher::hash_set(&self.content_state, state);
         self.cgka.hash(state);

@@ -1,6 +1,9 @@
-use crate::crypto::{
-    encrypted::EncryptedSecret,
-    share_key::{ShareKey, ShareSecretKey},
+use crate::{
+    crypto::{
+        encrypted::EncryptedSecret,
+        share_key::{ShareKey, ShareSecretKey},
+    },
+    transact::{fork::Fork, merge::Merge},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -49,6 +52,21 @@ impl ShareKeyMap {
         self.0.extend(other.0.iter());
     }
 }
+
+impl Fork for ShareKeyMap {
+    type Forked = Self;
+
+    fn fork(&self) -> Self::Forked {
+        self.clone()
+    }
+}
+
+impl Merge for ShareKeyMap {
+    fn merge(&mut self, fork: Self::Forked) {
+        self.0.extend(fork.0.into_iter())
+    }
+}
+
 impl std::hash::Hash for ShareKeyMap {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.keys().for_each(|k| k.hash(state));

@@ -52,11 +52,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
                 continue;
             }
 
-            let mut dlg_store_mut = delegations.borrow_mut();
-            dlg_store_mut.insert(head.dupe());
+            delegations.insert(head.dupe());
 
             for dlg in head.payload().proof_lineage() {
-                dlg_store_mut.insert(dlg.dupe());
+                delegations.insert(dlg.dupe());
 
                 for rev in dlg.payload().after_revocations.as_slice() {
                     revocations.borrow_mut().insert(rev.dupe());
@@ -180,7 +179,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
             }
         }
 
-        let hash = self.delegations.borrow_mut().insert(delegation);
+        let hash = self.delegations.insert(delegation);
         Ok(hash)
     }
 

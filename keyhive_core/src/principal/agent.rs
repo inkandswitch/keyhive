@@ -28,10 +28,10 @@ use std::{
 /// Immutable union over all agent types.
 ///
 /// This type is very lightweight to clone, since it only contains immutable references to the actual agents.
-#[derive(From, TryInto, Derivative)]
 #[derive_where(Clone, Debug; T)]
+#[derive(From, TryInto, Derivative)]
 pub enum Agent<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
-    Active(Rc<RefCell<Active<S, L>>>),
+    Active(Rc<RefCell<Active<S, T, L>>>),
     Individual(Rc<RefCell<Individual>>),
     Group(Rc<RefCell<Group<S, T, L>>>),
     Document(Rc<RefCell<Document<S, T, L>>>),
@@ -120,10 +120,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Active<S, L>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Active<S, T, L>>
     for Agent<S, T, L>
 {
-    fn from(a: Active<S, L>) -> Self {
+    fn from(a: Active<S, T, L>) -> Self {
         Agent::Active(Rc::new(RefCell::new(a)))
     }
 }

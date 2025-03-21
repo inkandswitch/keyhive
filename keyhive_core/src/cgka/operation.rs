@@ -2,6 +2,7 @@ use super::{beekem::PathChange, error::CgkaError};
 use crate::{
     crypto::{digest::Digest, share_key::ShareKey, signed::Signed},
     principal::{document::id::DocumentId, individual::id::IndividualId},
+    transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
@@ -121,6 +122,24 @@ pub(crate) struct CgkaOperationGraph {
 
     #[derivative(Hash(hash_with = "crate::util::hasher::hash_set"))]
     pub(crate) add_heads: HashSet<Digest<Signed<CgkaOperation>>>,
+}
+
+impl Fork for CgkaOperationGraph {
+    type Forked = Self;
+
+    fn fork(&self) -> Self::Forked {
+        self.clone()
+    }
+}
+
+impl Merge for CgkaOperationGraph {
+    fn merge(&mut self, fork: Self::Forked) {
+        self.cgka_ops.merge(fork.cgka_ops);
+        self.cgka_ops_predecessors
+            .extend(fork.cgka_ops_predecessors.into_iter());
+        self.cgka_op_heads.extend(fork.cgka_op_heads.into_iter());
+        self.add_heads.extend(fork.add_heads.into_iter()); // TODO reduce heads
+    }
 }
 
 fn hash_cgka_ops_preds<H: Hasher>(

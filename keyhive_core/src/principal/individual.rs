@@ -9,6 +9,7 @@ use super::{agent::id::AgentId, document::id::DocumentId};
 use crate::{
     contact_card::ContactCard,
     crypto::{share_key::ShareKey, signed::VerificationError, verifiable::Verifiable},
+    transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
@@ -121,6 +122,10 @@ impl Individual {
     pub fn prekey_ops(&self) -> &CaMap<KeyOp> {
         self.prekey_state.ops()
     }
+
+    pub fn rebuild(&mut self) {
+        self.prekeys = self.prekey_state.build();
+    }
 }
 
 impl std::hash::Hash for Individual {
@@ -148,6 +153,21 @@ impl Ord for Individual {
 impl Verifiable for Individual {
     fn verifying_key(&self) -> VerifyingKey {
         self.id.verifying_key()
+    }
+}
+
+impl Fork for Individual {
+    type Forked = Self;
+
+    fn fork(&self) -> Self::Forked {
+        self.clone()
+    }
+}
+
+impl Merge for Individual {
+    fn merge(&mut self, fork: Self::Forked) {
+        self.prekey_state.merge(fork.prekey_state);
+        self.rebuild()
     }
 }
 

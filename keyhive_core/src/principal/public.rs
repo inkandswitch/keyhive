@@ -4,6 +4,7 @@ use super::{
     individual::{op::add_key::AddKeyOp, state::PrekeyState, Individual},
 };
 use crate::{
+    content::reference::ContentRef,
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
         signer::{memory::MemorySigner, sync_signer::SyncSigner},
@@ -63,12 +64,16 @@ impl Public {
         }
     }
 
-    pub fn active<L: PrekeyListener>(&self, listener: L) -> Active<MemorySigner, L> {
+    pub fn active<T: ContentRef, L: PrekeyListener>(
+        &self,
+        listener: L,
+    ) -> Active<MemorySigner, T, L> {
         Active {
             signer: self.signer(),
             prekey_pairs: BTreeMap::from_iter([(self.share_key(), self.share_secret_key())]),
             individual: self.individual(),
             listener,
+            _phantom: std::marker::PhantomData,
         }
     }
 }

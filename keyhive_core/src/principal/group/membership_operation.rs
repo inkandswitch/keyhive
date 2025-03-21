@@ -768,7 +768,7 @@ mod tests {
 
             let alice_sk = fixture(&ALICE_SIGNER).clone();
             let alice = Rc::new(RefCell::new(
-                Active::generate(alice_sk, NoListener, csprng)
+                Active::<_, [u8; 32], _>::generate(alice_sk, NoListener, csprng)
                     .await
                     .unwrap(),
             ));
