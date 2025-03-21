@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "beelay/beelay-core",
+    "beelay/beelay-wasm",
     "keyhive_core",
     "keyhive_wasm",
     "test-utils",
