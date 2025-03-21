@@ -2,18 +2,11 @@ use dupe::Dupe;
 use keyhive_core::{
     access::Access, crypto::signer::memory::MemorySigner, keyhive::Keyhive,
     listener::no_listener::NoListener, principal::individual::Individual,
+    test_utils::make_simple_keyhive,
 };
 use nonempty::nonempty;
 use std::{cell::RefCell, rc::Rc};
 use testresult::TestResult;
-
-// TODO move to test utils
-async fn make_keyhive() -> Keyhive<MemorySigner> {
-    let sk = MemorySigner::generate(&mut rand::thread_rng());
-    Keyhive::generate(sk, NoListener, rand::thread_rng())
-        .await
-        .unwrap()
-}
 
 #[tokio::test]
 async fn test_group_members_have_access_to_group_docs() -> TestResult {
@@ -49,8 +42,8 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
     //              │                     │
     //              └─────────────────────┘
 
-    let mut alice = make_keyhive().await;
-    let mut bob = make_keyhive().await;
+    let mut alice = make_simple_keyhive().await?;
+    let mut bob = make_simple_keyhive().await?;
 
     let bob_contact = bob.contact_card().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact)?;
@@ -115,8 +108,8 @@ async fn test_group_members_cycle() -> TestResult {
     //              │                     │
     //              └─────────────────────┘
 
-    let mut alice = make_keyhive().await;
-    let mut bob = make_keyhive().await;
+    let mut alice = make_simple_keyhive().await?;
+    let mut bob = make_simple_keyhive().await?;
 
     let bob_contact = bob.contact_card().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact)?;
