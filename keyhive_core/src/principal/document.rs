@@ -34,7 +34,9 @@ use crate::{
         },
         identifier::Identifier,
     },
-    store::{delegation::DelegationStore, revocation::RevocationStore},
+    store::{
+        ciphertext::CiphertextStore, delegation::DelegationStore, revocation::RevocationStore,
+    },
     util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
@@ -481,6 +483,18 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         //     Err(DecryptError::SivMismatch)?;
         // }
         Ok(plaintext)
+    }
+
+    #[instrument(
+        skip_all,
+        fields(doc_id = %self.doc_id(), content_id = ?encrypted_content.content_ref)
+    )]
+    pub async fn try_causally_decrypt_content<U, C: CiphertextStore<U, T>>(
+        &mut self,
+        encrypted_content: &EncryptedContent<U, T>,
+        store: &C,
+    ) -> Result<HashMap<_, Vec<u8>>, DecryptError> {
+        todo!()
     }
 
     #[instrument(skip(self), fields(doc_id = ?self.doc_id()))]
