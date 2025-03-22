@@ -617,7 +617,7 @@ impl Cgka {
 //         Ok(())
 //     }
 //
-//     #[tokio::test]
+//     #[test_log::test(tokio::test)]
 //     async fn test_simple_add() -> Result<(), CgkaError> {
 //         let csprng = &mut rand::thread_rng();
 //         let sk = ed25519_dalek::SigningKey::generate(csprng);
@@ -737,7 +737,7 @@ impl Cgka {
 //         Ok(())
 //     }
 //
-//     #[tokio::test]
+//     #[test_log::test(tokio::test)]
 //     async fn test_update_all_concurrently() -> Result<(), CgkaError> {
 //         let mut csprng = rand::thread_rng();
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
@@ -821,7 +821,7 @@ impl Cgka {
 //         )
 //     }
 //
-//     #[tokio::test]
+//     #[test_log::test(tokio::test)]
 //     async fn test_update_and_remove_odd_concurrently() -> Result<(), CgkaError> {
 //         let mut csprng = rand::thread_rng();
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
@@ -836,7 +836,7 @@ impl Cgka {
 //         )
 //     }
 //
-//     #[tokio::test]
+//     #[test_log::test(tokio::test)]
 //     async fn test_update_and_add_concurrently() -> Result<(), CgkaError> {
 //         let mut csprng = rand::thread_rng();
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
@@ -861,7 +861,7 @@ impl Cgka {
 //         )
 //     }
 //
-//     #[tokio::test]
+//     #[test_log::test(tokio::test)]
 //     async fn test_all_add_one_concurrently() -> Result<(), CgkaError> {
 //         let mut csprng = rand::thread_rng();
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
@@ -872,7 +872,7 @@ impl Cgka {
 //         )
 //     }
 //
-//     #[tokio::test]
+//     #[test_log::test(tokio::test)]
 //     async fn test_remove_then_all_add_one_then_remove_odd_concurrently() -> Result<(), CgkaError> {
 //         let mut csprng = rand::thread_rng();
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
@@ -887,7 +887,7 @@ impl Cgka {
 //         )
 //     }
 //
-//     #[tokio::test]
+//     #[test_log::test(tokio::test)]
 //     async fn test_update_all_then_add_from_all_then_remove_odd_then_update_even_concurrently(
 //     ) -> Result<(), CgkaError> {
 //         let mut csprng = rand::thread_rng();
@@ -904,7 +904,7 @@ impl Cgka {
 //         )
 //     }
 //
-//     #[tokio::test]
+//     #[test_log::test(tokio::test)]
 //     async fn test_all_members_add_and_update_concurrently() -> Result<(), CgkaError> {
 //         let mut csprng = rand::thread_rng();
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
@@ -918,7 +918,7 @@ impl Cgka {
 //         )
 //     }
 //
-//     #[tokio::test]
+//     #[test_log::test(tokio::test)]
 //     async fn test_update_added_members_concurrently() -> Result<(), CgkaError> {
 //         let mut csprng = rand::thread_rng();
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
@@ -932,7 +932,7 @@ impl Cgka {
 //         )
 //     }
 //
-//     #[tokio::test]
+//     #[test_log::test(tokio::test)]
 //     async fn test_a_bunch_of_ops_in_rounds() -> Result<(), CgkaError> {
 //         let mut csprng = rand::thread_rng();
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);

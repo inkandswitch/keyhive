@@ -335,7 +335,7 @@ mod tests {
     use super::*;
     use crate::crypto::signer::memory::MemorySigner;
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_seal() {
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(&mut rand::thread_rng());

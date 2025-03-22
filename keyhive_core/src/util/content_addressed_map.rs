@@ -71,7 +71,7 @@ impl<T: Serialize> CaMap<T> {
         self.0.iter()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test_utils"))]
     pub(crate) fn from_iter_direct(elements: impl IntoIterator<Item = Rc<T>>) -> Self {
         let mut cam = CaMap::new();
         for rc in elements.into_iter() {

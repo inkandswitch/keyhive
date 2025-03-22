@@ -9,7 +9,7 @@ pub mod fork;
 pub mod merge;
 
 use self::merge::{Merge, MergeAsync};
-use tracing::instrument;
+use tracing::{info_span, instrument};
 
 /// A fully blocking transaction.
 ///
@@ -40,7 +40,7 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
     mut tx: F,
 ) -> Result<(), Error> {
     let mut forked = trunk.fork();
-    tx(&mut forked)?;
+    info_span!("blocking_transaction").in_scope(|| tx(&mut forked))?;
     trunk.merge(forked);
     Ok(())
 }
@@ -140,7 +140,9 @@ pub async fn transact_nonblocking<
     trunk: &T,
     mut tx: F,
 ) -> Result<(), Error> {
-    let diverged = tx(trunk.fork()).await?;
+    let diverged = info_span!("nonblocking_transaction")
+        .in_scope(|| async { tx(trunk.fork()).await })
+        .await?;
     trunk.clone().merge(diverged);
     Ok(())
 }
@@ -260,7 +262,9 @@ pub async fn transact_async<
     tx: F,
 ) -> Result<(), Error> {
     let forked = trunk.fork_async().await;
-    let diverged = tx(forked).await?;
+    let diverged = info_span!("async_transaction")
+        .in_scope(|| async { tx(forked).await })
+        .await?;
     trunk.clone().merge_async(diverged).await;
     Ok(())
 }

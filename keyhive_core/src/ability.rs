@@ -7,10 +7,11 @@ use crate::{
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::document::Document,
 };
+use derive_where::derive_where;
 use std::{cell::RefCell, rc::Rc};
 
 /// [`Ability`] is a helper type for working with [`Document`] access capabilties.
-#[derive(Debug)]
+#[derive_where(Debug; T)]
 pub struct Ability<
     'a,
     S: AsyncSigner,

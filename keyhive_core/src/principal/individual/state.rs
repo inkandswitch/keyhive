@@ -166,7 +166,7 @@ mod tests {
     };
     use dupe::Dupe;
 
-    #[test]
+    #[test_log::test]
     fn test_rebuild() {
         /*
          * ┌─────────────┐

@@ -1136,7 +1136,7 @@ mod tests {
         ]
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_transitive_self() {
         let csprng = &mut rand::thread_rng();
 
@@ -1155,7 +1155,7 @@ mod tests {
         assert_eq!(g0_mems, expected);
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_transitive_one() {
         let csprng = &mut rand::thread_rng();
 
@@ -1189,7 +1189,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_transitive_two() {
         let csprng = &mut rand::thread_rng();
 
@@ -1216,7 +1216,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_transitive_three() {
         let csprng = &mut rand::thread_rng();
 
@@ -1246,7 +1246,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_transitive_cycles() {
         let csprng = &mut rand::thread_rng();
 
@@ -1285,7 +1285,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_add_member() {
         let mut csprng = rand::thread_rng();
 
@@ -1408,7 +1408,7 @@ mod tests {
         assert_eq!(g2_mems.len(), 6);
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_revoke_member() {
         // ┌─────────┐
         // │  Group  ├─┬────────────────────────────────────────────────────▶

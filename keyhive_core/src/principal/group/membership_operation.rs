@@ -611,7 +611,7 @@ mod tests {
     mod ancestors {
         use super::*;
 
-        #[tokio::test]
+        #[test_log::test(tokio::test)]
         async fn test_singleton() {
             let csprng = &mut rand::thread_rng();
             let alice_dlg = add_alice(csprng).await;
@@ -620,7 +620,7 @@ mod tests {
             assert_eq!(longest, 1);
         }
 
-        #[tokio::test]
+        #[test_log::test(tokio::test)]
         async fn test_two_direct() {
             let csprng = &mut rand::thread_rng();
             let bob_dlg = add_bob(csprng).await;
@@ -629,7 +629,7 @@ mod tests {
             assert_eq!(longest, 2);
         }
 
-        #[tokio::test]
+        #[test_log::test(tokio::test)]
         async fn test_concurrent() {
             let csprng = &mut rand::thread_rng();
             let bob_dlg = add_bob(csprng).await;
@@ -642,7 +642,7 @@ mod tests {
             assert_eq!(bob_longest, carol_longest);
         }
 
-        #[tokio::test]
+        #[test_log::test(tokio::test)]
         async fn test_longer() {
             let csprng = &mut rand::thread_rng();
             let erin_dlg = add_erin(csprng).await;
@@ -651,7 +651,7 @@ mod tests {
             assert_eq!(longest, 2);
         }
 
-        #[tokio::test]
+        #[test_log::test(tokio::test)]
         async fn test_revocation() {
             let csprng = &mut rand::thread_rng();
             let rev = remove_carol(csprng).await;
@@ -666,7 +666,7 @@ mod tests {
 
         use super::*;
 
-        #[test]
+        #[test_log::test]
         fn test_empty() {
             let dlgs = CaMap::new();
             let revs = CaMap::new();
@@ -675,7 +675,7 @@ mod tests {
             assert_eq!(observed, vec![]);
         }
 
-        #[tokio::test]
+        #[test_log::test(tokio::test)]
         async fn test_one_delegation() {
             let csprng = &mut rand::thread_rng();
 
@@ -690,7 +690,7 @@ mod tests {
             assert_eq!(observed, vec![(Digest::hash(&expected), expected)]);
         }
 
-        #[tokio::test]
+        #[test_log::test(tokio::test)]
         async fn test_delegation_sequence() {
             let csprng = &mut rand::thread_rng();
 
@@ -714,7 +714,7 @@ mod tests {
             assert_eq!(observed, expected);
         }
 
-        #[tokio::test]
+        #[test_log::test(tokio::test)]
         async fn test_longer_delegation_chain() {
             let csprng = &mut rand::thread_rng();
 
@@ -743,7 +743,7 @@ mod tests {
             assert_eq!(observed, vec![d, c, a]);
         }
 
-        #[tokio::test]
+        #[test_log::test(tokio::test)]
         async fn test_delegation_concurrency() {
             //             ┌─────────┐
             //             │  Alice  │
@@ -855,7 +855,7 @@ mod tests {
             assert!(ab_idx < ad_idx);
         }
 
-        #[tokio::test]
+        #[test_log::test(tokio::test)]
         async fn test_one_revocation() {
             let csprng = &mut rand::thread_rng();
             let alice_sk = fixture(&ALICE_SIGNER).clone();
@@ -897,7 +897,7 @@ mod tests {
             assert_eq!(observed.pop(), None);
         }
 
-        #[tokio::test]
+        #[test_log::test(tokio::test)]
         async fn test_many_revocations() {
             let csprng = &mut rand::thread_rng();
 

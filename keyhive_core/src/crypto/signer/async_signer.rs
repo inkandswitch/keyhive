@@ -102,7 +102,7 @@ mod tests {
     use super::*;
     use crate::crypto::signer::memory::MemorySigner;
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_round_trip() {
         let sk = MemorySigner::generate(&mut rand::thread_rng());
         let signed = sk.try_sign_async(vec![1, 2, 3]).await.unwrap();

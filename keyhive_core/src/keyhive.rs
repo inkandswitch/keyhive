@@ -1677,7 +1677,7 @@ mod tests {
             .unwrap()
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_archival_round_trip() {
         let mut csprng = rand::thread_rng();
 
@@ -1723,7 +1723,7 @@ mod tests {
         assert_eq!(hive, hive_from_archive);
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_receive_delegations_associately() {
         let mut hive1 = make_keyhive().await;
         let mut hive2 = make_keyhive().await;
@@ -1771,7 +1771,7 @@ mod tests {
         assert_eq!(hive2.docs.len(), 0);
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_transitive_ops_for_agent() {
         let mut left = make_keyhive().await;
         let mut middle = make_keyhive().await;
@@ -1914,7 +1914,7 @@ mod tests {
         assert_eq!(middle.delegations.borrow().len(), 4);
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_add_member() {
         let mut keyhive = make_keyhive().await;
         let doc = keyhive
@@ -1933,7 +1933,7 @@ mod tests {
         assert_eq!(dlg.delegation.subject_id(), doc.borrow().doc_id().into());
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn receiving_an_event_with_added_or_rotated_prekeys_works() {
         let mut alice = make_keyhive().await;
         let mut bob = make_keyhive().await;
@@ -1999,10 +1999,6 @@ mod tests {
         let hive = Keyhive::<_, [u8; 32], _, _>::generate(sk, NoListener, rand::rngs::OsRng)
             .await
             .unwrap();
-
-        tracing::info!("hello");
-
-        assert!(false);
 
         let trunk = Rc::new(RefCell::new(hive));
 
