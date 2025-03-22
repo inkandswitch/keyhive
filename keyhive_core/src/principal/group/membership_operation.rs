@@ -24,8 +24,7 @@ use std::{
 };
 use topological_sort::TopologicalSort;
 
-#[derive(Debug)]
-#[derive_where(Clone, Eq; T)]
+#[derive_where(Debug, Clone, Eq; T)]
 pub enum MembershipOperation<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],

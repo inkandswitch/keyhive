@@ -9,6 +9,7 @@ pub mod fork;
 pub mod merge;
 
 use self::merge::{Merge, MergeAsync};
+use tracing::instrument;
 
 /// A fully blocking transaction.
 ///
@@ -33,6 +34,7 @@ use self::merge::{Merge, MergeAsync};
 /// assert!(og.contains(&99));
 /// assert_eq!(og.len(), 6);
 /// ```
+#[instrument(skip_all)]
 pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(), Error>>(
     trunk: &mut T,
     mut tx: F,
@@ -129,6 +131,7 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 /// assert_eq!(observed.len(), 8);
 /// # })
 /// ```
+#[instrument(skip_all)]
 pub async fn transact_nonblocking<
     T: Merge + Clone,
     Error,
@@ -247,7 +250,7 @@ pub async fn transact_nonblocking<
 ///     assert_eq!(observed.len(), 8);
 /// })
 /// ```
-
+#[instrument(skip_all)]
 pub async fn transact_async<
     T: MergeAsync + Clone,
     Error,
