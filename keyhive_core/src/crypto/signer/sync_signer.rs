@@ -1,9 +1,12 @@
 //! Synchronous signer trait.
 
 use super::async_signer::AsyncSigner;
-use crate::crypto::{
-    signed::{Signed, SigningError},
-    verifiable::Verifiable,
+use crate::{
+    crypto::{
+        signed::{Signed, SigningError},
+        verifiable::Verifiable,
+    },
+    util::hex::ToHexString,
 };
 use ed25519_dalek::Signer;
 use serde::Serialize;
@@ -146,7 +149,7 @@ impl<T: SyncSigner> SyncSignerBasic for T {
 }
 
 /// Wrapper to lift the result of a low-level [`SyncSignerBasic`] into [`Signed`].
-#[instrument(skip(signer, payload))]
+#[instrument(skip_all, fields(issuer = issuer.to_hex_string()))]
 pub fn try_sign_basic<S: SyncSignerBasic + ?Sized, T: Serialize + std::fmt::Debug>(
     signer: &S,
     issuer: ed25519_dalek::VerifyingKey,

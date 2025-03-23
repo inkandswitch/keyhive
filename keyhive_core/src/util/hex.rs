@@ -1,6 +1,6 @@
 //! Helpers for working with hexadecimal
 
-use std::iter::Iterator;
+use std::{fmt::Write, iter::Iterator};
 
 /// Convert some bytes to their hexidecimal representation.
 ///
@@ -15,6 +15,26 @@ pub(crate) fn bytes_as_hex<'a, I: Iterator<Item = &'a u8>>(
     }
 
     byte_iter.try_fold((), |_, byte| write!(f, "{:02x}", byte))
+}
+
+pub(crate) fn bytes_to_hex_string(bytes: &[u8]) -> String {
+    let mut buf = String::new();
+    write!(&mut buf, "0x").expect("writing to a string should not fail");
+    bytes
+        .iter()
+        .try_fold((), |_, byte| write!(&mut buf, "{:02x}", byte))
+        .expect("writing to a string should not fail");
+    buf
+}
+
+pub(crate) trait ToHexString {
+    fn to_hex_string(&self) -> String;
+}
+
+impl ToHexString for ed25519_dalek::VerifyingKey {
+    fn to_hex_string(&self) -> String {
+        bytes_to_hex_string(self.as_bytes())
+    }
 }
 
 #[cfg(test)]

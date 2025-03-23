@@ -38,7 +38,7 @@ use crate::{
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
     store::{delegation::DelegationStore, revocation::RevocationStore},
-    util::content_addressed_map::CaMap,
+    util::{content_addressed_map::CaMap, hex::ToHexString},
 };
 use derivative::Derivative;
 use derive_more::Debug;
@@ -150,7 +150,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     #[instrument(
         skip_all,
         fields(
-            verifier = format!("{:?}", verifier.as_bytes()),
+            verifier = verifier.to_hex_string(),
             parent_ids = ?parents.iter().map(|p| p.id()).collect::<Vec<_>>(),
         )
     )]
