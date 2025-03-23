@@ -339,7 +339,7 @@ impl<
         true
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
     pub fn get_membership_operation(
         &self,
         digest: &Digest<MembershipOperation<S, T, L>>,
@@ -385,7 +385,7 @@ impl<
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
     pub async fn revoke_member(
         &mut self,
         to_revoke: Identifier,
@@ -407,7 +407,7 @@ impl<
             .await
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all, fields(khid = %self.id(), doc_id = %doc.borrow().id(), content_ref))]
     pub async fn try_encrypt_content(
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
@@ -435,7 +435,7 @@ impl<
         doc.borrow_mut().try_decrypt_content(encrypted)
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
     pub async fn force_pcs_update(
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
@@ -445,12 +445,12 @@ impl<
             .await
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
     pub fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<S, T, L>> {
         self.docs_reachable_by_agent(&self.active.dupe().into())
     }
 
-    #[instrument(skip_all, fields(khid = %self.id(), membered_id = %membered.membered_id()))]
+    #[instrument(level = "debug", skip_all, fields(khid = %self.id(), membered_id = %membered.membered_id()))]
     pub fn reachable_members(
         &self,
         membered: Membered<S, T, L>,
@@ -461,7 +461,7 @@ impl<
         }
     }
 
-    #[instrument(skip_all, fields(khid = %self.id(), agent_id = %agent.id()))]
+    #[instrument(level = "debug", skip_all, fields(khid = %self.id(), agent_id = %agent.id()))]
     pub fn docs_reachable_by_agent(
         &self,
         agent: &Agent<S, T, L>,
@@ -1675,8 +1675,10 @@ mod tests {
             .unwrap()
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_archival_round_trip() {
+        test_utils::init_logging();
+
         let mut csprng = rand::thread_rng();
 
         let sk = MemorySigner::generate(&mut csprng);
@@ -1721,8 +1723,10 @@ mod tests {
         assert_eq!(hive, hive_from_archive);
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_receive_delegations_associately() {
+        test_utils::init_logging();
+
         let mut hive1 = make_keyhive().await;
         let mut hive2 = make_keyhive().await;
 
@@ -1769,8 +1773,10 @@ mod tests {
         assert_eq!(hive2.docs.len(), 0);
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_transitive_ops_for_agent() {
+        test_utils::init_logging();
+
         let mut left = make_keyhive().await;
         let mut middle = make_keyhive().await;
         let mut right = make_keyhive().await;
@@ -1912,8 +1918,10 @@ mod tests {
         assert_eq!(middle.delegations.borrow().len(), 4);
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_add_member() {
+        test_utils::init_logging();
+
         let mut keyhive = make_keyhive().await;
         let doc = keyhive
             .generate_doc(
@@ -1931,8 +1939,10 @@ mod tests {
         assert_eq!(dlg.delegation.subject_id(), doc.borrow().doc_id().into());
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn receiving_an_event_with_added_or_rotated_prekeys_works() {
+        test_utils::init_logging();
+
         let mut alice = make_keyhive().await;
         let mut bob = make_keyhive().await;
 
@@ -1991,8 +2001,10 @@ mod tests {
         bob.ingest_event_table(events).unwrap();
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_nonblocking_transaction() {
+        test_utils::init_logging();
+
         let sk = MemorySigner::generate(&mut rand::thread_rng());
         let hive = Keyhive::<_, [u8; 32], _, _>::generate(sk, NoListener, rand::rngs::OsRng)
             .await

@@ -3,7 +3,7 @@ use keyhive_core::{access::Access, test_utils::make_simple_keyhive};
 use nonempty::nonempty;
 use testresult::TestResult;
 
-#[test_log::test(tokio::test)]
+#[tokio::test]
 async fn test_group_members_have_access_to_group_docs() -> TestResult {
     // Scenario:
     // Alice and Bob are separate Keyhive agents
@@ -36,6 +36,7 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
     //              │         Doc         │
     //              │                     │
     //              └─────────────────────┘
+    test_utils::init_logging();
 
     let mut alice = make_simple_keyhive().await?;
     let mut bob = make_simple_keyhive().await?;
@@ -66,7 +67,7 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
     Ok(())
 }
 
-#[test_log::test(tokio::test)]
+#[tokio::test]
 async fn test_group_members_cycle() -> TestResult {
     // Scenario:
     // Alice and Bob are separate Keyhive agents
@@ -102,6 +103,7 @@ async fn test_group_members_cycle() -> TestResult {
     //              │         Doc         │
     //              │                     │
     //              └─────────────────────┘
+    test_utils::init_logging();
 
     let mut alice = make_simple_keyhive().await?;
     let mut bob = make_simple_keyhive().await?;

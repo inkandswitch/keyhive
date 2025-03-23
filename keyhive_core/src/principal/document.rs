@@ -428,7 +428,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         Ok(op)
     }
 
-    #[instrument(skip(self, signer, csprng), fields(doc_id = ?self.doc_id()))]
+    #[instrument(skip_all, fields(doc_id = ?self.doc_id(), content_ref))]
     pub async fn try_encrypt_content<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         content_ref: &T,

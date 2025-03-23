@@ -235,8 +235,9 @@ mod tests {
         crypto::signer::sync_signer::SyncSigner, principal::individual::op::add_key::AddKeyOp,
     };
 
-    #[test_log::test]
+    #[test]
     fn test_to_bytes() {
+        test_utils::init_logging();
         let mut csprng = rand::thread_rng();
         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         let op = sk.try_sign_sync(AddKeyOp::generate(&mut csprng)).unwrap();
@@ -244,8 +245,10 @@ mod tests {
         assert_eq!(individual.id.to_bytes(), sk.verifying_key().to_bytes());
     }
 
-    #[test_log::test]
+    #[test]
     fn test_clamp_sequence() {
+        test_utils::init_logging();
+
         let a = clamp([0xFF; 8], 0);
         let b = clamp([0xFF; 8], 1);
         let c = clamp([0xFF; 8], 8);
@@ -264,30 +267,38 @@ mod tests {
         assert_eq!(g, 0);
     }
 
-    #[test_log::test]
+    #[test]
     fn test_clamp_keeps_in_range() {
+        test_utils::init_logging();
+
         let x = clamp([0xFF; 8], 48);
         assert!(x <= 2usize.pow(64 - 48));
         assert_eq!(x, 65535);
     }
 
-    #[test_log::test]
+    #[test]
     fn test_clamp_keeps_in_range_2() {
+        test_utils::init_logging();
+
         let buf: [u8; 8] = rand::random();
         let x = clamp(buf, 48);
         assert!(x <= 2usize.pow(64 - 48));
     }
 
-    #[test_log::test]
+    #[test]
     fn test_pseudorandom_in_range() {
+        test_utils::init_logging();
+
         let arr = 0..39; // Not byte aligned
         let seed: [u8; 32] = rand::random();
         let index = pseudorandom_in_range(&seed, arr.len());
         assert!(index < arr.len());
     }
 
-    #[test_log::test]
+    #[test]
     fn test_pseudorandom_generates_random_values() {
+        test_utils::init_logging();
+
         let arr = 0..39; // Not byte aligned
 
         let seed1: [u8; 32] = [0u8; 32];
@@ -303,8 +314,10 @@ mod tests {
         assert_ne!(index2, index3);
     }
 
-    #[test_log::test]
+    #[test]
     fn test_pseudorandom_generates_stays_in_range() {
+        test_utils::init_logging();
+
         let seed1: [u8; 32] = rand::random();
         let seed2: [u8; 32] = rand::random();
 

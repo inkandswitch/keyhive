@@ -148,8 +148,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[instrument(
-        skip(signer, parents, delegations, revocations, listener),
-        fields(parent_ids = ?parents.iter().map(|p| p.id()).collect::<Vec<_>>())
+        skip_all,
+        fields(
+            verifier = format!("{:?}", verifier.as_bytes()),
+            parent_ids = ?parents.iter().map(|p| p.id()).collect::<Vec<_>>(),
+        )
     )]
     pub(crate) async fn generate_after_content(
         signer: Box<dyn SyncSignerBasic>,
@@ -1173,8 +1176,9 @@ mod tests {
         ]
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_transitive_self() {
+        test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(csprng).await));
@@ -1192,8 +1196,9 @@ mod tests {
         assert_eq!(g0_mems, expected);
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_transitive_one() {
+        test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(csprng).await));
@@ -1226,8 +1231,9 @@ mod tests {
         );
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_transitive_two() {
+        test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(csprng).await));
@@ -1253,8 +1259,9 @@ mod tests {
         );
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_transitive_three() {
+        test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(csprng).await));
@@ -1283,8 +1290,9 @@ mod tests {
         );
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_transitive_cycles() {
+        test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(csprng).await));
@@ -1322,8 +1330,9 @@ mod tests {
         );
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_add_member() {
+        test_utils::init_logging();
         let mut csprng = rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(&mut csprng).await));
@@ -1445,7 +1454,7 @@ mod tests {
         assert_eq!(g2_mems.len(), 6);
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_revoke_member() {
         // ┌─────────┐
         // │  Group  ├─┬────────────────────────────────────────────────────▶
@@ -1471,6 +1480,7 @@ mod tests {
         // │   Dan   ├ ─ ─ ─ ─ ─ ─ ─ ─ ─○─────────────────────x─ ─ ─ ─ ─ ─ ▶
         // └─────────┘
 
+        test_utils::init_logging();
         let mut csprng = rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(&mut csprng).await));

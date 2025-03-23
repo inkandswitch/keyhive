@@ -255,8 +255,10 @@ mod tests {
         )
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_hash_map_get_ciphertext() {
+        test_utils::init_logging();
+
         let mut csprng = rand::thread_rng();
         let doc_id = DocumentId::generate(&mut csprng);
         let pcs_update_op_hash: Digest<Signed<CgkaOperation>> = Digest {
@@ -294,8 +296,10 @@ mod tests {
         assert_eq!(store.get_ciphertext(&two_ref).await, Some(two));
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_try_causal_decrypt() {
+        test_utils::init_logging();
+
         let mut csprng = rand::thread_rng();
         let doc_id = DocumentId::generate(&mut csprng);
         let pcs_update_op_hash: Digest<Signed<CgkaOperation>> = Digest {
@@ -367,8 +371,10 @@ mod tests {
         assert!(observed.complete.contains(&(head_ref, "head".to_string())),);
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_try_causal_decrypt_multiple_heads() {
+        test_utils::init_logging();
+
         let mut csprng = rand::thread_rng();
         let doc_id = DocumentId::generate(&mut csprng);
         let pcs_update_op_hash: Digest<Signed<CgkaOperation>> = Digest {
@@ -503,8 +509,10 @@ mod tests {
         assert_eq!(observed.keys.get(&genesis2_ref), Some(&genesis2_key));
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_incomplete_store() {
+        test_utils::init_logging();
+
         let mut csprng = rand::thread_rng();
         let doc_id = DocumentId::generate(&mut csprng);
         let pcs_update_op_hash: Digest<Signed<CgkaOperation>> = Digest {

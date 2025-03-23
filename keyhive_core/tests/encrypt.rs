@@ -11,8 +11,10 @@ async fn make_keyhive() -> Keyhive<MemorySigner> {
         .unwrap()
 }
 
-#[test_log::test(tokio::test)]
+#[tokio::test]
 async fn test_encrypt_to_added_member() {
+    test_utils::init_logging();
+
     let mut alice = make_keyhive().await;
 
     let init_content = "hello world".as_bytes().to_vec();

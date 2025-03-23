@@ -614,8 +614,9 @@ mod tests {
     mod ancestors {
         use super::*;
 
-        #[test_log::test(tokio::test)]
+        #[tokio::test]
         async fn test_singleton() {
+            test_utils::init_logging();
             let csprng = &mut rand::thread_rng();
             let alice_dlg = add_alice(csprng).await;
             let (ancestors, longest) = MembershipOperation::from(alice_dlg).ancestors();
@@ -623,8 +624,9 @@ mod tests {
             assert_eq!(longest, 1);
         }
 
-        #[test_log::test(tokio::test)]
+        #[tokio::test]
         async fn test_two_direct() {
+            test_utils::init_logging();
             let csprng = &mut rand::thread_rng();
             let bob_dlg = add_bob(csprng).await;
             let (ancestors, longest) = MembershipOperation::from(bob_dlg).ancestors();
@@ -632,8 +634,9 @@ mod tests {
             assert_eq!(longest, 2);
         }
 
-        #[test_log::test(tokio::test)]
+        #[tokio::test]
         async fn test_concurrent() {
+            test_utils::init_logging();
             let csprng = &mut rand::thread_rng();
             let bob_dlg = add_bob(csprng).await;
             let carol_dlg = add_carol(csprng).await;
@@ -645,8 +648,9 @@ mod tests {
             assert_eq!(bob_longest, carol_longest);
         }
 
-        #[test_log::test(tokio::test)]
+        #[tokio::test]
         async fn test_longer() {
+            test_utils::init_logging();
             let csprng = &mut rand::thread_rng();
             let erin_dlg = add_erin(csprng).await;
             let (ancestors, longest) = MembershipOperation::from(erin_dlg).ancestors();
@@ -654,8 +658,9 @@ mod tests {
             assert_eq!(longest, 2);
         }
 
-        #[test_log::test(tokio::test)]
+        #[tokio::test]
         async fn test_revocation() {
+            test_utils::init_logging();
             let csprng = &mut rand::thread_rng();
             let rev = remove_carol(csprng).await;
             let (ancestors, longest) = MembershipOperation::from(rev).ancestors();
@@ -669,8 +674,10 @@ mod tests {
 
         use super::*;
 
-        #[test_log::test]
+        #[test]
         fn test_empty() {
+            test_utils::init_logging();
+
             let dlgs = CaMap::new();
             let revs = CaMap::new();
 
@@ -678,8 +685,9 @@ mod tests {
             assert_eq!(observed, vec![]);
         }
 
-        #[test_log::test(tokio::test)]
+        #[tokio::test]
         async fn test_one_delegation() {
+            test_utils::init_logging();
             let csprng = &mut rand::thread_rng();
 
             let dlg = add_alice(csprng).await;
@@ -693,8 +701,9 @@ mod tests {
             assert_eq!(observed, vec![(Digest::hash(&expected), expected)]);
         }
 
-        #[test_log::test(tokio::test)]
+        #[tokio::test]
         async fn test_delegation_sequence() {
+            test_utils::init_logging();
             let csprng = &mut rand::thread_rng();
 
             let alice_dlg = add_alice(csprng).await;
@@ -717,8 +726,9 @@ mod tests {
             assert_eq!(observed, expected);
         }
 
-        #[test_log::test(tokio::test)]
+        #[tokio::test]
         async fn test_longer_delegation_chain() {
+            test_utils::init_logging();
             let csprng = &mut rand::thread_rng();
 
             let alice_dlg = add_alice(csprng).await;
@@ -746,7 +756,7 @@ mod tests {
             assert_eq!(observed, vec![d, c, a]);
         }
 
-        #[test_log::test(tokio::test)]
+        #[tokio::test]
         async fn test_delegation_concurrency() {
             //             ┌─────────┐
             //             │  Alice  │
@@ -766,6 +776,7 @@ mod tests {
             // ┌─────────┐
             // │  Carol  │
             // └─────────┘
+            test_utils::init_logging();
             let csprng = &mut rand::thread_rng();
 
             let alice_sk = fixture(&ALICE_SIGNER).clone();
@@ -858,8 +869,10 @@ mod tests {
             assert!(ab_idx < ad_idx);
         }
 
-        #[test_log::test(tokio::test)]
+        #[tokio::test]
         async fn test_one_revocation() {
+            test_utils::init_logging();
+
             let csprng = &mut rand::thread_rng();
             let alice_sk = fixture(&ALICE_SIGNER).clone();
             let alice_dlg = add_alice(csprng).await;
@@ -900,8 +913,9 @@ mod tests {
             assert_eq!(observed.pop(), None);
         }
 
-        #[test_log::test(tokio::test)]
+        #[tokio::test]
         async fn test_many_revocations() {
+            test_utils::init_logging();
             let csprng = &mut rand::thread_rng();
 
             let alice_dlg = add_alice(csprng).await;

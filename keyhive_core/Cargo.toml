@@ -49,8 +49,10 @@ prettytable-rs = { version = "0.10.0", optional = true }
 
 [dev-dependencies]
 keyhive_core = { path = ".", features = ["test_utils", "debug_events"] }
+test-utils = { path = "../test-utils" }
 
 arbitrary = { version = "1.4.1", features = ["derive"] }
+lazy_static = "1.5"
 tokio = { version = "1.43", features = ["macros", "rt", "sync", "rt-multi-thread"] }
 tokio-test = "0.4.4"
 
@@ -58,11 +60,11 @@ tokio-test = "0.4.4"
 divan = "0.1.15"
 
 # Test Helpers
-pretty_assertions = "1.4"
+env_logger = "0.11.7" # FIXME remove
 hex = "0.4.3"
-test-log = { version = "0.2.17", features = ["trace"] }
+pretty_assertions = "1.4"
 testresult = "0.4.1"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.19", features = ["ansi", "env-filter"] }
 
 [features]
 default = []
