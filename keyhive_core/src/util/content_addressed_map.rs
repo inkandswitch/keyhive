@@ -72,7 +72,7 @@ impl<T: Serialize> CaMap<T> {
     }
 
     #[cfg(any(test, feature = "test_utils"))]
-    pub(crate) fn from_iter_direct(elements: impl IntoIterator<Item = Rc<T>>) -> Self {
+    pub fn from_iter_direct(elements: impl IntoIterator<Item = Rc<T>>) -> Self {
         let mut cam = CaMap::new();
         for rc in elements.into_iter() {
             cam.0.insert(Digest::hash(rc.as_ref()), rc);

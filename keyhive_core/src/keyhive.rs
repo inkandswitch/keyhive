@@ -61,7 +61,7 @@ use std::{
     rc::Rc,
 };
 use thiserror::Error;
-use tracing::{instrument, Level};
+use tracing::instrument;
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Derivative)]

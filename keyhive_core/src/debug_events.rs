@@ -1,8 +1,7 @@
 use crate::{
     crypto::{digest::Digest, signer::async_signer::AsyncSigner},
-    event::{static_event::StaticEvent, Event},
+    event::Event,
     listener::membership::MembershipListener,
-    principal::identifier::Identifier,
 };
 use std::collections::HashMap;
 
