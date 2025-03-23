@@ -9,6 +9,7 @@ pub mod fork;
 pub mod merge;
 
 use self::merge::{Merge, MergeAsync};
+use tracing::{info_span, instrument};
 
 /// A fully blocking transaction.
 ///
@@ -33,12 +34,13 @@ use self::merge::{Merge, MergeAsync};
 /// assert!(og.contains(&99));
 /// assert_eq!(og.len(), 6);
 /// ```
+#[instrument(skip_all)]
 pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(), Error>>(
     trunk: &mut T,
     mut tx: F,
 ) -> Result<(), Error> {
     let mut forked = trunk.fork();
-    tx(&mut forked)?;
+    info_span!("blocking_transaction").in_scope(|| tx(&mut forked))?;
     trunk.merge(forked);
     Ok(())
 }
@@ -129,6 +131,7 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 /// assert_eq!(observed.len(), 8);
 /// # })
 /// ```
+#[instrument(skip_all)]
 pub async fn transact_nonblocking<
     T: Merge + Clone,
     Error,
@@ -137,7 +140,9 @@ pub async fn transact_nonblocking<
     trunk: &T,
     mut tx: F,
 ) -> Result<(), Error> {
-    let diverged = tx(trunk.fork()).await?;
+    let diverged = info_span!("nonblocking_transaction")
+        .in_scope(|| async { tx(trunk.fork()).await })
+        .await?;
     trunk.clone().merge(diverged);
     Ok(())
 }
@@ -247,7 +252,7 @@ pub async fn transact_nonblocking<
 ///     assert_eq!(observed.len(), 8);
 /// })
 /// ```
-
+#[instrument(skip_all)]
 pub async fn transact_async<
     T: MergeAsync + Clone,
     Error,
@@ -257,7 +262,9 @@ pub async fn transact_async<
     tx: F,
 ) -> Result<(), Error> {
     let forked = trunk.fork_async().await;
-    let diverged = tx(forked).await?;
+    let diverged = info_span!("async_transaction")
+        .in_scope(|| async { tx(forked).await })
+        .await?;
     trunk.clone().merge_async(diverged).await;
     Ok(())
 }

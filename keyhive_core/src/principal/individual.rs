@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use state::PrekeyState;
 use std::{collections::HashSet, rc::Rc};
 use thiserror::Error;
+use tracing::instrument;
 
 #[cfg(any(feature = "test_utils", test))]
 use crate::crypto::{signed::SigningError, signer::async_signer::AsyncSigner};
@@ -60,6 +61,7 @@ pub struct Individual {
 }
 
 impl Individual {
+    #[instrument]
     pub fn new(initial_op: KeyOp) -> Self {
         let id = IndividualId(initial_op.verifying_key().into());
         let prekey_state = PrekeyState::new(initial_op);
@@ -72,6 +74,7 @@ impl Individual {
     }
 
     #[cfg(any(feature = "test_utils", test))]
+    #[instrument(skip_all)]
     pub async fn generate<R: rand::CryptoRng + rand::RngCore, S: AsyncSigner>(
         signer: &S,
         csprng: &mut R,
@@ -99,6 +102,7 @@ impl Individual {
         AgentId::IndividualId(self.id)
     }
 
+    #[instrument(skip(self), fields(indie_id = %self.id))]
     pub fn receive_prekey_op(&mut self, op: op::KeyOp) -> Result<(), ReceivePrekeyOpError> {
         if op.verifying_key() != self.id.verifying_key() {
             return Err(ReceivePrekeyOpError::IncorrectSigner);
@@ -109,6 +113,7 @@ impl Individual {
         Ok(())
     }
 
+    #[instrument(skip(self), fields(indie_id = %self.id))]
     pub fn pick_prekey(&self, doc_id: DocumentId) -> &ShareKey {
         let mut bytes: Vec<u8> = self.id.to_bytes().to_vec();
         bytes.extend_from_slice(&doc_id.to_bytes());
@@ -123,6 +128,7 @@ impl Individual {
         self.prekey_state.ops()
     }
 
+    #[instrument]
     pub fn rebuild(&mut self) {
         self.prekeys = self.prekey_state.build();
     }
@@ -231,6 +237,7 @@ mod tests {
 
     #[test]
     fn test_to_bytes() {
+        test_utils::init_logging();
         let mut csprng = rand::thread_rng();
         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         let op = sk.try_sign_sync(AddKeyOp::generate(&mut csprng)).unwrap();
@@ -240,6 +247,8 @@ mod tests {
 
     #[test]
     fn test_clamp_sequence() {
+        test_utils::init_logging();
+
         let a = clamp([0xFF; 8], 0);
         let b = clamp([0xFF; 8], 1);
         let c = clamp([0xFF; 8], 8);
@@ -260,6 +269,8 @@ mod tests {
 
     #[test]
     fn test_clamp_keeps_in_range() {
+        test_utils::init_logging();
+
         let x = clamp([0xFF; 8], 48);
         assert!(x <= 2usize.pow(64 - 48));
         assert_eq!(x, 65535);
@@ -267,6 +278,8 @@ mod tests {
 
     #[test]
     fn test_clamp_keeps_in_range_2() {
+        test_utils::init_logging();
+
         let buf: [u8; 8] = rand::random();
         let x = clamp(buf, 48);
         assert!(x <= 2usize.pow(64 - 48));
@@ -274,6 +287,8 @@ mod tests {
 
     #[test]
     fn test_pseudorandom_in_range() {
+        test_utils::init_logging();
+
         let arr = 0..39; // Not byte aligned
         let seed: [u8; 32] = rand::random();
         let index = pseudorandom_in_range(&seed, arr.len());
@@ -282,6 +297,8 @@ mod tests {
 
     #[test]
     fn test_pseudorandom_generates_random_values() {
+        test_utils::init_logging();
+
         let arr = 0..39; // Not byte aligned
 
         let seed1: [u8; 32] = [0u8; 32];
@@ -299,6 +316,8 @@ mod tests {
 
     #[test]
     fn test_pseudorandom_generates_stays_in_range() {
+        test_utils::init_logging();
+
         let seed1: [u8; 32] = rand::random();
         let seed2: [u8; 32] = rand::random();
 

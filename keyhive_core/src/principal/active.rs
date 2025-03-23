@@ -219,7 +219,7 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     }
 
     /// Asyncronously sign a payload.
-    pub async fn try_sign_async<U: Serialize>(
+    pub async fn try_sign_async<U: Serialize + std::fmt::Debug>(
         &self,
         payload: U,
     ) -> Result<Signed<U>, SigningError> {
@@ -337,6 +337,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_seal() {
+        test_utils::init_logging();
+
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let active: Active<_, [u8; 32], _> =

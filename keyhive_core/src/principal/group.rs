@@ -38,7 +38,7 @@ use crate::{
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
     store::{delegation::DelegationStore, revocation::RevocationStore},
-    util::content_addressed_map::CaMap,
+    util::{content_addressed_map::CaMap, hex::ToHexString},
 };
 use derivative::Derivative;
 use derive_more::Debug;
@@ -55,6 +55,7 @@ use std::{
     rc::Rc,
 };
 use thiserror::Error;
+use tracing::{debug, info, instrument};
 
 /// A collection of agents with no associated content.
 ///
@@ -82,6 +83,10 @@ pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> {
+    #[instrument(
+        skip_all,
+        fields(group_id = %group_id, head_sig = ?head.signature.to_bytes())
+    )]
     pub fn new(
         group_id: GroupId,
         head: Rc<Signed<Delegation<S, T, L>>>,
@@ -100,6 +105,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         group
     }
 
+    #[instrument(skip(delegations, revocations, listener))]
     pub fn from_individual(
         individual: Individual,
         head: Rc<Signed<Delegation<S, T, L>>>,
@@ -141,6 +147,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         group_result.await
     }
 
+    #[instrument(
+        skip_all,
+        fields(
+            verifier = verifier.to_hex_string(),
+            parent_ids = ?parents.iter().map(|p| p.id()).collect::<Vec<_>>(),
+        )
+    )]
     pub(crate) async fn generate_after_content(
         signer: Box<dyn SyncSignerBasic>,
         verifier: ed25519_dalek::VerifyingKey,
@@ -234,6 +247,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         &self.members
     }
 
+    #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
         struct GroupAccess<Z: AsyncSigner, U: ContentRef, M: MembershipListener<Z, U>> {
             agent: Agent<Z, U, M>,
@@ -317,6 +331,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         &self.state.revocation_heads
     }
 
+    #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn get_capability(
         &self,
         member_id: &Identifier,
@@ -328,6 +343,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         })
     }
 
+    #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn get_agent_revocations(
         &self,
         agent: &Agent<S, T, L>,
@@ -346,15 +362,18 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             .collect()
     }
 
+    #[instrument(skip_all, fields(group_id = %self.group_id()))]
     pub fn receive_delegation(
         &mut self,
         delegation: Rc<Signed<Delegation<S, T, L>>>,
     ) -> Result<Digest<Signed<Delegation<S, T, L>>>, error::AddError> {
         let digest = self.state.add_delegation(delegation)?;
+        info!("{:x?}", &digest);
         self.rebuild();
         Ok(digest)
     }
 
+    #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn receive_revocation(
         &mut self,
         revocation: Rc<Signed<Revocation<S, T, L>>>,
@@ -364,6 +383,15 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         Ok(digest)
     }
 
+    #[instrument(
+        skip_all,
+        fields(
+            khid = %self.id(),
+            member_to_add = %member_to_add.id(),
+            can,
+            relevant_docs_count=%relevant_docs.len()
+        ))
+    ]
     pub async fn add_member(
         &mut self,
         member_to_add: Agent<S, T, L>,
@@ -435,6 +463,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         })
     }
 
+    #[instrument(
+        skip_all,
+        fields(group_id = %self.group_id(), member_id = %delegation.payload.delegate.id())
+    )]
     pub(crate) async fn add_cgka_member(
         &mut self,
         delegation: Rc<Signed<Delegation<S, T, L>>>,
@@ -453,6 +485,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             })
             .collect::<Vec<_>>();
         for doc in docs {
+            debug!(
+                "Adding {:0?} to Cgka for Doc {:1x?}",
+                delegation.payload.delegate.id(),
+                doc.borrow().doc_id()
+            );
             for op in doc
                 .borrow_mut()
                 .add_cgka_member(&delegation, signer)
@@ -465,6 +502,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[allow(clippy::type_complexity)]
+    #[instrument(skip(self, signer), fields(group_id = %self.group_id()))]
     pub async fn revoke_member(
         &mut self,
         member_to_remove: Identifier,
@@ -652,6 +690,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         Ok(Rc::new(revocation))
     }
 
+    #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn rebuild(&mut self) {
         self.members.clear();
         self.active_revocations.clear();
@@ -796,6 +835,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         }
     }
 
+    #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn into_archive(&self) -> GroupArchive<T> {
         GroupArchive {
             id_or_indie: self.id_or_indie.clone(),
@@ -1138,6 +1178,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transitive_self() {
+        test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(csprng).await));
@@ -1157,6 +1198,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transitive_one() {
+        test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(csprng).await));
@@ -1191,6 +1233,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transitive_two() {
+        test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(csprng).await));
@@ -1218,6 +1261,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transitive_three() {
+        test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(csprng).await));
@@ -1248,6 +1292,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transitive_cycles() {
+        test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(csprng).await));
@@ -1287,6 +1332,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_member() {
+        test_utils::init_logging();
         let mut csprng = rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(&mut csprng).await));
@@ -1434,6 +1480,7 @@ mod tests {
         // │   Dan   ├ ─ ─ ─ ─ ─ ─ ─ ─ ─○─────────────────────x─ ─ ─ ─ ─ ─ ▶
         // └─────────┘
 
+        test_utils::init_logging();
         let mut csprng = rand::thread_rng();
 
         let alice = Rc::new(RefCell::new(setup_user(&mut csprng).await));

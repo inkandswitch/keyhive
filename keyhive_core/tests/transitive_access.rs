@@ -36,6 +36,7 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
     //              │         Doc         │
     //              │                     │
     //              └─────────────────────┘
+    test_utils::init_logging();
 
     let mut alice = make_simple_keyhive().await?;
     let mut bob = make_simple_keyhive().await?;
@@ -102,6 +103,7 @@ async fn test_group_members_cycle() -> TestResult {
     //              │         Doc         │
     //              │                     │
     //              └─────────────────────┘
+    test_utils::init_logging();
 
     let mut alice = make_simple_keyhive().await?;
     let mut bob = make_simple_keyhive().await?;

@@ -10,6 +10,7 @@ use std::{
     future::Future,
 };
 use thiserror::Error;
+use tracing::instrument;
 
 /// An async storage interface for ciphertexts.
 ///
@@ -107,6 +108,7 @@ pub trait CiphertextStore<T, Cr: ContentRef> {
     /// It is normal for this to stop decryption if it enounters an already-decrypted
     /// ciphertext. There is no reason to decrypt it again if you already have the plaintext.
     #[allow(async_fn_in_trait)]
+    #[instrument(skip(self, to_decrypt), fields(ciphertext_heads_count = %to_decrypt.len()))]
     async fn try_causal_decrypt(
         &self,
         to_decrypt: &mut Vec<(EncryptedContent<T, Cr>, SymmetricKey)>,
@@ -178,8 +180,8 @@ impl<T, Cr: ContentRef> CausalDecryptionState<T, Cr> {
     }
 }
 
-#[cfg(not(feature = "sendable"))]
 impl<T: Clone, Cr: ContentRef> CiphertextStore<T, Cr> for HashMap<Cr, EncryptedContent<T, Cr>> {
+    #[instrument(skip(self))]
     async fn get_ciphertext(&self, id: &Cr) -> Option<EncryptedContent<T, Cr>> {
         HashMap::get(self, id).cloned()
     }
@@ -255,6 +257,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_hash_map_get_ciphertext() {
+        test_utils::init_logging();
+
         let mut csprng = rand::thread_rng();
         let doc_id = DocumentId::generate(&mut csprng);
         let pcs_update_op_hash: Digest<Signed<CgkaOperation>> = Digest {
@@ -294,6 +298,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_causal_decrypt() {
+        test_utils::init_logging();
+
         let mut csprng = rand::thread_rng();
         let doc_id = DocumentId::generate(&mut csprng);
         let pcs_update_op_hash: Digest<Signed<CgkaOperation>> = Digest {
@@ -367,6 +373,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_causal_decrypt_multiple_heads() {
+        test_utils::init_logging();
+
         let mut csprng = rand::thread_rng();
         let doc_id = DocumentId::generate(&mut csprng);
         let pcs_update_op_hash: Digest<Signed<CgkaOperation>> = Digest {
@@ -503,6 +511,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_incomplete_store() {
+        test_utils::init_logging();
+
         let mut csprng = rand::thread_rng();
         let doc_id = DocumentId::generate(&mut csprng);
         let pcs_update_op_hash: Digest<Signed<CgkaOperation>> = Digest {

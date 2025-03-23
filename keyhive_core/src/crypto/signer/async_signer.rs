@@ -7,6 +7,7 @@ use crate::crypto::{
     verifiable::Verifiable,
 };
 use serde::Serialize;
+use tracing::instrument;
 
 #[allow(async_fn_in_trait)]
 /// Async [Ed25519] signer trait.
@@ -86,7 +87,11 @@ pub trait AsyncSigner: Verifiable {
     ///     assert_eq!(*sig.unwrap().payload(), payload);
     /// }
     /// ```
-    async fn try_sign_async<T: Serialize>(&self, payload: T) -> Result<Signed<T>, SigningError> {
+    #[instrument(skip_all)]
+    async fn try_sign_async<T: Serialize + std::fmt::Debug>(
+        &self,
+        payload: T,
+    ) -> Result<Signed<T>, SigningError> {
         let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
 
         Ok(Signed {
@@ -104,6 +109,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_round_trip() {
+        test_utils::init_logging();
         let sk = MemorySigner::generate(&mut rand::thread_rng());
         let signed = sk.try_sign_async(vec![1, 2, 3]).await.unwrap();
         assert!(signed.try_verify().is_ok());

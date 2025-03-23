@@ -11,6 +11,7 @@ use super::{
 use crate::{cgka::operation::CgkaOperation, content::reference::ContentRef};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
+use tracing::instrument;
 
 /// The public information for an encrypted content ciphertext.
 ///
@@ -94,6 +95,7 @@ impl<T> EncryptedSecret<T> {
         }
     }
 
+    #[instrument(skip(self))]
     pub fn try_encrypter_decrypt(
         &self,
         encrypter_secret_key: &ShareSecretKey,

@@ -6,6 +6,7 @@ use super::{separable::Separable, symmetric_key::SymmetricKey};
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use tracing::instrument;
 
 /// Newtype around [x25519_dalek::PublicKey].
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -21,6 +22,7 @@ impl<'a> arbitrary::Arbitrary<'a> for ShareKey {
 }
 
 impl ShareKey {
+    #[instrument(skip_all)]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         Self(x25519_dalek::PublicKey::from(
             &x25519_dalek::EphemeralSecret::random_from_rng(csprng),
@@ -89,6 +91,7 @@ impl From<x25519_dalek::PublicKey> for ShareKey {
 pub struct ShareSecretKey([u8; 32]);
 
 impl ShareSecretKey {
+    #[instrument(skip_all)]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         x25519_dalek::StaticSecret::random_from_rng(csprng).into()
     }
@@ -107,6 +110,7 @@ impl ShareSecretKey {
         &self.0
     }
 
+    #[instrument]
     pub fn derive_new_secret_key(&self, other: &ShareKey) -> Self {
         let bytes: [u8; 32] = x25519_dalek::StaticSecret::from(*self)
             .diffie_hellman(&other.0)
@@ -115,6 +119,7 @@ impl ShareSecretKey {
         Self::derive_from_bytes(bytes.as_slice())
     }
 
+    #[instrument]
     pub fn derive_symmetric_key(&self, other: &ShareKey) -> SymmetricKey {
         let secret = x25519_dalek::StaticSecret::from(*self)
             .diffie_hellman(&other.0)
@@ -123,6 +128,7 @@ impl ShareSecretKey {
         Self::derive_from_bytes(secret.as_slice()).0.into()
     }
 
+    #[instrument]
     pub fn ratchet_forward(&self) -> Self {
         let bytes = self.to_bytes();
         Self::derive_from_bytes(bytes.as_slice())
@@ -175,6 +181,6 @@ impl fmt::Display for ShareSecretKey {
 
 impl fmt::Debug for ShareSecretKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, f)
+        write!(f, "ShareSecretKey(SECRET)")
     }
 }

@@ -22,8 +22,8 @@ use std::{
 use thiserror::Error;
 
 /// An [`Agent`] minus the current user.
-#[derive(Debug, From, TryInto)]
-#[derive_where(PartialEq; T)]
+#[derive(From, TryInto)]
+#[derive_where(PartialEq, Debug; T)]
 pub enum Peer<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
     Individual(Rc<RefCell<Individual>>),
     Group(Rc<RefCell<Group<S, T, L>>>),

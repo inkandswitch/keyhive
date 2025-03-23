@@ -50,14 +50,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore
         borrowed.contains_value(value)
     }
 
-    /// Remove a [`Revocation`] by its [`Digest`].
-    pub fn remove_by_hash(
-        &self,
-        hash: &Digest<Signed<Revocation<S, T, L>>>,
-    ) -> Option<Rc<Signed<Revocation<S, T, L>>>> {
-        self.0.borrow_mut().remove_by_hash(hash)
-    }
-
     /// Insert a [`Revocation`] into the store.
     pub fn insert(
         &self,

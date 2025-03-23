@@ -51,14 +51,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> DelegationStore
         borrowed.contains_value(value)
     }
 
-    /// Remove a [`Delegation`] by its [`Digest`].
-    pub fn remove_by_hash(
-        &self,
-        hash: &Digest<Signed<Delegation<S, T, L>>>,
-    ) -> Option<Rc<Signed<Delegation<S, T, L>>>> {
-        self.0.borrow_mut().remove_by_hash(hash)
-    }
-
     /// Insert a [`Delegation`] into the store.
     pub fn insert(
         &self,

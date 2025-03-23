@@ -57,12 +57,14 @@ use serde::Serialize;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
+    fmt::{Debug, Formatter},
     rc::Rc,
 };
 use thiserror::Error;
+use tracing::instrument;
 
 /// The main object for a user agent & top-level owned stores.
-#[derive(Debug, Derivative)]
+#[derive(Derivative)]
 #[derivative(PartialEq, Eq)]
 pub struct Keyhive<
     S: AsyncSigner,
@@ -103,14 +105,17 @@ impl<
         R: rand::CryptoRng + rand::RngCore,
     > Keyhive<S, T, L, R>
 {
+    #[instrument(skip_all)]
     pub fn id(&self) -> IndividualId {
         self.active.borrow().id()
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn agent_id(&self) -> AgentId {
         self.active.borrow().agent_id()
     }
 
+    #[instrument(skip_all)]
     pub async fn generate(
         signer: S,
         event_listener: L,
@@ -134,6 +139,7 @@ impl<
     }
 
     /// The current [`Active`] Keyhive user.
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn active(&self) -> &Rc<RefCell<Active<S, T, L>>> {
         &self.active
     }
@@ -144,18 +150,22 @@ impl<
     /// register your identity on their system.
     ///
     /// Importantly this includes prekeys in addition to your public key.
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn individual(&self) -> Individual {
         self.active.borrow().individual().clone()
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn groups(&self) -> &HashMap<GroupId, Rc<RefCell<Group<S, T, L>>>> {
         &self.groups
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn documents(&self) -> &HashMap<DocumentId, Rc<RefCell<Document<S, T, L>>>> {
         &self.docs
     }
 
+    #[instrument(skip_all, fields(khid = %self.id()))]
     pub async fn generate_group(
         &mut self,
         coparents: Vec<Peer<S, T, L>>,
@@ -179,6 +189,7 @@ impl<
         Ok(g)
     }
 
+    #[instrument(skip_all, fields(khid = %self.id()))]
     pub async fn generate_doc(
         &mut self,
         coparents: Vec<Peer<S, T, L>>,
@@ -219,6 +230,7 @@ impl<
         Ok(doc)
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn contact_card(&mut self) -> Result<ContactCard, SigningError> {
         let rot_key_op = self
             .active
@@ -229,6 +241,7 @@ impl<
         Ok(ContactCard(KeyOp::Rotate(rot_key_op)))
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn receive_contact_card(
         &mut self,
         contact_card: &ContactCard,
@@ -246,6 +259,7 @@ impl<
         }
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn rotate_prekey(
         &mut self,
         prekey: ShareKey,
@@ -256,6 +270,7 @@ impl<
             .await
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn expand_prekeys(&mut self) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
         self.active
             .borrow_mut()
@@ -263,10 +278,12 @@ impl<
             .await
     }
 
-    pub async fn try_sign<U: Serialize>(&self, data: U) -> Result<Signed<U>, SigningError> {
+    #[instrument(skip(self), fields(khid = %self.id()))]
+    pub async fn try_sign<U: Serialize + Debug>(&self, data: U) -> Result<Signed<U>, SigningError> {
         self.active.borrow().try_sign_async(data).await
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn register_peer(&mut self, peer: Peer<S, T, L>) -> bool {
         let id = peer.id();
 
@@ -289,6 +306,7 @@ impl<
         true
     }
 
+    #[instrument(skip_all, fields(khid = %self.id()))]
     pub fn register_individual(&mut self, individual: Rc<RefCell<Individual>>) -> bool {
         let id = individual.borrow().id();
 
@@ -300,6 +318,7 @@ impl<
         true
     }
 
+    #[instrument(skip_all, fields(khid = %self.id()))]
     pub fn register_group(&mut self, root_delegation: Signed<Delegation<S, T, L>>) -> bool {
         if self
             .groups
@@ -320,6 +339,7 @@ impl<
         true
     }
 
+    #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
     pub fn get_membership_operation(
         &self,
         digest: &Digest<MembershipOperation<S, T, L>>,
@@ -365,6 +385,7 @@ impl<
     }
 
     #[allow(clippy::type_complexity)]
+    #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
     pub async fn revoke_member(
         &mut self,
         to_revoke: Identifier,
@@ -386,6 +407,7 @@ impl<
             .await
     }
 
+    #[instrument(skip_all, fields(khid = %self.id(), doc_id = %doc.borrow().id(), content_ref))]
     pub async fn try_encrypt_content(
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
@@ -413,6 +435,7 @@ impl<
         doc.borrow_mut().try_decrypt_content(encrypted)
     }
 
+    #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
     pub async fn force_pcs_update(
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
@@ -422,10 +445,12 @@ impl<
             .await
     }
 
+    #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
     pub fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<S, T, L>> {
         self.docs_reachable_by_agent(&self.active.dupe().into())
     }
 
+    #[instrument(level = "debug", skip_all, fields(khid = %self.id(), membered_id = %membered.membered_id()))]
     pub fn reachable_members(
         &self,
         membered: Membered<S, T, L>,
@@ -436,6 +461,7 @@ impl<
         }
     }
 
+    #[instrument(level = "debug", skip_all, fields(khid = %self.id(), agent_id = %agent.id()))]
     pub fn docs_reachable_by_agent(
         &self,
         agent: &Agent<S, T, L>,
@@ -452,6 +478,7 @@ impl<
         caps
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn membered_reachable_by_agent(
         &self,
         agent: &Agent<S, T, L>,
@@ -476,6 +503,7 @@ impl<
         caps
     }
 
+    #[instrument(skip_all, fields(khid = %self.id()))]
     pub fn events_for_agent(
         &self,
         agent: &Agent<S, T, L>,
@@ -501,6 +529,7 @@ impl<
         Ok(ops)
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn static_events_for_agent(
         &self,
         agent: &Agent<S, T, L>,
@@ -512,6 +541,7 @@ impl<
             .collect())
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn cgka_ops_reachable_by_agent(
         &self,
         agent: &Agent<S, T, L>,
@@ -525,6 +555,7 @@ impl<
         Ok(ops)
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn cgka_ops_for_doc(
         &self,
         doc: &DocumentId,
@@ -539,6 +570,7 @@ impl<
         Ok(Some(ops))
     }
 
+    #[instrument(skip_all, fields(khid = %self.id()))]
     pub fn membership_ops_for_agent(
         &self,
         agent: &Agent<S, T, L>,
@@ -594,6 +626,7 @@ impl<
         ops
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn reachable_prekey_ops_for_agent(
         &self,
         agent: &Agent<S, T, L>,
@@ -682,18 +715,22 @@ impl<
         map
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn get_individual(&self, id: IndividualId) -> Option<&Rc<RefCell<Individual>>> {
         self.individuals.get(&id)
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn get_group(&self, id: GroupId) -> Option<&Rc<RefCell<Group<S, T, L>>>> {
         self.groups.get(&id)
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn get_document(&self, id: DocumentId) -> Option<&Rc<RefCell<Document<S, T, L>>>> {
         self.docs.get(&id)
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn get_peer(&self, id: Identifier) -> Option<Peer<S, T, L>> {
         let indie_id = IndividualId(id);
 
@@ -712,6 +749,7 @@ impl<
         None
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn get_agent(&self, id: Identifier) -> Option<Agent<S, T, L>> {
         let indie_id = id.into();
 
@@ -734,6 +772,7 @@ impl<
         None
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn receive_prekey_op(&mut self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
         let id = Identifier(*key_op.issuer());
         let agent = self.get_agent(id).unwrap_or_else(|| {
@@ -773,6 +812,7 @@ impl<
         Ok(())
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn receive_delegation(
         &mut self,
         static_dlg: &Signed<StaticDelegation<T>>,
@@ -858,6 +898,7 @@ impl<
         Ok(())
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn receive_revocation(
         &mut self,
         static_rev: &Signed<StaticRevocation<T>>,
@@ -923,6 +964,7 @@ impl<
         Ok(())
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn receive_static_event(
         &mut self,
         static_event: StaticEvent<T>,
@@ -942,6 +984,7 @@ impl<
         Ok(())
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn receive_membership_op(
         &mut self,
         static_op: &StaticMembershipOperation<T>,
@@ -952,6 +995,7 @@ impl<
         }
     }
 
+    #[instrument(level = "trace",  skip(self), fields(khid = %self.id()))]
     pub fn receive_cgka_op(
         &mut self,
         signed_op: Signed<CgkaOperation>,
@@ -980,6 +1024,12 @@ impl<
         Ok(())
     }
 
+    #[instrument(
+        skip(self, individual),
+        fields(
+            khid = %self.id(),
+            indie_id = %individual.borrow().id()
+        ))]
     pub fn promote_individual_to_group(
         &mut self,
         individual: Rc<RefCell<Individual>>,
@@ -1042,6 +1092,7 @@ impl<
         group
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn into_archive(&self) -> Archive<T> {
         Archive {
             active: self.active.borrow().into_archive(),
@@ -1070,6 +1121,7 @@ impl<
         }
     }
 
+    #[instrument(skip_all, fields(archive_id = %archive.id()))]
     pub fn try_from_archive(
         archive: &Archive<T>,
         signer: S,
@@ -1298,11 +1350,13 @@ impl<
         })
     }
 
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn event_listener(&self) -> &L {
         &self.event_listener
     }
 
     #[cfg(any(test, feature = "test_utils"))]
+    #[instrument(level = "trace", skip_all, fields(khid = %self.id()))]
     pub fn ingest_unsorted_static_events(
         &mut self,
         events: Vec<StaticEvent<T>>,
@@ -1335,6 +1389,7 @@ impl<
     }
 
     #[cfg(any(test, feature = "test_utils"))]
+    #[instrument(level = "trace", skip_all, fields(khid = %self.id()))]
     pub fn ingest_event_table(
         &mut self,
         events: HashMap<Digest<Event<S, T, L>>, Event<S, T, L>>,
@@ -1342,6 +1397,26 @@ impl<
         self.ingest_unsorted_static_events(
             events.values().cloned().map(Into::into).collect::<Vec<_>>(),
         )
+    }
+}
+
+impl<
+        S: AsyncSigner,
+        T: ContentRef + Debug,
+        L: MembershipListener<S, T> + CgkaListener,
+        R: rand::CryptoRng + rand::RngCore,
+    > Debug for Keyhive<S, T, L, R>
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.debug_struct("Keyhive")
+            .field("active", &self.active)
+            .field("individuals", &self.individuals)
+            .field("groups", &self.groups)
+            .field("docs", &self.docs)
+            .field("delegations", &self.delegations)
+            .field("revocations", &self.revocations)
+            .field("csprng", &"<CSPRNG>")
+            .finish()
     }
 }
 
@@ -1602,6 +1677,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_archival_round_trip() {
+        test_utils::init_logging();
+
         let mut csprng = rand::thread_rng();
 
         let sk = MemorySigner::generate(&mut csprng);
@@ -1648,6 +1725,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_receive_delegations_associately() {
+        test_utils::init_logging();
+
         let mut hive1 = make_keyhive().await;
         let mut hive2 = make_keyhive().await;
 
@@ -1696,6 +1775,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_transitive_ops_for_agent() {
+        test_utils::init_logging();
+
         let mut left = make_keyhive().await;
         let mut middle = make_keyhive().await;
         let mut right = make_keyhive().await;
@@ -1839,6 +1920,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_member() {
+        test_utils::init_logging();
+
         let mut keyhive = make_keyhive().await;
         let doc = keyhive
             .generate_doc(
@@ -1858,6 +1941,8 @@ mod tests {
 
     #[tokio::test]
     async fn receiving_an_event_with_added_or_rotated_prekeys_works() {
+        test_utils::init_logging();
+
         let mut alice = make_keyhive().await;
         let mut bob = make_keyhive().await;
 
@@ -1918,6 +2003,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_nonblocking_transaction() {
+        test_utils::init_logging();
+
         let sk = MemorySigner::generate(&mut rand::thread_rng());
         let hive = Keyhive::<_, [u8; 32], _, _>::generate(sk, NoListener, rand::rngs::OsRng)
             .await

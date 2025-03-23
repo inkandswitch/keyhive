@@ -190,6 +190,8 @@ mod tests {
          *                      └────────────┘
          */
 
+        test_utils::init_logging();
+
         let mut rando = rand::thread_rng();
         let signer = ed25519_dalek::SigningKey::generate(&mut rando);
 

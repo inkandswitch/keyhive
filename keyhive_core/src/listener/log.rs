@@ -17,6 +17,7 @@ use std::{
     hash::{Hash, Hasher},
     rc::Rc,
 };
+use tracing::instrument;
 
 #[derive(From, Into, PartialEq, Eq)]
 #[derive_where(Debug; T)]
@@ -78,27 +79,31 @@ where
 }
 
 impl<S: AsyncSigner, T: ContentRef> PrekeyListener for Log<S, T> {
+    #[instrument(skip(self))]
     async fn on_prekeys_expanded(&self, new_prekey: &Rc<Signed<AddKeyOp>>) {
         self.push(Event::PrekeysExpanded(new_prekey.dupe()))
     }
 
+    #[instrument(skip(self))]
     async fn on_prekey_rotated(&self, rotate_key: &Rc<Signed<RotateKeyOp>>) {
         self.push(Event::PrekeyRotated(rotate_key.dupe()))
     }
 }
 
 impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for Log<S, T> {
+    #[instrument(skip(self))]
     async fn on_delegation(&self, data: &Rc<Signed<Delegation<S, T, Self>>>) {
         self.push(Event::Delegated(data.dupe()))
     }
 
+    #[instrument(skip(self))]
     async fn on_revocation(&self, data: &Rc<Signed<Revocation<S, T, Self>>>) {
         self.push(Event::Revoked(data.dupe()))
     }
 }
 
-// FIXME respect sendable feature flag
 impl<S: AsyncSigner, T: ContentRef> CgkaListener for Log<S, T> {
+    #[instrument(skip(self))]
     async fn on_cgka_op(&self, data: &Rc<Signed<CgkaOperation>>) {
         self.push(Event::CgkaOperation(data.dupe()))
     }

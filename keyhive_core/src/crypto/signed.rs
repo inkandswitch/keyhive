@@ -8,14 +8,16 @@ use ed25519_dalek::Verifier;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
+    fmt::Debug,
     hash::{Hash, Hasher},
 };
 use thiserror::Error;
+use tracing::instrument;
 
 /// A wrapper to add a signature and signer information to an arbitrary payload.
 #[derive(Clone, Derivative, Serialize, Deserialize)]
 #[derivative(Debug, PartialEq, Eq, Hash)]
-pub struct Signed<T: Serialize> {
+pub struct Signed<T: Serialize + Debug> {
     /// The data that was signed.
     #[derivative(PartialEq = "ignore", Hash = "ignore")]
     pub(crate) payload: T,
@@ -45,7 +47,7 @@ fn hash_signature<H: Hasher>(signature: &ed25519_dalek::Signature, state: &mut H
     signature.to_bytes().hash(state);
 }
 
-impl<T: Serialize> Signed<T> {
+impl<T: Serialize + Debug> Signed<T> {
     /// Getter for the payload.
     pub fn payload(&self) -> &T {
         &self.payload
@@ -79,6 +81,7 @@ impl<T: Serialize> Signed<T> {
     /// let signed = signer.try_sign_sync("Hello, world!").unwrap();
     /// assert!(signed.try_verify().is_ok());
     /// ```
+    #[instrument]
     pub fn try_verify(&self) -> Result<(), VerificationError> {
         let buf: Vec<u8> = bincode::serialize(&self.payload)?;
         Ok(self
@@ -89,7 +92,7 @@ impl<T: Serialize> Signed<T> {
     /// Map over the paylaod of the signed data.
     ///
     /// This is primarily useful if you need to
-    pub(crate) fn map<U: Serialize, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
+    pub(crate) fn map<U: Serialize + Debug, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
         Signed {
             payload: f(self.payload),
             issuer: self.issuer,
@@ -101,6 +104,7 @@ impl<T: Serialize> Signed<T> {
 #[cfg(any(test, feature = "arbitrary"))]
 mod arb {
     use signature::SignerMut;
+    use std::fmt::Debug;
 
     fn arb_signing_key<'a>(
         unstructured: &mut arbitrary::Unstructured<'a>,
@@ -110,7 +114,7 @@ mod arb {
         Ok(ed25519_dalek::SigningKey::from_bytes(&arr))
     }
 
-    impl<'a, T: serde::Serialize + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
+    impl<'a, T: serde::Serialize + Debug + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
         for super::Signed<T>
     {
         fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
@@ -127,7 +131,7 @@ mod arb {
     }
 }
 
-impl<T: Serialize + PartialOrd> PartialOrd for Signed<T> {
+impl<T: Serialize + PartialOrd + Debug> PartialOrd for Signed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self
             .verifying_key()
@@ -147,7 +151,7 @@ impl<T: Serialize + PartialOrd> PartialOrd for Signed<T> {
     }
 }
 
-impl<T: Serialize + Ord> Ord for Signed<T> {
+impl<T: Serialize + Ord + Debug> Ord for Signed<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         match self
             .verifying_key()
@@ -163,7 +167,7 @@ impl<T: Serialize + Ord> Ord for Signed<T> {
     }
 }
 
-impl<T: Dupe + Serialize> Dupe for Signed<T> {
+impl<T: Dupe + Serialize + Debug> Dupe for Signed<T> {
     fn dupe(&self) -> Self {
         Signed {
             payload: self.payload.dupe(),
@@ -173,7 +177,7 @@ impl<T: Dupe + Serialize> Dupe for Signed<T> {
     }
 }
 
-impl<T: Serialize> Verifiable for Signed<T> {
+impl<T: Serialize + Debug> Verifiable for Signed<T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.issuer
     }

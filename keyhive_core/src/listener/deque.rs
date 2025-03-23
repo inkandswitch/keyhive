@@ -16,6 +16,7 @@ use std::{
     hash::{Hash, Hasher},
     rc::Rc,
 };
+use tracing::instrument;
 
 #[derive(Debug, Default, PartialEq, Eq, From, Into)]
 pub struct Deque<S: AsyncSigner, T: ContentRef = [u8; 32]>(
@@ -78,20 +79,24 @@ where
 }
 
 impl<S: AsyncSigner, T: ContentRef> PrekeyListener for Deque<S, T> {
+    #[instrument(skip(self))]
     async fn on_prekeys_expanded(&self, new_prekey: &Rc<Signed<AddKeyOp>>) {
         self.push(Event::PrekeysExpanded(new_prekey.dupe()))
     }
 
+    #[instrument(skip(self))]
     async fn on_prekey_rotated(&self, rotate_key: &Rc<Signed<RotateKeyOp>>) {
         self.push(Event::PrekeyRotated(rotate_key.dupe()))
     }
 }
 
 impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for Deque<S, T> {
+    #[instrument(skip(self))]
     async fn on_delegation(&self, data: &Rc<Signed<Delegation<S, T, Self>>>) {
         self.push(Event::Delegated(data.dupe()))
     }
 
+    #[instrument(skip(self))]
     async fn on_revocation(&self, data: &Rc<Signed<Revocation<S, T, Self>>>) {
         self.push(Event::Revoked(data.dupe()))
     }

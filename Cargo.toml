@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
+    "beelay/beelay-core",
     "keyhive_core",
     "keyhive_wasm",
-    "beelay/beelay-core",
-    "beelay/test-utils",
+    "test-utils",
 ]
 
 [workspace.package]

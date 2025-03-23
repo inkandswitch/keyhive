@@ -3,6 +3,7 @@
 use super::{domain_separator::SEPARATOR, separable::Separable, siv::Siv};
 use chacha20poly1305::{AeadInPlace, KeyInit, XChaCha20Poly1305};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 use x25519_dalek::SharedSecret;
 
 /// Newtype wrapper around ChaCha20 key that's serializable.
@@ -73,6 +74,7 @@ impl SymmetricKey {
     }
 
     /// Encrypt data with the [`SymmetricKey`].
+    #[instrument(skip(self))]
     pub fn try_encrypt(
         &self,
         nonce: Siv,
@@ -83,6 +85,7 @@ impl SymmetricKey {
     }
 
     /// Decrypt data with the [`SymmetricKey`].
+    #[instrument(skip(self))]
     pub fn try_decrypt(
         &self,
         nonce: Siv,

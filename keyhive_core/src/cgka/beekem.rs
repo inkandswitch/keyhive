@@ -12,6 +12,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
+use tracing::instrument;
 use treemath::{InnerNodeIndex, LeafNodeIndex, TreeNodeIndex, TreeSize};
 
 pub type InnerNode = SecretStore;
@@ -200,6 +201,7 @@ impl BeeKem {
     /// Hold on to each idx you've seen along the way since ancestors might have been
     /// encrypted for any of these descendents (in cases like a blank node or
     /// conflicting keys on a node on the path).
+    #[instrument(skip_all, fields(doc_id, epochs))]
     pub(crate) fn decrypt_tree_secret(
         &self,
         owner_id: IndividualId,
