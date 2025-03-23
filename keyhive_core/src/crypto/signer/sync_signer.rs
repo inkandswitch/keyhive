@@ -7,7 +7,7 @@ use crate::crypto::{
 };
 use ed25519_dalek::Signer;
 use serde::Serialize;
-use tracing::instrument;
+use tracing::{info, instrument};
 
 /// Synchronous signer trait. This is the primary sync signer API.
 ///
@@ -96,7 +96,7 @@ impl SyncSigner for ed25519_dalek::SigningKey {
 }
 
 impl<T: SyncSigner> AsyncSigner for T {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn try_sign_bytes_async(
         &self,
         payload_bytes: &[u8],
@@ -146,7 +146,7 @@ impl<T: SyncSigner> SyncSignerBasic for T {
 }
 
 /// Wrapper to lift the result of a low-level [`SyncSignerBasic`] into [`Signed`].
-#[instrument(skip(signer))]
+#[instrument(skip(signer, payload))]
 pub fn try_sign_basic<S: SyncSignerBasic + ?Sized, T: Serialize + std::fmt::Debug>(
     signer: &S,
     issuer: ed25519_dalek::VerifyingKey,
@@ -154,6 +154,7 @@ pub fn try_sign_basic<S: SyncSignerBasic + ?Sized, T: Serialize + std::fmt::Debu
 ) -> Result<Signed<T>, SigningError> {
     let bytes = bincode::serialize(&payload)?;
     let signature = signer.try_sign_bytes_sync_basic(bytes.as_slice())?;
+    info!("signature: {:0x?}", signature.to_bytes());
     Ok(Signed {
         signature,
         payload,

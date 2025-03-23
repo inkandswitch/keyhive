@@ -87,7 +87,7 @@ pub trait AsyncSigner: Verifiable {
     ///     assert_eq!(*sig.unwrap().payload(), payload);
     /// }
     /// ```
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn try_sign_async<T: Serialize + std::fmt::Debug>(
         &self,
         payload: T,

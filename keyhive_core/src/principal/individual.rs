@@ -102,7 +102,7 @@ impl Individual {
         AgentId::IndividualId(self.id)
     }
 
-    #[instrument]
+    #[instrument(skip(self), fields(indie_id = %self.id))]
     pub fn receive_prekey_op(&mut self, op: op::KeyOp) -> Result<(), ReceivePrekeyOpError> {
         if op.verifying_key() != self.id.verifying_key() {
             return Err(ReceivePrekeyOpError::IncorrectSigner);
@@ -113,7 +113,7 @@ impl Individual {
         Ok(())
     }
 
-    #[instrument]
+    #[instrument(skip(self), fields(indie_id = %self.id))]
     pub fn pick_prekey(&self, doc_id: DocumentId) -> &ShareKey {
         let mut bytes: Vec<u8> = self.id.to_bytes().to_vec();
         bytes.extend_from_slice(&doc_id.to_bytes());

@@ -139,7 +139,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     }
 
     #[instrument(
-        skip(delegations, revocations, listener, signer, csprng),
+        skip_all,
         fields(parent_ids = ?parents.iter().map(|p| p.id()).collect::<Vec<_>>())
     )]
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
@@ -249,7 +249,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         Ok(update)
     }
 
-    #[instrument(skip(self, delegation, signer), fields(doc_id = ?self.doc_id()))]
+    #[instrument(
+        skip_all,
+        fields(doc_id = %self.doc_id(), member_id = %delegation.payload.delegate.id())
+    )]
     pub(crate) async fn add_cgka_member(
         &mut self,
         delegation: &Signed<Delegation<S, T, L>>,
@@ -452,7 +455,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         })
     }
 
-    #[instrument(skip(self), fields(doc_id = ?self.doc_id()))]
+    #[instrument(skip_all, fields(doc_id = ?self.doc_id(), nonce = ?encrypted_content.nonce))]
     pub fn try_decrypt_content(
         &mut self,
         encrypted_content: &EncryptedContent<Vec<u8>, T>,

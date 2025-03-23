@@ -55,7 +55,7 @@ use std::{
     rc::Rc,
 };
 use thiserror::Error;
-use tracing::instrument;
+use tracing::{debug, info, instrument};
 
 /// A collection of agents with no associated content.
 ///
@@ -83,7 +83,10 @@ pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> {
-    #[instrument(skip(delegations, revocations, listener))]
+    #[instrument(
+        skip_all,
+        fields(group_id = %group_id, head_sig = ?head.signature.to_bytes())
+    )]
     pub fn new(
         group_id: GroupId,
         head: Rc<Signed<Delegation<S, T, L>>>,
@@ -145,7 +148,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[instrument(
-        skip(signer, delegations, revocations, listener),
+        skip(signer, parents, delegations, revocations, listener),
         fields(parent_ids = ?parents.iter().map(|p| p.id()).collect::<Vec<_>>())
     )]
     pub(crate) async fn generate_after_content(
@@ -356,12 +359,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             .collect()
     }
 
-    #[instrument(skip(self), fields(group_id = %self.group_id()))]
+    #[instrument(skip_all, fields(group_id = %self.group_id()))]
     pub fn receive_delegation(
         &mut self,
         delegation: Rc<Signed<Delegation<S, T, L>>>,
     ) -> Result<Digest<Signed<Delegation<S, T, L>>>, error::AddError> {
         let digest = self.state.add_delegation(delegation)?;
+        info!("{:x?}", &digest);
         self.rebuild();
         Ok(digest)
     }
@@ -377,9 +381,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[instrument(
-        skip(self, signer, member_to_add),
-        fields(group_id = %self.group_id(), member_id = %member_to_add.id())
-    )]
+        skip_all,
+        fields(
+            khid = %self.id(),
+            member_to_add = %member_to_add.id(),
+            can,
+            relevant_docs_count=%relevant_docs.len()
+        ))
+    ]
     pub async fn add_member(
         &mut self,
         member_to_add: Agent<S, T, L>,
@@ -451,7 +460,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         })
     }
 
-    #[instrument(skip(self, signer), fields(group_id = %self.group_id()))]
+    #[instrument(
+        skip_all,
+        fields(group_id = %self.group_id(), member_id = %delegation.payload.delegate.id())
+    )]
     pub(crate) async fn add_cgka_member(
         &mut self,
         delegation: Rc<Signed<Delegation<S, T, L>>>,
@@ -470,6 +482,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             })
             .collect::<Vec<_>>();
         for doc in docs {
+            debug!(
+                "Adding {:0?} to Cgka for Doc {:1x?}",
+                delegation.payload.delegate.id(),
+                doc.borrow().doc_id()
+            );
             for op in doc
                 .borrow_mut()
                 .add_cgka_member(&delegation, signer)

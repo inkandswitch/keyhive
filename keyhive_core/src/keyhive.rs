@@ -354,7 +354,6 @@ impl<
             })
     }
 
-    #[instrument(skip(self, to_add, resource, other_relevant_docs), fields(khid = %self.id(), to_add = %to_add.id(), other_relevant_docs_count=%other_relevant_docs.len()))]
     pub async fn add_member(
         &mut self,
         to_add: Agent<S, T, L>,
@@ -428,7 +427,6 @@ impl<
             .await?)
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn try_decrypt_content(
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
@@ -452,7 +450,7 @@ impl<
         self.docs_reachable_by_agent(&self.active.dupe().into())
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all, fields(khid = %self.id(), membered_id = %membered.membered_id()))]
     pub fn reachable_members(
         &self,
         membered: Membered<S, T, L>,
@@ -463,7 +461,7 @@ impl<
         }
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all, fields(khid = %self.id(), agent_id = %agent.id()))]
     pub fn docs_reachable_by_agent(
         &self,
         agent: &Agent<S, T, L>,

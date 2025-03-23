@@ -129,7 +129,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         }
     }
 
-    #[instrument]
     pub fn ancestors(&self) -> (CaMap<MembershipOperation<S, T, L>>, usize) {
         if self.is_root() {
             return (CaMap::new(), 1);
