@@ -15,6 +15,7 @@ use crate::{
     crypto::{
         digest::Digest,
         encrypted::EncryptedContent,
+        envelope::Envelope,
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
         signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
@@ -35,7 +36,9 @@ use crate::{
         identifier::Identifier,
     },
     store::{
-        ciphertext::CiphertextStore, delegation::DelegationStore, revocation::RevocationStore,
+        ciphertext::{CausalDecryptionError, CausalDecryptionState, CiphertextStore, ErrorReason},
+        delegation::DelegationStore,
+        revocation::RevocationStore,
     },
     util::content_addressed_map::CaMap,
 };
@@ -45,6 +48,7 @@ use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
 use nonempty::NonEmpty;
+use serde::de::DeserializeOwned;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
@@ -489,12 +493,34 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         skip_all,
         fields(doc_id = %self.doc_id(), content_id = ?encrypted_content.content_ref)
     )]
-    pub async fn try_causally_decrypt_content<U, C: CiphertextStore<U, T>>(
+    pub async fn try_causally_decrypt_content<C: CiphertextStore<Vec<u8>, T>>(
         &mut self,
-        encrypted_content: &EncryptedContent<U, T>,
+        encrypted_content: &EncryptedContent<Vec<u8>, T>,
         store: &C,
-    ) -> Result<HashMap<_, Vec<u8>>, DecryptError> {
-        todo!()
+    ) -> Result<CausalDecryptionState<Vec<u8>, T>, CausalDecryptionError<Vec<u8>, T>>
+    // FIXME have an output store
+    where
+        T: DeserializeOwned,
+    {
+        let raw_entrypoint = self.try_decrypt_content(encrypted_content).expect("FIXME");
+        let acc = CausalDecryptionState::new(); // FIXME maybe just a new error
+
+        let entrypoint_envelope: Envelope<T, Vec<u8>> =
+            bincode::deserialize(raw_entrypoint.as_slice()).map_err(|e| CausalDecryptionError {
+                progress: acc,
+                cannot: HashMap::from_iter([(
+                    encrypted_content.content_ref.clone(),
+                    ErrorReason::DeserializationFailed(e.into()),
+                )]),
+            })?;
+
+        let mut to_decrypt = vec![];
+        for (t, symm_key) in entrypoint_envelope.ancestors.iter() {
+            let ciphertext = store.get_ciphertext(t).await.expect("FIXME");
+            to_decrypt.push((ciphertext, *symm_key));
+        }
+
+        store.try_causal_decrypt(&mut to_decrypt).await
     }
 
     #[instrument(skip(self), fields(doc_id = ?self.doc_id()))]
