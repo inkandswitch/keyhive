@@ -7,6 +7,7 @@ use crate::crypto::{
 };
 use ed25519_dalek::Signer;
 use serde::Serialize;
+use tracing::instrument;
 
 /// Synchronous signer trait. This is the primary sync signer API.
 ///
@@ -69,7 +70,10 @@ pub trait SyncSigner: Verifiable {
     /// assert!(sig.is_ok());
     /// assert_eq!(*sig.unwrap().payload(), payload);
     /// ```
-    fn try_sign_sync<T: Serialize>(&self, payload: T) -> Result<Signed<T>, SigningError> {
+    fn try_sign_sync<T: Serialize + std::fmt::Debug>(
+        &self,
+        payload: T,
+    ) -> Result<Signed<T>, SigningError> {
         let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
 
         Ok(Signed {
@@ -81,6 +85,7 @@ pub trait SyncSigner: Verifiable {
 }
 
 impl SyncSigner for ed25519_dalek::SigningKey {
+    #[instrument(skip(self))]
     fn try_sign_bytes_sync(
         &self,
         payload_bytes: &[u8],
@@ -91,6 +96,7 @@ impl SyncSigner for ed25519_dalek::SigningKey {
 }
 
 impl<T: SyncSigner> AsyncSigner for T {
+    #[instrument(skip(self))]
     async fn try_sign_bytes_async(
         &self,
         payload_bytes: &[u8],
@@ -130,6 +136,7 @@ pub trait SyncSignerBasic {
 }
 
 impl<T: SyncSigner> SyncSignerBasic for T {
+    #[instrument(skip(self))]
     fn try_sign_bytes_sync_basic(
         &self,
         payload_bytes: &[u8],
@@ -139,7 +146,8 @@ impl<T: SyncSigner> SyncSignerBasic for T {
 }
 
 /// Wrapper to lift the result of a low-level [`SyncSignerBasic`] into [`Signed`].
-pub fn try_sign_basic<S: SyncSignerBasic + ?Sized, T: Serialize>(
+#[instrument(skip(signer))]
+pub fn try_sign_basic<S: SyncSignerBasic + ?Sized, T: Serialize + std::fmt::Debug>(
     signer: &S,
     issuer: ed25519_dalek::VerifyingKey,
     payload: T,

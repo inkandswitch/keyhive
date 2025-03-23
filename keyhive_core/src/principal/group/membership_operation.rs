@@ -23,6 +23,7 @@ use std::{
     rc::Rc,
 };
 use topological_sort::TopologicalSort;
+use tracing::instrument;
 
 #[derive_where(Debug, Clone, Eq; T)]
 pub enum MembershipOperation<
@@ -128,6 +129,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         }
     }
 
+    #[instrument]
     pub fn ancestors(&self) -> (CaMap<MembershipOperation<S, T, L>>, usize) {
         if self.is_root() {
             return (CaMap::new(), 1);
@@ -171,6 +173,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
     }
 
     #[allow(clippy::type_complexity)] // Clippy doens't like the returned pair
+    #[instrument(skip_all)]
     pub fn topsort(
         delegation_heads: &CaMap<Signed<Delegation<S, T, L>>>,
         revocation_heads: &CaMap<Signed<Revocation<S, T, L>>>,
@@ -426,6 +429,7 @@ mod tests {
 
     use std::sync::LazyLock;
 
+    // FIXME these should probbaly use `lazy_static!`
     static GROUP_SIGNER: LazyLock<MemorySigner> =
         LazyLock::new(|| MemorySigner::generate(&mut rand::thread_rng()));
 

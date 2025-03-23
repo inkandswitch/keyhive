@@ -5,6 +5,7 @@ use crate::crypto::{signed::SigningError, verifiable::Verifiable};
 use dupe::Dupe;
 use ed25519_dalek::Signer;
 use std::hash::Hash;
+use tracing::instrument;
 
 /// An in-memory signer.
 ///
@@ -86,6 +87,7 @@ impl From<ed25519_dalek::SigningKey> for MemorySigner {
 }
 
 impl ed25519_dalek::Signer<ed25519_dalek::Signature> for MemorySigner {
+    #[instrument(skip(self))]
     fn try_sign(
         &self,
         msg: &[u8],

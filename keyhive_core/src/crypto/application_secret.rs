@@ -10,6 +10,7 @@ use crate::{
     },
 };
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 const STATIC_CONTEXT: &str = "/keyhive/beekem/app_secret/";
 
@@ -82,6 +83,7 @@ impl PcsKey {
         Self(share_secret_key)
     }
 
+    #[instrument]
     pub(crate) fn derive_application_secret<Cr: ContentRef>(
         &self,
         nonce: &Siv,

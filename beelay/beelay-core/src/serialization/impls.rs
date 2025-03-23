@@ -112,6 +112,7 @@ mod keyhive {
         cgka::operation::CgkaOperation, crypto::signed::Signed, event::static_event::StaticEvent,
     };
     use serde::{Deserialize, Serialize};
+    use std::fmt::Debug;
 
     use crate::{
         parse::{self, Parse},
@@ -119,7 +120,7 @@ mod keyhive {
         CommitHash,
     };
 
-    impl<T: Serialize> Encode for Signed<T> {
+    impl<T: Serialize + Debug> Encode for Signed<T> {
         fn encode_into(&self, out: &mut Vec<u8>) {
             let serialized = bincode::serialize(&self).unwrap();
             leb128::encode_uleb128(out, serialized.len() as u64);
@@ -127,7 +128,7 @@ mod keyhive {
         }
     }
 
-    impl<'a, T: Deserialize<'a> + Serialize> Parse<'a> for Signed<T> {
+    impl<'a, T: Deserialize<'a> + Serialize + Debug> Parse<'a> for Signed<T> {
         fn parse(input: parse::Input<'a>) -> Result<(parse::Input<'a>, Self), parse::ParseError> {
             let (input, bytes) = parse::slice(input)?;
             let signed = bincode::deserialize(bytes)

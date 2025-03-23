@@ -3,6 +3,7 @@
 use crate::crypto::verifiable::Verifiable;
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 /// A unique identifier for an [`Agent`](crate::principal::agentAgent).
 ///
@@ -14,6 +15,7 @@ pub struct Identifier(pub ed25519_dalek::VerifyingKey);
 
 impl Identifier {
     #[cfg(any(feature = "test_utils", test))]
+    #[instrument(skip_all)]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         ed25519_dalek::SigningKey::generate(csprng)
             .verifying_key()

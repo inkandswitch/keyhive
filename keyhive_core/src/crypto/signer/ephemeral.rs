@@ -4,6 +4,7 @@ use super::sync_signer::SyncSignerBasic;
 use crate::crypto::verifiable::Verifiable;
 use derive_more::{From, Into};
 use std::future::Future;
+use tracing::instrument;
 
 /// An ephemeral signer that never exposes its signing key.
 ///
@@ -98,6 +99,7 @@ impl EphemeralSigner {
 }
 
 impl ed25519_dalek::Signer<ed25519_dalek::Signature> for EphemeralSigner {
+    #[instrument(skip(self))]
     fn try_sign(
         &self,
         msg: &[u8],

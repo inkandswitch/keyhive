@@ -55,6 +55,7 @@ use std::{
     rc::Rc,
 };
 use thiserror::Error;
+use tracing::instrument;
 
 /// A collection of agents with no associated content.
 ///
@@ -82,6 +83,7 @@ pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> {
+    #[instrument(skip(delegations, revocations, listener))]
     pub fn new(
         group_id: GroupId,
         head: Rc<Signed<Delegation<S, T, L>>>,
@@ -100,6 +102,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         group
     }
 
+    #[instrument(skip(delegations, revocations, listener))]
     pub fn from_individual(
         individual: Individual,
         head: Rc<Signed<Delegation<S, T, L>>>,
@@ -141,6 +144,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         group_result.await
     }
 
+    #[instrument(
+        skip(signer, delegations, revocations, listener),
+        fields(parent_ids = ?parents.iter().map(|p| p.id()).collect::<Vec<_>>())
+    )]
     pub(crate) async fn generate_after_content(
         signer: Box<dyn SyncSignerBasic>,
         verifier: ed25519_dalek::VerifyingKey,
@@ -234,6 +241,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         &self.members
     }
 
+    #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
         struct GroupAccess<Z: AsyncSigner, U: ContentRef, M: MembershipListener<Z, U>> {
             agent: Agent<Z, U, M>,
@@ -317,6 +325,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         &self.state.revocation_heads
     }
 
+    #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn get_capability(
         &self,
         member_id: &Identifier,
@@ -328,6 +337,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         })
     }
 
+    #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn get_agent_revocations(
         &self,
         agent: &Agent<S, T, L>,
@@ -346,6 +356,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             .collect()
     }
 
+    #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn receive_delegation(
         &mut self,
         delegation: Rc<Signed<Delegation<S, T, L>>>,
@@ -355,6 +366,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         Ok(digest)
     }
 
+    #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn receive_revocation(
         &mut self,
         revocation: Rc<Signed<Revocation<S, T, L>>>,
@@ -364,6 +376,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         Ok(digest)
     }
 
+    #[instrument(
+        skip(self, signer, member_to_add),
+        fields(group_id = %self.group_id(), member_id = %member_to_add.id())
+    )]
     pub async fn add_member(
         &mut self,
         member_to_add: Agent<S, T, L>,
@@ -435,6 +451,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         })
     }
 
+    #[instrument(skip(self, signer), fields(group_id = %self.group_id()))]
     pub(crate) async fn add_cgka_member(
         &mut self,
         delegation: Rc<Signed<Delegation<S, T, L>>>,
@@ -465,6 +482,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[allow(clippy::type_complexity)]
+    #[instrument(skip(self, signer), fields(group_id = %self.group_id()))]
     pub async fn revoke_member(
         &mut self,
         member_to_remove: Identifier,
@@ -652,6 +670,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         Ok(Rc::new(revocation))
     }
 
+    #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn rebuild(&mut self) {
         self.members.clear();
         self.active_revocations.clear();
@@ -796,6 +815,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         }
     }
 
+    #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn into_archive(&self) -> GroupArchive<T> {
         GroupArchive {
             id_or_indie: self.id_or_indie.clone(),

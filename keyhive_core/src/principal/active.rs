@@ -219,7 +219,7 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     }
 
     /// Asyncronously sign a payload.
-    pub async fn try_sign_async<U: Serialize>(
+    pub async fn try_sign_async<U: Serialize + std::fmt::Debug>(
         &self,
         payload: U,
     ) -> Result<Signed<U>, SigningError> {
