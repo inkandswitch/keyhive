@@ -3,6 +3,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use futures::channel::mpsc;
 use futures::channel::oneshot;
+use keyhive_core::crypto::encrypted::EncryptedContent;
 use keyhive_core::keyhive::Keyhive;
 
 use crate::doc_state::DocState;
@@ -60,7 +61,14 @@ pub(crate) async fn load_keyhive<R: rand::Rng + rand::CryptoRng + Clone + 'stati
     rng: R,
     signer: Signer,
 ) -> (
-    Keyhive<Signer, crate::CommitHash, crate::keyhive::Listener, R>,
+    Keyhive<
+        Signer,
+        crate::CommitHash,
+        Vec<u8>,
+        HashMap<crate::CommitHash, EncryptedContent<Vec<u8>, crate::CommitHash>>,
+        crate::keyhive::Listener,
+        R,
+    >,
     mpsc::UnboundedReceiver<
         keyhive_core::event::Event<Signer, crate::CommitHash, crate::keyhive::Listener>,
     >,
@@ -75,6 +83,7 @@ pub(crate) async fn load_keyhive<R: rand::Rng + rand::CryptoRng + Clone + 'stati
         match keyhive_core::keyhive::Keyhive::try_from_archive(
             &archive,
             signer.clone(),
+            HashMap::new(), // FIXME use exitsing!
             listener.clone(),
             rng.clone(),
         ) {
@@ -84,17 +93,26 @@ pub(crate) async fn load_keyhive<R: rand::Rng + rand::CryptoRng + Clone + 'stati
             }
             Err(e) => {
                 tracing::error!(err=?e, "failed to load keyhive archive");
-                keyhive_core::keyhive::Keyhive::generate(signer, listener.clone(), rng.clone())
-                    .await
-                    .unwrap()
+                keyhive_core::keyhive::Keyhive::generate(
+                    signer,
+                    HashMap::new(/* FIXME use something else! */),
+                    listener.clone(),
+                    rng.clone(),
+                )
+                .await
+                .unwrap()
             }
         }
     } else {
         tracing::trace!("no archive found on disk, creating a new one");
-        let result =
-            keyhive_core::keyhive::Keyhive::generate(signer, listener.clone(), rng.clone())
-                .await
-                .unwrap();
+        let result = keyhive_core::keyhive::Keyhive::generate(
+            signer,
+            HashMap::new(/* FIXME */),
+            listener.clone(),
+            rng.clone(),
+        )
+        .await
+        .unwrap();
         let archived = result.into_archive();
         crate::keyhive_storage::save_archive(io.clone(), archived).await;
         result

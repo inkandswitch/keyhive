@@ -3,6 +3,7 @@
 use crate::crypto::verifiable::Verifiable;
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 /// A unique identifier for an [`Agent`](crate::principal::agentAgent).
 ///

@@ -1,8 +1,13 @@
+use std::collections::HashMap;
+
 use super::{
     change_ref::JsChangeRef, event_handler::JsEventHandler, keyhive::JsKeyhive, signer::JsSigner,
 };
 use derive_more::{Display, From, Into};
-use keyhive_core::{archive::Archive, keyhive::Keyhive, keyhive::TryFromArchiveError};
+use keyhive_core::{
+    archive::Archive, crypto::encrypted::EncryptedContent, keyhive::Keyhive,
+    keyhive::TryFromArchiveError, store::ciphertext,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -30,12 +35,14 @@ impl JsArchive {
     #[wasm_bindgen(js_name = tryToKeyhive)]
     pub fn try_to_keyhive(
         &self,
+        ciphertext_store: HashMap<JsChangeRef, EncryptedContent<Vec<u8>, JsChangeRef>>,
         signer: JsSigner,
         event_handler: &js_sys::Function,
     ) -> Result<JsKeyhive, JsTryFromArchiveError> {
         Ok(Keyhive::try_from_archive(
             &self.0,
             signer,
+            ciphertext_store,
             event_handler.clone().into(),
             rand::thread_rng(),
         )

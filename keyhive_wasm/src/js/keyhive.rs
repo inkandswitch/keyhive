@@ -13,17 +13,27 @@ use derive_more::{From, Into};
 use dupe::Dupe;
 use dupe::IterDupedExt;
 use keyhive_core::{
+    crypto::encrypted::EncryptedContent,
     keyhive::{EncryptContentError, Keyhive},
     principal::document::DecryptError,
+    store::ciphertext::CiphertextStore,
 };
 use nonempty::NonEmpty;
+use std::collections::HashMap;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Keyhive)]
 #[derive(Debug, From, Into)]
 pub struct JsKeyhive(
-    pub(crate) Keyhive<JsSigner, JsChangeRef, JsEventHandler, rand::rngs::ThreadRng>,
+    pub(crate)  Keyhive<
+        JsSigner,
+        JsChangeRef,
+        Vec<u8>,
+        HashMap<JsChangeRef, EncryptedContent<Vec<u8>, JsChangeRef>>, // FIXME: swap out of localstorage
+        JsEventHandler,
+        rand::rngs::ThreadRng,
+    >,
 );
 
 #[wasm_bindgen(js_class = Keyhive)]
@@ -36,6 +46,7 @@ impl JsKeyhive {
         Ok(JsKeyhive(
             Keyhive::generate(
                 signer,
+                HashMap::new(),
                 JsEventHandler(event_handler.clone()),
                 rand::thread_rng(),
             )
