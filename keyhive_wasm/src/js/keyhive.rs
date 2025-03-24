@@ -1,3 +1,4 @@
+use super::ciphertext_store::JsMemoryCiphertextStore;
 use super::contact_card::JsContactCard;
 use super::{
     access::JsAccess, add_member_error::JsAddMemberError, agent::JsAgent, archive::JsArchive,
@@ -13,13 +14,10 @@ use derive_more::{From, Into};
 use dupe::Dupe;
 use dupe::IterDupedExt;
 use keyhive_core::{
-    crypto::encrypted::EncryptedContent,
     keyhive::{EncryptContentError, Keyhive},
     principal::document::DecryptError,
-    store::ciphertext::CiphertextStore,
 };
 use nonempty::NonEmpty;
-use std::collections::HashMap;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -30,7 +28,7 @@ pub struct JsKeyhive(
         JsSigner,
         JsChangeRef,
         Vec<u8>,
-        HashMap<JsChangeRef, EncryptedContent<Vec<u8>, JsChangeRef>>, // FIXME: swap out of localstorage
+        JsMemoryCiphertextStore,
         JsEventHandler,
         rand::rngs::ThreadRng,
     >,
@@ -46,7 +44,7 @@ impl JsKeyhive {
         Ok(JsKeyhive(
             Keyhive::generate(
                 signer,
-                HashMap::new(),
+                JsMemoryCiphertextStore::new(),
                 JsEventHandler(event_handler.clone()),
                 rand::thread_rng(),
             )

@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use super::{
-    change_ref::JsChangeRef, event_handler::JsEventHandler, keyhive::JsKeyhive, signer::JsSigner,
+    change_ref::JsChangeRef, ciphertext_store::JsMemoryCiphertextStore,
+    event_handler::JsEventHandler, keyhive::JsKeyhive, signer::JsSigner,
 };
 use derive_more::{Display, From, Into};
 use keyhive_core::{
@@ -35,7 +36,7 @@ impl JsArchive {
     #[wasm_bindgen(js_name = tryToKeyhive)]
     pub fn try_to_keyhive(
         &self,
-        ciphertext_store: HashMap<JsChangeRef, EncryptedContent<Vec<u8>, JsChangeRef>>,
+        ciphertext_store: JsMemoryCiphertextStore, // FIXME cfg or enum
         signer: JsSigner,
         event_handler: &js_sys::Function,
     ) -> Result<JsKeyhive, JsTryFromArchiveError> {
