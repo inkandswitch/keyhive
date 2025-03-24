@@ -406,6 +406,15 @@ impl BeelayHandle<'_> {
 
         self.network.run_until_quiescent();
     }
+
+    pub fn peer_changes(&self) -> &HashMap<PeerId, Vec<beelay_core::conn_info::ConnectionInfo>> {
+        &self
+            .network
+            .beelays
+            .get(&self.peer_id)
+            .unwrap()
+            .peer_changes
+    }
 }
 
 pub struct Network {
@@ -632,6 +641,7 @@ pub struct BeelayWrapper<R: rand::Rng + rand::CryptoRng> {
         Result<beelay_core::CommandResult, beelay_core::error::Stopping>,
     >,
     notifications: HashMap<DocumentId, Vec<beelay_core::doc_status::DocEvent>>,
+    peer_changes: HashMap<PeerId, Vec<beelay_core::conn_info::ConnectionInfo>>,
     handling_requests: HashMap<beelay_core::CommandId, (beelay_core::OutboundRequestId, PeerId)>,
     endpoints: HashMap<beelay_core::EndpointId, beelay_core::PeerId>,
     streams: HashMap<beelay_core::StreamId, beelay_core::PeerId>,
@@ -652,6 +662,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> BeelayWrapper<R> {
             inbox: VecDeque::new(),
             completed_commands: HashMap::new(),
             notifications: HashMap::new(),
+            peer_changes: HashMap::new(),
             handling_requests: HashMap::new(),
             endpoints: HashMap::new(),
             streams: HashMap::new(),
@@ -740,6 +751,9 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> BeelayWrapper<R> {
             }
             for (doc_id, events) in results.notifications.into_iter() {
                 self.notifications.entry(doc_id).or_default().extend(events);
+            }
+            for (peer_id, status) in results.peer_status_changes.into_iter() {
+                self.peer_changes.entry(peer_id).or_default().push(status);
             }
             if results.stopped {
                 self.shutdown = true;
