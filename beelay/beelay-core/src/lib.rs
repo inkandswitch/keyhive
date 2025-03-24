@@ -221,6 +221,8 @@ pub struct EventResults {
     pub completed_commands: HashMap<CommandId, Result<CommandResult, error::Stopping>>,
     /// New notifications
     pub notifications: HashMap<DocumentId, Vec<doc_status::DocEvent>>,
+    /// Notifications about peer status
+    pub peer_status_changes: HashMap<PeerId, conn_info::ConnectionInfo>,
     /// New requests to send
     pub new_requests: HashMap<EndpointId, Vec<NewRequest>>,
     /// New events for streams

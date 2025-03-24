@@ -1,6 +1,7 @@
 use std::{borrow::Cow, cell::RefCell, collections::HashSet, rc::Rc};
 
 use crate::{
+    conn_info::ConnectionInfo,
     streams::{CompletedHandshake, EstablishedStream},
     StreamDirection, StreamError, StreamId, UnixTimestampMillis,
 };
@@ -55,5 +56,9 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Streams<'a, R> {
             .borrow_mut()
             .streams
             .mark_sync_complete(now, stream_id);
+    }
+
+    pub(crate) fn take_changed(&mut self) -> Vec<ConnectionInfo> {
+        self.state.borrow_mut().streams.take_changed()
     }
 }

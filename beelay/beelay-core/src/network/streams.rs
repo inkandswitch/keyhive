@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -11,6 +11,7 @@ mod run_streams;
 pub(crate) use run_streams::{run_streams, IncomingStreamEvent};
 
 use crate::{
+    conn_info,
     network::{messages::Request, InnerRpcResponse},
     Audience, OutboundRequestId, PeerId, TaskContext, UnixTimestampMillis,
 };
@@ -58,6 +59,7 @@ pub struct SendRequest {
 
 pub(crate) struct Streams {
     streams: HashMap<StreamId, StreamMeta>,
+    modified: HashSet<StreamId>,
 }
 
 struct StreamMeta {
@@ -76,6 +78,7 @@ impl Streams {
     pub(crate) fn new() -> Self {
         Self {
             streams: HashMap::new(),
+            modified: HashSet::new(),
         }
     }
 
@@ -91,6 +94,7 @@ impl Streams {
                 },
             },
         );
+        self.modified.insert(stream_id);
         stream_id
     }
 
@@ -126,6 +130,7 @@ impl Streams {
 
     pub(crate) fn mark_sync_started(&mut self, now: UnixTimestampMillis, stream_id: StreamId) {
         if let Some(meta) = self.streams.get_mut(&stream_id) {
+            self.modified.insert(stream_id);
             meta.sync_phase = SyncPhase::Syncing { started_at: now };
         } else {
             tracing::warn!(
@@ -137,6 +142,7 @@ impl Streams {
 
     pub(crate) fn mark_sync_complete(&mut self, now: UnixTimestampMillis, stream_id: StreamId) {
         if let Some(meta) = self.streams.get_mut(&stream_id) {
+            self.modified.insert(stream_id);
             meta.sync_phase = SyncPhase::Listening {
                 last_synced_at: Some(now),
             };
@@ -146,6 +152,24 @@ impl Streams {
                 "attempted to mark nonexistent stream as sync complete"
             );
         }
+    }
+
+    pub(crate) fn take_changed(&mut self) -> Vec<conn_info::ConnectionInfo> {
+        std::mem::take(&mut self.modified)
+            .into_iter()
+            .filter_map(|stream_id| {
+                let Some(meta) = self.streams.get(&stream_id) else {
+                    return None;
+                };
+                let Some(handshake) = meta.handshake.as_ref() else {
+                    return None;
+                };
+                Some(conn_info::ConnectionInfo {
+                    peer_id: handshake.their_peer_id,
+                    state: meta.sync_phase.into(),
+                })
+            })
+            .collect()
     }
 }
 

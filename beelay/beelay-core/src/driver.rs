@@ -12,6 +12,7 @@ use keyhive_core::crypto::verifiable::Verifiable;
 
 use crate::{
     commands,
+    conn_info::ConnectionInfo,
     doc_status::DocEvent,
     io::{IoHandle, IoResult, IoTask},
     keyhive_storage, loading,
@@ -19,7 +20,7 @@ use crate::{
     state::State,
     streams::{self, IncomingStreamEvent},
     sync_loops, Command, CommandId, CommandResult, DocumentId, EndpointId, EventResults, IoTaskId,
-    NewRequest, OutboundRequestId, Signer, TaskContext, UnixTimestampMillis,
+    NewRequest, OutboundRequestId, PeerId, Signer, TaskContext, UnixTimestampMillis,
 };
 
 pub struct SpawnArgs<R> {
@@ -147,6 +148,9 @@ impl Driver {
                         .entry(doc_id)
                         .or_default()
                         .push(event);
+                }
+                DriverEvent::PeersChanged(new_peers) => {
+                    event_results.peer_status_changes.extend(new_peers);
                 }
             }
         }
@@ -311,6 +315,15 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         }
         loops.reconcile(&ctx);
         ctx.state().sessions().expire_sessions(now.borrow().clone());
+        let changed = ctx.state().streams().take_changed();
+        if !changed.is_empty() {
+            let _ = tx_driver_events.unbounded_send(DriverEvent::PeersChanged(
+                changed
+                    .into_iter()
+                    .map(|info| (info.peer_id, info))
+                    .collect(),
+            ));
+        }
     }
 }
 
@@ -352,6 +365,7 @@ pub(crate) enum DriverEvent {
         doc_id: DocumentId,
         event: DocEvent,
     },
+    PeersChanged(HashMap<PeerId, ConnectionInfo>),
 }
 
 /// A handle used to send messages to the environment driving the event loop
