@@ -48,7 +48,7 @@ use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
 use nonempty::NonEmpty;
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
@@ -462,9 +462,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     }
 
     #[instrument(skip_all, fields(doc_id = ?self.doc_id(), nonce = ?encrypted_content.nonce))]
-    pub fn try_decrypt_content(
+    pub fn try_decrypt_content<P: for<'de> Deserialize<'de>>(
         &mut self,
-        encrypted_content: &EncryptedContent<Vec<u8>, T>,
+        encrypted_content: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
         let decrypt_key = self
             .cgka_mut()
@@ -493,14 +493,16 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         skip_all,
         fields(doc_id = %self.doc_id(), content_id = ?encrypted_content.content_ref)
     )]
-    pub async fn try_causally_decrypt_content<C: CiphertextStore<Vec<u8>, T>>(
+    pub async fn try_causal_decrypt_content<
+        C: CiphertextStore<T, P>,
+        P: for<'de> Deserialize<'de> + Serialize + Clone, // FIXME why serilaize?
+    >(
         &mut self,
-        encrypted_content: &EncryptedContent<Vec<u8>, T>,
-        store: &C,
-    ) -> Result<CausalDecryptionState<Vec<u8>, T>, CausalDecryptionError<Vec<u8>, T>>
-    // FIXME have an output store
+        encrypted_content: &EncryptedContent<P, T>,
+        store: &mut C,
+    ) -> Result<CausalDecryptionState<T, P>, CausalDecryptionError<T, P>>
     where
-        T: DeserializeOwned,
+        T: for<'de> Deserialize<'de>,
     {
         let raw_entrypoint = self.try_decrypt_content(encrypted_content).expect("FIXME");
         let acc = CausalDecryptionState::new(); // FIXME maybe just a new error
@@ -515,8 +517,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             })?;
 
         let mut to_decrypt = vec![];
-        for (t, symm_key) in entrypoint_envelope.ancestors.iter() {
-            let ciphertext = store.get_ciphertext(t).await.expect("FIXME");
+        for (digest, symm_key) in entrypoint_envelope.ancestors.iter() {
+            let ciphertext = store.get_ciphertext(digest).await.expect("FIXME");
             to_decrypt.push((ciphertext, *symm_key));
         }
 

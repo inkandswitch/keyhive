@@ -4,7 +4,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{encrypted::EncryptedContent, envelope::Envelope, symmetric_key::SymmetricKey},
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -25,15 +25,21 @@ use tracing::instrument;
 /// This is generally accomplished by either removing the decrypted values from the store,
 /// or — more commonly — by tracking which values have been decrypted and simply not
 /// hitting the backing store on requests for those IDs.
-pub trait CiphertextStore<T, Cr: ContentRef> {
+pub trait CiphertextStore<Cr: ContentRef, T> {
     #[cfg(feature = "sendable")]
     fn get_ciphertext(
         &self,
         id: &Cr,
     ) -> impl Future<Output = Option<EncryptedContent<T, Cr>>> + Send;
 
+    #[cfg(feature = "sendable")]
+    fn mark_decrypted(&mut self, id: &Cr) -> impl Future<Output = ()>;
+
     #[cfg(not(feature = "sendable"))]
     fn get_ciphertext(&self, id: &Cr) -> impl Future<Output = Option<EncryptedContent<T, Cr>>>;
+
+    #[cfg(not(feature = "sendable"))]
+    fn mark_decrypted(&mut self, id: &Cr) -> impl Future<Output = ()>;
 
     #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
     /// Recursively decryptsa set of causally-related ciphertexts.
@@ -110,12 +116,12 @@ pub trait CiphertextStore<T, Cr: ContentRef> {
     #[allow(async_fn_in_trait)]
     #[instrument(skip(self, to_decrypt), fields(ciphertext_heads_count = %to_decrypt.len()))]
     async fn try_causal_decrypt(
-        &self,
+        &mut self,
         to_decrypt: &mut Vec<(EncryptedContent<T, Cr>, SymmetricKey)>,
-    ) -> Result<CausalDecryptionState<T, Cr>, CausalDecryptionError<T, Cr>>
+    ) -> Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<Cr, T>>
     where
-        T: Serialize + DeserializeOwned + Clone,
-        Cr: DeserializeOwned,
+        Cr: for<'de> Deserialize<'de>,
+        T: Clone + Serialize + for<'de> Deserialize<'de>,
     {
         let mut acc = CausalDecryptionState::new();
         let mut seen = HashSet::new();
@@ -159,18 +165,22 @@ pub trait CiphertextStore<T, Cr: ContentRef> {
                 .push((ciphertext.content_ref, envelope.plaintext));
         }
 
+        for id in acc.complete.iter().map(|(id, _)| id) {
+            self.mark_decrypted(id).await;
+        }
+
         Ok(acc)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct CausalDecryptionState<T, Cr: ContentRef> {
+pub struct CausalDecryptionState<Cr: ContentRef, T> {
     pub complete: Vec<(Cr, T)>,
     pub keys: HashMap<Cr, SymmetricKey>,
     pub next: HashMap<Cr, SymmetricKey>,
 }
 
-impl<T, Cr: ContentRef> CausalDecryptionState<T, Cr> {
+impl<T, Cr: ContentRef> CausalDecryptionState<Cr, T> {
     pub fn new() -> Self {
         CausalDecryptionState {
             complete: vec![],
@@ -180,18 +190,22 @@ impl<T, Cr: ContentRef> CausalDecryptionState<T, Cr> {
     }
 }
 
-impl<T: Clone, Cr: ContentRef> CiphertextStore<T, Cr> for HashMap<Cr, EncryptedContent<T, Cr>> {
+impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for HashMap<Cr, EncryptedContent<T, Cr>> {
     #[instrument(skip(self))]
     async fn get_ciphertext(&self, id: &Cr) -> Option<EncryptedContent<T, Cr>> {
         HashMap::get(self, id).cloned()
+    }
+
+    async fn mark_decrypted(&mut self, id: &Cr) {
+        self.remove(id);
     }
 }
 
 #[derive(Debug, Error)]
 #[error("Causal decryption error: {cannot}")]
-pub struct CausalDecryptionError<T, Cr: ContentRef> {
+pub struct CausalDecryptionError<Cr: ContentRef, T> {
     pub cannot: HashMap<Cr, ErrorReason<Cr>>,
-    pub progress: CausalDecryptionState<T, Cr>,
+    pub progress: CausalDecryptionState<Cr, T>,
 }
 
 #[derive(Debug, Error)]
