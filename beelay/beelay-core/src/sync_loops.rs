@@ -214,8 +214,8 @@ async fn sync_loop<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
     stream_id: StreamId,
     peer_id: PeerId,
 ) -> StreamId {
-    crate::sync::sync_with_peer(ctx, stream_id.into(), peer_id)
-        .await
-        .unwrap();
+    if let Err(e) = crate::sync::sync_with_peer(ctx, stream_id.into(), peer_id).await {
+        tracing::error!(err=%e, "sync loop stopping due to error");
+    }
     stream_id
 }
