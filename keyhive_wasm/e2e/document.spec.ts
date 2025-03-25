@@ -9,9 +9,10 @@ test.beforeEach(async ({ page }) => {
 test.describe("Document", async () => {
   test('constructor', async ({ page }) => {
     const out = await page.evaluate(async () => {
-      const { Keyhive, Signer, ChangeRef } = window.keyhive
+      const { Keyhive, Signer, ChangeRef, CiphertextStore } = window.keyhive
 
-      const bh = await new Keyhive(await new Signer(), console.log)
+      const store = CiphertextStore.newInMemory()
+      const bh = await new Keyhive(await new Signer(), store, console.log)
       const changeRef = new ChangeRef(new Uint8Array([1, 2, 3]));
 
       const g = await bh.generateGroup([])

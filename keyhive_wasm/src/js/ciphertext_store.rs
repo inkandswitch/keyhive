@@ -11,6 +11,7 @@ pub struct JsCiphertextStore {
 
 #[wasm_bindgen(js_class = CiphertextStore)]
 impl JsCiphertextStore {
+    #[wasm_bindgen(js_name = newInMemory)]
     pub fn new_in_memory() -> Self {
         Self {
             inner: JsCiphertextStoreInner::Memory(HashMap::new()),
@@ -18,6 +19,7 @@ impl JsCiphertextStore {
     }
 
     #[cfg(feature = "web-sys")]
+    #[wasm_bindgen(js_name = newFromWebStorage)]
     pub fn from_web_storage(storage: web_sys::Storage) -> Self {
         Self {
             inner: JsCiphertextStoreInner::WebStorage(storage),
