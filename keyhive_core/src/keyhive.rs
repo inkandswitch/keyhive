@@ -47,7 +47,7 @@ use crate::{
         public::Public,
     },
     store::{
-        ciphertext::{CausalDecryptionState, CiphertextStore},
+        ciphertext::{memory::MemoryCiphertextStore, CausalDecryptionState, CiphertextStore},
         delegation::DelegationStore,
         revocation::RevocationStore,
     },
@@ -75,7 +75,7 @@ pub struct Keyhive<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
-    C: CiphertextStore<T, P> = HashMap<T, EncryptedContent<P, T>>,
+    C: CiphertextStore<T, P> = MemoryCiphertextStore<T, P>,
     L: MembershipListener<S, T> + CgkaListener = NoListener,
     R: rand::CryptoRng = rand::rngs::ThreadRng,
 > {
@@ -1714,40 +1714,37 @@ mod tests {
     };
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
+    use testresult::TestResult;
 
     async fn make_keyhive() -> Keyhive<MemorySigner> {
         let sk = MemorySigner::generate(&mut rand::thread_rng());
-        Keyhive::generate(sk, NoListener, rand::thread_rng())
+        let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
+        Keyhive::generate(sk, store, NoListener, rand::thread_rng())
             .await
             .unwrap()
     }
 
     #[tokio::test]
-    async fn test_archival_round_trip() {
+    async fn test_archival_round_trip() -> TestResult {
         test_utils::init_logging();
 
         let mut csprng = rand::thread_rng();
 
         let sk = MemorySigner::generate(&mut csprng);
-        let mut hive = Keyhive::generate(sk.clone(), NoListener, rand::thread_rng())
-            .await
-            .unwrap();
+        let store: Rc<RefCell<HashMap<[u8; 32], EncryptedContent<Vec<u8>, [u8; 32]>>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+        let mut hive =
+            Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::thread_rng()).await?;
 
         let indie_sk = MemorySigner::generate(&mut csprng);
         let indie = Rc::new(RefCell::new(
-            Individual::generate(&indie_sk, &mut csprng).await.unwrap(),
+            Individual::generate(&indie_sk, &mut csprng).await?,
         ));
 
         hive.register_individual(indie.dupe());
-        hive.generate_group(vec![indie.dupe().into()])
-            .await
-            .unwrap();
-        hive.generate_doc(
-            vec![indie.into()],
-            nonempty!["ref1".to_string(), "ref2".to_string()],
-        )
-        .await
-        .unwrap();
+        hive.generate_group(vec![indie.dupe().into()]).await?;
+        hive.generate_doc(vec![indie.into()], nonempty![[1u8; 32], [2u8; 32]])
+            .await?;
 
         assert!(hive.active.borrow().prekey_pairs.len() > 0);
         assert_eq!(hive.individuals.len(), 2);
@@ -1765,9 +1762,11 @@ mod tests {
         assert_eq!(archive.topsorted_ops.len(), 4);
 
         let hive_from_archive =
-            Keyhive::try_from_archive(&archive, sk, NoListener, rand::thread_rng()).unwrap();
+            Keyhive::try_from_archive(&archive, sk, store, NoListener, rand::thread_rng()).unwrap();
 
         assert_eq!(hive, hive_from_archive);
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -2049,13 +2048,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_nonblocking_transaction() {
+    async fn test_nonblocking_transaction() -> TestResult {
         test_utils::init_logging();
 
         let sk = MemorySigner::generate(&mut rand::thread_rng());
-        let hive = Keyhive::<_, [u8; 32], _, _>::generate(sk, NoListener, rand::rngs::OsRng)
-            .await
-            .unwrap();
+        let hive = Keyhive::<_, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
+            sk,
+            HashMap::new(),
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await?;
 
         let trunk = Rc::new(RefCell::new(hive));
 
@@ -2064,22 +2067,19 @@ mod tests {
                 &MemorySigner::generate(&mut rand::rngs::OsRng),
                 &mut rand::rngs::OsRng,
             )
-            .await
-            .unwrap(),
+            .await?,
         ))
         .into();
 
         trunk
             .borrow_mut()
             .generate_doc(vec![alice.dupe()], nonempty![[0u8; 32]])
-            .await
-            .unwrap();
+            .await?;
 
         trunk
             .borrow_mut()
             .generate_group(vec![alice.dupe()])
-            .await
-            .unwrap();
+            .await?;
 
         assert_eq!(trunk.borrow().active.borrow().prekey_pairs.len(), 7);
         assert_eq!(trunk.borrow().delegations.borrow().len(), 4);
@@ -2088,7 +2088,7 @@ mod tests {
 
         let tx = transact_nonblocking(
             &trunk,
-            |mut fork: Keyhive<_, _, Log<MemorySigner, _>, rand::rngs::OsRng>| async move {
+            |mut fork: Keyhive<_, _, _, _, Log<_, [u8; 32]>, _>| async move {
                 // Depending on when the async runs
                 let init_dlg_count = fork.delegations.borrow().len();
                 assert!(init_dlg_count >= 4);
@@ -2157,5 +2157,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(trunk.borrow().docs.len(), 4);
+        Ok(())
     }
 }

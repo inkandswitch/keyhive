@@ -1,15 +1,20 @@
 //! A store for encrypted content plus some metadata.
 
+pub mod memory;
+
+use self::memory::MemoryCiphertextStore;
 use crate::{
     content::reference::ContentRef,
     crypto::{encrypted::EncryptedContent, envelope::Envelope, symmetric_key::SymmetricKey},
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     convert::Infallible,
     fmt::{Debug, Display},
     future::Future,
+    rc::Rc,
 };
 use thiserror::Error;
 use tracing::instrument;
@@ -233,9 +238,45 @@ impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for HashMap<Cr, EncryptedC
         Ok(HashMap::get(self, id).cloned())
     }
 
+    #[instrument(skip(self))]
     async fn mark_decrypted(&mut self, id: &Cr) -> Result<(), Infallible> {
         self.remove(id);
         Ok(())
+    }
+}
+
+impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for MemoryCiphertextStore<Cr, T> {
+    type GetCiphertextError = Infallible;
+    type MarkDecryptedError = Infallible;
+
+    #[instrument(skip(self))]
+    async fn get_ciphertext(&self, id: &Cr) -> Result<Option<EncryptedContent<T, Cr>>, Infallible> {
+        self.store.get_ciphertext(id).await
+    }
+
+    #[instrument(skip(self))]
+    async fn mark_decrypted(&mut self, id: &Cr) -> Result<(), Infallible> {
+        self.store.mark_decrypted(id).await
+    }
+}
+
+impl<T: Clone, Cr: ContentRef, S: CiphertextStore<Cr, T>> CiphertextStore<Cr, T>
+    for Rc<RefCell<S>>
+{
+    type GetCiphertextError = S::GetCiphertextError;
+    type MarkDecryptedError = S::MarkDecryptedError;
+
+    #[instrument(skip(self))]
+    async fn get_ciphertext(
+        &self,
+        id: &Cr,
+    ) -> Result<Option<EncryptedContent<T, Cr>>, Self::GetCiphertextError> {
+        self.borrow().get_ciphertext(id).await
+    }
+
+    #[instrument(skip(self))]
+    async fn mark_decrypted(&mut self, id: &Cr) -> Result<(), Self::MarkDecryptedError> {
+        self.borrow_mut().mark_decrypted(id).await
     }
 }
 
@@ -350,8 +391,8 @@ mod tests {
             (two_ref, two.clone()),
         ]);
 
-        assert_eq!(store.get_ciphertext(&one_ref).await, Some(one));
-        assert_eq!(store.get_ciphertext(&two_ref).await, Some(two));
+        assert_eq!(store.get_ciphertext(&one_ref).await, Ok(Some(one)));
+        assert_eq!(store.get_ciphertext(&two_ref).await, Ok(Some(two)));
     }
 
     #[tokio::test]
@@ -406,7 +447,7 @@ mod tests {
             &mut csprng,
         );
 
-        let store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
+        let mut store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
             (genesis_ref, genesis.clone()),
             (left_ref, left.clone()),
             (right_ref, right.clone()),
@@ -513,7 +554,7 @@ mod tests {
             &mut csprng,
         );
 
-        let store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
+        let mut store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
             (genesis1_ref, genesis1.clone()),
             (genesis2_ref, genesis2.clone()),
             (left_ref, left.clone()),
@@ -651,7 +692,7 @@ mod tests {
             &mut csprng,
         );
 
-        let store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
+        let mut store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
             // NOTE: skipping: (genesis1_ref, genesis1.clone()),
             // NOTE: skipping (genesis2_ref, genesis2.clone()),
             (left_ref, left.clone()),

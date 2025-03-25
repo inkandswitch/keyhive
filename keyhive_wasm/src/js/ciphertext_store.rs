@@ -4,9 +4,25 @@ use std::collections::HashMap;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen(js_name = JsCiphertextStore)]
+#[wasm_bindgen(js_name = CiphertextStore)]
 pub struct JsCiphertextStore {
     inner: JsCiphertextStoreInner,
+}
+
+#[wasm_bindgen(js_class = CiphertextStore)]
+impl JsCiphertextStore {
+    pub fn new_in_memory() -> Self {
+        Self {
+            inner: JsCiphertextStoreInner::Memory(HashMap::new()),
+        }
+    }
+
+    #[cfg(feature = "web-sys")]
+    pub fn from_web_storage(storage: web_sys::Storage) -> Self {
+        Self {
+            inner: JsCiphertextStoreInner::WebStorage(storage),
+        }
+    }
 }
 
 impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
