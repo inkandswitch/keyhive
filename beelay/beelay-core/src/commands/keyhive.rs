@@ -9,7 +9,7 @@ use crate::{contact_card::ContactCard, io::Signer, CommitHash, DocumentId, PeerI
 
 #[derive(Debug)]
 pub enum KeyhiveCommand {
-    CreateGroup,
+    CreateGroup(Vec<KeyhiveEntityId>),
     CreateContactCard,
     AddMemberToGroup(AddMemberToGroup),
     RemoveMemberFromGroup(RemoveMemberFromGroup),
@@ -140,11 +140,11 @@ where
                 .ok_or(error::QueryAccess::NoSuchDocument);
             KeyhiveCommandResult::QueryAccess(result)
         }
-        KeyhiveCommand::CreateGroup => {
+        KeyhiveCommand::CreateGroup(other_parents) => {
             let result = ctx
                 .state()
                 .keyhive()
-                .create_group()
+                .create_group(other_parents)
                 .await
                 .map_err(|e| e.into());
             KeyhiveCommandResult::CreateGroup(result)

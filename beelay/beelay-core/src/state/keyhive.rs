@@ -692,11 +692,18 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
 
     pub(crate) async fn create_group(
         &self,
+        parents: Vec<KeyhiveEntityId>,
     ) -> Result<PeerId, keyhive_core::crypto::signed::SigningError> {
         let k_mutex = self.0.borrow().keyhive.clone();
         let mut keyhive = k_mutex.lock().await;
 
-        let group = keyhive.generate_group(vec![]).await?;
+        let parents = parents
+            .into_iter()
+            .filter_map(|parent| get_peer(&mut *keyhive, parent))
+            .map(|p| p.into())
+            .collect();
+
+        let group = keyhive.generate_group(parents).await?;
         let id = group.borrow().id().0.into();
         Ok(id)
     }
