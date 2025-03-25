@@ -1,4 +1,4 @@
-use super::{change_ref::JsChangeRef, hex_string::HexString};
+use super::{base64::Base64, change_ref::JsChangeRef};
 use keyhive_core::{crypto::encrypted::EncryptedContent, store::ciphertext::CiphertextStore};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -44,12 +44,12 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
 
             #[cfg(feature = "web-sys")]
             JsCiphertextStoreInner::WebStorage(ref store) => {
-                if let Some(hex_string) = store
-                    .get_item(&id.to_hex_string().as_str())
+                if let Some(b64) = store
+                    .get_item(&id.to_base64().as_str())
                     .map_err(JsWebStorageError::RetrievalError)?
                 {
-                    let bytes = HexString(hex_string).to_vec().map_err(|e| {
-                        JsGetCiphertextError(JsWebStorageError::ConvertFromHexError(e))
+                    let bytes = Base64(b64).into_vec().map_err(|e| {
+                        JsGetCiphertextError(JsWebStorageError::ConvertFromBase64Error(e))
                     })?;
                     let encrypted = bincode::deserialize(&bytes)
                         .map_err(JsWebStorageError::DeserailizationError)?;
@@ -70,7 +70,7 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
             #[cfg(feature = "web-sys")]
             JsCiphertextStoreInner::WebStorage(ref store) => {
                 store
-                    .remove_item(&id.to_hex_string().as_str())
+                    .remove_item(&id.to_base64().as_str())
                     .map_err(JsRemoveCiphertextError)?;
             }
         };
@@ -98,7 +98,7 @@ pub enum JsWebStorageError {
     DeserailizationError(#[from] bincode::Error),
 
     #[error("Error while removing item from web storage: {0:?}")]
-    ConvertFromHexError(String),
+    ConvertFromBase64Error(base64_simd::Error),
 }
 
 #[wasm_bindgen(js_class = GetCiphertextError)]

@@ -122,13 +122,13 @@
             "${wasm-pack} build ./keyhive_wasm --dev --target=web";
  
           "build:wasm:nodejs" = cmd "Build for wasm32-unknown-unknown with Node.js bindgings"
-            "${wasm-pack} build --dev --target=nodejs";
+            "${wasm-pack} build ./keyhive_wasm --dev --target=nodejs";
 
           "build:node" = cmd "Build JS-wrapped Wasm library"
             "${pnpm}/bin/pnpm install && ${node} run build";
 
           "build:wasi" = cmd "Build for Wasm32-WASI"
-            "${cargo} build --target wasm32-wasi";
+            "${cargo} build ./keyhive_wasm --target wasm32-wasi";
         };
 
         bench = {

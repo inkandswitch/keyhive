@@ -1,4 +1,4 @@
-use super::hex_string::HexString;
+use super::base64::Base64;
 use derive_more::{From, Into};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -21,12 +21,12 @@ impl JsChangeRef {
         self.0.clone()
     }
 
-    pub(crate) fn to_hex_string(&self) -> HexString {
-        HexString::from_vec(self.0.to_vec())
+    pub(crate) fn to_base64(&self) -> Base64 {
+        Base64::from_vec(self.0.clone())
     }
 
     #[allow(dead_code)]
-    pub(crate) fn from_hex_string(hex_string: HexString) -> Result<Self, String> {
-        hex_string.to_vec().map(Self)
+    pub(crate) fn from_base64(b64: Base64) -> Result<Self, base64_simd::Error> {
+        Ok(Self(b64.into_vec()?))
     }
 }

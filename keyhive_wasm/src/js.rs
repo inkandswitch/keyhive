@@ -38,4 +38,4 @@ pub mod signer;
 pub mod signing_error;
 pub mod summary;
 
-pub(crate) mod hex_string;
+pub(crate) mod base64;
