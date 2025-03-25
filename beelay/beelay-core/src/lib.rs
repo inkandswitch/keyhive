@@ -43,6 +43,7 @@ mod blob;
 mod config;
 pub mod conn_info;
 pub use config::Config;
+pub mod contact_card;
 mod driver;
 pub use blob::BlobHash;
 mod doc_state;
@@ -85,6 +86,7 @@ pub use network::{
 mod serialization;
 mod stopper;
 mod sync;
+pub use keyhive_core::contact_card::ContactCard;
 
 pub const SYNC_INTERVAL: Duration = Duration::from_secs(60);
 

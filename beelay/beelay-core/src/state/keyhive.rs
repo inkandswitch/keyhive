@@ -8,7 +8,6 @@ use std::{
 use keyhive_core::{
     access::Access as KeyhiveAccess,
     cgka::{error::CgkaError, operation::CgkaOperation},
-    contact_card::ContactCard,
     crypto::{
         digest::Digest,
         encrypted::EncryptedContent,
@@ -30,6 +29,7 @@ use nonempty::NonEmpty;
 
 use crate::{
     commands::keyhive::{KeyhiveEntityId, MemberAccess},
+    contact_card::ContactCard,
     io::Signer,
     keyhive::Listener,
     parse::{self, Parse},
@@ -336,7 +336,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
                 keyhive.get_agent(id)
             }
             KeyhiveEntityId::Individual(contact_card) => {
-                let indi = Rc::new(RefCell::new(Individual::from(contact_card)));
+                let indi = Rc::new(RefCell::new(Individual::from(contact_card.0)));
                 keyhive.register_individual(indi.clone());
                 Some(indi.into())
             }
@@ -496,7 +496,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         let k_mutex = self.0.borrow().keyhive.clone();
         let mut keyhive = k_mutex.lock().await;
 
-        let indie = Rc::new(RefCell::new(Individual::from(contact)));
+        let indie = Rc::new(RefCell::new(Individual::from(contact.0)));
         keyhive.register_individual(indie.clone());
         indie.into()
     }
@@ -736,11 +736,12 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
 
     pub(crate) async fn contact_card(
         &self,
-    ) -> Result<keyhive_core::contact_card::ContactCard, SigningError> {
+    ) -> Result<crate::contact_card::ContactCard, SigningError> {
         let k_mutex = self.0.borrow().keyhive.clone();
         let mut keyhive = k_mutex.lock().await;
 
-        keyhive.contact_card().await
+        let card = keyhive.contact_card().await?;
+        Ok(crate::contact_card::ContactCard(card))
     }
 }
 
@@ -765,7 +766,7 @@ fn get_peer<R: rand::Rng + rand::CryptoRng>(
             keyhive.get_peer(id)
         }
         KeyhiveEntityId::Individual(contact_card) => {
-            let indi = Rc::new(RefCell::new(Individual::from(contact_card)));
+            let indi = Rc::new(RefCell::new(Individual::from(contact_card.0)));
             keyhive.register_individual(indi.clone());
             Some(indi.into())
         }

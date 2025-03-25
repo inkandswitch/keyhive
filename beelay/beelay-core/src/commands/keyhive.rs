@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 
 use error::AddMember;
-use keyhive_core::{
-    contact_card::ContactCard,
-    listener::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener},
+use keyhive_core::listener::{
+    cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener,
 };
 
-use crate::{io::Signer, CommitHash, DocumentId, PeerId, TaskContext};
+use crate::{contact_card::ContactCard, io::Signer, CommitHash, DocumentId, PeerId, TaskContext};
 
 #[derive(Debug)]
 pub enum KeyhiveCommand {
