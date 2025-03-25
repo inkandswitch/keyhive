@@ -5,6 +5,7 @@ pub mod archive;
 pub mod capability;
 pub mod cgka_operation;
 pub mod change_ref;
+pub mod ciphertext_store;
 pub mod contact_card;
 pub mod delegation;
 pub mod doc_content_refs;
@@ -36,3 +37,5 @@ pub mod signed_revocation;
 pub mod signer;
 pub mod signing_error;
 pub mod summary;
+
+pub(crate) mod hex_string;

@@ -24,9 +24,9 @@ use crate::{
         active::Active,
         agent::{id::AgentId, Agent},
         document::{
-            id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError, Document, EncryptError,
-            EncryptedContentWithUpdate, GenerateDocError, MissingIndividualError,
-            RevokeMemberUpdate,
+            id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError,
+            DocCausalDecryptionError, Document, EncryptError, EncryptedContentWithUpdate,
+            GenerateDocError, MissingIndividualError, RevokeMemberUpdate,
         },
         group::{
             delegation::{Delegation, StaticDelegation},
@@ -46,18 +46,23 @@ use crate::{
         peer::Peer,
         public::Public,
     },
-    store::{delegation::DelegationStore, revocation::RevocationStore},
+    store::{
+        ciphertext::{memory::MemoryCiphertextStore, CausalDecryptionState, CiphertextStore},
+        delegation::DelegationStore,
+        revocation::RevocationStore,
+    },
     transact::{fork::Fork, merge::Merge},
 };
 use derivative::Derivative;
 use derive_where::derive_where;
 use dupe::Dupe;
 use nonempty::NonEmpty;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     fmt::{Debug, Formatter},
+    marker::PhantomData,
     rc::Rc,
 };
 use thiserror::Error;
@@ -69,6 +74,8 @@ use tracing::instrument;
 pub struct Keyhive<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
+    P: for<'de> Deserialize<'de> = Vec<u8>,
+    C: CiphertextStore<T, P> = MemoryCiphertextStore<T, P>,
     L: MembershipListener<S, T> + CgkaListener = NoListener,
     R: rand::CryptoRng = rand::rngs::ThreadRng,
 > {
@@ -93,17 +100,25 @@ pub struct Keyhive<
     /// Obsever for [`Event`]s. Intended for running live updates.
     event_listener: L,
 
+    /// Storeage for ciphertexts that cannot yet be decrypted.
+    #[derivative(PartialEq = "ignore")]
+    ciphertext_store: C,
+
     /// Cryptographically secure (pseudo)random number generator.
     #[derivative(PartialEq = "ignore")]
     csprng: R,
+
+    _plaintext_phantom: PhantomData<P>,
 }
 
 impl<
         S: AsyncSigner,
         T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P>,
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore,
-    > Keyhive<S, T, L, R>
+    > Keyhive<S, T, P, C, L, R>
 {
     #[instrument(skip_all)]
     pub fn id(&self) -> IndividualId {
@@ -118,6 +133,7 @@ impl<
     #[instrument(skip_all)]
     pub async fn generate(
         signer: S,
+        ciphertext_store: C,
         event_listener: L,
         mut csprng: R,
     ) -> Result<Self, SigningError> {
@@ -133,8 +149,10 @@ impl<
             docs: HashMap::new(),
             delegations: DelegationStore::new(),
             revocations: RevocationStore::new(),
+            ciphertext_store,
             event_listener,
             csprng,
+            _plaintext_phantom: PhantomData,
         })
     }
 
@@ -430,9 +448,23 @@ impl<
     pub fn try_decrypt_content(
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
-        encrypted: &EncryptedContent<Vec<u8>, T>,
+        encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
         doc.borrow_mut().try_decrypt_content(encrypted)
+    }
+
+    pub async fn try_causal_decrypt_content(
+        &mut self,
+        doc: Rc<RefCell<Document<S, T, L>>>,
+        encrypted: &EncryptedContent<P, T>,
+    ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<T, P, C>>
+    where
+        T: for<'de> Deserialize<'de>,
+        P: Serialize + Clone,
+    {
+        doc.borrow_mut()
+            .try_causal_decrypt_content(encrypted, &mut self.ciphertext_store)
+            .await
     }
 
     #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
@@ -1125,6 +1157,7 @@ impl<
     pub fn try_from_archive(
         archive: &Archive<T>,
         signer: S,
+        ciphertext_store: C,
         listener: L,
         csprng: R,
     ) -> Result<Self, TryFromArchiveError<S, T, L>> {
@@ -1346,7 +1379,9 @@ impl<
             delegations,
             revocations,
             csprng,
+            ciphertext_store,
             event_listener: listener,
+            _plaintext_phantom: PhantomData,
         })
     }
 
@@ -1403,9 +1438,11 @@ impl<
 impl<
         S: AsyncSigner,
         T: ContentRef + Debug,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P>,
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore,
-    > Debug for Keyhive<S, T, L, R>
+    > Debug for Keyhive<S, T, P, C, L, R>
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.debug_struct("Keyhive")
@@ -1415,6 +1452,7 @@ impl<
             .field("docs", &self.docs)
             .field("delegations", &self.delegations)
             .field("revocations", &self.revocations)
+            .field("ciphertext_store", &"<STORE>")
             .field("csprng", &"<CSPRNG>")
             .finish()
     }
@@ -1423,16 +1461,19 @@ impl<
 impl<
         S: AsyncSigner + Clone,
         T: ContentRef + Clone,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone, // FIXME make the default Rc<RefCell<...>>
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > Fork for Keyhive<S, T, L, R>
+    > Fork for Keyhive<S, T, P, C, L, R>
 {
-    type Forked = Keyhive<S, T, Log<S, T>, R>;
+    type Forked = Keyhive<S, T, P, C, Log<S, T>, R>;
 
     fn fork(&self) -> Self::Forked {
         Keyhive::try_from_archive(
             &self.into_archive(),
             self.active.borrow().signer.clone(),
+            self.ciphertext_store.clone(),
             Log::new(),
             self.csprng.clone(),
         )
@@ -1443,9 +1484,11 @@ impl<
 impl<
         S: AsyncSigner + Clone,
         T: ContentRef + Clone,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > Merge for Keyhive<S, T, L, R>
+    > Merge for Keyhive<S, T, P, C, L, R>
 {
     fn merge(&mut self, mut fork: Self::Forked) {
         self.active
@@ -1484,9 +1527,11 @@ impl<
 impl<
         S: AsyncSigner,
         T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P>,
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore,
-    > Verifiable for Keyhive<S, T, L, R>
+    > Verifiable for Keyhive<S, T, P, C, L, R>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.active.borrow().verifying_key()
@@ -1496,11 +1541,13 @@ impl<
 impl<
         S: AsyncSigner,
         T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P>,
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore,
-    > From<&Keyhive<S, T, L, R>> for Agent<S, T, L>
+    > From<&Keyhive<S, T, P, C, L, R>> for Agent<S, T, L>
 {
-    fn from(context: &Keyhive<S, T, L, R>) -> Self {
+    fn from(context: &Keyhive<S, T, P, C, L, R>) -> Self {
         context.active.dupe().into()
     }
 }
@@ -1667,40 +1714,37 @@ mod tests {
     };
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
+    use testresult::TestResult;
 
     async fn make_keyhive() -> Keyhive<MemorySigner> {
         let sk = MemorySigner::generate(&mut rand::thread_rng());
-        Keyhive::generate(sk, NoListener, rand::thread_rng())
+        let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
+        Keyhive::generate(sk, store, NoListener, rand::thread_rng())
             .await
             .unwrap()
     }
 
     #[tokio::test]
-    async fn test_archival_round_trip() {
+    async fn test_archival_round_trip() -> TestResult {
         test_utils::init_logging();
 
         let mut csprng = rand::thread_rng();
 
         let sk = MemorySigner::generate(&mut csprng);
-        let mut hive = Keyhive::generate(sk.clone(), NoListener, rand::thread_rng())
-            .await
-            .unwrap();
+        let store: Rc<RefCell<HashMap<[u8; 32], EncryptedContent<Vec<u8>, [u8; 32]>>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+        let mut hive =
+            Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::thread_rng()).await?;
 
         let indie_sk = MemorySigner::generate(&mut csprng);
         let indie = Rc::new(RefCell::new(
-            Individual::generate(&indie_sk, &mut csprng).await.unwrap(),
+            Individual::generate(&indie_sk, &mut csprng).await?,
         ));
 
         hive.register_individual(indie.dupe());
-        hive.generate_group(vec![indie.dupe().into()])
-            .await
-            .unwrap();
-        hive.generate_doc(
-            vec![indie.into()],
-            nonempty!["ref1".to_string(), "ref2".to_string()],
-        )
-        .await
-        .unwrap();
+        hive.generate_group(vec![indie.dupe().into()]).await?;
+        hive.generate_doc(vec![indie.into()], nonempty![[1u8; 32], [2u8; 32]])
+            .await?;
 
         assert!(hive.active.borrow().prekey_pairs.len() > 0);
         assert_eq!(hive.individuals.len(), 2);
@@ -1718,9 +1762,11 @@ mod tests {
         assert_eq!(archive.topsorted_ops.len(), 4);
 
         let hive_from_archive =
-            Keyhive::try_from_archive(&archive, sk, NoListener, rand::thread_rng()).unwrap();
+            Keyhive::try_from_archive(&archive, sk, store, NoListener, rand::thread_rng()).unwrap();
 
         assert_eq!(hive, hive_from_archive);
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -2002,13 +2048,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_nonblocking_transaction() {
+    async fn test_nonblocking_transaction() -> TestResult {
         test_utils::init_logging();
 
         let sk = MemorySigner::generate(&mut rand::thread_rng());
-        let hive = Keyhive::<_, [u8; 32], _, _>::generate(sk, NoListener, rand::rngs::OsRng)
-            .await
-            .unwrap();
+        let hive = Keyhive::<_, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
+            sk,
+            HashMap::new(),
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await?;
 
         let trunk = Rc::new(RefCell::new(hive));
 
@@ -2017,22 +2067,19 @@ mod tests {
                 &MemorySigner::generate(&mut rand::rngs::OsRng),
                 &mut rand::rngs::OsRng,
             )
-            .await
-            .unwrap(),
+            .await?,
         ))
         .into();
 
         trunk
             .borrow_mut()
             .generate_doc(vec![alice.dupe()], nonempty![[0u8; 32]])
-            .await
-            .unwrap();
+            .await?;
 
         trunk
             .borrow_mut()
             .generate_group(vec![alice.dupe()])
-            .await
-            .unwrap();
+            .await?;
 
         assert_eq!(trunk.borrow().active.borrow().prekey_pairs.len(), 7);
         assert_eq!(trunk.borrow().delegations.borrow().len(), 4);
@@ -2041,7 +2088,7 @@ mod tests {
 
         let tx = transact_nonblocking(
             &trunk,
-            |mut fork: Keyhive<_, _, Log<MemorySigner, _>, rand::rngs::OsRng>| async move {
+            |mut fork: Keyhive<_, _, _, _, Log<_, [u8; 32]>, _>| async move {
                 // Depending on when the async runs
                 let init_dlg_count = fork.delegations.borrow().len();
                 assert!(init_dlg_count >= 4);
@@ -2110,5 +2157,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(trunk.borrow().docs.len(), 4);
+        Ok(())
     }
 }

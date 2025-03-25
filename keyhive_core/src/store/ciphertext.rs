@@ -1,13 +1,21 @@
 //! A store for encrypted content plus some metadata.
 
+pub mod memory;
+
+use self::memory::MemoryCiphertextStore;
 use crate::{
     content::reference::ContentRef,
     crypto::{encrypted::EncryptedContent, envelope::Envelope, symmetric_key::SymmetricKey},
 };
-use serde::{de::DeserializeOwned, Serialize};
+use derive_where::derive_where;
+use serde::{Deserialize, Serialize};
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
+    convert::Infallible,
+    fmt::{Debug, Display},
     future::Future,
+    rc::Rc,
 };
 use thiserror::Error;
 use tracing::instrument;
@@ -25,15 +33,30 @@ use tracing::instrument;
 /// This is generally accomplished by either removing the decrypted values from the store,
 /// or — more commonly — by tracking which values have been decrypted and simply not
 /// hitting the backing store on requests for those IDs.
-pub trait CiphertextStore<T, Cr: ContentRef> {
+pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
+    type GetCiphertextError: Debug + Display;
+    type MarkDecryptedError: Debug + Display;
+
     #[cfg(feature = "sendable")]
     fn get_ciphertext(
         &self,
         id: &Cr,
-    ) -> impl Future<Output = Option<EncryptedContent<T, Cr>>> + Send;
+    ) -> impl Future<Output = Result<Option<EncryptedContent<T, Cr>>, Self::GetCiphertextError>> + Send;
+
+    #[cfg(feature = "sendable")]
+    fn mark_decrypted(&mut self, id: &Cr) -> impl Future<Output = ()>;
 
     #[cfg(not(feature = "sendable"))]
-    fn get_ciphertext(&self, id: &Cr) -> impl Future<Output = Option<EncryptedContent<T, Cr>>>;
+    fn get_ciphertext(
+        &self,
+        id: &Cr,
+    ) -> impl Future<Output = Result<Option<EncryptedContent<T, Cr>>, Self::GetCiphertextError>>;
+
+    #[cfg(not(feature = "sendable"))]
+    fn mark_decrypted(
+        &mut self,
+        id: &Cr,
+    ) -> impl Future<Output = Result<(), Self::MarkDecryptedError>>;
 
     #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
     /// Recursively decryptsa set of causally-related ciphertexts.
@@ -110,14 +133,15 @@ pub trait CiphertextStore<T, Cr: ContentRef> {
     #[allow(async_fn_in_trait)]
     #[instrument(skip(self, to_decrypt), fields(ciphertext_heads_count = %to_decrypt.len()))]
     async fn try_causal_decrypt(
-        &self,
+        &mut self,
         to_decrypt: &mut Vec<(EncryptedContent<T, Cr>, SymmetricKey)>,
-    ) -> Result<CausalDecryptionState<T, Cr>, CausalDecryptionError<T, Cr>>
+    ) -> Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<Cr, T, Self>>
     where
-        T: Serialize + DeserializeOwned + Clone,
-        Cr: DeserializeOwned,
+        Cr: for<'de> Deserialize<'de>,
+        T: Clone + Serialize + for<'de> Deserialize<'de>,
     {
-        let mut acc = CausalDecryptionState::new();
+        let mut progress = CausalDecryptionState::new();
+        let mut cannot: HashMap<Cr, ErrorReason<Cr, T, Self>> = HashMap::new();
         let mut seen = HashSet::new();
 
         while let Some((ciphertext, key)) = to_decrypt.pop() {
@@ -125,52 +149,78 @@ pub trait CiphertextStore<T, Cr: ContentRef> {
                 continue;
             }
 
-            acc.keys.insert(ciphertext.content_ref.clone(), key);
+            progress.keys.insert(ciphertext.content_ref.clone(), key);
             let content_ref = ciphertext.content_ref.clone();
 
-            let decrypted = ciphertext
-                .try_decrypt(key)
-                .map_err(|_| CausalDecryptionError {
-                    progress: acc.clone(),
-                    cannot: HashMap::from_iter([(
-                        content_ref.clone(),
-                        ErrorReason::DecryptionFailed(key),
-                    )]),
-                })?;
+            match ciphertext.try_decrypt(key) {
+                Err(_) => {
+                    seen.remove(&content_ref);
+                    cannot.insert(content_ref.clone(), ErrorReason::DecryptionFailed(key));
+                    continue;
+                }
+                Ok(decrypted) => {
+                    let result: Result<Envelope<Cr, T>, _> =
+                        bincode::deserialize(decrypted.as_slice());
+                    match result {
+                        Err(e) => {
+                            seen.remove(&content_ref);
+                            cannot.insert(
+                                content_ref.clone(),
+                                ErrorReason::DeserializationFailed(Box::new(e)),
+                            );
+                            continue;
+                        }
+                        Ok(envelope) => {
+                            for (ancestor_ref, ancestor_key) in envelope.ancestors.iter() {
+                                match self.get_ciphertext(&ancestor_ref).await {
+                                    Err(e) => {
+                                        seen.remove(&content_ref);
+                                        cannot.insert(
+                                            content_ref.clone(),
+                                            ErrorReason::GetCiphertextError(e),
+                                        );
+                                        continue;
+                                    }
+                                    Ok(None) => {
+                                        progress.next.insert(ancestor_ref.clone(), *ancestor_key);
+                                    }
+                                    Ok(Some(ancestor)) => {
+                                        to_decrypt.push((ancestor, *ancestor_key));
+                                    }
+                                }
+                            }
 
-            let envelope: Envelope<Cr, T> =
-                bincode::deserialize(decrypted.as_slice()).map_err(|e| CausalDecryptionError {
-                    progress: acc.clone(),
-                    cannot: HashMap::from_iter([(
-                        content_ref,
-                        ErrorReason::DeserializationFailed(e.into()),
-                    )]),
-                })?;
-
-            for (ancestor_ref, ancestor_key) in envelope.ancestors.iter() {
-                if let Some(ancestor) = self.get_ciphertext(&ancestor_ref).await {
-                    to_decrypt.push((ancestor, *ancestor_key));
-                } else {
-                    acc.next.insert(ancestor_ref.clone(), *ancestor_key);
+                            progress
+                                .complete
+                                .push((ciphertext.content_ref, envelope.plaintext));
+                        }
+                    }
                 }
             }
-
-            acc.complete
-                .push((ciphertext.content_ref, envelope.plaintext));
         }
 
-        Ok(acc)
+        for id in progress.complete.iter().map(|(id, _)| id) {
+            if let Err(e) = self.mark_decrypted(id).await {
+                cannot.insert(id.clone(), ErrorReason::MarkDecryptedError(e));
+            };
+        }
+
+        if cannot.is_empty() {
+            Ok(progress)
+        } else {
+            Err(CausalDecryptionError { cannot, progress })
+        }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct CausalDecryptionState<T, Cr: ContentRef> {
+#[derive(Debug, Clone, Default)]
+pub struct CausalDecryptionState<Cr: ContentRef, T> {
     pub complete: Vec<(Cr, T)>,
     pub keys: HashMap<Cr, SymmetricKey>,
     pub next: HashMap<Cr, SymmetricKey>,
 }
 
-impl<T, Cr: ContentRef> CausalDecryptionState<T, Cr> {
+impl<T, Cr: ContentRef> CausalDecryptionState<Cr, T> {
     pub fn new() -> Self {
         CausalDecryptionState {
             complete: vec![],
@@ -180,27 +230,86 @@ impl<T, Cr: ContentRef> CausalDecryptionState<T, Cr> {
     }
 }
 
-impl<T: Clone, Cr: ContentRef> CiphertextStore<T, Cr> for HashMap<Cr, EncryptedContent<T, Cr>> {
+impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for HashMap<Cr, EncryptedContent<T, Cr>> {
+    type GetCiphertextError = Infallible;
+    type MarkDecryptedError = Infallible;
+
     #[instrument(skip(self))]
-    async fn get_ciphertext(&self, id: &Cr) -> Option<EncryptedContent<T, Cr>> {
-        HashMap::get(self, id).cloned()
+    async fn get_ciphertext(&self, id: &Cr) -> Result<Option<EncryptedContent<T, Cr>>, Infallible> {
+        Ok(HashMap::get(self, id).cloned())
+    }
+
+    #[instrument(skip(self))]
+    async fn mark_decrypted(&mut self, id: &Cr) -> Result<(), Infallible> {
+        self.remove(id);
+        Ok(())
+    }
+}
+
+impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for MemoryCiphertextStore<Cr, T> {
+    type GetCiphertextError = Infallible;
+    type MarkDecryptedError = Infallible;
+
+    #[instrument(skip(self))]
+    async fn get_ciphertext(&self, id: &Cr) -> Result<Option<EncryptedContent<T, Cr>>, Infallible> {
+        self.store.get_ciphertext(id).await
+    }
+
+    #[instrument(skip(self))]
+    async fn mark_decrypted(&mut self, id: &Cr) -> Result<(), Infallible> {
+        self.store.mark_decrypted(id).await
+    }
+}
+
+impl<T: Clone, Cr: ContentRef, S: CiphertextStore<Cr, T>> CiphertextStore<Cr, T>
+    for Rc<RefCell<S>>
+{
+    type GetCiphertextError = S::GetCiphertextError;
+    type MarkDecryptedError = S::MarkDecryptedError;
+
+    #[instrument(skip(self))]
+    async fn get_ciphertext(
+        &self,
+        id: &Cr,
+    ) -> Result<Option<EncryptedContent<T, Cr>>, Self::GetCiphertextError> {
+        self.borrow().get_ciphertext(id).await
+    }
+
+    #[instrument(skip(self))]
+    async fn mark_decrypted(&mut self, id: &Cr) -> Result<(), Self::MarkDecryptedError> {
+        self.borrow_mut().mark_decrypted(id).await
     }
 }
 
 #[derive(Debug, Error)]
-#[error("Causal decryption error: {cannot}")]
-pub struct CausalDecryptionError<T, Cr: ContentRef> {
-    pub cannot: HashMap<Cr, ErrorReason<Cr>>,
-    pub progress: CausalDecryptionState<T, Cr>,
+pub struct CausalDecryptionError<Cr: ContentRef, T, S: CiphertextStore<Cr, T>> {
+    pub cannot: HashMap<Cr, ErrorReason<Cr, T, S>>,
+    pub progress: CausalDecryptionState<Cr, T>,
 }
 
-#[derive(Debug, Error)]
-pub enum ErrorReason<Cr: ContentRef> {
-    #[error("Decryption failed")]
-    DecryptionFailed(SymmetricKey),
+impl<Cr: ContentRef + Debug, T: Debug, S: CiphertextStore<Cr, T>> Display
+    for CausalDecryptionError<Cr, T, S>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let x = self.cannot.iter().collect::<Vec<_>>();
+        write!(f, "CausalDecryptionError({:?})", x)
+    }
+}
+
+#[derive(Error)]
+#[derive_where(Debug)]
+pub enum ErrorReason<Cr: ContentRef, T, S: CiphertextStore<Cr, T>> {
+    #[error("GetCiphertextError: {0}")]
+    GetCiphertextError(S::GetCiphertextError),
+
+    #[error("MarkDecryptedError: {0}")]
+    MarkDecryptedError(S::MarkDecryptedError),
 
     #[error(transparent)]
-    DeserializationFailed(Box<bincode::Error>),
+    DeserializationFailed(#[from] Box<bincode::Error>),
+
+    #[error("Decryption failed")]
+    DecryptionFailed(SymmetricKey),
 
     #[error("Cannot find ciphertext for ref")]
     CannotFindCiphertext(Cr),
@@ -219,6 +328,7 @@ mod tests {
     };
     use rand::rngs::ThreadRng;
     use std::marker::PhantomData;
+    use testresult::TestResult;
 
     fn setup(
         plaintext: String,
@@ -256,7 +366,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_hash_map_get_ciphertext() {
+    async fn test_hash_map_get_ciphertext() -> TestResult {
         test_utils::init_logging();
 
         let mut csprng = rand::thread_rng();
@@ -292,12 +402,14 @@ mod tests {
             (two_ref, two.clone()),
         ]);
 
-        assert_eq!(store.get_ciphertext(&one_ref).await, Some(one));
-        assert_eq!(store.get_ciphertext(&two_ref).await, Some(two));
+        assert_eq!(store.get_ciphertext(&one_ref).await, Ok(Some(one)));
+        assert_eq!(store.get_ciphertext(&two_ref).await, Ok(Some(two)));
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_try_causal_decrypt() {
+    async fn test_try_causal_decrypt() -> TestResult {
         test_utils::init_logging();
 
         let mut csprng = rand::thread_rng();
@@ -348,7 +460,7 @@ mod tests {
             &mut csprng,
         );
 
-        let store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
+        let mut store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
             (genesis_ref, genesis.clone()),
             (left_ref, left.clone()),
             (right_ref, right.clone()),
@@ -357,8 +469,7 @@ mod tests {
 
         let observed = store
             .try_causal_decrypt(&mut vec![(head.clone(), head_key)])
-            .await
-            .unwrap();
+            .await?;
 
         assert_eq!(observed.complete.len(), 4);
         assert!(observed
@@ -369,10 +480,12 @@ mod tests {
             .complete
             .contains(&(right_ref, "right".to_string())),);
         assert!(observed.complete.contains(&(head_ref, "head".to_string())),);
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_try_causal_decrypt_multiple_heads() {
+    async fn test_try_causal_decrypt_multiple_heads() -> TestResult {
         test_utils::init_logging();
 
         let mut csprng = rand::thread_rng();
@@ -455,7 +568,7 @@ mod tests {
             &mut csprng,
         );
 
-        let store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
+        let mut store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
             (genesis1_ref, genesis1.clone()),
             (genesis2_ref, genesis2.clone()),
             (left_ref, left.clone()),
@@ -470,8 +583,7 @@ mod tests {
                 (head2.clone(), head2_key),
                 (head3.clone(), head3_key),
             ])
-            .await
-            .unwrap();
+            .await?;
 
         // Doesn't have the unused head
         assert!(!observed
@@ -507,10 +619,12 @@ mod tests {
         assert_eq!(observed.keys.get(&right_ref), Some(&right_key));
         assert_eq!(observed.keys.get(&genesis1_ref), Some(&genesis1_key));
         assert_eq!(observed.keys.get(&genesis2_ref), Some(&genesis2_key));
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_incomplete_store() {
+    async fn test_incomplete_store() -> TestResult {
         test_utils::init_logging();
 
         let mut csprng = rand::thread_rng();
@@ -593,7 +707,7 @@ mod tests {
             &mut csprng,
         );
 
-        let store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
+        let mut store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
             // NOTE: skipping: (genesis1_ref, genesis1.clone()),
             // NOTE: skipping (genesis2_ref, genesis2.clone()),
             (left_ref, left.clone()),
@@ -608,8 +722,7 @@ mod tests {
                 (head2.clone(), head2_key),
                 (head3.clone(), head3_key),
             ])
-            .await
-            .unwrap();
+            .await?;
 
         // Doesn't have the unused head
         assert!(!observed
@@ -646,5 +759,7 @@ mod tests {
         assert_eq!(observed.next.len(), 2);
         assert_eq!(observed.next.get(&genesis1_ref), Some(&genesis1_key));
         assert_eq!(observed.next.get(&genesis2_ref), Some(&genesis2_key));
+
+        Ok(())
     }
 }

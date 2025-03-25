@@ -4,16 +4,10 @@ pub use error::InvalidCommitHash;
 use crate::serialization::{hex, parse, Encode, Parse};
 
 #[derive(
-    Clone, Copy, Eq, Hash, PartialEq, Ord, PartialOrd, serde::Serialize, serde::Deserialize,
+    Clone, Copy, Dupe, Eq, Hash, PartialEq, Ord, PartialOrd, serde::Serialize, serde::Deserialize,
 )]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct CommitHash([u8; 32]);
-
-impl Dupe for CommitHash {
-    fn dupe(&self) -> Self {
-        CommitHash(self.0)
-    }
-}
 
 impl Encode for CommitHash {
     fn encode_into(&self, out: &mut Vec<u8>) {

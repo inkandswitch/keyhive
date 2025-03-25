@@ -1,5 +1,6 @@
 use super::{
-    change_ref::JsChangeRef, event_handler::JsEventHandler, keyhive::JsKeyhive, signer::JsSigner,
+    change_ref::JsChangeRef, ciphertext_store::JsCiphertextStore, event_handler::JsEventHandler,
+    keyhive::JsKeyhive, signer::JsSigner,
 };
 use derive_more::{Display, From, Into};
 use keyhive_core::{archive::Archive, keyhive::Keyhive, keyhive::TryFromArchiveError};
@@ -30,12 +31,14 @@ impl JsArchive {
     #[wasm_bindgen(js_name = tryToKeyhive)]
     pub fn try_to_keyhive(
         &self,
+        ciphertext_store: JsCiphertextStore,
         signer: JsSigner,
         event_handler: &js_sys::Function,
     ) -> Result<JsKeyhive, JsTryFromArchiveError> {
         Ok(Keyhive::try_from_archive(
             &self.0,
             signer,
+            ciphertext_store,
             event_handler.clone().into(),
             rand::thread_rng(),
         )

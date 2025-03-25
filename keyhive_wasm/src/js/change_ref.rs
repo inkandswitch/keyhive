@@ -1,3 +1,4 @@
+use super::hex_string::HexString;
 use derive_more::{From, Into};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -18,5 +19,14 @@ impl JsChangeRef {
     #[wasm_bindgen(getter)]
     pub fn bytes(&self) -> Vec<u8> {
         self.0.clone()
+    }
+
+    pub(crate) fn to_hex_string(&self) -> HexString {
+        HexString::from_vec(self.0.to_vec())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn from_hex_string(hex_string: HexString) -> Result<Self, String> {
+        hex_string.to_vec().map(Self)
     }
 }

@@ -7,7 +7,10 @@ use std::{
 };
 
 use keyhive::KeyhiveCtx;
-use keyhive_core::{crypto::verifiable::Verifiable, keyhive::Keyhive};
+use keyhive_core::{
+    crypto::{encrypted::EncryptedContent, verifiable::Verifiable},
+    keyhive::Keyhive,
+};
 
 mod auth;
 pub(crate) use auth::Auth;
@@ -29,7 +32,18 @@ pub(crate) struct State<R: rand::Rng + rand::CryptoRng> {
     docs: HashMap<DocumentId, DocState>,
     docs_with_changes: HashSet<DocumentId>,
     auth: crate::auth::manager::Manager,
-    keyhive: Rc<futures::lock::Mutex<Keyhive<Signer, CommitHash, crate::keyhive::Listener, R>>>,
+    keyhive: Rc<
+        futures::lock::Mutex<
+            Keyhive<
+                Signer,
+                CommitHash,
+                Vec<u8>, // FIXME what shoudl go here?
+                HashMap<CommitHash, EncryptedContent<Vec<u8>, CommitHash>>,
+                crate::keyhive::Listener,
+                R,
+            >,
+        >,
+    >,
     streams: crate::streams::Streams,
     endpoints: endpoint::Endpoints,
     rng: Rc<RefCell<R>>,
@@ -42,7 +56,14 @@ impl<R: rand::Rng + rand::CryptoRng> State<R> {
     pub(crate) fn new(
         rng: R,
         signer: Signer,
-        keyhive: Keyhive<Signer, CommitHash, crate::keyhive::Listener, R>,
+        keyhive: Keyhive<
+            Signer,
+            CommitHash,
+            Vec<u8>,
+            HashMap<CommitHash, EncryptedContent<Vec<u8>, CommitHash>>,
+            crate::keyhive::Listener,
+            R,
+        >,
         docs: HashMap<DocumentId, DocState>,
         session_duration: Duration,
     ) -> Self {

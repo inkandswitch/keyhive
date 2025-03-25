@@ -11,6 +11,7 @@ use keyhive_core::{
     contact_card::ContactCard,
     crypto::{
         digest::Digest,
+        encrypted::EncryptedContent,
         signed::{Signed, SigningError},
         verifiable::Verifiable,
     },
@@ -742,7 +743,14 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
 }
 
 fn get_peer<R: rand::Rng + rand::CryptoRng>(
-    keyhive: &mut Keyhive<Signer, CommitHash, crate::keyhive::Listener, R>,
+    keyhive: &mut Keyhive<
+        Signer,
+        CommitHash,
+        Vec<u8>,
+        HashMap<CommitHash, EncryptedContent<Vec<u8>, CommitHash>>,
+        crate::keyhive::Listener,
+        R,
+    >,
     agent_id: KeyhiveEntityId,
 ) -> Option<keyhive_core::principal::peer::Peer<Signer, CommitHash, crate::keyhive::Listener>> {
     match agent_id {
