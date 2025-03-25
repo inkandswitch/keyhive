@@ -140,7 +140,7 @@ fn changes_published_after_sync() {
     let peer2_contact = network.beelay(&peer2).contact_card().unwrap();
     network
         .beelay(&peer1)
-        .add_member_to_doc(doc1_id, peer2_contact, MemberAccess::Read);
+        .add_member_to_doc(doc1_id, peer2_contact.into(), MemberAccess::Read);
 
     // Now connect the other peer
     let ConnectedPair { .. } = network.connect_stream(&peer2, &peer1);

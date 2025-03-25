@@ -425,15 +425,11 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
     pub(crate) async fn remove_member_from_group(
         &self,
         group_id: PeerId,
-        peer: PeerId,
+        member: keyhive_core::principal::agent::Agent<Signer, CommitHash, crate::keyhive::Listener>,
     ) -> Result<(), RevokeMemberError> {
         let k_mutex = self.0.borrow().keyhive.clone();
         let mut keyhive = k_mutex.lock().await;
 
-        let Some(agent) = keyhive.get_agent(peer.as_key().into()) else {
-            tracing::warn!("attempting to remove an agent we dont have");
-            return Ok(());
-        };
         if let Some(group) =
             keyhive
                 .groups()
@@ -443,7 +439,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         {
             let mut membered = Membered::from(group.clone());
             keyhive
-                .revoke_member(agent.agent_id().into(), true, &mut membered)
+                .revoke_member(member.agent_id().into(), true, &mut membered)
                 .await?;
             Ok(())
         } else {
