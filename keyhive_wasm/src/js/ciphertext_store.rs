@@ -1,4 +1,4 @@
-use super::{base64::Base64, change_ref::JsChangeRef};
+use super::{change_ref::JsChangeRef, hex_string::HexString};
 use keyhive_core::{crypto::encrypted::EncryptedContent, store::ciphertext::CiphertextStore};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -42,11 +42,13 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
 
             #[cfg(feature = "web-sys")]
             JsCiphertextStoreInner::WebStorage(ref store) => {
-                if let Some(base64_string) = store
-                    .get_item(&id.to_base64().as_str())
+                if let Some(hex_string) = store
+                    .get_item(&id.to_hex_string().as_str())
                     .map_err(JsWebStorageError::RetrievalError)?
                 {
-                    let bytes = Base64(base64_string).to_vec();
+                    let bytes = HexString(hex_string).to_vec().map_err(|e| {
+                        JsGetCiphertextError(JsWebStorageError::ConvertFromHexError(e))
+                    })?;
                     let encrypted = bincode::deserialize(&bytes)
                         .map_err(JsWebStorageError::DeserailizationError)?;
 
@@ -66,7 +68,7 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
             #[cfg(feature = "web-sys")]
             JsCiphertextStoreInner::WebStorage(ref store) => {
                 store
-                    .remove_item(&id.to_base64().as_str())
+                    .remove_item(&id.to_hex_string().as_str())
                     .map_err(JsRemoveCiphertextError)?;
             }
         };
@@ -75,9 +77,9 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
     }
 }
 
-#[wasm_bindgen(js_name = GetCiphertextError)]
+#[wasm_bindgen(js_name = RemoveCiphertextError)]
 #[derive(Debug, Error)]
-#[error("GetCiphertextError: {0:?}")]
+#[error("RemoveCiphertextError: {0:?}")]
 pub struct JsRemoveCiphertextError(JsValue);
 
 #[wasm_bindgen(js_name = GetCiphertextError)]
@@ -92,6 +94,9 @@ pub enum JsWebStorageError {
 
     #[error(transparent)]
     DeserailizationError(#[from] bincode::Error),
+
+    #[error("Error while removing item from web storage: {0:?}")]
+    ConvertFromHexError(String),
 }
 
 #[wasm_bindgen(js_class = GetCiphertextError)]
