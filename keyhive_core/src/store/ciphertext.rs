@@ -7,6 +7,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{encrypted::EncryptedContent, envelope::Envelope, symmetric_key::SymmetricKey},
 };
+use derive_where::derive_where;
 use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
@@ -281,13 +282,22 @@ impl<T: Clone, Cr: ContentRef, S: CiphertextStore<Cr, T>> CiphertextStore<Cr, T>
 }
 
 #[derive(Debug, Error)]
-#[error("Causal decryption error: {cannot}")]
 pub struct CausalDecryptionError<Cr: ContentRef, T, S: CiphertextStore<Cr, T>> {
     pub cannot: HashMap<Cr, ErrorReason<Cr, T, S>>,
     pub progress: CausalDecryptionState<Cr, T>,
 }
 
-#[derive(Debug, Error)]
+impl<Cr: ContentRef + Debug, T: Debug, S: CiphertextStore<Cr, T>> Display
+    for CausalDecryptionError<Cr, T, S>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let x = self.cannot.iter().collect::<Vec<_>>();
+        write!(f, "CausalDecryptionError({:?})", x)
+    }
+}
+
+#[derive(Error)]
+#[derive_where(Debug)]
 pub enum ErrorReason<Cr: ContentRef, T, S: CiphertextStore<Cr, T>> {
     #[error("GetCiphertextError: {0}")]
     GetCiphertextError(S::GetCiphertextError),
@@ -318,6 +328,7 @@ mod tests {
     };
     use rand::rngs::ThreadRng;
     use std::marker::PhantomData;
+    use testresult::TestResult;
 
     fn setup(
         plaintext: String,
@@ -355,7 +366,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_hash_map_get_ciphertext() {
+    async fn test_hash_map_get_ciphertext() -> TestResult {
         test_utils::init_logging();
 
         let mut csprng = rand::thread_rng();
@@ -393,10 +404,12 @@ mod tests {
 
         assert_eq!(store.get_ciphertext(&one_ref).await, Ok(Some(one)));
         assert_eq!(store.get_ciphertext(&two_ref).await, Ok(Some(two)));
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_try_causal_decrypt() {
+    async fn test_try_causal_decrypt() -> TestResult {
         test_utils::init_logging();
 
         let mut csprng = rand::thread_rng();
@@ -456,8 +469,7 @@ mod tests {
 
         let observed = store
             .try_causal_decrypt(&mut vec![(head.clone(), head_key)])
-            .await
-            .unwrap();
+            .await?;
 
         assert_eq!(observed.complete.len(), 4);
         assert!(observed
@@ -468,10 +480,12 @@ mod tests {
             .complete
             .contains(&(right_ref, "right".to_string())),);
         assert!(observed.complete.contains(&(head_ref, "head".to_string())),);
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_try_causal_decrypt_multiple_heads() {
+    async fn test_try_causal_decrypt_multiple_heads() -> TestResult {
         test_utils::init_logging();
 
         let mut csprng = rand::thread_rng();
@@ -569,8 +583,7 @@ mod tests {
                 (head2.clone(), head2_key),
                 (head3.clone(), head3_key),
             ])
-            .await
-            .unwrap();
+            .await?;
 
         // Doesn't have the unused head
         assert!(!observed
@@ -606,10 +619,12 @@ mod tests {
         assert_eq!(observed.keys.get(&right_ref), Some(&right_key));
         assert_eq!(observed.keys.get(&genesis1_ref), Some(&genesis1_key));
         assert_eq!(observed.keys.get(&genesis2_ref), Some(&genesis2_key));
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_incomplete_store() {
+    async fn test_incomplete_store() -> TestResult {
         test_utils::init_logging();
 
         let mut csprng = rand::thread_rng();
@@ -707,8 +722,7 @@ mod tests {
                 (head2.clone(), head2_key),
                 (head3.clone(), head3_key),
             ])
-            .await
-            .unwrap();
+            .await?;
 
         // Doesn't have the unused head
         assert!(!observed
@@ -745,5 +759,7 @@ mod tests {
         assert_eq!(observed.next.len(), 2);
         assert_eq!(observed.next.get(&genesis1_ref), Some(&genesis1_key));
         assert_eq!(observed.next.get(&genesis2_ref), Some(&genesis2_key));
+
+        Ok(())
     }
 }
