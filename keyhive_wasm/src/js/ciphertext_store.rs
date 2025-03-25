@@ -12,6 +12,7 @@ pub struct JsCiphertextStore {
 impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
     #[cfg(feature = "web-sys")]
     type GetCiphertextError = JsGetCiphertextError;
+    type MarkDecryptedError = JsRemoveCiphertextError;
 
     #[cfg(not(feature = "web-sys"))]
     type GetCiphertextError = std::convert::Infallible;
@@ -41,18 +42,27 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
         }
     }
 
-    async fn mark_decrypted(&mut self, id: &JsChangeRef) {
+    async fn mark_decrypted(&mut self, id: &JsChangeRef) -> Result<(), Self::MarkDecryptedError> {
         match self.inner {
             JsCiphertextStoreInner::Memory(ref mut store) => {
                 store.remove(id);
             }
             #[cfg(feature = "web-sys")]
             JsCiphertextStoreInner::WebStorage(ref store) => {
-                store.remove_item(&id.to_base64().as_str()).unwrap();
+                store
+                    .remove_item(&id.to_base64().as_str())
+                    .map_err(JsRemoveCiphertextError)?;
             }
-        }
+        };
+
+        Ok(())
     }
 }
+
+#[wasm_bindgen(js_name = GetCiphertextError)]
+#[derive(Debug, Error)]
+#[error("GetCiphertextError: {0:?}")]
+pub struct JsRemoveCiphertextError(JsValue);
 
 #[wasm_bindgen(js_name = GetCiphertextError)]
 #[derive(Debug, Error)]
