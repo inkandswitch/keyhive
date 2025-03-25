@@ -165,7 +165,7 @@ impl Event {
 
     pub fn add_member_to_doc(
         doc_id: DocumentId,
-        member: ContactCard,
+        member: KeyhiveEntityId,
         access: MemberAccess,
     ) -> (CommandId, Event) {
         let command_id = CommandId::new();

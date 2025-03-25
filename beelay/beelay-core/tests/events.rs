@@ -61,9 +61,11 @@ fn listen_emits_local_notifications() {
         .create_doc(vec![peer2_contact_card.into()])
         .unwrap();
     let peer2_contact = network.beelay(&peer2).contact_card().unwrap();
-    network
-        .beelay(&peer1)
-        .add_member_to_doc(doc_id.clone(), peer2_contact, MemberAccess::Write);
+    network.beelay(&peer1).add_member_to_doc(
+        doc_id.clone(),
+        peer2_contact.into(),
+        MemberAccess::Write,
+    );
 
     network.connect_stream(&peer1, &peer2);
 

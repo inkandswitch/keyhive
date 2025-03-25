@@ -202,7 +202,7 @@ impl BeelayHandle<'_> {
     pub fn add_member_to_doc(
         &mut self,
         doc: DocumentId,
-        member: ContactCard,
+        member: KeyhiveEntityId,
         access: MemberAccess,
     ) {
         let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();

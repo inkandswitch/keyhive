@@ -14,7 +14,7 @@ pub enum KeyhiveCommand {
     CreateContactCard,
     AddMemberToGroup(AddMemberToGroup),
     RemoveMemberFromGroup(RemoveMemberFromGroup),
-    AddMemberToDoc(DocumentId, ContactCard, MemberAccess),
+    AddMemberToDoc(DocumentId, KeyhiveEntityId, MemberAccess),
     RemoveMemberFromDoc(DocumentId, KeyhiveEntityId),
     QueryAccess(DocumentId),
     #[cfg(feature = "debug_events")]
@@ -187,15 +187,18 @@ where
 async fn add_member_to_doc<R: rand::Rng + rand::CryptoRng + 'static>(
     ctx: TaskContext<R>,
     doc_id: DocumentId,
-    peer_to_add: ContactCard,
+    peer_to_add: KeyhiveEntityId,
     access: MemberAccess,
 ) {
     tracing::debug!("adding member to document");
-    let agent = ctx.state().keyhive().register_peer(peer_to_add).await;
-    ctx.state()
-        .keyhive()
-        .add_member_to_doc(doc_id, agent.into(), access.into())
-        .await;
+    if let Some(agent) = ctx.state().keyhive().get_agent(peer_to_add).await {
+        ctx.state()
+            .keyhive()
+            .add_member_to_doc(doc_id, agent, access.into())
+            .await;
+    } else {
+        tracing::error!("member not found");
+    }
 }
 
 #[tracing::instrument(skip(ctx, peer_to_remove),fields(peer_to_remove=%peer_to_remove))]
@@ -251,24 +254,28 @@ where
 #[derive(Debug)]
 pub struct RemoveMemberFromGroup {
     pub group_id: PeerId,
-    pub peer_id: PeerId,
+    pub member: KeyhiveEntityId,
 }
 
-#[tracing::instrument(skip(ctx, peer_id),fields(peer_id=%peer_id))]
+#[tracing::instrument(skip(ctx, member))]
 async fn remove_member_from_group<R>(
     ctx: TaskContext<R>,
-    RemoveMemberFromGroup { group_id, peer_id }: RemoveMemberFromGroup,
+    RemoveMemberFromGroup { group_id, member }: RemoveMemberFromGroup,
 ) -> Result<(), error::RemoveMember>
 where
     R: rand::Rng + rand::CryptoRng + 'static,
 {
     tracing::debug!("removing member from group");
-    ctx.state()
-        .keyhive()
-        .remove_member_from_group(group_id, peer_id)
-        .await
-        .map_err(|e| error::RemoveMember(e.to_string()))?;
-    Ok(())
+    if let Some(agent) = ctx.state().keyhive().get_agent(member).await {
+        ctx.state()
+            .keyhive()
+            .remove_member_from_group(group_id, agent)
+            .await
+            .map_err(|e| error::RemoveMember(e.to_string()))
+    } else {
+        tracing::error!("member not found");
+        Ok(())
+    }
 }
 
 pub(crate) mod error {
