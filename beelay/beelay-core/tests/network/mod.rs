@@ -240,9 +240,12 @@ impl BeelayHandle<'_> {
     }
 
     #[allow(dead_code)]
-    pub fn create_group(&mut self) -> Result<beelay_core::PeerId, beelay_core::error::CreateGroup> {
+    pub fn create_group(
+        &mut self,
+        other_parents: Vec<KeyhiveEntityId>,
+    ) -> Result<beelay_core::PeerId, beelay_core::error::CreateGroup> {
         let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
-        let (command_id, event) = beelay_core::Event::create_group();
+        let (command_id, event) = beelay_core::Event::create_group(other_parents);
         beelay.inbox.push_back(event);
         self.network.run_until_quiescent();
         let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();

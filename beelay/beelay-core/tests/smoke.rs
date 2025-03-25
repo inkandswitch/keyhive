@@ -276,7 +276,7 @@ fn newly_accessible_documents_are_synced() {
     // syncs with Alice. He should have access to the doc.
 
     let charlie_contact = network.beelay(&charlie).contact_card().unwrap();
-    let group = network.beelay(&alice).create_group().unwrap();
+    let group = network.beelay(&alice).create_group(vec![]).unwrap();
     network
         .beelay(&alice)
         .add_member_to_group(AddMemberToGroup {

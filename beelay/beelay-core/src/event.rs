@@ -199,11 +199,11 @@ impl Event {
         (command_id, event)
     }
 
-    pub fn create_group() -> (CommandId, Event) {
+    pub fn create_group(other_owners: Vec<KeyhiveEntityId>) -> (CommandId, Event) {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::Keyhive(keyhive::KeyhiveCommand::CreateGroup),
+            Command::Keyhive(keyhive::KeyhiveCommand::CreateGroup(other_owners)),
         ));
         (command_id, event)
     }
