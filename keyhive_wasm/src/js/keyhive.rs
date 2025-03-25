@@ -1,4 +1,4 @@
-use super::ciphertext_store::JsMemoryCiphertextStore;
+use super::ciphertext_store::JsCiphertextStore;
 use super::contact_card::JsContactCard;
 use super::{
     access::JsAccess, add_member_error::JsAddMemberError, agent::JsAgent, archive::JsArchive,
@@ -28,7 +28,7 @@ pub struct JsKeyhive(
         JsSigner,
         JsChangeRef,
         Vec<u8>,
-        JsMemoryCiphertextStore,
+        JsCiphertextStore,
         JsEventHandler,
         rand::rngs::ThreadRng,
     >,
@@ -39,12 +39,13 @@ impl JsKeyhive {
     #[wasm_bindgen(constructor)]
     pub async fn new(
         signer: JsSigner,
+        ciphertext_store: JsCiphertextStore,
         event_handler: &js_sys::Function,
     ) -> Result<JsKeyhive, JsSigningError> {
         Ok(JsKeyhive(
             Keyhive::generate(
                 signer,
-                JsMemoryCiphertextStore::new(),
+                ciphertext_store,
                 JsEventHandler(event_handler.clone()),
                 rand::thread_rng(),
             )

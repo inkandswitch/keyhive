@@ -500,7 +500,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
         store: &mut C,
-    ) -> Result<CausalDecryptionState<T, P>, CausalDecryptionError<T, P>>
+    ) -> Result<CausalDecryptionState<T, P>, CausalDecryptionError<T, P, C>>
     where
         T: for<'de> Deserialize<'de>,
     {
@@ -516,10 +516,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
                 )]),
             })?;
 
-        let mut to_decrypt = vec![];
+        let mut to_decrypt: Vec<(EncryptedContent<P, T>, SymmetricKey)> = vec![];
         for (digest, symm_key) in entrypoint_envelope.ancestors.iter() {
-            let ciphertext = store.get_ciphertext(digest).await.expect("FIXME");
-            to_decrypt.push((ciphertext, *symm_key));
+            if let Some(ciphertext) = store.get_ciphertext(digest).await.expect("FIXME") {
+                to_decrypt.push((ciphertext, *symm_key));
+            } else {
+                todo!("FIXME")
+            }
         }
 
         store.try_causal_decrypt(&mut to_decrypt).await

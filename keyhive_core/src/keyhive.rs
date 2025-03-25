@@ -457,7 +457,7 @@ impl<
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
         encrypted: &EncryptedContent<P, T>,
-    ) -> Result<CausalDecryptionState<T, P>, CausalDecryptionError<T, P>>
+    ) -> Result<CausalDecryptionState<T, P>, CausalDecryptionError<T, P, C>>
     where
         T: for<'de> Deserialize<'de>,
         P: Serialize + Clone,

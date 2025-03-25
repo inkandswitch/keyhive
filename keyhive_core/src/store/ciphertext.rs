@@ -4,9 +4,11 @@ use crate::{
     content::reference::ContentRef,
     crypto::{encrypted::EncryptedContent, envelope::Envelope, symmetric_key::SymmetricKey},
 };
-use serde::{Deserialize, Serialize};
+use serde::{ser::Impossible, Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
+    convert::Infallible,
+    fmt::{Debug, Display},
     future::Future,
 };
 use thiserror::Error;
@@ -25,18 +27,23 @@ use tracing::instrument;
 /// This is generally accomplished by either removing the decrypted values from the store,
 /// or — more commonly — by tracking which values have been decrypted and simply not
 /// hitting the backing store on requests for those IDs.
-pub trait CiphertextStore<Cr: ContentRef, T> {
+pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
+    type GetCiphertextError: Debug + Display;
+
     #[cfg(feature = "sendable")]
     fn get_ciphertext(
         &self,
         id: &Cr,
-    ) -> impl Future<Output = Option<EncryptedContent<T, Cr>>> + Send;
+    ) -> impl Future<Output = Result<Option<EncryptedContent<T, Cr>>, Self::GetCiphertextError>> + Send;
 
     #[cfg(feature = "sendable")]
     fn mark_decrypted(&mut self, id: &Cr) -> impl Future<Output = ()>;
 
     #[cfg(not(feature = "sendable"))]
-    fn get_ciphertext(&self, id: &Cr) -> impl Future<Output = Option<EncryptedContent<T, Cr>>>;
+    fn get_ciphertext(
+        &self,
+        id: &Cr,
+    ) -> impl Future<Output = Result<Option<EncryptedContent<T, Cr>>, Self::GetCiphertextError>>;
 
     #[cfg(not(feature = "sendable"))]
     fn mark_decrypted(&mut self, id: &Cr) -> impl Future<Output = ()>;
@@ -118,7 +125,7 @@ pub trait CiphertextStore<Cr: ContentRef, T> {
     async fn try_causal_decrypt(
         &mut self,
         to_decrypt: &mut Vec<(EncryptedContent<T, Cr>, SymmetricKey)>,
-    ) -> Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<Cr, T>>
+    ) -> Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<Cr, T, Self>>
     where
         Cr: for<'de> Deserialize<'de>,
         T: Clone + Serialize + for<'de> Deserialize<'de>,
@@ -154,7 +161,18 @@ pub trait CiphertextStore<Cr: ContentRef, T> {
                 })?;
 
             for (ancestor_ref, ancestor_key) in envelope.ancestors.iter() {
-                if let Some(ancestor) = self.get_ciphertext(&ancestor_ref).await {
+                if let Some(ancestor) =
+                    self.get_ciphertext(&ancestor_ref)
+                        .await
+                        .map_err(|e| CausalDecryptionError {
+                            progress: acc.clone(),
+                            // FIXME possibly many? else remove the hashmap
+                            cannot: HashMap::from_iter([(
+                                ancestor_ref.clone(),
+                                ErrorReason::GetCiphertextError(e),
+                            )]),
+                        })?
+                {
                     to_decrypt.push((ancestor, *ancestor_key));
                 } else {
                     acc.next.insert(ancestor_ref.clone(), *ancestor_key);
@@ -191,9 +209,11 @@ impl<T, Cr: ContentRef> CausalDecryptionState<Cr, T> {
 }
 
 impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for HashMap<Cr, EncryptedContent<T, Cr>> {
+    type GetCiphertextError = Infallible;
+
     #[instrument(skip(self))]
-    async fn get_ciphertext(&self, id: &Cr) -> Option<EncryptedContent<T, Cr>> {
-        HashMap::get(self, id).cloned()
+    async fn get_ciphertext(&self, id: &Cr) -> Result<Option<EncryptedContent<T, Cr>>, Infallible> {
+        Ok(HashMap::get(self, id).cloned())
     }
 
     async fn mark_decrypted(&mut self, id: &Cr) {
@@ -203,18 +223,21 @@ impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for HashMap<Cr, EncryptedC
 
 #[derive(Debug, Error)]
 #[error("Causal decryption error: {cannot}")]
-pub struct CausalDecryptionError<Cr: ContentRef, T> {
-    pub cannot: HashMap<Cr, ErrorReason<Cr>>,
+pub struct CausalDecryptionError<Cr: ContentRef, T, S: CiphertextStore<Cr, T>> {
+    pub cannot: HashMap<Cr, ErrorReason<Cr, T, S>>,
     pub progress: CausalDecryptionState<Cr, T>,
 }
 
 #[derive(Debug, Error)]
-pub enum ErrorReason<Cr: ContentRef> {
-    #[error("Decryption failed")]
-    DecryptionFailed(SymmetricKey),
+pub enum ErrorReason<Cr: ContentRef, T, S: CiphertextStore<Cr, T>> {
+    #[error("GetCiphertextError: {0}")]
+    GetCiphertextError(S::GetCiphertextError),
 
     #[error(transparent)]
-    DeserializationFailed(Box<bincode::Error>),
+    DeserializationFailed(#[from] Box<bincode::Error>),
+
+    #[error("Decryption failed")]
+    DecryptionFailed(SymmetricKey),
 
     #[error("Cannot find ciphertext for ref")]
     CannotFindCiphertext(Cr),
