@@ -5,13 +5,13 @@ use std::{
 
 use beelay_core::{
     conn_info,
+    contact_card::ContactCard,
     io::{IoAction, IoResult},
     keyhive::{KeyhiveCommandResult, KeyhiveEntityId, MemberAccess},
     BundleSpec, CommandResult, CommitHash, CommitOrBundle, DocumentId, Event, PeerId, StreamId,
     UnixTimestampMillis,
 };
 use ed25519_dalek::SigningKey;
-use keyhive_core::contact_card::ContactCard;
 use signature::SignerMut;
 
 #[allow(dead_code)]

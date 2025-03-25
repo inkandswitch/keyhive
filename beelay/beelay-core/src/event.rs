@@ -1,10 +1,9 @@
-use keyhive_core::contact_card::ContactCard;
-
 use crate::{
     commands::{
         keyhive::{self, AddMemberToGroup, KeyhiveEntityId, MemberAccess, RemoveMemberFromGroup},
         Command,
     },
+    contact_card::ContactCard,
     io::{self, IoResult},
     network::InnerRpcResponse,
     Audience, CommandId, Commit, CommitBundle, DocumentId, EndpointId, OutboundRequestId,
