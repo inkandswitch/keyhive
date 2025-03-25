@@ -471,6 +471,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             .map_err(|_| DecryptError::KeyNotFound)?
             .decryption_key_for(encrypted_content)
             .map_err(|_| DecryptError::KeyNotFound)?;
+
         let mut plaintext = encrypted_content.ciphertext.clone();
         decrypt_key
             .try_decrypt(encrypted_content.nonce, &mut plaintext)
@@ -495,21 +496,22 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     )]
     pub async fn try_causal_decrypt_content<
         C: CiphertextStore<T, P>,
-        P: for<'de> Deserialize<'de> + Serialize + Clone, // FIXME why serilaize?
+        P: for<'de> Deserialize<'de> + Serialize + Clone,
     >(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
         store: &mut C,
-    ) -> Result<CausalDecryptionState<T, P>, CausalDecryptionError<T, P, C>>
+    ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<T, P, C>>
     where
         T: for<'de> Deserialize<'de>,
     {
-        let raw_entrypoint = self.try_decrypt_content(encrypted_content).expect("FIXME");
-        let acc = CausalDecryptionState::new(); // FIXME maybe just a new error
+        let raw_entrypoint = self.try_decrypt_content(encrypted_content)?;
+
+        let mut acc = CausalDecryptionState::new();
 
         let entrypoint_envelope: Envelope<T, Vec<u8>> =
             bincode::deserialize(raw_entrypoint.as_slice()).map_err(|e| CausalDecryptionError {
-                progress: acc,
+                progress: acc.clone(),
                 cannot: HashMap::from_iter([(
                     encrypted_content.content_ref.clone(),
                     ErrorReason::DeserializationFailed(e.into()),
@@ -518,14 +520,18 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
 
         let mut to_decrypt: Vec<(EncryptedContent<P, T>, SymmetricKey)> = vec![];
         for (digest, symm_key) in entrypoint_envelope.ancestors.iter() {
-            if let Some(ciphertext) = store.get_ciphertext(digest).await.expect("FIXME") {
+            if let Some(ciphertext) = store
+                .get_ciphertext(digest)
+                .await
+                .map_err(DocCausalDecryptionError::GetCiphertextError)?
+            {
                 to_decrypt.push((ciphertext, *symm_key));
             } else {
-                todo!("FIXME")
+                acc.next.insert(digest.clone(), *symm_key);
             }
         }
 
-        store.try_causal_decrypt(&mut to_decrypt).await
+        Ok(store.try_causal_decrypt(&mut to_decrypt).await?)
     }
 
     #[instrument(skip(self), fields(doc_id = ?self.doc_id()))]
@@ -656,6 +662,18 @@ pub enum GenerateDocError {
 
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
+}
+
+#[derive(Debug, Error)]
+pub enum DocCausalDecryptionError<T: ContentRef, P, C: CiphertextStore<T, P>> {
+    #[error(transparent)]
+    CausalDecryptionError(#[from] CausalDecryptionError<T, P, C>),
+
+    #[error("{0}")]
+    GetCiphertextError(C::GetCiphertextError),
+
+    #[error("Cannot decrypt entrypoint: {0}")]
+    EntrypointDecryptError(#[from] DecryptError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

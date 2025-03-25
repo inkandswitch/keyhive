@@ -9,6 +9,7 @@ pub struct JsRevokeMemberError(#[from] pub(crate) RevokeMemberError);
 
 #[wasm_bindgen(js_class = "RevokeMemberError")]
 impl JsRevokeMemberError {
+    #[wasm_bindgen(getter)]
     pub fn message(&self) -> String {
         self.0.to_string()
     }

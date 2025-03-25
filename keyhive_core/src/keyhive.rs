@@ -24,9 +24,9 @@ use crate::{
         active::Active,
         agent::{id::AgentId, Agent},
         document::{
-            id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError, Document, EncryptError,
-            EncryptedContentWithUpdate, GenerateDocError, MissingIndividualError,
-            RevokeMemberUpdate,
+            id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError,
+            DocCausalDecryptionError, Document, EncryptError, EncryptedContentWithUpdate,
+            GenerateDocError, MissingIndividualError, RevokeMemberUpdate,
         },
         group::{
             delegation::{Delegation, StaticDelegation},
@@ -47,7 +47,7 @@ use crate::{
         public::Public,
     },
     store::{
-        ciphertext::{CausalDecryptionError, CausalDecryptionState, CiphertextStore},
+        ciphertext::{CausalDecryptionState, CiphertextStore},
         delegation::DelegationStore,
         revocation::RevocationStore,
     },
@@ -457,7 +457,7 @@ impl<
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
         encrypted: &EncryptedContent<P, T>,
-    ) -> Result<CausalDecryptionState<T, P>, CausalDecryptionError<T, P, C>>
+    ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<T, P, C>>
     where
         T: for<'de> Deserialize<'de>,
         P: Serialize + Clone,
