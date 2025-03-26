@@ -261,7 +261,7 @@ impl<T, Cr: ContentRef> CausalDecryptionState<Cr, T> {
     }
 }
 
-impl<Cr: ContentRef, T, C: CiphertextStore<Cr, P>> CiphertextStore<Cr, T> for Rc<RefCell<C>> {
+impl<Cr: ContentRef, T, C: CiphertextStore<Cr, T>> CiphertextStore<Cr, T> for Rc<RefCell<C>> {
     type GetCiphertextError = C::GetCiphertextError;
     type MarkDecryptedError = C::MarkDecryptedError;
 

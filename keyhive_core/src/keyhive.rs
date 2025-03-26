@@ -463,7 +463,7 @@ impl<
         P: Serialize + Clone,
     {
         doc.borrow_mut()
-            .try_causal_decrypt_content(encrypted, self.ciphertext_store.dupe())
+            .try_causal_decrypt_content(encrypted, &mut self.ciphertext_store)
             .await
     }
 
@@ -1157,7 +1157,7 @@ impl<
     pub fn try_from_archive(
         archive: &Archive<T>,
         signer: S,
-        ciphertext_store: Rc<RefCell<C>>,
+        ciphertext_store: C,
         listener: L,
         csprng: R,
     ) -> Result<Self, TryFromArchiveError<S, T, L>> {
@@ -1473,7 +1473,7 @@ impl<
         Keyhive::try_from_archive(
             &self.into_archive(),
             self.active.borrow().signer.clone(),
-            self.ciphertext_store.dupe(),
+            self.ciphertext_store.clone(),
             Log::new(),
             self.csprng.clone(),
         )

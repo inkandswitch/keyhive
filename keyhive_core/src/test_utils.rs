@@ -1,5 +1,3 @@
-use std::{cell::RefCell, rc::Rc};
-
 use crate::{
     crypto::{signed::SigningError, signer::memory::MemorySigner},
     keyhive::Keyhive,
@@ -21,11 +19,5 @@ pub async fn make_simple_keyhive() -> Result<
 > {
     let mut csprng = rand::thread_rng();
     let sk = MemorySigner::generate(&mut csprng);
-    Ok(Keyhive::generate(
-        sk,
-        Rc::new(RefCell::new(MemoryCiphertextStore::new())),
-        NoListener,
-        csprng,
-    )
-    .await?)
+    Ok(Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng).await?)
 }

@@ -3,7 +3,6 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use futures::channel::mpsc;
 use futures::channel::oneshot;
-use keyhive_core::crypto::encrypted::EncryptedContent;
 use keyhive_core::keyhive::Keyhive;
 use keyhive_core::store::ciphertext::memory::MemoryCiphertextStore;
 
@@ -84,7 +83,7 @@ pub(crate) async fn load_keyhive<R: rand::Rng + rand::CryptoRng + Clone + 'stati
         match keyhive_core::keyhive::Keyhive::try_from_archive(
             &archive,
             signer.clone(),
-            Rc::new(RefCell::new(MemoryCiphertextStore::new())), // FIXME use exitsing!
+            MemoryCiphertextStore::new(), // FIXME use exitsing!
             listener.clone(),
             rng.clone(),
         ) {
@@ -96,9 +95,7 @@ pub(crate) async fn load_keyhive<R: rand::Rng + rand::CryptoRng + Clone + 'stati
                 tracing::error!(err=?e, "failed to load keyhive archive");
                 keyhive_core::keyhive::Keyhive::generate(
                     signer,
-                    Rc::new(RefCell::new(
-                        MemoryCiphertextStore::new(/* FIXME use something else! */),
-                    )),
+                    MemoryCiphertextStore::new(/* FIXME use something else! */),
                     listener.clone(),
                     rng.clone(),
                 )
@@ -110,7 +107,7 @@ pub(crate) async fn load_keyhive<R: rand::Rng + rand::CryptoRng + Clone + 'stati
         tracing::trace!("no archive found on disk, creating a new one");
         let result = keyhive_core::keyhive::Keyhive::generate(
             signer,
-            Rc::new(RefCell::new(MemoryCiphertextStore::new(/* FIXME */))),
+            MemoryCiphertextStore::new(/* FIXME */),
             listener.clone(),
             rng.clone(),
         )
