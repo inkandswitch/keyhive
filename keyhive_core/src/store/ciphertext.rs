@@ -4,8 +4,12 @@ pub mod memory;
 
 use self::memory::MemoryCiphertextStore;
 use crate::{
+    cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::{encrypted::EncryptedContent, envelope::Envelope, symmetric_key::SymmetricKey},
+    crypto::{
+        digest::Digest, encrypted::EncryptedContent, envelope::Envelope, signed::Signed,
+        symmetric_key::SymmetricKey,
+    },
 };
 use derive_where::derive_where;
 use serde::{Deserialize, Serialize};
@@ -37,6 +41,7 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     type GetCiphertextError: Debug + Display;
     type MarkDecryptedError: Debug + Display;
 
+    // FIXME make this into a macro, or maybe use their macro and switch at the call site?
     #[cfg(feature = "sendable")]
     fn get_ciphertext(
         &self,
@@ -51,6 +56,25 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
         &self,
         id: &Cr,
     ) -> impl Future<Output = Result<Option<EncryptedContent<T, Cr>>, Self::GetCiphertextError>>;
+
+    //////////
+
+    #[cfg(feature = "sendable")]
+    fn get_ciphertexts_by_pcs_update(
+        &self,
+        pcs_udpate: &Digest<Signed<CgkaOperation>>,
+    ) -> impl Future<Output = Result<Vec<EncryptedContent<T, Cr>>, Self::GetCiphertextError>> + Send;
+
+    #[cfg(feature = "sendable")]
+    fn mark_decrypted(&mut self, id: &Cr) -> impl Future<Output = ()>;
+
+    #[cfg(not(feature = "sendable"))]
+    fn get_ciphertext_by_pcs_update(
+        &self,
+        pcs_update: &Digest<Signed<CgkaOperation>>,
+    ) -> impl Future<Output = Result<Vec<EncryptedContent<T, Cr>>, Self::GetCiphertextError>>;
+
+    //////////
 
     #[cfg(not(feature = "sendable"))]
     fn mark_decrypted(
@@ -239,6 +263,20 @@ impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for HashMap<Cr, EncryptedC
         Ok(HashMap::get(self, id).cloned())
     }
 
+    async fn get_ciphertext_by_pcs_update(
+        &self,
+        _pcs_update: &Digest<Signed<CgkaOperation>>,
+    ) -> Result<Vec<EncryptedContent<T, Cr>>, Infallible> {
+        todo!()
+        // let mut acc = vec![];
+        // for (id, ciphertext) in self.iter() {
+        //     if ciphertext.pcs_update_op_hash == Digest::hash(pcs_update) {
+        //         acc.push(ciphertext.clone());
+        //     }
+        // }
+        // Ok(acc)
+    }
+
     #[instrument(skip(self))]
     async fn mark_decrypted(&mut self, id: &Cr) -> Result<(), Infallible> {
         self.remove(id);
@@ -250,14 +288,23 @@ impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for MemoryCiphertextStore<
     type GetCiphertextError = Infallible;
     type MarkDecryptedError = Infallible;
 
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     async fn get_ciphertext(&self, id: &Cr) -> Result<Option<EncryptedContent<T, Cr>>, Infallible> {
-        self.store.get_ciphertext(id).await
+        Ok(self.get(id))
     }
 
-    #[instrument(skip(self))]
-    async fn mark_decrypted(&mut self, id: &Cr) -> Result<(), Infallible> {
-        self.store.mark_decrypted(id).await
+    #[instrument(level = "debug", skip(self))]
+    async fn get_ciphertext_by_pcs_update(
+        &self,
+        pcs_update: &Digest<Signed<CgkaOperation>>,
+    ) -> Result<Vec<EncryptedContent<T, Cr>>, Infallible> {
+        Ok(self.get_by_pcs_update(pcs_update))
+    }
+
+    #[instrument(level = "debug", skip(self))]
+    async fn mark_decrypted(&mut self, content_ref: &Cr) -> Result<(), Infallible> {
+        self.remove_all(content_ref);
+        Ok(())
     }
 }
 
@@ -267,7 +314,7 @@ impl<T: Clone, Cr: ContentRef, S: CiphertextStore<Cr, T>> CiphertextStore<Cr, T>
     type GetCiphertextError = S::GetCiphertextError;
     type MarkDecryptedError = S::MarkDecryptedError;
 
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     async fn get_ciphertext(
         &self,
         id: &Cr,
@@ -275,7 +322,15 @@ impl<T: Clone, Cr: ContentRef, S: CiphertextStore<Cr, T>> CiphertextStore<Cr, T>
         self.borrow().get_ciphertext(id).await
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
+    async fn get_ciphertext_by_pcs_update(
+        &self,
+        pcs_update: &Digest<Signed<CgkaOperation>>,
+    ) -> Result<Vec<EncryptedContent<T, Cr>>, Infallible> {
+        self.get_ciphertext_by_pcs_update(pcs_update).await
+    }
+
+    #[instrument(level = "debug", skip(self))]
     async fn mark_decrypted(&mut self, id: &Cr) -> Result<(), Self::MarkDecryptedError> {
         self.borrow_mut().mark_decrypted(id).await
     }

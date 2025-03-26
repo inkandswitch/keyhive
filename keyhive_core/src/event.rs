@@ -6,7 +6,7 @@ use self::static_event::StaticEvent;
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{encrypted::EncryptedContent, signed::Signed, signer::async_signer::AsyncSigner},
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
         group::{
@@ -15,6 +15,7 @@ use crate::{
         },
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
     },
+    store::ciphertext::CiphertextStore,
 };
 use derive_more::{From, TryInto};
 use derive_where::derive_where;
@@ -40,6 +41,27 @@ pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S
 
     /// A delegation was revoked.
     Revoked(Rc<Signed<Revocation<S, T, L>>>),
+}
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> {
+    pub async fn what_can_i_decrypt_now<P, C: CiphertextStore<T, P>>(
+        new_events: &[Event<S, T, L>],
+        ciphertext_store: C,
+    ) -> Vec<&EncryptedContent<P, T>> {
+        let mut acc = vec![];
+
+        // FIXME switch to fold
+        for event in new_events {
+            if let Event::CgkaOperation(cgka) = event {
+                // FIXME put doc_id trait on Signed{}
+                let doc_id = cgka.dupe().borrow().payload.doc_id();
+
+                ciphertext_store.get_ciphertext(id);
+            }
+        }
+
+        acc
+    }
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<KeyOp> for Event<S, T, L> {
