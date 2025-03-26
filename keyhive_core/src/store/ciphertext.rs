@@ -15,6 +15,7 @@ use derive_where::derive_where;
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     convert::Infallible,
     fmt::{Debug, Display},
@@ -257,6 +258,32 @@ impl<T, Cr: ContentRef> CausalDecryptionState<Cr, T> {
             keys: HashMap::new(),
             next: HashMap::new(),
         }
+    }
+}
+
+impl<Cr: ContentRef, T, C: CiphertextStore<Cr, P>> CiphertextStore<Cr, T> for Rc<RefCell<C>> {
+    type GetCiphertextError = C::GetCiphertextError;
+    type MarkDecryptedError = C::MarkDecryptedError;
+
+    #[instrument(level = "debug", skip(self))]
+    async fn get_ciphertext(
+        &self,
+        cr: &Cr,
+    ) -> Result<Option<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError> {
+        self.borrow().get_ciphertext(cr).await
+    }
+
+    #[instrument(level = "debug", skip(self))]
+    async fn get_ciphertext_by_pcs_update(
+        &self,
+        pcs_update: &Digest<Signed<CgkaOperation>>,
+    ) -> Result<Vec<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError> {
+        self.borrow().get_ciphertext_by_pcs_update(pcs_update).await
+    }
+
+    #[instrument(level = "debug", skip(self))]
+    async fn mark_decrypted(&mut self, content_ref: &Cr) -> Result<(), Self::MarkDecryptedError> {
+        self.borrow_mut().mark_decrypted(content_ref).await
     }
 }
 

@@ -102,7 +102,7 @@ pub struct Keyhive<
 
     /// Storeage for ciphertexts that cannot yet be decrypted.
     #[derivative(PartialEq = "ignore")]
-    ciphertext_store: Rc<RefCell<C>>,
+    ciphertext_store: C,
 
     /// Cryptographically secure (pseudo)random number generator.
     #[derivative(PartialEq = "ignore")]
@@ -133,7 +133,7 @@ impl<
     #[instrument(skip_all)]
     pub async fn generate(
         signer: S,
-        ciphertext_store: Rc<RefCell<C>>,
+        ciphertext_store: C,
         event_listener: L,
         mut csprng: R,
     ) -> Result<Self, SigningError> {
