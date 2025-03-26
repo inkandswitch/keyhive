@@ -102,7 +102,7 @@ pub struct Keyhive<
 
     /// Storeage for ciphertexts that cannot yet be decrypted.
     #[derivative(PartialEq = "ignore")]
-    ciphertext_store: C,
+    ciphertext_store: Rc<RefCell<C>>,
 
     /// Cryptographically secure (pseudo)random number generator.
     #[derivative(PartialEq = "ignore")]
@@ -133,7 +133,7 @@ impl<
     #[instrument(skip_all)]
     pub async fn generate(
         signer: S,
-        ciphertext_store: C,
+        ciphertext_store: Rc<RefCell<C>>,
         event_listener: L,
         mut csprng: R,
     ) -> Result<Self, SigningError> {
@@ -463,7 +463,7 @@ impl<
         P: Serialize + Clone,
     {
         doc.borrow_mut()
-            .try_causal_decrypt_content(encrypted, &mut self.ciphertext_store)
+            .try_causal_decrypt_content(encrypted, self.ciphertext_store.dupe())
             .await
     }
 
@@ -1157,7 +1157,7 @@ impl<
     pub fn try_from_archive(
         archive: &Archive<T>,
         signer: S,
-        ciphertext_store: C,
+        ciphertext_store: Rc<RefCell<C>>,
         listener: L,
         csprng: R,
     ) -> Result<Self, TryFromArchiveError<S, T, L>> {
@@ -1461,7 +1461,7 @@ impl<
 impl<
         S: AsyncSigner + Clone,
         T: ContentRef + Clone,
-        P: for<'de> Deserialize<'de>,
+        P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone, // FIXME make the default Rc<RefCell<...>>
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore + Clone,
@@ -1473,7 +1473,7 @@ impl<
         Keyhive::try_from_archive(
             &self.into_archive(),
             self.active.borrow().signer.clone(),
-            self.ciphertext_store.clone(),
+            self.ciphertext_store.dupe(),
             Log::new(),
             self.csprng.clone(),
         )
@@ -1484,7 +1484,7 @@ impl<
 impl<
         S: AsyncSigner + Clone,
         T: ContentRef + Clone,
-        P: for<'de> Deserialize<'de>,
+        P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone,
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore + Clone,

@@ -1,5 +1,4 @@
-use dupe::Dupe;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     cgka::operation::CgkaOperation,
@@ -7,88 +6,47 @@ use crate::{
     crypto::{digest::Digest, encrypted::EncryptedContent, signed::Signed},
 };
 
-#[derive(Debug, Clone, Dupe, PartialEq, Eq)]
-pub struct MemoryCiphertextStore<T: ContentRef, P>(pub(crate) Rc<RefCell<Inner<T, P>>>);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryCiphertextStore<Cr: ContentRef, P> {
+    pub(crate) ops_to_refs: HashMap<Digest<Signed<CgkaOperation>>, HashSet<Cr>>,
+    pub(crate) refs_to_digests: HashMap<Cr, HashSet<Digest<EncryptedContent<P, Cr>>>>,
+    pub(crate) store: HashMap<Digest<EncryptedContent<P, Cr>>, (ByteSize, EncryptedContent<P, Cr>)>,
+}
 
-impl<T: ContentRef, P> MemoryCiphertextStore<T, P> {
+impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     pub fn new() -> Self {
-        MemoryCiphertextStore(Rc::new(RefCell::new(Inner::new())))
+        Self {
+            ops_to_refs: HashMap::new(),
+            refs_to_digests: HashMap::new(),
+            store: HashMap::new(),
+        }
     }
 
-    pub fn get(&self, content_ref: &T) -> Option<EncryptedContent<P, T>>
-    where
-        P: Clone,
-    {
-        let inner = self.0.borrow();
-        inner.get(content_ref).cloned()
+    pub fn get_by_content_ref(&self, content_ref: &Cr) -> Option<&EncryptedContent<P, Cr>> {
+        let digests = self.refs_to_digests.get(content_ref)?;
+
+        let xs = digests
+            .iter()
+            .map(|digest| self.store.get(digest))
+            .collect::<Option<Vec<_>>>()?;
+        let (_, largest) = xs.iter().max_by_key(|(size, _)| size)?;
+        Some(largest)
     }
 
     pub fn get_by_pcs_update(
         &self,
         pcs_update_op: &Digest<Signed<CgkaOperation>>,
-    ) -> Vec<EncryptedContent<P, T>>
-    where
-        P: Clone,
-    {
-        let inner = self.0.borrow();
-        inner
-            .get_by_pcs_update(pcs_update_op)
-            .into_iter()
-            .cloned()
-            .collect()
-    }
-
-    pub fn insert(&mut self, encrypted: EncryptedContent<P, T>) {
-        self.0.borrow_mut().insert(encrypted);
-    }
-
-    pub fn remove(
-        &mut self,
-        content_ref: &T,
-        digest: &Digest<EncryptedContent<P, T>>,
-    ) -> Option<EncryptedContent<P, T>> {
-        self.0.borrow_mut().remove(content_ref, digest)
-    }
-
-    pub fn remove_all(&mut self, content_ref: &T) -> bool {
-        self.0.borrow_mut().remove_all(content_ref)
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct Inner<T: ContentRef, P> {
-    pub(crate) index: HashMap<Digest<Signed<CgkaOperation>>, Vec<T>>,
-    pub(crate) store:
-        HashMap<T, HashMap<Digest<EncryptedContent<P, T>>, (ByteSize, EncryptedContent<P, T>)>>,
-}
-
-impl<T: ContentRef, P> Inner<T, P> {
-    pub fn new() -> Self {
-        Inner {
-            store: HashMap::new(),
-            index: HashMap::new(),
-        }
-    }
-
-    pub fn get(&self, content_ref: &T) -> Option<&EncryptedContent<P, T>> {
-        self.store.get(content_ref).and_then(|xs| {
-            let (_, largest) = xs.values().max_by_key(|(size, _)| size)?;
-            Some(largest)
-        })
-    }
-
-    fn get_by_pcs_update(
-        &self,
-        pcs_update_op: &Digest<Signed<CgkaOperation>>,
-    ) -> Vec<&EncryptedContent<P, T>> {
-        self.index
+    ) -> Vec<&EncryptedContent<P, Cr>> {
+        self.ops_to_refs
             .get(pcs_update_op)
             .iter()
-            .fold(vec![], |mut acc, hashes| {
-                for hash in hashes.iter() {
-                    if let Some(entry) = self.store.get(hash) {
-                        for (_, encrypted) in entry.values() {
-                            acc.push(encrypted);
+            .fold(vec![], |mut acc, content_refs| {
+                for content_ref in content_refs.iter() {
+                    if let Some(digests) = self.refs_to_digests.get(content_ref) {
+                        for digest in digests.iter() {
+                            if let Some((_, encrypted)) = self.store.get(digest) {
+                                acc.push(encrypted);
+                            }
                         }
                     }
                 }
@@ -97,42 +55,80 @@ impl<T: ContentRef, P> Inner<T, P> {
             })
     }
 
-    pub fn insert(&mut self, encrypted: EncryptedContent<P, T>) {
+    pub fn insert(&mut self, encrypted: EncryptedContent<P, Cr>) {
+        let digest = Digest::hash(&encrypted);
         let content_ref = encrypted.content_ref.clone();
         let pcs_update_op_hash = encrypted.pcs_update_op_hash;
 
-        self.store
-            .entry(content_ref.clone())
-            .or_insert_with(HashMap::new)
-            .insert(
-                Digest::hash(&encrypted),
-                (ByteSize(encrypted.ciphertext.len()), encrypted),
-            );
+        if self
+            .store
+            .insert(digest, (ByteSize(encrypted.ciphertext.len()), encrypted))
+            .is_some()
+        {
+            return;
+        }
 
-        self.index
+        self.ops_to_refs
             .entry(pcs_update_op_hash)
-            .or_insert_with(Vec::new)
-            .push(content_ref);
+            .or_default()
+            .insert(content_ref.clone());
+
+        self.refs_to_digests
+            .entry(content_ref)
+            .or_default()
+            .insert(digest);
     }
 
     pub fn remove(
         &mut self,
-        content_ref: &T,
-        digest: &Digest<EncryptedContent<P, T>>,
-    ) -> Option<EncryptedContent<P, T>> {
-        let entry = self.store.get_mut(content_ref)?;
-        let encrypted = entry.remove(digest).map(|(_, ciphertext)| ciphertext)?;
+        digest: &Digest<EncryptedContent<P, Cr>>,
+    ) -> Option<EncryptedContent<P, Cr>> {
+        let (_, encrypted) = self.store.remove(digest)?;
 
-        if entry.is_empty() {
-            self.store.remove(content_ref);
-            self.index.remove(&encrypted.pcs_update_op_hash);
+        self.ops_to_refs
+            .entry(encrypted.pcs_update_op_hash)
+            .and_modify(|crs| {
+                crs.remove(&encrypted.content_ref);
+            });
+
+        if self
+            .ops_to_refs
+            .get(&encrypted.pcs_update_op_hash)?
+            .is_empty()
+        {
+            self.ops_to_refs.remove(&encrypted.pcs_update_op_hash);
+        }
+
+        self.refs_to_digests
+            .entry(encrypted.content_ref.clone())
+            .and_modify(|digests| {
+                digests.remove(digest);
+            });
+
+        if let Some(digests) = self.refs_to_digests.get(&encrypted.content_ref) {
+            if digests.is_empty() {
+                self.refs_to_digests.remove(&encrypted.content_ref);
+            }
         }
 
         Some(encrypted)
     }
 
-    pub fn remove_all(&mut self, content_ref: &T) -> bool {
-        self.store.remove(content_ref).is_some()
+    pub fn remove_all(&mut self, content_ref: &Cr) -> bool {
+        if let Some(digests) = self.refs_to_digests.remove(content_ref) {
+            for digest in digests.iter() {
+                self.store.remove(&digest);
+            }
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl<T: ContentRef, P> Default for MemoryCiphertextStore<T, P> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

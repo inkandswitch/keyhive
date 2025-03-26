@@ -43,36 +43,48 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
 
     // FIXME make this into a macro, or maybe use their macro and switch at the call site?
     #[cfg(feature = "sendable")]
-    fn get_ciphertext(
-        &self,
-        id: &Cr,
-    ) -> impl Future<Output = Result<Option<EncryptedContent<T, Cr>>, Self::GetCiphertextError>> + Send;
+    fn get_ciphertext<'a>(
+        &'a self,
+        id: &'a Cr,
+    ) -> impl Future<Output = Result<Option<&'a EncryptedContent<T, Cr>>, Self::GetCiphertextError>> + Send
+    where
+        T: 'a,
+        Cr: 'a;
 
     #[cfg(feature = "sendable")]
     fn mark_decrypted(&mut self, id: &Cr) -> impl Future<Output = ()>;
 
     #[cfg(not(feature = "sendable"))]
-    fn get_ciphertext(
-        &self,
-        id: &Cr,
-    ) -> impl Future<Output = Result<Option<EncryptedContent<T, Cr>>, Self::GetCiphertextError>>;
+    fn get_ciphertext<'a>(
+        &'a self,
+        id: &'a Cr,
+    ) -> impl Future<Output = Result<Option<&'a EncryptedContent<T, Cr>>, Self::GetCiphertextError>>
+    where
+        T: 'a,
+        Cr: 'a;
 
     //////////
 
     #[cfg(feature = "sendable")]
-    fn get_ciphertexts_by_pcs_update(
-        &self,
-        pcs_udpate: &Digest<Signed<CgkaOperation>>,
-    ) -> impl Future<Output = Result<Vec<EncryptedContent<T, Cr>>, Self::GetCiphertextError>> + Send;
+    fn get_ciphertexts_by_pcs_update<'a>(
+        &'a self,
+        pcs_udpate: &'a Digest<Signed<CgkaOperation>>,
+    ) -> impl Future<Output = Result<Vec<&'a EncryptedContent<T, Cr>>, Self::GetCiphertextError>> + Send
+    where
+        T: 'a,
+        Cr: 'a;
 
     #[cfg(feature = "sendable")]
     fn mark_decrypted(&mut self, id: &Cr) -> impl Future<Output = ()>;
 
     #[cfg(not(feature = "sendable"))]
-    fn get_ciphertext_by_pcs_update(
-        &self,
-        pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> impl Future<Output = Result<Vec<EncryptedContent<T, Cr>>, Self::GetCiphertextError>>;
+    fn get_ciphertext_by_pcs_update<'a>(
+        &'a self,
+        pcs_update: &'a Digest<Signed<CgkaOperation>>,
+    ) -> impl Future<Output = Result<Vec<&'a EncryptedContent<T, Cr>>, Self::GetCiphertextError>>
+    where
+        T: 'a,
+        Cr: 'a;
 
     //////////
 
@@ -209,7 +221,7 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
                                         progress.next.insert(ancestor_ref.clone(), *ancestor_key);
                                     }
                                     Ok(Some(ancestor)) => {
-                                        to_decrypt.push((ancestor, *ancestor_key));
+                                        to_decrypt.push((ancestor.clone(), *ancestor_key));
                                     }
                                 }
                             }
@@ -254,50 +266,31 @@ impl<T, Cr: ContentRef> CausalDecryptionState<Cr, T> {
     }
 }
 
-impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for HashMap<Cr, EncryptedContent<T, Cr>> {
-    type GetCiphertextError = Infallible;
-    type MarkDecryptedError = Infallible;
-
-    #[instrument(skip(self))]
-    async fn get_ciphertext(&self, id: &Cr) -> Result<Option<EncryptedContent<T, Cr>>, Infallible> {
-        Ok(HashMap::get(self, id).cloned())
-    }
-
-    async fn get_ciphertext_by_pcs_update(
-        &self,
-        _pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<Vec<EncryptedContent<T, Cr>>, Infallible> {
-        todo!()
-        // let mut acc = vec![];
-        // for (id, ciphertext) in self.iter() {
-        //     if ciphertext.pcs_update_op_hash == Digest::hash(pcs_update) {
-        //         acc.push(ciphertext.clone());
-        //     }
-        // }
-        // Ok(acc)
-    }
-
-    #[instrument(skip(self))]
-    async fn mark_decrypted(&mut self, id: &Cr) -> Result<(), Infallible> {
-        self.remove(id);
-        Ok(())
-    }
-}
-
 impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for MemoryCiphertextStore<Cr, T> {
     type GetCiphertextError = Infallible;
     type MarkDecryptedError = Infallible;
 
     #[instrument(level = "debug", skip(self))]
-    async fn get_ciphertext(&self, id: &Cr) -> Result<Option<EncryptedContent<T, Cr>>, Infallible> {
-        Ok(self.get(id))
+    async fn get_ciphertext<'a>(
+        &'a self,
+        cr: &'a Cr,
+    ) -> Result<Option<&'a EncryptedContent<T, Cr>>, Infallible>
+    where
+        T: 'a,
+        Cr: 'a,
+    {
+        Ok(self.get_by_content_ref(cr))
     }
 
     #[instrument(level = "debug", skip(self))]
-    async fn get_ciphertext_by_pcs_update(
-        &self,
-        pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<Vec<EncryptedContent<T, Cr>>, Infallible> {
+    async fn get_ciphertext_by_pcs_update<'a>(
+        &'a self,
+        pcs_update: &'a Digest<Signed<CgkaOperation>>,
+    ) -> Result<Vec<&'a EncryptedContent<T, Cr>>, Infallible>
+    where
+        T: 'a,
+        Cr: 'a,
+    {
         Ok(self.get_by_pcs_update(pcs_update))
     }
 
@@ -308,32 +301,9 @@ impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for MemoryCiphertextStore<
     }
 }
 
-impl<T: Clone, Cr: ContentRef, S: CiphertextStore<Cr, T>> CiphertextStore<Cr, T>
-    for Rc<RefCell<S>>
-{
-    type GetCiphertextError = S::GetCiphertextError;
-    type MarkDecryptedError = S::MarkDecryptedError;
-
-    #[instrument(level = "debug", skip(self))]
-    async fn get_ciphertext(
-        &self,
-        id: &Cr,
-    ) -> Result<Option<EncryptedContent<T, Cr>>, Self::GetCiphertextError> {
-        self.borrow().get_ciphertext(id).await
-    }
-
-    #[instrument(level = "debug", skip(self))]
-    async fn get_ciphertext_by_pcs_update(
-        &self,
-        pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<Vec<EncryptedContent<T, Cr>>, Infallible> {
-        self.get_ciphertext_by_pcs_update(pcs_update).await
-    }
-
-    #[instrument(level = "debug", skip(self))]
-    async fn mark_decrypted(&mut self, id: &Cr) -> Result<(), Self::MarkDecryptedError> {
-        self.borrow_mut().mark_decrypted(id).await
-    }
+pub trait Isomorphic<T> {
+    fn pure(inner: T) -> Self;
+    fn extract(self) -> T;
 }
 
 #[derive(Debug, Error)]

@@ -6,7 +6,10 @@ use self::static_event::StaticEvent;
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::{encrypted::EncryptedContent, signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{
+        digest::Digest, encrypted::EncryptedContent, signed::Signed,
+        signer::async_signer::AsyncSigner,
+    },
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
         group::{
@@ -47,20 +50,24 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> 
     pub async fn what_can_i_decrypt_now<P, C: CiphertextStore<T, P>>(
         new_events: &[Event<S, T, L>],
         ciphertext_store: C,
-    ) -> Vec<&EncryptedContent<P, T>> {
+    ) -> Result<Vec<&EncryptedContent<P, T>>, ()> {
         let mut acc = vec![];
 
         // FIXME switch to fold
         for event in new_events {
-            if let Event::CgkaOperation(cgka) = event {
+            if let Event::CgkaOperation(op) = event {
+                let digest = Digest::hash(op.as_ref());
                 // FIXME put doc_id trait on Signed{}
-                let doc_id = cgka.dupe().borrow().payload.doc_id();
-
-                ciphertext_store.get_ciphertext(id);
+                let doc_id = op.payload.doc_id();
+                let more = ciphertext_store
+                    .get_ciphertext_by_pcs_update(&digest)
+                    .await
+                    .expect("FIXME");
+                acc.extend(more);
             }
         }
 
-        acc
+        Ok(acc)
     }
 }
 
