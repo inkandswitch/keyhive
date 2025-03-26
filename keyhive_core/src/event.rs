@@ -12,6 +12,7 @@ use crate::{
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
+        document::id::DocumentId,
         group::{
             delegation::Delegation, membership_operation::MembershipOperation,
             revocation::Revocation,
@@ -24,7 +25,7 @@ use derive_more::{From, TryInto};
 use derive_where::derive_where;
 use dupe::Dupe;
 use serde::Serialize;
-use std::rc::Rc;
+use std::{collections::HashMap, rc::Rc};
 
 /// Top-level event variants.
 #[derive(PartialEq, Eq, From, TryInto)]
@@ -47,23 +48,25 @@ pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> {
-    pub async fn what_can_i_decrypt_now<P, C: CiphertextStore<T, P>>(
-        new_events: &[Event<S, T, L>],
-        ciphertext_store: C,
-    ) -> Result<Vec<&EncryptedContent<P, T>>, ()> {
-        let mut acc = vec![];
+    pub async fn what_can_i_decrypt_now<'a, P: 'a, C: CiphertextStore<T, P>>(
+        new_events: &'a [Event<S, T, L>],
+        ciphertext_store: &'a C,
+    ) -> Result<HashMap<DocumentId, Vec<&'a EncryptedContent<P, T>>>, C::GetCiphertextError> {
+        let mut acc: HashMap<DocumentId, Vec<&'a EncryptedContent<P, T>>> = HashMap::new();
 
         // FIXME switch to fold
         for event in new_events {
             if let Event::CgkaOperation(op) = event {
-                let digest = Digest::hash(op.as_ref());
-                // FIXME put doc_id trait on Signed{}
+                let op_digest = Digest::hash(&op.as_ref().clone()); // FIXME option to hash from ref
+                                                                    // FIXME put doc_id trait on Signed{}
                 let doc_id = op.payload.doc_id();
                 let more = ciphertext_store
-                    .get_ciphertext_by_pcs_update(&digest)
-                    .await
-                    .expect("FIXME");
-                acc.extend(more);
+                    .get_ciphertext_by_pcs_update(&op_digest)
+                    .await?;
+
+                acc.entry(*doc_id)
+                    .or_default()
+                    .extend_from_slice(more.as_slice());
             }
         }
 

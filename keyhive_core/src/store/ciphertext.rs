@@ -14,12 +14,10 @@ use crate::{
 use derive_where::derive_where;
 use serde::{Deserialize, Serialize};
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     convert::Infallible,
     fmt::{Debug, Display},
     future::Future,
-    rc::Rc,
 };
 use thiserror::Error;
 use tracing::instrument;
@@ -68,7 +66,7 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     #[cfg(feature = "sendable")]
     fn get_ciphertexts_by_pcs_update<'a>(
         &'a self,
-        pcs_udpate: &'a Digest<Signed<CgkaOperation>>,
+        pcs_udpate: &'_ Digest<Signed<CgkaOperation>>,
     ) -> impl Future<Output = Result<Vec<&'a EncryptedContent<T, Cr>>, Self::GetCiphertextError>> + Send
     where
         T: 'a,
@@ -80,7 +78,7 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     #[cfg(not(feature = "sendable"))]
     fn get_ciphertext_by_pcs_update<'a>(
         &'a self,
-        pcs_update: &'a Digest<Signed<CgkaOperation>>,
+        pcs_update: &'_ Digest<Signed<CgkaOperation>>,
     ) -> impl Future<Output = Result<Vec<&'a EncryptedContent<T, Cr>>, Self::GetCiphertextError>>
     where
         T: 'a,
@@ -285,7 +283,7 @@ impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for MemoryCiphertextStore<
     #[instrument(level = "debug", skip(self))]
     async fn get_ciphertext_by_pcs_update<'a>(
         &'a self,
-        pcs_update: &'a Digest<Signed<CgkaOperation>>,
+        pcs_update: &'_ Digest<Signed<CgkaOperation>>,
     ) -> Result<Vec<&'a EncryptedContent<T, Cr>>, Infallible>
     where
         T: 'a,
