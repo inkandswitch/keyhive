@@ -54,11 +54,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> 
     ) -> Result<HashMap<DocumentId, Vec<&'a EncryptedContent<P, T>>>, C::GetCiphertextError> {
         let mut acc: HashMap<DocumentId, Vec<&'a EncryptedContent<P, T>>> = HashMap::new();
 
-        // FIXME switch to fold
         for event in new_events {
             if let Event::CgkaOperation(op) = event {
-                let op_digest = Digest::hash(&op.as_ref().clone()); // FIXME option to hash from ref
-                                                                    // FIXME put doc_id trait on Signed{}
+                let op_digest = Digest::hash(op.as_ref());
                 let doc_id = op.payload.doc_id();
                 let more = ciphertext_store
                     .get_ciphertext_by_pcs_update(&op_digest)
