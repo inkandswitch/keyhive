@@ -1,6 +1,11 @@
+use std::rc::Rc;
+
 use super::{base64::Base64, change_ref::JsChangeRef};
-use keyhive_core::{crypto::encrypted::EncryptedContent, store::ciphertext::CiphertextStore};
-use std::collections::HashMap;
+use keyhive_core::{
+    cgka::operation::CgkaOperation,
+    crypto::{digest::Digest, encrypted::EncryptedContent, signed::Signed},
+    store::ciphertext::{memory::MemoryCiphertextStore, CiphertextStore},
+};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -14,7 +19,7 @@ impl JsCiphertextStore {
     #[wasm_bindgen(js_name = newInMemory)]
     pub fn new_in_memory() -> Self {
         Self {
-            inner: JsCiphertextStoreInner::Memory(HashMap::new()),
+            inner: JsCiphertextStoreInner::Memory(MemoryCiphertextStore::new()),
         }
     }
 
@@ -38,9 +43,9 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
     async fn get_ciphertext(
         &self,
         id: &JsChangeRef,
-    ) -> Result<Option<EncryptedContent<Vec<u8>, JsChangeRef>>, Self::GetCiphertextError> {
+    ) -> Result<Option<Rc<EncryptedContent<Vec<u8>, JsChangeRef>>>, Self::GetCiphertextError> {
         match self.inner {
-            JsCiphertextStoreInner::Memory(ref hash_map) => Ok(hash_map.get(&id).cloned()),
+            JsCiphertextStoreInner::Memory(ref mem_store) => Ok(mem_store.get_by_content_ref(&id)),
 
             #[cfg(feature = "web-sys")]
             JsCiphertextStoreInner::WebStorage(ref store) => {
@@ -62,10 +67,50 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
         }
     }
 
+    async fn get_ciphertext_by_pcs_update(
+        &self,
+        pcs_update: &Digest<Signed<CgkaOperation>>,
+    ) -> Result<Vec<Rc<EncryptedContent<Vec<u8>, JsChangeRef>>>, Self::GetCiphertextError> {
+        match self.inner {
+            JsCiphertextStoreInner::Memory(ref mem_store) => {
+                Ok(mem_store.get_by_pcs_update(&pcs_update))
+            }
+
+            // TODO add index
+            #[cfg(feature = "web-sys")]
+            JsCiphertextStoreInner::WebStorage(ref store) => {
+                let mut acc = vec![];
+
+                for i in 0..store.length().expect("FIXME") {
+                    let key = store
+                        .key(i)
+                        .map_err(JsWebStorageError::RetrievalError)?
+                        .expect("FIXME");
+
+                    let b64 = store
+                        .get_item(&key)
+                        .map_err(JsWebStorageError::RetrievalError)?;
+
+                    if let Some(b64) = b64 {
+                        let bytes = Base64(b64).into_vec().map_err(|e| {
+                            JsGetCiphertextError(JsWebStorageError::ConvertFromBase64Error(e))
+                        })?;
+                        let encrypted = bincode::deserialize(&bytes)
+                            .map_err(JsWebStorageError::DeserailizationError)?;
+
+                        acc.push(encrypted);
+                    }
+                }
+
+                Ok(acc)
+            }
+        }
+    }
+
     async fn mark_decrypted(&mut self, id: &JsChangeRef) -> Result<(), Self::MarkDecryptedError> {
         match self.inner {
             JsCiphertextStoreInner::Memory(ref mut store) => {
-                store.remove(id);
+                store.remove_all(id);
             }
             #[cfg(feature = "web-sys")]
             JsCiphertextStoreInner::WebStorage(ref store) => {
@@ -110,7 +155,7 @@ impl JsGetCiphertextError {
 }
 
 pub enum JsCiphertextStoreInner {
-    Memory(HashMap<JsChangeRef, EncryptedContent<Vec<u8>, JsChangeRef>>),
+    Memory(MemoryCiphertextStore<JsChangeRef, Vec<u8>>),
 
     #[cfg(feature = "web-sys")]
     WebStorage(web_sys::Storage),

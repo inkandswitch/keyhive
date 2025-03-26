@@ -12,12 +12,14 @@ use crate::{
     },
 };
 use derive_where::derive_where;
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     convert::Infallible,
     fmt::{Debug, Display},
     future::Future,
+    rc::Rc,
 };
 use thiserror::Error;
 use tracing::instrument;
@@ -41,50 +43,44 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
 
     // FIXME make this into a macro, or maybe use their macro and switch at the call site?
     #[cfg(feature = "sendable")]
-    fn get_ciphertext<'a>(
-        &'a self,
-        id: &'a Cr,
-    ) -> impl Future<Output = Result<Option<&'a EncryptedContent<T, Cr>>, Self::GetCiphertextError>> + Send
-    where
-        T: 'a,
-        Cr: 'a;
-
-    #[cfg(feature = "sendable")]
-    fn mark_decrypted(&mut self, id: &Cr) -> impl Future<Output = ()>;
+    fn get_ciphertext(
+        &self,
+        id: &Cr,
+    ) -> impl Future<Output = Result<Option<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> + Send;
 
     #[cfg(not(feature = "sendable"))]
-    fn get_ciphertext<'a>(
-        &'a self,
-        id: &'a Cr,
-    ) -> impl Future<Output = Result<Option<&'a EncryptedContent<T, Cr>>, Self::GetCiphertextError>>
-    where
-        T: 'a,
-        Cr: 'a;
+    fn get_ciphertext(
+        &self,
+        id: &Cr,
+    ) -> impl Future<Output = Result<Option<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
 
     //////////
 
     #[cfg(feature = "sendable")]
-    fn get_ciphertexts_by_pcs_update<'a>(
-        &'a self,
-        pcs_udpate: &'_ Digest<Signed<CgkaOperation>>,
-    ) -> impl Future<Output = Result<Vec<&'a EncryptedContent<T, Cr>>, Self::GetCiphertextError>> + Send
-    where
-        T: 'a,
-        Cr: 'a;
+    fn get_ciphertexts_by_pcs_update(
+        &self,
+        pcs_udpate: &Digest<Signed<CgkaOperation>>,
+    ) -> impl Future<Output = Result<Vec<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> + Send;
 
     #[cfg(feature = "sendable")]
-    fn mark_decrypted(&mut self, id: &Cr) -> impl Future<Output = ()>;
+    fn get_ciphertexts_by_pcs_update(
+        &self,
+        pcs_udpate: &Digest<Signed<CgkaOperation>>,
+    ) -> impl Future<Output = Result<Vec<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> + Send;
 
     #[cfg(not(feature = "sendable"))]
-    fn get_ciphertext_by_pcs_update<'a>(
-        &'a self,
-        pcs_update: &'_ Digest<Signed<CgkaOperation>>,
-    ) -> impl Future<Output = Result<Vec<&'a EncryptedContent<T, Cr>>, Self::GetCiphertextError>>
-    where
-        T: 'a,
-        Cr: 'a;
+    fn get_ciphertext_by_pcs_update(
+        &self,
+        pcs_update: &Digest<Signed<CgkaOperation>>,
+    ) -> impl Future<Output = Result<Vec<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
 
     //////////
+
+    #[cfg(feature = "sendable")]
+    fn mark_decrypted(
+        &mut self,
+        id: &Cr,
+    ) -> impl Future<Output = Result<(), Self::MarkDecryptedError>> + Send;
 
     #[cfg(not(feature = "sendable"))]
     fn mark_decrypted(
@@ -168,7 +164,7 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     #[instrument(skip(self, to_decrypt), fields(ciphertext_heads_count = %to_decrypt.len()))]
     async fn try_causal_decrypt(
         &mut self,
-        to_decrypt: &mut Vec<(EncryptedContent<T, Cr>, SymmetricKey)>,
+        to_decrypt: &mut Vec<(Rc<EncryptedContent<T, Cr>>, SymmetricKey)>,
     ) -> Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<Cr, T, Self>>
     where
         Cr: for<'de> Deserialize<'de>,
@@ -219,14 +215,14 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
                                         progress.next.insert(ancestor_ref.clone(), *ancestor_key);
                                     }
                                     Ok(Some(ancestor)) => {
-                                        to_decrypt.push((ancestor.clone(), *ancestor_key));
+                                        to_decrypt.push((ancestor.dupe(), *ancestor_key));
                                     }
                                 }
                             }
 
                             progress
                                 .complete
-                                .push((ciphertext.content_ref, envelope.plaintext));
+                                .push((ciphertext.content_ref.clone(), envelope.plaintext));
                         }
                     }
                 }
@@ -269,26 +265,18 @@ impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for MemoryCiphertextStore<
     type MarkDecryptedError = Infallible;
 
     #[instrument(level = "debug", skip(self))]
-    async fn get_ciphertext<'a>(
-        &'a self,
-        cr: &'a Cr,
-    ) -> Result<Option<&'a EncryptedContent<T, Cr>>, Infallible>
-    where
-        T: 'a,
-        Cr: 'a,
-    {
+    async fn get_ciphertext(
+        &self,
+        cr: &Cr,
+    ) -> Result<Option<Rc<EncryptedContent<T, Cr>>>, Infallible> {
         Ok(self.get_by_content_ref(cr))
     }
 
     #[instrument(level = "debug", skip(self))]
-    async fn get_ciphertext_by_pcs_update<'a>(
-        &'a self,
-        pcs_update: &'_ Digest<Signed<CgkaOperation>>,
-    ) -> Result<Vec<&'a EncryptedContent<T, Cr>>, Infallible>
-    where
-        T: 'a,
-        Cr: 'a,
-    {
+    async fn get_ciphertext_by_pcs_update(
+        &self,
+        pcs_update: &Digest<Signed<CgkaOperation>>,
+    ) -> Result<Vec<Rc<EncryptedContent<T, Cr>>>, Infallible> {
         Ok(self.get_by_pcs_update(pcs_update))
     }
 

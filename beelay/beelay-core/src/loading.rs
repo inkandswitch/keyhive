@@ -5,6 +5,7 @@ use futures::channel::mpsc;
 use futures::channel::oneshot;
 use keyhive_core::crypto::encrypted::EncryptedContent;
 use keyhive_core::keyhive::Keyhive;
+use keyhive_core::store::ciphertext::memory::MemoryCiphertextStore;
 
 use crate::doc_state::DocState;
 use crate::io::{IoHandle, IoResult};
@@ -65,7 +66,7 @@ pub(crate) async fn load_keyhive<R: rand::Rng + rand::CryptoRng + Clone + 'stati
         Signer,
         crate::CommitHash,
         Vec<u8>,
-        HashMap<crate::CommitHash, EncryptedContent<Vec<u8>, crate::CommitHash>>,
+        MemoryCiphertextStore<crate::CommitHash, Vec<u8>>,
         crate::keyhive::Listener,
         R,
     >,
@@ -83,7 +84,7 @@ pub(crate) async fn load_keyhive<R: rand::Rng + rand::CryptoRng + Clone + 'stati
         match keyhive_core::keyhive::Keyhive::try_from_archive(
             &archive,
             signer.clone(),
-            HashMap::new(), // FIXME use exitsing!
+            Rc::new(RefCell::new(MemoryCiphertextStore::new())), // FIXME use exitsing!
             listener.clone(),
             rng.clone(),
         ) {
@@ -95,7 +96,9 @@ pub(crate) async fn load_keyhive<R: rand::Rng + rand::CryptoRng + Clone + 'stati
                 tracing::error!(err=?e, "failed to load keyhive archive");
                 keyhive_core::keyhive::Keyhive::generate(
                     signer,
-                    HashMap::new(/* FIXME use something else! */),
+                    Rc::new(RefCell::new(
+                        MemoryCiphertextStore::new(/* FIXME use something else! */),
+                    )),
                     listener.clone(),
                     rng.clone(),
                 )
@@ -107,7 +110,7 @@ pub(crate) async fn load_keyhive<R: rand::Rng + rand::CryptoRng + Clone + 'stati
         tracing::trace!("no archive found on disk, creating a new one");
         let result = keyhive_core::keyhive::Keyhive::generate(
             signer,
-            HashMap::new(/* FIXME */),
+            Rc::new(RefCell::new(MemoryCiphertextStore::new(/* FIXME */))),
             listener.clone(),
             rng.clone(),
         )

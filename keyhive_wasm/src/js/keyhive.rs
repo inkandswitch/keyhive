@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use super::ciphertext_store::JsCiphertextStore;
 use super::contact_card::JsContactCard;
 use super::{
@@ -45,7 +48,7 @@ impl JsKeyhive {
         Ok(JsKeyhive(
             Keyhive::generate(
                 signer,
-                ciphertext_store,
+                Rc::new(RefCell::new(ciphertext_store)),
                 JsEventHandler(event_handler.clone()),
                 rand::thread_rng(),
             )

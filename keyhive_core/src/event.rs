@@ -48,11 +48,11 @@ pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> {
-    pub async fn what_can_i_decrypt_now<'a, P: 'a, C: CiphertextStore<T, P>>(
-        new_events: &'a [Event<S, T, L>],
-        ciphertext_store: &'a C,
-    ) -> Result<HashMap<DocumentId, Vec<&'a EncryptedContent<P, T>>>, C::GetCiphertextError> {
-        let mut acc: HashMap<DocumentId, Vec<&'a EncryptedContent<P, T>>> = HashMap::new();
+    pub async fn what_can_i_decrypt_now<P, C: CiphertextStore<T, P>>(
+        new_events: &[Event<S, T, L>],
+        ciphertext_store: &C,
+    ) -> Result<HashMap<DocumentId, Vec<Rc<EncryptedContent<P, T>>>>, C::GetCiphertextError> {
+        let mut acc: HashMap<DocumentId, Vec<Rc<EncryptedContent<P, T>>>> = HashMap::new();
 
         for event in new_events {
             if let Event::CgkaOperation(op) = event {

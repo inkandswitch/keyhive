@@ -1,4 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
+
+use dupe::Dupe;
 
 use crate::{
     cgka::operation::CgkaOperation,
@@ -10,7 +15,8 @@ use crate::{
 pub struct MemoryCiphertextStore<Cr: ContentRef, P> {
     pub(crate) ops_to_refs: HashMap<Digest<Signed<CgkaOperation>>, HashSet<Cr>>,
     pub(crate) refs_to_digests: HashMap<Cr, HashSet<Digest<EncryptedContent<P, Cr>>>>,
-    pub(crate) store: HashMap<Digest<EncryptedContent<P, Cr>>, (ByteSize, EncryptedContent<P, Cr>)>,
+    pub(crate) store:
+        HashMap<Digest<EncryptedContent<P, Cr>>, (ByteSize, Rc<EncryptedContent<P, Cr>>)>,
 }
 
 impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
@@ -22,7 +28,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
         }
     }
 
-    pub fn get_by_content_ref(&self, content_ref: &Cr) -> Option<&EncryptedContent<P, Cr>> {
+    pub fn get_by_content_ref(&self, content_ref: &Cr) -> Option<Rc<EncryptedContent<P, Cr>>> {
         let digests = self.refs_to_digests.get(content_ref)?;
 
         let xs = digests
@@ -30,13 +36,13 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
             .map(|digest| self.store.get(digest))
             .collect::<Option<Vec<_>>>()?;
         let (_, largest) = xs.iter().max_by_key(|(size, _)| size)?;
-        Some(largest)
+        Some(largest.dupe())
     }
 
     pub fn get_by_pcs_update(
         &self,
         pcs_update_op: &Digest<Signed<CgkaOperation>>,
-    ) -> Vec<&EncryptedContent<P, Cr>> {
+    ) -> Vec<Rc<EncryptedContent<P, Cr>>> {
         self.ops_to_refs
             .get(pcs_update_op)
             .iter()
@@ -45,7 +51,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
                     if let Some(digests) = self.refs_to_digests.get(content_ref) {
                         for digest in digests.iter() {
                             if let Some((_, encrypted)) = self.store.get(digest) {
-                                acc.push(encrypted);
+                                acc.push(encrypted.dupe());
                             }
                         }
                     }
@@ -55,8 +61,8 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
             })
     }
 
-    pub fn insert(&mut self, encrypted: EncryptedContent<P, Cr>) {
-        let digest = Digest::hash(&encrypted);
+    pub fn insert(&mut self, encrypted: Rc<EncryptedContent<P, Cr>>) {
+        let digest = Digest::hash(encrypted.as_ref());
         let content_ref = encrypted.content_ref.clone();
         let pcs_update_op_hash = encrypted.pcs_update_op_hash;
 
@@ -79,10 +85,19 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
             .insert(digest);
     }
 
+    pub fn insert_raw(
+        &mut self,
+        encrypted: EncryptedContent<P, Cr>,
+    ) -> Rc<EncryptedContent<P, Cr>> {
+        let rc = Rc::new(encrypted);
+        self.insert(rc.dupe());
+        rc
+    }
+
     pub fn remove(
         &mut self,
         digest: &Digest<EncryptedContent<P, Cr>>,
-    ) -> Option<EncryptedContent<P, Cr>> {
+    ) -> Option<Rc<EncryptedContent<P, Cr>>> {
         let (_, encrypted) = self.store.remove(digest)?;
 
         self.ops_to_refs
@@ -132,6 +147,5 @@ impl<T: ContentRef, P> Default for MemoryCiphertextStore<T, P> {
     }
 }
 
-// FIXME move to util
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct ByteSize(pub(crate) usize);

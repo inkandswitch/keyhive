@@ -1,3 +1,5 @@
+use std::{cell::RefCell, rc::Rc};
+
 use super::{
     change_ref::JsChangeRef, ciphertext_store::JsCiphertextStore, event_handler::JsEventHandler,
     keyhive::JsKeyhive, signer::JsSigner,
@@ -38,7 +40,7 @@ impl JsArchive {
         Ok(Keyhive::try_from_archive(
             &self.0,
             signer,
-            ciphertext_store,
+            Rc::new(RefCell::new(ciphertext_store)),
             event_handler.clone().into(),
             rand::thread_rng(),
         )
