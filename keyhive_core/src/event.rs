@@ -48,7 +48,7 @@ pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> {
-    pub async fn what_can_i_decrypt_now<P, C: CiphertextStore<T, P>>(
+    pub async fn now_decryptable<P, C: CiphertextStore<T, P>>(
         new_events: &[Event<S, T, L>],
         ciphertext_store: &C,
     ) -> Result<HashMap<DocumentId, Vec<Rc<EncryptedContent<P, T>>>>, C::GetCiphertextError> {
