@@ -1,3 +1,5 @@
+use std::{cell::RefCell, rc::Rc};
+
 use keyhive_core::{
     access::Access, crypto::signer::memory::MemorySigner, keyhive::Keyhive,
     listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore,
@@ -8,9 +10,14 @@ use testresult::TestResult;
 async fn make_keyhive() -> Keyhive<MemorySigner> {
     let sk = MemorySigner::generate(&mut rand::thread_rng());
     let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
-    Keyhive::generate(sk, store, NoListener, rand::thread_rng())
-        .await
-        .unwrap()
+    Keyhive::generate(
+        sk,
+        Rc::new(RefCell::new(store)),
+        NoListener,
+        rand::thread_rng(),
+    )
+    .await
+    .unwrap()
 }
 
 #[tokio::test]

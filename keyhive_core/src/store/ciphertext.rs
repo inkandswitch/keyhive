@@ -420,13 +420,12 @@ mod tests {
             &mut csprng,
         );
 
-        let store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
-            (one_ref, one.clone()),
-            (two_ref, two.clone()),
-        ]);
+        let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        store.insert(one.clone());
+        store.insert(two.clone());
 
-        assert_eq!(store.get_ciphertext(&one_ref).await, Ok(Some(one)));
-        assert_eq!(store.get_ciphertext(&two_ref).await, Ok(Some(two)));
+        assert_eq!(store.get_ciphertext(&one_ref).await, Ok(Some(&one)));
+        assert_eq!(store.get_ciphertext(&two_ref).await, Ok(Some(&two)));
 
         Ok(())
     }
@@ -483,12 +482,11 @@ mod tests {
             &mut csprng,
         );
 
-        let mut store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
-            (genesis_ref, genesis.clone()),
-            (left_ref, left.clone()),
-            (right_ref, right.clone()),
-            (head_ref, head.clone()),
-        ]);
+        let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        store.insert(genesis.clone());
+        store.insert(left.clone());
+        store.insert(right.clone());
+        store.insert(head.clone());
 
         let observed = store
             .try_causal_decrypt(&mut vec![(head.clone(), head_key)])
@@ -591,15 +589,14 @@ mod tests {
             &mut csprng,
         );
 
-        let mut store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
-            (genesis1_ref, genesis1.clone()),
-            (genesis2_ref, genesis2.clone()),
-            (left_ref, left.clone()),
-            (right_ref, right.clone()),
-            (head1_ref, head1.clone()),
-            (head2_ref, head2.clone()),
-            (head3_ref, head3.clone()),
-        ]);
+        let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        store.insert(genesis1.clone());
+        store.insert(genesis2.clone());
+        store.insert(left.clone());
+        store.insert(right.clone());
+        store.insert(head1.clone());
+        store.insert(head2.clone());
+        store.insert(head3.clone());
 
         let observed = store
             .try_causal_decrypt(&mut vec![
@@ -730,15 +727,14 @@ mod tests {
             &mut csprng,
         );
 
-        let mut store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
-            // NOTE: skipping: (genesis1_ref, genesis1.clone()),
-            // NOTE: skipping (genesis2_ref, genesis2.clone()),
-            (left_ref, left.clone()),
-            (right_ref, right.clone()),
-            (head1_ref, head1.clone()),
-            (head2_ref, head2.clone()),
-            (head3_ref, head3.clone()),
-        ]);
+        let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        // NOTE: skipping: (genesis1_ref, genesis1.clone()),
+        // NOTE: skipping (genesis2_ref, genesis2.clone()),
+        store.insert(left.clone());
+        store.insert(right.clone());
+        store.insert(head1.clone());
+        store.insert(head2.clone());
+        store.insert(head3.clone());
 
         let observed = store
             .try_causal_decrypt(&mut vec![

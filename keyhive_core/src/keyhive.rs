@@ -1719,9 +1719,14 @@ mod tests {
     async fn make_keyhive() -> Keyhive<MemorySigner> {
         let sk = MemorySigner::generate(&mut rand::thread_rng());
         let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
-        Keyhive::generate(sk, store, NoListener, rand::thread_rng())
-            .await
-            .unwrap()
+        Keyhive::generate(
+            sk,
+            Rc::new(RefCell::new(store)),
+            NoListener,
+            rand::thread_rng(),
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -1731,8 +1736,9 @@ mod tests {
         let mut csprng = rand::thread_rng();
 
         let sk = MemorySigner::generate(&mut csprng);
-        let store: Rc<RefCell<HashMap<[u8; 32], EncryptedContent<Vec<u8>, [u8; 32]>>>> =
-            Rc::new(RefCell::new(HashMap::new()));
+        let store = Rc::new(RefCell::new(
+            MemoryCiphertextStore::<[u8; 32], String>::new(),
+        ));
         let mut hive =
             Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::thread_rng()).await?;
 
@@ -2054,7 +2060,7 @@ mod tests {
         let sk = MemorySigner::generate(&mut rand::thread_rng());
         let hive = Keyhive::<_, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
             sk,
-            HashMap::new(),
+            Rc::new(RefCell::new(MemoryCiphertextStore::new())),
             NoListener,
             rand::rngs::OsRng,
         )
