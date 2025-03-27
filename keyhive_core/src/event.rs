@@ -26,6 +26,7 @@ use derive_where::derive_where;
 use dupe::Dupe;
 use serde::Serialize;
 use std::{collections::HashMap, rc::Rc};
+use tracing::instrument;
 
 /// Top-level event variants.
 #[derive(PartialEq, Eq, From, TryInto)]
@@ -48,6 +49,7 @@ pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> {
+    #[instrument(level = "debug", skip(ciphertext_store))]
     pub async fn now_decryptable<P, C: CiphertextStore<T, P>>(
         new_events: &[Event<S, T, L>],
         ciphertext_store: &C,
