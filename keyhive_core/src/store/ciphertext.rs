@@ -375,7 +375,7 @@ mod tests {
         ancestors: HashMap<[u8; 32], SymmetricKey>,
         doc_id: DocumentId,
         csprng: &mut ThreadRng,
-    ) -> (EncryptedContent<String, [u8; 32]>, SymmetricKey) {
+    ) -> (Rc<EncryptedContent<String, [u8; 32]>>, SymmetricKey) {
         let pcs_key: PcsKey = ShareSecretKey::generate(csprng).into();
         let pcs_key_hash = Digest::hash(&pcs_key);
 
@@ -389,7 +389,7 @@ mod tests {
         key.try_encrypt(nonce, &mut bytes).unwrap();
 
         (
-            EncryptedContent::<String, [u8; 32]>::new(
+            Rc::new(EncryptedContent::<String, [u8; 32]>::new(
                 nonce,
                 bytes,
                 //
@@ -398,7 +398,7 @@ mod tests {
                 //
                 cref,
                 Digest::hash(&vec![]),
-            ),
+            )),
             key,
         )
     }
@@ -436,11 +436,11 @@ mod tests {
         );
 
         let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();
-        store.insert(one.clone());
-        store.insert(two.clone());
+        store.insert(one.dupe());
+        store.insert(two.dupe());
 
-        assert_eq!(store.get_ciphertext(&one_ref).await, Ok(Some(&one)));
-        assert_eq!(store.get_ciphertext(&two_ref).await, Ok(Some(&two)));
+        assert_eq!(store.get_ciphertext(&one_ref).await, Ok(Some(one)));
+        assert_eq!(store.get_ciphertext(&two_ref).await, Ok(Some(two)));
 
         Ok(())
     }

@@ -1716,7 +1716,13 @@ mod tests {
     use pretty_assertions::assert_eq;
     use testresult::TestResult;
 
-    async fn make_keyhive() -> Keyhive<MemorySigner> {
+    async fn make_keyhive() -> Keyhive<
+        MemorySigner,
+        [u8; 32],
+        Vec<u8>,
+        Rc<RefCell<MemoryCiphertextStore<[u8; 32], Vec<u8>>>>,
+        NoListener,
+    > {
         let sk = MemorySigner::generate(&mut rand::thread_rng());
         let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
         Keyhive::generate(
