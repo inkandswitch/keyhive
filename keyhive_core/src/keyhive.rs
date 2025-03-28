@@ -1078,6 +1078,10 @@ impl<
                 doc.merge_cgka_invite_op(signed_op.clone(), &sk)?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
+            } else if Public.individual().id() == added_id {
+                let sk = Public.share_secret_key();
+                doc.merge_cgka_invite_op(signed_op, &sk)?;
+                return Ok(());
             }
         }
         doc.merge_cgka_op(signed_op.clone())?;
