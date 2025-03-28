@@ -728,6 +728,9 @@ impl<
                 .collect(),
         );
 
+        // Add the agents own keys
+        add_many_keys(&mut map, agent.id(), agent.key_ops());
+
         for (mem, _) in self.membered_reachable_by_agent(agent).values() {
             match mem {
                 Membered::Group(group) => {
