@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     cell::RefCell,
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
     rc::Rc,
 };
 
@@ -22,6 +22,7 @@ use keyhive_core::{
         identifier::Identifier,
         individual::{op::KeyOp, Individual},
         membered::Membered,
+        public::Public,
     },
     store::ciphertext::memory::MemoryCiphertextStore,
 };
@@ -65,6 +66,14 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         {
             let transitive = doc.borrow().transitive_members();
             if transitive
+                .get(&Public.id())
+                .map(|(_, a)| a >= &access)
+                .unwrap_or(false)
+            {
+                tracing::trace!("access granted due to public access");
+                return true;
+            }
+            if transitive
                 .get(&peer_id.as_key().into())
                 .map(|(_, a)| a >= &access)
                 .unwrap_or(false)
@@ -104,61 +113,38 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         let k_mutex = self.0.borrow().keyhive.clone();
         let keyhive = k_mutex.lock().await;
 
-        if let Some(agent) = keyhive.get_individual(for_peer.as_key().into()) {
-            keyhive.membership_ops_for_agent(&(agent.clone().into()))
-        } else {
-            HashMap::new()
-        }
-    }
-
-    pub(crate) async fn prekey_ops_for_peer(
-        &self,
-        for_peer: PeerId,
-    ) -> HashMap<Identifier, Vec<Rc<KeyOp>>> {
-        let k_mutex = self.0.borrow().keyhive.clone();
-        let keyhive = k_mutex.lock().await;
+        let mut ops = keyhive.membership_ops_for_agent(&Public.individual().into());
 
         if let Some(agent) = keyhive.get_individual(for_peer.as_key().into()) {
-            keyhive.reachable_prekey_ops_for_agent(&(agent.clone().into()))
-        } else {
-            HashMap::new()
-        }
-    }
-
-    pub(crate) async fn membership_and_prekey_ops_for_peer(
-        &self,
-        for_peer: PeerId,
-    ) -> HashMap<Digest<StaticEvent<CommitHash>>, StaticEvent<CommitHash>> {
-        let k_mutex = self.0.borrow().keyhive.clone();
-        let keyhive = k_mutex.lock().await;
-        let mut result = HashMap::new();
-        if let Some(agent) = keyhive.get_individual(for_peer.as_key().into()) {
-            for op in keyhive
-                .membership_ops_for_agent(&(agent.clone().into()))
-                .into_values()
-                .map(|op| StaticEvent::from(Event::from(op)))
-                .chain(
-                    keyhive
-                        .reachable_prekey_ops_for_agent(&agent.clone().into())
-                        .into_values()
-                        .flat_map(|vs| {
-                            vs.into_iter().map(|op| {
-                                StaticEvent::from(Event::<
-                                    Signer,
-                                    CommitHash,
-                                    crate::keyhive::Listener,
-                                >::from(
-                                    Rc::unwrap_or_clone(op)
-                                ))
-                            })
-                        }),
-                )
-            {
-                let hash = Digest::hash(&op);
-                result.insert(hash, op);
+            // ops.extend(keyhive.membership_ops_for_agent(&(agent.clone().into())));
+            for (hash, op) in keyhive.membership_ops_for_agent(&(agent.clone().into())) {
+                ops.insert(hash, op);
             }
         }
-        result
+
+        ops
+    }
+
+    pub(crate) async fn prekey_ops_for_peer(&self, for_peer: PeerId) -> HashSet<Rc<KeyOp>> {
+        let k_mutex = self.0.borrow().keyhive.clone();
+        let keyhive = k_mutex.lock().await;
+
+        let mut ops = keyhive
+            .reachable_prekey_ops_for_agent(&Public.individual().into())
+            .into_values()
+            .flat_map(|vs| vs.into_iter())
+            .collect::<HashSet<_>>();
+
+        // let mut ops = HashSet::new();
+
+        if let Some(agent) = keyhive.get_individual(for_peer.as_key().into()) {
+            for (_, agent_ops) in keyhive.reachable_prekey_ops_for_agent(&(agent.clone().into())) {
+                ops.extend(agent_ops);
+                // ops.entry(identifier).or_default().extend(agent_ops);
+            }
+        }
+
+        ops
     }
 
     pub(crate) async fn ingest_membership_ops(
@@ -340,6 +326,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
                 keyhive.register_individual(indi.clone());
                 Some(indi.into())
             }
+            KeyhiveEntityId::Public => Some(Public.individual().into()),
         }
     }
 
@@ -712,15 +699,23 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         let k_mutex = self.0.borrow().keyhive.clone();
         let keyhive = k_mutex.lock().await;
 
-        let Some(peer) = keyhive.get_agent(agent_id.into()) else {
-            tracing::trace!("agent not found in local keyhive");
-            return Vec::new();
-        };
-        keyhive
-            .docs_reachable_by_agent(&peer)
+        let mut docs: Vec<DocumentId> = keyhive
+            .docs_reachable_by_agent(&Public.individual().into())
             .into_keys()
             .map(|d| d.into())
-            .collect()
+            .collect();
+
+        if let Some(peer) = keyhive.get_agent(agent_id.into()) {
+            docs.extend(
+                keyhive
+                    .docs_reachable_by_agent(&peer)
+                    .into_keys()
+                    .map(|d| DocumentId::from(d)),
+            );
+        } else {
+            tracing::trace!("agent not found in local keyhive");
+        };
+        docs
     }
 
     #[cfg(feature = "debug_events")]
@@ -777,6 +772,7 @@ fn get_peer<R: rand::Rng + rand::CryptoRng>(
             keyhive.register_individual(indi.clone());
             Some(indi.into())
         }
+        KeyhiveEntityId::Public => Some(Rc::new(RefCell::new(Public.individual())).into()),
     }
 }
 

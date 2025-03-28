@@ -1,4 +1,7 @@
-use std::{collections::HashMap, rc::Rc};
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use keyhive_core::{
     crypto::{digest::Digest, signer::memory::MemorySigner},
@@ -18,14 +21,15 @@ pub(crate) struct MembershipState {
         Digest<MembershipOperation<Signer, CommitHash, Listener>>,
         MembershipOperation<Signer, CommitHash, Listener>,
     >,
-    prekey_ops: HashMap<Identifier, Vec<Rc<KeyOp>>>,
+    // prekey_ops: HashMap<Identifier, Vec<Rc<KeyOp>>>,
+    prekey_ops: HashSet<Rc<KeyOp>>,
 }
 
 impl MembershipState {
     pub(crate) fn empty() -> Self {
         Self {
             membership_ops: HashMap::new(),
-            prekey_ops: HashMap::new(),
+            prekey_ops: HashSet::new(),
         }
     }
 
@@ -45,12 +49,10 @@ impl MembershipState {
         self.membership_ops
             .into_values()
             .map(|op| StaticEvent::from(Event::from(op)))
-            .chain(self.prekey_ops.into_values().flat_map(|ops| {
-                ops.into_iter().map(|op| {
-                    StaticEvent::from(Event::<MemorySigner, CommitHash, NoListener>::from(
-                        Rc::unwrap_or_clone(op),
-                    ))
-                })
+            .chain(self.prekey_ops.into_iter().map(|op| {
+                StaticEvent::from(Event::<MemorySigner, CommitHash, NoListener>::from(
+                    Rc::unwrap_or_clone(op),
+                ))
             }))
             .map(|op| (Digest::hash(&op), op))
             .collect()

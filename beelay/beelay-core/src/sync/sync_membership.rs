@@ -191,10 +191,14 @@ pub(crate) async fn run_once<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
             Ok::<_, super::Error>(())
         } else {
             tracing::trace!(num_to_upload = to_upload.len(), "uploading ops");
-            ctx.requests()
+            if let Err(err) = ctx
+                .requests()
                 .sessions()
                 .upload_membership_ops(remote_target, session_id, to_upload)
-                .await?;
+                .await?
+            {
+                tracing::error!(err=?err, "failed to upload membership ops");
+            }
             Ok(())
         }
     };

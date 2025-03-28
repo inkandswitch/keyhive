@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use error::AddMember;
-use keyhive_core::listener::{
-    cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener,
+use keyhive_core::{
+    listener::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener},
+    principal::public::Public,
 };
 
 use crate::{contact_card::ContactCard, io::Signer, CommitHash, DocumentId, PeerId, TaskContext};
@@ -85,6 +86,7 @@ pub enum KeyhiveEntityId {
     Individual(ContactCard),
     Group(PeerId),
     Doc(DocumentId),
+    Public,
 }
 
 impl std::fmt::Display for KeyhiveEntityId {
@@ -93,6 +95,7 @@ impl std::fmt::Display for KeyhiveEntityId {
             KeyhiveEntityId::Individual(peer_id) => write!(f, "peer:{}", peer_id),
             KeyhiveEntityId::Group(group_id) => write!(f, "group:{}", group_id),
             KeyhiveEntityId::Doc(doc_id) => write!(f, "doc:{}", doc_id),
+            KeyhiveEntityId::Public => write!(f, "public"),
         }
     }
 }
@@ -112,6 +115,12 @@ impl From<PeerId> for KeyhiveEntityId {
 impl From<DocumentId> for KeyhiveEntityId {
     fn from(doc_id: DocumentId) -> Self {
         KeyhiveEntityId::Doc(doc_id)
+    }
+}
+
+impl From<Public> for KeyhiveEntityId {
+    fn from(public: Public) -> Self {
+        KeyhiveEntityId::Public
     }
 }
 

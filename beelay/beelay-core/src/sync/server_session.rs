@@ -196,6 +196,12 @@ impl Session {
 
         let (mut docs, _decoder) = DocsSession::new(docs);
 
+        tracing::trace!(
+            mem_decoded = decoder.decoded(),
+            num_local_symbols = decoder.get_local_symbols().len(),
+            num_remote_symbols = decoder.get_remote_symbols().len(),
+            "determining session phase"
+        );
         let phase = if decoder.decoded()
             && decoder.get_local_symbols().is_empty()
             && decoder.get_remote_symbols().is_empty()
@@ -203,7 +209,7 @@ impl Session {
             let doc_symbols = docs.encoder.next_n_symbols(10);
             GraphSyncPhase::Docs(doc_symbols)
         } else {
-            let membership_symbols = membership_riblt.next_n_symbols(10);
+            let membership_symbols = membership_riblt.next_n_symbols(20);
             GraphSyncPhase::Membership(membership_symbols)
         };
 
