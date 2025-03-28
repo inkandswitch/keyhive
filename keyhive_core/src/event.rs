@@ -139,3 +139,99 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for Event<
         self.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, collections::BTreeMap};
+
+    use crate::{
+        access::Access,
+        crypto::{
+            share_key::ShareKey,
+            signer::{memory::MemorySigner, sync_signer::SyncSigner},
+        },
+        principal::{
+            group::Group,
+            individual::{id::IndividualId, Individual},
+        },
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_event_now_decryptable() {
+        let mut csprng = rand::thread_rng();
+        let signer = MemorySigner::generate(&mut csprng);
+        let doc_id = DocumentId::generate(&mut csprng);
+        let doc_id2 = DocumentId::generate(&mut csprng);
+
+        let events = vec![
+            Event::CgkaOperation(Rc::new(
+                signer
+                    .try_sign_sync(CgkaOperation::Add {
+                        added_id: IndividualId::generate(&mut csprng),
+                        pk: ShareKey::generate(&mut csprng),
+                        leaf_index: 42,
+                        predecessors: vec![],
+                        add_predecessors: vec![],
+                        doc_id,
+                    })
+                    .expect("signature to work"),
+            )),
+            Event::CgkaOperation(Rc::new(
+                signer
+                    .try_sign_sync(CgkaOperation::Remove {
+                        id: IndividualId::generate(&mut csprng),
+                        leaf_idx: 4,
+                        predecessors: vec![],
+                        removed_keys: vec![],
+                        doc_id,
+                    })
+                    .expect("signature to work"),
+            )),
+            Event::PrekeysExpanded(Rc::new(
+                signer
+                    .try_sign_sync(AddKeyOp::generate(&mut csprng))
+                    .expect("signature to work"),
+            )),
+            Event::PrekeysExpanded(Rc::new(
+                signer
+                    .try_sign_sync(AddKeyOp::generate(&mut csprng))
+                    .expect("signature to work"),
+            )),
+            Event::PrekeysExpanded(Rc::new(
+                signer
+                    .try_sign_sync(AddKeyOp::generate(&mut csprng))
+                    .expect("signature to work"),
+            )),
+            Event::CgkaOperation(Rc::new(
+                signer
+                    .try_sign_sync(CgkaOperation::Add {
+                        added_id: IndividualId::generate(&mut csprng),
+                        pk: ShareKey::generate(&mut csprng),
+                        leaf_index: 11,
+                        predecessors: vec![],
+                        add_predecessors: vec![],
+                        doc_id: doc_id2,
+                    })
+                    .expect("signature to work"),
+            )),
+            Event::Delegated(Rc::new(
+                signer
+                    .try_sign_sync(Delegation {
+                        delegate: Rc::new(RefCell::new(Individual::generate(&signer, &mut csprng)))
+                            .into(),
+                        can: Access::Read,
+                        proof: None,
+                        after_revocations: vec![],
+                        after_content: BTreeMap::new(),
+                    })
+                    .expect("signature to work"),
+            )),
+        ];
+
+        let ciphertext_store = crate::store::ciphertext::NoCiphertextStore;
+        let res = Event::now_decryptable(&[event], &ciphertext_store).await;
+        assert!(res.is_ok());
+    }
+}
