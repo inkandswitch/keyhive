@@ -64,9 +64,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> 
                     .get_ciphertext_by_pcs_update(&op_digest)
                     .await?;
 
-                acc.entry(*doc_id)
-                    .or_default()
-                    .extend_from_slice(more.as_slice());
+                acc.entry(*doc_id).or_default().extend(more.into_iter());
             }
         }
 
@@ -142,96 +140,137 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for Event<
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, collections::BTreeMap};
-
+    use super::*;
     use crate::{
         access::Access,
         crypto::{
             share_key::ShareKey,
             signer::{memory::MemorySigner, sync_signer::SyncSigner},
+            siv::Siv,
+            symmetric_key::SymmetricKey,
         },
         principal::{
-            group::Group,
+            agent::Agent,
             individual::{id::IndividualId, Individual},
         },
+        store::ciphertext::memory::MemoryCiphertextStore,
     };
-
-    use super::*;
+    use std::{cell::RefCell, collections::BTreeMap};
+    use test_utils::init_logging;
+    use testresult::TestResult;
 
     #[tokio::test]
-    async fn test_event_now_decryptable() {
+    async fn test_event_now_decryptable() -> TestResult {
+        init_logging();
+
         let mut csprng = rand::thread_rng();
         let signer = MemorySigner::generate(&mut csprng);
-        let doc_id = DocumentId::generate(&mut csprng);
+        let doc_id1 = DocumentId::generate(&mut csprng);
         let doc_id2 = DocumentId::generate(&mut csprng);
 
-        let events = vec![
-            Event::CgkaOperation(Rc::new(
-                signer
-                    .try_sign_sync(CgkaOperation::Add {
-                        added_id: IndividualId::generate(&mut csprng),
-                        pk: ShareKey::generate(&mut csprng),
-                        leaf_index: 42,
-                        predecessors: vec![],
-                        add_predecessors: vec![],
-                        doc_id,
-                    })
-                    .expect("signature to work"),
-            )),
-            Event::CgkaOperation(Rc::new(
-                signer
-                    .try_sign_sync(CgkaOperation::Remove {
-                        id: IndividualId::generate(&mut csprng),
-                        leaf_idx: 4,
-                        predecessors: vec![],
-                        removed_keys: vec![],
-                        doc_id,
-                    })
-                    .expect("signature to work"),
+        let cgka_op_1 = signer.try_sign_sync(CgkaOperation::Add {
+            added_id: IndividualId::generate(&mut csprng),
+            pk: ShareKey::generate(&mut csprng),
+            leaf_index: 42,
+            predecessors: vec![],
+            add_predecessors: vec![],
+            doc_id: doc_id1,
+        })?;
+
+        let cgka_op_2 = signer.try_sign_sync(CgkaOperation::Remove {
+            id: IndividualId::generate(&mut csprng),
+            leaf_idx: 4,
+            predecessors: vec![],
+            removed_keys: vec![],
+            doc_id: doc_id2,
+        })?;
+
+        let cgka_op_3 = signer.try_sign_sync(CgkaOperation::Add {
+            added_id: IndividualId::generate(&mut csprng),
+            pk: ShareKey::generate(&mut csprng),
+            leaf_index: 11,
+            predecessors: vec![],
+            add_predecessors: vec![],
+            doc_id: doc_id1,
+        })?;
+
+        let hash1 = Digest::hash(&cgka_op_1);
+        let hash2 = Digest::hash(&cgka_op_2);
+        let hash3 = Digest::hash(&cgka_op_3);
+
+        let events: Vec<Event<MemorySigner, [u8; 32], NoListener>> = vec![
+            Event::CgkaOperation(Rc::new(cgka_op_1)),
+            Event::CgkaOperation(Rc::new(cgka_op_2)),
+            Event::PrekeysExpanded(Rc::new(
+                signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
             )),
             Event::PrekeysExpanded(Rc::new(
-                signer
-                    .try_sign_sync(AddKeyOp::generate(&mut csprng))
-                    .expect("signature to work"),
+                signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
             )),
             Event::PrekeysExpanded(Rc::new(
-                signer
-                    .try_sign_sync(AddKeyOp::generate(&mut csprng))
-                    .expect("signature to work"),
+                signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
             )),
-            Event::PrekeysExpanded(Rc::new(
-                signer
-                    .try_sign_sync(AddKeyOp::generate(&mut csprng))
-                    .expect("signature to work"),
-            )),
-            Event::CgkaOperation(Rc::new(
-                signer
-                    .try_sign_sync(CgkaOperation::Add {
-                        added_id: IndividualId::generate(&mut csprng),
-                        pk: ShareKey::generate(&mut csprng),
-                        leaf_index: 11,
-                        predecessors: vec![],
-                        add_predecessors: vec![],
-                        doc_id: doc_id2,
-                    })
-                    .expect("signature to work"),
-            )),
-            Event::Delegated(Rc::new(
-                signer
-                    .try_sign_sync(Delegation {
-                        delegate: Rc::new(RefCell::new(Individual::generate(&signer, &mut csprng)))
-                            .into(),
-                        can: Access::Read,
-                        proof: None,
-                        after_revocations: vec![],
-                        after_content: BTreeMap::new(),
-                    })
-                    .expect("signature to work"),
-            )),
+            Event::Delegated(Rc::new(signer.try_sign_sync(Delegation {
+                delegate: Agent::Individual(Rc::new(RefCell::new(
+                    Individual::generate(&signer, &mut csprng).await?,
+                ))),
+                can: Access::Read,
+                proof: None,
+                after_revocations: vec![],
+                after_content: BTreeMap::new(),
+            })?)),
         ];
 
-        let ciphertext_store = crate::store::ciphertext::NoCiphertextStore;
-        let res = Event::now_decryptable(&[event], &ciphertext_store).await;
-        assert!(res.is_ok());
+        let ciphertext1 = Rc::new(EncryptedContent::new(
+            Siv::new(&SymmetricKey::generate(&mut csprng), &[4, 5, 6], doc_id1)?,
+            vec![4, 5, 6],
+            [1u8; 32].into(),
+            hash1,
+            [1u8; 32],
+            [1u8; 32].into(),
+        ));
+
+        let ciphertext2 = Rc::new(EncryptedContent::new(
+            Siv::new(&SymmetricKey::generate(&mut csprng), &[1, 2, 3], doc_id2)?,
+            vec![1, 2, 3],
+            [2u8; 32].into(),
+            hash2,
+            [2u8; 32],
+            [2u8; 32].into(),
+        ));
+
+        let mut store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
+        store.insert(ciphertext1.dupe());
+        store.insert(ciphertext2.dupe());
+
+        // Should not show up in updates
+        store.insert(Rc::new(EncryptedContent::new(
+            Siv::new(&SymmetricKey::generate(&mut csprng), &[0], doc_id1)?,
+            vec![0],
+            [3u8; 32].into(),
+            hash3,
+            [3u8; 32],
+            [3u8; 32].into(),
+        )));
+
+        let decryptable = Event::now_decryptable(&events, &store).await?;
+        tracing::info!("decryptable: {:?}", decryptable);
+        assert_eq!(decryptable.len(), 2);
+        assert!(decryptable.contains_key(&doc_id1));
+        assert!(decryptable.contains_key(&doc_id2));
+
+        tracing::debug!("store: {:?}", store);
+
+        let doc1_results = decryptable.get(&doc_id1).unwrap();
+        tracing::info!("doc1_results: {:?}", doc1_results);
+        assert_eq!(doc1_results.len(), 1);
+        assert!(doc1_results.contains(&ciphertext1));
+
+        let doc2_results = decryptable.get(&doc_id2).unwrap();
+        tracing::info!("doc2_results: {:?}", doc2_results);
+        assert_eq!(doc2_results.len(), 1);
+        assert!(doc2_results.contains(&ciphertext2));
+
+        Ok(())
     }
 }

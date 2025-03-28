@@ -106,3 +106,24 @@ impl<T> EncryptedSecret<T> {
         Ok(buf)
     }
 }
+
+impl<T: std::hash::Hash, Cr: ContentRef> std::hash::Hash for EncryptedContent<T, Cr> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let EncryptedContent {
+            nonce,
+            ciphertext,
+            pcs_key_hash,
+            pcs_update_op_hash,
+            content_ref,
+            pred_refs,
+            _plaintext_tag,
+        } = self;
+
+        nonce.hash(state);
+        ciphertext.hash(state);
+        pcs_key_hash.hash(state);
+        pcs_update_op_hash.hash(state);
+        content_ref.hash(state);
+        pred_refs.hash(state);
+    }
+}

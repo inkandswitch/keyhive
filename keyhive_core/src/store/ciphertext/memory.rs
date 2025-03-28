@@ -1,15 +1,14 @@
-use std::{
-    collections::{HashMap, HashSet},
-    rc::Rc,
-};
-
-use dupe::Dupe;
-
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{digest::Digest, encrypted::EncryptedContent, signed::Signed},
 };
+use dupe::Dupe;
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
+use tracing::instrument;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryCiphertextStore<Cr: ContentRef, P> {
@@ -20,6 +19,7 @@ pub struct MemoryCiphertextStore<Cr: ContentRef, P> {
 }
 
 impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
+    #[instrument(level = "debug")]
     pub fn new() -> Self {
         Self {
             ops_to_refs: HashMap::new(),
@@ -28,6 +28,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
         }
     }
 
+    #[instrument(level = "debug", skip(self))]
     pub fn get_by_content_ref(&self, content_ref: &Cr) -> Option<Rc<EncryptedContent<P, Cr>>> {
         let digests = self.refs_to_digests.get(content_ref)?;
 
@@ -39,6 +40,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
         Some(largest.dupe())
     }
 
+    #[instrument(level = "debug", skip(self))]
     pub fn get_by_pcs_update(
         &self,
         pcs_update_op: &Digest<Signed<CgkaOperation>>,
@@ -61,6 +63,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
             })
     }
 
+    #[instrument(level = "debug", skip_all, fields(ecrypted.content_ref))]
     pub fn insert(&mut self, encrypted: Rc<EncryptedContent<P, Cr>>) {
         let digest = Digest::hash(encrypted.as_ref());
         let content_ref = encrypted.content_ref.clone();
@@ -85,6 +88,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
             .insert(digest);
     }
 
+    #[instrument(level = "debug", skip_all, fields(ecrypted.content_ref))]
     pub fn insert_raw(
         &mut self,
         encrypted: EncryptedContent<P, Cr>,
@@ -94,6 +98,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
         rc
     }
 
+    #[instrument(level = "debug", skip_all, fields(digest))]
     pub fn remove(
         &mut self,
         digest: &Digest<EncryptedContent<P, Cr>>,
@@ -129,6 +134,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
         Some(encrypted)
     }
 
+    #[instrument(level = "debug", skip(self))]
     pub fn remove_all(&mut self, content_ref: &Cr) -> bool {
         if let Some(digests) = self.refs_to_digests.remove(content_ref) {
             for digest in digests.iter() {
