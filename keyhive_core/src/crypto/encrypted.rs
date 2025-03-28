@@ -22,11 +22,11 @@ pub struct EncryptedContent<T, Cr: ContentRef> {
     /// The nonce used to encrypt the data.
     pub nonce: Siv,
     /// The encrypted data.
-    pub ciphertext: Vec<u8>,
+    pub ciphertext: Vec<u8>, // TODO wrap in newtype
     /// Hash of the PCS key used to derive the application secret for encrypting.
-    pub pcs_key_hash: Digest<PcsKey>, // FIXME use pubkey instead of hash?
+    pub pcs_key_hash: Digest<PcsKey>, // TODO use pubkey instead of hash?
     /// Hash of the PCS update operation corresponding to the PCS key
-    pub pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
+    pub pcs_update_op_hash: Digest<Signed<CgkaOperation>>, // TODO check if thi really needs to be a digest?
     /// The content ref hash used to derive the application secret for encrypting.
     pub content_ref: Cr,
     /// The predecessor content ref hashes used to derive the application secret
@@ -104,5 +104,26 @@ impl<T> EncryptedSecret<T> {
         let key = encrypter_secret_key.derive_symmetric_key(&self.paired_pk);
         key.try_decrypt(self.nonce, &mut buf)?;
         Ok(buf)
+    }
+}
+
+impl<T: std::hash::Hash, Cr: ContentRef> std::hash::Hash for EncryptedContent<T, Cr> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let EncryptedContent {
+            nonce,
+            ciphertext,
+            pcs_key_hash,
+            pcs_update_op_hash,
+            content_ref,
+            pred_refs,
+            _plaintext_tag,
+        } = self;
+
+        nonce.hash(state);
+        ciphertext.hash(state);
+        pcs_key_hash.hash(state);
+        pcs_update_op_hash.hash(state);
+        content_ref.hash(state);
+        pred_refs.hash(state);
     }
 }

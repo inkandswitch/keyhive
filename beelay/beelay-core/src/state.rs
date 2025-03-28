@@ -8,8 +8,8 @@ use std::{
 
 use keyhive::KeyhiveCtx;
 use keyhive_core::{
-    crypto::{encrypted::EncryptedContent, verifiable::Verifiable},
-    keyhive::Keyhive,
+    crypto::verifiable::Verifiable, keyhive::Keyhive,
+    store::ciphertext::memory::MemoryCiphertextStore,
 };
 
 mod auth;
@@ -37,8 +37,8 @@ pub(crate) struct State<R: rand::Rng + rand::CryptoRng> {
             Keyhive<
                 Signer,
                 CommitHash,
-                Vec<u8>, // FIXME what shoudl go here?
-                HashMap<CommitHash, EncryptedContent<Vec<u8>, CommitHash>>,
+                Vec<u8>,
+                MemoryCiphertextStore<CommitHash, Vec<u8>>,
                 crate::keyhive::Listener,
                 R,
             >,
@@ -60,7 +60,7 @@ impl<R: rand::Rng + rand::CryptoRng> State<R> {
             Signer,
             CommitHash,
             Vec<u8>,
-            HashMap<CommitHash, EncryptedContent<Vec<u8>, CommitHash>>,
+            MemoryCiphertextStore<CommitHash, Vec<u8>>,
             crate::keyhive::Listener,
             R,
         >,

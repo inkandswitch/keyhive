@@ -242,6 +242,7 @@
               pkgs.nodePackages.pnpm
               pkgs.nodePackages_latest.webpack-cli
               pkgs.nodejs_20
+              pkgs.rust-analyzer
               pkgs.wasm-pack
             ]
             ++ format-pkgs

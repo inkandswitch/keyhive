@@ -14,6 +14,11 @@ impl IndividualId {
         Self(identifier)
     }
 
+    #[cfg(any(test, feature = "test_utils"))]
+    pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
+        Identifier::generate(csprng).into()
+    }
+
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
     }

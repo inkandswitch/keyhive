@@ -24,6 +24,7 @@ use keyhive_core::{
         individual::{op::KeyOp, Individual},
         membered::Membered,
     },
+    store::ciphertext::memory::MemoryCiphertextStore,
 };
 use nonempty::NonEmpty;
 
@@ -747,7 +748,7 @@ fn get_peer<R: rand::Rng + rand::CryptoRng>(
         Signer,
         CommitHash,
         Vec<u8>,
-        HashMap<CommitHash, EncryptedContent<Vec<u8>, CommitHash>>,
+        MemoryCiphertextStore<CommitHash, Vec<u8>>,
         crate::keyhive::Listener,
         R,
     >,

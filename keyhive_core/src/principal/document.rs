@@ -518,14 +518,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
                 )]),
             })?;
 
-        let mut to_decrypt: Vec<(EncryptedContent<P, T>, SymmetricKey)> = vec![];
+        let mut to_decrypt: Vec<(Rc<EncryptedContent<P, T>>, SymmetricKey)> = vec![];
         for (digest, symm_key) in entrypoint_envelope.ancestors.iter() {
-            if let Some(ciphertext) = store
+            if let Some(encrypted) = store
                 .get_ciphertext(digest)
                 .await
                 .map_err(DocCausalDecryptionError::GetCiphertextError)?
             {
-                to_decrypt.push((ciphertext, *symm_key));
+                to_decrypt.push((encrypted, *symm_key));
             } else {
                 acc.next.insert(digest.clone(), *symm_key);
             }

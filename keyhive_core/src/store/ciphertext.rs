@@ -4,10 +4,15 @@ pub mod memory;
 
 use self::memory::MemoryCiphertextStore;
 use crate::{
+    cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::{encrypted::EncryptedContent, envelope::Envelope, symmetric_key::SymmetricKey},
+    crypto::{
+        digest::Digest, encrypted::EncryptedContent, envelope::Envelope, signed::Signed,
+        symmetric_key::SymmetricKey,
+    },
 };
 use derive_where::derive_where;
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
@@ -37,20 +42,46 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     type GetCiphertextError: Debug + Display;
     type MarkDecryptedError: Debug + Display;
 
+    // TODO make this into a macro, or maybe use their macro and switch at the call site?
     #[cfg(feature = "sendable")]
     fn get_ciphertext(
         &self,
         id: &Cr,
-    ) -> impl Future<Output = Result<Option<EncryptedContent<T, Cr>>, Self::GetCiphertextError>> + Send;
-
-    #[cfg(feature = "sendable")]
-    fn mark_decrypted(&mut self, id: &Cr) -> impl Future<Output = ()>;
+    ) -> impl Future<Output = Result<Option<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> + Send;
 
     #[cfg(not(feature = "sendable"))]
     fn get_ciphertext(
         &self,
         id: &Cr,
-    ) -> impl Future<Output = Result<Option<EncryptedContent<T, Cr>>, Self::GetCiphertextError>>;
+    ) -> impl Future<Output = Result<Option<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
+
+    //////////
+
+    #[cfg(feature = "sendable")]
+    fn get_ciphertexts_by_pcs_update(
+        &self,
+        pcs_udpate: &Digest<Signed<CgkaOperation>>,
+    ) -> impl Future<Output = Result<Vec<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> + Send;
+
+    #[cfg(feature = "sendable")]
+    fn get_ciphertexts_by_pcs_update(
+        &self,
+        pcs_udpate: &Digest<Signed<CgkaOperation>>,
+    ) -> impl Future<Output = Result<Vec<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> + Send;
+
+    #[cfg(not(feature = "sendable"))]
+    fn get_ciphertext_by_pcs_update(
+        &self,
+        pcs_update: &Digest<Signed<CgkaOperation>>,
+    ) -> impl Future<Output = Result<Vec<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
+
+    //////////
+
+    #[cfg(feature = "sendable")]
+    fn mark_decrypted(
+        &mut self,
+        id: &Cr,
+    ) -> impl Future<Output = Result<(), Self::MarkDecryptedError>> + Send;
 
     #[cfg(not(feature = "sendable"))]
     fn mark_decrypted(
@@ -134,7 +165,7 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     #[instrument(skip(self, to_decrypt), fields(ciphertext_heads_count = %to_decrypt.len()))]
     async fn try_causal_decrypt(
         &mut self,
-        to_decrypt: &mut Vec<(EncryptedContent<T, Cr>, SymmetricKey)>,
+        to_decrypt: &mut Vec<(Rc<EncryptedContent<T, Cr>>, SymmetricKey)>,
     ) -> Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<Cr, T, Self>>
     where
         Cr: for<'de> Deserialize<'de>,
@@ -185,14 +216,14 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
                                         progress.next.insert(ancestor_ref.clone(), *ancestor_key);
                                     }
                                     Ok(Some(ancestor)) => {
-                                        to_decrypt.push((ancestor, *ancestor_key));
+                                        to_decrypt.push((ancestor.dupe(), *ancestor_key));
                                     }
                                 }
                             }
 
                             progress
                                 .complete
-                                .push((ciphertext.content_ref, envelope.plaintext));
+                                .push((ciphertext.content_ref.clone(), envelope.plaintext));
                         }
                     }
                 }
@@ -230,19 +261,29 @@ impl<T, Cr: ContentRef> CausalDecryptionState<Cr, T> {
     }
 }
 
-impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for HashMap<Cr, EncryptedContent<T, Cr>> {
-    type GetCiphertextError = Infallible;
-    type MarkDecryptedError = Infallible;
+impl<Cr: ContentRef, T, C: CiphertextStore<Cr, T>> CiphertextStore<Cr, T> for Rc<RefCell<C>> {
+    type GetCiphertextError = C::GetCiphertextError;
+    type MarkDecryptedError = C::MarkDecryptedError;
 
-    #[instrument(skip(self))]
-    async fn get_ciphertext(&self, id: &Cr) -> Result<Option<EncryptedContent<T, Cr>>, Infallible> {
-        Ok(HashMap::get(self, id).cloned())
+    #[instrument(level = "debug", skip(self))]
+    async fn get_ciphertext(
+        &self,
+        cr: &Cr,
+    ) -> Result<Option<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError> {
+        self.borrow().get_ciphertext(cr).await
     }
 
-    #[instrument(skip(self))]
-    async fn mark_decrypted(&mut self, id: &Cr) -> Result<(), Infallible> {
-        self.remove(id);
-        Ok(())
+    #[instrument(level = "debug", skip(self))]
+    async fn get_ciphertext_by_pcs_update(
+        &self,
+        pcs_update: &Digest<Signed<CgkaOperation>>,
+    ) -> Result<Vec<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError> {
+        self.borrow().get_ciphertext_by_pcs_update(pcs_update).await
+    }
+
+    #[instrument(level = "debug", skip(self))]
+    async fn mark_decrypted(&mut self, content_ref: &Cr) -> Result<(), Self::MarkDecryptedError> {
+        self.borrow_mut().mark_decrypted(content_ref).await
     }
 }
 
@@ -250,35 +291,32 @@ impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for MemoryCiphertextStore<
     type GetCiphertextError = Infallible;
     type MarkDecryptedError = Infallible;
 
-    #[instrument(skip(self))]
-    async fn get_ciphertext(&self, id: &Cr) -> Result<Option<EncryptedContent<T, Cr>>, Infallible> {
-        self.store.get_ciphertext(id).await
+    #[instrument(level = "debug", skip(self))]
+    async fn get_ciphertext(
+        &self,
+        cr: &Cr,
+    ) -> Result<Option<Rc<EncryptedContent<T, Cr>>>, Infallible> {
+        Ok(self.get_by_content_ref(cr))
     }
 
-    #[instrument(skip(self))]
-    async fn mark_decrypted(&mut self, id: &Cr) -> Result<(), Infallible> {
-        self.store.mark_decrypted(id).await
+    #[instrument(level = "debug", skip(self))]
+    async fn get_ciphertext_by_pcs_update(
+        &self,
+        pcs_update: &Digest<Signed<CgkaOperation>>,
+    ) -> Result<Vec<Rc<EncryptedContent<T, Cr>>>, Infallible> {
+        Ok(self.get_by_pcs_update(pcs_update))
+    }
+
+    #[instrument(level = "debug", skip(self))]
+    async fn mark_decrypted(&mut self, content_ref: &Cr) -> Result<(), Infallible> {
+        self.remove_all(content_ref);
+        Ok(())
     }
 }
 
-impl<T: Clone, Cr: ContentRef, S: CiphertextStore<Cr, T>> CiphertextStore<Cr, T>
-    for Rc<RefCell<S>>
-{
-    type GetCiphertextError = S::GetCiphertextError;
-    type MarkDecryptedError = S::MarkDecryptedError;
-
-    #[instrument(skip(self))]
-    async fn get_ciphertext(
-        &self,
-        id: &Cr,
-    ) -> Result<Option<EncryptedContent<T, Cr>>, Self::GetCiphertextError> {
-        self.borrow().get_ciphertext(id).await
-    }
-
-    #[instrument(skip(self))]
-    async fn mark_decrypted(&mut self, id: &Cr) -> Result<(), Self::MarkDecryptedError> {
-        self.borrow_mut().mark_decrypted(id).await
-    }
+pub trait Isomorphic<T> {
+    fn pure(inner: T) -> Self;
+    fn extract(self) -> T;
 }
 
 #[derive(Debug, Error)]
@@ -337,7 +375,7 @@ mod tests {
         ancestors: HashMap<[u8; 32], SymmetricKey>,
         doc_id: DocumentId,
         csprng: &mut ThreadRng,
-    ) -> (EncryptedContent<String, [u8; 32]>, SymmetricKey) {
+    ) -> (Rc<EncryptedContent<String, [u8; 32]>>, SymmetricKey) {
         let pcs_key: PcsKey = ShareSecretKey::generate(csprng).into();
         let pcs_key_hash = Digest::hash(&pcs_key);
 
@@ -351,7 +389,7 @@ mod tests {
         key.try_encrypt(nonce, &mut bytes).unwrap();
 
         (
-            EncryptedContent::<String, [u8; 32]>::new(
+            Rc::new(EncryptedContent::<String, [u8; 32]>::new(
                 nonce,
                 bytes,
                 //
@@ -360,7 +398,7 @@ mod tests {
                 //
                 cref,
                 Digest::hash(&vec![]),
-            ),
+            )),
             key,
         )
     }
@@ -397,10 +435,9 @@ mod tests {
             &mut csprng,
         );
 
-        let store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
-            (one_ref, one.clone()),
-            (two_ref, two.clone()),
-        ]);
+        let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        store.insert(one.dupe());
+        store.insert(two.dupe());
 
         assert_eq!(store.get_ciphertext(&one_ref).await, Ok(Some(one)));
         assert_eq!(store.get_ciphertext(&two_ref).await, Ok(Some(two)));
@@ -460,12 +497,11 @@ mod tests {
             &mut csprng,
         );
 
-        let mut store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
-            (genesis_ref, genesis.clone()),
-            (left_ref, left.clone()),
-            (right_ref, right.clone()),
-            (head_ref, head.clone()),
-        ]);
+        let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        store.insert(genesis.clone());
+        store.insert(left.clone());
+        store.insert(right.clone());
+        store.insert(head.clone());
 
         let observed = store
             .try_causal_decrypt(&mut vec![(head.clone(), head_key)])
@@ -568,15 +604,14 @@ mod tests {
             &mut csprng,
         );
 
-        let mut store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
-            (genesis1_ref, genesis1.clone()),
-            (genesis2_ref, genesis2.clone()),
-            (left_ref, left.clone()),
-            (right_ref, right.clone()),
-            (head1_ref, head1.clone()),
-            (head2_ref, head2.clone()),
-            (head3_ref, head3.clone()),
-        ]);
+        let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        store.insert(genesis1.clone());
+        store.insert(genesis2.clone());
+        store.insert(left.clone());
+        store.insert(right.clone());
+        store.insert(head1.clone());
+        store.insert(head2.clone());
+        store.insert(head3.clone());
 
         let observed = store
             .try_causal_decrypt(&mut vec![
@@ -707,15 +742,14 @@ mod tests {
             &mut csprng,
         );
 
-        let mut store = HashMap::<[u8; 32], EncryptedContent<String, [u8; 32]>>::from_iter([
-            // NOTE: skipping: (genesis1_ref, genesis1.clone()),
-            // NOTE: skipping (genesis2_ref, genesis2.clone()),
-            (left_ref, left.clone()),
-            (right_ref, right.clone()),
-            (head1_ref, head1.clone()),
-            (head2_ref, head2.clone()),
-            (head3_ref, head3.clone()),
-        ]);
+        let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        // NOTE: skipping: (genesis1_ref, genesis1.clone()),
+        // NOTE: skipping (genesis2_ref, genesis2.clone()),
+        store.insert(left.clone());
+        store.insert(right.clone());
+        store.insert(head1.clone());
+        store.insert(head2.clone());
+        store.insert(head3.clone());
 
         let observed = store
             .try_causal_decrypt(&mut vec![
