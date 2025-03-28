@@ -7,6 +7,7 @@ use beelay_core::{
     CommitHash, CommitOrBundle,
 };
 use ed25519_dalek::SigningKey;
+use keyhive_core::principal::public::Public;
 use network::{ConnectedPair, Network};
 use test_utils::init_logging;
 
@@ -341,4 +342,91 @@ fn newly_accessible_documents_are_synced() {
         })
         .collect::<HashSet<_>>();
     assert!(commit_hashes.contains(&initial_commit.hash()));
+}
+
+#[test]
+fn empty_sync() {
+    init_logging();
+    let mut network = Network::new();
+    let peer1 = network.create_peer("peer1").build();
+    let peer2 = network.create_peer("peer2").build();
+
+    // Now connect the other peer
+    let ConnectedPair { .. } = network.connect_stream(&peer2, &peer1);
+
+    // the simulator runs until there are no more messages to send, so if we get here the sync halted
+}
+
+#[test]
+fn public_docs_are_synced() {
+    init_logging();
+    let mut network = Network::new();
+    let peer1 = network.create_peer("peer1").build();
+    let peer2 = network.create_peer("peer2").build();
+    test_utils::add_rewrite(Public.id().to_string(), "PUBLIC");
+
+    // First create the doc
+    let (doc1_id, initial_commit) = network
+        .beelay(&peer1)
+        .create_doc(vec![Public.into()])
+        .unwrap();
+
+    let DocStatus {
+        local_heads: Some(start_heads),
+    } = network.beelay(&peer1).doc_status(&doc1_id)
+    else {
+        panic!("no local heads on peer1");
+    };
+    assert_eq!(start_heads, vec![initial_commit.hash()]);
+
+    let commit1 = beelay_core::Commit::new(start_heads, vec![1, 2, 3], CommitHash::from([1; 32]));
+    network
+        .beelay(&peer1)
+        .add_commits(doc1_id, vec![commit1.clone()])
+        .unwrap();
+
+    // Monitor the doc on peer2
+    let status = network.beelay(&peer2).doc_status(&doc1_id);
+    assert_eq!(
+        status,
+        beelay_core::doc_status::DocStatus { local_heads: None }
+    );
+
+    // Now connect the other peer
+    let ConnectedPair { .. } = network.connect_stream(&peer2, &peer1);
+
+    // The other end should now be synced because `connect_stream` will run the network until quiescent
+    assert_eq!(
+        network.beelay(&peer2).doc_status(&doc1_id),
+        DocStatus {
+            local_heads: Some(vec![CommitHash::from([1; 32])])
+        }
+    );
+
+    let commits_on_2: HashSet<beelay_core::Commit> = network
+        .beelay(&peer2)
+        .load_doc(doc1_id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| {
+            let CommitOrBundle::Commit(c) = c else {
+                panic!("expected commit");
+            };
+            c
+        })
+        .collect();
+    // let expected_commits = vec![initial_commit, commit1.clone(), commit2.clone()]
+    let expected_commits = vec![initial_commit, commit1.clone()]
+        .into_iter()
+        .collect::<HashSet<_>>();
+
+    let table = network.beelay(&peer2).log_keyhive_events(
+        keyhive_core::debug_events::Nicknames::default()
+            .with_nickname(doc1_id.as_bytes(), "doc1")
+            .with_nickname(peer1.as_bytes(), "peer1")
+            .with_nickname(peer2.as_bytes(), "peer2"),
+    );
+    keyhive_core::debug_events::terminal::print_event_table_verbose(table);
+
+    assert_eq!(commits_on_2, expected_commits);
 }
