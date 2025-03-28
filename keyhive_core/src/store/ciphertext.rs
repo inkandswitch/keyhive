@@ -42,7 +42,7 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     type GetCiphertextError: Debug + Display;
     type MarkDecryptedError: Debug + Display;
 
-    // FIXME make this into a macro, or maybe use their macro and switch at the call site?
+    // TODO make this into a macro, or maybe use their macro and switch at the call site?
     #[cfg(feature = "sendable")]
     fn get_ciphertext(
         &self,

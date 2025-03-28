@@ -22,11 +22,11 @@ pub struct EncryptedContent<T, Cr: ContentRef> {
     /// The nonce used to encrypt the data.
     pub nonce: Siv,
     /// The encrypted data.
-    pub ciphertext: Vec<u8>, // FIXME wrap in newtype
+    pub ciphertext: Vec<u8>, // TODO wrap in newtype
     /// Hash of the PCS key used to derive the application secret for encrypting.
-    pub pcs_key_hash: Digest<PcsKey>, // FIXME use pubkey instead of hash?
+    pub pcs_key_hash: Digest<PcsKey>, // TODO use pubkey instead of hash?
     /// Hash of the PCS update operation corresponding to the PCS key
-    pub pcs_update_op_hash: Digest<Signed<CgkaOperation>>, // FIXME needs to be a digest?
+    pub pcs_update_op_hash: Digest<Signed<CgkaOperation>>, // TODO check if thi really needs to be a digest?
     /// The content ref hash used to derive the application secret for encrypting.
     pub content_ref: Cr,
     /// The predecessor content ref hashes used to derive the application secret
