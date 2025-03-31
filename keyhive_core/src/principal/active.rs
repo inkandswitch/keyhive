@@ -251,6 +251,10 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
 
     /// Deserialize from storage.
     pub fn from_archive(archive: &ActiveArchive, signer: S, listener: L) -> Self {
+        tracing::trace!(
+            num_prekey_pairs = archive.prekey_pairs.len(),
+            "loaded from archive"
+        );
         Self {
             prekey_pairs: archive.prekey_pairs.clone(),
             individual: archive.individual.clone(),

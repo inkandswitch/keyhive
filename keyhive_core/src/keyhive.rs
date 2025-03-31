@@ -219,7 +219,7 @@ impl<
             }
         }
 
-        let new_doc = Document::generate(
+        let (new_doc, ops) = Document::generate(
             NonEmpty {
                 head: self.active.dupe().into(),
                 tail: coparents.into_iter().map(Into::into).collect(),
@@ -232,6 +232,9 @@ impl<
             &mut self.csprng,
         )
         .await?;
+        for op in ops {
+            self.event_listener.on_cgka_op(&Rc::new(op)).await;
+        }
 
         for head in new_doc.delegation_heads().values() {
             self.delegations.insert(head.dupe());
@@ -1044,6 +1047,7 @@ impl<
         if let CgkaOperation::Add { added_id, pk, .. } = signed_op.payload {
             let active = self.active.borrow();
             if active.id() == added_id {
+                tracing::info!("one of us!");
                 let sk = active
                     .prekey_pairs
                     .get(&pk)
