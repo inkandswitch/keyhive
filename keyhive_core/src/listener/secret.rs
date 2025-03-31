@@ -19,8 +19,8 @@ pub trait SecretListener: Sized + Clone {
     async fn on_new_sharing_secret(
         &self,
         subject: Subject,
-        new_public_key: &ShareKey,
-        new_secret_key: &ShareSecretKey,
+        new_public_key: ShareKey,
+        new_secret_key: ShareSecretKey,
     );
 }
 

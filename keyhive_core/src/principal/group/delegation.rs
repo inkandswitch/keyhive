@@ -10,7 +10,7 @@ use crate::{
         signed::{Signed, SigningError},
         signer::async_signer::AsyncSigner,
     },
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{membership::MembershipListener, no_listener::NoListener, secret::SecretListener},
     principal::{
         agent::{id::AgentId, Agent},
         document::id::DocumentId,
@@ -27,7 +27,7 @@ use thiserror::Error;
 pub struct Delegation<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<S, T> + SecretListener = NoListener,
 > {
     pub(crate) delegate: Agent<S, T, L>,
     pub(crate) can: Access,
@@ -37,9 +37,14 @@ pub struct Delegation<
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Eq for Delegation<S, T, L> {}
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Eq
+    for Delegation<S, T, L>
+{
+}
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+    Delegation<S, T, L>
+{
     pub fn subject_id(&self, issuer: AgentId) -> Identifier {
         if let Some(proof) = &self.proof {
             proof.subject_id()
@@ -131,7 +136,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Signed<Delegation<S, T, L>> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+    Signed<Delegation<S, T, L>>
+{
     pub fn subject_id(&self) -> Identifier {
         let mut head = self;
 
@@ -143,7 +150,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Signed<Delegati
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for Delegation<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Serialize
+    for Delegation<S, T, L>
+{
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticDelegation::from(self.clone()).serialize(serializer)
     }
@@ -181,8 +190,8 @@ impl<'a, T: ContentRef + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Delegation<S, T, L>>
-    for StaticDelegation<T>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+    From<Delegation<S, T, L>> for StaticDelegation<T>
 {
     fn from(delegation: Delegation<S, T, L>) -> Self {
         Self {
@@ -204,7 +213,7 @@ pub struct AfterAuth<
     'a,
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<S, T> + SecretListener = NoListener,
 > {
     pub(crate) optional_delegation: Option<Rc<Signed<Delegation<S, T, L>>>>,
     pub(crate) revocations: &'a [Rc<Signed<Revocation<S, T, L>>>],

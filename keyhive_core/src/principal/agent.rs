@@ -11,7 +11,7 @@ use super::{
 use crate::{
     content::reference::ContentRef,
     crypto::{share_key::ShareKey, signer::async_signer::AsyncSigner, verifiable::Verifiable},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{membership::MembershipListener, no_listener::NoListener, secret::SecretListener},
 };
 use derivative::Derivative;
 use derive_more::{From, TryInto};
@@ -30,14 +30,20 @@ use std::{
 /// This type is very lightweight to clone, since it only contains immutable references to the actual agents.
 #[derive_where(Clone, Debug; T)]
 #[derive(From, TryInto, Derivative)]
-pub enum Agent<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
+pub enum Agent<
+    S: AsyncSigner,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<S, T> + SecretListener = NoListener,
+> {
     Active(Rc<RefCell<Active<S, T, L>>>),
     Individual(Rc<RefCell<Individual>>),
     Group(Rc<RefCell<Group<S, T, L>>>),
     Document(Rc<RefCell<Document<S, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq for Agent<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> PartialEq
+    for Agent<S, T, L>
+{
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Agent::Active(a), Agent::Active(b)) => a.borrow().id() == b.borrow().id(),
@@ -49,7 +55,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq for A
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Agent<S, T, L> {
     pub fn id(&self) -> Identifier {
         match self {
             Agent::Active(a) => a.borrow().id().into(),
@@ -120,15 +126,15 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Active<S, T, L>>
-    for Agent<S, T, L>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+    From<Active<S, T, L>> for Agent<S, T, L>
 {
     fn from(a: Active<S, T, L>) -> Self {
         Agent::Active(Rc::new(RefCell::new(a)))
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Individual>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> From<Individual>
     for Agent<S, T, L>
 {
     fn from(i: Individual) -> Self {
@@ -136,16 +142,16 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Individual
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Group<S, T, L>>
-    for Agent<S, T, L>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+    From<Group<S, T, L>> for Agent<S, T, L>
 {
     fn from(g: Group<S, T, L>) -> Self {
         Agent::Group(Rc::new(RefCell::new(g)))
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Membered<S, T, L>>
-    for Agent<S, T, L>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+    From<Membered<S, T, L>> for Agent<S, T, L>
 {
     fn from(m: Membered<S, T, L>) -> Self {
         match m {
@@ -155,14 +161,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Membered<S
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Document<S, T, L>>
-    for Agent<S, T, L>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+    From<Document<S, T, L>> for Agent<S, T, L>
 {
     fn from(d: Document<S, T, L>) -> Self {
         Agent::Document(Rc::new(RefCell::new(d)))
     }
 }
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Agent<S, T, L> {
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Verifiable
+    for Agent<S, T, L>
+{
     fn verifying_key(&self) -> VerifyingKey {
         match self {
             Agent::Active(a) => a.borrow().verifying_key(),
@@ -173,13 +182,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Display for Agent<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Display
+    for Agent<S, T, L>
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.id())
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for Agent<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Dupe
+    for Agent<S, T, L>
+{
     fn dupe(&self) -> Self {
         match self {
             Agent::Active(a) => a.dupe().into(),

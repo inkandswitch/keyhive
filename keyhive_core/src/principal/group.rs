@@ -36,7 +36,7 @@ use crate::{
         },
         verifiable::Verifiable,
     },
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{membership::MembershipListener, no_listener::NoListener, secret::SecretListener},
     store::{delegation::DelegationStore, revocation::RevocationStore},
     util::{content_addressed_map::CaMap, hex::ToHexString},
 };
@@ -64,8 +64,11 @@ use tracing::{debug, info, instrument};
 /// through the network of [`Agent`]s.
 #[derive(Clone, Derivative)]
 #[derive_where(Debug, PartialEq; T)]
-pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener>
-{
+pub struct Group<
+    S: AsyncSigner,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<S, T> + SecretListener = NoListener,
+> {
     pub(crate) id_or_indie: IdOrIndividual,
 
     /// The current view of members of a group.
@@ -82,7 +85,7 @@ pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener
     pub(crate) listener: L,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Group<S, T, L> {
     #[instrument(
         skip_all,
         fields(group_id = %group_id, head_sig = ?head.signature.to_bytes())
@@ -855,7 +858,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Group<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Hash
+    for Group<S, T, L>
+{
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id_or_indie.hash(state);
         self.members.iter().collect::<BTreeMap<_, _>>().hash(state);
@@ -863,7 +868,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Group<
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Group<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Verifiable
+    for Group<S, T, L>
+{
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }

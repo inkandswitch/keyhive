@@ -19,6 +19,7 @@ use crate::{
     event::{static_event::StaticEvent, Event},
     listener::{
         cgka::CgkaListener, log::Log, membership::MembershipListener, no_listener::NoListener,
+        secret::SecretListener,
     },
     principal::{
         active::Active,
@@ -76,7 +77,7 @@ pub struct Keyhive<
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
     C: CiphertextStore<T, P> = MemoryCiphertextStore<T, P>,
-    L: MembershipListener<S, T> + CgkaListener = NoListener,
+    L: MembershipListener<S, T> + CgkaListener + SecretListener = NoListener,
     R: rand::CryptoRng = rand::rngs::ThreadRng,
 > {
     /// The [`Active`] user agent.
@@ -116,7 +117,7 @@ impl<
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T> + CgkaListener + SecretListener,
         R: rand::CryptoRng + rand::RngCore,
     > Keyhive<S, T, P, C, L, R>
 {
@@ -1031,7 +1032,7 @@ impl<
     }
 
     #[instrument(level = "trace",  skip(self), fields(khid = %self.id()))]
-    pub fn receive_cgka_op(
+    pub async fn receive_cgka_op(
         &mut self,
         signed_op: Signed<CgkaOperation>,
     ) -> Result<(), ReceiveCgkaOpError> {
@@ -1052,11 +1053,11 @@ impl<
                     .prekey_pairs
                     .get(&pk)
                     .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?;
-                doc.merge_cgka_invite_op(Rc::new(signed_op), sk)?;
+                doc.merge_cgka_invite_op(Rc::new(signed_op), sk),await?;
                 return Ok(());
             }
         }
-        doc.merge_cgka_op(Rc::new(signed_op))?;
+        doc.merge_cgka_op(Rc::new(signed_op)).await?;
         Ok(())
     }
 
@@ -1298,7 +1299,11 @@ impl<
         }
 
         #[allow(clippy::type_complexity)]
-        fn reify_ops<Z: AsyncSigner, U: ContentRef, M: MembershipListener<Z, U>>(
+        fn reify_ops<
+            Z: AsyncSigner,
+            U: ContentRef,
+            M: MembershipListener<Z, U> + SecretListener,
+        >(
             group: &mut Group<Z, U, M>,
             dlg_store: DelegationStore<Z, U, M>,
             rev_store: RevocationStore<Z, U, M>,
@@ -1475,8 +1480,8 @@ impl<
         S: AsyncSigner + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
-        C: CiphertextStore<T, P> + Clone, // FIXME make the default Rc<RefCell<...>>
-        L: MembershipListener<S, T> + CgkaListener,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<S, T> + CgkaListener + SecretListener,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > Fork for Keyhive<S, T, P, C, L, R>
 {
@@ -1556,7 +1561,7 @@ impl<
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T> + CgkaListener + SecretListener,
         R: rand::CryptoRng + rand::RngCore,
     > From<&Keyhive<S, T, P, C, L, R>> for Agent<S, T, L>
 {

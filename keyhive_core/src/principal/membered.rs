@@ -14,7 +14,7 @@ use crate::{
     crypto::{
         digest::Digest, signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable,
     },
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{membership::MembershipListener, no_listener::NoListener, secret::SecretListener},
     util::content_addressed_map::CaMap,
 };
 use derive_where::derive_where;
@@ -33,13 +33,15 @@ use std::{
 pub enum Membered<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<S, T> + SecretListener = NoListener,
 > {
     Group(Rc<RefCell<Group<S, T, L>>>),
     Document(Rc<RefCell<Document<S, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+    Membered<S, T, L>
+{
     pub fn get_capability(&self, agent_id: &Identifier) -> Option<Rc<Signed<Delegation<S, T, L>>>> {
         match self {
             Membered::Group(group) => group.borrow().get_capability(agent_id).duped(),
@@ -150,15 +152,15 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Rc<RefCell<Group<S, T, L>>>>
-    for Membered<S, T, L>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+    From<Rc<RefCell<Group<S, T, L>>>> for Membered<S, T, L>
 {
     fn from(group: Rc<RefCell<Group<S, T, L>>>) -> Self {
         Membered::Group(group)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
     From<Rc<RefCell<Document<S, T, L>>>> for Membered<S, T, L>
 {
     fn from(document: Rc<RefCell<Document<S, T, L>>>) -> Self {
@@ -166,7 +168,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Membered<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Verifiable
+    for Membered<S, T, L>
+{
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         match self {
             Membered::Group(group) => group.borrow().verifying_key(),

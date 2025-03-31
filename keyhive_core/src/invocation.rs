@@ -1,7 +1,7 @@
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{membership::MembershipListener, no_listener::NoListener, secret::SecretListener},
     principal::group::delegation::{Delegation, StaticDelegation},
 };
 use derive_where::derive_where;
@@ -13,15 +13,19 @@ use std::rc::Rc;
 pub struct Invocation<
     S: AsyncSigner,
     C: ContentRef = [u8; 32],
-    L: MembershipListener<S, C> = NoListener,
+    L: MembershipListener<S, C> + SecretListener = NoListener,
     T: Clone = C,
 > {
     pub(crate) invoke: T,
     pub(crate) proof: Option<Rc<Signed<Delegation<S, C, L>>>>,
 }
 
-impl<S: AsyncSigner, C: ContentRef, L: MembershipListener<S, C>, T: Clone + Serialize> Serialize
-    for Invocation<S, C, L, T>
+impl<
+        S: AsyncSigner,
+        C: ContentRef,
+        L: MembershipListener<S, C> + SecretListener,
+        T: Clone + Serialize,
+    > Serialize for Invocation<S, C, L, T>
 {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticInvocation::from(self.clone()).serialize(serializer)
@@ -34,7 +38,7 @@ pub struct StaticInvocation<C: ContentRef, T: Clone> {
     pub(crate) proof: Option<Digest<Signed<StaticDelegation<C>>>>,
 }
 
-impl<S: AsyncSigner, C: ContentRef, L: MembershipListener<S, C>, T: Clone>
+impl<S: AsyncSigner, C: ContentRef, L: MembershipListener<S, C> + SecretListener, T: Clone>
     From<Invocation<S, C, L, T>> for StaticInvocation<C, T>
 {
     fn from(invocation: Invocation<S, C, L, T>) -> Self {

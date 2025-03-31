@@ -3,7 +3,7 @@
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{membership::MembershipListener, no_listener::NoListener, secret::SecretListener},
     principal::group::delegation::Delegation,
     util::content_addressed_map::CaMap,
 };
@@ -18,10 +18,12 @@ use std::{cell::Ref, cell::RefCell, rc::Rc};
 pub struct DelegationStore<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<S, T> + SecretListener = NoListener,
 >(pub(crate) Rc<RefCell<CaMap<Signed<Delegation<S, T, L>>>>>);
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> DelegationStore<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+    DelegationStore<S, T, L>
+{
     /// Create a new delegation store.
     pub fn new() -> Self {
         Self(Rc::new(RefCell::new(CaMap::new())))
@@ -64,7 +66,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> DelegationStore
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> PartialEq
     for DelegationStore<S, T, L>
 {
     fn eq(&self, other: &Self) -> bool {
@@ -72,9 +74,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Eq for DelegationStore<S, T, L> {}
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Eq
+    for DelegationStore<S, T, L>
+{
+}
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> std::hash::Hash
     for DelegationStore<S, T, L>
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -82,7 +87,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for DelegationStore<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Dupe
+    for DelegationStore<S, T, L>
+{
     fn dupe(&self) -> Self {
         Self(self.0.dupe())
     }

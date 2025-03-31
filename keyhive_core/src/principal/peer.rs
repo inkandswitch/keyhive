@@ -8,7 +8,7 @@ use super::{
 use crate::{
     content::reference::ContentRef,
     crypto::{share_key::ShareKey, signer::async_signer::AsyncSigner},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{membership::MembershipListener, no_listener::NoListener, secret::SecretListener},
 };
 use derive_more::{From, TryInto};
 use derive_where::derive_where;
@@ -24,13 +24,17 @@ use thiserror::Error;
 /// An [`Agent`] minus the current user.
 #[derive(From, TryInto)]
 #[derive_where(PartialEq, Debug; T)]
-pub enum Peer<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
+pub enum Peer<
+    S: AsyncSigner,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<S, T> + SecretListener = NoListener,
+> {
     Individual(Rc<RefCell<Individual>>),
     Group(Rc<RefCell<Group<S, T, L>>>),
     Document(Rc<RefCell<Document<S, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Peer<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Peer<S, T, L> {
     pub fn id(&self) -> Identifier {
         match self {
             Peer::Individual(i) => i.borrow().id().into(),
@@ -67,13 +71,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Peer<S, T, L> {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for Peer<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Dupe
+    for Peer<S, T, L>
+{
     fn dupe(&self) -> Self {
         self.clone()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Peer<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Clone
+    for Peer<S, T, L>
+{
     fn clone(&self) -> Self {
         match self {
             Peer::Individual(i) => Peer::Individual(i.dupe()),
@@ -83,14 +91,16 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Peer<
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Display for Peer<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Display
+    for Peer<S, T, L>
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.id().fmt(f)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Peer<S, T, L>>
-    for Agent<S, T, L>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+    From<Peer<S, T, L>> for Agent<S, T, L>
 {
     fn from(peer: Peer<S, T, L>) -> Self {
         match peer {
@@ -101,8 +111,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Peer<S, T,
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> TryFrom<Agent<S, T, L>>
-    for Peer<S, T, L>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+    TryFrom<Agent<S, T, L>> for Peer<S, T, L>
 {
     type Error = ActiveUserIsNotAPeer;
 

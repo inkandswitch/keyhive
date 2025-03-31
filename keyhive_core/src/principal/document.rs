@@ -23,7 +23,7 @@ use crate::{
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{membership::MembershipListener, no_listener::NoListener, secret::SecretListener},
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
@@ -63,17 +63,19 @@ use tracing::instrument;
 pub struct Document<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<S, T> + SecretListener = NoListener,
 > {
     pub(crate) group: Group<S, T, L>,
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
 
     known_decryption_keys: HashMap<T, SymmetricKey>,
-    cgka: Option<Cgka>,
+    cgka: Option<Cgka<L>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+    Document<S, T, L>
+{
     // FIXME: We need a signing key for initializing Cgka and we need to share
     // the init add op.
     // NOTE doesn't register into the top-level Keyhive context
@@ -106,14 +108,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.doc_id().into()
     }
 
-    pub fn cgka(&self) -> Result<&Cgka, CgkaError> {
+    pub fn cgka(&self) -> Result<&Cgka<L>, CgkaError> {
         match &self.cgka {
             Some(cgka) => Ok(cgka),
             None => Err(CgkaError::NotInitialized),
         }
     }
 
-    pub fn cgka_mut(&mut self) -> Result<&mut Cgka, CgkaError> {
+    pub fn cgka_mut(&mut self) -> Result<&mut Cgka<L>, CgkaError> {
         match &mut self.cgka {
             Some(cgka) => Ok(cgka),
             None => Err(CgkaError::NotInitialized),
@@ -168,7 +170,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
                     DocumentId(verifier.into()),
                     initial_content_heads.clone().into_iter().collect(),
                 )]),
-                listener,
+                listener.clone(),
             )
         });
 
@@ -185,9 +187,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             .collect();
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_share_key, owner_share_secret_key);
-        let mut cgka = Cgka::new(doc_id, owner_id, owner_share_key, signer)
+        let mut cgka = Cgka::new(doc_id, owner_id, owner_share_key, signer, listener)
             .await?
-            .with_new_owner(owner_id, owner_sks)?;
+            .with_new_owner(owner_id, owner_sks)
+            .await?;
+
         let mut ops: Vec<Signed<CgkaOperation>> = Vec::new();
         ops.push(cgka.init_add_op());
         if other_members.len() > 1 {
@@ -362,7 +366,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.group.receive_revocation(revocation)
     }
 
-    pub fn merge_cgka_op(&mut self, op: Rc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
+    pub fn merge_cgka_op(
+        &mut self,
+        op: Rc<Signed<CgkaOperation>>,
+        listener: L,
+    ) -> Result<(), CgkaError> {
         match &mut self.cgka {
             Some(cgka) => return cgka.merge_concurrent_operation(op),
             None => match op.payload.clone() {
@@ -375,11 +383,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
                     if !predecessors.is_empty() {
                         return Err(CgkaError::OutOfOrderOperation);
                     }
+
                     self.cgka = Some(Cgka::new_from_init_add(
                         self.doc_id(),
                         added_id,
                         pk,
                         (*op).clone(),
+                        listener,
                     )?)
                 }
                 _ => return Err(CgkaError::UnexpectedInitialOperation),
@@ -389,7 +399,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     }
 
     #[instrument(skip(self, sk), fields(doc_id = ?self.doc_id()))]
-    pub fn merge_cgka_invite_op(
+    pub async fn merge_cgka_invite_op(
         &mut self,
         op: Rc<Signed<CgkaOperation>>,
         sk: &ShareSecretKey,
@@ -410,9 +420,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             return Err(CgkaError::OutOfOrderOperation);
         }
         let mut owner_sks = self.cgka()?.owner_sks.clone();
-        owner_sks.insert(pk.clone(), sk.clone());
-        self.cgka = Some(self.cgka()?.with_new_owner(added_id, owner_sks)?);
-        self.merge_cgka_op(op)
+        owner_sks.insert(pk, *sk);
+        self.cgka = Some(self.cgka()?.with_new_owner(added_id, owner_sks).await?);
+        let listener = self.cgka()?.listener.clone();
+        self.merge_cgka_op(op, listener)
     }
 
     pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
@@ -573,13 +584,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Document<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Verifiable
+    for Document<S, T, L>
+{
     fn verifying_key(&self) -> VerifyingKey {
         self.group.verifying_key()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Document<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Hash
+    for Document<S, T, L>
+{
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.group.hash(state);
         crate::util::hasher::hash_set(&self.content_heads, state);
@@ -592,7 +607,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Docume
 pub struct AddMemberUpdate<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<S, T> + SecretListener = NoListener,
 > {
     pub delegation: Rc<Signed<Delegation<S, T, L>>>,
     pub cgka_ops: Vec<Signed<CgkaOperation>>,
@@ -606,14 +621,16 @@ pub struct MissingIndividualError(pub Box<IndividualId>);
 pub struct RevokeMemberUpdate<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<S, T> + SecretListener = NoListener,
 > {
     pub(crate) revocations: Vec<Rc<Signed<Revocation<S, T, L>>>>,
     pub(crate) redelegations: Vec<Rc<Signed<Delegation<S, T, L>>>>,
     pub(crate) cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevokeMemberUpdate<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+    RevokeMemberUpdate<S, T, L>
+{
     pub fn revocations(&self) -> &[Rc<Signed<Revocation<S, T, L>>>] {
         &self.revocations
     }
@@ -627,7 +644,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevokeMemberUpd
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Default
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Default
     for RevokeMemberUpdate<S, T, L>
 {
     fn default() -> Self {
