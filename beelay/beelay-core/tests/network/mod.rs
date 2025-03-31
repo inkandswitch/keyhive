@@ -488,6 +488,17 @@ impl Network {
         peer_id
     }
 
+    pub fn reload_peer(&mut self, peer: &PeerId) {
+        {
+            let mut beelay = self.beelay(peer);
+            beelay.shutdown();
+        }
+        let beelay = self.beelays.remove(peer).unwrap();
+        let config =
+            beelay_core::Config::new(rand::thread_rng(), beelay.signing_key.verifying_key());
+        self.load_peer(&beelay.nickname, config, beelay.storage, beelay.signing_key);
+    }
+
     // Create a stream from left to right (i.e. the left peer will send the hello message)
     #[allow(dead_code)]
     pub fn connect_stream(&mut self, left: &PeerId, right: &PeerId) -> ConnectedPair {

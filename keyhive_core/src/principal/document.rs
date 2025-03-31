@@ -156,7 +156,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         listener: L,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<Self, GenerateDocError> {
+    ) -> Result<(Self, Vec<Signed<CgkaOperation>>), GenerateDocError> {
         let (group_result, group_vk) = EphemeralSigner::with_signer(csprng, |verifier, signer| {
             Group::generate_after_content(
                 signer,
@@ -204,16 +204,18 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         let (_pcs_key, update_op) = cgka
             .update(owner_share_key, owner_share_secret_key, signer, csprng)
             .await?;
-        // FIXME: We don't currently do anything with these ops, but need to share them
-        // across the network.
+
         ops.push(update_op);
-        Ok(Document {
-            group,
-            content_state: HashSet::new(),
-            content_heads: initial_content_heads.iter().cloned().collect(),
-            known_decryption_keys: HashMap::new(),
-            cgka: Some(cgka),
-        })
+        Ok((
+            Document {
+                group,
+                content_state: HashSet::new(),
+                content_heads: initial_content_heads.iter().cloned().collect(),
+                known_decryption_keys: HashMap::new(),
+                cgka: Some(cgka),
+            },
+            ops,
+        ))
     }
 
     #[instrument(

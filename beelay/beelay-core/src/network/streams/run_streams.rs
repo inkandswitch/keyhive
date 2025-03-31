@@ -320,7 +320,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> StreamToRun<R> {
                             let _ = reply.send(None);
                             continue
                         }
-                        tracing::debug!(?req, remote_peer=%connection.their_peer_id(), "sending outbound request");
+                        tracing::debug!(%req, remote_peer=%connection.their_peer_id(), "sending outbound request");
                         let signed = ctx.state().auth().sign_message(
                             ctx.now().as_secs(),
                             crate::Audience::peer(&connection.their_peer_id()),
