@@ -102,6 +102,11 @@ impl Driver {
     }
 
     pub(crate) fn step(&mut self, now: UnixTimestampMillis) -> EventResults {
+        if self.tx_commands.is_closed() {
+            let mut result = EventResults::default();
+            result.stopped = true;
+            return result;
+        }
         *self.now.borrow_mut() = now;
         self.executor.run_until_stalled();
 
@@ -144,6 +149,10 @@ impl Driver {
                         .push(event);
                 }
             }
+        }
+
+        if self.tx_commands.is_closed() {
+            event_results.stopped = true;
         }
 
         event_results
@@ -303,6 +312,7 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         loops.reconcile(&ctx);
         ctx.state().sessions().expire_sessions(now.borrow().clone());
     }
+    tracing::trace!("driver loop completed");
 }
 
 #[derive(Debug, PartialEq, Eq)]
