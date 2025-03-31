@@ -20,6 +20,7 @@ use crate::{
         siv::Siv,
         symmetric_key::SymmetricKey,
     },
+    listener::secret::SecretListener,
     principal::{document::id::DocumentId, individual::id::IndividualId},
     transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
@@ -52,7 +53,7 @@ use tracing::{info, instrument};
 /// guaranteed by Keyhive as a whole).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Derivative)]
 #[derivative(Hash)]
-pub struct Cgka {
+pub struct Cgka<L: SecretListener> {
     doc_id: DocumentId,
     /// The id of the member who owns this tree.
     pub owner_id: IndividualId,
@@ -74,6 +75,8 @@ pub struct Cgka {
 
     original_member: (IndividualId, ShareKey),
     init_add_op: Signed<CgkaOperation>,
+
+    listener: L,
 }
 
 fn hash_pcs_keys<H: Hasher>(pcs_keys: &CaMap<PcsKey>, state: &mut H) {
@@ -87,16 +90,26 @@ fn hashed_key_bytes<T: Serialize, V, H: Hasher>(hmap: &HashMap<Digest<T>, V>, st
         .hash(state)
 }
 
-impl Cgka {
+impl<L: SecretListener> Cgka<L> {
     pub async fn new<S: AsyncSigner>(
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
         signer: &S,
+        listener: L,
     ) -> Result<Self, CgkaError> {
         let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk);
         let signed_op = signer.try_sign_async(init_add_op).await?;
-        Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op)
+        Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op, listener)
+    }
+
+    pub fn remove_me(&self) -> ShareKeyMap {
+        self.owner_sks.clone()
+    }
+
+    // FIXME remove; just here while debugging a thing
+    pub fn ops_graph_len(&self) -> usize {
+        self.ops_graph.cgka_ops.len()
     }
 
     #[instrument(skip_all, fields(doc_id))]
@@ -105,6 +118,7 @@ impl Cgka {
         owner_id: IndividualId,
         owner_pk: ShareKey,
         init_add_op: Signed<CgkaOperation>,
+        listener: L,
     ) -> Result<Self, CgkaError> {
         let tree = BeeKem::new(doc_id, owner_id, owner_pk)?;
         let mut cgka = Self {
@@ -118,6 +132,7 @@ impl Cgka {
             pcs_key_ops: HashMap::new(),
             original_member: (owner_id, owner_pk),
             init_add_op: init_add_op.clone(),
+            listener,
         };
         cgka.ops_graph.add_local_op(&init_add_op);
         Ok(cgka)
@@ -197,9 +212,12 @@ impl Cgka {
         &mut self,
         encrypted: &EncryptedContent<T, Cr>,
     ) -> Result<SymmetricKey, CgkaError> {
+        tracing::trace!("Decrypting content");
         let pcs_key =
             self.pcs_key_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)?;
+
         if !self.pcs_keys.contains_key(&encrypted.pcs_key_hash) {
+            tracing::trace!("insert PCS key");
             self.insert_pcs_key(&pcs_key, encrypted.pcs_update_op_hash);
         }
         let app_secret = pcs_key.derive_application_secret(
@@ -449,6 +467,7 @@ impl Cgka {
 
     /// Decrypt tree secret to derive [`PcsKey`].
     fn pcs_key_from_tree_root(&mut self) -> Result<PcsKey, CgkaError> {
+        tracing::trace!("Decrypting tree secret");
         let key = self
             .tree
             .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)?;
@@ -466,11 +485,16 @@ impl Cgka {
         update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
         if let Some(pcs_key) = self.pcs_keys.get(pcs_key_hash) {
-            Ok(*pcs_key.clone())
+            tracing::trace!("Found PCS key in cache");
+            Ok(*pcs_key.dupe())
         } else {
+            tracing::trace!("No PCS key in cache; deriving from tree root");
             if self.has_pcs_key() {
+                tracing::trace!("Tree has root key");
                 let pcs_key = self.pcs_key_from_tree_root()?;
+                tracing::trace!("Derived PCS key from tree root");
                 if &Digest::hash(&pcs_key) == pcs_key_hash {
+                    tracing::trace!("Derived PCS key matches hash");
                     return Ok(pcs_key);
                 }
             }
@@ -485,8 +509,10 @@ impl Cgka {
         op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
         if !self.ops_graph.contains_op_hash(op_hash) {
+            tracing::trace!("Operation not in graph");
             return Err(CgkaError::UnknownPcsKey);
         }
+        tracing::trace!("Operation in graph");
         let mut heads = HashSet::new();
         heads.insert(*op_hash);
         let ops = self.ops_graph.topsort_for_heads(&heads)?;
@@ -511,12 +537,13 @@ impl Cgka {
 
     /// Build a new [`Cgka`] for the provided non-empty list of [`CgkaEpoch`]s.
     #[instrument(skip_all, fields(doc_id, epochs))]
-    fn rebuild_cgka(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<Cgka, CgkaError> {
+    fn rebuild_cgka(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<Cgka<L>, CgkaError> {
         let mut rebuilt_cgka = Cgka::new_from_init_add(
             self.doc_id,
             self.original_member.0,
             self.original_member.1,
             self.init_add_op.clone(),
+            self.listener.clone(),
         )?
         .with_new_owner(self.owner_id, self.owner_sks.clone())?;
         rebuilt_cgka.apply_epochs(&epochs)?;
@@ -540,6 +567,7 @@ impl Cgka {
             self.original_member.0,
             self.original_member.1,
             self.init_add_op.clone(),
+            self.listener.clone(),
         )?
         .with_new_owner(self.owner_id, self.owner_sks.clone())?;
         rebuilt_cgka.apply_epochs(&epochs)?;
@@ -572,15 +600,15 @@ impl Cgka {
     }
 }
 
-impl Fork for Cgka {
-    type Forked = Self;
+impl<L: SecretListener> Fork for Cgka<L> {
+    type Forked = Self; // FIXME need a local copy. Maybe just use Log or a SecretStore of some kind?
 
     fn fork(&self) -> Self::Forked {
         self.clone()
     }
 }
 
-impl Merge for Cgka {
+impl<L: SecretListener> Merge for Cgka<L> {
     fn merge(&mut self, fork: Self::Forked) {
         self.owner_sks.merge(fork.owner_sks);
         self.ops_graph.merge(fork.ops_graph);
@@ -591,7 +619,7 @@ impl Merge for Cgka {
 }
 
 #[cfg(feature = "test_utils")]
-impl Cgka {
+impl<L: SecretListener> Cgka<L> {
     pub fn secret_from_root(&mut self) -> Result<PcsKey, CgkaError> {
         self.pcs_key_from_tree_root()
     }

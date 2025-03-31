@@ -127,6 +127,11 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
         })
     }
 
+    // FIXME
+    pub fn remove_me(&self) -> BTreeMap<ShareKey, ShareSecretKey> {
+        self.prekey_pairs.clone()
+    }
+
     /// Getter for the agent's [`IndividualId`].
     pub fn id(&self) -> IndividualId {
         self.individual.id()

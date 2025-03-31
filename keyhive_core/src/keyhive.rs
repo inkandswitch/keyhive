@@ -1130,6 +1130,15 @@ impl<
 
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn into_archive(&self) -> Archive<T> {
+        tracing::info!("doc dcount: {}", self.docs.len());
+        let foo: HashMap<DocumentId, crate::principal::document::archive::DocumentArchive<T>> =
+            self.docs
+                .iter()
+                .map(|(k, rc_v)| (*k, rc_v.borrow().into_archive()))
+                .collect();
+
+        tracing::info!("foo: {:?}", foo);
+
         Archive {
             active: self.active.borrow().into_archive(),
             topsorted_ops: MembershipOperation::<S, T, L>::topsort(

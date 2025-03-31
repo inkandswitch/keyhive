@@ -51,6 +51,10 @@ impl ShareKeyMap {
     pub fn extend(&mut self, other: &ShareKeyMap) {
         self.0.extend(other.0.iter());
     }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 impl Fork for ShareKeyMap {

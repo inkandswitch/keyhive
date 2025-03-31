@@ -208,21 +208,33 @@ impl BeeKem {
         owner_sks: &mut ShareKeyMap,
     ) -> Result<ShareSecretKey, CgkaError> {
         let leaf_idx = *self.leaf_index_for_id(owner_id)?;
+        tracing::trace!("Decrypting tree secret");
         if !self.has_root_key() {
+            tracing::trace!("No root key found");
             return Err(CgkaError::NoRootKey);
         }
+        tracing::trace!("Root key found");
         let leaf = self
             .leaf(leaf_idx)
             .as_ref()
             .expect("Leaf should not be blank");
+
         if Some(leaf_idx) == self.current_secret_encrypter_leaf_idx {
+            tracing::trace!("Leaf is current encrypter");
             let NodeKey::ShareKey(pk) = leaf.pk else {
+                tracing::trace!("Leaf has no public key");
                 return Err(CgkaError::ShareKeyNotFound);
             };
+
+            tracing::trace!("Leaf has public key");
+            tracing::trace!("Looking up secret {:?}", pk);
+            tracing::trace!(owner_sks = ?owner_sks, len = owner_sks.len());
             let secret = owner_sks.get(&pk).ok_or(CgkaError::ShareKeyNotFound)?;
+            tracing::trace!("Secret found");
             return Ok(secret
                 .ratchet_n_forward(treemath::direct_path(leaf_idx.into(), self.tree_size).len()));
         }
+        tracing::trace!("Leaf is not current encrypter");
         let lca_with_encrypter = treemath::lowest_common_ancestor(
             leaf_idx,
             self.current_secret_encrypter_leaf_idx

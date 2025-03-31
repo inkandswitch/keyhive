@@ -3,7 +3,7 @@ use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{signed::Signed, signer::async_signer::AsyncSigner},
-    event::Event,
+    event::{static_event::StaticEvent, Event},
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
@@ -54,6 +54,14 @@ impl<S: AsyncSigner, T: ContentRef> Log<S, T> {
 
     pub fn len(&self) -> usize {
         self.0.borrow().len()
+    }
+
+    pub fn to_static_events(&self) -> Vec<StaticEvent<T>> {
+        self.0
+            .borrow()
+            .iter()
+            .map(|e| StaticEvent::from(e.dupe()))
+            .collect()
     }
 }
 

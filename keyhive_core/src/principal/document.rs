@@ -470,9 +470,15 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     ) -> Result<Vec<u8>, DecryptError> {
         let decrypt_key = self
             .cgka_mut()
-            .map_err(|_| DecryptError::KeyNotFound)?
+            .map_err(|e| {
+                tracing::warn!("No CGKA: {:?}", e);
+                DecryptError::KeyNotFound
+            })?
             .decryption_key_for(encrypted_content)
-            .map_err(|_| DecryptError::KeyNotFound)?;
+            .map_err(|e| {
+                tracing::warn!("No Key: {:?}", e);
+                DecryptError::KeyNotFound
+            })?;
 
         let mut plaintext = encrypted_content.ciphertext.clone();
         decrypt_key
