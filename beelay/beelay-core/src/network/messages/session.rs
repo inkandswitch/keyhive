@@ -27,7 +27,28 @@ pub(crate) enum SessionRequest {
     },
 }
 
-#[derive(Clone, PartialEq, Eq)]
+impl std::fmt::Display for SessionRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Begin {
+                membership_symbols,
+                doc_symbols,
+            } => {
+                write!(
+                    f,
+                    "Begin(membership_symbols: {}, doc_symbols: {})",
+                    membership_symbols.len(),
+                    doc_symbols.len()
+                )
+            }
+            Self::Message { session_id, msg } => {
+                write!(f, "Message(session_id: {}, msg: {})", session_id, msg)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub(crate) enum SessionMessage {
     FetchMembershipSymbols {
@@ -48,7 +69,7 @@ pub(crate) enum SessionMessage {
     FetchCgkaOps(DocumentId, Vec<Digest<Signed<CgkaOperation>>>),
 }
 
-impl std::fmt::Debug for SessionMessage {
+impl std::fmt::Display for SessionMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::FetchMembershipSymbols { count } => {

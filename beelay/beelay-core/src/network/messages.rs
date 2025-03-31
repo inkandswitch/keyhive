@@ -158,7 +158,7 @@ impl std::fmt::Display for Request {
             Request::FetchSedimentree(doc_id) => write!(f, "FetchSedimentree({})", doc_id),
             Request::FetchBlob { doc_id, blob } => write!(f, "FetchBlob({}, {})", doc_id, blob),
             Request::Ping => write!(f, "Ping"),
-            Request::Session(session) => write!(f, "Session({:?})", session),
+            Request::Session(session) => write!(f, "Session({})", session),
             Request::UploadMembershipOps { ops } => {
                 write!(f, "UploadMembershipOps({} ops)", ops.len())
             }
