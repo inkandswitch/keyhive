@@ -170,6 +170,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
 
         keyhive
             .ingest_unsorted_static_events(ops)
+            .await
             .map_err(|e| error::Ingest::Failed(format!("failed to ingest keyhive events: {:?}", e)))
     }
 
@@ -201,7 +202,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         loop {
             let mut ingested = false;
             while let Some(op) = ops.pop() {
-                match keyhive.receive_cgka_op(op.clone()) {
+                match keyhive.receive_cgka_op(op.clone()).await {
                     Ok(_) => {
                         tracing::trace!(?op, "processed keyhive event");
                         ingested = true;
@@ -266,7 +267,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         loop {
             let mut ingested = false;
             while let Some(event) = events.pop() {
-                match keyhive.receive_static_event(event.clone()) {
+                match keyhive.receive_static_event(event.clone()).await {
                     Ok(_) => {
                         tracing::trace!(?event, "processing keyhive event");
                         ingested = true;

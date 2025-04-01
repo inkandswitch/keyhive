@@ -1,28 +1,52 @@
+use std::{cell::RefCell, rc::Rc};
+
 use keyhive_core::{
     access::Access,
-    archive::Archive,
     crypto::signer::memory::MemorySigner,
     event::static_event::StaticEvent,
     keyhive::Keyhive,
     listener::{log::Log, no_listener::NoListener},
+    principal::{individual::Individual, peer::Peer},
     store::ciphertext::memory::MemoryCiphertextStore,
+    transact::merge::Merge,
 };
 use nonempty::nonempty;
 use testresult::TestResult;
 
-async fn make_keyhive() -> Keyhive<MemorySigner> {
+struct NewKeyhive {
+    signer: MemorySigner,
+    log: Log<MemorySigner>,
+    keyhive: Keyhive<
+        MemorySigner,
+        [u8; 32],
+        Vec<u8>,
+        MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+        Log<MemorySigner>,
+        rand::rngs::ThreadRng,
+    >,
+}
+
+async fn make_keyhive() -> NewKeyhive {
     let sk = MemorySigner::generate(&mut rand::thread_rng());
     let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
-    Keyhive::generate(sk, store, NoListener, rand::thread_rng())
+    let log = Log::new();
+    let keyhive = Keyhive::generate(sk.clone(), store, log.clone(), rand::thread_rng())
         .await
-        .unwrap()
+        .unwrap();
+    NewKeyhive {
+        signer: sk,
+        log,
+        keyhive,
+    }
 }
 
 #[tokio::test]
 async fn test_encrypt_to_added_member() -> TestResult {
     test_utils::init_logging();
 
-    let mut alice = make_keyhive().await;
+    let NewKeyhive {
+        keyhive: mut alice, ..
+    } = make_keyhive().await;
 
     let init_content = "hello world".as_bytes().to_vec();
     let init_hash = blake3::hash(&init_content);
@@ -31,7 +55,9 @@ async fn test_encrypt_to_added_member() -> TestResult {
         .generate_doc(vec![], nonempty![init_hash.into()])
         .await?;
 
-    let mut bob = make_keyhive().await;
+    let NewKeyhive {
+        keyhive: mut bob, ..
+    } = make_keyhive().await;
 
     alice
         .add_member(
@@ -48,7 +74,8 @@ async fn test_encrypt_to_added_member() -> TestResult {
 
     // now sync everything to bob
     let events = alice.static_events_for_agent(&bob.active().clone().into())?;
-    bob.ingest_unsorted_static_events(events.into_values().collect())?;
+    bob.ingest_unsorted_static_events(events.into_values().collect())
+        .await?;
 
     // Now attempt to decrypt on bob
     let doc_on_bob = bob.get_document(doc.borrow().doc_id()).unwrap();
@@ -61,12 +88,11 @@ async fn test_encrypt_to_added_member() -> TestResult {
 #[tokio::test]
 async fn test_decrypt_after_to_from_archive() {
     test_utils::init_logging();
-    let sk = MemorySigner::generate(&mut rand::thread_rng());
-    let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
-    let log = Log::new();
-    let mut alice = Keyhive::generate(sk.clone(), store, log.clone(), rand::thread_rng())
-        .await
-        .unwrap();
+    let NewKeyhive {
+        keyhive: mut alice,
+        signer: sk,
+        log,
+    } = make_keyhive().await;
 
     let archive = alice.into_archive();
 
@@ -95,7 +121,7 @@ async fn test_decrypt_after_to_from_archive() {
     while let Some(evt) = log.pop() {
         events.push(StaticEvent::from(evt));
     }
-    alice.ingest_unsorted_static_events(events).unwrap();
+    alice.ingest_unsorted_static_events(events).await.unwrap();
 
     let doc = alice.get_document(doc.borrow().doc_id()).unwrap();
 

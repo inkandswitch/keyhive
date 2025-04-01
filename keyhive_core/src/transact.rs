@@ -147,7 +147,7 @@ pub async fn transact_nonblocking<
     Ok(())
 }
 
-/// A variant of [`transact_nonblocking`] that works with multithreaded primitives.
+/// A variant of [`transact_nonblocking`] that works when the merge logic is asynchronous.
 ///
 /// ```rust
 /// # use keyhive_core::transact::{
@@ -183,17 +183,17 @@ pub async fn transact_nonblocking<
 ///
 /// # let multithreaded = tokio::runtime::Builder::new_multi_thread().worker_threads(3).build().unwrap();
 /// multithreaded.block_on(async {
-///     let og = TokioArcMutex(Arc::new(tokio::sync::Mutex::new(HashSet::from_iter([
+///     let mut og = TokioArcMutex(Arc::new(tokio::sync::Mutex::new(HashSet::from_iter([
 ///         0u8, 1, 2, 3,
 ///     ]))));
 ///     let mut work = tokio::task::JoinSet::new();
 ///
-///     let og1 = og.clone();
-///     let og2 = og.clone();
-///     let og3 = og.clone();
+///     let mut og1 = og.clone();
+///     let mut og2 = og.clone();
+///     let mut og3 = og.clone();
 ///
 ///     work.spawn(async move {
-///         transact_async(&og1, |mut set: HashSet<u8>| async move {
+///         transact_async(&mut og1, |mut set: HashSet<u8>| async move {
 ///             set.insert(42);
 ///             set.insert(99);
 ///             set.remove(&1);
@@ -204,7 +204,7 @@ pub async fn transact_nonblocking<
 ///     });
 ///
 ///     work.spawn(async move {
-///         transact_async(&og2, |mut set: HashSet<u8>| async move {
+///         transact_async(&mut og2, |mut set: HashSet<u8>| async move {
 ///             set.insert(255);
 ///             set.insert(254);
 ///             set.insert(253);
@@ -215,7 +215,7 @@ pub async fn transact_nonblocking<
 ///     });
 ///
 ///     work.spawn(async move {
-///         transact_async(&og3, |mut set: HashSet<u8>| async move {
+///         transact_async(&mut og3, |mut set: HashSet<u8>| async move {
 ///             set.insert(50);
 ///             set.insert(60);
 ///             Err::<HashSet<u8>, _>("NOPE".to_string())
@@ -254,17 +254,17 @@ pub async fn transact_nonblocking<
 /// ```
 #[instrument(skip_all)]
 pub async fn transact_async<
-    T: MergeAsync + Clone,
+    T: MergeAsync,
     Error,
     F: AsyncFnOnce(T::AsyncForked) -> Result<T::AsyncForked, Error>,
 >(
-    trunk: &T,
+    trunk: &mut T,
     tx: F,
 ) -> Result<(), Error> {
     let forked = trunk.fork_async().await;
     let diverged = info_span!("async_transaction")
         .in_scope(|| async { tx(forked).await })
         .await?;
-    trunk.clone().merge_async(diverged).await;
+    trunk.merge_async(diverged).await;
     Ok(())
 }
