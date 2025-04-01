@@ -4,13 +4,15 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use futures::channel::mpsc;
 use futures::channel::oneshot;
 use keyhive_core::keyhive::Keyhive;
+use keyhive_core::listener::log::Log;
 use keyhive_core::store::ciphertext::memory::MemoryCiphertextStore;
+use keyhive_core::transact::merge::Merge;
 
 use crate::doc_state::DocState;
 use crate::io::{IoHandle, IoResult};
 use crate::state::State;
 use crate::task_context::Storage;
-use crate::{driver, DocumentId, PeerId, Signer};
+use crate::{driver, keyhive_storage, CommitHash, DocumentId, PeerId, Signer};
 use crate::{io::IoTask, task_context::DocStorage, Beelay, StorageKey, UnixTimestampMillis};
 
 pub struct Loading<R: rand::Rng + rand::CryptoRng + Clone + 'static> {
@@ -76,33 +78,31 @@ pub(crate) async fn load_keyhive<R: rand::Rng + rand::CryptoRng + Clone + 'stati
     let (tx, rx) = mpsc::unbounded();
     let listener = crate::keyhive::Listener::new(tx);
 
-    // let signer = Signer::new(verifying_key, io.clone());
-    let mut keyhive = if let Some(archive) = crate::keyhive_storage::load_archive(io.clone()).await
-    {
-        tracing::trace!("keyhive archive found on disk, attempting to load");
-        match keyhive_core::keyhive::Keyhive::try_from_archive(
+    let (archive_keys, mut archives) = crate::keyhive_storage::load_archives(io.clone()).await;
+    tracing::trace!(
+        num_archives = archives.len(),
+        "loading from keyhive archives"
+    );
+    let should_compact = archive_keys.len() > 1;
+    let init_keyhive = archives.pop().and_then(|archive| {
+        keyhive_core::keyhive::Keyhive::try_from_archive(
             &archive,
             signer.clone(),
-            MemoryCiphertextStore::new(), // FIXME use exitsing!
+            MemoryCiphertextStore::<CommitHash, Vec<u8>>::new(), // FIXME use exitsing!
             listener.clone(),
             rng.clone(),
-        ) {
-            Ok(k) => {
-                tracing::debug!("loaded keyhive archive");
-                k
-            }
-            Err(e) => {
-                tracing::error!(err=?e, "failed to load keyhive archive");
-                keyhive_core::keyhive::Keyhive::generate(
-                    signer,
-                    MemoryCiphertextStore::new(/* FIXME use something else! */),
-                    listener.clone(),
-                    rng.clone(),
-                )
+        )
+        .inspect_err(|e| tracing::error!(err=?e, "failed to load archive"))
+        .ok()
+    });
+    let mut keyhive = if let Some(mut keyhive) = init_keyhive {
+        for archive in archives {
+            let _ = keyhive
+                .ingest_archive(archive)
                 .await
-                .unwrap()
-            }
+                .inspect_err(|e| tracing::warn!(err=?e, "error ingesting archive"));
         }
+        keyhive
     } else {
         tracing::trace!("no archive found on disk, creating a new one");
         let result = keyhive_core::keyhive::Keyhive::generate(
@@ -114,9 +114,21 @@ pub(crate) async fn load_keyhive<R: rand::Rng + rand::CryptoRng + Clone + 'stati
         .await
         .unwrap();
         let archived = result.into_archive();
-        crate::keyhive_storage::save_archive(io.clone(), archived).await;
+        crate::keyhive_storage::store_archive(io.clone(), archived).await;
         result
     };
+    if should_compact {
+        tracing::trace!("compacting archives");
+        // first write a new archive
+        let new_archive = keyhive.into_archive();
+        keyhive_storage::store_archive(io.clone(), new_archive).await;
+        let deletes = archive_keys.into_iter().map(|key| async {
+            let (tx, rx) = oneshot::channel();
+            io.new_task(IoTask::delete(key), tx);
+            let _ = rx.await;
+        });
+        futures::future::join_all(deletes).await;
+    }
     let events = crate::keyhive_storage::load_events(io).await;
     tracing::trace!(num_events = events.len(), ?events, "loading keyhive events");
     if let Err(e) = keyhive.ingest_unsorted_static_events(events).await {

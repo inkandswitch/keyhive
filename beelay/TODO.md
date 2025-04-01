@@ -3,8 +3,10 @@
 
 
 ## The big list
+* Add signatures to commits and bundles
+  * Signatures will need to be stored separately from commits because we can have multiple signatures per commit
+  * Bundles will need signatures per run of commits in the bundle
 * Bundle peer ID in with peer address
-
 * Introduce a GroupId type instead of using PeerId for the group id
 * Make sure we are incrementally saving ShareSecretKeys
 * Find a better name than `sync_loops`

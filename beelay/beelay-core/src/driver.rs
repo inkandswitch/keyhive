@@ -20,7 +20,7 @@ use crate::{
     state::State,
     streams::{self, IncomingStreamEvent},
     sync_loops, Command, CommandId, CommandResult, DocumentId, EndpointId, EventResults, IoTaskId,
-    NewRequest, OutboundRequestId, PeerId, Signer, TaskContext, UnixTimestampMillis,
+    NewRequest, OutboundRequestId, PeerId, Signer, StorageKey, TaskContext, UnixTimestampMillis,
 };
 
 pub struct SpawnArgs<R> {
@@ -262,6 +262,8 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         .expect("keyhive should be available at this point");
 
     loop {
+        let mut current_archive_keys: Vec<StorageKey> = Vec::new();
+
         if run_state == RunState::Stopping {
             tracing::trace!(
                 num_commands = running_commands.len(),
@@ -306,14 +308,37 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
                 let _ = tx_driver_events.unbounded_send(DriverEvent::Stream{ stream_id, event });
             }
             keyhive_event = keyhive_rx.select_next_some() => {
-                running_keyhive_event_stores.push(keyhive_storage::store_event(ctx.clone(), keyhive_event));
+                // horrible hack because at the moment keyhive events don't include secret keys
+                let ctx = ctx.clone();
+                let superceded_archives = std::mem::take(&mut current_archive_keys);
+                let task = async move {
+                    keyhive_storage::store_event(ctx.clone(), keyhive_event).await;
+                    let archive = ctx.state().keyhive().archive().await;
+                    let archive_path = keyhive_storage::store_archive(ctx.clone(), archive).await;
+                    let deletes = superceded_archives.into_iter().map({
+                        let ctx = ctx.clone();
+                        move |key| {
+                            let ctx = ctx.clone();
+                            async move {
+                                tracing::debug!(%key, "deleting superceded archive key");
+                                ctx.clone().storage().delete(key.clone()).await;
+                                tracing::debug!(%key, "finished deleting superceded archive key");
+                            }
+                        }
+                    });
+                    futures::future::join_all(deletes).await;
+                    archive_path
+                };
+                running_keyhive_event_stores.push(task);
             }
             finished_command = running_commands.select_next_some() => {
                 let (command_id, result) = finished_command;
                 let _ = tx_driver_events.unbounded_send(DriverEvent::CommandCompleted{ command_id, result });
             }
-            _finished_put = running_keyhive_event_stores.select_next_some() => {
-                tracing::trace!("finished storing keyhive event");
+            stored_archive_path = running_keyhive_event_stores.select_next_some() => {
+                if let Some(path) = stored_archive_path {
+                    current_archive_keys.push(path);
+                }
             }
             _loop_result = loops.process_pending(&ctx).fuse() => {
                 tracing::trace!("sync loop completed");
