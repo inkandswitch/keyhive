@@ -190,7 +190,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             .with_new_owner(owner_id, owner_sks)?;
         let mut ops: Vec<Signed<CgkaOperation>> = Vec::new();
         ops.push(cgka.init_add_op());
-        if other_members.len() > 1 {
+        if !other_members.is_empty() {
             ops.extend(
                 cgka.add_multiple(
                     NonEmpty::from_vec(other_members).expect("there to be multiple other members"),
