@@ -120,23 +120,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         }
     }
 
-    pub fn cgka_mut_or_init(&mut self) -> Result<&mut Cgka<L>, CgkaError> {
-        match &mut self.cgka {
-            Some(cgka) => Ok(cgka),
-            None => {
-                let cgka = Cgka::new(
-                    self.doc_id(),
-                    self.agent_id(),
-                    ShareKey::generate(),
-                    self.group.signer(),
-                    self.group.listener().clone(),
-                )?;
-                self.cgka = Some(cgka);
-                Ok(self.cgka.as_mut().unwrap())
-            }
-        }
-    }
-
     #[allow(clippy::type_complexity)]
     pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>> {
         self.group.members()

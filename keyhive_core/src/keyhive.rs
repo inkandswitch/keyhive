@@ -1071,12 +1071,10 @@ impl<
             .get(&doc_id)
             .ok_or(ReceiveDocumentSecretError::UnknownDocument(doc_id))?;
 
-        doc.borrow_mut().cgka_mut().ensure_init()?;
-        doc.borrow_mut()
-            .cgka_mut()
-            .expect("initted directly above")
-            .viewer_sks
-            .insert(public_key, secret_key);
+        // FIXME will not need this once `cgka` is not an `Option`
+        if let Ok(cgka) = doc.borrow_mut().cgka_mut() {
+            cgka.viewer_sks.insert(public_key, secret_key);
+        }
 
         Ok(())
     }

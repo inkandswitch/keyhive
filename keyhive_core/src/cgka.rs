@@ -547,13 +547,6 @@ impl<L: SecretListener> Cgka<L> {
         Ok(())
     }
 
-    pub(crate) fn ensure_init(&mut self) -> Result<(), CgkaError> {
-        if self.should_replay() {
-            self.replay_ops_graph()?;
-        }
-        Ok(())
-    }
-
     /// Build a new [`Cgka`] for the provided non-empty list of [`CgkaEpoch`]s.
     #[instrument(skip_all, fields(doc_id, epochs))]
     fn rebuild_cgka(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<Cgka<L>, CgkaError> {
