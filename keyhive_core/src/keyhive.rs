@@ -1411,6 +1411,8 @@ impl<
         })
     }
 
+    #[cfg(any(test, feature = "test_utils"))]
+    #[instrument(level = "trace", skip_all, fields(khid = %self.id()))]
     pub async fn ingest_archive(
         &mut self,
         archive: Archive<T>,
