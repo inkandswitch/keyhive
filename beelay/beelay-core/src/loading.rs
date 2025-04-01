@@ -119,7 +119,7 @@ pub(crate) async fn load_keyhive<R: rand::Rng + rand::CryptoRng + Clone + 'stati
     };
     let events = crate::keyhive_storage::load_events(io).await;
     tracing::trace!(num_events = events.len(), ?events, "loading keyhive events");
-    if let Err(e) = keyhive.ingest_unsorted_static_events(events) {
+    if let Err(e) = keyhive.ingest_unsorted_static_events(events).await {
         tracing::error!(err=?e, "failed to ingest keyhive events");
     }
 
