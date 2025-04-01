@@ -22,7 +22,7 @@ use crate::{
         siv::Siv,
         symmetric_key::SymmetricKey,
     },
-    listener::secret::{SecretListener, Subject},
+    listener::secret::SecretListener,
     principal::{document::id::DocumentId, individual::id::IndividualId},
     transact::{
         fork::Fork,
@@ -109,15 +109,6 @@ impl<L: SecretListener> Cgka<L> {
         Self::new_from_init_add(doc_id, viewer_id, viewer_pk, signed_op, listener)
     }
 
-    pub fn remove_me(&self) -> ShareKeyMap {
-        self.viewer_sks.clone()
-    }
-
-    // FIXME remove; just here while debugging a thing
-    pub fn ops_graph_len(&self) -> usize {
-        self.ops_graph.cgka_ops.len()
-    }
-
     #[instrument(skip_all, fields(doc_id))]
     pub fn new_from_init_add(
         doc_id: DocumentId,
@@ -155,7 +146,7 @@ impl<L: SecretListener> Cgka<L> {
 
         for (pk, sk) in viewer_sks.0.iter() {
             cgka.listener
-                .on_new_sharing_secret(Subject::DocumentId(self.doc_id), *pk, *sk)
+                .on_doc_sharing_secret(self.doc_id, *pk, *sk)
                 .await;
         }
 
@@ -337,7 +328,7 @@ impl<L: SecretListener> Cgka<L> {
             self.replay_ops_graph().await?;
         }
         self.listener
-            .on_new_sharing_secret(Subject::DocumentId(self.doc_id), new_pk, new_sk)
+            .on_doc_sharing_secret(self.doc_id, new_pk, new_sk)
             .await;
         self.viewer_sks.insert(new_pk, new_sk);
 
@@ -548,7 +539,7 @@ impl<L: SecretListener> Cgka<L> {
     async fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
         let ordered_ops = self.ops_graph.topsort_graph()?;
         let rebuilt_cgka = self.rebuild_cgka(ordered_ops).await?;
-        self.update_cgka_from(&rebuilt_cgka);
+        self.update_cgka_from(&rebuilt_cgka).await;
         self.pending_ops_for_structural_change = false;
         Ok(())
     }
@@ -611,7 +602,7 @@ impl<L: SecretListener> Cgka<L> {
 
         for (pk, sk) in other.viewer_sks.0.iter() {
             self.listener
-                .on_new_sharing_secret(Subject::DocumentId(self.doc_id), *pk, *sk)
+                .on_doc_sharing_secret(self.doc_id, *pk, *sk)
                 .await;
             self.viewer_sks.insert(*pk, *sk);
         }

@@ -10,13 +10,13 @@ use crate::{
     crypto::{
         digest::Digest,
         encrypted::EncryptedContent,
-        share_key::ShareKey,
+        share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError, VerificationError},
         signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
-    event::{static_event::StaticEvent, Event},
+    event::{static_event::StaticEvent, wire_event::WireEvent, Event},
     listener::{
         cgka::CgkaListener, log::Log, membership::MembershipListener, no_listener::NoListener,
         secret::SecretListener,
@@ -1004,6 +1004,24 @@ impl<
     }
 
     #[instrument(skip(self), fields(khid = %self.id()))]
+    pub async fn receive_wire_event(
+        &mut self,
+        wire_event: WireEvent<T>,
+    ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+        match wire_event {
+            WireEvent::PrekeysExpanded(add_op) => {
+                self.receive_prekey_op(&Rc::new(add_op).into())?
+            }
+            WireEvent::PrekeyRotated(rot_op) => self.receive_prekey_op(&Rc::new(rot_op).into())?,
+            WireEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op).await?,
+            WireEvent::Delegated(dlg) => self.receive_delegation(&dlg)?,
+            WireEvent::Revoked(rev) => self.receive_revocation(&rev)?,
+        }
+
+        Ok(())
+    }
+
+    #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn receive_static_event(
         &mut self,
         static_event: StaticEvent<T>,
@@ -1018,7 +1036,48 @@ impl<
             StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op).await?,
             StaticEvent::Delegated(dlg) => self.receive_delegation(&dlg)?,
             StaticEvent::Revoked(rev) => self.receive_revocation(&rev)?,
+            StaticEvent::DocumentSecret {
+                doc_id,
+                public_key,
+                secret_key,
+            } => self.receive_document_secret(doc_id, public_key, secret_key)?,
+            StaticEvent::ActiveAgentSecret {
+                public_key,
+                secret_key,
+            } => {
+                self.recieve_active_agent_secret(public_key, secret_key);
+            }
         }
+
+        Ok(())
+    }
+
+    pub(crate) fn recieve_active_agent_secret(
+        &mut self,
+        public_key: ShareKey,
+        secret_key: ShareSecretKey,
+    ) {
+        self.active
+            .borrow_mut()
+            .prekey_pairs
+            .insert(public_key, secret_key);
+    }
+
+    pub(crate) fn receive_document_secret(
+        &mut self,
+        doc_id: DocumentId,
+        public_key: ShareKey,
+        secret_key: ShareSecretKey,
+    ) -> Result<(), ReceiveDocumentSecretError> {
+        let doc = self
+            .docs
+            .get(&doc_id)
+            .ok_or(ReceiveDocumentSecretError::UnknownDocument(doc_id))?;
+
+        doc.borrow_mut()
+            .cgka_mut()?
+            .viewer_sks
+            .insert(public_key, secret_key);
 
         Ok(())
     }
@@ -1586,6 +1645,9 @@ pub enum ReceiveStaticEventError<S: AsyncSigner, T: ContentRef, L: MembershipLis
 
     #[error(transparent)]
     ReceieveStaticMembershipError(#[from] ReceieveStaticDelegationError<S, T, L>),
+
+    #[error(transparent)]
+    ReceiveDocumentSecretError(#[from] ReceiveDocumentSecretError),
 }
 
 impl<S, T, L> ReceiveStaticEventError<S, T, L>
@@ -1597,6 +1659,7 @@ where
     pub fn is_missing_dependency(&self) -> bool {
         match self {
             Self::ReceivePrekeyOpError(_) => false,
+            Self::ReceiveDocumentSecretError(_) => false,
             Self::ReceiveCgkaOpError(e) => e.is_missing_dependency(),
             Self::ReceieveStaticMembershipError(e) => e.is_missing_dependency(),
         }
@@ -1726,6 +1789,15 @@ pub enum ReceiveEventError<
 
     #[error(transparent)]
     ReceiveCgkaOpError(#[from] ReceiveCgkaOpError),
+}
+
+#[derive(Debug, Error)]
+pub enum ReceiveDocumentSecretError {
+    #[error("Unknown document: {0}")]
+    UnknownDocument(DocumentId),
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
 }
 
 #[cfg(test)]

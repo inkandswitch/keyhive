@@ -10,22 +10,16 @@ use crate::{
     crypto::share_key::{ShareKey, ShareSecretKey},
     principal::document::id::DocumentId,
 };
-use serde::{Deserialize, Serialize};
 
 // FIXME docs
 #[allow(async_fn_in_trait)]
 pub trait SecretListener: Sized + Clone {
-    /// React to new prekeys.
-    async fn on_new_sharing_secret(
+    async fn on_active_prekey_pair(&self, new_public_key: ShareKey, new_secret_key: ShareSecretKey);
+
+    async fn on_doc_sharing_secret(
         &self,
-        subject: Subject,
+        doc_id: DocumentId,
         new_public_key: ShareKey,
         new_secret_key: ShareSecretKey,
     );
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Subject {
-    CurrentActiveAgent,
-    DocumentId(DocumentId),
 }

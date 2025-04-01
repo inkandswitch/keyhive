@@ -107,10 +107,6 @@ async fn test_decrypt_after_archive_round_trip() -> TestResult {
 
     let rehydrated_doc = rehydrated_alice.get_document(doc_id).unwrap();
     rehydrated_doc.borrow_mut().rebuild();
-    assert_eq!(
-        rehydrated_doc.borrow().cgka()?.ops_graph_len().clone(),
-        original_doc.borrow().cgka()?.ops_graph_len().clone()
-    );
 
     tracing::error!(
         "{:?}",
@@ -122,11 +118,6 @@ async fn test_decrypt_after_archive_round_trip() -> TestResult {
             .clone()
             .unwrap()
             .viewer_sks
-    );
-    assert!(rehydrated_alice.active().borrow().remove_me().len() > 0);
-    assert_eq!(
-        rehydrated_alice.active().borrow().remove_me(),
-        original_alice.active().borrow().remove_me()
     );
 
     let decrypted = rehydrated_alice

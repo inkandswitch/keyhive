@@ -148,12 +148,12 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = tryDecrypt)]
-    pub fn try_decrypt(
+    pub async fn try_decrypt(
         &mut self,
         doc: JsDocument,
         encrypted: JsEncrypted,
     ) -> Result<Vec<u8>, JsDecryptError> {
-        Ok(self.0.try_decrypt_content(doc.0, &encrypted.0)?)
+        Ok(self.0.try_decrypt_content(doc.0, &encrypted.0).await?)
     }
 
     #[wasm_bindgen(js_name = addMember)]

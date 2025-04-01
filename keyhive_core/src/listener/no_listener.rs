@@ -1,10 +1,8 @@
 //! Stub out listener functionality.
 
 use super::{
-    cgka::CgkaListener,
-    membership::MembershipListener,
-    prekey::PrekeyListener,
-    secret::{SecretListener, Subject},
+    cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener,
+    secret::SecretListener,
 };
 use crate::{
     cgka::operation::CgkaOperation,
@@ -15,6 +13,7 @@ use crate::{
         signer::async_signer::AsyncSigner,
     },
     principal::{
+        document::id::DocumentId,
         group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
@@ -45,9 +44,16 @@ impl CgkaListener for NoListener {
 }
 
 impl SecretListener for NoListener {
-    async fn on_new_sharing_secret(
+    async fn on_active_prekey_pair(
         &self,
-        _subject: Subject,
+        _new_public_key: ShareKey,
+        _new_secret_key: ShareSecretKey,
+    ) {
+    }
+
+    async fn on_doc_sharing_secret(
+        &self,
+        _doc_id: DocumentId,
         _new_public_key: ShareKey,
         _new_secret_key: ShareSecretKey,
     ) {
