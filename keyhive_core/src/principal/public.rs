@@ -10,7 +10,7 @@ use crate::{
         signer::{memory::MemorySigner, sync_signer::SyncSigner},
         verifiable::Verifiable,
     },
-    listener::prekey::PrekeyListener,
+    listener::{prekey::PrekeyListener, secret::SecretListener},
 };
 use dupe::Dupe;
 use std::{collections::BTreeMap, rc::Rc};
@@ -64,7 +64,7 @@ impl Public {
         }
     }
 
-    pub fn active<T: ContentRef, L: PrekeyListener>(
+    pub fn active<T: ContentRef, L: PrekeyListener + SecretListener>(
         &self,
         listener: L,
     ) -> Active<MemorySigner, T, L> {

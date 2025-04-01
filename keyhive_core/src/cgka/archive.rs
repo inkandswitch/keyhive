@@ -28,3 +28,37 @@ pub struct CgkaArchive {
     pub(crate) original_member: (IndividualId, ShareKey),
     pub(crate) init_add_op: Signed<CgkaOperation>,
 }
+
+impl CgkaArchive {
+    pub fn doc_id(&self) -> DocumentId {
+        self.doc_id
+    }
+
+    pub fn viewer_id(&self) -> IndividualId {
+        self.viewer_id
+    }
+
+    pub fn viewer_sks(&self) -> &ShareKeyMap {
+        &self.viewer_sks
+    }
+
+    pub fn pending_ops_for_structural_change(&self) -> bool {
+        self.pending_ops_for_structural_change
+    }
+
+    pub fn pcs_keys(&self) -> &CaMap<PcsKey> {
+        &self.pcs_keys
+    }
+
+    pub fn pcs_key_ops(&self) -> &HashMap<Digest<PcsKey>, Digest<Signed<CgkaOperation>>> {
+        &self.pcs_key_ops
+    }
+
+    pub fn original_member(&self) -> (IndividualId, ShareKey) {
+        self.original_member
+    }
+
+    pub fn init_add_op(&self) -> &Signed<CgkaOperation> {
+        &self.init_add_op
+    }
+}

@@ -71,6 +71,7 @@ impl PrekeyState {
     /// # Errors
     ///
     /// Returns a [`SigningError`] if the operation could not be signed.
+    #[cfg(any(test, feature = "test_utils"))]
     pub async fn generate<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
         signer: &S,
         size: NonZeroUsize,

@@ -136,7 +136,7 @@ impl<L: SecretListener> Cgka<L> {
     }
 
     #[instrument(skip_all, fields(doc_id, my_id))]
-    pub async fn with_new_owner(
+    pub fn with_new_owner(
         &self,
         my_id: IndividualId,
         viewer_sks: ShareKeyMap,
@@ -144,11 +144,13 @@ impl<L: SecretListener> Cgka<L> {
         let mut cgka = self.clone();
         cgka.viewer_id = my_id;
 
-        for (pk, sk) in viewer_sks.0.iter() {
-            cgka.listener
-                .on_doc_sharing_secret(self.doc_id, *pk, *sk)
-                .await;
-        }
+        // for (pk, sk) in viewer_sks.0.iter() {
+        //     if !cgka.viewer_sks.contains_key(pk) {
+        //         cgka.listener
+        //             .on_doc_sharing_secret(self.doc_id, *pk, *sk)
+        //             .await;
+        //     }
+        // }
 
         cgka.viewer_sks = viewer_sks;
         cgka.pcs_keys = self.pcs_keys.clone();
@@ -252,7 +254,7 @@ impl<L: SecretListener> Cgka<L> {
             return Ok(None);
         }
         if self.should_replay() {
-            self.replay_ops_graph().await?;
+            self.replay_ops_graph()?;
         }
         let leaf_index = self.tree.push_leaf(id, pk.into());
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
@@ -295,7 +297,7 @@ impl<L: SecretListener> Cgka<L> {
             return Ok(None);
         }
         if self.should_replay() {
-            self.replay_ops_graph().await?;
+            self.replay_ops_graph()?;
         }
         if self.group_size() == 1 {
             return Err(CgkaError::RemoveLastMember);
@@ -325,11 +327,12 @@ impl<L: SecretListener> Cgka<L> {
         csprng: &mut R,
     ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
         if self.should_replay() {
-            self.replay_ops_graph().await?;
+            self.replay_ops_graph()?;
         }
-        self.listener
-            .on_doc_sharing_secret(self.doc_id, new_pk, new_sk)
-            .await;
+        // FIXME
+        // self.listener
+        //     .on_doc_sharing_secret(self.doc_id, new_pk, new_sk)
+        //     .await;
         self.viewer_sks.insert(new_pk, new_sk);
 
         let maybe_key_and_path =
@@ -365,7 +368,7 @@ impl<L: SecretListener> Cgka<L> {
     /// membership changes and we receive a concurrent update, we can apply it
     /// immediately.
     #[instrument(skip_all, fields(doc_id, op))]
-    pub async fn merge_concurrent_operation(
+    pub fn merge_concurrent_operation(
         &mut self,
         op: Rc<Signed<CgkaOperation>>,
     ) -> Result<(), CgkaError> {
@@ -391,7 +394,7 @@ impl<L: SecretListener> Cgka<L> {
             }
         } else {
             if self.should_replay() {
-                self.replay_ops_graph().await?;
+                self.replay_ops_graph()?;
             }
             self.apply_operation(op)?;
         }
@@ -536,17 +539,24 @@ impl<L: SecretListener> Cgka<L> {
 
     /// Replay all ops in our graph in a deterministic order.
     #[instrument(skip_all, fields(doc_id))]
-    async fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
+    fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
         let ordered_ops = self.ops_graph.topsort_graph()?;
-        let rebuilt_cgka = self.rebuild_cgka(ordered_ops).await?;
-        self.update_cgka_from(&rebuilt_cgka).await;
+        let rebuilt_cgka = self.rebuild_cgka(ordered_ops)?;
+        self.update_cgka_from(&rebuilt_cgka);
         self.pending_ops_for_structural_change = false;
+        Ok(())
+    }
+
+    pub(crate) fn ensure_init(&mut self) -> Result<(), CgkaError> {
+        if self.should_replay() {
+            self.replay_ops_graph()?;
+        }
         Ok(())
     }
 
     /// Build a new [`Cgka`] for the provided non-empty list of [`CgkaEpoch`]s.
     #[instrument(skip_all, fields(doc_id, epochs))]
-    async fn rebuild_cgka(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<Cgka<L>, CgkaError> {
+    fn rebuild_cgka(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<Cgka<L>, CgkaError> {
         let mut rebuilt_cgka = Cgka::new_from_init_add(
             self.doc_id,
             self.original_member.0,
@@ -554,8 +564,7 @@ impl<L: SecretListener> Cgka<L> {
             self.init_add_op.clone(),
             self.listener.clone(),
         )?
-        .with_new_owner(self.viewer_id, self.viewer_sks.clone())
-        .await?;
+        .with_new_owner(self.viewer_id, self.viewer_sks.clone())?;
         rebuilt_cgka.apply_epochs(&epochs)?;
         if rebuilt_cgka.has_pcs_key() {
             let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
@@ -579,8 +588,7 @@ impl<L: SecretListener> Cgka<L> {
             self.init_add_op.clone(),
             self.listener.clone(),
         )?
-        .with_new_owner(self.viewer_id, self.viewer_sks.clone())
-        .await?;
+        .with_new_owner(self.viewer_id, self.viewer_sks.clone())?;
         rebuilt_cgka.apply_epochs(&epochs)?;
         let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
         self.insert_pcs_key(&pcs_key, Digest::hash(&epochs.last()[0]));
@@ -597,13 +605,14 @@ impl<L: SecretListener> Cgka<L> {
 
     /// Extend our state with that of the provided [`Cgka`].
     #[instrument(skip_all, fields(doc_id))]
-    async fn update_cgka_from(&mut self, other: &Self) {
+    fn update_cgka_from(&mut self, other: &Self) {
         self.tree = other.tree.clone();
 
         for (pk, sk) in other.viewer_sks.0.iter() {
-            self.listener
-                .on_doc_sharing_secret(self.doc_id, *pk, *sk)
-                .await;
+            // FIXME
+            // self.listener
+            //     .on_doc_sharing_secret(self.doc_id, *pk, *sk)
+            //     .await;
             self.viewer_sks.insert(*pk, *sk);
         }
 
@@ -664,9 +673,7 @@ impl<L: SecretListener> MergeAsync for Cgka<L> {
         self.viewer_sks.merge(fork.viewer_sks);
         self.ops_graph.merge(fork.ops_graph);
         self.pcs_keys.merge(fork.pcs_keys);
-        self.replay_ops_graph()
-            .await
-            .expect("ops graph should be valid")
+        self.replay_ops_graph().expect("ops graph should be valid")
     }
 }
 

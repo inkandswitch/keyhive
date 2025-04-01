@@ -22,7 +22,7 @@ use crate::{
         signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
     },
-    listener::{log::Log, no_listener::NoListener, prekey::PrekeyListener},
+    listener::{log::Log, no_listener::NoListener, prekey::PrekeyListener, secret::SecretListener},
     principal::{
         agent::id::AgentId,
         group::delegation::{Delegation, DelegationError},
@@ -40,7 +40,11 @@ use thiserror::Error;
 /// The current user agent (which can sign and encrypt).
 #[derive(Clone, Derivative, Serialize, Deserialize)]
 #[derivative(Debug, Hash, PartialEq)]
-pub struct Active<S: AsyncSigner, T: ContentRef = [u8; 32], L: PrekeyListener = NoListener> {
+pub struct Active<
+    S: AsyncSigner,
+    T: ContentRef = [u8; 32],
+    L: PrekeyListener + SecretListener = NoListener,
+> {
     /// The signing key of the active agent.
     #[derivative(Debug = "ignore")]
     pub(crate) signer: S,
@@ -64,7 +68,7 @@ pub struct Active<S: AsyncSigner, T: ContentRef = [u8; 32], L: PrekeyListener = 
     pub(crate) _phantom: PhantomData<T>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener + SecretListener> Active<S, T, L> {
     /// Generate a new active agent.
     ///
     /// # Arguments
@@ -94,6 +98,10 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
                 acc.insert(pk, sk);
                 Ok::<_, SigningError>(acc)
             })?;
+
+        for (pk, sk) in prekey_pairs.iter() {
+            listener.on_active_prekey_pair(*pk, *sk).await;
+        }
 
         let borrowed_signer = &signer;
         let ops = stream::iter(prekey_pairs.keys().map(|x| Ok::<_, SigningError>(x)))
@@ -174,6 +182,10 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
         let new_secret = ShareSecretKey::generate(csprng);
         let new_public = new_secret.share_key();
 
+        self.listener
+            .on_active_prekey_pair(new_public, new_secret)
+            .await;
+
         let rot_op = Rc::new(
             self.try_sign_async(RotateKeyOp {
                 old: old_prekey,
@@ -203,6 +215,10 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
         let new_public = new_secret.share_key();
+
+        self.listener
+            .on_active_prekey_pair(new_public, new_secret)
+            .await;
 
         let op = Rc::new(
             self.signer
@@ -270,19 +286,25 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> std::fmt::Display for Active<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener + SecretListener> std::fmt::Display
+    for Active<S, T, L>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.id(), f)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Verifiable for Active<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener + SecretListener> Verifiable
+    for Active<S, T, L>
+{
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.signer.verifying_key()
     }
 }
 
-impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Fork for Active<S, T, L> {
+impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener + SecretListener> Fork
+    for Active<S, T, L>
+{
     type Forked = Active<S, T, Log<S, T>>;
 
     fn fork(&self) -> Self::Forked {
@@ -296,7 +318,9 @@ impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Fork for Active<S
     }
 }
 
-impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Merge for Active<S, T, L> {
+impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener + SecretListener> Merge
+    for Active<S, T, L>
+{
     fn merge(&mut self, fork: Self::Forked) {
         self.prekey_pairs.extend(fork.prekey_pairs);
         self.individual.merge(fork.individual);

@@ -616,7 +616,9 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             Digest::hash(&parents.to_vec()),
         );
 
-        Ok(keyhive.try_decrypt_content(doc.clone(), &enc_content)?)
+        Ok(keyhive
+            .try_decrypt_content(doc.clone(), &enc_content)
+            .await?)
     }
 
     pub(crate) async fn decrypt_batch(
@@ -664,7 +666,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
                 Digest::hash(&parents.to_vec()),
             );
 
-            match keyhive.try_decrypt_content(doc, &enc_content) {
+            match keyhive.try_decrypt_content(doc, &enc_content).await {
                 Ok(content) => {
                     let content = match request.payload {
                         crate::CommitOrBundle::Commit(_) => crate::CommitOrBundle::Commit(

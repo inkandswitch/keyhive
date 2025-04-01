@@ -52,10 +52,7 @@ use crate::{
         delegation::DelegationStore,
         revocation::RevocationStore,
     },
-    transact::{
-        fork::Fork,
-        merge::{Merge, MergeAsync},
-    },
+    transact::{fork::Fork, merge::Merge},
 };
 use derivative::Derivative;
 use derive_where::derive_where;
@@ -1004,7 +1001,7 @@ impl<
     }
 
     #[instrument(skip(self), fields(khid = %self.id()))]
-    pub async fn receive_wire_event(
+    pub fn receive_wire_event(
         &mut self,
         wire_event: WireEvent<T>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
@@ -1013,7 +1010,7 @@ impl<
                 self.receive_prekey_op(&Rc::new(add_op).into())?
             }
             WireEvent::PrekeyRotated(rot_op) => self.receive_prekey_op(&Rc::new(rot_op).into())?,
-            WireEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op).await?,
+            WireEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op)?,
             WireEvent::Delegated(dlg) => self.receive_delegation(&dlg)?,
             WireEvent::Revoked(rev) => self.receive_revocation(&rev)?,
         }
@@ -1022,7 +1019,7 @@ impl<
     }
 
     #[instrument(skip(self), fields(khid = %self.id()))]
-    pub async fn receive_static_event(
+    pub fn receive_static_event(
         &mut self,
         static_event: StaticEvent<T>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
@@ -1033,7 +1030,7 @@ impl<
             StaticEvent::PrekeyRotated(rot_op) => {
                 self.receive_prekey_op(&Rc::new(rot_op).into())?
             }
-            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op).await?,
+            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op)?,
             StaticEvent::Delegated(dlg) => self.receive_delegation(&dlg)?,
             StaticEvent::Revoked(rev) => self.receive_revocation(&rev)?,
             StaticEvent::DocumentSecret {
@@ -1074,8 +1071,10 @@ impl<
             .get(&doc_id)
             .ok_or(ReceiveDocumentSecretError::UnknownDocument(doc_id))?;
 
+        doc.borrow_mut().cgka_mut().ensure_init()?;
         doc.borrow_mut()
-            .cgka_mut()?
+            .cgka_mut()
+            .expect("initted directly above")
             .viewer_sks
             .insert(public_key, secret_key);
 
@@ -1094,7 +1093,7 @@ impl<
     }
 
     #[instrument(level = "trace",  skip(self), fields(khid = %self.id()))]
-    pub async fn receive_cgka_op(
+    pub fn receive_cgka_op(
         &mut self,
         signed_op: Signed<CgkaOperation>,
     ) -> Result<(), ReceiveCgkaOpError> {
@@ -1115,12 +1114,11 @@ impl<
                     .prekey_pairs
                     .get(&pk)
                     .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?;
-                doc.merge_cgka_invite_op(Rc::new(signed_op), sk).await?;
+                doc.merge_cgka_invite_op(Rc::new(signed_op), sk)?;
                 return Ok(());
             }
         }
-        doc.merge_cgka_op(Rc::new(signed_op), &self.event_listener)
-            .await?;
+        doc.merge_cgka_op(Rc::new(signed_op), &self.event_listener)?;
         Ok(())
     }
 
@@ -1569,9 +1567,9 @@ impl<
         C: CiphertextStore<T, P> + Clone,
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > MergeAsync for Keyhive<S, T, P, C, L, R>
+    > Merge for Keyhive<S, T, P, C, L, R>
 {
-    async fn merge_async(&mut self, mut fork: Self::AsyncForked) {
+    fn merge(&mut self, mut fork: Self::Forked) {
         self.active
             .borrow_mut()
             .merge(Rc::unwrap_or_clone(fork.active).into_inner());
@@ -1598,7 +1596,6 @@ impl<
             }
 
             self.receive_static_event(event.clone().into())
-                .await
                 .expect("prechecked events to work");
         }
 
@@ -2234,7 +2231,7 @@ mod tests {
                     .unwrap();
                 assert_eq!(fork.docs.len(), init_doc_count + 1);
 
-                assert_eq!(fork.event_listener.len(), 9); // 1 + 2 + 2 + 2 = 9
+                assert_eq!(fork.event_listener.len(), 15); // 1 + 2 + 2 + 2 = 9, plus 6 secret keys
 
                 Ok::<_, String>(fork)
             },

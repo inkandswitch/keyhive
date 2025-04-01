@@ -51,7 +51,9 @@ async fn test_encrypt_to_added_member() -> TestResult {
 
     // Now attempt to decrypt on bob
     let doc_on_bob = bob.get_document(doc.borrow().doc_id()).unwrap();
-    let decrypted = bob.try_decrypt_content(doc_on_bob.clone(), encrypted.encrypted_content())?;
+    let decrypted = bob
+        .try_decrypt_content(doc_on_bob.clone(), encrypted.encrypted_content())
+        .await?;
 
     assert_eq!(decrypted, init_content);
     Ok(())
@@ -88,8 +90,9 @@ async fn test_decrypt_after_archive_round_trip() -> TestResult {
     assert!(encrypted.update_op().is_none());
 
     tracing::info!("Round tripping...");
-    let round_tripped =
-        original_alice.try_decrypt_content(original_doc.clone(), encrypted.encrypted_content())?;
+    let round_tripped = original_alice
+        .try_decrypt_content(original_doc.clone(), encrypted.encrypted_content())
+        .await?;
     assert_eq!(round_tripped, init_content);
 
     let static_events = log.to_static_events();
@@ -108,20 +111,9 @@ async fn test_decrypt_after_archive_round_trip() -> TestResult {
     let rehydrated_doc = rehydrated_alice.get_document(doc_id).unwrap();
     rehydrated_doc.borrow_mut().rebuild();
 
-    tracing::error!(
-        "{:?}",
-        early_archive
-            .docs()
-            .get(&doc_id)
-            .expect("doc to exist")
-            .cgka
-            .clone()
-            .unwrap()
-            .viewer_sks
-    );
-
     let decrypted = rehydrated_alice
-        .try_decrypt_content(rehydrated_doc.dupe(), encrypted.encrypted_content())?;
+        .try_decrypt_content(rehydrated_doc.dupe(), encrypted.encrypted_content())
+        .await?;
 
     assert_eq!(decrypted, init_content);
     Ok(())

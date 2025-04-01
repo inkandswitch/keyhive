@@ -120,6 +120,23 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         }
     }
 
+    pub fn cgka_mut_or_init(&mut self) -> Result<&mut Cgka<L>, CgkaError> {
+        match &mut self.cgka {
+            Some(cgka) => Ok(cgka),
+            None => {
+                let cgka = Cgka::new(
+                    self.doc_id(),
+                    self.agent_id(),
+                    ShareKey::generate(),
+                    self.group.signer(),
+                    self.group.listener().clone(),
+                )?;
+                self.cgka = Some(cgka);
+                Ok(self.cgka.as_mut().unwrap())
+            }
+        }
+    }
+
     #[allow(clippy::type_complexity)]
     pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>> {
         self.group.members()
@@ -185,10 +202,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             .collect();
         let mut viewer_sks = ShareKeyMap::new();
         viewer_sks.insert(viewer_share_key, viewer_share_secret_key);
+
         let mut cgka = Cgka::new(doc_id, viewer_id, viewer_share_key, signer, listener)
             .await?
-            .with_new_owner(viewer_id, viewer_sks)
-            .await?;
+            .with_new_owner(viewer_id, viewer_sks)?;
+
+        cgka.listener
+            .on_doc_sharing_secret(doc_id, viewer_share_key, viewer_share_secret_key)
+            .await;
 
         let mut ops: Vec<Signed<CgkaOperation>> = Vec::new();
         ops.push(cgka.init_add_op());
@@ -364,13 +385,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.group.receive_revocation(revocation)
     }
 
-    pub async fn merge_cgka_op(
+    pub fn merge_cgka_op(
         &mut self,
         op: Rc<Signed<CgkaOperation>>,
         listener: &L,
     ) -> Result<(), CgkaError> {
         match &mut self.cgka {
-            Some(cgka) => return cgka.merge_concurrent_operation(op).await,
+            Some(cgka) => return cgka.merge_concurrent_operation(op),
             None => match op.payload.clone() {
                 CgkaOperation::Add {
                     added_id,
@@ -397,7 +418,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     }
 
     #[instrument(skip(self, sk), fields(doc_id = ?self.doc_id()))]
-    pub async fn merge_cgka_invite_op(
+    pub fn merge_cgka_invite_op(
         &mut self,
         op: Rc<Signed<CgkaOperation>>,
         sk: &ShareSecretKey,
@@ -419,9 +440,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         }
         let mut viewer_sks = self.cgka()?.viewer_sks.clone();
         viewer_sks.insert(pk, *sk);
-        self.cgka = Some(self.cgka()?.with_new_owner(added_id, viewer_sks).await?);
+        // FIXME viewer_sks
+        // todo!();
+        self.cgka = Some(self.cgka()?.with_new_owner(added_id, viewer_sks)?);
+
         let listener = self.cgka()?.listener.clone();
-        self.merge_cgka_op(op, &listener).await
+        self.merge_cgka_op(op, &listener)
     }
 
     pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
@@ -436,6 +460,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
+        self.group
+            .listener
+            .on_doc_sharing_secret(self.doc_id(), new_share_key, new_share_secret_key)
+            .await;
         let (_, op) = self
             .cgka_mut()
             .map_err(EncryptError::UnableToPcsUpdate)?

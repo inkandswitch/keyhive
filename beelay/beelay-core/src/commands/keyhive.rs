@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use error::AddMember;
 use keyhive_core::{
     contact_card::ContactCard,
-    listener::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener},
+    listener::{
+        cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener,
+        secret::SecretListener,
+    },
 };
 
 use crate::{io::Signer, CommitHash, DocumentId, PeerId, TaskContext};
@@ -470,6 +473,38 @@ impl CgkaListener for Listener {
         let _ = self
             .send
             .unbounded_send(keyhive_core::event::Event::from(data.clone()))
+            .unwrap();
+    }
+}
+
+impl SecretListener for Listener {
+    async fn on_doc_sharing_secret(
+        &self,
+        doc_id: keyhive_core::principal::document::id::DocumentId,
+        public_key: keyhive_core::crypto::share_key::ShareKey,
+        secret_key: keyhive_core::crypto::share_key::ShareSecretKey,
+    ) {
+        let _ = self
+            .send
+            .unbounded_send(keyhive_core::event::Event::DocumentSecret {
+                doc_id: doc_id.clone(),
+                public_key: public_key.clone(),
+                secret_key: secret_key.clone(),
+            })
+            .unwrap();
+    }
+
+    async fn on_active_prekey_pair(
+        &self,
+        public_key: keyhive_core::crypto::share_key::ShareKey,
+        secret_key: keyhive_core::crypto::share_key::ShareSecretKey,
+    ) {
+        let _ = self
+            .send
+            .unbounded_send(keyhive_core::event::Event::ActiveAgentSecret {
+                public_key: public_key.clone(),
+                secret_key: secret_key.clone(),
+            })
             .unwrap();
     }
 }
