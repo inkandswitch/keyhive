@@ -81,14 +81,12 @@ pub(crate) async fn store_event<S: Storage>(
     ctx: S,
     event: Event<Signer, CommitHash, crate::keyhive::Listener>,
 ) {
-    tracing::trace!(?event, "storing keyhive event");
     let event = StaticEvent::from(event);
     let digest = Digest::hash(&event).raw;
     let storage_key = StorageKey::auth()
         .push("events")
         .push(hex::encode(digest.as_bytes()));
     ctx.put(storage_key, event.encode()).await;
-    tracing::trace!("done storing keyhive event");
 }
 
 pub(crate) async fn load_events<S: Storage>(ctx: S) -> Vec<StaticEvent<CommitHash>> {
@@ -107,29 +105,44 @@ pub(crate) async fn load_events<S: Storage>(ctx: S) -> Vec<StaticEvent<CommitHas
     events
 }
 
-pub(crate) async fn load_archive<S: Storage>(
+pub(crate) async fn load_archives<S: Storage>(
     ctx: S,
-) -> Option<keyhive_core::archive::Archive<CommitHash>> {
-    let key = StorageKey::auth().push("archive");
-    let Some(raw) = ctx.load(key).await else {
-        return None;
-    };
-    bincode::deserialize(&raw)
-        .inspect_err(|e| {
-            tracing::error!(err=?e, "failed to decode stored keyhive archive");
-        })
-        .ok()
+) -> (
+    Vec<StorageKey>,
+    Vec<keyhive_core::archive::Archive<CommitHash>>,
+) {
+    let prefix = StorageKey::auth().push("archive");
+    let raw_archives = ctx.load_range(prefix).await;
+    let mut keys = Vec::new();
+    let mut archives = Vec::new();
+    tracing::trace!(num_archives = raw_archives.len(), "loading raw archives");
+    for (key, v) in raw_archives {
+        keys.push(key);
+        if let Some(archive) = bincode::deserialize(&v)
+            .inspect_err(|e| {
+                tracing::error!(err=?e, "failed to decode stored keyhive archive");
+            })
+            .ok()
+        {
+            archives.push(archive);
+        }
+    }
+    (keys, archives)
 }
 
-pub(crate) async fn save_archive<S: Storage>(
+pub(crate) async fn store_archive<S: Storage>(
     ctx: S,
     archive: keyhive_core::archive::Archive<CommitHash>,
-) {
-    let key = StorageKey::auth().push("archive");
+) -> Option<StorageKey> {
     let Ok(raw) = bincode::serialize(&archive).inspect_err(|e| {
         tracing::error!(err=?e, "failed to encode keyhive archive");
     }) else {
-        return;
+        return None;
     };
-    ctx.put(key, raw).await;
+    let raw_hash = blake3::hash(&raw);
+    let key = StorageKey::auth()
+        .push("archive")
+        .push(hex::encode(raw_hash.as_bytes()));
+    ctx.put(key.clone(), raw).await;
+    Some(key)
 }
