@@ -1,6 +1,6 @@
 //! Trait for listening to membership change events.
 
-use super::prekey::PrekeyListener;
+use super::{prekey::PrekeyListener, secret::SecretListener};
 use crate::{
     content::reference::ContentRef,
     crypto::{signed::Signed, signer::async_signer::AsyncSigner},
@@ -23,7 +23,9 @@ use std::rc::Rc;
 /// [`Group`]: crate::principal::group::Group
 /// [`Document`]: crate::principal::document::Document
 #[allow(async_fn_in_trait)]
-pub trait MembershipListener<S: AsyncSigner, T: ContentRef>: PrekeyListener {
+pub trait MembershipListener<S: AsyncSigner, T: ContentRef>:
+    PrekeyListener + SecretListener
+{
     /// React to new [`Delegation`]s.
     async fn on_delegation(&self, data: &Rc<Signed<Delegation<S, T, Self>>>);
 

@@ -52,7 +52,10 @@ use crate::{
         delegation::DelegationStore,
         revocation::RevocationStore,
     },
-    transact::{fork::Fork, merge::Merge},
+    transact::{
+        fork::Fork,
+        merge::{Merge, MergeAsync},
+    },
 };
 use derivative::Derivative;
 use derive_where::derive_where;
@@ -77,7 +80,7 @@ pub struct Keyhive<
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
     C: CiphertextStore<T, P> = MemoryCiphertextStore<T, P>,
-    L: MembershipListener<S, T> + CgkaListener + SecretListener = NoListener,
+    L: MembershipListener<S, T> + CgkaListener = NoListener,
     R: rand::CryptoRng = rand::rngs::ThreadRng,
 > {
     /// The [`Active`] user agent.
@@ -117,7 +120,7 @@ impl<
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
-        L: MembershipListener<S, T> + CgkaListener + SecretListener,
+        L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore,
     > Keyhive<S, T, P, C, L, R>
 {
@@ -449,12 +452,12 @@ impl<
             .await?)
     }
 
-    pub fn try_decrypt_content(
+    pub async fn try_decrypt_content(
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
-        doc.borrow_mut().try_decrypt_content(encrypted)
+        doc.borrow_mut().try_decrypt_content(encrypted).await
     }
 
     pub async fn try_causal_decrypt_content(
@@ -1001,7 +1004,7 @@ impl<
     }
 
     #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn receive_static_event(
+    pub async fn receive_static_event(
         &mut self,
         static_event: StaticEvent<T>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
@@ -1012,7 +1015,7 @@ impl<
             StaticEvent::PrekeyRotated(rot_op) => {
                 self.receive_prekey_op(&Rc::new(rot_op).into())?
             }
-            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op)?,
+            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op).await?,
             StaticEvent::Delegated(dlg) => self.receive_delegation(&dlg)?,
             StaticEvent::Revoked(rev) => self.receive_revocation(&rev)?,
         }
@@ -1053,11 +1056,12 @@ impl<
                     .prekey_pairs
                     .get(&pk)
                     .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?;
-                doc.merge_cgka_invite_op(Rc::new(signed_op), sk),await?;
+                doc.merge_cgka_invite_op(Rc::new(signed_op), sk).await?;
                 return Ok(());
             }
         }
-        doc.merge_cgka_op(Rc::new(signed_op)).await?;
+        doc.merge_cgka_op(Rc::new(signed_op), &self.event_listener)
+            .await?;
         Ok(())
     }
 
@@ -1481,7 +1485,7 @@ impl<
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T> + CgkaListener + SecretListener,
+        L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > Fork for Keyhive<S, T, P, C, L, R>
 {
@@ -1506,9 +1510,9 @@ impl<
         C: CiphertextStore<T, P> + Clone,
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > Merge for Keyhive<S, T, P, C, L, R>
+    > MergeAsync for Keyhive<S, T, P, C, L, R>
 {
-    fn merge(&mut self, mut fork: Self::Forked) {
+    async fn merge_async(&mut self, mut fork: Self::AsyncForked) {
         self.active
             .borrow_mut()
             .merge(Rc::unwrap_or_clone(fork.active).into_inner());
@@ -1535,10 +1539,11 @@ impl<
             }
 
             self.receive_static_event(event.clone().into())
+                .await
                 .expect("prechecked events to work");
         }
 
-        // FIXME ^^^^^^^^^^^ skip checks to speed up; this is all trusted data
+        // TODO skip all above checks to speed up; this is all trusted data
     }
 }
 
@@ -1561,7 +1566,7 @@ impl<
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
-        L: MembershipListener<S, T> + CgkaListener + SecretListener,
+        L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore,
     > From<&Keyhive<S, T, P, C, L, R>> for Agent<S, T, L>
 {

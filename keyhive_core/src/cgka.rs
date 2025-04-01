@@ -22,7 +22,10 @@ use crate::{
     },
     listener::secret::{SecretListener, Subject},
     principal::{document::id::DocumentId, individual::id::IndividualId},
-    transact::{fork::Fork, merge::Merge},
+    transact::{
+        fork::Fork,
+        merge::{Merge, MergeAsync},
+    },
     util::content_addressed_map::CaMap,
 };
 use beekem::BeeKem;
@@ -216,13 +219,14 @@ impl<L: SecretListener> Cgka<L> {
     /// We must first derive a [`PcsKey`] for the encrypted data's associated
     /// hashes. Then we use that [`PcsKey`] to derive an [`ApplicationSecret`].
     #[instrument(skip_all, fields(encrypted.content_ref))]
-    pub fn decryption_key_for<T, Cr: ContentRef>(
+    pub async fn decryption_key_for<T, Cr: ContentRef>(
         &mut self,
         encrypted: &EncryptedContent<T, Cr>,
     ) -> Result<SymmetricKey, CgkaError> {
         tracing::trace!("Decrypting content");
-        let pcs_key =
-            self.pcs_key_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)?;
+        let pcs_key = self
+            .pcs_key_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)
+            .await?;
 
         if !self.pcs_keys.contains_key(&encrypted.pcs_key_hash) {
             tracing::trace!("insert PCS key");
@@ -368,7 +372,7 @@ impl<L: SecretListener> Cgka<L> {
     /// membership changes and we receive a concurrent update, we can apply it
     /// immediately.
     #[instrument(skip_all, fields(doc_id, op))]
-    pub fn merge_concurrent_operation(
+    pub async fn merge_concurrent_operation(
         &mut self,
         op: Rc<Signed<CgkaOperation>>,
     ) -> Result<(), CgkaError> {
@@ -394,7 +398,7 @@ impl<L: SecretListener> Cgka<L> {
             }
         } else {
             if self.should_replay() {
-                self.replay_ops_graph()?;
+                self.replay_ops_graph().await?;
             }
             self.apply_operation(op)?;
         }
@@ -491,7 +495,7 @@ impl<L: SecretListener> Cgka<L> {
     /// If we have not seen this [`PcsKey`] before, we'll need to rebuild
     /// the tree state for its corresponding update operation.
     #[instrument(skip_all, fields(doc_id, pcs_key_hash, update_op_hash))]
-    fn pcs_key_from_hashes(
+    async fn pcs_key_from_hashes(
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
@@ -510,13 +514,13 @@ impl<L: SecretListener> Cgka<L> {
                     return Ok(pcs_key);
                 }
             }
-            self.derive_pcs_key_for_op(update_op_hash)
+            self.derive_pcs_key_for_op(update_op_hash).await
         }
     }
 
     /// Derive [`PcsKey`] for this operation hash.
     #[instrument(skip_all, fields(doc_id, op_hash))]
-    fn derive_pcs_key_for_op(
+    async fn derive_pcs_key_for_op(
         &mut self,
         op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
@@ -528,7 +532,7 @@ impl<L: SecretListener> Cgka<L> {
         let mut heads = HashSet::new();
         heads.insert(*op_hash);
         let ops = self.ops_graph.topsort_for_heads(&heads)?;
-        self.rebuild_pcs_key(ops)
+        self.rebuild_pcs_key(ops).await
     }
 
     /// Whether we have unresolved concurrency that requires a replay to resolve.
@@ -557,7 +561,8 @@ impl<L: SecretListener> Cgka<L> {
             self.init_add_op.clone(),
             self.listener.clone(),
         )?
-        .with_new_owner(self.owner_id, self.owner_sks.clone()).await?;
+        .with_new_owner(self.owner_id, self.owner_sks.clone())
+        .await?;
         rebuilt_cgka.apply_epochs(&epochs)?;
         if rebuilt_cgka.has_pcs_key() {
             let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
@@ -580,8 +585,9 @@ impl<L: SecretListener> Cgka<L> {
             self.original_member.1,
             self.init_add_op.clone(),
             self.listener.clone(),
-        )?;
-        .with_new_owner(self.owner_id, self.owner_sks.clone())?;
+        )?
+        .with_new_owner(self.owner_id, self.owner_sks.clone())
+        .await?;
         rebuilt_cgka.apply_epochs(&epochs)?;
         let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
         self.insert_pcs_key(&pcs_key, Digest::hash(&epochs.last()[0]));
@@ -627,13 +633,14 @@ impl<L: SecretListener> Fork for Cgka<L> {
     }
 }
 
-impl<L: SecretListener> Merge for Cgka<L> {
-    fn merge(&mut self, fork: Self::Forked) {
-        self.owner_sks.merge(fork.owner_sks); // FIXME need to log these in the listener?
+impl<L: SecretListener> MergeAsync for Cgka<L> {
+    async fn merge_async(&mut self, fork: Self::AsyncForked) {
+        self.owner_sks.merge(fork.owner_sks);
         self.ops_graph.merge(fork.ops_graph);
         self.pcs_keys.merge(fork.pcs_keys);
         self.replay_ops_graph()
-            .expect("two valid graphs should always merge causal consistency");
+            .await
+            .expect("ops graph should be valid")
     }
 }
 
@@ -643,12 +650,12 @@ impl<L: SecretListener> Cgka<L> {
         self.pcs_key_from_tree_root()
     }
 
-    pub fn secret(
+    pub async fn secret(
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
-        self.pcs_key_from_hashes(pcs_key_hash, update_op_hash)
+        self.pcs_key_from_hashes(pcs_key_hash, update_op_hash).await
     }
 }
 

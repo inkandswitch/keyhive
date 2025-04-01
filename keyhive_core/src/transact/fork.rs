@@ -39,7 +39,8 @@ pub trait ForkAsync {
     ///
     /// This variant is helpful when forking a type like `tokio::sync::Mutex`,
     /// which requires an `await` to acquire a lock.
-    fn fork_async(&self) -> impl Future<Output = Self::AsyncForked> + Send;
+    fn fork_async(&self) -> impl Future<Output = Self::AsyncForked>;
+    // FIXME fn fork_async(&self) -> impl Future<Output = Self::AsyncForked> + Send;
 }
 
 impl<T: Hash + Eq + Clone> Fork for HashSet<T> {
@@ -66,7 +67,8 @@ impl<T: Fork> Fork for Rc<RefCell<T>> {
     }
 }
 
-impl<T: Fork<Forked = U> + Send + Sync, U: Send + Sync> ForkAsync for T {
+impl<T: Fork> ForkAsync for T {
+    // FIXME impl<T: Fork<Forked = U> + Send + Sync, U: Send + Sync> ForkAsync for T {
     type AsyncForked = T::Forked;
 
     async fn fork_async(&self) -> Self::AsyncForked {

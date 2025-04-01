@@ -8,7 +8,7 @@ use crate::{
     crypto::{
         digest::Digest, signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable,
     },
-    listener::{membership::MembershipListener, no_listener::NoListener, secret::SecretListener},
+    listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{document::id::DocumentId, identifier::Identifier},
     util::content_addressed_map::CaMap,
 };
@@ -29,13 +29,13 @@ use tracing::instrument;
 pub enum MembershipOperation<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> + SecretListener = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     Delegation(Rc<Signed<Delegation<S, T, L>>>),
     Revocation(Rc<Signed<Revocation<S, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> std::hash::Hash
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
     for MembershipOperation<S, T, L>
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -50,7 +50,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> PartialEq
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
     for MembershipOperation<S, T, L>
 {
     fn eq(&self, other: &Self) -> bool {
@@ -62,8 +62,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef + Serialize, L: MembershipListener<S, T> + SecretListener>
-    Serialize for MembershipOperation<S, T, L>
+impl<S: AsyncSigner, T: ContentRef + Serialize, L: MembershipListener<S, T>> Serialize
+    for MembershipOperation<S, T, L>
 {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         match self {
@@ -73,9 +73,7 @@ impl<S: AsyncSigner, T: ContentRef + Serialize, L: MembershipListener<S, T> + Se
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
-    MembershipOperation<S, T, L>
-{
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOperation<S, T, L> {
     pub fn subject_id(&self) -> Identifier {
         match self {
             MembershipOperation::Delegation(delegation) => delegation.subject_id(),
@@ -358,7 +356,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Dupe
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe
     for MembershipOperation<S, T, L>
 {
     fn dupe(&self) -> Self {
@@ -366,7 +364,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Verifiable
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
     for MembershipOperation<S, T, L>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
@@ -377,7 +375,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     From<Rc<Signed<Delegation<S, T, L>>>> for MembershipOperation<S, T, L>
 {
     fn from(delegation: Rc<Signed<Delegation<S, T, L>>>) -> Self {
@@ -385,7 +383,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     From<Rc<Signed<Revocation<S, T, L>>>> for MembershipOperation<S, T, L>
 {
     fn from(revocation: Rc<Signed<Revocation<S, T, L>>>) -> Self {
@@ -400,8 +398,8 @@ pub enum StaticMembershipOperation<T: ContentRef> {
     Revocation(Signed<StaticRevocation<T>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
-    From<MembershipOperation<S, T, L>> for StaticMembershipOperation<T>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<MembershipOperation<S, T, L>>
+    for StaticMembershipOperation<T>
 {
     fn from(op: MembershipOperation<S, T, L>) -> Self {
         match op {

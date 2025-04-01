@@ -23,7 +23,7 @@ use crate::{
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
-    listener::{membership::MembershipListener, no_listener::NoListener, secret::SecretListener},
+    listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
@@ -63,7 +63,7 @@ use tracing::instrument;
 pub struct Document<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> + SecretListener = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     pub(crate) group: Group<S, T, L>,
     pub(crate) content_heads: HashSet<T>,
@@ -73,9 +73,7 @@ pub struct Document<
     cgka: Option<Cgka<L>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
-    Document<S, T, L>
-{
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, L> {
     // FIXME: We need a signing key for initializing Cgka and we need to share
     // the init add op.
     // NOTE doesn't register into the top-level Keyhive context
@@ -366,13 +364,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
         self.group.receive_revocation(revocation)
     }
 
-    pub fn merge_cgka_op(
+    pub async fn merge_cgka_op(
         &mut self,
         op: Rc<Signed<CgkaOperation>>,
-        listener: L,
+        listener: &L,
     ) -> Result<(), CgkaError> {
         match &mut self.cgka {
-            Some(cgka) => return cgka.merge_concurrent_operation(op),
+            Some(cgka) => return cgka.merge_concurrent_operation(op).await,
             None => match op.payload.clone() {
                 CgkaOperation::Add {
                     added_id,
@@ -389,7 +387,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
                         added_id,
                         pk,
                         (*op).clone(),
-                        listener,
+                        listener.clone(),
                     )?)
                 }
                 _ => return Err(CgkaError::UnexpectedInitialOperation),
@@ -423,7 +421,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
         owner_sks.insert(pk, *sk);
         self.cgka = Some(self.cgka()?.with_new_owner(added_id, owner_sks).await?);
         let listener = self.cgka()?.listener.clone();
-        self.merge_cgka_op(op, listener)
+        self.merge_cgka_op(op, &listener).await
     }
 
     pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
@@ -475,7 +473,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
     }
 
     #[instrument(skip_all, fields(doc_id = ?self.doc_id(), nonce = ?encrypted_content.nonce))]
-    pub fn try_decrypt_content<P: for<'de> Deserialize<'de>>(
+    pub async fn try_decrypt_content<P: for<'de> Deserialize<'de>>(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
@@ -486,6 +484,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
                 DecryptError::KeyNotFound
             })?
             .decryption_key_for(encrypted_content)
+            .await
             .map_err(|e| {
                 tracing::warn!("No Key: {:?}", e);
                 DecryptError::KeyNotFound
@@ -524,7 +523,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
     where
         T: for<'de> Deserialize<'de>,
     {
-        let raw_entrypoint = self.try_decrypt_content(encrypted_content)?;
+        let raw_entrypoint = self.try_decrypt_content(encrypted_content).await?;
 
         let mut acc = CausalDecryptionState::new();
 
@@ -584,17 +583,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Verifiable
-    for Document<S, T, L>
-{
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Document<S, T, L> {
     fn verifying_key(&self) -> VerifyingKey {
         self.group.verifying_key()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Hash
-    for Document<S, T, L>
-{
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Document<S, T, L> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.group.hash(state);
         crate::util::hasher::hash_set(&self.content_heads, state);
@@ -607,7 +602,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
 pub struct AddMemberUpdate<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> + SecretListener = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     pub delegation: Rc<Signed<Delegation<S, T, L>>>,
     pub cgka_ops: Vec<Signed<CgkaOperation>>,
@@ -621,16 +616,14 @@ pub struct MissingIndividualError(pub Box<IndividualId>);
 pub struct RevokeMemberUpdate<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> + SecretListener = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     pub(crate) revocations: Vec<Rc<Signed<Revocation<S, T, L>>>>,
     pub(crate) redelegations: Vec<Rc<Signed<Delegation<S, T, L>>>>,
     pub(crate) cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
-    RevokeMemberUpdate<S, T, L>
-{
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevokeMemberUpdate<S, T, L> {
     pub fn revocations(&self) -> &[Rc<Signed<Revocation<S, T, L>>>] {
         &self.revocations
     }
@@ -644,7 +637,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Default
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Default
     for RevokeMemberUpdate<S, T, L>
 {
     fn default() -> Self {

@@ -4,7 +4,7 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::signer::async_signer::AsyncSigner,
-    listener::{membership::MembershipListener, no_listener::NoListener, secret::SecretListener},
+    listener::{membership::MembershipListener, no_listener::NoListener},
     principal::document::Document,
 };
 use derive_where::derive_where;
@@ -16,15 +16,13 @@ pub struct Ability<
     'a,
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> + SecretListener = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     pub(crate) doc: &'a Rc<RefCell<Document<S, T, L>>>,
     pub(crate) can: Access,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
-    Ability<'_, S, T, L>
-{
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Ability<'_, S, T, L> {
     /// Getter for the referenced [`Document`].
     pub fn doc(&self) -> &Rc<RefCell<Document<S, T, L>>> {
         self.doc

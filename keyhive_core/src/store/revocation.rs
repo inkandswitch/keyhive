@@ -3,7 +3,7 @@
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    listener::{membership::MembershipListener, no_listener::NoListener, secret::SecretListener},
+    listener::{membership::MembershipListener, no_listener::NoListener},
     principal::group::revocation::Revocation,
     util::content_addressed_map::CaMap,
 };
@@ -21,12 +21,10 @@ use std::{
 pub struct RevocationStore<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> + SecretListener = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 >(pub Rc<RefCell<CaMap<Signed<Revocation<S, T, L>>>>>);
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
-    RevocationStore<S, T, L>
-{
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore<S, T, L> {
     /// Create a new revocation store.
     pub fn new() -> Self {
         Self(Rc::new(RefCell::new(CaMap::new())))
@@ -71,15 +69,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Dupe
-    for RevocationStore<S, T, L>
-{
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for RevocationStore<S, T, L> {
     fn dupe(&self) -> Self {
         Self(self.0.dupe())
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> PartialEq
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
     for RevocationStore<S, T, L>
 {
     fn eq(&self, other: &Self) -> bool {
@@ -87,12 +83,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> Eq
-    for RevocationStore<S, T, L>
-{
-}
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Eq for RevocationStore<S, T, L> {}
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener> std::hash::Hash
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
     for RevocationStore<S, T, L>
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {

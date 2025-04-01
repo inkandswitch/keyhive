@@ -11,7 +11,7 @@ use crate::{
         signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSigner},
         verifiable::Verifiable,
     },
-    listener::{membership::MembershipListener, no_listener::NoListener, secret::SecretListener},
+    listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::Agent, group::delegation::DelegationError, identifier::Identifier},
     store::{delegation::DelegationStore, revocation::RevocationStore},
     util::content_addressed_map::CaMap,
@@ -25,7 +25,7 @@ use std::{cmp::Ordering, collections::BTreeMap, rc::Rc};
 pub struct GroupState<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> + SecretListener = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     pub(crate) id: GroupId,
 
@@ -38,9 +38,7 @@ pub struct GroupState<
     pub(crate) revocation_heads: CaMap<Signed<Revocation<S, T, L>>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + SecretListener>
-    GroupState<S, T, L>
-{
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T, L> {
     pub fn new(
         delegation_head: Rc<Signed<Delegation<S, T, L>>>,
         delegations: DelegationStore<S, T, L>,
