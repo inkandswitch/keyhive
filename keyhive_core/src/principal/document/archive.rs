@@ -1,4 +1,6 @@
-use crate::{cgka::Cgka, content::reference::ContentRef, principal::group::GroupArchive};
+use crate::{
+    cgka::archive::CgkaArchive, content::reference::ContentRef, principal::group::GroupArchive,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -7,5 +9,5 @@ pub struct DocumentArchive<T: ContentRef> {
     pub(crate) group: GroupArchive<T>,
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
-    pub cgka: Option<Cgka>, // FIXME pub(crate)
+    pub(crate) cgka: Option<CgkaArchive>,
 }

@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod beekem;
 pub mod error;
 pub mod keys;
@@ -8,6 +9,7 @@ pub mod treemath;
 #[cfg(feature = "test_utils")]
 pub mod test_utils;
 
+use self::archive::CgkaArchive;
 use crate::{
     content::reference::ContentRef,
     crypto::{
@@ -59,9 +61,9 @@ use tracing::{info, instrument};
 pub struct Cgka<L: SecretListener> {
     doc_id: DocumentId,
     /// The id of the member who owns this tree.
-    pub owner_id: IndividualId,
+    pub viewer_id: IndividualId,
     /// The secret keys of the member who owns this tree.
-    pub owner_sks: ShareKeyMap,
+    pub viewer_sks: ShareKeyMap,
     tree: BeeKem,
     /// Graph of all operations seen (but not necessarily applied) so far.
     ops_graph: CgkaOperationGraph,
@@ -97,18 +99,18 @@ fn hashed_key_bytes<T: Serialize, V, H: Hasher>(hmap: &HashMap<Digest<T>, V>, st
 impl<L: SecretListener> Cgka<L> {
     pub async fn new<S: AsyncSigner>(
         doc_id: DocumentId,
-        owner_id: IndividualId,
-        owner_pk: ShareKey,
+        viewer_id: IndividualId,
+        viewer_pk: ShareKey,
         signer: &S,
         listener: L,
     ) -> Result<Self, CgkaError> {
-        let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk);
+        let init_add_op = CgkaOperation::init_add(doc_id, viewer_id, viewer_pk);
         let signed_op = signer.try_sign_async(init_add_op).await?;
-        Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op, listener)
+        Self::new_from_init_add(doc_id, viewer_id, viewer_pk, signed_op, listener)
     }
 
     pub fn remove_me(&self) -> ShareKeyMap {
-        self.owner_sks.clone()
+        self.viewer_sks.clone()
     }
 
     // FIXME remove; just here while debugging a thing
@@ -119,22 +121,22 @@ impl<L: SecretListener> Cgka<L> {
     #[instrument(skip_all, fields(doc_id))]
     pub fn new_from_init_add(
         doc_id: DocumentId,
-        owner_id: IndividualId,
-        owner_pk: ShareKey,
+        viewer_id: IndividualId,
+        viewer_pk: ShareKey,
         init_add_op: Signed<CgkaOperation>,
         listener: L,
     ) -> Result<Self, CgkaError> {
-        let tree = BeeKem::new(doc_id, owner_id, owner_pk)?;
+        let tree = BeeKem::new(doc_id, viewer_id, viewer_pk)?;
         let mut cgka = Self {
             doc_id,
-            owner_id,
-            owner_sks: ShareKeyMap::new(),
+            viewer_id,
+            viewer_sks: ShareKeyMap::new(),
             tree,
             ops_graph: CgkaOperationGraph::new(),
             pending_ops_for_structural_change: false,
             pcs_keys: CaMap::new(),
             pcs_key_ops: HashMap::new(),
-            original_member: (owner_id, owner_pk),
+            original_member: (viewer_id, viewer_pk),
             init_add_op: init_add_op.clone(),
             listener,
         };
@@ -146,18 +148,18 @@ impl<L: SecretListener> Cgka<L> {
     pub async fn with_new_owner(
         &self,
         my_id: IndividualId,
-        owner_sks: ShareKeyMap,
+        viewer_sks: ShareKeyMap,
     ) -> Result<Self, CgkaError> {
         let mut cgka = self.clone();
-        cgka.owner_id = my_id;
+        cgka.viewer_id = my_id;
 
-        for (pk, sk) in owner_sks.0.iter() {
+        for (pk, sk) in viewer_sks.0.iter() {
             cgka.listener
                 .on_new_sharing_secret(Subject::DocumentId(self.doc_id), *pk, *sk)
                 .await;
         }
 
-        cgka.owner_sks = owner_sks;
+        cgka.viewer_sks = viewer_sks;
         cgka.pcs_keys = self.pcs_keys.clone();
         cgka.pcs_key_ops = self.pcs_key_ops.clone();
         Ok(cgka)
@@ -337,15 +339,15 @@ impl<L: SecretListener> Cgka<L> {
         self.listener
             .on_new_sharing_secret(Subject::DocumentId(self.doc_id), new_pk, new_sk)
             .await;
-        self.owner_sks.insert(new_pk, new_sk);
+        self.viewer_sks.insert(new_pk, new_sk);
 
         let maybe_key_and_path =
             self.tree
-                .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
+                .encrypt_path(self.viewer_id, new_pk, &mut self.viewer_sks, csprng)?;
         if let Some((pcs_key, new_path)) = maybe_key_and_path {
             let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
             let op = CgkaOperation::Update {
-                id: self.owner_id,
+                id: self.viewer_id,
                 new_path: Box::new(new_path),
                 predecessors,
                 doc_id: self.doc_id,
@@ -486,7 +488,7 @@ impl<L: SecretListener> Cgka<L> {
         tracing::trace!("Decrypting tree secret");
         let key = self
             .tree
-            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)?;
+            .decrypt_tree_secret(self.viewer_id, &mut self.viewer_sks)?;
         Ok(PcsKey::new(key))
     }
 
@@ -561,7 +563,7 @@ impl<L: SecretListener> Cgka<L> {
             self.init_add_op.clone(),
             self.listener.clone(),
         )?
-        .with_new_owner(self.owner_id, self.owner_sks.clone())
+        .with_new_owner(self.viewer_id, self.viewer_sks.clone())
         .await?;
         rebuilt_cgka.apply_epochs(&epochs)?;
         if rebuilt_cgka.has_pcs_key() {
@@ -586,7 +588,7 @@ impl<L: SecretListener> Cgka<L> {
             self.init_add_op.clone(),
             self.listener.clone(),
         )?
-        .with_new_owner(self.owner_id, self.owner_sks.clone())
+        .with_new_owner(self.viewer_id, self.viewer_sks.clone())
         .await?;
         rebuilt_cgka.apply_epochs(&epochs)?;
         let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
@@ -607,11 +609,11 @@ impl<L: SecretListener> Cgka<L> {
     async fn update_cgka_from(&mut self, other: &Self) {
         self.tree = other.tree.clone();
 
-        for (pk, sk) in other.owner_sks.0.iter() {
+        for (pk, sk) in other.viewer_sks.0.iter() {
             self.listener
                 .on_new_sharing_secret(Subject::DocumentId(self.doc_id), *pk, *sk)
                 .await;
-            self.owner_sks.insert(*pk, *sk);
+            self.viewer_sks.insert(*pk, *sk);
         }
 
         self.pcs_keys.extend(
@@ -622,6 +624,39 @@ impl<L: SecretListener> Cgka<L> {
         );
         self.pcs_key_ops.extend(other.pcs_key_ops.iter());
         self.pending_ops_for_structural_change = other.pending_ops_for_structural_change;
+    }
+
+    #[instrument(skip_all, fields(self.doc_id))]
+    pub fn into_archive(&self) -> CgkaArchive {
+        CgkaArchive {
+            doc_id: self.doc_id,
+            viewer_id: self.viewer_id,
+            viewer_sks: self.viewer_sks.clone(),
+            tree: self.tree.clone(),
+            ops_graph: self.ops_graph.clone(),
+            pending_ops_for_structural_change: self.pending_ops_for_structural_change,
+            pcs_keys: self.pcs_keys.clone(),
+            pcs_key_ops: self.pcs_key_ops.clone(),
+            original_member: self.original_member,
+            init_add_op: self.init_add_op.clone(),
+        }
+    }
+
+    #[instrument(skip_all, fields(archive.doc_id))]
+    pub fn from_archive(archive: CgkaArchive, listener: L) -> Self {
+        Self {
+            doc_id: archive.doc_id,
+            viewer_id: archive.viewer_id,
+            viewer_sks: archive.viewer_sks,
+            tree: archive.tree,
+            ops_graph: archive.ops_graph,
+            pending_ops_for_structural_change: archive.pending_ops_for_structural_change,
+            pcs_keys: archive.pcs_keys,
+            pcs_key_ops: archive.pcs_key_ops,
+            original_member: archive.original_member,
+            init_add_op: archive.init_add_op,
+            listener,
+        }
     }
 }
 
@@ -635,7 +670,7 @@ impl<L: SecretListener> Fork for Cgka<L> {
 
 impl<L: SecretListener> MergeAsync for Cgka<L> {
     async fn merge_async(&mut self, fork: Self::AsyncForked) {
-        self.owner_sks.merge(fork.owner_sks);
+        self.viewer_sks.merge(fork.viewer_sks);
         self.ops_graph.merge(fork.ops_graph);
         self.pcs_keys.merge(fork.pcs_keys);
         self.replay_ops_graph()

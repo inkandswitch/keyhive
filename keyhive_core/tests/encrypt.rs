@@ -121,7 +121,7 @@ async fn test_decrypt_after_archive_round_trip() -> TestResult {
             .cgka
             .clone()
             .unwrap()
-            .owner_sks
+            .viewer_sks
     );
     assert!(rehydrated_alice.active().borrow().remove_me().len() > 0);
     assert_eq!(

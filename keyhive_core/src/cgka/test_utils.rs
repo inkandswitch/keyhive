@@ -71,7 +71,7 @@
 //     }
 //
 //     pub fn update_cgka_to(&mut self, cgka: &Cgka) -> Result<(), CgkaError> {
-//         let sks = self.cgka.owner_sks.clone();
+//         let sks = self.cgka.viewer_sks.clone();
 //         self.cgka = cgka.with_new_owner(self.id(), sks)?;
 //         Ok(())
 //     }
@@ -189,10 +189,10 @@
 //             .expect("there to be extra members");
 //     }
 //
-//     let mut owner_sks = ShareKeyMap::new();
-//     owner_sks.insert(owner.pk, owner.sk);
+//     let mut viewer_sks = ShareKeyMap::new();
+//     viewer_sks.insert(owner.pk, owner.sk);
 //     let mut cgka = cgka
-//         .with_new_owner(owner.id, owner_sks)
+//         .with_new_owner(owner.id, viewer_sks)
 //         .expect("CGKA construction failed");
 //     let (_pcs_key, op) = cgka
 //         .update(owner.pk, owner.sk, signing_key, &mut rand::thread_rng())

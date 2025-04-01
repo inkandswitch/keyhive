@@ -173,21 +173,21 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         });
 
         let group = group_result.await?;
-        let owner_id = IndividualId(group_vk.into());
+        let viewer_id = IndividualId(group_vk.into());
         let doc_id = DocumentId(group.id());
-        let owner_share_secret_key = ShareSecretKey::generate(csprng);
-        let owner_share_key = owner_share_secret_key.share_key();
+        let viewer_share_secret_key = ShareSecretKey::generate(csprng);
+        let viewer_share_key = viewer_share_secret_key.share_key();
         let group_members = group.pick_individual_prekeys(doc_id);
         let other_members: Vec<(IndividualId, ShareKey)> = group_members
             .iter()
-            .filter(|(id, _sk)| **id != owner_id)
+            .filter(|(id, _sk)| **id != viewer_id)
             .map(|(id, pk)| (*id, *pk))
             .collect();
-        let mut owner_sks = ShareKeyMap::new();
-        owner_sks.insert(owner_share_key, owner_share_secret_key);
-        let mut cgka = Cgka::new(doc_id, owner_id, owner_share_key, signer, listener)
+        let mut viewer_sks = ShareKeyMap::new();
+        viewer_sks.insert(viewer_share_key, viewer_share_secret_key);
+        let mut cgka = Cgka::new(doc_id, viewer_id, viewer_share_key, signer, listener)
             .await?
-            .with_new_owner(owner_id, owner_sks)
+            .with_new_owner(viewer_id, viewer_sks)
             .await?;
 
         let mut ops: Vec<Signed<CgkaOperation>> = Vec::new();
@@ -204,7 +204,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             );
         }
         let (_pcs_key, update_op) = cgka
-            .update(owner_share_key, owner_share_secret_key, signer, csprng)
+            .update(viewer_share_key, viewer_share_secret_key, signer, csprng)
             .await?;
 
         ops.push(update_op);
@@ -417,9 +417,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         {
             return Err(CgkaError::OutOfOrderOperation);
         }
-        let mut owner_sks = self.cgka()?.owner_sks.clone();
-        owner_sks.insert(pk, *sk);
-        self.cgka = Some(self.cgka()?.with_new_owner(added_id, owner_sks).await?);
+        let mut viewer_sks = self.cgka()?.viewer_sks.clone();
+        viewer_sks.insert(pk, *sk);
+        self.cgka = Some(self.cgka()?.with_new_owner(added_id, viewer_sks).await?);
         let listener = self.cgka()?.listener.clone();
         self.merge_cgka_op(op, &listener).await
     }
@@ -558,7 +558,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             group: self.group.into_archive(),
             content_heads: self.content_heads.clone(),
             content_state: self.content_state.clone(),
-            cgka: self.cgka.clone(),
+            cgka: if let Some(cgka) = &self.cgka {
+                Some(cgka.into_archive())
+            } else {
+                None
+            },
         }
     }
 
@@ -569,6 +573,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         listener: L,
     ) -> Result<Self, MissingIndividualError> {
         Ok(Document {
+            cgka: archive
+                .cgka
+                .map(|cgka_archive| Cgka::from_archive(cgka_archive, listener.clone())),
             group: Group::<S, T, L>::dummy_from_archive(
                 archive.group,
                 delegations,
@@ -578,7 +585,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             content_heads: archive.content_heads,
             content_state: archive.content_state,
             known_decryption_keys: HashMap::new(),
-            cgka: archive.cgka,
         })
     }
 }

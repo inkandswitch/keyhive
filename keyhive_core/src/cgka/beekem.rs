@@ -204,10 +204,10 @@ impl BeeKem {
     #[instrument(skip_all, fields(doc_id, epochs))]
     pub(crate) fn decrypt_tree_secret(
         &self,
-        owner_id: IndividualId,
-        owner_sks: &mut ShareKeyMap,
+        viewer_id: IndividualId,
+        viewer_sks: &mut ShareKeyMap,
     ) -> Result<ShareSecretKey, CgkaError> {
-        let leaf_idx = *self.leaf_index_for_id(owner_id)?;
+        let leaf_idx = *self.leaf_index_for_id(viewer_id)?;
         tracing::trace!("Decrypting tree secret");
         if !self.has_root_key() {
             tracing::trace!("No root key found");
@@ -228,8 +228,8 @@ impl BeeKem {
 
             tracing::trace!("Leaf has public key");
             tracing::trace!("Looking up secret {:?}", pk);
-            tracing::trace!(owner_sks = ?owner_sks, len = owner_sks.len());
-            let secret = owner_sks.get(&pk).ok_or(CgkaError::ShareKeyNotFound)?;
+            tracing::trace!(viewer_sks = ?viewer_sks, len = viewer_sks.len());
+            let secret = viewer_sks.get(&pk).ok_or(CgkaError::ShareKeyNotFound)?;
             tracing::trace!("Secret found");
             return Ok(secret
                 .ratchet_n_forward(treemath::direct_path(leaf_idx.into(), self.tree_size).len()));
@@ -254,7 +254,7 @@ impl BeeKem {
             }
             debug_assert!(!self.is_root(child_idx));
             maybe_last_secret_decrypted =
-                self.maybe_decrypt_parent_key(child_idx, &child_node_key, &seen_idxs, owner_sks)?;
+                self.maybe_decrypt_parent_key(child_idx, &child_node_key, &seen_idxs, viewer_sks)?;
             let Some(ref secret) = maybe_last_secret_decrypted else {
                 panic!("Non-blank, non-conflict parent should have a secret we can decrypt");
             };
