@@ -40,7 +40,7 @@ where
     let cgkas = setup(member_count).unwrap();
     let mut first_cgka = cgkas[0].clone();
     let mut paired_cgka = cgkas[paired_idx].clone();
-    let mut sks = paired_cgka.cgka.owner_sks.clone();
+    let mut sks = paired_cgka.cgka.viewer_sks.clone();
     sks.insert(paired_cgka.m.pk, paired_cgka.m.sk.clone());
     paired_cgka.cgka = first_cgka
         .cgka

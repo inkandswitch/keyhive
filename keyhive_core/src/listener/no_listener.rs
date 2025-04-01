@@ -1,11 +1,19 @@
 //! Stub out listener functionality.
 
-use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener};
+use super::{
+    cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener,
+    secret::SecretListener,
+};
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{
+        share_key::{ShareKey, ShareSecretKey},
+        signed::Signed,
+        signer::async_signer::AsyncSigner,
+    },
     principal::{
+        document::id::DocumentId,
         group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
@@ -33,4 +41,21 @@ impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for NoListener {
 
 impl CgkaListener for NoListener {
     async fn on_cgka_op(&self, _data: &Rc<Signed<CgkaOperation>>) {}
+}
+
+impl SecretListener for NoListener {
+    async fn on_active_prekey_pair(
+        &self,
+        _new_public_key: ShareKey,
+        _new_secret_key: ShareSecretKey,
+    ) {
+    }
+
+    async fn on_doc_sharing_secret(
+        &self,
+        _doc_id: DocumentId,
+        _new_public_key: ShareKey,
+        _new_secret_key: ShareSecretKey,
+    ) {
+    }
 }

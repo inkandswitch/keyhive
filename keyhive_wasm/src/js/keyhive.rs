@@ -148,12 +148,12 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = tryDecrypt)]
-    pub fn try_decrypt(
+    pub async fn try_decrypt(
         &mut self,
         doc: JsDocument,
         encrypted: JsEncrypted,
     ) -> Result<Vec<u8>, JsDecryptError> {
-        Ok(self.0.try_decrypt_content(doc.0, &encrypted.0)?)
+        Ok(self.0.try_decrypt_content(doc.0, &encrypted.0).await?)
     }
 
     #[wasm_bindgen(js_name = addMember)]
@@ -325,7 +325,9 @@ mod tests {
             let encrypted = bh
                 .try_encrypt(doc.clone(), content_ref.clone(), pred_refs, &content)
                 .await?;
-            let decrypted = bh.try_decrypt(doc.clone(), encrypted.encrypted_content())?;
+            let decrypted = bh
+                .try_decrypt(doc.clone(), encrypted.encrypted_content())
+                .await?;
             assert_eq!(content, decrypted);
             bh.force_pcs_update(&doc).await?;
             let content_2 = vec![5, 6, 7, 8, 9];
@@ -334,7 +336,9 @@ mod tests {
             let encrypted_2 = bh
                 .try_encrypt(doc.clone(), content_ref_2, pred_refs_2, &content_2)
                 .await?;
-            let decrypted_2 = bh.try_decrypt(doc.clone(), encrypted_2.encrypted_content())?;
+            let decrypted_2 = bh
+                .try_decrypt(doc.clone(), encrypted_2.encrypted_content())
+                .await?;
             assert_eq!(content_2, decrypted_2);
             Ok(())
         }

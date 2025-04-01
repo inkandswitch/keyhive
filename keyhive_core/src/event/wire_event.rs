@@ -3,12 +3,8 @@
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::{
-        share_key::{ShareKey, ShareSecretKey},
-        signed::Signed,
-    },
+    crypto::signed::Signed,
     principal::{
-        document::id::DocumentId,
         group::{delegation::StaticDelegation, revocation::StaticRevocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
@@ -16,14 +12,15 @@ use crate::{
 use derive_more::{From, TryInto};
 use serde::{Deserialize, Serialize};
 
-use super::wire_event::WireEvent;
-
 /// Serailizable version of [`Event`][super::Event].
 ///
-/// These events MUST NOT be put on the network. If you need a
-/// serializable event to put on the network, use [`WireEvent`][super::WireEvent].
+/// This is useful for sending over a network or storing to disk.
+/// However the references contained in `WireEvent`s may be missing
+/// dependencies, unlike [`Event`][super::Event]s.
+///
+/// Unlike [`StaticEvent`]s, `WireEvent`s are safe to send and recieve on the network.
 #[derive(Debug, Clone, PartialEq, Eq, From, TryInto, Serialize, Deserialize)]
-pub enum StaticEvent<T: ContentRef = [u8; 32]> {
+pub enum WireEvent<T: ContentRef = [u8; 32]> {
     /// Prekeys were expanded.
     PrekeysExpanded(Signed<AddKeyOp>),
 
@@ -38,35 +35,10 @@ pub enum StaticEvent<T: ContentRef = [u8; 32]> {
 
     /// A delegation was revoked.
     Revoked(Signed<StaticRevocation<T>>),
-
-    // TODO comment: do not add to static event
-    DocumentSecret {
-        doc_id: DocumentId,
-        public_key: ShareKey,
-        secret_key: ShareSecretKey,
-    },
-
-    // TODO comment: do not add to static event
-    ActiveAgentSecret {
-        public_key: ShareKey,
-        secret_key: ShareSecretKey,
-    },
-}
-
-impl From<WireEvent> for StaticEvent {
-    fn from(event: WireEvent) -> Self {
-        match event {
-            WireEvent::PrekeysExpanded(e) => Self::PrekeysExpanded(e),
-            WireEvent::PrekeyRotated(e) => Self::PrekeyRotated(e),
-            WireEvent::CgkaOperation(e) => Self::CgkaOperation(e),
-            WireEvent::Delegated(e) => Self::Delegated(e),
-            WireEvent::Revoked(e) => Self::Revoked(e),
-        }
-    }
 }
 
 #[cfg(any(test, feature = "arbitrary"))]
-impl<'a, T: arbitrary::Arbitrary<'a> + ContentRef> arbitrary::Arbitrary<'a> for StaticEvent<T> {
+impl<'a, T: arbitrary::Arbitrary<'a> + ContentRef> arbitrary::Arbitrary<'a> for WireEvent<T> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let variant = u.int_in_range(0..=4)?;
         match variant {

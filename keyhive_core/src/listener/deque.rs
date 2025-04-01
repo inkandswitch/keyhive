@@ -1,9 +1,14 @@
-use super::{membership::MembershipListener, prekey::PrekeyListener};
+use super::{membership::MembershipListener, prekey::PrekeyListener, secret::SecretListener};
 use crate::{
     content::reference::ContentRef,
-    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{
+        share_key::{ShareKey, ShareSecretKey},
+        signed::Signed,
+        signer::async_signer::AsyncSigner,
+    },
     event::Event,
     principal::{
+        document::id::DocumentId,
         group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
@@ -99,5 +104,29 @@ impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for Deque<S, T> {
     #[instrument(skip(self))]
     async fn on_revocation(&self, data: &Rc<Signed<Revocation<S, T, Self>>>) {
         self.push(Event::Revoked(data.dupe()))
+    }
+}
+
+impl<S: AsyncSigner, T: ContentRef> SecretListener for Deque<S, T> {
+    #[instrument(skip(self))]
+    async fn on_active_prekey_pair(&self, public_key: ShareKey, secret_key: ShareSecretKey) {
+        self.push(Event::ActiveAgentSecret {
+            public_key,
+            secret_key,
+        })
+    }
+
+    #[instrument(skip(self))]
+    async fn on_doc_sharing_secret(
+        &self,
+        doc_id: DocumentId,
+        public_key: ShareKey,
+        secret_key: ShareSecretKey,
+    ) {
+        self.push(Event::DocumentSecret {
+            doc_id,
+            public_key,
+            secret_key,
+        })
     }
 }

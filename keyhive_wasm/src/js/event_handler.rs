@@ -3,10 +3,17 @@ use derive_more::{From, Into};
 use dupe::Dupe;
 use keyhive_core::{
     cgka::operation::CgkaOperation,
-    crypto::signed::Signed,
+    crypto::{
+        share_key::{ShareKey, ShareSecretKey},
+        signed::Signed,
+    },
     event::Event,
-    listener::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener},
+    listener::{
+        cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener,
+        secret::SecretListener,
+    },
     principal::{
+        document::id::DocumentId,
         group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
@@ -52,5 +59,37 @@ impl MembershipListener<JsSigner, JsChangeRef> for JsEventHandler {
 impl CgkaListener for JsEventHandler {
     async fn on_cgka_op(&self, data: &Rc<Signed<CgkaOperation>>) {
         self.call(Event::CgkaOperation(data.dupe()).into())
+    }
+}
+
+impl SecretListener for JsEventHandler {
+    async fn on_active_prekey_pair(
+        &self,
+        new_public_key: ShareKey,
+        new_secret_key: ShareSecretKey,
+    ) {
+        self.call(
+            Event::ActiveAgentSecret {
+                public_key: new_public_key,
+                secret_key: new_secret_key,
+            }
+            .into(),
+        )
+    }
+
+    async fn on_doc_sharing_secret(
+        &self,
+        doc_id: DocumentId,
+        new_public_key: ShareKey,
+        new_secret_key: ShareSecretKey,
+    ) {
+        self.call(
+            Event::DocumentSecret {
+                doc_id,
+                public_key: new_public_key,
+                secret_key: new_secret_key,
+            }
+            .into(),
+        )
     }
 }

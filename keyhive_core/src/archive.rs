@@ -31,4 +31,9 @@ impl<T: ContentRef> Archive<T> {
     pub fn id(&self) -> IndividualId {
         self.active.individual.id()
     }
+
+    // FIXME remove
+    pub fn docs(&self) -> &HashMap<DocumentId, DocumentArchive<T>> {
+        &self.docs
+    }
 }

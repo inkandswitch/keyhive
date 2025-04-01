@@ -170,6 +170,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
 
         keyhive
             .ingest_unsorted_static_events(ops)
+            .await
             .map_err(|e| error::Ingest::Failed(format!("failed to ingest keyhive events: {:?}", e)))
     }
 
@@ -266,7 +267,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         loop {
             let mut ingested = false;
             while let Some(event) = events.pop() {
-                match keyhive.receive_static_event(event.clone()) {
+                match keyhive.receive_static_event(event.clone()).await {
                     Ok(_) => {
                         tracing::trace!(?event, "processing keyhive event");
                         ingested = true;
@@ -616,7 +617,9 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             Digest::hash(&parents.to_vec()),
         );
 
-        Ok(keyhive.try_decrypt_content(doc.clone(), &enc_content)?)
+        Ok(keyhive
+            .try_decrypt_content(doc.clone(), &enc_content)
+            .await?)
     }
 
     pub(crate) async fn decrypt_batch(
@@ -664,7 +667,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
                 Digest::hash(&parents.to_vec()),
             );
 
-            match keyhive.try_decrypt_content(doc, &enc_content) {
+            match keyhive.try_decrypt_content(doc, &enc_content).await {
                 Ok(content) => {
                     let content = match request.payload {
                         crate::CommitOrBundle::Commit(_) => crate::CommitOrBundle::Commit(

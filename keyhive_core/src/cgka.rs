@@ -50,14 +50,15 @@ use tracing::{info, instrument};
 ///
 /// We assume that all operations are received in causal order (a property
 /// guaranteed by Keyhive as a whole).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Derivative)]
-#[derivative(Hash)]
+#[derive(Clone, Eq, Serialize, Deserialize, Derivative)]
+#[derivative(Hash, PartialEq, Debug)]
 pub struct Cgka {
     doc_id: DocumentId,
     /// The id of the member who owns this tree.
-    pub owner_id: IndividualId,
+    pub viewer_id: IndividualId,
+    pub viewer_init_share_key: ShareKey,
     /// The secret keys of the member who owns this tree.
-    pub owner_sks: ShareKeyMap,
+    pub viewer_sks: ShareKeyMap,
     tree: BeeKem,
     /// Graph of all operations seen (but not necessarily applied) so far.
     ops_graph: CgkaOperationGraph,
@@ -72,7 +73,7 @@ pub struct Cgka {
     #[derivative(Hash(hash_with = "hashed_key_bytes"))]
     pcs_key_ops: HashMap<Digest<PcsKey>, Digest<Signed<CgkaOperation>>>,
 
-    original_member: (IndividualId, ShareKey),
+    // original_member: (IndividualId, ShareKey),
     init_add_op: Signed<CgkaOperation>,
 }
 
@@ -90,36 +91,47 @@ fn hashed_key_bytes<T: Serialize, V, H: Hasher>(hmap: &HashMap<Digest<T>, V>, st
 impl Cgka {
     pub async fn new<S: AsyncSigner>(
         doc_id: DocumentId,
-        owner_id: IndividualId,
-        owner_pk: ShareKey,
+        viewer_id: IndividualId,
+        viewer_pk: ShareKey,
         signer: &S,
     ) -> Result<Self, CgkaError> {
-        let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk);
+        let init_add_op = CgkaOperation::init_add(doc_id, viewer_id, viewer_pk);
         let signed_op = signer.try_sign_async(init_add_op).await?;
-        Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op)
+        Self::new_from_init_add(doc_id, viewer_id, viewer_pk, signed_op)
     }
 
     #[instrument(skip_all, fields(doc_id))]
     pub fn new_from_init_add(
         doc_id: DocumentId,
-        owner_id: IndividualId,
-        owner_pk: ShareKey,
+        viewer_id: IndividualId,
+        viewer_pk: ShareKey,
         init_add_op: Signed<CgkaOperation>,
     ) -> Result<Self, CgkaError> {
-        let tree = BeeKem::new(doc_id, owner_id, owner_pk)?;
+        let tree = BeeKem::new(doc_id, viewer_id, viewer_pk)?;
+        if !tree.has_root_key() {
+            tracing::error!("Tree should have root key");
+        }
+        if tree.member_count() == 0 {
+            tracing::error!("Empty tree?!");
+        } else {
+            tracing::info!("Tree has {} members", tree.member_count());
+        }
         let mut cgka = Self {
             doc_id,
-            owner_id,
-            owner_sks: ShareKeyMap::new(),
+            viewer_id,
+            viewer_sks: ShareKeyMap::new(),
+            viewer_init_share_key: viewer_pk,
             tree,
             ops_graph: CgkaOperationGraph::new(),
             pending_ops_for_structural_change: false,
             pcs_keys: CaMap::new(),
             pcs_key_ops: HashMap::new(),
-            original_member: (owner_id, owner_pk),
             init_add_op: init_add_op.clone(),
         };
         cgka.ops_graph.add_local_op(&init_add_op);
+        if !cgka.tree.has_root_key() {
+            tracing::error!("Tree should definitley now have root key");
+        }
         Ok(cgka)
     }
 
@@ -127,11 +139,11 @@ impl Cgka {
     pub fn with_new_owner(
         &self,
         my_id: IndividualId,
-        owner_sks: ShareKeyMap,
+        viewer_sks: ShareKeyMap,
     ) -> Result<Self, CgkaError> {
         let mut cgka = self.clone();
-        cgka.owner_id = my_id;
-        cgka.owner_sks = owner_sks;
+        cgka.viewer_id = my_id;
+        cgka.viewer_sks = viewer_sks;
         cgka.pcs_keys = self.pcs_keys.clone();
         cgka.pcs_key_ops = self.pcs_key_ops.clone();
         Ok(cgka)
@@ -193,13 +205,17 @@ impl Cgka {
     /// We must first derive a [`PcsKey`] for the encrypted data's associated
     /// hashes. Then we use that [`PcsKey`] to derive an [`ApplicationSecret`].
     #[instrument(skip_all, fields(encrypted.content_ref))]
-    pub fn decryption_key_for<T, Cr: ContentRef>(
+    pub async fn decryption_key_for<T, Cr: ContentRef>(
         &mut self,
         encrypted: &EncryptedContent<T, Cr>,
     ) -> Result<SymmetricKey, CgkaError> {
-        let pcs_key =
-            self.pcs_key_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)?;
+        tracing::trace!("Decrypting content");
+        let pcs_key = self
+            .pcs_key_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)
+            .await?;
+
         if !self.pcs_keys.contains_key(&encrypted.pcs_key_hash) {
+            tracing::trace!("insert PCS key");
             self.insert_pcs_key(&pcs_key, encrypted.pcs_update_op_hash);
         }
         let app_secret = pcs_key.derive_application_secret(
@@ -304,14 +320,15 @@ impl Cgka {
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
-        self.owner_sks.insert(new_pk, new_sk);
+        self.viewer_sks.insert(new_pk, new_sk);
+
         let maybe_key_and_path =
             self.tree
-                .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
+                .encrypt_path(self.viewer_id, new_pk, &mut self.viewer_sks, csprng)?;
         if let Some((pcs_key, new_path)) = maybe_key_and_path {
             let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
             let op = CgkaOperation::Update {
-                id: self.owner_id,
+                id: self.viewer_id,
                 new_path: Box::new(new_path),
                 predecessors,
                 doc_id: self.doc_id,
@@ -449,9 +466,10 @@ impl Cgka {
 
     /// Decrypt tree secret to derive [`PcsKey`].
     fn pcs_key_from_tree_root(&mut self) -> Result<PcsKey, CgkaError> {
+        tracing::trace!("Decrypting tree secret");
         let key = self
             .tree
-            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)?;
+            .decrypt_tree_secret(self.viewer_id, &mut self.viewer_sks)?;
         Ok(PcsKey::new(key))
     }
 
@@ -460,37 +478,44 @@ impl Cgka {
     /// If we have not seen this [`PcsKey`] before, we'll need to rebuild
     /// the tree state for its corresponding update operation.
     #[instrument(skip_all, fields(doc_id, pcs_key_hash, update_op_hash))]
-    fn pcs_key_from_hashes(
+    async fn pcs_key_from_hashes(
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
         if let Some(pcs_key) = self.pcs_keys.get(pcs_key_hash) {
-            Ok(*pcs_key.clone())
+            tracing::trace!("Found PCS key in cache");
+            Ok(*pcs_key.dupe())
         } else {
+            tracing::trace!("No PCS key in cache; deriving from tree root");
             if self.has_pcs_key() {
+                tracing::trace!("Tree has root key");
                 let pcs_key = self.pcs_key_from_tree_root()?;
+                tracing::trace!("Derived PCS key from tree root");
                 if &Digest::hash(&pcs_key) == pcs_key_hash {
+                    tracing::trace!("Derived PCS key matches hash");
                     return Ok(pcs_key);
                 }
             }
-            self.derive_pcs_key_for_op(update_op_hash)
+            self.derive_pcs_key_for_op(update_op_hash).await
         }
     }
 
     /// Derive [`PcsKey`] for this operation hash.
     #[instrument(skip_all, fields(doc_id, op_hash))]
-    fn derive_pcs_key_for_op(
+    async fn derive_pcs_key_for_op(
         &mut self,
         op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
         if !self.ops_graph.contains_op_hash(op_hash) {
+            tracing::trace!("Operation not in graph");
             return Err(CgkaError::UnknownPcsKey);
         }
+        tracing::trace!("Operation in graph");
         let mut heads = HashSet::new();
         heads.insert(*op_hash);
         let ops = self.ops_graph.topsort_for_heads(&heads)?;
-        self.rebuild_pcs_key(ops)
+        self.rebuild_pcs_key(ops).await
     }
 
     /// Whether we have unresolved concurrency that requires a replay to resolve.
@@ -501,7 +526,7 @@ impl Cgka {
 
     /// Replay all ops in our graph in a deterministic order.
     #[instrument(skip_all, fields(doc_id))]
-    fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
+    pub(crate) fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
         let ordered_ops = self.ops_graph.topsort_graph()?;
         let rebuilt_cgka = self.rebuild_cgka(ordered_ops)?;
         self.update_cgka_from(&rebuilt_cgka);
@@ -514,11 +539,11 @@ impl Cgka {
     fn rebuild_cgka(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<Cgka, CgkaError> {
         let mut rebuilt_cgka = Cgka::new_from_init_add(
             self.doc_id,
-            self.original_member.0,
-            self.original_member.1,
+            self.viewer_id,
+            self.viewer_init_share_key,
             self.init_add_op.clone(),
         )?
-        .with_new_owner(self.owner_id, self.owner_sks.clone())?;
+        .with_new_owner(self.viewer_id, self.viewer_sks.clone())?;
         rebuilt_cgka.apply_epochs(&epochs)?;
         if rebuilt_cgka.has_pcs_key() {
             let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
@@ -530,18 +555,18 @@ impl Cgka {
     /// Derive a [`PcsKey`] by rebuilding a [`Cgka`] from the provided non-empty
     /// list of [`CgkaEpoch`]s.
     #[instrument(skip_all, fields(doc_id, epochs))]
-    fn rebuild_pcs_key(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<PcsKey, CgkaError> {
+    async fn rebuild_pcs_key(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<PcsKey, CgkaError> {
         debug_assert!(matches!(
             epochs.last()[0].payload,
             CgkaOperation::Update { .. }
         ));
         let mut rebuilt_cgka = Cgka::new_from_init_add(
             self.doc_id,
-            self.original_member.0,
-            self.original_member.1,
+            self.viewer_id,
+            self.viewer_init_share_key,
             self.init_add_op.clone(),
         )?
-        .with_new_owner(self.owner_id, self.owner_sks.clone())?;
+        .with_new_owner(self.viewer_id, self.viewer_sks.clone())?;
         rebuilt_cgka.apply_epochs(&epochs)?;
         let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
         self.insert_pcs_key(&pcs_key, Digest::hash(&epochs.last()[0]));
@@ -560,7 +585,11 @@ impl Cgka {
     #[instrument(skip_all, fields(doc_id))]
     fn update_cgka_from(&mut self, other: &Self) {
         self.tree = other.tree.clone();
-        self.owner_sks.extend(&other.owner_sks);
+
+        for (pk, sk) in other.viewer_sks.0.iter() {
+            self.viewer_sks.insert(*pk, *sk);
+        }
+
         self.pcs_keys.extend(
             other
                 .pcs_keys
@@ -582,11 +611,10 @@ impl Fork for Cgka {
 
 impl Merge for Cgka {
     fn merge(&mut self, fork: Self::Forked) {
-        self.owner_sks.merge(fork.owner_sks);
+        self.viewer_sks.merge(fork.viewer_sks);
         self.ops_graph.merge(fork.ops_graph);
         self.pcs_keys.merge(fork.pcs_keys);
-        self.replay_ops_graph()
-            .expect("two valid graphs should always merge causal consistency");
+        self.replay_ops_graph().expect("ops graph should be valid")
     }
 }
 
@@ -596,12 +624,12 @@ impl Cgka {
         self.pcs_key_from_tree_root()
     }
 
-    pub fn secret(
+    pub async fn secret(
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
-        self.pcs_key_from_hashes(pcs_key_hash, update_op_hash)
+        self.pcs_key_from_hashes(pcs_key_hash, update_op_hash).await
     }
 }
 

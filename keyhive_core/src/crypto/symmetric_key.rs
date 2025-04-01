@@ -32,7 +32,7 @@ use x25519_dalek::SharedSecret;
 ///
 ///     let delegation_store = DelegationStore::new();
 ///     let revocation_store = RevocationStore::new();
-///     let doc = Document::generate(
+///     let (doc, cgka_ops) = Document::generate(
 ///         nonempty![user_agent],
 ///         nonempty!["commit-1".to_string()],
 ///         delegation_store,

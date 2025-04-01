@@ -162,6 +162,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Document<S
         Agent::Document(Rc::new(RefCell::new(d)))
     }
 }
+
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Agent<S, T, L> {
     fn verifying_key(&self) -> VerifyingKey {
         match self {

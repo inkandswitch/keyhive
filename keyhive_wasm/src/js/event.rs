@@ -60,6 +60,9 @@ pub enum JsEventVariant {
 
     PrekeyRotated,
     PrekeysExpanded,
+
+    ActiveAgentSecret,
+    DocumentSecret,
 }
 
 impl From<&JsEvent> for JsEventVariant {
@@ -72,6 +75,9 @@ impl From<&JsEvent> for JsEventVariant {
 
             Event::PrekeyRotated { .. } => JsEventVariant::PrekeyRotated,
             Event::PrekeysExpanded { .. } => JsEventVariant::PrekeysExpanded,
+
+            Event::ActiveAgentSecret { .. } => JsEventVariant::ActiveAgentSecret,
+            Event::DocumentSecret { .. } => JsEventVariant::DocumentSecret,
         }
     }
 }
@@ -86,6 +92,9 @@ impl std::fmt::Display for JsEventVariant {
 
             JsEventVariant::PrekeyRotated => "PREKEY_ROTATED",
             JsEventVariant::PrekeysExpanded => "PREKEYS_EXPANDED",
+
+            JsEventVariant::ActiveAgentSecret => "ACTIVE_AGENT_SECRET",
+            JsEventVariant::DocumentSecret => "DOCUMENT_SECRET",
         }
         .fmt(f)
     }

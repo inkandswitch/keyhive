@@ -1,13 +1,17 @@
 //! Events that are emitted during operation of Keyhive.
 
 pub mod static_event;
+pub mod wire_event;
 
 use self::static_event::StaticEvent;
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{
-        digest::Digest, encrypted::EncryptedContent, signed::Signed,
+        digest::Digest,
+        encrypted::EncryptedContent,
+        share_key::{ShareKey, ShareSecretKey},
+        signed::Signed,
         signer::async_signer::AsyncSigner,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
@@ -26,7 +30,9 @@ use derive_where::derive_where;
 use dupe::Dupe;
 use serde::Serialize;
 use std::{collections::HashMap, rc::Rc};
+use thiserror::Error;
 use tracing::instrument;
+use wire_event::WireEvent;
 
 /// Top-level event variants.
 #[derive(PartialEq, Eq, From, TryInto)]
@@ -46,6 +52,19 @@ pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S
 
     /// A delegation was revoked.
     Revoked(Rc<Signed<Revocation<S, T, L>>>),
+
+    // TODO comment: do not add to static event
+    DocumentSecret {
+        doc_id: DocumentId,
+        public_key: ShareKey,
+        secret_key: ShareSecretKey,
+    },
+
+    // TODO comment: do not add to static event
+    ActiveAgentSecret {
+        public_key: ShareKey,
+        secret_key: ShareSecretKey,
+    },
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> {
@@ -108,8 +127,80 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Event<S, T
             Event::PrekeysExpanded(pke) => {
                 StaticEvent::PrekeysExpanded(Rc::unwrap_or_clone(pke).map(Into::into))
             }
+            Event::DocumentSecret {
+                doc_id,
+                public_key,
+                secret_key,
+            } => StaticEvent::DocumentSecret {
+                doc_id,
+                public_key,
+                secret_key,
+            },
+            Event::ActiveAgentSecret {
+                public_key,
+                secret_key,
+            } => StaticEvent::ActiveAgentSecret {
+                public_key,
+                secret_key,
+            },
         }
     }
+}
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> TryFrom<Event<S, T, L>>
+    for WireEvent<T>
+{
+    type Error = CannotConvertSecretToWireFormat;
+
+    fn try_from(op: Event<S, T, L>) -> Result<Self, Self::Error> {
+        match op {
+            Event::Delegated(d) => Ok(WireEvent::Delegated(Rc::unwrap_or_clone(d).map(Into::into))),
+            Event::Revoked(r) => Ok(WireEvent::Revoked(Rc::unwrap_or_clone(r).map(Into::into))),
+
+            Event::CgkaOperation(cgka) => Ok(WireEvent::CgkaOperation(Rc::unwrap_or_clone(cgka))),
+
+            Event::PrekeyRotated(pkr) => Ok(WireEvent::PrekeyRotated(
+                Rc::unwrap_or_clone(pkr).map(Into::into),
+            )),
+            Event::PrekeysExpanded(pke) => Ok(WireEvent::PrekeysExpanded(
+                Rc::unwrap_or_clone(pke).map(Into::into),
+            )),
+            Event::DocumentSecret {
+                doc_id,
+                public_key,
+                secret_key,
+            } => Err(CannotConvertSecretToWireFormat::DocumentSecretNotAllowed {
+                doc_id,
+                public_key,
+                secret_key,
+            }),
+            Event::ActiveAgentSecret {
+                public_key,
+                secret_key,
+            } => Err(
+                CannotConvertSecretToWireFormat::ActiveAgentSecretNotAllowed {
+                    public_key,
+                    secret_key,
+                },
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Error)]
+pub enum CannotConvertSecretToWireFormat {
+    #[error("Cannot convert new doc sharing secret to static event: {doc_id:?} {public_key:?}")]
+    DocumentSecretNotAllowed {
+        doc_id: DocumentId,
+        public_key: ShareKey,
+        secret_key: ShareSecretKey,
+    },
+
+    #[error("Cannot convert new active agent secret to static event: {public_key:?}")]
+    ActiveAgentSecretNotAllowed {
+        public_key: ShareKey,
+        secret_key: ShareSecretKey,
+    },
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for Event<S, T, L> {
@@ -128,6 +219,24 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Event
 
             Event::PrekeyRotated(pkr) => Event::PrekeyRotated(Rc::clone(pkr)),
             Event::PrekeysExpanded(pke) => Event::PrekeysExpanded(Rc::clone(pke)),
+
+            Event::DocumentSecret {
+                doc_id,
+                public_key,
+                secret_key,
+            } => Event::DocumentSecret {
+                doc_id: *doc_id,
+                public_key: public_key.clone(),
+                secret_key: secret_key.clone(),
+            },
+
+            Event::ActiveAgentSecret {
+                public_key,
+                secret_key,
+            } => Event::ActiveAgentSecret {
+                public_key: public_key.clone(),
+                secret_key: secret_key.clone(),
+            },
         }
     }
 }

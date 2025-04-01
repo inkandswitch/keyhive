@@ -106,6 +106,8 @@ impl DebugEventTable {
                 Event::CgkaOperation(_) => "CgkaOperation",
                 Event::Delegated(_) => "Delegated",
                 Event::Revoked(_) => "Revoked",
+                Event::DocumentSecret { .. } => "DocumentSecret",
+                Event::ActiveAgentSecret { .. } => "ActiveAgentSecret",
             };
             *event_counts.entry(event_type.to_string()).or_insert(0) += 1;
         }
@@ -297,6 +299,49 @@ impl DebugEventRow {
                 Self {
                     index: idx,
                     event_type: "Revoked".to_string(),
+                    event_hash,
+                    issuer,
+                    details,
+                }
+            }
+            Event::DocumentSecret {
+                doc_id,
+                public_key,
+                secret_key,
+            } => {
+                let event_hash = Hash::new(doc_id.as_bytes(), nicknames);
+                let issuer = Hash::new(public_key.as_bytes(), nicknames);
+                let details = DebugEventDetails::PrekeysExpanded {
+                    share_key: Hash::new(
+                        Digest::hash(&secret_key.to_bytes()).as_slice(),
+                        nicknames,
+                    ),
+                };
+
+                Self {
+                    index: idx,
+                    event_type: "DocumentSecret".to_string(),
+                    event_hash,
+                    issuer,
+                    details,
+                }
+            }
+            Event::ActiveAgentSecret {
+                public_key,
+                secret_key,
+            } => {
+                let event_hash = Hash::new(public_key.as_bytes(), nicknames);
+                let issuer = Hash::new(public_key.as_bytes(), nicknames);
+                let details = DebugEventDetails::PrekeysExpanded {
+                    share_key: Hash::new(
+                        Digest::hash(&secret_key.to_bytes()).as_slice(),
+                        nicknames,
+                    ),
+                };
+
+                Self {
+                    index: idx,
+                    event_type: "ActiveAgentSecret".to_string(),
                     event_hash,
                     issuer,
                     details,
