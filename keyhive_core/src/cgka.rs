@@ -56,6 +56,7 @@ pub struct Cgka {
     doc_id: DocumentId,
     /// The id of the member who owns this tree.
     pub viewer_id: IndividualId,
+    pub viewer_init_share_key: ShareKey,
     /// The secret keys of the member who owns this tree.
     pub viewer_sks: ShareKeyMap,
     tree: BeeKem,
@@ -72,7 +73,7 @@ pub struct Cgka {
     #[derivative(Hash(hash_with = "hashed_key_bytes"))]
     pcs_key_ops: HashMap<Digest<PcsKey>, Digest<Signed<CgkaOperation>>>,
 
-    original_member: (IndividualId, ShareKey),
+    // original_member: (IndividualId, ShareKey),
     init_add_op: Signed<CgkaOperation>,
 }
 
@@ -107,19 +108,30 @@ impl Cgka {
         init_add_op: Signed<CgkaOperation>,
     ) -> Result<Self, CgkaError> {
         let tree = BeeKem::new(doc_id, viewer_id, viewer_pk)?;
+        if !tree.has_root_key() {
+            tracing::error!("Tree should have root key");
+        }
+        if tree.member_count() == 0 {
+            tracing::error!("Empty tree?!");
+        } else {
+            tracing::info!("Tree has {} members", tree.member_count());
+        }
         let mut cgka = Self {
             doc_id,
             viewer_id,
             viewer_sks: ShareKeyMap::new(),
+            viewer_init_share_key: viewer_pk,
             tree,
             ops_graph: CgkaOperationGraph::new(),
             pending_ops_for_structural_change: false,
             pcs_keys: CaMap::new(),
             pcs_key_ops: HashMap::new(),
-            original_member: (viewer_id, viewer_pk),
             init_add_op: init_add_op.clone(),
         };
         cgka.ops_graph.add_local_op(&init_add_op);
+        if !cgka.tree.has_root_key() {
+            tracing::error!("Tree should definitley now have root key");
+        }
         Ok(cgka)
     }
 
@@ -514,7 +526,7 @@ impl Cgka {
 
     /// Replay all ops in our graph in a deterministic order.
     #[instrument(skip_all, fields(doc_id))]
-    fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
+    pub(crate) fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
         let ordered_ops = self.ops_graph.topsort_graph()?;
         let rebuilt_cgka = self.rebuild_cgka(ordered_ops)?;
         self.update_cgka_from(&rebuilt_cgka);
@@ -527,8 +539,8 @@ impl Cgka {
     fn rebuild_cgka(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<Cgka, CgkaError> {
         let mut rebuilt_cgka = Cgka::new_from_init_add(
             self.doc_id,
-            self.original_member.0,
-            self.original_member.1,
+            self.viewer_id,
+            self.viewer_init_share_key,
             self.init_add_op.clone(),
         )?
         .with_new_owner(self.viewer_id, self.viewer_sks.clone())?;
@@ -550,8 +562,8 @@ impl Cgka {
         ));
         let mut rebuilt_cgka = Cgka::new_from_init_add(
             self.doc_id,
-            self.original_member.0,
-            self.original_member.1,
+            self.viewer_id,
+            self.viewer_init_share_key,
             self.init_add_op.clone(),
         )?
         .with_new_owner(self.viewer_id, self.viewer_sks.clone())?;

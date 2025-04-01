@@ -133,17 +133,17 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 /// ```
 #[instrument(skip_all)]
 pub async fn transact_nonblocking<
-    T: MergeAsync + Clone,
+    T: Merge + Clone,
     Error,
-    F: AsyncFnMut(T::AsyncForked) -> Result<T::AsyncForked, Error>,
+    F: AsyncFnMut(T::Forked) -> Result<T::Forked, Error>,
 >(
-    trunk: &T,
+    trunk: &mut T,
     mut tx: F,
 ) -> Result<(), Error> {
     let diverged = info_span!("nonblocking_transaction")
-        .in_scope(|| async { tx(trunk.fork_async().await).await })
+        .in_scope(|| async { tx(trunk.fork()).await })
         .await?;
-    trunk.clone().merge_async(diverged).await;
+    trunk.merge(diverged);
     Ok(())
 }
 

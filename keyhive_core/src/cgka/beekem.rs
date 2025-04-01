@@ -398,8 +398,10 @@ impl BeeKem {
             panic!("BeeKEM should always have a root at an inner node.")
         };
         if let Some(r) = self.inner_node(p_idx) {
+            tracing::trace!("Root node found, has conflict: {}", r.has_conflict());
             !r.has_conflict()
         } else {
+            tracing::trace!("Root node not found via treemath");
             false
         }
     }

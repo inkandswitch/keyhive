@@ -69,7 +69,7 @@ pub struct Document<
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
 
-    known_decryption_keys: HashMap<T, SymmetricKey>,
+    known_decryption_keys: HashMap<T, SymmetricKey>, // FIXME unused?
     pub(crate) cgka: Cgka,
 }
 
@@ -103,6 +103,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             known_decryption_keys: HashMap::new(),
         };
         doc.rebuild();
+        // doc.cgka.replay_ops_graph()?; // FIXME debugging... plz remove this line
         Ok(doc)
     }
 
