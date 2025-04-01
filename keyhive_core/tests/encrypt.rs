@@ -131,3 +131,69 @@ async fn test_decrypt_after_to_from_archive() {
 
     assert_eq!(decrypted, init_content);
 }
+
+#[tokio::test]
+async fn test_decrypt_after_fork_and_merge() {
+    test_utils::init_logging();
+    let NewKeyhive {
+        keyhive: mut alice,
+        signer: sk,
+        log,
+    } = make_keyhive().await;
+
+    let archive1 = alice.into_archive();
+
+    let init_content = "hello world".as_bytes().to_vec();
+    let init_hash = blake3::hash(&init_content);
+
+    let doc = alice
+        .generate_doc(vec![], nonempty![init_hash.into()])
+        .await
+        .unwrap();
+
+    let encrypted = alice
+        .try_encrypt_content(doc.clone(), &init_hash.into(), &vec![], &init_content)
+        .await
+        .unwrap();
+
+    let archive2 = alice.into_archive();
+    let mut events = Rc::unwrap_or_clone(log.0)
+        .into_inner()
+        .into_iter()
+        .chain(
+            alice
+                .events_for_agent(&alice.individual().into())
+                .unwrap()
+                .into_values(),
+        )
+        .map(StaticEvent::from)
+        .collect::<Vec<_>>();
+
+    if let Some(op) = encrypted.update_op() {
+        events.push(StaticEvent::from(op.clone()));
+    }
+
+    let mut reloaded = {
+        let mut keyhive = Keyhive::try_from_archive(
+            &archive1,
+            sk.clone(),
+            MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
+            Log::new(),
+            rand::thread_rng(),
+        )
+        .unwrap();
+
+        keyhive.ingest_archive(archive2).await.unwrap();
+        keyhive.ingest_unsorted_static_events(events).await.unwrap();
+
+        keyhive
+    };
+
+    let doc = reloaded.get_document(doc.borrow().doc_id()).unwrap();
+
+    let decrypted = reloaded
+        .try_decrypt_content(doc.clone(), encrypted.encrypted_content())
+        .unwrap();
+
+    assert_eq!(decrypted, init_content);
+}

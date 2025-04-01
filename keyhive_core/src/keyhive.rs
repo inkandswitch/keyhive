@@ -1411,6 +1411,37 @@ impl<
         })
     }
 
+    pub async fn ingest_archive(
+        &mut self,
+        archive: Archive<T>,
+    ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+        self.active
+            .borrow_mut()
+            .prekey_pairs
+            .extend(archive.active.prekey_pairs);
+        self.active
+            .borrow_mut()
+            .individual
+            .merge(archive.active.individual);
+        for (id, indie) in archive.individuals {
+            if let Some(our_indie) = self.individuals.get_mut(&id) {
+                our_indie.merge(indie);
+            } else {
+                self.individuals.insert(id, Rc::new(RefCell::new(indie)));
+            }
+        }
+        let events = archive
+            .topsorted_ops
+            .into_iter()
+            .map(|(_, op)| match op {
+                StaticMembershipOperation::Delegation(signed) => StaticEvent::Delegated(signed),
+                StaticMembershipOperation::Revocation(signed) => StaticEvent::Revoked(signed),
+            })
+            .collect::<Vec<_>>();
+        self.ingest_unsorted_static_events(events).await?;
+        Ok(())
+    }
+
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn event_listener(&self) -> &L {
         &self.event_listener
