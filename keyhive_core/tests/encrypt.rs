@@ -47,7 +47,8 @@ async fn test_encrypt_to_added_member() -> TestResult {
 
     // now sync everything to bob
     let events = alice.static_events_for_agent(&bob.active().clone().into())?;
-    bob.ingest_unsorted_static_events(events.into_values().collect())?;
+    bob.ingest_unsorted_static_events(events.into_values().collect())
+        .await?;
 
     // Now attempt to decrypt on bob
     let doc_on_bob = bob.get_document(doc.borrow().doc_id()).unwrap();
@@ -106,7 +107,9 @@ async fn test_decrypt_after_archive_round_trip() -> TestResult {
         rand::thread_rng(),
     )?;
 
-    rehydrated_alice.ingest_unsorted_static_events(static_events)?;
+    rehydrated_alice
+        .ingest_unsorted_static_events(static_events)
+        .await?;
 
     let rehydrated_doc = rehydrated_alice.get_document(doc_id).unwrap();
     rehydrated_doc.borrow_mut().rebuild();
