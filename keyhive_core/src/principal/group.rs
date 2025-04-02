@@ -27,7 +27,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
-        share_key::ShareKey,
+        share_key::{ShareKey, ShareSecretStore},
         signed::{Signed, SigningError},
         signer::{
             async_signer::AsyncSigner,
@@ -401,12 +401,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             relevant_docs_count=%relevant_docs.len()
         ))
     ]
-    pub async fn add_member(
+    pub async fn add_member<K: ShareSecretStore>(
         &mut self,
         member_to_add: Agent<S, T, L>,
         can: Access,
         signer: &S,
         relevant_docs: &[Rc<RefCell<Document<S, T, L>>>],
+        owner_sks: &mut K,
     ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError> {
         let after_content = relevant_docs
             .iter()
@@ -418,16 +419,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             })
             .collect();
 
-        self.add_member_with_manual_content(member_to_add, can, signer, after_content)
+        self.add_member_with_manual_content(member_to_add, can, signer, after_content, owner_sks)
             .await
     }
 
-    pub(crate) async fn add_member_with_manual_content(
+    pub(crate) async fn add_member_with_manual_content<K: ShareSecretStore>(
         &mut self,
         member_to_add: Agent<S, T, L>,
         can: Access,
         signer: &S,
         after_content: BTreeMap<DocumentId, Vec<T>>,
+        owner_sks: &mut K,
     ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError> {
         let proof = if self.verifying_key() == signer.verifying_key() {
             None
@@ -461,7 +463,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         self.listener.on_delegation(&rc).await;
 
         let cgka_ops = if rc.payload.can.is_reader() {
-            self.add_cgka_member(rc.dupe(), signer).await?
+            self.add_cgka_member(rc.dupe(), signer, owner_sks).await?
         } else {
             vec![]
         };
@@ -477,10 +479,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         skip_all,
         fields(group_id = %self.group_id(), member_id = %delegation.payload.delegate.id())
     )]
-    pub(crate) async fn add_cgka_member(
+    pub(crate) async fn add_cgka_member<K: ShareSecretStore>(
         &mut self,
         delegation: Rc<Signed<Delegation<S, T, L>>>,
         signer: &S,
+        owner_sks: &mut K,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut cgka_ops = Vec::new();
         let docs: Vec<Rc<RefCell<Document<S, T, L>>>> = self
@@ -503,7 +506,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
 
             for op in doc
                 .borrow_mut()
-                .add_cgka_member(&delegation, signer)
+                .add_cgka_member(&delegation, owner_sks, signer)
                 .await?
             {
                 cgka_ops.push(op);
@@ -514,13 +517,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
 
     #[allow(clippy::type_complexity)]
     #[allow(clippy::await_holding_refcell_ref)] // FIXME
-    #[instrument(skip(self, signer), fields(group_id = %self.group_id()))]
-    pub async fn revoke_member(
+    #[instrument(skip(self, signer, owner_sks), fields(group_id = %self.group_id()))]
+    pub async fn revoke_member<K: ShareSecretStore>(
         &mut self,
         member_to_remove: Identifier,
         retain_all_other_members: bool,
         signer: &S,
         after_content: &BTreeMap<DocumentId, Vec<T>>,
+        owner_sks: &mut K,
     ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
         let vk = signer.verifying_key();
         let mut revocations = vec![];
@@ -646,7 +650,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         for indie in individuals {
             let id = indie.borrow().id();
             for doc in &docs {
-                if let Some(op) = doc.borrow_mut().remove_cgka_member(id, signer).await? {
+                if let Some(op) = doc
+                    .borrow_mut()
+                    .remove_cgka_member(id, signer, owner_sks)
+                    .await?
+                {
                     cgka_ops.push(op);
                 }
             }
@@ -668,6 +676,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                                 dlg.payload.can,
                                 signer,
                                 after_content.clone(),
+                                owner_sks,
                             )
                             .await?;
 

@@ -10,7 +10,7 @@ use crate::{
     crypto::{
         digest::Digest,
         encrypted::EncryptedContent,
-        share_key::ShareKey,
+        share_key::{ShareKey, ShareSecretStore},
         signed::{Signed, SigningError, VerificationError},
         signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
@@ -74,6 +74,7 @@ use tracing::instrument;
 #[derivative(PartialEq, Eq, Clone)]
 pub struct Keyhive<
     S: AsyncSigner + Clone,
+    K: ShareSecretStore,
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
     C: CiphertextStore<T, P> = MemoryCiphertextStore<T, P>,
@@ -107,6 +108,9 @@ pub struct Keyhive<
     #[derivative(PartialEq = "ignore")]
     ciphertext_store: C,
 
+    #[derivative(PartialEq = "ignore")]
+    share_secret_store: K,
+
     /// Cryptographically secure (pseudo)random number generator.
     #[derivative(PartialEq = "ignore")]
     csprng: R,
@@ -116,12 +120,13 @@ pub struct Keyhive<
 
 impl<
         S: AsyncSigner + Clone,
+        K: ShareSecretStore,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
-    > Keyhive<S, T, P, C, L, R>
+    > Keyhive<S, K, T, P, C, L, R>
 {
     #[instrument(skip_all)]
     pub fn id(&self) -> IndividualId {
@@ -136,6 +141,7 @@ impl<
     #[instrument(skip_all)]
     pub async fn generate(
         signer: S,
+        share_secret_store: K,
         ciphertext_store: C,
         event_listener: L,
         mut csprng: R,
@@ -152,6 +158,7 @@ impl<
             docs: HashMap::new(),
             delegations: DelegationStore::new(),
             revocations: RevocationStore::new(),
+            share_secret_store,
             ciphertext_store,
             event_listener,
             csprng,
@@ -400,11 +407,23 @@ impl<
         match resource {
             Membered::Group(group) => Ok(group
                 .borrow_mut()
-                .add_member(to_add, can, &signer, other_relevant_docs)
+                .add_member(
+                    to_add,
+                    can,
+                    &self.active.borrow().signer,
+                    other_relevant_docs,
+                    &mut self.share_secret_store,
+                )
                 .await?),
             Membered::Document(doc) => {
                 doc.borrow_mut()
-                    .add_member(to_add, can, &signer, other_relevant_docs)
+                    .add_member(
+                        to_add,
+                        can,
+                        &self.active.borrow().signer,
+                        other_relevant_docs,
+                        &mut self.share_secret_store,
+                    )
                     .await
             }
         }
@@ -430,6 +449,7 @@ impl<
                 retain_all_other_members,
                 &signer,
                 &mut relevant_docs,
+                &mut self.share_secret_store,
             )
             .await
     }
@@ -446,7 +466,14 @@ impl<
         let signer = self.active.borrow().signer.clone();
         let result = doc
             .borrow_mut()
-            .try_encrypt_content(content_ref, content, pred_refs, &signer, &mut self.csprng)
+            .try_encrypt_content(
+                content_ref,
+                content,
+                pred_refs,
+                &mut self.share_secret_store,
+                &self.active.borrow().signer,
+                &mut self.csprng,
+            )
             .await?;
         if let Some(op) = &result.update_op {
             self.event_listener.on_cgka_op(&Rc::new(op.clone())).await;
@@ -454,12 +481,14 @@ impl<
         Ok(result)
     }
 
-    pub fn try_decrypt_content(
+    pub async fn try_decrypt_content(
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
-        doc.borrow_mut().try_decrypt_content(encrypted)
+        doc.borrow_mut()
+            .try_decrypt_content(encrypted, &mut self.share_secret_store)
+            .await
     }
 
     #[allow(clippy::await_holding_refcell_ref)] // FIXME
@@ -473,7 +502,11 @@ impl<
         P: Serialize + Clone,
     {
         doc.borrow_mut()
-            .try_causal_decrypt_content(encrypted, &mut self.ciphertext_store)
+            .try_causal_decrypt_content(
+                encrypted,
+                &mut self.ciphertext_store,
+                &mut self.share_secret_store,
+            )
             .await
     }
 
@@ -484,7 +517,9 @@ impl<
         doc: Rc<RefCell<Document<S, T, L>>>,
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
         let signer = self.active.borrow().signer.clone();
-        doc.borrow_mut().pcs_update(&signer, &mut self.csprng).await
+        doc.borrow_mut()
+            .pcs_update(&signer, &mut self.share_secret_store, &mut self.csprng)
+            .await
     }
 
     #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
@@ -1105,7 +1140,9 @@ impl<
                 return Ok(());
             }
         }
-        doc.borrow_mut().merge_cgka_op(signed_op.clone())?;
+        doc.borrow_mut()
+            .merge_cgka_op(owner_sks, signed_op.clone())
+            .await?;
         self.event_listener.on_cgka_op(&signed_op).await;
         Ok(())
     }
@@ -1215,6 +1252,7 @@ impl<
     pub fn try_from_archive(
         archive: &Archive<T>,
         signer: S,
+        share_secret_store: K,
         ciphertext_store: C,
         listener: L,
         csprng: R,
@@ -1437,6 +1475,7 @@ impl<
             delegations,
             revocations,
             csprng,
+            share_secret_store,
             ciphertext_store,
             event_listener: listener,
             _plaintext_phantom: PhantomData,
@@ -1530,12 +1569,13 @@ impl<
 
 impl<
         S: AsyncSigner + Clone,
+        K: ShareSecretStore,
         T: ContentRef + Debug,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
-    > Debug for Keyhive<S, T, P, C, L, R>
+    > Debug for Keyhive<S, K, T, P, C, L, R>
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.debug_struct("Keyhive")
@@ -1545,6 +1585,7 @@ impl<
             .field("docs", &self.docs)
             .field("delegations", &self.delegations)
             .field("revocations", &self.revocations)
+            .field("share_secret_store", &"<STORE>")
             .field("ciphertext_store", &"<STORE>")
             .field("csprng", &"<CSPRNG>")
             .finish()
@@ -1553,20 +1594,22 @@ impl<
 
 impl<
         S: AsyncSigner + Clone,
+        K: ShareSecretStore + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone, // FIXME make the default Rc<RefCell<...>>
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > Fork for Keyhive<S, T, P, C, L, R>
+    > Fork for Keyhive<S, K, T, P, C, L, R>
 {
-    type Forked = Keyhive<S, T, P, C, Log<S, T>, R>;
+    type Forked = Keyhive<S, K, T, P, C, Log<S, T>, R>;
 
     fn fork(&self) -> Self::Forked {
         // TODO this is probably fairly slow, and due to the logger type changing
         Keyhive::try_from_archive(
             &self.into_archive(),
             self.active.borrow().signer.clone(),
+            self.share_secret_store.clone(),
             self.ciphertext_store.clone(),
             Log::new(),
             self.csprng.clone(),
@@ -1577,12 +1620,13 @@ impl<
 
 impl<
         S: AsyncSigner + Clone,
+        K: ShareSecretStore + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone,
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > MergeAsync for Rc<RefCell<Keyhive<S, T, P, C, L, R>>>
+    > MergeAsync for Rc<RefCell<Keyhive<S, K, T, P, C, L, R>>>
 {
     #[allow(clippy::await_holding_refcell_ref)] // FIXME
     async fn merge_async(&self, mut fork: Self::AsyncForked) {
@@ -1626,12 +1670,13 @@ impl<
 
 impl<
         S: AsyncSigner + Clone,
+        K: ShareSecretStore,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
-    > Verifiable for Keyhive<S, T, P, C, L, R>
+    > Verifiable for Keyhive<S, K, T, P, C, L, R>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.active.borrow().verifying_key()
@@ -1640,14 +1685,15 @@ impl<
 
 impl<
         S: AsyncSigner + Clone,
+        K: ShareSecretStore,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
-    > From<&Keyhive<S, T, P, C, L, R>> for Agent<S, T, L>
+    > From<&Keyhive<S, K, T, P, C, L, R>> for Agent<S, T, L>
 {
-    fn from(context: &Keyhive<S, T, P, C, L, R>) -> Self {
+    fn from(context: &Keyhive<S, K, T, P, C, L, R>) -> Self {
         context.active.dupe().into()
     }
 }

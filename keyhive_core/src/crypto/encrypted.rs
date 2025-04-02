@@ -3,7 +3,7 @@
 use super::{
     application_secret::PcsKey,
     digest::Digest,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
     signed::Signed,
     siv::Siv,
     symmetric_key::SymmetricKey,
@@ -95,13 +95,16 @@ impl<T> EncryptedSecret<T> {
         }
     }
 
-    #[instrument(skip(self))]
-    pub fn try_encrypter_decrypt(
+    #[instrument(skip_all)]
+    pub async fn try_encrypter_decrypt<Sk: AsyncSecretKey>(
         &self,
-        encrypter_secret_key: &ShareSecretKey,
+        encrypter_secret_key: &Sk,
     ) -> Result<Vec<u8>, chacha20poly1305::Error> {
         let mut buf: Vec<u8> = self.ciphertext.clone();
-        let key = encrypter_secret_key.derive_symmetric_key(&self.paired_pk);
+        let key = encrypter_secret_key
+            .derive_symmetric_key(self.paired_pk)
+            .await
+            .expect("FIXME");
         key.try_decrypt(self.nonce, &mut buf)?;
         Ok(buf)
     }

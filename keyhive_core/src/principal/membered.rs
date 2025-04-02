@@ -12,7 +12,8 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::{
-        digest::Digest, signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable,
+        digest::Digest, share_key::ShareSecretStore, signed::Signed,
+        signer::async_signer::AsyncSigner, verifiable::Verifiable,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
     util::content_addressed_map::CaMap,
@@ -85,22 +86,23 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, 
 
     #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[allow(clippy::type_complexity)]
-    pub async fn add_member(
+    pub async fn add_member<K: ShareSecretStore>(
         &mut self,
         member_to_add: Agent<S, T, L>,
         can: Access,
         signer: &S,
         other_relevant_docs: &[Rc<RefCell<Document<S, T, L>>>],
+        owner_sks: &mut K,
     ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError> {
         match self {
             Membered::Group(group) => Ok(group
                 .borrow_mut()
-                .add_member(member_to_add, can, signer, other_relevant_docs)
+                .add_member(member_to_add, can, signer, other_relevant_docs, owner_sks)
                 .await?),
             Membered::Document(document) => {
                 document
                     .borrow_mut()
-                    .add_member(member_to_add, can, signer, other_relevant_docs)
+                    .add_member(member_to_add, can, signer, other_relevant_docs, owner_sks)
                     .await
             }
         }
@@ -108,24 +110,37 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, 
 
     #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[allow(clippy::type_complexity)]
-    pub async fn revoke_member(
+    pub async fn revoke_member<K: ShareSecretStore>(
         &mut self,
         member_id: Identifier,
         retain_all_other_members: bool,
         signer: &S,
         relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
+        owner_sks: &mut K,
     ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
         match self {
             Membered::Group(group) => {
                 group
                     .borrow_mut()
-                    .revoke_member(member_id, retain_all_other_members, signer, relevant_docs)
+                    .revoke_member(
+                        member_id,
+                        retain_all_other_members,
+                        signer,
+                        relevant_docs,
+                        owner_sks,
+                    )
                     .await
             }
             Membered::Document(document) => {
                 document
                     .borrow_mut()
-                    .revoke_member(member_id, retain_all_other_members, signer, relevant_docs)
+                    .revoke_member(
+                        member_id,
+                        retain_all_other_members,
+                        signer,
+                        relevant_docs,
+                        owner_sks,
+                    )
                     .await
             }
         }
