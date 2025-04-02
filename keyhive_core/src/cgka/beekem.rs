@@ -1,6 +1,4 @@
-use super::{
-    error::CgkaError, keys::NodeKey, keys::ShareKeyMap, secret_store::SecretStore, treemath,
-};
+use super::{error::CgkaError, keys::NodeKey, secret_store::SecretStore, treemath};
 use crate::{
     crypto::{
         application_secret::PcsKey,
@@ -10,7 +8,6 @@ use crate::{
     },
     principal::{document::id::DocumentId, individual::id::IndividualId},
 };
-use chacha20poly1305::aead::generic_array::typenum::NonZero;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use tracing::instrument;
@@ -306,7 +303,7 @@ impl BeeKem {
         pk: ShareKey,
         sks: &mut S,
         csprng: &mut R,
-    ) -> Result<Option<(PcsKey, PathChange)>, CgkaError> {
+    ) -> Result<Option<(PcsKey<S::SecretKey>, PathChange)>, CgkaError> {
         let local_pk: ShareKey = x25519_dalek::PublicKey::from(self.doc_id.to_bytes()).into();
         let leaf_idx = *self.leaf_index_for_id(id)?;
         debug_assert!(self.id_for_leaf(leaf_idx).unwrap() == id);
@@ -361,7 +358,7 @@ impl BeeKem {
             parent_idx = treemath::parent(child_idx);
         }
         self.current_secret_encrypter_leaf_idx = Some(leaf_idx);
-        Ok(Some((child_sk.into(), new_path)))
+        Ok(Some((PcsKey::new(child_sk), new_path)))
     }
 
     /// Applies a [`PathChange`] representing new public and encrypted secret keys for each

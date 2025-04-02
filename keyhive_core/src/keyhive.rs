@@ -235,6 +235,7 @@ impl<
             self.delegations.dupe(),
             self.revocations.dupe(),
             self.event_listener.clone(),
+            &mut self.share_secret_store,
             &self.active.borrow().signer,
             &mut self.csprng,
         )
@@ -1515,50 +1516,50 @@ impl<
     }
 }
 
-impl<
-        S: AsyncSigner + Clone,
-        K: ShareSecretStore + Clone,
-        T: ContentRef + Clone,
-        P: for<'de> Deserialize<'de> + Clone,
-        C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T> + CgkaListener,
-        R: rand::CryptoRng + rand::RngCore + Clone,
-    > Merge for Keyhive<S, K, T, P, C, L, R>
-{
-    fn merge(&mut self, mut fork: Self::Forked) {
-        self.active
-            .borrow_mut()
-            .merge(Rc::unwrap_or_clone(fork.active).into_inner());
-
-        for (id, forked_indie) in fork.individuals.drain() {
-            if let Some(og_indie) = self.individuals.remove(&id) {
-                og_indie
-                    .borrow_mut()
-                    .merge(Rc::unwrap_or_clone(forked_indie).into_inner());
-            } else {
-                self.individuals.insert(id, forked_indie);
-            }
-        }
-
-        for event in fork.event_listener.0.borrow().iter() {
-            match event {
-                Event::PrekeysExpanded(_add_op) => {
-                    continue; // NOTE: handled above
-                }
-                Event::PrekeyRotated(_rot_op) => {
-                    continue; // NOTE: handled above
-                }
-                _ => {}
-            }
-
-            self.receive_static_event(event.clone().into())
-                .await
-                .expect("prechecked events to work");
-        }
-
-        // FIXME ^^^^^^^^^^^ skip checks to speed up; this is all trusted data
-    }
-}
+// impl<
+//         S: AsyncSigner + Clone,
+//         K: ShareSecretStore + Clone,
+//         T: ContentRef + Clone,
+//         P: for<'de> Deserialize<'de> + Clone,
+//         C: CiphertextStore<T, P> + Clone,
+//         L: MembershipListener<S, T> + CgkaListener,
+//         R: rand::CryptoRng + rand::RngCore + Clone,
+//     > Merge for Keyhive<S, K, T, P, C, L, R>
+// {
+//     fn merge(&mut self, mut fork: Self::Forked) {
+//         self.active
+//             .borrow_mut()
+//             .merge(Rc::unwrap_or_clone(fork.active).into_inner());
+//
+//         for (id, forked_indie) in fork.individuals.drain() {
+//             if let Some(og_indie) = self.individuals.remove(&id) {
+//                 og_indie
+//                     .borrow_mut()
+//                     .merge(Rc::unwrap_or_clone(forked_indie).into_inner());
+//             } else {
+//                 self.individuals.insert(id, forked_indie);
+//             }
+//         }
+//
+//         for event in fork.event_listener.0.borrow().iter() {
+//             match event {
+//                 Event::PrekeysExpanded(_add_op) => {
+//                     continue; // NOTE: handled above
+//                 }
+//                 Event::PrekeyRotated(_rot_op) => {
+//                     continue; // NOTE: handled above
+//                 }
+//                 _ => {}
+//             }
+//
+//             self.receive_static_event(event.clone().into())
+//                 .await
+//                 .expect("prechecked events to work");
+//         }
+//
+//         // FIXME ^^^^^^^^^^^ skip checks to speed up; this is all trusted data
+//     }
+// }
 
 impl<
         S: AsyncSigner,

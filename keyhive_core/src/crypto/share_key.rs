@@ -259,7 +259,7 @@ impl<T: AsyncSecretKey> AsyncSecretKey for Rc<T> {
 }
 
 pub trait ShareSecretStore {
-    type SecretKey: AsyncSecretKey;
+    type SecretKey: AsyncSecretKey + Clone;
 
     type GetSecretError: Debug;
     type GetIndexError: Debug;

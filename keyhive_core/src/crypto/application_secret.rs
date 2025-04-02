@@ -1,6 +1,9 @@
 //! Encryption keys, key derivation, and associated metadata.
 
-use super::signed::Signed;
+use super::{
+    share_key::{AsyncSecretKey, ShareKey},
+    signed::Signed,
+};
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
@@ -8,6 +11,7 @@ use crate::{
         digest::Digest, encrypted::EncryptedContent, separable::Separable,
         share_key::ShareSecretKey, siv::Siv, symmetric_key::SymmetricKey,
     },
+    principal::document::id::DocumentId,
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -18,7 +22,7 @@ const STATIC_CONTEXT: &str = "/keyhive/beekem/app_secret/";
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ApplicationSecret<Cr: ContentRef> {
     key: SymmetricKey,
-    pcs_key_hash: Digest<PcsKey>,
+    pcs_pubkey: ShareKey,
     pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
     nonce: Siv,
     content_ref: Cr,
@@ -29,7 +33,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
     /// Construct a new [`ApplicationSecret`].
     pub fn new(
         key: SymmetricKey,
-        pcs_key_hash: Digest<PcsKey>,
+        pcs_pubkey: ShareKey,
         pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
         nonce: Siv,
         content_ref: Cr,
@@ -37,7 +41,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
     ) -> Self {
         Self {
             key,
-            pcs_key_hash,
+            pcs_pubkey,
             pcs_update_op_hash,
             nonce,
             content_ref,
@@ -65,7 +69,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
         Ok(EncryptedContent::new(
             self.nonce,
             ciphertext,
-            self.pcs_key_hash,
+            self.pcs_pubkey,
             self.pcs_update_op_hash,
             self.content_ref.clone(),
             self.pred_refs,
@@ -75,49 +79,47 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
 
 /// A key used to derive application secrets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-pub struct PcsKey(pub ShareSecretKey);
+pub struct PcsKey<T: AsyncSecretKey + Clone>(pub T);
 
-impl PcsKey {
+impl<T: AsyncSecretKey + Clone> PcsKey<T> {
     /// Lift a `ShareSecretKey` into a `PcsKey`.
-    pub fn new(share_secret_key: ShareSecretKey) -> Self {
+    pub fn new(share_secret_key: T) -> Self {
         Self(share_secret_key)
     }
 
-    #[instrument]
-    pub(crate) fn derive_application_secret<Cr: ContentRef>(
+    #[instrument(skip_all)]
+    pub(crate) async fn derive_application_secret<Cr: ContentRef>(
         &self,
+        doc_id: DocumentId,
         nonce: &Siv,
         content_ref: &Cr,
         pred_refs: &Digest<Vec<Cr>>,
         pcs_update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> ApplicationSecret<Cr> {
-        let pcs_hash = Digest::hash(&self.0);
+        let pcs_hash = Digest::hash(&self.0.to_share_key());
         let display_ref = Digest::hash(&content_ref);
         let mut app_secret_context =
             format!("epoch:{pcs_hash}/pred:{pred_refs}/content:{display_ref}").into_bytes();
-        let mut key_material = self.0.clone().as_slice().to_vec();
+        let local_pk: ShareKey = x25519_dalek::PublicKey::from(doc_id.to_bytes()).into();
+        let mut key_material = self.0.derive_bytes(local_pk).await.expect("FIXME").to_vec();
         key_material.append(&mut app_secret_context);
         let app_secret_bytes = blake3::derive_key(STATIC_CONTEXT, key_material.as_slice());
         let symmetric_key = SymmetricKey::derive_from_bytes(&app_secret_bytes);
         ApplicationSecret::new(
             symmetric_key,
-            Digest::hash(self),
+            self.0.to_share_key(),
             *pcs_update_op_hash,
             *nonce,
             content_ref.clone(),
             *pred_refs,
         )
     }
-}
 
-impl From<ShareSecretKey> for PcsKey {
-    fn from(share_secret_key: ShareSecretKey) -> PcsKey {
-        PcsKey(share_secret_key)
-    }
-}
-
-impl From<PcsKey> for SymmetricKey {
-    fn from(pcs_key: PcsKey) -> SymmetricKey {
-        SymmetricKey::derive_from_bytes(pcs_key.0.as_slice())
+    pub(crate) async fn to_symmetric_key(
+        &self,
+        doc_id: DocumentId,
+    ) -> Result<SymmetricKey, T::EcdhError> {
+        let local_pk: ShareKey = x25519_dalek::PublicKey::from(doc_id.to_bytes()).into();
+        self.0.derive_symmetric_key(local_pk).await
     }
 }
