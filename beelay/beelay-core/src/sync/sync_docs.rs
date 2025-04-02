@@ -26,7 +26,7 @@ pub(super) struct SyncDocsResult {
     pub in_sync: HashSet<DocumentId>,
 }
 
-#[tracing::instrument(skip(ctx, local_docs), fields(remote=%remote))]
+#[tracing::instrument(skip(ctx, local_docs, init_remote_symbols), fields(remote=%remote))]
 pub(super) async fn sync_docs<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
     ctx: TaskContext<R>,
     session: SessionId,

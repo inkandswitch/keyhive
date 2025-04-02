@@ -33,14 +33,16 @@ fn sync_emits_local_notifications() {
     // Check that after sync we were notified of the new changes available
     let notis = network.beelay(&peer2).pop_notifications();
 
-    assert_eq!(notis.len(), 1);
     assert_eq!(
         notis,
         HashMap::from_iter(vec![(
             doc_id.clone(),
-            vec![DocEvent::Data {
-                data: CommitOrBundle::Commit(initial_commit.clone()),
-            }]
+            vec![
+                DocEvent::Discovered,
+                DocEvent::Data {
+                    data: CommitOrBundle::Commit(initial_commit.clone()),
+                }
+            ]
         )])
     );
 }
@@ -121,4 +123,56 @@ fn connect_emits_peer_changes() {
         panic!("expected last_synced_at to be Some");
     };
     assert!(last_synced_at > started_at);
+}
+
+#[test]
+fn discovered_emitted_on_sync_of_new_doc() {
+    init_logging();
+    let mut network = Network::new();
+    let alice = network.create_peer("peer1").build();
+    let bob = network.create_peer("peer2").build();
+    let bob_contact = network.beelay(&bob).contact_card().unwrap();
+
+    let (doc, _) = network
+        .beelay(&alice)
+        .create_doc(vec![bob_contact.into()])
+        .unwrap();
+
+    network.beelay(&bob).pop_notifications();
+    network.connect_stream(&bob, &alice);
+
+    let notis = network
+        .beelay(&bob)
+        .pop_notifications()
+        .remove(&doc)
+        .unwrap();
+    println!("{:?}", notis);
+    let noti = notis.first().unwrap();
+    assert!(matches!(noti, DocEvent::Discovered));
+}
+
+#[test]
+fn discovered_emitted_on_upload_of_new_doc() {
+    init_logging();
+    let mut network = Network::new();
+    let alice = network.create_peer("peer1").build();
+    let bob = network.create_peer("peer2").build();
+    let bob_contact = network.beelay(&bob).contact_card().unwrap();
+
+    let (doc, _) = network
+        .beelay(&alice)
+        .create_doc(vec![bob_contact.into()])
+        .unwrap();
+
+    network.beelay(&bob).pop_notifications();
+    network.connect_stream(&alice, &bob);
+
+    let notis = network
+        .beelay(&bob)
+        .pop_notifications()
+        .remove(&doc)
+        .unwrap();
+    println!("{:?}", notis);
+    let noti = notis.first().unwrap();
+    assert!(matches!(noti, DocEvent::Discovered));
 }

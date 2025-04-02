@@ -268,9 +268,9 @@ impl Session {
         let symbols = if let Some((cgka_session, _, _)) = docs.trees.get_mut(&doc) {
             cgka_session.next_n_symbols(count as u64)
         } else {
-            // make an empty session and return the first symbol
+            // make an empty session and return the first 10 symbols
             let mut encoder = riblt::Encoder::new();
-            encoder.next_n_symbols(1)
+            encoder.next_n_symbols(10)
         };
         Ok(symbols)
     }

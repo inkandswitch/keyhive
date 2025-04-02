@@ -190,7 +190,6 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             while let Some(op) = ops.pop() {
                 match keyhive.receive_cgka_op(op.clone()).await {
                     Ok(_) => {
-                        tracing::trace!(?op, "processed keyhive event");
                         ingested = true;
                     }
                     Err(e) => {
@@ -744,6 +743,36 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
 
         let card = keyhive.contact_card().await?;
         Ok(crate::contact_card::ContactCard(card))
+    }
+
+    pub(crate) async fn archive(&self) -> keyhive_core::archive::Archive<CommitHash> {
+        let k_mutex = self.0.borrow().keyhive.clone();
+        let keyhive = k_mutex.lock().await;
+
+        keyhive.into_archive()
+    }
+
+    pub(crate) fn try_known_docs(&self) -> Option<HashSet<DocumentId>> {
+        let k_mutex = self.0.borrow().keyhive.clone();
+        let Some(keyhive) = k_mutex.try_lock() else {
+            return None;
+        };
+
+        Some(
+            keyhive
+                .documents()
+                .iter()
+                .filter_map(|(doc_id, doc)| {
+                    if doc.borrow().cgka().is_ok() {
+                        Some(doc_id)
+                    } else {
+                        None
+                    }
+                })
+                .cloned()
+                .map(DocumentId::from)
+                .collect(),
+        )
     }
 }
 

@@ -255,6 +255,12 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
     let mut loops = sync_loops::SyncLoops::new();
     pin_mut!(running_streams);
 
+    let mut known_docs = ctx
+        .state()
+        .keyhive()
+        .try_known_docs()
+        .expect("keyhive should be available at this point");
+
     loop {
         if run_state == RunState::Stopping {
             tracing::trace!(
@@ -313,6 +319,7 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
                 tracing::trace!("sync loop completed");
             }
         }
+
         loops.reconcile(&ctx);
         ctx.state().sessions().expire_sessions(now.borrow().clone());
         let changed = ctx.state().streams().take_changed();
@@ -323,6 +330,15 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
                     .map(|info| (info.peer_id, info))
                     .collect(),
             ));
+        }
+        if let Some(docs_after) = ctx.state().keyhive().try_known_docs() {
+            if docs_after != known_docs {
+                let new_docs = docs_after.difference(&known_docs);
+                for doc in new_docs {
+                    ctx.io().new_doc_event(doc.clone(), DocEvent::Discovered);
+                }
+                known_docs = docs_after;
+            }
         }
     }
 }

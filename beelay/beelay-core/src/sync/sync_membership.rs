@@ -7,6 +7,7 @@ use std::{
 use keyhive_core::{crypto::digest::Digest, event::static_event::StaticEvent};
 
 use crate::{
+    doc_status::DocEvent,
     network::{messages::session::NextSyncPhase, PeerAddress},
     parse::{self, Parse},
     riblt::{self, CodedSymbol},
@@ -155,7 +156,6 @@ pub(crate) async fn run_once<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
     const BATCH_SIZE: usize = 100;
 
     loop {
-        tracing::trace!("running RIBLT sync");
         for symbol in symbols {
             decoder.add_coded_symbol(&symbol);
             decoder.try_decode().unwrap();

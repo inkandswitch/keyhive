@@ -13,6 +13,7 @@ pub enum DocEvent {
     Data {
         data: CommitOrBundle,
     },
+    Discovered,
     AccessChanged {
         new_access: HashMap<PeerId, MemberAccess>,
     },
