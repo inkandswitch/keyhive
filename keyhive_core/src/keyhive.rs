@@ -243,7 +243,7 @@ impl<
             self.delegations.dupe(),
             self.revocations.dupe(),
             self.event_listener.clone(),
-            &signer,
+            &mut self.share_secret_store,
             &mut self.csprng,
         )
         .await?;

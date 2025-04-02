@@ -14,27 +14,22 @@ use crate::{
         application_secret::{ApplicationSecret, PcsKey},
         digest::Digest,
         encrypted::EncryptedContent,
-        share_key::{ShareKey, ShareSecretKey, ShareSecretStore},
+        share_key::{AsyncSecretKey, ShareKey, ShareSecretKey, ShareSecretStore},
         signed::Signed,
         signer::async_signer::AsyncSigner,
         siv::Siv,
         symmetric_key::SymmetricKey,
     },
     principal::{document::id::DocumentId, individual::id::IndividualId},
-    transact::{
-        fork::Fork,
-        merge::{Merge, MergeAsync},
-    },
-    util::content_addressed_map::CaMap,
+    transact::fork::Fork,
 };
 use beekem::BeeKem;
 use derivative::Derivative;
 use dupe::Dupe;
 use error::CgkaError;
-use keys::ShareKeyMap;
 use nonempty::NonEmpty;
 use operation::{CgkaEpoch, CgkaOperation, CgkaOperationGraph};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{
     borrow::Borrow,
     collections::{BTreeSet, HashMap, HashSet},
@@ -53,9 +48,9 @@ use tracing::{info, instrument};
 ///
 /// We assume that all operations are received in causal order (a property
 /// guaranteed by Keyhive as a whole).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Derivative)]
+#[derive(Debug, Clone, PartialEq, Eq, Derivative)]
 #[derivative(Hash)]
-pub struct Cgka {
+pub struct Cgka<K: ShareSecretStore + Clone> {
     doc_id: DocumentId,
     /// The id of the member who owns this tree.
     pub owner_id: IndividualId,
@@ -65,39 +60,44 @@ pub struct Cgka {
     /// Whether there are ops in the graph that have not been applied to the
     ///tree due to a structural change.
     pending_ops_for_structural_change: bool,
-    // TODO: Enable policies to evict older entries.
+
     #[derivative(Hash(hash_with = "hash_pcs_keys"))]
-    pcs_keys: CaMap<PcsKey>,
+    pcs_keys: HashMap<ShareKey, PcsKey<K::SecretKey>>,
 
     /// The update operations for each PCS key.
     #[derivative(Hash(hash_with = "hashed_key_bytes"))]
-    pcs_key_ops: HashMap<Digest<PcsKey>, Digest<Signed<CgkaOperation>>>,
+    pcs_key_ops: HashMap<ShareKey, Digest<Signed<CgkaOperation>>>,
 
     original_member: (IndividualId, ShareKey),
     init_add_op: Signed<CgkaOperation>,
+    store: K,
 }
 
-fn hash_pcs_keys<H: Hasher>(pcs_keys: &CaMap<PcsKey>, state: &mut H) {
-    pcs_keys.keys().collect::<BTreeSet<_>>().hash(state)
+fn hash_pcs_keys<H: Hasher, T>(pcs_keys: &HashMap<ShareKey, T>, state: &mut H) {
+    pcs_keys.keys().collect::<BTreeSet<&ShareKey>>().hash(state)
 }
 
-fn hashed_key_bytes<T: Serialize, V, H: Hasher>(hmap: &HashMap<Digest<T>, V>, state: &mut H) {
+fn hashed_key_bytes<H: Hasher>(
+    hmap: &HashMap<ShareKey, Digest<Signed<CgkaOperation>>>,
+    state: &mut H,
+) {
     hmap.keys()
-        .map(|k| k.as_slice())
+        .map(|k| k.as_bytes())
         .collect::<BTreeSet<_>>()
         .hash(state)
 }
 
-impl Cgka {
+impl<K: ShareSecretStore + Clone> Cgka<K> {
     pub async fn new<A: AsyncSigner>(
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
+        store: K,
         signer: &A,
     ) -> Result<Self, CgkaError> {
         let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk);
         let signed_op = signer.try_sign_async(init_add_op).await?;
-        Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op)
+        Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op, store)
     }
 
     #[instrument(skip_all, fields(doc_id))]
@@ -106,6 +106,7 @@ impl Cgka {
         owner_id: IndividualId,
         owner_pk: ShareKey,
         init_add_op: Signed<CgkaOperation>,
+        store: K,
     ) -> Result<Self, CgkaError> {
         let tree = BeeKem::new(doc_id, owner_id, owner_pk)?;
         let mut cgka = Self {
@@ -114,10 +115,11 @@ impl Cgka {
             tree,
             ops_graph: CgkaOperationGraph::new(),
             pending_ops_for_structural_change: false,
-            pcs_keys: CaMap::new(),
+            pcs_keys: HashMap::new(),
             pcs_key_ops: HashMap::new(),
             original_member: (owner_id, owner_pk),
             init_add_op: init_add_op.clone(),
+            store,
         };
         cgka.ops_graph.add_local_op(&init_add_op);
         Ok(cgka)
@@ -144,7 +146,6 @@ impl Cgka {
     #[instrument(skip_all, fields(content_ref))]
     pub async fn new_app_secret_for<
         A: AsyncSigner,
-        S: ShareSecretStore,
         T: ContentRef,
         R: rand::CryptoRng + rand::RngCore,
     >(
@@ -152,7 +153,6 @@ impl Cgka {
         content_ref: &T,
         content: &[u8],
         pred_refs: &Vec<T>,
-        owner_sks: &mut S,
         signer: &A,
         csprng: &mut R,
     ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
@@ -161,32 +161,36 @@ impl Cgka {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
             let (pcs_key, update_op) = self
-                .update(
-                    new_share_key,
-                    new_share_secret_key,
-                    owner_sks,
-                    signer,
-                    csprng,
-                )
+                .update(new_share_key, new_share_secret_key, signer, csprng)
                 .await?;
-            self.insert_pcs_key(&pcs_key, Digest::hash(&update_op));
+            self.insert_pcs_key(pcs_key.clone(), Digest::hash(&update_op));
             op = Some(update_op);
             pcs_key
         } else {
-            self.pcs_key_from_tree_root(owner_sks).await?
+            self.pcs_key_from_tree_root().await?
         };
-        let pcs_key_hash = Digest::hash(&current_pcs_key);
-        let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id)
-            .map_err(|_e| CgkaError::Conversion)?;
+        let pcs_pk = current_pcs_key.0.to_share_key();
+        let nonce = Siv::new(
+            &current_pcs_key
+                .to_symmetric_key(self.doc_id)
+                .await
+                .expect("FIXME"),
+            content,
+            self.doc_id,
+        )
+        .map_err(|_e| CgkaError::Conversion)?;
         Ok((
-            current_pcs_key.derive_application_secret(
-                &nonce,
-                content_ref,
-                &Digest::hash(pred_refs),
-                self.pcs_key_ops
-                    .get(&pcs_key_hash)
-                    .expect("PcsKey hash should be present becuase we derived it above"),
-            ),
+            current_pcs_key
+                .derive_application_secret(
+                    self.doc_id,
+                    &nonce,
+                    content_ref,
+                    &Digest::hash(pred_refs),
+                    self.pcs_key_ops
+                        .get(&pcs_pk)
+                        .expect("PcsKey hash should be present becuase we derived it above"),
+                )
+                .await,
             op,
         ))
     }
@@ -196,27 +200,25 @@ impl Cgka {
     /// We must first derive a [`PcsKey`] for the encrypted data's associated
     /// hashes. Then we use that [`PcsKey`] to derive an [`ApplicationSecret`].
     #[instrument(skip_all, fields(encrypted.content_ref))]
-    pub async fn decryption_key_for<T, Cr: ContentRef, S: ShareSecretStore>(
+    pub async fn decryption_key_for<T, Cr: ContentRef>(
         &mut self,
         encrypted: &EncryptedContent<T, Cr>,
-        owner_sks: &mut S,
     ) -> Result<SymmetricKey, CgkaError> {
         let pcs_key = self
-            .pcs_key_from_hashes(
-                &encrypted.pcs_key_hash,
-                &encrypted.pcs_update_op_hash,
-                owner_sks,
-            )
+            .pcs_key_from_hashes(encrypted.pcs_pubkey, &encrypted.pcs_update_op_hash)
             .await?;
-        if !self.pcs_keys.contains_key(&encrypted.pcs_key_hash) {
-            self.insert_pcs_key(&pcs_key, encrypted.pcs_update_op_hash);
+        if !self.pcs_keys.contains_key(&encrypted.pcs_pubkey) {
+            self.insert_pcs_key(pcs_key.clone(), encrypted.pcs_update_op_hash);
         }
-        let app_secret = pcs_key.derive_application_secret(
-            &encrypted.nonce,
-            &encrypted.content_ref,
-            &encrypted.pred_refs,
-            &encrypted.pcs_update_op_hash,
-        );
+        let app_secret = pcs_key
+            .derive_application_secret(
+                self.doc_id,
+                &encrypted.nonce,
+                &encrypted.content_ref,
+                &encrypted.pred_refs,
+                &encrypted.pcs_update_op_hash,
+            )
+            .await;
         Ok(app_secret.key())
     }
 
@@ -228,18 +230,17 @@ impl Cgka {
 
     /// Add member to group.
     #[instrument(skip_all, fields(id, pk))]
-    pub async fn add<A: AsyncSigner, S: ShareSecretStore>(
+    pub async fn add<A: AsyncSigner>(
         &mut self,
         id: IndividualId,
         pk: ShareKey,
         signer: &A,
-        owner_sks: &mut S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         if self.tree.contains_id(&id) {
             return Ok(None);
         }
         if self.should_replay() {
-            self.replay_ops_graph(owner_sks).await?;
+            self.replay_ops_graph().await?;
         }
         let leaf_index = self.tree.push_leaf(id, pk.into());
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
@@ -259,32 +260,30 @@ impl Cgka {
     }
 
     /// Add multiple members to group.
-    pub async fn add_multiple<A: AsyncSigner, S: ShareSecretStore>(
+    pub async fn add_multiple<A: AsyncSigner>(
         &mut self,
         members: NonEmpty<(IndividualId, ShareKey)>,
         signer: &A,
-        owner_sks: &mut S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut ops = Vec::new();
         for m in members {
-            ops.push(self.add(m.0, m.1, signer, owner_sks).await?);
+            ops.push(self.add(m.0, m.1, signer).await?);
         }
         Ok(ops.into_iter().flatten().collect())
     }
 
     /// Remove member from group.
     #[instrument(skip_all, fields(doc_id))]
-    pub async fn remove<A: AsyncSigner, S: ShareSecretStore>(
+    pub async fn remove<A: AsyncSigner>(
         &mut self,
         id: IndividualId,
         signer: &A,
-        owner_sks: &mut S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         if !self.tree.contains_id(&id) {
             return Ok(None);
         }
         if self.should_replay() {
-            self.replay_ops_graph(owner_sks).await?;
+            self.replay_ops_graph().await?;
         }
         if self.group_size() == 1 {
             return Err(CgkaError::RemoveLastMember);
@@ -306,21 +305,20 @@ impl Cgka {
     /// Update leaf key pair for this Identifier.
     /// This also triggers a tree path update for that leaf.
     #[instrument(skip_all, fields(doc_id, new_pk))]
-    pub async fn update<A: AsyncSigner, S: ShareSecretStore, R: rand::CryptoRng + rand::RngCore>(
+    pub async fn update<A: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         new_pk: ShareKey,
         new_sk: ShareSecretKey,
-        owner_sks: &mut S,
         signer: &A,
         csprng: &mut R,
-    ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
+    ) -> Result<(PcsKey<K::SecretKey>, Signed<CgkaOperation>), CgkaError> {
         if self.should_replay() {
-            self.replay_ops_graph(owner_sks).await?;
+            self.replay_ops_graph().await?;
         }
-        owner_sks.import_secret_key(new_sk).await.expect("FIXME");
+        self.store.import_secret_key(new_sk).await.expect("FIXME");
         let maybe_key_and_path = self
             .tree
-            .encrypt_path(self.owner_id, new_pk, owner_sks, csprng)
+            .encrypt_path(self.owner_id, new_pk, &mut self.store, csprng)
             .await?;
         if let Some((pcs_key, new_path)) = maybe_key_and_path {
             let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
@@ -333,7 +331,7 @@ impl Cgka {
 
             let signed_op = signer.try_sign_async(op).await?;
             self.ops_graph.add_local_op(&signed_op);
-            self.insert_pcs_key(&pcs_key, Digest::hash(&signed_op));
+            self.insert_pcs_key(pcs_key.clone(), Digest::hash(&signed_op));
             Ok((pcs_key, signed_op))
         } else {
             Err(CgkaError::IdentifierNotFound)
@@ -352,10 +350,9 @@ impl Cgka {
     /// membership changes and we receive a concurrent update, we can apply it
     /// immediately.
     #[instrument(skip_all, fields(doc_id, op))]
-    pub async fn merge_concurrent_operation<S: ShareSecretStore>(
+    pub async fn merge_concurrent_operation(
         &mut self,
         op: Rc<Signed<CgkaOperation>>,
-        owner_sks: &mut S,
     ) -> Result<(), CgkaError> {
         if self.ops_graph.contains_op_hash(&Digest::hash(op.borrow())) {
             return Ok(());
@@ -379,7 +376,7 @@ impl Cgka {
             }
         } else {
             if self.should_replay() {
-                self.replay_ops_graph(owner_sks).await?;
+                self.replay_ops_graph().await?;
             }
             self.apply_operation(op)?;
         }
@@ -463,13 +460,10 @@ impl Cgka {
     }
 
     /// Decrypt tree secret to derive [`PcsKey`].
-    async fn pcs_key_from_tree_root<S: ShareSecretStore>(
-        &mut self,
-        owner_sks: &mut S,
-    ) -> Result<PcsKey, CgkaError> {
+    async fn pcs_key_from_tree_root(&mut self) -> Result<PcsKey<K::SecretKey>, CgkaError> {
         let key = self
             .tree
-            .decrypt_tree_secret(self.owner_id, owner_sks)
+            .decrypt_tree_secret(self.owner_id, &mut self.store)
             .await?;
         Ok(PcsKey::new(key))
     }
@@ -479,39 +473,37 @@ impl Cgka {
     /// If we have not seen this [`PcsKey`] before, we'll need to rebuild
     /// the tree state for its corresponding update operation.
     #[instrument(skip_all, fields(doc_id, pcs_key_hash, update_op_hash))]
-    async fn pcs_key_from_hashes<S: ShareSecretStore>(
+    async fn pcs_key_from_hashes(
         &mut self,
-        pcs_key_hash: &Digest<PcsKey>,
+        pcs_pubkey: ShareKey,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
-        owner_sks: &mut S,
-    ) -> Result<PcsKey, CgkaError> {
-        if let Some(pcs_key) = self.pcs_keys.get(pcs_key_hash) {
-            Ok(*pcs_key.clone())
+    ) -> Result<PcsKey<K::SecretKey>, CgkaError> {
+        if let Some(pcs_key) = self.store.get_secret_key(&pcs_pubkey).await.expect("FIXME") {
+            Ok(PcsKey(pcs_key))
         } else {
             if self.has_pcs_key() {
-                let pcs_key = self.pcs_key_from_tree_root(owner_sks).await?;
-                if &Digest::hash(&pcs_key) == pcs_key_hash {
+                let pcs_key = self.pcs_key_from_tree_root().await?;
+                if pcs_key.0.to_share_key() == pcs_pubkey {
                     return Ok(pcs_key);
                 }
             }
-            self.derive_pcs_key_for_op(update_op_hash, owner_sks).await
+            self.derive_pcs_key_for_op(update_op_hash).await
         }
     }
 
     /// Derive [`PcsKey`] for this operation hash.
     #[instrument(skip_all, fields(doc_id, op_hash))]
-    async fn derive_pcs_key_for_op<S: ShareSecretStore>(
+    async fn derive_pcs_key_for_op(
         &mut self,
         op_hash: &Digest<Signed<CgkaOperation>>,
-        owner_sks: &mut S,
-    ) -> Result<PcsKey, CgkaError> {
+    ) -> Result<PcsKey<K::SecretKey>, CgkaError> {
         if !self.ops_graph.contains_op_hash(op_hash) {
             return Err(CgkaError::UnknownPcsKey);
         }
         let mut heads = HashSet::new();
         heads.insert(*op_hash);
         let ops = self.ops_graph.topsort_for_heads(&heads)?;
-        self.rebuild_pcs_key(ops, owner_sks).await
+        self.rebuild_pcs_key(ops).await
     }
 
     /// Whether we have unresolved concurrency that requires a replay to resolve.
@@ -522,12 +514,9 @@ impl Cgka {
 
     /// Replay all ops in our graph in a deterministic order.
     #[instrument(skip_all, fields(doc_id))]
-    async fn replay_ops_graph<S: ShareSecretStore>(
-        &mut self,
-        owner_sks: &mut S,
-    ) -> Result<(), CgkaError> {
+    async fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
         let ordered_ops = self.ops_graph.topsort_graph()?;
-        let rebuilt_cgka = self.rebuild_cgka(ordered_ops, owner_sks).await?;
+        let rebuilt_cgka = self.rebuild_cgka(ordered_ops).await?;
         self.update_cgka_from(&rebuilt_cgka);
         self.pending_ops_for_structural_change = false;
         Ok(())
@@ -535,22 +524,19 @@ impl Cgka {
 
     /// Build a new [`Cgka`] for the provided non-empty list of [`CgkaEpoch`]s.
     #[instrument(skip_all, fields(doc_id, epochs))]
-    async fn rebuild_cgka<S: ShareSecretStore>(
-        &mut self,
-        epochs: NonEmpty<CgkaEpoch>,
-        owner_sks: &mut S,
-    ) -> Result<Cgka, CgkaError> {
+    async fn rebuild_cgka(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<Self, CgkaError> {
         let mut rebuilt_cgka = Cgka::new_from_init_add(
             self.doc_id,
             self.original_member.0,
             self.original_member.1,
             self.init_add_op.clone(),
+            self.store.clone(),
         )?
         .with_new_owner(self.owner_id)?;
         rebuilt_cgka.apply_epochs(&epochs)?;
         if rebuilt_cgka.has_pcs_key() {
-            let pcs_key = rebuilt_cgka.pcs_key_from_tree_root(owner_sks).await?;
-            rebuilt_cgka.insert_pcs_key(&pcs_key, Digest::hash(&epochs.last()[0]));
+            let pcs_key = rebuilt_cgka.pcs_key_from_tree_root().await?;
+            rebuilt_cgka.insert_pcs_key(pcs_key, Digest::hash(&epochs.last()[0]));
         }
         Ok(rebuilt_cgka)
     }
@@ -558,34 +544,38 @@ impl Cgka {
     /// Derive a [`PcsKey`] by rebuilding a [`Cgka`] from the provided non-empty
     /// list of [`CgkaEpoch`]s.
     #[instrument(skip_all, fields(doc_id, epochs))]
-    async fn rebuild_pcs_key<S: ShareSecretStore>(
+    async fn rebuild_pcs_key(
         &mut self,
         epochs: NonEmpty<CgkaEpoch>,
-        owner_sks: &mut S,
-    ) -> Result<PcsKey, CgkaError> {
+    ) -> Result<PcsKey<K::SecretKey>, CgkaError> {
         debug_assert!(matches!(
             epochs.last()[0].payload,
             CgkaOperation::Update { .. }
         ));
-        let mut rebuilt_cgka = Cgka::new_from_init_add(
+        let mut rebuilt_cgka = Cgka::<K>::new_from_init_add(
             self.doc_id,
             self.original_member.0,
             self.original_member.1,
             self.init_add_op.clone(),
+            self.store.clone(),
         )?
         .with_new_owner(self.owner_id)?;
         rebuilt_cgka.apply_epochs(&epochs)?;
-        let pcs_key = rebuilt_cgka.pcs_key_from_tree_root(owner_sks).await?;
-        self.insert_pcs_key(&pcs_key, Digest::hash(&epochs.last()[0]));
+        let pcs_key = rebuilt_cgka.pcs_key_from_tree_root().await?;
+        self.insert_pcs_key(pcs_key.clone(), Digest::hash(&epochs.last()[0]));
         Ok(pcs_key)
     }
 
     #[instrument(skip_all, fields(doc_id, op_hash))]
-    fn insert_pcs_key(&mut self, pcs_key: &PcsKey, op_hash: Digest<Signed<CgkaOperation>>) {
-        let digest = Digest::hash(pcs_key);
-        info!("{:?}", digest);
-        self.pcs_key_ops.insert(digest, op_hash);
-        self.pcs_keys.insert((*pcs_key).into());
+    fn insert_pcs_key(
+        &mut self,
+        pcs_key: PcsKey<K::SecretKey>,
+        op_hash: Digest<Signed<CgkaOperation>>,
+    ) {
+        let pk = pcs_key.0.to_share_key();
+        info!("{:?}", pk);
+        self.pcs_key_ops.insert(pk, op_hash);
+        self.pcs_keys.insert(pk, pcs_key);
     }
 
     /// Extend our state with that of the provided [`Cgka`].
@@ -603,13 +593,13 @@ impl Cgka {
     }
 }
 
-impl Fork for Cgka {
-    type Forked = Self;
-
-    fn fork(&self) -> Self::Forked {
-        self.clone()
-    }
-}
+// impl Fork for Cgka {
+//     type Forked = Self;
+//
+//     fn fork(&self) -> Self::Forked {
+//         self.clone()
+//     }
+// }
 
 // impl MergeAsync for Cgka {
 //     async fn merge_async(&mut self, fork: Self::AsyncForked) {
@@ -623,22 +613,17 @@ impl Fork for Cgka {
 // }
 
 #[cfg(feature = "test_utils")]
-impl Cgka {
-    pub async fn secret_from_root<S: ShareSecretStore>(
-        &mut self,
-        owner_sks: &mut S,
-    ) -> Result<PcsKey, CgkaError> {
-        self.pcs_key_from_tree_root(owner_sks).await
+impl<K: ShareSecretStore + Clone> Cgka<K> {
+    pub async fn secret_from_root(&mut self) -> Result<PcsKey<K::SecretKey>, CgkaError> {
+        self.pcs_key_from_tree_root().await
     }
 
-    pub async fn secret<S: ShareSecretStore>(
+    pub async fn secret(
         &mut self,
-        pcs_key_hash: &Digest<PcsKey>,
+        pcs_pubkey: ShareKey,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
-        owner_sks: &mut S,
-    ) -> Result<PcsKey, CgkaError> {
-        self.pcs_key_from_hashes(pcs_key_hash, update_op_hash, owner_sks)
-            .await
+    ) -> Result<PcsKey<K::SecretKey>, CgkaError> {
+        self.pcs_key_from_hashes(pcs_pubkey, update_op_hash).await
     }
 }
 
