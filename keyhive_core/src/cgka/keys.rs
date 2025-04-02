@@ -33,20 +33,20 @@ impl ShareKeyMap {
         self.0.contains_key(pk)
     }
 
-    pub fn try_decrypt_encryption(
-        &self,
-        encrypter_pk: ShareKey,
-        encrypted: &EncryptedSecret<ShareSecretKey>,
-    ) -> Result<Vec<u8>, CgkaError> {
-        let sk = self
-            .get(&encrypted.paired_pk)
-            .ok_or(CgkaError::SecretKeyNotFound)?;
-        let key = sk.derive_symmetric_key(&encrypter_pk);
-        let mut buf = encrypted.ciphertext.clone();
-        key.try_decrypt(encrypted.nonce, &mut buf)
-            .map_err(|e| CgkaError::Decryption(e.to_string()))?;
-        Ok(buf)
-    }
+    // pub fn try_decrypt_encryption(
+    //     &self,
+    //     encrypter_pk: ShareKey,
+    //     encrypted: &EncryptedSecret<ShareSecretKey>,
+    // ) -> Result<Vec<u8>, CgkaError> {
+    //     let sk = self
+    //         .get(&encrypted.paired_pk)
+    //         .ok_or(CgkaError::SecretKeyNotFound)?;
+    //     let key = sk.derive_symmetric_key(&encrypter_pk);
+    //     let mut buf = encrypted.ciphertext.clone();
+    //     key.try_decrypt(encrypted.nonce, &mut buf)
+    //         .map_err(|e| CgkaError::Decryption(e.to_string()))?;
+    //     Ok(buf)
+    // }
 
     pub fn extend(&mut self, other: &ShareKeyMap) {
         self.0.extend(other.0.iter());

@@ -2,10 +2,19 @@
 //!
 //! [ECDH]: https://wikipedia.org/wiki/Elliptic-curve_Diffie%E2%80%93Hellman
 
-use super::{separable::Separable, symmetric_key::SymmetricKey};
+use super::{
+    digest::Digest, encrypted::EncryptedSecret, separable::Separable, symmetric_key::SymmetricKey,
+};
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    fmt::{self, Debug},
+    future::Future,
+    num::NonZero,
+    rc::Rc,
+};
 use tracing::instrument;
 
 /// Newtype around [x25519_dalek::PublicKey].
@@ -110,36 +119,20 @@ impl ShareSecretKey {
         &self.0
     }
 
-    #[instrument]
-    pub fn derive_new_secret_key(&self, other: &ShareKey) -> Self {
-        let bytes: [u8; 32] = x25519_dalek::StaticSecret::from(*self)
-            .diffie_hellman(&other.0)
-            .to_bytes();
-
-        Self::derive_from_bytes(bytes.as_slice())
-    }
-
-    #[instrument]
-    pub fn derive_symmetric_key(&self, other: &ShareKey) -> SymmetricKey {
-        let secret = x25519_dalek::StaticSecret::from(*self)
-            .diffie_hellman(&other.0)
-            .to_bytes();
-
-        Self::derive_from_bytes(secret.as_slice()).0.into()
-    }
-
-    #[instrument]
-    pub fn ratchet_forward(&self) -> Self {
-        let bytes = self.to_bytes();
-        Self::derive_from_bytes(bytes.as_slice())
-    }
-
-    pub fn ratchet_n_forward(&self, n: usize) -> Self {
-        (0..n).fold(*self, |acc, _| acc.ratchet_forward())
-    }
-
     pub(crate) fn force_from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
+    }
+}
+
+impl From<ShareSecretKey> for ShareKey {
+    fn from(secret: ShareSecretKey) -> Self {
+        secret.share_key()
+    }
+}
+
+impl<T: Into<ShareKey>> From<Rc<T>> for ShareKey {
+    fn from(secret: Rc<T>) -> Self {
+        secret.into()
     }
 }
 
@@ -182,5 +175,179 @@ impl fmt::Display for ShareSecretKey {
 impl fmt::Debug for ShareSecretKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ShareSecretKey(SECRET)")
+    }
+}
+
+pub trait AsyncSecretKey {
+    type EcdhError: Debug;
+
+    fn to_share_key(&self) -> ShareKey;
+
+    async fn ecdh_derive_shared_secret(
+        &self,
+        counterparty: ShareKey,
+    ) -> Result<x25519_dalek::SharedSecret, Self::EcdhError>;
+
+    // FIXME derive against public key of initial signer... or something
+    async fn derive_bytes(&self, counterparty: ShareKey) -> Result<[u8; 32], Self::EcdhError> {
+        let secret = self
+            .ecdh_derive_shared_secret(counterparty)
+            .await?
+            .to_bytes();
+
+        let extended = secret.to_vec().extend(b"/keyhive/ecdh/derive-bytes/");
+        Ok(Digest::hash(&extended).into())
+    }
+
+    #[instrument(skip(self), fields(pk = %self.to_share_key()))]
+    async fn derive_symmetric_key(&self, other: ShareKey) -> Result<SymmetricKey, Self::EcdhError> {
+        let secret = self.derive_bytes(other).await?;
+        Ok(SymmetricKey::from(secret))
+    }
+
+    #[instrument(skip(self), fields(pk = %self.to_share_key()))]
+    async fn ratchet_forward(&self, other: ShareKey) -> Result<ShareSecretKey, Self::EcdhError> {
+        let bytes = self.derive_bytes(other).await?;
+        Ok(ShareSecretKey::force_from_bytes(bytes))
+    }
+
+    #[instrument(skip(self), fields(pk = %self.to_share_key()))]
+    async fn ratchet_n_forward(
+        &self,
+        other: ShareKey,
+        n: NonZero<usize>,
+    ) -> Result<ShareSecretKey, Self::EcdhError> {
+        let mut acc = self.derive_bytes(other).await?;
+        let max = n.get() - 1;
+        for _ in 0..max {
+            let acc_sk = ShareSecretKey::force_from_bytes(acc);
+            let acc_pk = acc_sk.share_key();
+            acc = self.derive_bytes(acc_pk).await?;
+        }
+        Ok(ShareSecretKey::force_from_bytes(acc))
+    }
+}
+
+impl AsyncSecretKey for ShareSecretKey {
+    type EcdhError = Infallible;
+
+    fn to_share_key(&self) -> ShareKey {
+        self.share_key()
+    }
+
+    async fn ecdh_derive_shared_secret(
+        &self,
+        counterparty: ShareKey,
+    ) -> Result<x25519_dalek::SharedSecret, Self::EcdhError> {
+        Ok(x25519_dalek::StaticSecret::from(*self).diffie_hellman(&counterparty.0))
+    }
+}
+
+impl<T: AsyncSecretKey> AsyncSecretKey for Rc<T> {
+    type EcdhError = T::EcdhError;
+
+    fn to_share_key(&self) -> ShareKey {
+        self.as_ref().to_share_key()
+    }
+
+    async fn ecdh_derive_shared_secret(
+        &self,
+        counterparty: ShareKey,
+    ) -> Result<x25519_dalek::SharedSecret, Self::EcdhError> {
+        self.as_ref().ecdh_derive_shared_secret(counterparty).await
+    }
+}
+
+pub trait ShareSecretStore {
+    type SecretKey: AsyncSecretKey;
+
+    type GetSecretError: Debug;
+    type GetIndexError: Debug;
+    type ImportKeyError: Debug;
+    type GenerateSecretError: Debug;
+
+    async fn get_index(&self) -> Result<HashMap<ShareKey, Self::SecretKey>, Self::GetIndexError>;
+
+    fn get_secret_key(
+        &self,
+        public_key: &ShareKey,
+    ) -> impl Future<Output = Result<Option<Self::SecretKey>, Self::GetSecretError>>;
+
+    fn import_secret_key(
+        &mut self,
+        secret_key: ShareSecretKey,
+    ) -> impl Future<Output = Result<Self::SecretKey, Self::ImportKeyError>>;
+
+    async fn import_secret_key_directly(
+        &mut self,
+        secret_key: Self::SecretKey,
+    ) -> Result<Self::SecretKey, Self::ImportKeyError>;
+
+    fn generate_share_secret_key<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        csprng: &mut R,
+    ) -> impl Future<Output = Result<Self::SecretKey, Self::GenerateSecretError>>;
+
+    async fn try_decrypt_encryption(
+        &self,
+        encrypter_pk: ShareKey,
+        encrypted: &EncryptedSecret<ShareSecretKey>,
+    ) -> Result<Vec<u8>, ()> {
+        let sk = self
+            .get_secret_key(&encrypted.paired_pk)
+            .await
+            .expect("FIXME")
+            .expect("FIXME");
+        let key = sk.derive_symmetric_key(encrypter_pk).await.expect("FIXME");
+        let mut buf = encrypted.ciphertext.clone();
+        key.try_decrypt(encrypted.nonce, &mut buf).expect("FIXME");
+        Ok(buf)
+    }
+}
+
+impl ShareSecretStore for HashMap<ShareKey, Rc<ShareSecretKey>> {
+    type SecretKey = Rc<ShareSecretKey>;
+
+    type GetSecretError = Infallible;
+    type GetIndexError = Infallible;
+    type ImportKeyError = Infallible;
+    type GenerateSecretError = Infallible;
+
+    async fn get_index(&self) -> Result<HashMap<ShareKey, Self::SecretKey>, Self::GetIndexError> {
+        Ok(self.clone())
+    }
+
+    async fn get_secret_key(
+        &self,
+        public_key: &ShareKey,
+    ) -> Result<Option<Self::SecretKey>, Self::GetSecretError> {
+        Ok(self.get(public_key).cloned())
+    }
+
+    async fn import_secret_key(
+        &mut self,
+        secret_key: ShareSecretKey,
+    ) -> Result<Self::SecretKey, Self::ImportKeyError> {
+        let rc = Rc::new(secret_key);
+        self.insert(secret_key.share_key(), rc.dupe());
+        Ok(rc)
+    }
+
+    async fn import_secret_key_directly(
+        &mut self,
+        secret_key: Self::SecretKey,
+    ) -> Result<Self::SecretKey, Self::ImportKeyError> {
+        self.insert(secret_key.to_share_key(), secret_key.dupe());
+        Ok(secret_key)
+    }
+
+    async fn generate_share_secret_key<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        csprng: &mut R,
+    ) -> Result<Self::SecretKey, Self::GenerateSecretError> {
+        let sk = Rc::new(ShareSecretKey::generate(csprng));
+        let pk = sk.share_key();
+        self.insert(pk, sk.dupe());
+        Ok(sk)
     }
 }

@@ -6,18 +6,18 @@ use crate::{
 };
 use rand::rngs::ThreadRng;
 
-pub async fn make_simple_keyhive() -> Result<
-    Keyhive<
-        MemorySigner,
-        [u8; 32],
-        Vec<u8>,
-        MemoryCiphertextStore<[u8; 32], Vec<u8>>,
-        NoListener,
-        ThreadRng,
-    >,
-    SigningError,
-> {
-    let mut csprng = rand::thread_rng();
-    let sk = MemorySigner::generate(&mut csprng);
-    Ok(Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng).await?)
-}
+// pub async fn make_simple_keyhive() -> Result<
+//     Keyhive<
+//         MemorySigner,
+//         [u8; 32],
+//         Vec<u8>,
+//         MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+//         NoListener,
+//         ThreadRng,
+//     >,
+//     SigningError,
+// > {
+//     let mut csprng = rand::thread_rng();
+//     let sk = MemorySigner::generate(&mut csprng);
+//     Ok(Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng).await?)
+// }

@@ -5,7 +5,7 @@ use super::{
 };
 use crate::crypto::{
     encrypted::EncryptedSecret,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::{ShareKey, ShareSecretKey, ShareSecretStore},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -72,16 +72,21 @@ impl SecretStore {
         }
     }
 
-    pub fn decrypt_secret(
+    pub async fn decrypt_secret<S: ShareSecretStore>(
         &self,
         child_node_key: &NodeKey,
-        child_sks: &mut ShareKeyMap,
+        child_sks: &mut S,
         seen_idxs: &[TreeNodeIndex],
-    ) -> Result<ShareSecretKey, CgkaError> {
+    ) -> Result<S::SecretKey, CgkaError> {
         if self.has_conflict() {
             return Err(CgkaError::UnexpectedKeyConflict);
         }
-        self.versions[0].decrypt_secret(child_node_key, child_sks, seen_idxs)
+        let secret = self.versions[0]
+            .decrypt_secret(child_node_key, child_sks, seen_idxs)
+            .await?;
+
+        let imported = child_sks.import_secret_key(secret).await.expect("FIXME");
+        Ok(imported)
     }
 
     // TODO: Is it possible we're bringing in duplicate keys here?
@@ -118,10 +123,10 @@ pub(crate) struct SecretStoreVersion {
 }
 
 impl SecretStoreVersion {
-    pub(crate) fn decrypt_secret(
+    pub(crate) async fn decrypt_secret<S: ShareSecretStore>(
         &self,
         child_node_key: &NodeKey,
-        child_sks: &ShareKeyMap,
+        child_sks: &S,
         seen_idxs: &[TreeNodeIndex],
     ) -> Result<ShareSecretKey, CgkaError> {
         let is_encrypter = child_node_key.contains_key(&self.encrypter_pk);
@@ -146,14 +151,20 @@ impl SecretStoreVersion {
 
         let decrypted: Vec<u8> = if is_encrypter {
             let secret_key = child_sks
-                .get(&self.encrypter_pk)
+                .get_secret_key(&self.encrypter_pk)
+                .await
+                .expect("FIXME")
                 .ok_or(CgkaError::SecretKeyNotFound)?;
 
             encrypted
-                .try_encrypter_decrypt(secret_key)
+                .try_encrypter_decrypt(&secret_key)
+                .await
                 .map_err(|e| CgkaError::Decryption(e.to_string()))?
         } else {
-            child_sks.try_decrypt_encryption(self.encrypter_pk, encrypted)?
+            child_sks
+                .try_decrypt_encryption(self.encrypter_pk, encrypted)
+                .await
+                .expect("FIXME")
         };
 
         let arr: [u8; 32] = decrypted.try_into().map_err(|_| CgkaError::Conversion)?;

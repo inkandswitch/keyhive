@@ -32,7 +32,7 @@ pub trait MergeAsync: ForkAsync {
     /// but rather via the [`transact_async`].
     ///
     /// [`transact_async`]: keyhive_core::transact::transact_async
-    fn merge_async(&mut self, fork: Self::AsyncForked) -> impl Future<Output = ()> + Send;
+    async fn merge_async(&mut self, fork: Self::AsyncForked);
 }
 
 impl<T: Hash + Eq + Clone> Merge for HashSet<T> {

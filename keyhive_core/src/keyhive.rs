@@ -10,7 +10,7 @@ use crate::{
     crypto::{
         digest::Digest,
         encrypted::EncryptedContent,
-        share_key::ShareKey,
+        share_key::{ShareKey, ShareSecretStore},
         signed::{Signed, SigningError, VerificationError},
         signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
@@ -73,6 +73,7 @@ use tracing::instrument;
 #[derivative(PartialEq, Eq)]
 pub struct Keyhive<
     S: AsyncSigner,
+    K: ShareSecretStore,
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
     C: CiphertextStore<T, P> = MemoryCiphertextStore<T, P>,
@@ -104,6 +105,9 @@ pub struct Keyhive<
     #[derivative(PartialEq = "ignore")]
     ciphertext_store: C,
 
+    #[derivative(PartialEq = "ignore")]
+    share_secret_store: K,
+
     /// Cryptographically secure (pseudo)random number generator.
     #[derivative(PartialEq = "ignore")]
     csprng: R,
@@ -113,12 +117,13 @@ pub struct Keyhive<
 
 impl<
         S: AsyncSigner,
+        K: ShareSecretStore,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore,
-    > Keyhive<S, T, P, C, L, R>
+    > Keyhive<S, K, T, P, C, L, R>
 {
     #[instrument(skip_all)]
     pub fn id(&self) -> IndividualId {
@@ -133,6 +138,7 @@ impl<
     #[instrument(skip_all)]
     pub async fn generate(
         signer: S,
+        share_secret_store: K,
         ciphertext_store: C,
         event_listener: L,
         mut csprng: R,
@@ -149,6 +155,7 @@ impl<
             docs: HashMap::new(),
             delegations: DelegationStore::new(),
             revocations: RevocationStore::new(),
+            share_secret_store,
             ciphertext_store,
             event_listener,
             csprng,
@@ -390,6 +397,7 @@ impl<
                     can,
                     &self.active.borrow().signer,
                     other_relevant_docs,
+                    &mut self.share_secret_store,
                 )
                 .await?),
             Membered::Document(doc) => {
@@ -399,6 +407,7 @@ impl<
                         can,
                         &self.active.borrow().signer,
                         other_relevant_docs,
+                        &mut self.share_secret_store,
                     )
                     .await
             }
@@ -424,6 +433,7 @@ impl<
                 retain_all_other_members,
                 &self.active.borrow().signer,
                 &mut relevant_docs,
+                &mut self.share_secret_store,
             )
             .await
     }
@@ -442,18 +452,21 @@ impl<
                 content_ref,
                 content,
                 pred_refs,
+                &mut self.share_secret_store,
                 &self.active.borrow().signer,
                 &mut self.csprng,
             )
             .await?)
     }
 
-    pub fn try_decrypt_content(
+    pub async fn try_decrypt_content(
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
-        doc.borrow_mut().try_decrypt_content(encrypted)
+        doc.borrow_mut()
+            .try_decrypt_content(encrypted, &mut self.share_secret_store)
+            .await
     }
 
     pub async fn try_causal_decrypt_content(
@@ -466,7 +479,11 @@ impl<
         P: Serialize + Clone,
     {
         doc.borrow_mut()
-            .try_causal_decrypt_content(encrypted, &mut self.ciphertext_store)
+            .try_causal_decrypt_content(
+                encrypted,
+                &mut self.ciphertext_store,
+                &mut self.share_secret_store,
+            )
             .await
     }
 
@@ -476,7 +493,11 @@ impl<
         doc: Rc<RefCell<Document<S, T, L>>>,
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
         doc.borrow_mut()
-            .pcs_update(&self.active.borrow().signer, &mut self.csprng)
+            .pcs_update(
+                &self.active.borrow().signer,
+                &mut self.share_secret_store,
+                &mut self.csprng,
+            )
             .await
     }
 
@@ -1000,7 +1021,7 @@ impl<
     }
 
     #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn receive_static_event(
+    pub async fn receive_static_event(
         &mut self,
         static_event: StaticEvent<T>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
@@ -1011,7 +1032,7 @@ impl<
             StaticEvent::PrekeyRotated(rot_op) => {
                 self.receive_prekey_op(&Rc::new(rot_op).into())?
             }
-            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op)?,
+            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op).await?,
             StaticEvent::Delegated(dlg) => self.receive_delegation(&dlg)?,
             StaticEvent::Revoked(rev) => self.receive_revocation(&rev)?,
         }
@@ -1031,7 +1052,7 @@ impl<
     }
 
     #[instrument(level = "trace",  skip(self), fields(khid = %self.id()))]
-    pub fn receive_cgka_op(
+    pub async fn receive_cgka_op(
         &mut self,
         signed_op: Signed<CgkaOperation>,
     ) -> Result<(), ReceiveCgkaOpError> {
@@ -1052,11 +1073,13 @@ impl<
                     .prekey_pairs
                     .get(&pk)
                     .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?;
-                doc.merge_cgka_invite_op(Rc::new(signed_op), sk)?;
+                doc.merge_cgka_invite_op(Rc::new(signed_op), sk, &mut self.share_secret_store)
+                    .await?;
                 return Ok(());
             }
         }
-        doc.merge_cgka_op(Rc::new(signed_op))?;
+        doc.merge_cgka_op(&mut self.share_secret_store, Rc::new(signed_op))
+            .await?;
         Ok(())
     }
 
@@ -1161,6 +1184,7 @@ impl<
     pub fn try_from_archive(
         archive: &Archive<T>,
         signer: S,
+        share_secret_store: K,
         ciphertext_store: C,
         listener: L,
         csprng: R,
@@ -1383,6 +1407,7 @@ impl<
             delegations,
             revocations,
             csprng,
+            share_secret_store,
             ciphertext_store,
             event_listener: listener,
             _plaintext_phantom: PhantomData,
@@ -1396,7 +1421,7 @@ impl<
 
     #[cfg(any(test, feature = "test_utils"))]
     #[instrument(level = "trace", skip_all, fields(khid = %self.id()))]
-    pub fn ingest_unsorted_static_events(
+    pub async fn ingest_unsorted_static_events(
         &mut self,
         events: Vec<StaticEvent<T>>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
@@ -1408,7 +1433,7 @@ impl<
             let epoch_len = epoch.len();
 
             for event in epoch {
-                if let Err(e) = self.receive_static_event(event.clone()) {
+                if let Err(e) = self.receive_static_event(event.clone()).await {
                     err = Some(e);
                     next_epoch.push(event);
                 }
@@ -1429,24 +1454,26 @@ impl<
 
     #[cfg(any(test, feature = "test_utils"))]
     #[instrument(level = "trace", skip_all, fields(khid = %self.id()))]
-    pub fn ingest_event_table(
+    pub async fn ingest_event_table(
         &mut self,
         events: HashMap<Digest<Event<S, T, L>>, Event<S, T, L>>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
         self.ingest_unsorted_static_events(
             events.values().cloned().map(Into::into).collect::<Vec<_>>(),
         )
+        .await
     }
 }
 
 impl<
         S: AsyncSigner,
+        K: ShareSecretStore,
         T: ContentRef + Debug,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore,
-    > Debug for Keyhive<S, T, P, C, L, R>
+    > Debug for Keyhive<S, K, T, P, C, L, R>
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.debug_struct("Keyhive")
@@ -1456,6 +1483,7 @@ impl<
             .field("docs", &self.docs)
             .field("delegations", &self.delegations)
             .field("revocations", &self.revocations)
+            .field("share_secret_store", &"<STORE>")
             .field("ciphertext_store", &"<STORE>")
             .field("csprng", &"<CSPRNG>")
             .finish()
@@ -1464,19 +1492,21 @@ impl<
 
 impl<
         S: AsyncSigner + Clone,
+        K: ShareSecretStore + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone, // FIXME make the default Rc<RefCell<...>>
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > Fork for Keyhive<S, T, P, C, L, R>
+    > Fork for Keyhive<S, K, T, P, C, L, R>
 {
-    type Forked = Keyhive<S, T, P, C, Log<S, T>, R>;
+    type Forked = Keyhive<S, K, T, P, C, Log<S, T>, R>;
 
     fn fork(&self) -> Self::Forked {
         Keyhive::try_from_archive(
             &self.into_archive(),
             self.active.borrow().signer.clone(),
+            self.share_secret_store.clone(),
             self.ciphertext_store.clone(),
             Log::new(),
             self.csprng.clone(),
@@ -1487,12 +1517,13 @@ impl<
 
 impl<
         S: AsyncSigner + Clone,
+        K: ShareSecretStore + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone,
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > Merge for Keyhive<S, T, P, C, L, R>
+    > Merge for Keyhive<S, K, T, P, C, L, R>
 {
     fn merge(&mut self, mut fork: Self::Forked) {
         self.active
@@ -1521,6 +1552,7 @@ impl<
             }
 
             self.receive_static_event(event.clone().into())
+                .await
                 .expect("prechecked events to work");
         }
 
@@ -1530,12 +1562,13 @@ impl<
 
 impl<
         S: AsyncSigner,
+        K: ShareSecretStore,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore,
-    > Verifiable for Keyhive<S, T, P, C, L, R>
+    > Verifiable for Keyhive<S, K, T, P, C, L, R>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.active.borrow().verifying_key()
@@ -1544,14 +1577,15 @@ impl<
 
 impl<
         S: AsyncSigner,
+        K: ShareSecretStore,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
         L: MembershipListener<S, T> + CgkaListener,
         R: rand::CryptoRng + rand::RngCore,
-    > From<&Keyhive<S, T, P, C, L, R>> for Agent<S, T, L>
+    > From<&Keyhive<S, K, T, P, C, L, R>> for Agent<S, T, L>
 {
-    fn from(context: &Keyhive<S, T, P, C, L, R>) -> Self {
+    fn from(context: &Keyhive<S, K, T, P, C, L, R>) -> Self {
         context.active.dupe().into()
     }
 }
