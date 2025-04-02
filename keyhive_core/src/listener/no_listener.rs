@@ -4,7 +4,7 @@ use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyLi
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{share_key::ShareSecretStore, signed::Signed, signer::async_signer::AsyncSigner},
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
@@ -26,9 +26,11 @@ impl PrekeyListener for NoListener {
     async fn on_prekey_rotated(&self, _e: &Rc<Signed<RotateKeyOp>>) {}
 }
 
-impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for NoListener {
-    async fn on_delegation(&self, _data: &Rc<Signed<Delegation<S, T, NoListener>>>) {}
-    async fn on_revocation(&self, _data: &Rc<Signed<Revocation<S, T, NoListener>>>) {}
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef> MembershipListener<S, K, T>
+    for NoListener
+{
+    async fn on_delegation(&self, _data: &Rc<Signed<Delegation<S, K, T, NoListener>>>) {}
+    async fn on_revocation(&self, _data: &Rc<Signed<Revocation<S, K, T, NoListener>>>) {}
 }
 
 impl CgkaListener for NoListener {

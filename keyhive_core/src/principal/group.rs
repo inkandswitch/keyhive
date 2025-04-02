@@ -64,34 +64,40 @@ use tracing::{debug, info, instrument};
 /// through the network of [`Agent`]s.
 #[derive(Clone, Derivative)]
 #[derive_where(Debug, PartialEq; T)]
-pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener>
-{
+pub struct Group<
+    S: AsyncSigner,
+    K: ShareSecretStore,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<S, K, T> = NoListener,
+> {
     pub(crate) id_or_indie: IdOrIndividual,
 
     /// The current view of members of a group.
     #[allow(clippy::type_complexity)]
-    pub(crate) members: HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>>,
+    pub(crate) members: HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, K, T, L>>>>>,
 
     /// Current view of revocations
-    pub(crate) active_revocations: HashMap<[u8; 64], Rc<Signed<Revocation<S, T, L>>>>,
+    pub(crate) active_revocations: HashMap<[u8; 64], Rc<Signed<Revocation<S, K, T, L>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
-    pub(crate) state: GroupState<S, T, L>,
+    pub(crate) state: GroupState<S, K, T, L>,
 
     #[derive_where(skip)]
     pub(crate) listener: L,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    Group<S, K, T, L>
+{
     #[instrument(
         skip_all,
         fields(group_id = %group_id, head_sig = ?head.signature.to_bytes())
     )]
     pub fn new(
         group_id: GroupId,
-        head: Rc<Signed<Delegation<S, T, L>>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        head: Rc<Signed<Delegation<S, K, T, L>>>,
+        delegations: DelegationStore<S, K, T, L>,
+        revocations: RevocationStore<S, K, T, L>,
         listener: L,
     ) -> Self {
         let mut group = Self {
@@ -108,9 +114,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     #[instrument(skip(delegations, revocations, listener))]
     pub fn from_individual(
         individual: Individual,
-        head: Rc<Signed<Delegation<S, T, L>>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        head: Rc<Signed<Delegation<S, K, T, L>>>,
+        delegations: DelegationStore<S, K, T, L>,
+        revocations: RevocationStore<S, K, T, L>,
         listener: L,
     ) -> Self {
         let mut group = Self {
@@ -126,12 +132,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
 
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
-        parents: NonEmpty<Agent<S, T, L>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        parents: NonEmpty<Agent<S, K, T, L>>,
+        delegations: DelegationStore<S, K, T, L>,
+        revocations: RevocationStore<S, K, T, L>,
         listener: L,
         csprng: &mut R,
-    ) -> Result<Group<S, T, L>, SigningError> {
+    ) -> Result<Group<S, K, T, L>, SigningError> {
         let (group_result, _vk) = EphemeralSigner::with_signer(csprng, |verifier, signer| {
             Self::generate_after_content(
                 signer,
@@ -157,9 +163,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     pub(crate) async fn generate_after_content(
         signer: Box<dyn SyncSignerBasic>,
         verifier: ed25519_dalek::VerifyingKey,
-        parents: NonEmpty<Agent<S, T, L>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        parents: NonEmpty<Agent<S, K, T, L>>,
+        delegations: DelegationStore<S, K, T, L>,
+        revocations: RevocationStore<S, K, T, L>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
         listener: L,
     ) -> Result<Self, SigningError> {
@@ -243,19 +249,24 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>> {
+    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, K, T, L>>>>> {
         &self.members
     }
 
     #[instrument(skip(self), fields(group_id = %self.group_id()))]
-    pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
-        struct GroupAccess<Z: AsyncSigner, U: ContentRef, M: MembershipListener<Z, U>> {
-            agent: Agent<Z, U, M>,
+    pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<S, K, T, L>, Access)> {
+        struct GroupAccess<
+            Z: AsyncSigner,
+            V: ShareSecretStore,
+            U: ContentRef,
+            M: MembershipListener<Z, V, U>,
+        > {
+            agent: Agent<Z, V, U, M>,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess<S, T, L>> = vec![];
+        let mut explore: Vec<GroupAccess<S, K, T, L>> = vec![];
         let mut seen: HashSet<([u8; 64], Access)> = HashSet::new();
 
         for member in self.members.keys() {
@@ -272,7 +283,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             });
         }
 
-        let mut caps: HashMap<Identifier, (Agent<S, T, L>, Access)> = HashMap::new();
+        let mut caps: HashMap<Identifier, (Agent<S, K, T, L>, Access)> = HashMap::new();
 
         while let Some(GroupAccess {
             agent: member,
@@ -294,7 +305,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             caps.insert(member.id(), (member.dupe(), current_path_access));
 
             if let Some(membered) = match member {
-                Agent::Group(inner_group) => Some(Membered::<S, T, L>::from(inner_group)),
+                Agent::Group(inner_group) => Some(Membered::<S, K, T, L>::from(inner_group)),
                 Agent::Document(doc) => Some(doc.into()),
                 _ => None,
             } {
@@ -323,11 +334,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         caps
     }
 
-    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<S, T, L>>> {
+    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<S, K, T, L>>> {
         &self.state.delegation_heads
     }
 
-    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<S, T, L>>> {
+    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<S, K, T, L>>> {
         &self.state.revocation_heads
     }
 
@@ -335,7 +346,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     pub fn get_capability(
         &self,
         member_id: &Identifier,
-    ) -> Option<&Rc<Signed<Delegation<S, T, L>>>> {
+    ) -> Option<&Rc<Signed<Delegation<S, K, T, L>>>> {
         self.members.get(member_id).and_then(|delegations| {
             delegations
                 .iter()
@@ -346,8 +357,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn get_agent_revocations(
         &self,
-        agent: &Agent<S, T, L>,
-    ) -> Vec<Rc<Signed<Revocation<S, T, L>>>> {
+        agent: &Agent<S, K, T, L>,
+    ) -> Vec<Rc<Signed<Revocation<S, K, T, L>>>> {
         self.state
             .revocations
             .borrow()
@@ -365,8 +376,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     #[instrument(skip_all, fields(group_id = %self.group_id()))]
     pub fn receive_delegation(
         &mut self,
-        delegation: Rc<Signed<Delegation<S, T, L>>>,
-    ) -> Result<Digest<Signed<Delegation<S, T, L>>>, error::AddError> {
+        delegation: Rc<Signed<Delegation<S, K, T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<S, K, T, L>>>, error::AddError> {
         let digest = self.state.add_delegation(delegation)?;
         info!("{:x?}", &digest);
         self.rebuild();
@@ -376,8 +387,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn receive_revocation(
         &mut self,
-        revocation: Rc<Signed<Revocation<S, T, L>>>,
-    ) -> Result<Digest<Signed<Revocation<S, T, L>>>, error::AddError> {
+        revocation: Rc<Signed<Revocation<S, K, T, L>>>,
+    ) -> Result<Digest<Signed<Revocation<S, K, T, L>>>, error::AddError> {
         let digest = self.state.add_revocation(revocation)?;
         self.rebuild();
         Ok(digest)
@@ -392,14 +403,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             relevant_docs_count=%relevant_docs.len()
         ))
     ]
-    pub async fn add_member<K: ShareSecretStore>(
+    pub async fn add_member(
         &mut self,
-        member_to_add: Agent<S, T, L>,
+        member_to_add: Agent<S, K, T, L>,
         can: Access,
         signer: &S,
-        relevant_docs: &[Rc<RefCell<Document<S, T, L>>>],
-        owner_sks: &mut K,
-    ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError> {
+        relevant_docs: &[Rc<RefCell<Document<S, K, T, L>>>],
+    ) -> Result<AddMemberUpdate<S, K, T, L>, AddGroupMemberError> {
         let after_content = relevant_docs
             .iter()
             .map(|d| {
@@ -410,18 +420,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             })
             .collect();
 
-        self.add_member_with_manual_content(member_to_add, can, signer, after_content, owner_sks)
+        self.add_member_with_manual_content(member_to_add, can, signer, after_content)
             .await
     }
 
-    pub(crate) async fn add_member_with_manual_content<K: ShareSecretStore>(
+    pub(crate) async fn add_member_with_manual_content(
         &mut self,
-        member_to_add: Agent<S, T, L>,
+        member_to_add: Agent<S, K, T, L>,
         can: Access,
         signer: &S,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-        owner_sks: &mut K,
-    ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError> {
+    ) -> Result<AddMemberUpdate<S, K, T, L>, AddGroupMemberError> {
         let proof = if self.verifying_key() == signer.verifying_key() {
             None
         } else {
@@ -454,7 +463,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         self.listener.on_delegation(&rc).await;
 
         let cgka_ops = if rc.payload.can.is_reader() {
-            self.add_cgka_member(rc.dupe(), signer, owner_sks).await?
+            self.add_cgka_member(rc.dupe(), signer).await?
         } else {
             vec![]
         };
@@ -469,14 +478,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         skip_all,
         fields(group_id = %self.group_id(), member_id = %delegation.payload.delegate.id())
     )]
-    pub(crate) async fn add_cgka_member<K: ShareSecretStore>(
+    pub(crate) async fn add_cgka_member(
         &mut self,
-        delegation: Rc<Signed<Delegation<S, T, L>>>,
+        delegation: Rc<Signed<Delegation<S, K, T, L>>>,
         signer: &S,
-        owner_sks: &mut K,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut cgka_ops = Vec::new();
-        let docs: Vec<Rc<RefCell<Document<S, T, L>>>> = self
+        let docs: Vec<Rc<RefCell<Document<S, K, T, L>>>> = self
             .transitive_members()
             .values()
             .filter_map(|(agent, _)| {
@@ -495,7 +503,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             );
             for op in doc
                 .borrow_mut()
-                .add_cgka_member(&delegation, owner_sks, signer)
+                .add_cgka_member(&delegation, signer)
                 .await?
             {
                 cgka_ops.push(op);
@@ -505,20 +513,19 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(skip(self, signer, owner_sks), fields(group_id = %self.group_id()))]
-    pub async fn revoke_member<K: ShareSecretStore>(
+    #[instrument(skip(self, signer), fields(group_id = %self.group_id()))]
+    pub async fn revoke_member(
         &mut self,
         member_to_remove: Identifier,
         retain_all_other_members: bool,
         signer: &S,
         after_content: &BTreeMap<DocumentId, Vec<T>>,
-        owner_sks: &mut K,
-    ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<S, K, T, L>, RevokeMemberError> {
         let vk = signer.verifying_key();
         let mut revocations = vec![];
         let og_dlgs: Vec<_> = self.members.values().flatten().cloned().collect();
 
-        let all_to_revoke: Vec<Rc<Signed<Delegation<S, T, L>>>> = self
+        let all_to_revoke: Vec<Rc<Signed<Delegation<S, K, T, L>>>> = self
             .members()
             .get(&member_to_remove)
             .map(|ne| Vec::<_>::from(ne.clone())) // Semi-inexpensive because `Vec<Rc<_>>`
@@ -617,7 +624,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         let mut cgka_ops = Vec::new();
         let (individuals, docs): (
             Vec<Rc<RefCell<Individual>>>,
-            Vec<Rc<RefCell<Document<S, T, L>>>>,
+            Vec<Rc<RefCell<Document<S, K, T, L>>>>,
         ) = self.transitive_members().values().fold(
             (vec![], vec![]),
             |(mut indies, mut docs), (agent, _)| {
@@ -638,11 +645,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         for indie in individuals {
             let id = indie.borrow().id();
             for doc in &docs {
-                if let Some(op) = doc
-                    .borrow_mut()
-                    .remove_cgka_member(id, signer, owner_sks)
-                    .await?
-                {
+                if let Some(op) = doc.borrow_mut().remove_cgka_member(id, signer).await? {
                     cgka_ops.push(op);
                 }
             }
@@ -664,7 +667,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                                 dlg.payload.can,
                                 signer,
                                 after_content.clone(),
-                                owner_sks,
                             )
                             .await?;
 
@@ -684,10 +686,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     async fn build_revocation(
         &mut self,
         signer: &S,
-        revoke: Rc<Signed<Delegation<S, T, L>>>,
-        proof: Option<Rc<Signed<Delegation<S, T, L>>>>,
+        revoke: Rc<Signed<Delegation<S, K, T, L>>>,
+        proof: Option<Rc<Signed<Delegation<S, K, T, L>>>>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Rc<Signed<Revocation<S, T, L>>>, SigningError> {
+    ) -> Result<Rc<Signed<Revocation<S, K, T, L>>>, SigningError> {
         let revocation = signer
             .try_sign_async(Revocation {
                 revoke,
@@ -704,7 +706,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         self.members.clear();
         self.active_revocations.clear();
 
-        let mut dlgs_in_play: HashMap<[u8; 64], Rc<Signed<Delegation<S, T, L>>>> = HashMap::new();
+        let mut dlgs_in_play: HashMap<[u8; 64], Rc<Signed<Delegation<S, K, T, L>>>> =
+            HashMap::new();
         let mut revoked_dlgs: HashSet<[u8; 64]> = HashSet::new();
 
         // {dlg_dep => Set<dlgs that depend on it>}
@@ -831,8 +834,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
 
     pub(crate) fn dummy_from_archive(
         archive: GroupArchive<T>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        delegations: DelegationStore<S, K, T, L>,
+        revocations: RevocationStore<S, K, T, L>,
         listener: L,
     ) -> Self {
         Self {
@@ -864,7 +867,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Group<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Hash
+    for Group<S, K, T, L>
+{
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id_or_indie.hash(state);
         self.members.iter().collect::<BTreeMap<_, _>>().hash(state);
@@ -872,7 +877,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Group<
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Group<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Verifiable
+    for Group<S, K, T, L>
+{
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }

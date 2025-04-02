@@ -7,6 +7,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         digest::Digest, signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable,
+        share_key::ShareSecretStore,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{document::id::DocumentId, identifier::Identifier},
@@ -28,15 +29,16 @@ use tracing::instrument;
 #[derive_where(Debug, Clone, Eq; T)]
 pub enum MembershipOperation<
     S: AsyncSigner,
+    K: ShareSecretStore,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<S, K, T> = NoListener,
 > {
-    Delegation(Rc<Signed<Delegation<S, T, L>>>),
-    Revocation(Rc<Signed<Revocation<S, T, L>>>),
+    Delegation(Rc<Signed<Delegation<S, K, T, L>>>),
+    Revocation(Rc<Signed<Revocation<S, K, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
-    for MembershipOperation<S, T, L>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> std::hash::Hash
+    for MembershipOperation<S, K, T, L>
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
@@ -50,8 +52,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
-    for MembershipOperation<S, T, L>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> PartialEq
+    for MembershipOperation<S, K, T, L>
 {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -62,8 +64,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef + Serialize, L: MembershipListener<S, T>> Serialize
-    for MembershipOperation<S, T, L>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef + Serialize, L: MembershipListener<S, K, T>> Serialize
+    for MembershipOperation<S, K, T, L>
 {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         match self {
@@ -73,7 +75,7 @@ impl<S: AsyncSigner, T: ContentRef + Serialize, L: MembershipListener<S, T>> Ser
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOperation<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> MembershipOperation<S, K, T, L> {
     pub fn subject_id(&self) -> Identifier {
         match self {
             MembershipOperation::Delegation(delegation) => delegation.subject_id(),
@@ -99,7 +101,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         !self.is_delegation()
     }
 
-    pub fn after_auth(&self) -> Vec<MembershipOperation<S, T, L>> {
+    pub fn after_auth(&self) -> Vec<MembershipOperation<S, K, T, L>> {
         let deps = self.after();
         deps.delegations
             .into_iter()
@@ -108,7 +110,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
             .collect()
     }
 
-    pub fn after(&self) -> Dependencies<S, T, L> {
+    pub fn after(&self) -> Dependencies<S, K, T, L> {
         match self {
             MembershipOperation::Delegation(delegation) => delegation.payload.after(),
             MembershipOperation::Revocation(revocation) => revocation.payload.after(),
@@ -129,7 +131,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         }
     }
 
-    pub fn ancestors(&self) -> (CaMap<MembershipOperation<S, T, L>>, usize) {
+    pub fn ancestors(&self) -> (CaMap<MembershipOperation<S, K, T, L>>, usize) {
         if self.is_root() {
             return (CaMap::new(), 1);
         }
@@ -174,18 +176,18 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
     #[allow(clippy::type_complexity)] // Clippy doens't like the returned pair
     #[instrument(skip_all)]
     pub fn topsort(
-        delegation_heads: &CaMap<Signed<Delegation<S, T, L>>>,
-        revocation_heads: &CaMap<Signed<Revocation<S, T, L>>>,
+        delegation_heads: &CaMap<Signed<Delegation<S, K, T, L>>>,
+        revocation_heads: &CaMap<Signed<Revocation<S, K, T, L>>>,
     ) -> Vec<(
-        Digest<MembershipOperation<S, T, L>>,
-        MembershipOperation<S, T, L>,
+        Digest<MembershipOperation<S, K, T, L>>,
+        MembershipOperation<S, K, T, L>,
     )> {
         // NOTE: BTreeMap to get deterministic order
         let mut ops_with_ancestors: BTreeMap<
-            Digest<MembershipOperation<S, T, L>>,
+            Digest<MembershipOperation<S, K, T, L>>,
             (
-                MembershipOperation<S, T, L>,
-                CaMap<MembershipOperation<S, T, L>>,
+                MembershipOperation<S, K, T, L>,
+                CaMap<MembershipOperation<S, K, T, L>>,
                 usize,
             ),
         > = BTreeMap::new();
@@ -205,17 +207,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
             }
         }
 
-        let mut leftovers: HashMap<Key, MembershipOperation<S, T, L>> = HashMap::new();
-        let mut explore: Vec<MembershipOperation<S, T, L>> = vec![];
+        let mut leftovers: HashMap<Key, MembershipOperation<S, K, T, L>> = HashMap::new();
+        let mut explore: Vec<MembershipOperation<S, K, T, L>> = vec![];
 
         for dlg in delegation_heads.values() {
-            let op: MembershipOperation<S, T, L> = dlg.dupe().into();
+            let op: MembershipOperation<S, K, T, L> = dlg.dupe().into();
             leftovers.insert(op.signature().into(), op.clone());
             explore.push(op);
         }
 
         for rev in revocation_heads.values() {
-            let op: MembershipOperation<S, T, L> = rev.dupe().into();
+            let op: MembershipOperation<S, K, T, L> = rev.dupe().into();
             leftovers.insert(op.signature().into(), op.clone());
             explore.push(op);
         }
@@ -224,8 +226,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         let mut revoked_dependencies: HashMap<
             Key,
             (
-                Digest<MembershipOperation<S, T, L>>,
-                MembershipOperation<S, T, L>,
+                Digest<MembershipOperation<S, K, T, L>>,
+                MembershipOperation<S, K, T, L>,
             ),
         > = HashMap::new();
 
@@ -246,8 +248,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         }
 
         let mut adjacencies: TopologicalSort<(
-            Digest<MembershipOperation<S, T, L>>,
-            &MembershipOperation<S, T, L>,
+            Digest<MembershipOperation<S, K, T, L>>,
+            &MembershipOperation<S, K, T, L>,
         )> = topological_sort::TopologicalSort::new();
 
         for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
@@ -267,11 +269,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
                     .expect("values that we just put there to be there");
 
                 #[allow(clippy::mutable_key_type)]
-                let ancestor_set: HashSet<&MembershipOperation<S, T, L>> =
+                let ancestor_set: HashSet<&MembershipOperation<S, K, T, L>> =
                     op_ancestors.values().map(|op| op.as_ref()).collect();
 
                 #[allow(clippy::mutable_key_type)]
-                let other_ancestor_set: HashSet<&MembershipOperation<S, T, L>> =
+                let other_ancestor_set: HashSet<&MembershipOperation<S, K, T, L>> =
                     other_ancestors.values().map(|op| op.as_ref()).collect();
 
                 if other_ancestor_set.contains(op) || ancestor_set.is_subset(&other_ancestor_set) {
@@ -329,8 +331,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         }
 
         let mut history: Vec<(
-            Digest<MembershipOperation<S, T, L>>,
-            MembershipOperation<S, T, L>,
+            Digest<MembershipOperation<S, K, T, L>>,
+            MembershipOperation<S, K, T, L>,
         )> = leftovers
             .values()
             .map(|op| (Digest::hash(op), op.clone()))
@@ -356,16 +358,16 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe
-    for MembershipOperation<S, T, L>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Dupe
+    for MembershipOperation<S, K, T, L>
 {
     fn dupe(&self) -> Self {
         self.clone()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
-    for MembershipOperation<S, T, L>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Verifiable
+    for MembershipOperation<S, K, T, L>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         match self {
@@ -375,18 +377,18 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Rc<Signed<Delegation<S, T, L>>>> for MembershipOperation<S, T, L>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    From<Rc<Signed<Delegation<S, K, T, L>>>> for MembershipOperation<S, K, T, L>
 {
-    fn from(delegation: Rc<Signed<Delegation<S, T, L>>>) -> Self {
+    fn from(delegation: Rc<Signed<Delegation<S, K, T, L>>>) -> Self {
         MembershipOperation::Delegation(delegation)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Rc<Signed<Revocation<S, T, L>>>> for MembershipOperation<S, T, L>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    From<Rc<Signed<Revocation<S, K, T, L>>>> for MembershipOperation<S, K, T, L>
 {
-    fn from(revocation: Rc<Signed<Revocation<S, T, L>>>) -> Self {
+    fn from(revocation: Rc<Signed<Revocation<S, K, T, L>>>) -> Self {
         MembershipOperation::Revocation(revocation)
     }
 }
@@ -398,10 +400,10 @@ pub enum StaticMembershipOperation<T: ContentRef> {
     Revocation(Signed<StaticRevocation<T>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<MembershipOperation<S, T, L>>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> From<MembershipOperation<S, K, T, L>>
     for StaticMembershipOperation<T>
 {
-    fn from(op: MembershipOperation<S, T, L>) -> Self {
+    fn from(op: MembershipOperation<S, K, T, L>) -> Self {
         match op {
             MembershipOperation::Delegation(d) => {
                 StaticMembershipOperation::Delegation(Rc::unwrap_or_clone(d).map(Into::into))

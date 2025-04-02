@@ -48,8 +48,8 @@ use tracing::{info, instrument};
 ///
 /// We assume that all operations are received in causal order (a property
 /// guaranteed by Keyhive as a whole).
-#[derive(Debug, Clone, PartialEq, Eq, Derivative)]
-#[derivative(Hash)]
+#[derive(Debug, Clone, Eq, Derivative)]
+#[derivative(Hash, PartialEq)]
 pub struct Cgka<K: ShareSecretStore + Clone> {
     doc_id: DocumentId,
     /// The id of the member who owns this tree.
@@ -70,7 +70,9 @@ pub struct Cgka<K: ShareSecretStore + Clone> {
 
     original_member: (IndividualId, ShareKey),
     init_add_op: Signed<CgkaOperation>,
-    store: K,
+
+    #[derivative(PartialEq = "ignore", Hash = "ignore")]
+    pub(crate) store: K,
 }
 
 fn hash_pcs_keys<H: Hasher, T>(pcs_keys: &HashMap<ShareKey, T>, state: &mut H) {

@@ -7,6 +7,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
+        share_key::ShareSecretStore,
         signed::{Signed, SigningError},
         signer::async_signer::AsyncSigner,
     },
@@ -26,20 +27,26 @@ use thiserror::Error;
 #[derive_where(Debug, Clone, PartialEq; T)]
 pub struct Delegation<
     S: AsyncSigner,
+    K: ShareSecretStore,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<S, K, T> = NoListener,
 > {
-    pub(crate) delegate: Agent<S, T, L>,
+    pub(crate) delegate: Agent<S, K, T, L>,
     pub(crate) can: Access,
 
-    pub(crate) proof: Option<Rc<Signed<Delegation<S, T, L>>>>,
-    pub(crate) after_revocations: Vec<Rc<Signed<Revocation<S, T, L>>>>,
+    pub(crate) proof: Option<Rc<Signed<Delegation<S, K, T, L>>>>,
+    pub(crate) after_revocations: Vec<Rc<Signed<Revocation<S, K, T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Eq for Delegation<S, T, L> {}
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Eq
+    for Delegation<S, K, T, L>
+{
+}
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    Delegation<S, K, T, L>
+{
     pub fn subject_id(&self, issuer: AgentId) -> Identifier {
         if let Some(proof) = &self.proof {
             proof.subject_id()
@@ -48,7 +55,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         }
     }
 
-    pub fn delegate(&self) -> &Agent<S, T, L> {
+    pub fn delegate(&self) -> &Agent<S, K, T, L> {
         &self.delegate
     }
 
@@ -56,15 +63,15 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         self.can
     }
 
-    pub fn proof(&self) -> Option<&Rc<Signed<Delegation<S, T, L>>>> {
+    pub fn proof(&self) -> Option<&Rc<Signed<Delegation<S, K, T, L>>>> {
         self.proof.as_ref()
     }
 
-    pub fn after_revocations(&self) -> &[Rc<Signed<Revocation<S, T, L>>>] {
+    pub fn after_revocations(&self) -> &[Rc<Signed<Revocation<S, K, T, L>>>] {
         &self.after_revocations
     }
 
-    pub fn after(&self) -> Dependencies<S, T, L> {
+    pub fn after(&self) -> Dependencies<S, K, T, L> {
         let AfterAuth {
             optional_delegation,
             revocations,
@@ -79,7 +86,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         }
     }
 
-    pub fn after_auth(&self) -> AfterAuth<S, T, L> {
+    pub fn after_auth(&self) -> AfterAuth<S, K, T, L> {
         AfterAuth {
             optional_delegation: self.proof.dupe(),
             revocations: &self.after_revocations,
@@ -90,7 +97,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         self.proof.is_none()
     }
 
-    pub fn proof_lineage(&self) -> Vec<Rc<Signed<Delegation<S, T, L>>>> {
+    pub fn proof_lineage(&self) -> Vec<Rc<Signed<Delegation<S, K, T, L>>>> {
         let mut lineage = vec![];
         let mut head = self;
 
@@ -102,7 +109,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         lineage
     }
 
-    pub fn is_descendant_of(&self, maybe_ancestor: &Signed<Delegation<S, T, L>>) -> bool {
+    pub fn is_descendant_of(&self, maybe_ancestor: &Signed<Delegation<S, K, T, L>>) -> bool {
         let mut head = self;
 
         while let Some(proof) = &head.proof {
@@ -116,7 +123,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         false
     }
 
-    pub fn is_ancestor_of(&self, maybe_descendant: &Signed<Delegation<S, T, L>>) -> bool {
+    pub fn is_ancestor_of(&self, maybe_descendant: &Signed<Delegation<S, K, T, L>>) -> bool {
         let mut head = maybe_descendant.payload();
 
         while let Some(proof) = &head.proof {
@@ -131,7 +138,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Signed<Delegation<S, T, L>> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    Signed<Delegation<S, K, T, L>>
+{
     pub fn subject_id(&self) -> Identifier {
         let mut head = self;
 
@@ -143,7 +152,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Signed<Delegati
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for Delegation<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Serialize
+    for Delegation<S, K, T, L>
+{
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticDelegation::from(self.clone()).serialize(serializer)
     }
@@ -181,10 +192,10 @@ impl<'a, T: ContentRef + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Delegation<S, T, L>>
-    for StaticDelegation<T>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    From<Delegation<S, K, T, L>> for StaticDelegation<T>
 {
-    fn from(delegation: Delegation<S, T, L>) -> Self {
+    fn from(delegation: Delegation<S, K, T, L>) -> Self {
         Self {
             can: delegation.can,
             proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).into()),
@@ -203,11 +214,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Delegation
 pub struct AfterAuth<
     'a,
     S: AsyncSigner,
+    K: ShareSecretStore,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<S, K, T> = NoListener,
 > {
-    pub(crate) optional_delegation: Option<Rc<Signed<Delegation<S, T, L>>>>,
-    pub(crate) revocations: &'a [Rc<Signed<Revocation<S, T, L>>>],
+    pub(crate) optional_delegation: Option<Rc<Signed<Delegation<S, K, T, L>>>>,
+    pub(crate) revocations: &'a [Rc<Signed<Revocation<S, K, T, L>>>],
 }
 
 /// Errors that can occur when using an active agent.

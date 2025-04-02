@@ -7,6 +7,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
+        share_key::ShareSecretStore,
         signed::Signed,
         signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSigner},
         verifiable::Verifiable,
@@ -24,25 +25,28 @@ use std::{cmp::Ordering, collections::BTreeMap, rc::Rc};
 #[derive_where(Debug, PartialEq, Hash; T)]
 pub struct GroupState<
     S: AsyncSigner,
+    K: ShareSecretStore,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<S, K, T> = NoListener,
 > {
     pub(crate) id: GroupId,
 
     #[derive_where(skip)]
-    pub(crate) delegations: DelegationStore<S, T, L>,
-    pub(crate) delegation_heads: CaMap<Signed<Delegation<S, T, L>>>,
+    pub(crate) delegations: DelegationStore<S, K, T, L>,
+    pub(crate) delegation_heads: CaMap<Signed<Delegation<S, K, T, L>>>,
 
     #[derive_where(skip)]
-    pub(crate) revocations: RevocationStore<S, T, L>,
-    pub(crate) revocation_heads: CaMap<Signed<Revocation<S, T, L>>>,
+    pub(crate) revocations: RevocationStore<S, K, T, L>,
+    pub(crate) revocation_heads: CaMap<Signed<Revocation<S, K, T, L>>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    GroupState<S, K, T, L>
+{
     pub fn new(
-        delegation_head: Rc<Signed<Delegation<S, T, L>>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        delegation_head: Rc<Signed<Delegation<S, K, T, L>>>,
+        delegations: DelegationStore<S, K, T, L>,
+        revocations: RevocationStore<S, K, T, L>,
     ) -> Self {
         let id = GroupId(delegation_head.verifying_key().into());
         let mut heads = vec![delegation_head.dupe()];
@@ -84,9 +88,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
     }
 
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        parents: Vec<Agent<S, T, L>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        parents: Vec<Agent<S, K, T, L>>,
+        delegations: DelegationStore<S, K, T, L>,
+        revocations: RevocationStore<S, K, T, L>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let signer = MemorySigner::generate(csprng);
@@ -125,18 +129,18 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
         self.id
     }
 
-    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<S, T, L>>> {
+    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<S, K, T, L>>> {
         &self.delegation_heads
     }
 
-    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<S, T, L>>> {
+    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<S, K, T, L>>> {
         &self.revocation_heads
     }
 
     pub fn add_delegation(
         &mut self,
-        delegation: Rc<Signed<Delegation<S, T, L>>>,
-    ) -> Result<Digest<Signed<Delegation<S, T, L>>>, AddError> {
+        delegation: Rc<Signed<Delegation<S, K, T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<S, K, T, L>>>, AddError> {
         if delegation.subject_id() != self.id.into() {
             return Err(AddError::InvalidSubject(Box::new(delegation.subject_id())));
         }
@@ -185,8 +189,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
 
     pub fn add_revocation(
         &mut self,
-        revocation: Rc<Signed<Revocation<S, T, L>>>,
-    ) -> Result<Digest<Signed<Revocation<S, T, L>>>, AddError> {
+        revocation: Rc<Signed<Revocation<S, K, T, L>>>,
+    ) -> Result<Digest<Signed<Revocation<S, K, T, L>>>, AddError> {
         if revocation.subject_id() != self.id.into() {
             return Err(AddError::InvalidSubject(Box::new(revocation.subject_id())));
         }
@@ -226,7 +230,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
         Ok(hash)
     }
 
-    pub fn delegations_for(&self, agent: Agent<S, T, L>) -> Vec<Rc<Signed<Delegation<S, T, L>>>> {
+    pub fn delegations_for(
+        &self,
+        agent: Agent<S, K, T, L>,
+    ) -> Vec<Rc<Signed<Delegation<S, K, T, L>>>> {
         self.delegations
             .borrow()
             .values()
@@ -242,8 +249,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
 
     pub(crate) fn dummy_from_archive(
         archive: GroupStateArchive<T>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        delegations: DelegationStore<S, K, T, L>,
+        revocations: RevocationStore<S, K, T, L>,
     ) -> Self {
         Self {
             id: archive.id,
@@ -265,8 +272,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
-    for GroupState<S, T, L>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Verifiable
+    for GroupState<S, K, T, L>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.id.0.verifying_key()
