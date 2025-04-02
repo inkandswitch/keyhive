@@ -1,4 +1,5 @@
 use crate::{
+    doc_status::DocEvent,
     network::messages::{
         self,
         session::{SessionMessage, SessionRequest, SessionResponse},

@@ -1,4 +1,4 @@
-use crate::{network::PeerAddress, DocumentId, PeerId, TaskContext};
+use crate::{doc_status::DocEvent, network::PeerAddress, DocumentId, PeerId, TaskContext};
 
 pub use error::SyncDocError;
 
@@ -24,7 +24,7 @@ pub(crate) async fn sync_doc<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
             tracing::error!(err=?e, "syncing sedimentree failed");
             crate::sync::Error::Other(format!("failed to sync sedimentree: {:?}", e))
         })?;
-    sync_cgka::sync_cgka(ctx, peer_address, session_id, doc_id).await?;
+    sync_cgka::sync_cgka(ctx.clone(), peer_address, session_id, doc_id).await?;
 
     Ok(())
 }
