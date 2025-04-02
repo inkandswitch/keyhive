@@ -258,8 +258,8 @@ impl<T: AsyncSecretKey> AsyncSecretKey for Rc<T> {
     }
 }
 
-pub trait ShareSecretStore {
-    type SecretKey: AsyncSecretKey + Clone;
+pub trait ShareSecretStore: Clone {
+    type SecretKey: AsyncSecretKey + Debug + Clone;
 
     type GetSecretError: Debug;
     type GetIndexError: Debug;
@@ -283,9 +283,8 @@ pub trait ShareSecretStore {
         secret_key: Self::SecretKey,
     ) -> Result<Self::SecretKey, Self::ImportKeyError>;
 
-    fn generate_share_secret_key<R: rand::CryptoRng + rand::RngCore>(
+    fn generate_share_secret_key(
         &mut self,
-        csprng: &mut R,
     ) -> impl Future<Output = Result<Self::SecretKey, Self::GenerateSecretError>>;
 
     async fn try_decrypt_encryption(
@@ -305,6 +304,7 @@ pub trait ShareSecretStore {
     }
 }
 
+// FIXME Memory and include a csrpng directy
 impl ShareSecretStore for HashMap<ShareKey, Rc<ShareSecretKey>> {
     type SecretKey = Rc<ShareSecretKey>;
 
@@ -341,11 +341,10 @@ impl ShareSecretStore for HashMap<ShareKey, Rc<ShareSecretKey>> {
         Ok(secret_key)
     }
 
-    async fn generate_share_secret_key<R: rand::CryptoRng + rand::RngCore>(
+    async fn generate_share_secret_key(
         &mut self,
-        csprng: &mut R,
     ) -> Result<Self::SecretKey, Self::GenerateSecretError> {
-        let sk = Rc::new(ShareSecretKey::generate(csprng));
+        let sk = Rc::new(ShareSecretKey::generate(&mut rand::thread_rng()));
         let pk = sk.share_key();
         self.insert(pk, sk.dupe());
         Ok(sk)

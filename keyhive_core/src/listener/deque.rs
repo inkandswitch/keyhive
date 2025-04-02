@@ -2,7 +2,7 @@ use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyLi
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{share_key::ShareSecretStore, signed::Signed, signer::async_signer::AsyncSigner},
     event::Event,
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
@@ -20,28 +20,28 @@ use std::{
 use tracing::instrument;
 
 #[derive(Debug, Default, PartialEq, Eq, From, Into)]
-pub struct Deque<S: AsyncSigner, T: ContentRef = [u8; 32]>(
-    #[allow(clippy::type_complexity)] pub Rc<RefCell<VecDeque<Event<S, T, Deque<S, T>>>>>,
+pub struct Deque<S: AsyncSigner, K: ShareSecretStore, T: ContentRef = [u8; 32]>(
+    #[allow(clippy::type_complexity)] pub Rc<RefCell<VecDeque<Event<S, K, T, Deque<S, K, T>>>>>,
 );
 
-impl<S: AsyncSigner, T: ContentRef> Deque<S, T> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef> Deque<S, K, T> {
     pub fn new() -> Self {
         Self(Rc::new(RefCell::new(VecDeque::new())))
     }
 
-    pub fn push(&self, event: Event<S, T, Self>) {
+    pub fn push(&self, event: Event<S, K, T, Self>) {
         let rc = self.0.dupe();
         let mut deq = (*rc).borrow_mut();
         deq.push_back(event)
     }
 
-    pub fn pop_latest(&self) -> Option<Event<S, T, Self>> {
+    pub fn pop_latest(&self) -> Option<Event<S, K, T, Self>> {
         let rc = self.0.dupe();
         let mut deq = (*rc).borrow_mut();
         deq.pop_front()
     }
 
-    pub fn pop_earliest(&self) -> Option<Event<S, T, Self>> {
+    pub fn pop_earliest(&self) -> Option<Event<S, K, T, Self>> {
         let rc = self.0.dupe();
         let mut deq = (*rc).borrow_mut();
         deq.pop_back()
@@ -58,28 +58,28 @@ impl<S: AsyncSigner, T: ContentRef> Deque<S, T> {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Clone for Deque<S, T> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef> Clone for Deque<S, K, T> {
     fn clone(&self) -> Self {
         Self(self.0.dupe())
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Dupe for Deque<S, T> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef> Dupe for Deque<S, K, T> {
     fn dupe(&self) -> Self {
         self.clone()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Hash for Deque<S, T>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef> Hash for Deque<S, K, T>
 where
-    Event<S, T, Deque<S, T>>: Hash,
+    Event<S, K, T, Deque<S, K, T>>: Hash,
 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.borrow().hash(state)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> PrekeyListener for Deque<S, T> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef> PrekeyListener for Deque<S, K, T> {
     #[instrument(skip(self))]
     async fn on_prekeys_expanded(&self, new_prekey: &Rc<Signed<AddKeyOp>>) {
         self.push(Event::PrekeysExpanded(new_prekey.dupe()))
@@ -91,14 +91,16 @@ impl<S: AsyncSigner, T: ContentRef> PrekeyListener for Deque<S, T> {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for Deque<S, T> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef> MembershipListener<S, K, T>
+    for Deque<S, K, T>
+{
     #[instrument(skip(self))]
-    async fn on_delegation(&self, data: &Rc<Signed<Delegation<S, T, Self>>>) {
+    async fn on_delegation(&self, data: &Rc<Signed<Delegation<S, K, T, Self>>>) {
         self.push(Event::Delegated(data.dupe()))
     }
 
     #[instrument(skip(self))]
-    async fn on_revocation(&self, data: &Rc<Signed<Revocation<S, T, Self>>>) {
+    async fn on_revocation(&self, data: &Rc<Signed<Revocation<S, K, T, Self>>>) {
         self.push(Event::Revoked(data.dupe()))
     }
 }

@@ -7,7 +7,7 @@ use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{
-        digest::Digest, encrypted::EncryptedContent, signed::Signed,
+        digest::Digest, encrypted::EncryptedContent, share_key::ShareSecretStore, signed::Signed,
         signer::async_signer::AsyncSigner,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
@@ -31,7 +31,12 @@ use tracing::instrument;
 /// Top-level event variants.
 #[derive(PartialEq, Eq, From, TryInto)]
 #[derive_where(Debug, Hash; T)]
-pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
+pub enum Event<
+    S: AsyncSigner,
+    K: ShareSecretStore,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<S, K, T> = NoListener,
+> {
     /// Prekeys were expanded.
     PrekeysExpanded(Rc<Signed<AddKeyOp>>),
 
@@ -42,17 +47,19 @@ pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S
     CgkaOperation(Rc<Signed<CgkaOperation>>),
 
     /// A delegation was created.
-    Delegated(Rc<Signed<Delegation<S, T, L>>>),
+    Delegated(Rc<Signed<Delegation<S, K, T, L>>>),
 
     /// A delegation was revoked.
-    Revoked(Rc<Signed<Revocation<S, T, L>>>),
+    Revoked(Rc<Signed<Revocation<S, K, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    Event<S, K, T, L>
+{
     #[allow(clippy::type_complexity)]
     #[instrument(level = "debug", skip(ciphertext_store))]
     pub async fn now_decryptable<P, C: CiphertextStore<T, P>>(
-        new_events: &[Event<S, T, L>],
+        new_events: &[Event<S, K, T, L>],
         ciphertext_store: &C,
     ) -> Result<HashMap<DocumentId, Vec<Rc<EncryptedContent<P, T>>>>, C::GetCiphertextError> {
         let mut acc: HashMap<DocumentId, Vec<Rc<EncryptedContent<P, T>>>> = HashMap::new();
@@ -73,7 +80,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<KeyOp> for Event<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> From<KeyOp>
+    for Event<S, K, T, L>
+{
     fn from(key_op: KeyOp) -> Self {
         match key_op {
             KeyOp::Add(add) => Event::PrekeysExpanded(add),
@@ -82,10 +91,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<KeyOp> for
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<MembershipOperation<S, T, L>>
-    for Event<S, T, L>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    From<MembershipOperation<S, K, T, L>> for Event<S, K, T, L>
 {
-    fn from(op: MembershipOperation<S, T, L>) -> Self {
+    fn from(op: MembershipOperation<S, K, T, L>) -> Self {
         match op {
             MembershipOperation::Delegation(d) => Event::Delegated(d),
             MembershipOperation::Revocation(r) => Event::Revoked(r),
@@ -93,10 +102,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Membership
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Event<S, T, L>>
-    for StaticEvent<T>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    From<Event<S, K, T, L>> for StaticEvent<T>
 {
-    fn from(op: Event<S, T, L>) -> Self {
+    fn from(op: Event<S, K, T, L>) -> Self {
         match op {
             Event::Delegated(d) => StaticEvent::Delegated(Rc::unwrap_or_clone(d).map(Into::into)),
             Event::Revoked(r) => StaticEvent::Revoked(Rc::unwrap_or_clone(r).map(Into::into)),
@@ -115,13 +124,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Event<S, T
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for Event<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Serialize
+    for Event<S, K, T, L>
+{
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticEvent::from(self.clone()).serialize(serializer)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Event<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Clone
+    for Event<S, K, T, L>
+{
     fn clone(&self) -> Self {
         match self {
             Event::Delegated(d) => Event::Delegated(Rc::clone(d)),
@@ -135,7 +148,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Event
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for Event<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Dupe
+    for Event<S, K, T, L>
+{
     fn dupe(&self) -> Self {
         self.clone()
     }

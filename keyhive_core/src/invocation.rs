@@ -1,6 +1,6 @@
 use crate::{
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner, share_key::ShareSecretStore},
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::group::delegation::{Delegation, StaticDelegation},
 };
@@ -12,16 +12,17 @@ use std::rc::Rc;
 #[derive_where(Clone; T)]
 pub struct Invocation<
     S: AsyncSigner,
+    K: ShareSecretStore,
     C: ContentRef = [u8; 32],
-    L: MembershipListener<S, C> = NoListener,
+    L: MembershipListener<S, K, C> = NoListener,
     T: Clone = C,
 > {
     pub(crate) invoke: T,
-    pub(crate) proof: Option<Rc<Signed<Delegation<S, C, L>>>>,
+    pub(crate) proof: Option<Rc<Signed<Delegation<S, K, C, L>>>>,
 }
 
-impl<S: AsyncSigner, C: ContentRef, L: MembershipListener<S, C>, T: Clone + Serialize> Serialize
-    for Invocation<S, C, L, T>
+impl<S: AsyncSigner, K: ShareSecretStore, C: ContentRef, L: MembershipListener<S, K, C>, T: Clone + Serialize> Serialize
+    for Invocation<S, K, C, L, T>
 {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticInvocation::from(self.clone()).serialize(serializer)
@@ -34,10 +35,10 @@ pub struct StaticInvocation<C: ContentRef, T: Clone> {
     pub(crate) proof: Option<Digest<Signed<StaticDelegation<C>>>>,
 }
 
-impl<S: AsyncSigner, C: ContentRef, L: MembershipListener<S, C>, T: Clone>
-    From<Invocation<S, C, L, T>> for StaticInvocation<C, T>
+impl<S: AsyncSigner, K: ShareSecretStore, C: ContentRef, L: MembershipListener<S, K, C>, T: Clone>
+    From<Invocation<S, K, C, L, T>> for StaticInvocation<C, T>
 {
-    fn from(invocation: Invocation<S, C, L, T>) -> Self {
+    fn from(invocation: Invocation<S, K, C, L, T>) -> Self {
         let invoke = invocation.invoke;
         let proof = invocation
             .proof
