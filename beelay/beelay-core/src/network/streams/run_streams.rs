@@ -289,6 +289,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> StreamToRun<R> {
                                     let fut = async move {
                                         let resp = crate::request_handlers::handle_request(
                                             req_ctx,
+                                            Some(stream_id),
                                             *msg,
                                             None,
                                         ).await;

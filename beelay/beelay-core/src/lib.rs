@@ -88,7 +88,7 @@ mod stopper;
 mod sync;
 pub use keyhive_core::contact_card::ContactCard;
 
-pub const SYNC_INTERVAL: Duration = Duration::from_secs(60);
+pub const SYNC_INTERVAL: Duration = Duration::from_secs(10);
 
 /// The main entrypoint for this library
 ///

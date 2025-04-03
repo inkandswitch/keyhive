@@ -40,6 +40,7 @@ pub(super) fn parse_request(
             let (input, req) = super::session::SessionRequest::parse(input)?;
             Ok((input, super::Request::Session(req)))
         }
+        RequestType::SyncNeeded => Ok((input, super::Request::SyncNeeded)),
         RequestType::UploadMembershipOps => input.parse_in_ctx("UploadMembershipOps", |input| {
             let (input, ops) = Vec::<StaticEvent<CommitHash>>::parse(input)?;
             Ok((input, super::Request::UploadMembershipOps { ops }))
@@ -82,6 +83,7 @@ pub(crate) fn parse_response(
             let (input, resp) = super::session::SessionResponse::parse(input)?;
             Ok((input, super::Response::Session(resp)))
         }
+        ResponseType::SyncNeeded => Ok((input, super::Response::SyncNeeded)),
         ResponseType::UploadMembershipOps => Ok((input, super::Response::UploadMembershipOps)),
         ResponseType::UploadCgkaOps => Ok((input, super::Response::UploadCgkaOps)),
         ResponseType::UploadBlob => Ok((input, super::Response::UploadBlob)),

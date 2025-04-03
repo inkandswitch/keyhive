@@ -1,11 +1,14 @@
 use crate::{
     auth,
     blob::BlobMeta,
-    network::messages::{self, FetchedSedimentree, TreePart, UploadItem},
+    network::{
+        messages::{self, FetchedSedimentree, TreePart, UploadItem},
+        PeerAddress,
+    },
     sedimentree::{self},
     state::DocUpdateBuilder,
     Audience, Commit, CommitBundle, CommitOrBundle, DocumentId, OutgoingResponse, PeerId, Response,
-    StorageKey, TaskContext,
+    StorageKey, StreamId, TaskContext,
 };
 
 mod sync;
@@ -17,6 +20,7 @@ pub struct AuthenticationFailed;
 #[tracing::instrument(skip(ctx, request, receive_audience), fields(from_peer))]
 pub(super) async fn handle_request<R>(
     ctx: TaskContext<R>,
+    source: Option<StreamId>,
     request: auth::Signed<auth::Message>,
     receive_audience: Option<String>,
 ) -> Result<OutgoingResponse, AuthenticationFailed>
@@ -88,6 +92,12 @@ where
             Response::Pong
         }
         messages::Request::Session(req) => sync::handle_sync_request(ctx, req, from).await,
+        messages::Request::SyncNeeded => {
+            if let Some(stream_id) = source {
+                ctx.state().streams().mark_received_sync_needed(stream_id);
+            }
+            Response::SyncNeeded
+        }
         messages::Request::UploadMembershipOps { ops } => {
             tracing::debug!("upload membership ops request");
 

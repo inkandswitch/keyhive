@@ -58,6 +58,20 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Streams<'a, R> {
             .mark_sync_complete(now, stream_id);
     }
 
+    pub(crate) fn mark_received_sync_needed(&mut self, stream_id: StreamId) {
+        self.state
+            .borrow_mut()
+            .streams
+            .mark_received_sync_needed(stream_id);
+    }
+
+    pub(crate) fn clear_received_sync_needed(&mut self, stream_id: StreamId) {
+        self.state
+            .borrow_mut()
+            .streams
+            .clear_received_sync_needed(stream_id);
+    }
+
     pub(crate) fn take_changed(&mut self) -> Vec<ConnectionInfo> {
         self.state.borrow_mut().streams.take_changed()
     }

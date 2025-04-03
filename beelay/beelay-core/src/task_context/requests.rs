@@ -149,6 +149,21 @@ where
         }
     }
 
+    pub(crate) fn sync_needed(
+        &self,
+        to_peer: PeerAddress,
+    ) -> impl Future<Output = Result<(), RpcError>> + 'static {
+        let request = crate::Request::SyncNeeded;
+        let task = self.request(to_peer, request);
+        async move {
+            let response = task.await?;
+            match response.content {
+                NonErrorPayload::SyncNeeded => Ok(()),
+                _ => Err(RpcError::IncorrectResponseType),
+            }
+        }
+    }
+
     pub(crate) fn sessions<'b>(&'b self) -> Sessions<'b, R> {
         Sessions::new(self)
     }
@@ -264,6 +279,7 @@ enum NonErrorPayload {
     FetchBlob(Option<Vec<u8>>),
     Pong,
     Session(session::SessionResponse),
+    SyncNeeded,
     UploadMembershipOps,
     UploadCgkaOps,
 }
@@ -284,6 +300,7 @@ impl TryFrom<Response> for NonErrorPayload {
             Response::AuthenticationFailed => Err(RpcError::AuthenticatedFailed),
             Response::AuthorizationFailed => Err(RpcError::AuthorizationFailed),
             Response::Session(resp) => Ok(NonErrorPayload::Session(resp)),
+            Response::SyncNeeded => Ok(NonErrorPayload::SyncNeeded),
             Response::UploadMembershipOps => Ok(NonErrorPayload::UploadMembershipOps),
             Response::UploadCgkaOps => Ok(NonErrorPayload::UploadCgkaOps),
         }

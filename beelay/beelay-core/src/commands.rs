@@ -83,9 +83,13 @@ where
             request,
             receive_audience,
         } => {
-            let result =
-                crate::request_handlers::handle_request(ctx.clone(), request, receive_audience)
-                    .await;
+            let result = crate::request_handlers::handle_request(
+                ctx.clone(),
+                None,
+                request,
+                receive_audience,
+            )
+            .await;
             let response = match result {
                 Ok(r) => InnerRpcResponse::Response(Box::new(
                     ctx.state()

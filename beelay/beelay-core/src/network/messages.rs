@@ -25,6 +25,7 @@ pub(crate) enum Response {
     AuthenticationFailed,
     AuthorizationFailed,
     Session(session::SessionResponse),
+    SyncNeeded,
     UploadMembershipOps,
     UploadCgkaOps,
 }
@@ -58,6 +59,7 @@ impl std::fmt::Display for Response {
                 write!(f, ")")
             }
             Response::Session(response) => write!(f, "Session({:?})", response),
+            Response::SyncNeeded => write!(f, "SyncNeeded"),
             Response::Pong => write!(f, "Pong"),
             Response::AuthenticationFailed => write!(f, "AuthenticationFailed"),
             Response::AuthorizationFailed => write!(f, "AuthorizationFailed"),
@@ -121,6 +123,7 @@ pub(crate) enum Request {
     },
     Ping,
     Session(session::SessionRequest),
+    SyncNeeded,
     UploadMembershipOps {
         ops: Vec<StaticEvent<CommitHash>>,
     },
@@ -159,6 +162,7 @@ impl std::fmt::Display for Request {
             Request::FetchBlob { doc_id, blob } => write!(f, "FetchBlob({}, {})", doc_id, blob),
             Request::Ping => write!(f, "Ping"),
             Request::Session(session) => write!(f, "Session({})", session),
+            Request::SyncNeeded => write!(f, "SyncNeeded"),
             Request::UploadMembershipOps { ops } => {
                 write!(f, "UploadMembershipOps({} ops)", ops.len())
             }

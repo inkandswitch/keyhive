@@ -39,6 +39,9 @@ pub(super) fn encode_request(buf: &mut Vec<u8>, req: &Request) {
             buf.push(RequestType::Session.into());
             session_req.encode_into(buf);
         }
+        Request::SyncNeeded => {
+            buf.push(RequestType::SyncNeeded.into());
+        }
         Request::UploadMembershipOps { ops } => {
             buf.push(RequestType::UploadMembershipOps.into());
             ops.encode_into(buf);
@@ -88,6 +91,7 @@ pub(crate) fn encode_response(buf: &mut Vec<u8>, resp: &Response) {
             buf.push(ResponseType::Session.into());
             session_resp.encode_into(buf);
         }
+        Response::SyncNeeded => buf.push(ResponseType::SyncNeeded.into()),
         Response::UploadMembershipOps => {
             buf.push(ResponseType::UploadMembershipOps.into());
         }

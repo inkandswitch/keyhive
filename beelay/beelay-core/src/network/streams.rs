@@ -64,6 +64,7 @@ pub(crate) struct Streams {
 
 struct StreamMeta {
     handshake: Option<CompletedHandshake>,
+    received_sync_needed: bool,
     sync_phase: SyncPhase,
 }
 
@@ -72,6 +73,7 @@ pub(crate) struct EstablishedStream {
     pub(crate) their_peer_id: PeerId,
     pub(crate) direction: ResolvedDirection,
     pub(crate) sync_phase: SyncPhase,
+    pub(crate) received_sync_needed: bool,
 }
 
 impl Streams {
@@ -89,6 +91,7 @@ impl Streams {
             stream_id,
             StreamMeta {
                 handshake: None,
+                received_sync_needed: false,
                 sync_phase: SyncPhase::Listening {
                     last_synced_at: None,
                 },
@@ -105,6 +108,7 @@ impl Streams {
                 their_peer_id: hs.their_peer_id,
                 direction: hs.resolved_direction,
                 sync_phase: meta.sync_phase,
+                received_sync_needed: meta.received_sync_needed,
             })
         })
     }
@@ -150,6 +154,30 @@ impl Streams {
             tracing::warn!(
                 ?stream_id,
                 "attempted to mark nonexistent stream as sync complete"
+            );
+        }
+    }
+
+    pub(crate) fn mark_received_sync_needed(&mut self, stream_id: StreamId) {
+        if let Some(meta) = self.streams.get_mut(&stream_id) {
+            self.modified.insert(stream_id);
+            meta.received_sync_needed = true;
+        } else {
+            tracing::warn!(
+                ?stream_id,
+                "attempted to mark nonexistent stream as received sync needed"
+            );
+        }
+    }
+
+    pub(crate) fn clear_received_sync_needed(&mut self, stream_id: StreamId) {
+        if let Some(meta) = self.streams.get_mut(&stream_id) {
+            self.modified.insert(stream_id);
+            meta.received_sync_needed = false;
+        } else {
+            tracing::warn!(
+                ?stream_id,
+                "attempted to clear received sync needed for nonexistent stream"
             );
         }
     }
