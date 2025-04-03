@@ -11,6 +11,7 @@ pub(super) enum RequestType {
     UploadMembershipOps,
     UploadCgkaOps,
     Session,
+    SyncNeeded,
 }
 
 impl RequestType {
@@ -39,6 +40,7 @@ impl TryFrom<u8> for RequestType {
             18 => Ok(Self::UploadMembershipOps),
             21 => Ok(Self::UploadCgkaOps),
             24 => Ok(Self::Session),
+            25 => Ok(Self::SyncNeeded),
 
             _ => Err(error::InvalidRequestType(value)),
         }
@@ -56,6 +58,7 @@ impl From<RequestType> for u8 {
             RequestType::UploadMembershipOps => 18,
             RequestType::UploadCgkaOps => 21,
             RequestType::Session => 24,
+            RequestType::SyncNeeded => 25,
         }
     }
 }
@@ -71,6 +74,7 @@ pub(super) enum ResponseType {
     AuthenticationFailed,
     AuthorizationFailed,
     Session,
+    SyncNeeded,
     UploadMembershipOps,
     UploadCgkaOps,
     UploadBlob,
@@ -105,6 +109,7 @@ impl TryFrom<u8> for ResponseType {
             23 => Ok(Self::UploadCgkaOps),
             25 => Ok(Self::UploadBlob),
             27 => Ok(Self::Session),
+            28 => Ok(Self::SyncNeeded),
 
             _ => Err(error::InvalidResponseType(value)),
         }
@@ -125,6 +130,7 @@ impl From<ResponseType> for u8 {
             ResponseType::UploadCgkaOps => 23,
             ResponseType::UploadBlob => 25,
             ResponseType::Session => 27,
+            ResponseType::SyncNeeded => 28,
         }
     }
 }

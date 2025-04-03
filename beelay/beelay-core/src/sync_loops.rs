@@ -2,7 +2,6 @@ use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     future::Future,
     pin::Pin,
-    time::Duration,
 };
 
 use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
@@ -11,7 +10,7 @@ use crate::{
     doc_status::DocEvent,
     network::{messages::UploadItem, RpcError},
     state::keyhive::batch,
-    streams::{CompletedHandshake, EstablishedStream, ResolvedDirection, SyncPhase},
+    streams::{EstablishedStream, ResolvedDirection, SyncPhase},
     CommitOrBundle, DocumentId, PeerId, StreamId, TaskContext, SYNC_INTERVAL,
 };
 
@@ -55,11 +54,26 @@ impl SyncLoops {
             direction,
             id: stream_id,
             sync_phase,
+            received_sync_needed,
         } in established
         {
+            let has_new_doc = doc_changes
+                .keys()
+                .collect::<HashSet<_>>()
+                .difference(&self.doc_versions.keys().collect::<HashSet<_>>())
+                .collect::<Vec<_>>()
+                .len()
+                > 0;
             let should_start_sync = {
                 if direction == ResolvedDirection::Accepting {
                     false
+                } else if has_new_doc {
+                    tracing::trace!(%their_peer_id, "beginning new sync loop as we have new documents");
+                    true
+                } else if received_sync_needed {
+                    tracing::trace!(%their_peer_id, "beginning new sync loop as they have sent us a syncneeded message");
+                    ctx.state().streams().clear_received_sync_needed(stream_id);
+                    true
                 } else {
                     // Start a sync if we haven't synced before, or it's been
                     // more than SYNC_INTERVAL since the last sync
@@ -74,6 +88,12 @@ impl SyncLoops {
                     }
                 }
             };
+
+            if has_new_doc && direction == ResolvedDirection::Accepting {
+                tracing::trace!(%their_peer_id, "sending them a syncneeded message as we are the acceptor and have new docs");
+                self.running_uploads
+                    .push(ctx.requests().sync_needed(stream_id.into()).boxed_local());
+            }
 
             if should_start_sync {
                 tracing::trace!(?stream_id, ?their_peer_id, "starting sync loop for stream");

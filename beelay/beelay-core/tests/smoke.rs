@@ -264,6 +264,52 @@ fn sync_loops_are_rerun() {
 }
 
 #[test]
+fn newly_created_documents_are_synced__alice_to_bob() {
+    init_logging();
+    let mut network = Network::new();
+    let alice = network.create_peer("alice").build();
+    let bob = network.create_peer("bob").build();
+
+    // Connect alice to bob
+    network.connect_stream(&alice, &bob);
+
+    // Create a document on alice
+    let (doc, initial_commit) = network
+        .beelay(&alice)
+        .create_doc(vec![Public.into()])
+        .unwrap();
+
+    network.run_until_quiescent();
+
+    // Check that the document has been synced to bob
+    let commits = network.beelay(&bob).load_doc(doc).unwrap();
+    assert_eq!(commits, vec![CommitOrBundle::Commit(initial_commit)]);
+}
+
+#[test]
+fn newly_created_documents_are_synced__bob_to_alice() {
+    init_logging();
+    let mut network = Network::new();
+    let alice = network.create_peer("alice").build();
+    let bob = network.create_peer("bob").build();
+
+    // Connect alice to bob
+    network.connect_stream(&bob, &alice);
+
+    // Create a document on alice
+    let (doc, initial_commit) = network
+        .beelay(&alice)
+        .create_doc(vec![Public.into()])
+        .unwrap();
+
+    network.run_until_quiescent();
+
+    // Check that the document has been synced to bob
+    let commits = network.beelay(&bob).load_doc(doc).unwrap();
+    assert_eq!(commits, vec![CommitOrBundle::Commit(initial_commit)]);
+}
+
+#[test]
 fn newly_accessible_documents_are_synced() {
     init_logging();
     let mut network = Network::new();
