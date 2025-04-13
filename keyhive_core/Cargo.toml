@@ -53,7 +53,12 @@ test-utils = { path = "../test-utils" }
 
 arbitrary = { version = "1.4.1", features = ["derive"] }
 lazy_static = "1.5"
-tokio = { version = "1.43", features = ["macros", "rt", "sync", "rt-multi-thread"] }
+tokio = { version = "1.43", features = [
+    "macros",
+    "rt",
+    "sync",
+    "rt-multi-thread",
+] }
 tokio-test = "0.4.4"
 
 # Benchmarks
@@ -70,7 +75,8 @@ default = []
 debug_events = ["prettytable-rs"]
 mermaid_docs = ["aquamarine"]
 sendable = []
-test_utils = ["proptest", "proptest-derive"]
+test_utils = ["proptest", "proptest-derive", "ingest_static"]
+ingest_static = []
 
 [[bench]]
 name = "bench_cgka"
