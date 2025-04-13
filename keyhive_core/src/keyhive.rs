@@ -1418,7 +1418,7 @@ impl<
         })
     }
 
-    #[cfg(any(test, feature = "test_utils"))]
+    #[cfg(any(test, feature = "ingest_static"))]
     #[instrument(level = "trace", skip_all, fields(khid = %self.id()))]
     pub async fn ingest_archive(
         &mut self,
@@ -1456,7 +1456,7 @@ impl<
         &self.event_listener
     }
 
-    #[cfg(any(test, feature = "test_utils"))]
+    #[cfg(any(test, feature = "ingest_static"))]
     #[instrument(level = "trace", skip_all, fields(khid = %self.id()))]
     pub async fn ingest_unsorted_static_events(
         &mut self,

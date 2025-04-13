@@ -16,7 +16,7 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 keyhive_core = { path = "../../keyhive_core", features = [
-    "test_utils",
+    "ingest_static",
 ] } # TODO: get rid of test_utils
 bincode = "1.3"
 
