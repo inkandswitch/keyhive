@@ -344,7 +344,7 @@ impl<
     }
 
     #[instrument(skip_all, fields(khid = %self.id()))]
-    pub fn register_group(&mut self, root_delegation: Signed<Delegation<S, T, L>>) -> bool {
+    pub async fn register_group(&mut self, root_delegation: Signed<Delegation<S, T, L>>) -> bool {
         if self
             .groups
             .contains_key(&GroupId(root_delegation.subject_id()))
@@ -352,13 +352,16 @@ impl<
             return false;
         }
 
-        let group = Rc::new(RefCell::new(Group::new(
-            GroupId(root_delegation.issuer.into()),
-            Rc::new(root_delegation),
-            self.delegations.dupe(),
-            self.revocations.dupe(),
-            self.event_listener.clone(),
-        )));
+        let group = Rc::new(RefCell::new(
+            Group::new(
+                GroupId(root_delegation.issuer.into()),
+                Rc::new(root_delegation),
+                self.delegations.dupe(),
+                self.revocations.dupe(),
+                self.event_listener.clone(),
+            )
+            .await,
+        ));
 
         self.groups.insert(group.borrow().group_id(), group.dupe());
         true
@@ -922,11 +925,12 @@ impl<
         } else {
             let group = Group::new(
                 GroupId(subject_id),
-                delegation.clone(),
+                delegation.dupe(),
                 self.delegations.dupe(),
                 self.revocations.dupe(),
                 self.event_listener.clone(),
-            );
+            )
+            .await;
 
             if let Some(content_heads) = static_dlg
                 .payload
@@ -942,7 +946,8 @@ impl<
             }
         };
 
-        self.event_listener.on_delegation(&delegation).await;
+        // FIXME remove because this is way too high in the stack
+        // self.event_listener.on_delegation(&delegation).await;
 
         Ok(())
     }
@@ -991,27 +996,41 @@ impl<
         let id = revocation.subject_id();
         let revocation = Rc::new(revocation);
         if let Some(group) = self.groups.get(&GroupId(id)) {
-            group.borrow_mut().receive_revocation(revocation.clone())?;
+            group
+                .borrow_mut()
+                .receive_revocation(revocation.clone())
+                .await?;
         } else if let Some(doc) = self.docs.get(&DocumentId(id)) {
-            doc.borrow_mut().receive_revocation(revocation.clone())?;
+            doc.borrow_mut()
+                .receive_revocation(revocation.clone())
+                .await;
         } else if let Some(indie) = self.individuals.remove(&IndividualId(id)) {
-            let group = self.promote_individual_to_group(indie, revocation.payload.revoke.dupe());
-            group.borrow_mut().receive_revocation(revocation.clone())?;
+            let group = self
+                .promote_individual_to_group(indie, revocation.payload.revoke.dupe())
+                .await;
+            group
+                .borrow_mut()
+                .receive_revocation(revocation.clone())
+                .await?;
         } else {
-            let mut group = Group::new(
-                GroupId(static_rev.issuer.into()),
-                revocation.payload.revoke.dupe(),
-                self.delegations.dupe(),
-                self.revocations.dupe(),
-                self.event_listener.clone(),
-            );
+            let group = Rc::new(RefCell::new(
+                Group::new(
+                    GroupId(static_rev.issuer.into()),
+                    revocation.payload.revoke.dupe(),
+                    self.delegations.dupe(),
+                    self.revocations.dupe(),
+                    self.event_listener.clone(),
+                )
+                .await,
+            ));
 
-            group.receive_revocation(revocation.clone())?;
-            self.groups
-                .insert(group.group_id(), Rc::new(RefCell::new(group)));
+            self.groups.insert(group.borrow().group_id(), group.dupe());
+
+            group
+                .borrow_mut()
+                .receive_revocation(revocation.clone())
+                .await?;
         }
-
-        self.event_listener.on_revocation(&revocation).await;
 
         Ok(())
     }
@@ -1095,18 +1114,21 @@ impl<
             khid = %self.id(),
             indie_id = %individual.borrow().id()
         ))]
-    pub fn promote_individual_to_group(
+    pub async fn promote_individual_to_group(
         &mut self,
         individual: Rc<RefCell<Individual>>,
         head: Rc<Signed<Delegation<S, T, L>>>,
     ) -> Rc<RefCell<Group<S, T, L>>> {
-        let group = Rc::new(RefCell::new(Group::from_individual(
-            individual.borrow().clone(),
-            head,
-            self.delegations.dupe(),
-            self.revocations.dupe(),
-            self.event_listener.clone(),
-        )));
+        let group = Rc::new(RefCell::new(
+            Group::from_individual(
+                individual.borrow().clone(),
+                head,
+                self.delegations.dupe(),
+                self.revocations.dupe(),
+                self.event_listener.clone(),
+            )
+            .await,
+        ));
 
         let agent = Agent::from(group.dupe());
 

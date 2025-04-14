@@ -355,11 +355,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.group.receive_delegation(delegation)
     }
 
-    pub fn receive_revocation(
+    pub async fn receive_revocation(
         &mut self,
         revocation: Rc<Signed<Revocation<S, T, L>>>,
     ) -> Result<Digest<Signed<Revocation<S, T, L>>>, AddError> {
-        self.group.receive_revocation(revocation)
+        self.group.receive_revocation(revocation).await
     }
 
     pub fn merge_cgka_op(&mut self, op: Rc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
