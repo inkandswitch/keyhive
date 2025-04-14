@@ -11,7 +11,7 @@ use super::{
 use crate::{
     content::reference::ContentRef,
     crypto::{share_key::ShareKey, signer::async_signer::AsyncSigner, verifiable::Verifiable},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{cgka::CgkaListener, membership::MembershipListener, no_listener::NoListener},
 };
 use derivative::Derivative;
 use derive_more::{From, TryInto};

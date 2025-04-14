@@ -3,9 +3,10 @@ use crate::{
     transact::{fork::Fork, merge::Merge},
 };
 use derive_where::derive_where;
+use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     rc::Rc,
 };
 
@@ -121,10 +122,17 @@ impl<T: Serialize> Fork for CaMap<T> {
 }
 
 impl<T: Serialize> Merge for CaMap<T> {
-    fn merge(&mut self, other: Self) {
+    type MergeMetadata = Vec<Rc<T>>;
+
+    fn merge(&mut self, other: Self) -> Self::MergeMetadata {
+        let mut diff = vec![];
         for (k, v) in other.0 {
-            self.0.entry(k).or_insert(v);
+            if !self.0.contains_key(&k) {
+                diff.push(v.dupe());
+                self.insert(v);
+            }
         }
+        diff
     }
 }
 

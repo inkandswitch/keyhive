@@ -139,12 +139,12 @@ pub async fn transact_nonblocking<
 >(
     trunk: &T,
     mut tx: F,
-) -> Result<(), Error> {
+) -> Result<T::MergeMetadata, Error> {
     let diverged = info_span!("nonblocking_transaction")
         .in_scope(|| async { tx(trunk.fork()).await })
         .await?;
-    trunk.clone().merge(diverged);
-    Ok(())
+    let meta = trunk.clone().merge(diverged);
+    Ok(meta)
 }
 
 /// A variant of [`transact_nonblocking`] that works when the merge logic is asynchronous.

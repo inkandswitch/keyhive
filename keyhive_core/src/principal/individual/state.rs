@@ -1,6 +1,7 @@
 use super::op::{add_key::AddKeyOp, KeyOp};
 use crate::{
     crypto::{
+        digest::Digest,
         share_key::{ShareKey, ShareSecretKey},
         signed::{SigningError, VerificationError},
         signer::async_signer::AsyncSigner,
@@ -153,7 +154,9 @@ impl Fork for PrekeyState {
 }
 
 impl Merge for PrekeyState {
-    fn merge(&mut self, fork: Self::Forked) {
+    type MergeMetadata = Vec<Rc<KeyOp>>;
+
+    fn merge(&mut self, fork: Self::Forked) -> Self::MergeMetadata {
         self.ops.merge(fork.ops)
     }
 }

@@ -73,7 +73,7 @@ pub struct Document<
     cgka: Option<Cgka>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + CgkaListener> Document<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, L> {
     // FIXME: We need a signing key for initializing Cgka and we need to share
     // the init add op.
     // NOTE doesn't register into the top-level Keyhive context

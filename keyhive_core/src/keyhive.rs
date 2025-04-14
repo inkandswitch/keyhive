@@ -65,7 +65,6 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     fmt::{Debug, Formatter},
-    future::Future,
     marker::PhantomData,
     rc::Rc,
 };
@@ -80,7 +79,7 @@ pub struct Keyhive<
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
     C: CiphertextStore<T, P> = MemoryCiphertextStore<T, P>,
-    L: MembershipListener<S, T> + CgkaListener = NoListener,
+    L: MembershipListener<S, T> = NoListener,
     R: rand::CryptoRng = rand::rngs::ThreadRng,
 > {
     /// The [`Active`] user agent.
@@ -120,7 +119,7 @@ impl<
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Keyhive<S, T, P, C, L, R>
 {
@@ -1522,7 +1521,7 @@ impl<
         T: ContentRef + Debug,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Debug for Keyhive<S, T, P, C, L, R>
 {
@@ -1545,7 +1544,7 @@ impl<
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone, // FIXME make the default Rc<RefCell<...>>
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > Fork for Keyhive<S, T, P, C, L, R>
 {
@@ -1568,44 +1567,46 @@ impl<
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > MergeAsync for Keyhive<S, T, P, C, L, R>
+    > Merge for Keyhive<S, T, P, C, L, R>
 {
-    fn merge_async(&mut self, mut fork: Self::AsyncForked) -> impl Future<Output = ()> + Send {
-        async move {
-            self.active
-                .borrow_mut()
-                .merge(Rc::unwrap_or_clone(fork.active).into_inner());
+    type MergeMetadata = Log<S, T>;
 
-            for (id, forked_indie) in fork.individuals.drain() {
-                if let Some(og_indie) = self.individuals.get(&id) {
-                    og_indie
-                        .borrow_mut()
-                        .merge(Rc::unwrap_or_clone(forked_indie).into_inner());
-                } else {
-                    self.individuals.insert(id, forked_indie);
-                }
+    fn merge(&mut self, mut fork: Self::Forked) -> Self::MergeMetadata {
+        self.active
+            .borrow_mut()
+            .merge(Rc::unwrap_or_clone(fork.active).into_inner());
+
+        for (id, forked_indie) in fork.individuals.drain() {
+            if let Some(og_indie) = self.individuals.get(&id) {
+                og_indie
+                    .borrow_mut()
+                    .merge(Rc::unwrap_or_clone(forked_indie).into_inner());
+            } else {
+                self.individuals.insert(id, forked_indie);
             }
-
-            for event in fork.event_listener.0.borrow().iter() {
-                match event {
-                    Event::PrekeysExpanded(_add_op) => {
-                        continue; // NOTE: handled above
-                    }
-                    Event::PrekeyRotated(_rot_op) => {
-                        continue; // NOTE: handled above
-                    }
-                    _ => {}
-                }
-
-                self.receive_static_event(event.clone().into())
-                    .await
-                    .expect("prechecked events to work");
-            }
-
-            // FIXME ^^^^^^^^^^^ skip checks to speed up; this is all trusted data
         }
+
+        fork.event_listener.clone()
+
+        // for event in fork.event_listener.0.borrow().iter() {
+        //     match event {
+        //         Event::PrekeysExpanded(_add_op) => {
+        //             continue; // NOTE: handled above
+        //         }
+        //         Event::PrekeyRotated(_rot_op) => {
+        //             continue; // NOTE: handled above
+        //         }
+        //         _ => {}
+        //     }
+
+        //     self.receive_static_event(event.clone().into())
+        //         .await
+        //         .expect("prechecked events to work");
+        // }
+
+        // FIXME ^^^^^^^^^^^ skip checks to speed up; this is all trusted data
     }
 }
 
@@ -1614,7 +1615,7 @@ impl<
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Verifiable for Keyhive<S, T, P, C, L, R>
 {
@@ -1628,7 +1629,7 @@ impl<
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > From<&Keyhive<S, T, P, C, L, R>> for Agent<S, T, L>
 {
@@ -1795,7 +1796,7 @@ mod tests {
     use super::*;
     use crate::{
         access::Access, crypto::signer::memory::MemorySigner, principal::public::Public,
-        transact::transact_async,
+        transact::transact_nonblocking,
     };
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
@@ -2146,7 +2147,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_async_transaction() -> TestResult {
+    async fn test_nonblocking_transaction() -> TestResult {
         test_utils::init_logging();
 
         let sk = MemorySigner::generate(&mut rand::thread_rng());
@@ -2180,8 +2181,8 @@ mod tests {
         assert_eq!(trunk.groups.len(), 1);
         assert_eq!(trunk.docs.len(), 1);
 
-        let tx = transact_async(
-            &mut trunk,
+        let tx = transact_nonblocking(
+            &trunk,
             |mut fork: Keyhive<_, _, _, _, Log<_, [u8; 32]>, _>| async move {
                 // Depending on when the async runs
                 let init_dlg_count = fork.delegations.borrow().len();
@@ -2259,6 +2260,7 @@ mod tests {
         assert!(trunk.docs.len() >= 1);
         assert!(trunk.docs.len() <= 3);
 
+        // FIXME add transact right on Keyhive taht aslo dispatches new events
         let result = tx;
         assert!(result.is_ok());
 
