@@ -223,7 +223,7 @@ impl<
             }
         }
 
-        let (new_doc, ops) = Document::generate(
+        let new_doc = Document::generate(
             NonEmpty {
                 head: self.active.dupe().into(),
                 tail: coparents.into_iter().map(Into::into).collect(),
@@ -236,9 +236,6 @@ impl<
             &mut self.csprng,
         )
         .await?;
-        for op in ops {
-            self.event_listener.on_cgka_op(&Rc::new(op)).await;
-        }
 
         for head in new_doc.delegation_heads().values() {
             self.delegations.insert(head.dupe());
@@ -1097,10 +1094,6 @@ impl<
                 doc.merge_cgka_invite_op(signed_op.clone(), &sk)?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
-            } else if Public.individual().id() == added_id {
-                let sk = Public.share_secret_key();
-                doc.merge_cgka_invite_op(signed_op, &sk)?;
-                return Ok(());
             }
         }
         doc.merge_cgka_op(signed_op.clone())?;
@@ -1579,7 +1572,7 @@ impl<
         R: rand::CryptoRng + rand::RngCore + Clone,
     > MergeAsync for Keyhive<S, T, P, C, L, R>
 {
-    fn merge_async(&mut self, mut fork: Self::AsyncForked) -> impl Future<Output = ()> {
+    fn merge_async(&mut self, mut fork: Self::AsyncForked) -> impl Future<Output = ()> + Send {
         async move {
             self.active
                 .borrow_mut()

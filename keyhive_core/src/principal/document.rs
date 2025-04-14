@@ -23,7 +23,7 @@ use crate::{
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::{cgka::CgkaListener, membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
@@ -73,7 +73,7 @@ pub struct Document<
     cgka: Option<Cgka>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T> + CgkaListener> Document<S, T, L> {
     // FIXME: We need a signing key for initializing Cgka and we need to share
     // the init add op.
     // NOTE doesn't register into the top-level Keyhive context
@@ -156,7 +156,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         listener: L,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(Self, Vec<Signed<CgkaOperation>>), GenerateDocError> {
+    ) -> Result<Self, GenerateDocError> {
         let (group_result, group_vk) = EphemeralSigner::with_signer(csprng, |verifier, signer| {
             Group::generate_after_content(
                 signer,
@@ -190,32 +190,25 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             .with_new_owner(owner_id, owner_sks)?;
         let mut ops: Vec<Signed<CgkaOperation>> = Vec::new();
         ops.push(cgka.init_add_op());
-        if !other_members.is_empty() {
-            ops.extend(
-                cgka.add_multiple(
-                    NonEmpty::from_vec(other_members).expect("there to be multiple other members"),
-                    signer,
-                )
-                .await?
-                .iter()
-                .cloned(),
-            );
+        if let Some(others) = NonEmpty::from_vec(other_members) {
+            ops.extend(cgka.add_multiple(others, signer).await?.iter().cloned());
         }
         let (_pcs_key, update_op) = cgka
             .update(owner_share_key, owner_share_secret_key, signer, csprng)
             .await?;
 
         ops.push(update_op);
-        Ok((
-            Document {
-                group,
-                content_state: HashSet::new(),
-                content_heads: initial_content_heads.iter().cloned().collect(),
-                known_decryption_keys: HashMap::new(),
-                cgka: Some(cgka),
-            },
-            ops,
-        ))
+        for op in ops {
+            group.listener.on_cgka_op(&Rc::new(op)).await;
+        }
+
+        Ok(Document {
+            group,
+            content_state: HashSet::new(),
+            content_heads: initial_content_heads.iter().cloned().collect(),
+            known_decryption_keys: HashMap::new(),
+            cgka: Some(cgka),
+        })
     }
 
     #[instrument(

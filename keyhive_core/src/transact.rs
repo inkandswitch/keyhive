@@ -254,17 +254,17 @@ pub async fn transact_nonblocking<
 /// ```
 #[instrument(skip_all)]
 pub async fn transact_async<
-    T: MergeAsync,
+    T: MergeAsync + Clone,
     Error,
     F: AsyncFnOnce(T::AsyncForked) -> Result<T::AsyncForked, Error>,
 >(
-    trunk: &mut T,
+    trunk: &T,
     tx: F,
 ) -> Result<(), Error> {
     let forked = trunk.fork_async().await;
     let diverged = info_span!("async_transaction")
         .in_scope(|| async { tx(forked).await })
         .await?;
-    trunk.merge_async(diverged).await;
+    trunk.clone().merge_async(diverged).await;
     Ok(())
 }
