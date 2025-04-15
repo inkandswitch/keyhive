@@ -122,17 +122,10 @@ impl<T: Serialize> Fork for CaMap<T> {
 }
 
 impl<T: Serialize> Merge for CaMap<T> {
-    type MergeMetadata = Vec<Rc<T>>;
-
-    fn merge(&mut self, other: Self) -> Self::MergeMetadata {
-        let mut diff = vec![];
+    fn merge(&mut self, other: Self) {
         for (k, v) in other.0 {
-            if !self.0.contains_key(&k) {
-                diff.push(v.dupe());
-                self.insert(v);
-            }
+            self.0.entry(k).or_insert(v);
         }
-        diff
     }
 }
 

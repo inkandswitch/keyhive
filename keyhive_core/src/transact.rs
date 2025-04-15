@@ -9,6 +9,7 @@ pub mod fork;
 pub mod merge;
 
 use self::merge::{Merge, MergeAsync};
+use merge::MergeSend;
 use tracing::{info_span, instrument};
 
 /// A fully blocking transaction.
@@ -132,19 +133,22 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 /// # })
 /// ```
 #[instrument(skip_all)]
-pub async fn transact_nonblocking<
-    T: Merge + Clone,
+pub async fn transact_async<
+    T: MergeAsync + Clone,
     Error,
-    F: AsyncFnMut(T::Forked) -> Result<T::Forked, Error>,
+    F: AsyncFnMut(T::AsyncForked) -> Result<T::AsyncForked, Error>,
 >(
     trunk: &T,
     mut tx: F,
-) -> Result<T::MergeMetadata, Error> {
+) -> Result<(), Error> {
     let diverged = info_span!("nonblocking_transaction")
-        .in_scope(|| async { tx(trunk.fork()).await })
+        .in_scope(|| async {
+            let fork = trunk.fork_async().await;
+            tx(fork).await
+        })
         .await?;
-    let meta = trunk.clone().merge(diverged);
-    Ok(meta)
+    trunk.clone().merge_async(diverged).await;
+    Ok(())
 }
 
 /// A variant of [`transact_nonblocking`] that works when the merge logic is asynchronous.
@@ -253,18 +257,18 @@ pub async fn transact_nonblocking<
 /// })
 /// ```
 #[instrument(skip_all)]
-pub async fn transact_async<
-    T: MergeAsync + Clone,
+pub async fn transact_sendable<
+    T: MergeSend + Clone,
     Error,
-    F: AsyncFnOnce(T::AsyncForked) -> Result<T::AsyncForked, Error>,
+    F: AsyncFnOnce(T::SendableForked) -> Result<T::SendableForked, Error>,
 >(
     trunk: &T,
     tx: F,
 ) -> Result<(), Error> {
-    let forked = trunk.fork_async().await;
+    let forked = trunk.fork_sendable().await;
     let diverged = info_span!("async_transaction")
         .in_scope(|| async { tx(forked).await })
         .await?;
-    trunk.clone().merge_async(diverged).await;
+    trunk.clone().merge_sendable(diverged).await;
     Ok(())
 }

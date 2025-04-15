@@ -171,8 +171,6 @@ impl Fork for Individual {
 }
 
 impl Merge for Individual {
-    type MergeMetadata = ();
-
     fn merge(&mut self, fork: Self::Forked) {
         self.prekey_state.merge(fork.prekey_state);
         self.rebuild()

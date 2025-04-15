@@ -62,8 +62,6 @@ impl Fork for ShareKeyMap {
 }
 
 impl Merge for ShareKeyMap {
-    type MergeMetadata = ();
-
     fn merge(&mut self, fork: Self::Forked) {
         self.0.extend(fork.0.into_iter())
     }

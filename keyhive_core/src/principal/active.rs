@@ -292,8 +292,6 @@ impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Fork for Active<S
 }
 
 impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Merge for Active<S, T, L> {
-    type MergeMetadata = ();
-
     fn merge(&mut self, fork: Self::Forked) {
         self.prekey_pairs.extend(fork.prekey_pairs);
         self.individual.merge(fork.individual);

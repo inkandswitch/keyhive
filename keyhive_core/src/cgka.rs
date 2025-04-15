@@ -581,8 +581,6 @@ impl Fork for Cgka {
 }
 
 impl Merge for Cgka {
-    type MergeMetadata = ();
-
     fn merge(&mut self, fork: Self::Forked) {
         self.owner_sks.merge(fork.owner_sks);
         self.ops_graph.merge(fork.ops_graph);

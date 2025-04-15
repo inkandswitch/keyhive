@@ -36,10 +36,22 @@ pub trait ForkAsync {
     type AsyncForked;
 
     /// Asynchonously fork the data structure.
+    fn fork_async(&self) -> impl Future<Output = Self::AsyncForked>;
+}
+
+/// An async version of [`Fork`].
+pub trait ForkSend {
+    /// The forked variant of the data structure.
+    ///
+    /// This is helpful for situations like wanting a different listener,
+    /// or to unwrap from containers like `Rc<RefCell<T>>`.
+    type SendableForked;
+
+    /// Asynchonously fork the data structure.
     ///
     /// This variant is helpful when forking a type like `tokio::sync::Mutex`,
     /// which requires an `await` to acquire a lock.
-    fn fork_async(&self) -> impl Future<Output = Self::AsyncForked> + Send;
+    fn fork_sendable(&self) -> impl Future<Output = Self::SendableForked> + Send;
 }
 
 impl<T: Hash + Eq + Clone> Fork for HashSet<T> {
@@ -66,7 +78,7 @@ impl<T: Fork> Fork for Rc<RefCell<T>> {
     }
 }
 
-impl<T: Fork<Forked = U> + Send + Sync, U: Send + Sync> ForkAsync for T {
+impl<T: Fork<Forked = U>, U> ForkAsync for T {
     type AsyncForked = T::Forked;
 
     async fn fork_async(&self) -> Self::AsyncForked {

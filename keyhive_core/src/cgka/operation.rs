@@ -133,8 +133,6 @@ impl Fork for CgkaOperationGraph {
 }
 
 impl Merge for CgkaOperationGraph {
-    type MergeMetadata = ();
-
     fn merge(&mut self, fork: Self::Forked) {
         self.cgka_ops.merge(fork.cgka_ops);
         self.cgka_ops_predecessors

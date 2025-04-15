@@ -154,9 +154,7 @@ impl Fork for PrekeyState {
 }
 
 impl Merge for PrekeyState {
-    type MergeMetadata = Vec<Rc<KeyOp>>;
-
-    fn merge(&mut self, fork: Self::Forked) -> Self::MergeMetadata {
+    fn merge(&mut self, fork: Self::Forked) {
         self.ops.merge(fork.ops)
     }
 }
