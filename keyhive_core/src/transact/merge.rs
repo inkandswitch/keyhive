@@ -22,9 +22,6 @@ pub trait Merge: Fork {
 }
 
 /// An asynchronous version of [`Merge`].
-///
-/// This variant is helpful when merging a type like `tokio::sync::Mutex`,
-/// which requires an `await` to acquire a lock.
 pub trait MergeAsync: ForkAsync {
     /// Asynchronously consume the fork and merge it back into the original data structure.
     ///
@@ -35,7 +32,7 @@ pub trait MergeAsync: ForkAsync {
     fn merge_async(&self, fork: Self::AsyncForked) -> impl Future<Output = ()>;
 }
 
-/// An asynchronous version of [`Merge`].
+/// A [`Send`]able version of [`Merge`].
 ///
 /// This variant is helpful when merging a type like `tokio::sync::Mutex`,
 /// which requires an `await` to acquire a lock.
