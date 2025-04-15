@@ -10,6 +10,8 @@ use futures::{
 };
 use keyhive_core::crypto::verifiable::Verifiable;
 
+mod executor;
+
 use crate::{
     commands,
     conn_info::ConnectionInfo,
@@ -38,7 +40,7 @@ pub(crate) struct Driver {
     rx_driver_events: mpsc::UnboundedReceiver<DriverEvent>,
     tx_commands: mpsc::UnboundedSender<(CommandId, Command)>,
     tx_tick: mpsc::Sender<()>,
-    executor: futures::executor::LocalPool,
+    executor: executor::LocalExecutor,
 }
 
 impl Driver {
@@ -60,8 +62,7 @@ impl Driver {
             rx_tick,
         };
         let fut = f(spawn_args);
-        let executor = futures::executor::LocalPool::new();
-        executor.spawner().spawn_local(fut).unwrap();
+        let executor = executor::LocalExecutor::spawn(fut);
         let driver = Self {
             now,
             io_tasks: HashMap::new(),
