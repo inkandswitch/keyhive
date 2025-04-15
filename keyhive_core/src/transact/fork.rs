@@ -78,10 +78,18 @@ impl<T: Fork> Fork for Rc<RefCell<T>> {
     }
 }
 
-impl<T: Fork<Forked = U>, U> ForkAsync for T {
+impl<T: Fork> ForkAsync for T {
     type AsyncForked = T::Forked;
 
     async fn fork_async(&self) -> Self::AsyncForked {
+        self.fork()
+    }
+}
+
+impl<T: Fork<Forked = U> + Send + Sync, U: Send + Sync> ForkSend for T {
+    type SendableForked = T::Forked;
+
+    async fn fork_sendable(&self) -> Self::SendableForked {
         self.fork()
     }
 }

@@ -52,7 +52,6 @@ use crate::{
     transact::{
         fork::Fork,
         merge::{Merge, MergeAsync},
-        transact_async,
     },
 };
 use derivative::Derivative;
@@ -2145,7 +2144,7 @@ mod tests {
         bob.ingest_event_table(events).await.unwrap();
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn test_async_transaction() -> TestResult {
         test_utils::init_logging();
 

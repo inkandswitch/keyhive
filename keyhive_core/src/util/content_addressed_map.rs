@@ -3,10 +3,9 @@ use crate::{
     transact::{fork::Fork, merge::Merge},
 };
 use derive_where::derive_where;
-use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     rc::Rc,
 };
 

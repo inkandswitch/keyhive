@@ -1,7 +1,6 @@
 use super::op::{add_key::AddKeyOp, KeyOp};
 use crate::{
     crypto::{
-        digest::Digest,
         share_key::{ShareKey, ShareSecretKey},
         signed::{SigningError, VerificationError},
         signer::async_signer::AsyncSigner,

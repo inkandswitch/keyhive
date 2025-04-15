@@ -46,7 +46,7 @@ pub trait MergeSend: ForkSend {
     /// but rather via the [`transact_sendable`].
     ///
     /// [`transact_sendable`]: keyhive_core::transact::transact_sendable
-    fn merge_sendable(&mut self, fork: Self::SendableForked) -> impl Future<Output = ()> + Send;
+    fn merge_sendable(&self, fork: Self::SendableForked) -> impl Future<Output = ()> + Send;
 }
 
 impl<T: Hash + Eq + Clone> Merge for HashSet<T> {

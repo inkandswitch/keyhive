@@ -8,7 +8,7 @@ use super::{
 use crate::{
     content::reference::ContentRef,
     crypto::{share_key::ShareKey, signer::async_signer::AsyncSigner},
-    listener::{cgka::CgkaListener, membership::MembershipListener, no_listener::NoListener},
+    listener::{membership::MembershipListener, no_listener::NoListener},
 };
 use derive_more::{From, TryInto};
 use derive_where::derive_where;

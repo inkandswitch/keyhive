@@ -23,7 +23,7 @@ use crate::{
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
-    listener::{cgka::CgkaListener, membership::MembershipListener, no_listener::NoListener},
+    listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
