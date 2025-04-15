@@ -24,4 +24,4 @@ jobs:
     - name: Check
       run: cargo check --verbose --features=test_utils
     - name: Clippy
-      run: cargo clippy
+      run: cargo clippy --all-targets --all-features
