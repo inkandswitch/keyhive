@@ -17,9 +17,7 @@ use crate::{
     },
     error::missing_dependency::MissingDependency,
     event::{static_event::StaticEvent, Event},
-    listener::{
-        cgka::CgkaListener, log::Log, membership::MembershipListener, no_listener::NoListener,
-    },
+    listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
         agent::{id::AgentId, Agent},
@@ -65,7 +63,6 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     fmt::{Debug, Formatter},
-    future::Future,
     marker::PhantomData,
     rc::Rc,
 };
@@ -74,13 +71,13 @@ use tracing::instrument;
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Derivative)]
-#[derivative(PartialEq, Eq)]
+#[derivative(PartialEq, Eq, Clone)]
 pub struct Keyhive<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
     C: CiphertextStore<T, P> = MemoryCiphertextStore<T, P>,
-    L: MembershipListener<S, T> + CgkaListener = NoListener,
+    L: MembershipListener<S, T> = NoListener,
     R: rand::CryptoRng = rand::rngs::ThreadRng,
 > {
     /// The [`Active`] user agent.
@@ -120,7 +117,7 @@ impl<
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Keyhive<S, T, P, C, L, R>
 {
@@ -223,7 +220,7 @@ impl<
             }
         }
 
-        let (new_doc, ops) = Document::generate(
+        let new_doc = Document::generate(
             NonEmpty {
                 head: self.active.dupe().into(),
                 tail: coparents.into_iter().map(Into::into).collect(),
@@ -236,9 +233,6 @@ impl<
             &mut self.csprng,
         )
         .await?;
-        for op in ops {
-            self.event_listener.on_cgka_op(&Rc::new(op)).await;
-        }
 
         for head in new_doc.delegation_heads().values() {
             self.delegations.insert(head.dupe());
@@ -344,7 +338,7 @@ impl<
     }
 
     #[instrument(skip_all, fields(khid = %self.id()))]
-    pub fn register_group(&mut self, root_delegation: Signed<Delegation<S, T, L>>) -> bool {
+    pub async fn register_group(&mut self, root_delegation: Signed<Delegation<S, T, L>>) -> bool {
         if self
             .groups
             .contains_key(&GroupId(root_delegation.subject_id()))
@@ -352,13 +346,16 @@ impl<
             return false;
         }
 
-        let group = Rc::new(RefCell::new(Group::new(
-            GroupId(root_delegation.issuer.into()),
-            Rc::new(root_delegation),
-            self.delegations.dupe(),
-            self.revocations.dupe(),
-            self.event_listener.clone(),
-        )));
+        let group = Rc::new(RefCell::new(
+            Group::new(
+                GroupId(root_delegation.issuer.into()),
+                Rc::new(root_delegation),
+                self.delegations.dupe(),
+                self.revocations.dupe(),
+                self.event_listener.clone(),
+            )
+            .await,
+        ));
 
         self.groups.insert(group.borrow().group_id(), group.dupe());
         true
@@ -918,15 +915,17 @@ impl<
         } else if let Some(doc) = self.docs.get(&DocumentId(subject_id)) {
             doc.borrow_mut().receive_delegation(delegation.clone())?;
         } else if let Some(indie) = self.individuals.remove(&IndividualId(subject_id)) {
-            self.promote_individual_to_group(indie, delegation.clone());
+            self.promote_individual_to_group(indie, delegation.clone())
+                .await;
         } else {
             let group = Group::new(
                 GroupId(subject_id),
-                delegation.clone(),
+                delegation.dupe(),
                 self.delegations.dupe(),
                 self.revocations.dupe(),
                 self.event_listener.clone(),
-            );
+            )
+            .await;
 
             if let Some(content_heads) = static_dlg
                 .payload
@@ -942,7 +941,8 @@ impl<
             }
         };
 
-        self.event_listener.on_delegation(&delegation).await;
+        // FIXME remove because this is way too high in the stack
+        // self.event_listener.on_delegation(&delegation).await;
 
         Ok(())
     }
@@ -991,27 +991,41 @@ impl<
         let id = revocation.subject_id();
         let revocation = Rc::new(revocation);
         if let Some(group) = self.groups.get(&GroupId(id)) {
-            group.borrow_mut().receive_revocation(revocation.clone())?;
+            group
+                .borrow_mut()
+                .receive_revocation(revocation.clone())
+                .await?;
         } else if let Some(doc) = self.docs.get(&DocumentId(id)) {
-            doc.borrow_mut().receive_revocation(revocation.clone())?;
+            doc.borrow_mut()
+                .receive_revocation(revocation.clone())
+                .await?;
         } else if let Some(indie) = self.individuals.remove(&IndividualId(id)) {
-            let group = self.promote_individual_to_group(indie, revocation.payload.revoke.dupe());
-            group.borrow_mut().receive_revocation(revocation.clone())?;
+            let group = self
+                .promote_individual_to_group(indie, revocation.payload.revoke.dupe())
+                .await;
+            group
+                .borrow_mut()
+                .receive_revocation(revocation.clone())
+                .await?;
         } else {
-            let mut group = Group::new(
-                GroupId(static_rev.issuer.into()),
-                revocation.payload.revoke.dupe(),
-                self.delegations.dupe(),
-                self.revocations.dupe(),
-                self.event_listener.clone(),
-            );
+            let group = Rc::new(RefCell::new(
+                Group::new(
+                    GroupId(static_rev.issuer.into()),
+                    revocation.payload.revoke.dupe(),
+                    self.delegations.dupe(),
+                    self.revocations.dupe(),
+                    self.event_listener.clone(),
+                )
+                .await,
+            ));
 
-            group.receive_revocation(revocation.clone())?;
-            self.groups
-                .insert(group.group_id(), Rc::new(RefCell::new(group)));
+            self.groups.insert(group.borrow().group_id(), group.dupe());
+
+            group
+                .borrow_mut()
+                .receive_revocation(revocation.clone())
+                .await?;
         }
-
-        self.event_listener.on_revocation(&revocation).await;
 
         Ok(())
     }
@@ -1078,10 +1092,6 @@ impl<
                 doc.merge_cgka_invite_op(signed_op.clone(), &sk)?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
-            } else if Public.individual().id() == added_id {
-                let sk = Public.share_secret_key();
-                doc.merge_cgka_invite_op(signed_op, &sk)?;
-                return Ok(());
             }
         }
         doc.merge_cgka_op(signed_op.clone())?;
@@ -1095,18 +1105,21 @@ impl<
             khid = %self.id(),
             indie_id = %individual.borrow().id()
         ))]
-    pub fn promote_individual_to_group(
+    pub async fn promote_individual_to_group(
         &mut self,
         individual: Rc<RefCell<Individual>>,
         head: Rc<Signed<Delegation<S, T, L>>>,
     ) -> Rc<RefCell<Group<S, T, L>>> {
-        let group = Rc::new(RefCell::new(Group::from_individual(
-            individual.borrow().clone(),
-            head,
-            self.delegations.dupe(),
-            self.revocations.dupe(),
-            self.event_listener.clone(),
-        )));
+        let group = Rc::new(RefCell::new(
+            Group::from_individual(
+                individual.borrow().clone(),
+                head,
+                self.delegations.dupe(),
+                self.revocations.dupe(),
+                self.event_listener.clone(),
+            )
+            .await,
+        ));
 
         let agent = Agent::from(group.dupe());
 
@@ -1507,7 +1520,7 @@ impl<
         T: ContentRef + Debug,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Debug for Keyhive<S, T, P, C, L, R>
 {
@@ -1530,7 +1543,7 @@ impl<
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone, // FIXME make the default Rc<RefCell<...>>
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > Fork for Keyhive<S, T, P, C, L, R>
 {
@@ -1553,43 +1566,44 @@ impl<
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > MergeAsync for Keyhive<S, T, P, C, L, R>
+    > MergeAsync for Rc<RefCell<Keyhive<S, T, P, C, L, R>>>
 {
-    fn merge_async(&mut self, mut fork: Self::AsyncForked) -> impl Future<Output = ()> {
-        async move {
-            self.active
-                .borrow_mut()
-                .merge(Rc::unwrap_or_clone(fork.active).into_inner());
+    async fn merge_async(&self, mut fork: Self::AsyncForked) {
+        self.borrow()
+            .active
+            .borrow_mut()
+            .merge(Rc::unwrap_or_clone(fork.active).into_inner());
 
+        {
+            let mut inner = self.borrow_mut();
             for (id, forked_indie) in fork.individuals.drain() {
-                if let Some(og_indie) = self.individuals.get(&id) {
+                if let Some(og_indie) = inner.individuals.get(&id) {
                     og_indie
                         .borrow_mut()
                         .merge(Rc::unwrap_or_clone(forked_indie).into_inner());
                 } else {
-                    self.individuals.insert(id, forked_indie);
+                    inner.individuals.insert(id, forked_indie);
                 }
             }
+        }
 
-            for event in fork.event_listener.0.borrow().iter() {
-                match event {
-                    Event::PrekeysExpanded(_add_op) => {
-                        continue; // NOTE: handled above
-                    }
-                    Event::PrekeyRotated(_rot_op) => {
-                        continue; // NOTE: handled above
-                    }
-                    _ => {}
+        for event in fork.event_listener.0.borrow().iter() {
+            match event {
+                Event::PrekeysExpanded(_add_op) => {
+                    continue; // NOTE: handled above
                 }
-
-                self.receive_static_event(event.clone().into())
-                    .await
-                    .expect("prechecked events to work");
+                Event::PrekeyRotated(_rot_op) => {
+                    continue; // NOTE: handled above
+                }
+                _ => {}
             }
 
-            // FIXME ^^^^^^^^^^^ skip checks to speed up; this is all trusted data
+            self.borrow_mut()
+                .receive_static_event(event.clone().into())
+                .await
+                .expect("prechecked events to work");
         }
     }
 }
@@ -1599,7 +1613,7 @@ impl<
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Verifiable for Keyhive<S, T, P, C, L, R>
 {
@@ -1613,7 +1627,7 @@ impl<
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
-        L: MembershipListener<S, T> + CgkaListener,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > From<&Keyhive<S, T, P, C, L, R>> for Agent<S, T, L>
 {
@@ -2143,7 +2157,7 @@ mod tests {
         )
         .await?;
 
-        let mut trunk = hive;
+        let trunk = Rc::new(RefCell::new(hive));
 
         let alice: Peer<MemorySigner, [u8; 32], NoListener> = Rc::new(RefCell::new(
             Individual::generate(
@@ -2155,18 +2169,22 @@ mod tests {
         .into();
 
         trunk
+            .borrow_mut()
             .generate_doc(vec![alice.dupe()], nonempty![[0u8; 32]])
             .await?;
 
-        trunk.generate_group(vec![alice.dupe()]).await?;
+        trunk
+            .borrow_mut()
+            .generate_group(vec![alice.dupe()])
+            .await?;
 
-        assert_eq!(trunk.active.borrow().prekey_pairs.len(), 7);
-        assert_eq!(trunk.delegations.borrow().len(), 4);
-        assert_eq!(trunk.groups.len(), 1);
-        assert_eq!(trunk.docs.len(), 1);
+        assert_eq!(trunk.borrow().active.borrow().prekey_pairs.len(), 7);
+        assert_eq!(trunk.borrow().delegations.borrow().len(), 4);
+        assert_eq!(trunk.borrow().groups.len(), 1);
+        assert_eq!(trunk.borrow().docs.len(), 1);
 
         let tx = transact_async(
-            &mut trunk,
+            &trunk,
             |mut fork: Keyhive<_, _, _, _, Log<_, [u8; 32]>, _>| async move {
                 // Depending on when the async runs
                 let init_dlg_count = fork.delegations.borrow().len();
@@ -2237,27 +2255,29 @@ mod tests {
         .await;
 
         trunk
+            .borrow_mut()
             .generate_doc(vec![alice.dupe()], nonempty![[2u8; 32]])
             .await
             .unwrap();
 
-        assert!(trunk.docs.len() >= 1);
-        assert!(trunk.docs.len() <= 3);
+        assert!(trunk.borrow().docs.len() >= 1);
+        assert!(trunk.borrow().docs.len() <= 3);
 
-        let result = tx;
-        assert!(result.is_ok());
+        // FIXME add transact right on Keyhive taht aslo dispatches new events
+        let () = tx?;
 
         // tx is done, so should be all caught up. Counts are now certain.
-        assert_eq!(trunk.active.borrow().prekey_pairs.len(), 8);
-        assert_eq!(trunk.docs.len(), 3);
-        assert_eq!(trunk.groups.len(), 4);
+        assert_eq!(trunk.borrow().active.borrow().prekey_pairs.len(), 8);
+        assert_eq!(trunk.borrow().docs.len(), 3);
+        assert_eq!(trunk.borrow().groups.len(), 4);
 
         trunk
+            .borrow_mut()
             .generate_doc(vec![alice.dupe()], nonempty![[3u8; 32]])
             .await
             .unwrap();
 
-        assert_eq!(trunk.docs.len(), 4);
+        assert_eq!(trunk.borrow().docs.len(), 4);
         Ok(())
     }
 }

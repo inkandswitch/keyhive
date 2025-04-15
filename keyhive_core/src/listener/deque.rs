@@ -1,5 +1,6 @@
-use super::{membership::MembershipListener, prekey::PrekeyListener};
+use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener};
 use crate::{
+    cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{signed::Signed, signer::async_signer::AsyncSigner},
     event::Event,
@@ -99,5 +100,12 @@ impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for Deque<S, T> {
     #[instrument(skip(self))]
     async fn on_revocation(&self, data: &Rc<Signed<Revocation<S, T, Self>>>) {
         self.push(Event::Revoked(data.dupe()))
+    }
+}
+
+impl<S: AsyncSigner, T: ContentRef> CgkaListener for Deque<S, T> {
+    #[instrument(skip(self))]
+    async fn on_cgka_op(&self, op: &Rc<Signed<CgkaOperation>>) {
+        self.push(Event::CgkaOperation(op.dupe()))
     }
 }

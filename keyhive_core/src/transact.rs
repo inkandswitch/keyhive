@@ -9,6 +9,7 @@ pub mod fork;
 pub mod merge;
 
 use self::merge::{Merge, MergeAsync};
+use merge::MergeSend;
 use tracing::{info_span, instrument};
 
 /// A fully blocking transaction.
@@ -45,7 +46,7 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
     Ok(())
 }
 
-/// A nonblocking variant of [`transact_blocking`].
+/// A async variant of [`transact_blocking`].
 ///
 /// This is meant for types that are wrapped in e.g. `Rc<RefCell<T>>` or `Arc<Mutex<T>>`.
 ///
@@ -55,37 +56,36 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 /// ```rust
 /// # use std::{
 /// #     collections::HashSet,
-/// #     sync::{Arc, Mutex},
+/// #     rc::Rc,
+/// #     cell::RefCell
 /// # };
 /// # use keyhive_core::transact::{
-/// #     fork::Fork,
-/// #     merge::Merge,
-/// #     transact_nonblocking
+/// #     fork::{Fork, ForkAsync},
+/// #     merge::{Merge, MergeAsync},
+/// #     transact_async
 /// # };
 /// #
 /// #[derive(Debug, Clone)]
-/// struct ArcMutex<T>(Arc<Mutex<T>>);
+/// struct RcRefCell<T>(Rc<RefCell<T>>);
 ///
-/// impl<T: Fork> Fork for ArcMutex<T> {
+/// impl<T: Fork> Fork for RcRefCell<T> {
 ///     type Forked = T::Forked;
 ///
 ///     fn fork(&self) -> Self::Forked {
-///         let lock = self.0.lock().unwrap();
-///         lock.fork()
+///         self.0.borrow().fork()
 ///     }
 /// }
 ///
-/// impl<T: Merge> Merge for ArcMutex<T> {
-///     fn merge(&mut self, fork: T::Forked) {
-///         let mut lock = self.0.lock().expect("lock to be available");
-///         lock.merge(fork)
+/// impl<T: Merge + ForkAsync> MergeAsync for RcRefCell<T> {
+///     async fn merge_async(&self, fork: T::Forked) {
+///         self.0.borrow_mut().merge(fork)
 ///     }
 /// }
 ///
 /// # tokio_test::block_on(async {
-/// let og = ArcMutex(Arc::new(Mutex::new(HashSet::from_iter([0u8, 1, 2, 3]))));
+/// let og = RcRefCell(Rc::new(RefCell::new(HashSet::from_iter([0u8, 1, 2, 3]))));
 ///
-/// let fut1 = transact_nonblocking(&og, |mut set: HashSet<u8>| async move {
+/// let fut1 = transact_async(&og, |mut set: HashSet<u8>| async move {
 ///     set.insert(42);
 ///     set.insert(99);
 ///     set.remove(&1);
@@ -93,7 +93,7 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 ///     Ok::<_, String>(set)
 /// });
 ///
-/// let fut2 = transact_nonblocking(&og, |mut set: HashSet<u8>| async move {
+/// let fut2 = transact_async(&og, |mut set: HashSet<u8>| async move {
 ///     set.insert(255);
 ///     set.insert(254);
 ///     set.insert(253);
@@ -101,7 +101,7 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 ///     Ok::<HashSet<u8>, String>(set)
 /// });
 ///
-/// let fut3 = transact_nonblocking(&og, |mut set: HashSet<u8>| async move {
+/// let fut3 = transact_async(&og, |mut set: HashSet<u8>| async move {
 ///     set.insert(50);
 ///     set.insert(60);
 ///     Err("NOPE".to_string())
@@ -112,7 +112,7 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 ///
 /// assert!(fut3.await.is_err());
 ///
-/// let observed = og.0.lock().unwrap();
+/// let observed = og.0.borrow();
 ///
 /// assert!(!observed.contains(&50));
 /// assert!(!observed.contains(&60));
@@ -132,28 +132,31 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 /// # })
 /// ```
 #[instrument(skip_all)]
-pub async fn transact_nonblocking<
-    T: Merge + Clone,
+pub async fn transact_async<
+    T: MergeAsync + Clone,
     Error,
-    F: AsyncFnMut(T::Forked) -> Result<T::Forked, Error>,
+    F: AsyncFnMut(T::AsyncForked) -> Result<T::AsyncForked, Error>,
 >(
     trunk: &T,
     mut tx: F,
 ) -> Result<(), Error> {
     let diverged = info_span!("nonblocking_transaction")
-        .in_scope(|| async { tx(trunk.fork()).await })
+        .in_scope(|| async {
+            let fork = trunk.fork_async().await;
+            tx(fork).await
+        })
         .await?;
-    trunk.clone().merge(diverged);
+    trunk.clone().merge_async(diverged).await;
     Ok(())
 }
 
-/// A variant of [`transact_nonblocking`] that works when the merge logic is asynchronous.
+/// A transaction variant that works when the fork/merge logic is sendable.
 ///
 /// ```rust
 /// # use keyhive_core::transact::{
-/// #     fork::{Fork, ForkAsync},
-/// #     merge::{Merge, MergeAsync},
-/// #     transact_async,
+/// #     fork::{Fork, ForkAsync, ForkSend},
+/// #     merge::{Merge, MergeAsync, MergeSend},
+/// #     transact_sendable,
 /// # };
 /// # use std::{
 /// #     collections::HashSet,
@@ -163,21 +166,21 @@ pub async fn transact_nonblocking<
 /// #[derive(Debug, Clone)]
 /// struct TokioArcMutex<T>(Arc<tokio::sync::Mutex<T>>);
 ///
-/// impl<T: ForkAsync<AsyncForked = U> + Send + Clone, U: Send + Sync> ForkAsync for TokioArcMutex<T> {
-///     type AsyncForked = T::AsyncForked;
+/// impl<T: Fork<Forked = U> + Send + Clone, U: Send + Sync> ForkSend for TokioArcMutex<T> {
+///     type SendableForked = T::Forked;
 ///
-///     async fn fork_async(&self) -> Self::AsyncForked {
+///     async fn fork_sendable(&self) -> Self::SendableForked {
 ///         let lock = self.0.lock().await;
-///         lock.fork_async().await
+///         lock.fork()
 ///     }
 /// }
 ///
-/// impl<T: ForkAsync<AsyncForked = U> + MergeAsync + Send + Clone, U: Send + Sync> MergeAsync
+/// impl<T: Fork<Forked = U> + Merge + Send + Clone, U: Send + Sync> MergeSend
 ///     for TokioArcMutex<T>
 /// {
-///     async fn merge_async(&mut self, fork: Self::AsyncForked) {
+///     async fn merge_sendable(&self, fork: Self::SendableForked) {
 ///         let mut lock = self.0.lock().await;
-///         lock.merge_async(fork).await
+///         lock.merge(fork)
 ///     }
 /// }
 ///
@@ -193,7 +196,7 @@ pub async fn transact_nonblocking<
 ///     let mut og3 = og.clone();
 ///
 ///     work.spawn(async move {
-///         transact_async(&mut og1, |mut set: HashSet<u8>| async move {
+///         transact_sendable(&mut og1, |mut set: HashSet<u8>| async move {
 ///             set.insert(42);
 ///             set.insert(99);
 ///             set.remove(&1);
@@ -204,7 +207,7 @@ pub async fn transact_nonblocking<
 ///     });
 ///
 ///     work.spawn(async move {
-///         transact_async(&mut og2, |mut set: HashSet<u8>| async move {
+///         transact_sendable(&og2, |mut set: HashSet<u8>| async move {
 ///             set.insert(255);
 ///             set.insert(254);
 ///             set.insert(253);
@@ -215,7 +218,7 @@ pub async fn transact_nonblocking<
 ///     });
 ///
 ///     work.spawn(async move {
-///         transact_async(&mut og3, |mut set: HashSet<u8>| async move {
+///         transact_sendable(&og3, |mut set: HashSet<u8>| async move {
 ///             set.insert(50);
 ///             set.insert(60);
 ///             Err::<HashSet<u8>, _>("NOPE".to_string())
@@ -253,18 +256,18 @@ pub async fn transact_nonblocking<
 /// })
 /// ```
 #[instrument(skip_all)]
-pub async fn transact_async<
-    T: MergeAsync,
+pub async fn transact_sendable<
+    T: MergeSend + Clone,
     Error,
-    F: AsyncFnOnce(T::AsyncForked) -> Result<T::AsyncForked, Error>,
+    F: AsyncFnOnce(T::SendableForked) -> Result<T::SendableForked, Error>,
 >(
-    trunk: &mut T,
+    trunk: &T,
     tx: F,
 ) -> Result<(), Error> {
-    let forked = trunk.fork_async().await;
+    let forked = trunk.fork_sendable().await;
     let diverged = info_span!("async_transaction")
         .in_scope(|| async { tx(forked).await })
         .await?;
-    trunk.merge_async(diverged).await;
+    trunk.clone().merge_sendable(diverged).await;
     Ok(())
 }

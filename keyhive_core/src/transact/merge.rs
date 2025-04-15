@@ -1,6 +1,6 @@
 //! Merge [`Fork`]s back into their original data structures.
 
-use super::fork::{Fork, ForkAsync};
+use super::fork::{Fork, ForkAsync, ForkSend};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -22,9 +22,6 @@ pub trait Merge: Fork {
 }
 
 /// An asynchronous version of [`Merge`].
-///
-/// This variant is helpful when merging a type like `tokio::sync::Mutex`,
-/// which requires an `await` to acquire a lock.
 pub trait MergeAsync: ForkAsync {
     /// Asynchronously consume the fork and merge it back into the original data structure.
     ///
@@ -32,7 +29,21 @@ pub trait MergeAsync: ForkAsync {
     /// but rather via the [`transact_async`].
     ///
     /// [`transact_async`]: keyhive_core::transact::transact_async
-    fn merge_async(&mut self, fork: Self::AsyncForked) -> impl Future<Output = ()>;
+    fn merge_async(&self, fork: Self::AsyncForked) -> impl Future<Output = ()>;
+}
+
+/// A [`Send`]able version of [`Merge`].
+///
+/// This variant is helpful when merging a type like `tokio::sync::Mutex`,
+/// which requires an `await` to acquire a lock.
+pub trait MergeSend: ForkSend {
+    /// Asynchronously consume the fork and merge it back into the original data structure.
+    ///
+    /// In general, this should not be used directly,
+    /// but rather via the [`transact_sendable`].
+    ///
+    /// [`transact_sendable`]: keyhive_core::transact::transact_sendable
+    fn merge_sendable(&self, fork: Self::SendableForked) -> impl Future<Output = ()> + Send;
 }
 
 impl<T: Hash + Eq + Clone> Merge for HashSet<T> {
@@ -52,12 +63,5 @@ impl<K: Clone + Hash + Eq, V: Clone> Merge for HashMap<K, V> {
 impl<T: Merge> Merge for Rc<RefCell<T>> {
     fn merge(&mut self, fork: Self::Forked) {
         self.borrow_mut().merge(fork)
-    }
-}
-
-impl<T: Fork<Forked = U> + Merge, U> MergeAsync for T {
-    fn merge_async(&mut self, fork: Self::AsyncForked) -> impl Future<Output = ()> {
-        self.merge(fork);
-        std::future::ready(())
     }
 }

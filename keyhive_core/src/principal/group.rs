@@ -87,13 +87,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         skip_all,
         fields(group_id = %group_id, head_sig = ?head.signature.to_bytes())
     )]
-    pub fn new(
+    pub async fn new(
         group_id: GroupId,
         head: Rc<Signed<Delegation<S, T, L>>>,
         delegations: DelegationStore<S, T, L>,
         revocations: RevocationStore<S, T, L>,
         listener: L,
     ) -> Self {
+        listener.on_delegation(&head).await;
         let mut group = Self {
             id_or_indie: IdOrIndividual::GroupId(group_id),
             members: HashMap::new(),
@@ -101,18 +102,20 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             active_revocations: HashMap::new(),
             listener,
         };
+
         group.rebuild();
         group
     }
 
     #[instrument(skip(delegations, revocations, listener))]
-    pub fn from_individual(
+    pub async fn from_individual(
         individual: Individual,
         head: Rc<Signed<Delegation<S, T, L>>>,
         delegations: DelegationStore<S, T, L>,
         revocations: RevocationStore<S, T, L>,
         listener: L,
     ) -> Self {
+        listener.on_delegation(&head).await;
         let mut group = Self {
             id_or_indie: IdOrIndividual::Individual(individual),
             members: HashMap::new(),
@@ -374,10 +377,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[instrument(skip(self), fields(group_id = %self.group_id()))]
-    pub fn receive_revocation(
+    pub async fn receive_revocation(
         &mut self,
         revocation: Rc<Signed<Revocation<S, T, L>>>,
     ) -> Result<Digest<Signed<Revocation<S, T, L>>>, error::AddError> {
+        self.listener.on_revocation(&revocation).await;
         let digest = self.state.add_revocation(revocation)?;
         self.rebuild();
         Ok(digest)
@@ -532,7 +536,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                 let r = self
                     .build_revocation(signer, to_revoke.dupe(), None, after_content.clone())
                     .await?;
-                self.receive_revocation(r.dupe())?;
+                self.receive_revocation(r.dupe()).await?;
                 revocations.push(r);
             }
         } else {
@@ -561,7 +565,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                                     after_content.clone(),
                                 )
                                 .await?;
-                            self.receive_revocation(r.dupe())?;
+                            self.receive_revocation(r.dupe()).await?;
                             revocations.push(r);
                             found = true;
                         }
@@ -577,7 +581,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                             after_content.clone(),
                         )
                         .await?;
-                    self.receive_revocation(r.dupe())?;
+                    self.receive_revocation(r.dupe()).await?;
                     revocations.push(r);
                     found = true;
                 } else {
@@ -594,7 +598,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                                 )
                                 .await?;
                             revocations.push(r.dupe());
-                            self.receive_revocation(r)?;
+                            self.receive_revocation(r).await?;
                             break;
                         }
                     }

@@ -156,7 +156,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         listener: L,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(Self, Vec<Signed<CgkaOperation>>), GenerateDocError> {
+    ) -> Result<Self, GenerateDocError> {
         let (group_result, group_vk) = EphemeralSigner::with_signer(csprng, |verifier, signer| {
             Group::generate_after_content(
                 signer,
@@ -190,32 +190,25 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             .with_new_owner(owner_id, owner_sks)?;
         let mut ops: Vec<Signed<CgkaOperation>> = Vec::new();
         ops.push(cgka.init_add_op());
-        if !other_members.is_empty() {
-            ops.extend(
-                cgka.add_multiple(
-                    NonEmpty::from_vec(other_members).expect("there to be multiple other members"),
-                    signer,
-                )
-                .await?
-                .iter()
-                .cloned(),
-            );
+        if let Some(others) = NonEmpty::from_vec(other_members) {
+            ops.extend(cgka.add_multiple(others, signer).await?.iter().cloned());
         }
         let (_pcs_key, update_op) = cgka
             .update(owner_share_key, owner_share_secret_key, signer, csprng)
             .await?;
 
         ops.push(update_op);
-        Ok((
-            Document {
-                group,
-                content_state: HashSet::new(),
-                content_heads: initial_content_heads.iter().cloned().collect(),
-                known_decryption_keys: HashMap::new(),
-                cgka: Some(cgka),
-            },
-            ops,
-        ))
+        for op in ops {
+            group.listener.on_cgka_op(&Rc::new(op)).await;
+        }
+
+        Ok(Document {
+            group,
+            content_state: HashSet::new(),
+            content_heads: initial_content_heads.iter().cloned().collect(),
+            known_decryption_keys: HashMap::new(),
+            cgka: Some(cgka),
+        })
     }
 
     #[instrument(
@@ -355,11 +348,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.group.receive_delegation(delegation)
     }
 
-    pub fn receive_revocation(
+    pub async fn receive_revocation(
         &mut self,
         revocation: Rc<Signed<Revocation<S, T, L>>>,
     ) -> Result<Digest<Signed<Revocation<S, T, L>>>, AddError> {
-        self.group.receive_revocation(revocation)
+        self.group.receive_revocation(revocation).await
     }
 
     pub fn merge_cgka_op(&mut self, op: Rc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
