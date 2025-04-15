@@ -78,6 +78,12 @@ where
     }
 }
 
+impl<S: AsyncSigner, T: ContentRef> Default for Log<S, T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<S: AsyncSigner, T: ContentRef> PrekeyListener for Log<S, T> {
     #[instrument(skip(self))]
     async fn on_prekeys_expanded(&self, new_prekey: &Rc<Signed<AddKeyOp>>) {

@@ -840,7 +840,7 @@ pub struct PeerBuilder<'a> {
     storage: BTreeMap<beelay_core::StorageKey, Vec<u8>>,
 }
 
-impl<'a> PeerBuilder<'a> {
+impl PeerBuilder<'_> {
     pub fn session_duration(mut self, duration: Duration) -> Self {
         self.session_duration = duration;
         self

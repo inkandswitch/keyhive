@@ -47,7 +47,7 @@ where
     }
 }
 
-impl<'a, R> Requests<'a, R>
+impl<R> Requests<'_, R>
 where
     R: rand::Rng + rand::CryptoRng + 'static,
 {

@@ -60,7 +60,7 @@ where
     }
 }
 
-impl<'a> Storage for crate::task_context::Storage<'a> {
+impl Storage for crate::task_context::Storage<'_> {
     async fn load_range(
         &self,
         prefix: StorageKey,

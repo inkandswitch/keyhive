@@ -1159,11 +1159,12 @@ mod tests {
             .unwrap()
             .dupe();
 
+        let alice_signer = alice.borrow().signer.clone();
+
         group0
             .borrow_mut()
             .receive_delegation(Rc::new(
-                alice
-                    .borrow()
+                alice_signer
                     .try_sign_async(Delegation {
                         delegate: group9.clone().into(),
                         can: Access::Admin,
@@ -1418,7 +1419,7 @@ mod tests {
         assert_eq!(g0_mems.len(), 2);
 
         assert_eq!(
-            g0_mems.get(&active_id),
+            g0_mems.get(&active_id.into()),
             Some(&(active.dupe().into(), Access::Admin))
         );
 

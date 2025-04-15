@@ -38,6 +38,7 @@ impl Sessions {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn create<R: rand::Rng + rand::CryptoRng>(
         &mut self,
         rng: &mut R,
@@ -76,7 +77,8 @@ impl Sessions {
 
     pub(crate) fn start_reloading(&mut self, session_id: &SessionId) -> Result<(), SessionError> {
         let session = self.get_session(session_id)?;
-        Ok(session.start_reloading())
+        session.start_reloading();
+        Ok(())
     }
 
     pub(crate) fn reload_complete(
@@ -175,10 +177,10 @@ impl Sessions {
     }
 
     fn get_session(&mut self, session_id: &SessionId) -> Result<&mut Session, SessionError> {
-        if let Some(session) = self.sessions.get_mut(&session_id) {
+        if let Some(session) = self.sessions.get_mut(session_id) {
             return Ok(session);
         };
-        if self.expired_sessions.contains(&session_id) {
+        if self.expired_sessions.contains(session_id) {
             Err(SessionError::Expired)
         } else {
             Err(SessionError::NotFound)

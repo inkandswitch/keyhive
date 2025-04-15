@@ -1938,7 +1938,7 @@ mod tests {
         assert_eq!(left.revocations.borrow().len(), 0);
 
         assert_eq!(left.individuals.len(), 1);
-        assert!(left.individuals.get(&IndividualId(Public.id())).is_some());
+        assert!(left.individuals.contains_key(&IndividualId(Public.id())));
 
         assert_eq!(left.groups.len(), 1);
         assert_eq!(left.docs.len(), 1);
@@ -2260,7 +2260,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(trunk.borrow().docs.len() >= 1);
+        assert!(!trunk.borrow().docs.is_empty());
         assert!(trunk.borrow().docs.len() <= 3);
 
         // FIXME add transact right on Keyhive taht aslo dispatches new events

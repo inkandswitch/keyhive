@@ -22,7 +22,7 @@ enum State {
     Loading,
     Loaded {
         docs: DocsSession,
-        membership: MembershipSession,
+        membership: Box<MembershipSession>,
     },
 }
 
@@ -70,10 +70,7 @@ impl DocsSession {
                 encoder.add_symbol(&CgkaSymbol::from(op));
                 ops.insert(Digest::hash(op), op.clone());
             }
-            trees.insert(
-                doc_id.clone(),
-                (encoder, ops, doc_state.sedimentree.clone()),
-            );
+            trees.insert(doc_id, (encoder, ops, doc_state.sedimentree.clone()));
         }
 
         (
@@ -147,10 +144,10 @@ impl Session {
                 remote_peer,
                 state: State::Loaded {
                     docs: doc_session,
-                    membership: MembershipSession {
+                    membership: Box::new(MembershipSession {
                         encoder: membership_riblt,
                         ops: membership_ops,
-                    },
+                    }),
                 },
             },
             phase,
@@ -215,10 +212,10 @@ impl Session {
 
         self.state = State::Loaded {
             docs,
-            membership: MembershipSession {
+            membership: Box::new(MembershipSession {
                 encoder: membership_riblt,
                 ops: membership_ops,
-            },
+            }),
         };
 
         Ok(phase)
@@ -265,7 +262,7 @@ impl Session {
         let State::Loaded { docs, .. } = &mut self.state else {
             return Err(SessionError::Loading);
         };
-        let symbols = if let Some((cgka_session, _, _)) = docs.trees.get_mut(&doc) {
+        let symbols = if let Some((cgka_session, _, _)) = docs.trees.get_mut(doc) {
             cgka_session.next_n_symbols(count as u64)
         } else {
             // make an empty session and return the first 10 symbols
@@ -283,7 +280,7 @@ impl Session {
         let State::Loaded { docs, .. } = &self.state else {
             return Err(SessionError::Loading);
         };
-        let ops = if let Some((_, ops, _)) = docs.trees.get(&doc) {
+        let ops = if let Some((_, ops, _)) = docs.trees.get(doc) {
             op_hashes
                 .into_iter()
                 .filter_map(|h| ops.get(&h).cloned())
