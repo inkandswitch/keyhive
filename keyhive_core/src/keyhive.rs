@@ -1037,12 +1037,12 @@ impl<
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
         match static_event {
             StaticEvent::PrekeysExpanded(add_op) => {
-                self.receive_prekey_op(&Rc::new(add_op).into())?
+                self.receive_prekey_op(&Rc::new(*add_op).into())?
             }
             StaticEvent::PrekeyRotated(rot_op) => {
-                self.receive_prekey_op(&Rc::new(rot_op).into())?
+                self.receive_prekey_op(&Rc::new(*rot_op).into())?
             }
-            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op).await?,
+            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(*cgka_op).await?,
             StaticEvent::Delegated(dlg) => self.receive_delegation(&dlg).await?,
             StaticEvent::Revoked(rev) => self.receive_revocation(&rev).await?,
         }

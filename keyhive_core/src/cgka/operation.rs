@@ -136,9 +136,9 @@ impl Merge for CgkaOperationGraph {
     fn merge(&mut self, fork: Self::Forked) {
         self.cgka_ops.merge(fork.cgka_ops);
         self.cgka_ops_predecessors
-            .extend(fork.cgka_ops_predecessors.into_iter());
-        self.cgka_op_heads.extend(fork.cgka_op_heads.into_iter());
-        self.add_heads.extend(fork.add_heads.into_iter()); // TODO reduce heads
+            .extend(fork.cgka_ops_predecessors);
+        self.cgka_op_heads.extend(fork.cgka_op_heads);
+        self.add_heads.extend(fork.add_heads); // TODO reduce heads
     }
 }
 
@@ -214,7 +214,7 @@ impl CgkaOperationGraph {
             } = &op.payload
             {
                 for h in add_predecessors {
-                    self.add_heads.remove(&h);
+                    self.add_heads.remove(h);
                 }
             }
         } else {

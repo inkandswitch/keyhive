@@ -494,6 +494,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                 delegation.payload.delegate.id(),
                 doc.borrow().doc_id()
             );
+
             for op in doc
                 .borrow_mut()
                 .add_cgka_member(&delegation, signer)
@@ -1355,6 +1356,9 @@ mod tests {
                 .unwrap(),
         ));
 
+        let active_id = active.borrow().id();
+        let active_signer = active.borrow().signer.clone();
+
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
 
@@ -1395,12 +1399,7 @@ mod tests {
         ));
 
         g0.borrow_mut()
-            .add_member(
-                carol_agent.dupe(),
-                Access::Write,
-                &active.borrow().signer,
-                &[],
-            )
+            .add_member(carol_agent.dupe(), Access::Write, &active_signer, &[])
             .await
             .unwrap();
 
@@ -1419,7 +1418,7 @@ mod tests {
         assert_eq!(g0_mems.len(), 2);
 
         assert_eq!(
-            g0_mems.get(&active.dupe().borrow().id().into()),
+            g0_mems.get(&active_id),
             Some(&(active.dupe().into(), Access::Admin))
         );
 
@@ -1499,6 +1498,18 @@ mod tests {
         let dan = Rc::new(RefCell::new(setup_user(&mut csprng).await));
         let dan_agent: Agent<MemorySigner> = dan.dupe().into();
 
+        let alice_id = alice.borrow().id().into();
+        let alice_signer = alice.borrow().signer.dupe();
+
+        let bob_id = bob.borrow().id().into();
+        let bob_signer = bob.borrow().signer.dupe();
+
+        let carol_id = carol.borrow().id().into();
+        let carol_signer = carol.borrow().signer.clone();
+
+        let dan_id = dan.borrow().id().into();
+        let dan_signer = dan.borrow().signer.clone();
+
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
 
@@ -1513,38 +1524,33 @@ mod tests {
         .unwrap();
 
         let _alice_adds_bob = g1
-            .add_member(bob_agent.dupe(), Access::Write, &alice.borrow().signer, &[])
+            .add_member(bob_agent.dupe(), Access::Write, &alice_signer, &[])
             .await
             .unwrap();
 
         let _bob_adds_carol = g1
-            .add_member(carol_agent.dupe(), Access::Read, &bob.borrow().signer, &[])
+            .add_member(carol_agent.dupe(), Access::Read, &bob_signer, &[])
             .await
             .unwrap();
 
-        assert!(g1.members().contains_key(&alice.borrow().id().into()));
-        assert!(g1.members().contains_key(&bob.borrow().id().into()));
-        assert!(g1.members().contains_key(&carol.borrow().id().into()));
-        assert!(!g1.members().contains_key(&dan.borrow().id().into()));
+        assert!(g1.members().contains_key(&alice_id));
+        assert!(g1.members().contains_key(&bob_id));
+        assert!(g1.members().contains_key(&carol_id));
+        assert!(!g1.members().contains_key(&dan_id));
 
         let _carol_adds_dan = g1
-            .add_member(dan_agent.dupe(), Access::Read, &carol.borrow().signer, &[])
+            .add_member(dan_agent.dupe(), Access::Read, &carol_signer, &[])
             .await
             .unwrap();
 
-        assert!(g1.members.contains_key(&alice.borrow().id().into()));
-        assert!(g1.members.contains_key(&bob.borrow().id().into()));
-        assert!(g1.members.contains_key(&carol.borrow().id().into()));
-        assert!(g1.members.contains_key(&dan.borrow().id().into()));
+        assert!(g1.members.contains_key(&alice_id));
+        assert!(g1.members.contains_key(&bob_id));
+        assert!(g1.members.contains_key(&carol_id));
+        assert!(g1.members.contains_key(&dan_id));
         assert_eq!(g1.members.len(), 4);
 
         let _alice_revokes_bob = g1
-            .revoke_member(
-                bob.borrow().id().into(),
-                true,
-                &alice.borrow().signer,
-                &BTreeMap::new(),
-            )
+            .revoke_member(bob_id, true, &alice_signer, &BTreeMap::new())
             .await
             .unwrap();
 
@@ -1555,7 +1561,7 @@ mod tests {
         assert!(g1.members.contains_key(&dan.borrow().id().into()));
 
         let _bob_to_carol = g1
-            .add_member(bob_agent.dupe(), Access::Read, &carol.borrow().signer, &[])
+            .add_member(bob_agent.dupe(), Access::Read, &carol_signer, &[])
             .await
             .unwrap();
 
@@ -1564,12 +1570,7 @@ mod tests {
         assert!(g1.members.contains_key(&dan.borrow().id().into()));
 
         let _alice_revokes_carol = g1
-            .revoke_member(
-                carol.borrow().id().into(),
-                false,
-                &alice.borrow().signer,
-                &BTreeMap::new(),
-            )
+            .revoke_member(carol_id, false, &alice_signer, &BTreeMap::new())
             .await
             .unwrap();
 
@@ -1577,14 +1578,9 @@ mod tests {
         assert!(!g1.members.contains_key(&carol.borrow().id().into()));
         // FIXME assert!(!g1.members.contains_key(&dan.borrow().id().into()));
 
-        g1.revoke_member(
-            alice.borrow().id().into(),
-            false,
-            &alice.borrow().signer,
-            &BTreeMap::new(),
-        )
-        .await
-        .unwrap();
+        g1.revoke_member(alice_id, false, &alice_signer, &BTreeMap::new())
+            .await
+            .unwrap();
 
         assert!(!g1.members.contains_key(&alice.borrow().id().into()));
         assert!(!g1.members.contains_key(&carol.borrow().id().into()));

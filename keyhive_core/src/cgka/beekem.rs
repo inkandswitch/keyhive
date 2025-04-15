@@ -567,7 +567,7 @@ impl BeeKem {
             TreeNodeIndex::Inner(i_idx) => self
                 .inner_node(i_idx)
                 .as_ref()
-                .map_or(true, |n| n.has_conflict()),
+                .is_none_or(|n| n.has_conflict()),
         }
     }
 
