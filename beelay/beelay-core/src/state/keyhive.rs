@@ -37,6 +37,8 @@ use crate::{
     CommitHash, DocumentId, PeerId,
 };
 
+use super::Beehive;
+
 pub(crate) struct KeyhiveCtx<'a, R: rand::Rng + rand::CryptoRng>(
     Cow<'a, Rc<RefCell<super::State<R>>>>,
 );
@@ -265,9 +267,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
                 }
             }
 
-            if try_later.is_empty() {
-                break;
-            } else if !ingested {
+            if try_later.is_empty() || !ingested {
                 break;
             } else {
                 events = try_later;
@@ -760,14 +760,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
 }
 
 fn get_peer<R: rand::Rng + rand::CryptoRng>(
-    keyhive: &mut Keyhive<
-        Signer,
-        CommitHash,
-        Vec<u8>,
-        MemoryCiphertextStore<CommitHash, Vec<u8>>,
-        crate::keyhive::Listener,
-        R,
-    >,
+    keyhive: &mut Beehive<R>,
     agent_id: KeyhiveEntityId,
 ) -> Option<keyhive_core::principal::peer::Peer<Signer, CommitHash, crate::keyhive::Listener>> {
     match agent_id {

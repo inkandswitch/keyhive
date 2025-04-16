@@ -187,11 +187,5 @@ pub(crate) mod error {
         BadSymbol,
         #[error(transparent)]
         Rpc(#[from] RpcError),
-        #[error("session expired")]
-        SessionExpired,
-        #[error("session not found")]
-        SessionNotFound,
-        #[error("session error: {0}")]
-        Session(String),
     }
 }

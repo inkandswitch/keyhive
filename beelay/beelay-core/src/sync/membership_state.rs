@@ -14,6 +14,7 @@ use crate::{keyhive::Listener, CommitHash, PeerId, Signer, TaskContext};
 
 #[derive(Clone)]
 pub(crate) struct MembershipState {
+    #[allow(clippy::type_complexity)]
     membership_ops: HashMap<
         Digest<MembershipOperation<Signer, CommitHash, Listener>>,
         MembershipOperation<Signer, CommitHash, Listener>,

@@ -141,7 +141,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
             })
             .instrument(run_span)
         });
-        loading::Loading::new(now, driver, rx_load_complete)
+        loading::Loading::loading(now, driver, rx_load_complete)
     }
 
     pub(crate) fn loaded(

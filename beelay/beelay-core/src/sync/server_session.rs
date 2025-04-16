@@ -37,14 +37,13 @@ struct MembershipSession {
 
 struct DocsSession {
     encoder: riblt::Encoder<sync_docs::DocStateHash>,
-    trees: HashMap<
-        DocumentId,
-        (
-            riblt::Encoder<sync_doc::CgkaSymbol>,
-            HashMap<Digest<Signed<CgkaOperation>>, Signed<CgkaOperation>>,
-            sedimentree::SedimentreeSummary,
-        ),
-    >,
+    trees: HashMap<DocumentId, SessionDocMeta>,
+}
+
+struct SessionDocMeta {
+    encoder: riblt::Encoder<sync_doc::CgkaSymbol>,
+    ops: HashMap<Digest<Signed<CgkaOperation>>, Signed<CgkaOperation>>,
+    sedimentree_summary: sedimentree::SedimentreeSummary,
 }
 
 pub(crate) enum GraphSyncPhase {
@@ -70,7 +69,14 @@ impl DocsSession {
                 encoder.add_symbol(&CgkaSymbol::from(op));
                 ops.insert(Digest::hash(op), op.clone());
             }
-            trees.insert(doc_id, (encoder, ops, doc_state.sedimentree.clone()));
+            trees.insert(
+                doc_id,
+                SessionDocMeta {
+                    encoder,
+                    ops,
+                    sedimentree_summary: doc_state.sedimentree.clone(),
+                },
+            );
         }
 
         (
@@ -262,7 +268,11 @@ impl Session {
         let State::Loaded { docs, .. } = &mut self.state else {
             return Err(SessionError::Loading);
         };
-        let symbols = if let Some((cgka_session, _, _)) = docs.trees.get_mut(doc) {
+        let symbols = if let Some(SessionDocMeta {
+            encoder: cgka_session,
+            ..
+        }) = docs.trees.get_mut(doc)
+        {
             cgka_session.next_n_symbols(count as u64)
         } else {
             // make an empty session and return the first 10 symbols
@@ -280,7 +290,7 @@ impl Session {
         let State::Loaded { docs, .. } = &self.state else {
             return Err(SessionError::Loading);
         };
-        let ops = if let Some((_, ops, _)) = docs.trees.get(doc) {
+        let ops = if let Some(SessionDocMeta { ops, .. }) = docs.trees.get(doc) {
             op_hashes
                 .into_iter()
                 .filter_map(|h| ops.get(&h).cloned())

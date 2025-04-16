@@ -1,6 +1,5 @@
 use crate::{network::PeerAddress, DocumentId, PeerId, TaskContext};
 
-
 use super::SessionId;
 
 mod sync_cgka;
@@ -33,9 +32,5 @@ pub(crate) mod error {
     pub enum SyncDocError {
         #[error(transparent)]
         Sedimentree(#[from] super::sync_sedimentree::SyncSedimentreeError),
-        #[error("session expired")]
-        SessionExpired,
-        #[error("session not found")]
-        SessionNotFound,
     }
 }

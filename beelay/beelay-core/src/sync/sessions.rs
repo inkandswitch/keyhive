@@ -194,10 +194,6 @@ pub(crate) enum SessionError {
     NotFound,
     #[error("session expired")]
     Expired,
-    #[error("already begun doc collection sync")]
-    DocCollectionSyncAlreadyBegun,
-    #[error("doc collection sync not started")]
-    DocCollectionSyncNotStarted,
     #[error("request received while loading state")]
     Loading,
     #[error("Invalid request")]

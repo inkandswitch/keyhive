@@ -29,7 +29,7 @@ pub enum Step<R: rand::Rng + rand::CryptoRng + Clone + 'static> {
 }
 
 impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Loading<R> {
-    pub(crate) fn new(
+    pub(crate) fn loading(
         now: UnixTimestampMillis,
         driver: driver::Driver,
         rx_loaded: oneshot::Receiver<LoadedParts<R>>,

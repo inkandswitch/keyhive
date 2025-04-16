@@ -13,6 +13,7 @@ use super::{InnerRpcResponse, StreamDirection, StreamError, StreamEvent, StreamI
 
 struct RunningStreamHandle {
     tx: mpsc::UnboundedSender<Vec<u8>>,
+    #[allow(clippy::type_complexity)]
     outbound_requests: mpsc::UnboundedSender<(
         OutboundRequestId,
         Request,
@@ -151,6 +152,8 @@ struct StreamToRun<R: rand::Rng + rand::CryptoRng + Clone> {
     direction: crate::StreamDirection,
     stream_id: StreamId,
     incoming: mpsc::UnboundedReceiver<Vec<u8>>,
+
+    #[allow(clippy::type_complexity)]
     outbound_requests: mpsc::UnboundedReceiver<(
         OutboundRequestId,
         Request,

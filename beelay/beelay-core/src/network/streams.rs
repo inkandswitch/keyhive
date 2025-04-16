@@ -250,8 +250,6 @@ pub(crate) mod error {
 
     #[derive(Debug)]
     pub(crate) enum EncodeResponse {
-        NoSuchStream,
-        StreamClosed,
         StreamError(StreamError),
     }
 
@@ -264,8 +262,6 @@ pub(crate) mod error {
     impl std::fmt::Display for EncodeResponse {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
-                Self::NoSuchStream => write!(f, "no such stream"),
-                Self::StreamClosed => write!(f, "stream closed"),
                 Self::StreamError(e) => write!(f, "stream error: {}", e),
             }
         }

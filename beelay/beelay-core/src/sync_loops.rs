@@ -18,6 +18,8 @@ pub(crate) struct SyncLoops {
     doc_versions: HashMap<DocumentId, u64>,
     doc_events_pending_decryption: Vec<EventPendingDecryption>,
     running_sync_loops: FuturesUnordered<Pin<Box<dyn Future<Output = StreamId>>>>,
+
+    #[allow(clippy::type_complexity)]
     running_uploads: FuturesUnordered<Pin<Box<dyn Future<Output = Result<(), RpcError>>>>>,
 
     #[allow(clippy::type_complexity)]
