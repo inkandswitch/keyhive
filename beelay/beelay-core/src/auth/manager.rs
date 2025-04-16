@@ -1,6 +1,6 @@
 use keyhive_core::crypto::verifiable::Verifiable;
 
-use crate::{Signer, TaskContext, UnixTimestamp};
+use crate::{Signer, UnixTimestamp};
 
 use super::{
     audience::Audience,

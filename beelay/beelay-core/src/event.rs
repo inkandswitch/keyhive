@@ -3,7 +3,6 @@ use crate::{
         keyhive::{self, AddMemberToGroup, KeyhiveEntityId, MemberAccess, RemoveMemberFromGroup},
         Command,
     },
-    contact_card::ContactCard,
     io::{self, IoResult},
     network::InnerRpcResponse,
     Audience, CommandId, Commit, CommitBundle, DocumentId, EndpointId, OutboundRequestId,

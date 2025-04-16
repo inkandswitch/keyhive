@@ -36,7 +36,7 @@ fn sync_emits_local_notifications() {
     assert_eq!(
         notis,
         HashMap::from_iter(vec![(
-            doc_id.clone(),
+            doc_id,
             vec![
                 DocEvent::Discovered,
                 DocEvent::Data {
@@ -62,7 +62,7 @@ fn listen_emits_local_notifications() {
         .unwrap();
     let peer2_contact = network.beelay(&peer2).contact_card().unwrap();
     network.beelay(&peer1).add_member_to_doc(
-        doc_id.clone(),
+        doc_id,
         peer2_contact.into(),
         MemberAccess::Write,
     );
@@ -80,7 +80,7 @@ fn listen_emits_local_notifications() {
     );
     network
         .beelay(&peer1)
-        .add_commits(doc_id.clone(), vec![new_commit.clone()])
+        .add_commits(doc_id, vec![new_commit.clone()])
         .unwrap();
 
     let notis = network.beelay(&peer2).pop_notifications();
@@ -89,7 +89,7 @@ fn listen_emits_local_notifications() {
     assert_eq!(
         notis,
         HashMap::from_iter(vec![(
-            doc_id.clone(),
+            doc_id,
             vec![DocEvent::Data {
                 data: CommitOrBundle::Commit(new_commit.clone()),
             }]

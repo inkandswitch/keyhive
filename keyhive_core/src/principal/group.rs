@@ -617,7 +617,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         }
 
         for r in revocations.iter() {
-            self.listener.on_revocation(&r).await
+            self.listener.on_revocation(r).await
         }
 
         let mut cgka_ops = Vec::new();

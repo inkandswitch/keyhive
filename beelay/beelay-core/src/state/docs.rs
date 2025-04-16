@@ -38,7 +38,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Docs<'a, R> {
         self.state
             .borrow_mut()
             .docs_with_changes
-            .insert(doc_id.clone());
+            .insert(*doc_id);
     }
 
     pub(crate) fn sedimentree(&self, doc: &DocumentId) -> Option<crate::sedimentree::Sedimentree> {
@@ -62,7 +62,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Docs<'a, R> {
         let mut state = self.state.borrow_mut();
 
         if !update.is_empty() {
-            state.docs_with_changes.insert(doc_id.clone());
+            state.docs_with_changes.insert(doc_id);
         }
 
         let commits = update.take_commits();

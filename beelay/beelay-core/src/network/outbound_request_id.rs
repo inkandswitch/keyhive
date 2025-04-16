@@ -4,6 +4,12 @@ pub struct OutboundRequestId(u64);
 static LAST_OUTBOUND_REQUEST_ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+impl Default for OutboundRequestId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OutboundRequestId {
     pub fn new() -> Self {
         Self(LAST_OUTBOUND_REQUEST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed))

@@ -209,7 +209,7 @@ impl UploadItem {
                 start: stratum.start(),
                 end: stratum.end(),
                 checkpoints: stratum.checkpoints().to_vec(),
-                hash: stratum.hash().clone(),
+                hash: stratum.hash(),
             },
         }
     }

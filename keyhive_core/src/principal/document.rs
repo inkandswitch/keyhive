@@ -403,7 +403,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             return Err(CgkaError::OutOfOrderOperation);
         }
         let mut owner_sks = self.cgka()?.owner_sks.clone();
-        owner_sks.insert(pk.clone(), sk.clone());
+        owner_sks.insert(pk, *sk);
         self.cgka = Some(self.cgka()?.with_new_owner(added_id, owner_sks)?);
         self.merge_cgka_op(op)
     }

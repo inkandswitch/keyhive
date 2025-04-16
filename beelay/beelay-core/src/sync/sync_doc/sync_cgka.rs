@@ -1,17 +1,15 @@
 use std::{array, collections::HashMap, hash::Hash};
 
 use keyhive_core::{
-    cgka::{error::CgkaError, operation::CgkaOperation},
+    cgka::operation::CgkaOperation,
     crypto::{digest::Digest, signed::Signed},
-    keyhive::ReceiveCgkaOpError,
 };
 
 use crate::{
-    network::{PeerAddress, RpcError},
+    network::PeerAddress,
     parse::{self, Parse},
     riblt,
     serialization::Encode,
-    state::keyhive::error::Ingest,
     sync::SessionId,
     DocumentId, TaskContext,
 };

@@ -1090,11 +1090,10 @@ impl<
                 tracing::info!("one of us!");
                 let sk = {
                     let active = self.active.borrow();
-                    active
+                    *active
                         .prekey_pairs
                         .get(&pk)
                         .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?
-                        .clone()
                 };
                 doc.merge_cgka_invite_op(signed_op.clone(), &sk)?;
                 self.event_listener.on_cgka_op(&signed_op).await;

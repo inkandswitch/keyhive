@@ -115,7 +115,7 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
             #[cfg(feature = "web-sys")]
             JsCiphertextStoreInner::WebStorage(ref store) => {
                 store
-                    .remove_item(&id.to_base64().as_str())
+                    .remove_item(id.to_base64().as_str())
                     .map_err(JsRemoveCiphertextError)?;
             }
         };

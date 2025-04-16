@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use keyhive_core::crypto::{signer::async_signer::AsyncSigner, verifiable::Verifiable};
 use std::hash::{Hash, Hasher};
 
@@ -43,7 +43,7 @@ where
         let signature = signer
             .try_sign_bytes_async(&to_sign)
             .await
-            .map_err(|e| signature::Error::from_source(e))?;
+            .map_err(signature::Error::from_source)?;
 
         Ok(Self {
             verifier: signer.verifying_key(),

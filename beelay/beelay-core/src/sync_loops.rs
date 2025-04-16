@@ -56,13 +56,11 @@ impl SyncLoops {
             received_sync_needed,
         } in established
         {
-            let has_new_doc = doc_changes
+            let has_new_doc = !doc_changes
                 .keys()
                 .collect::<HashSet<_>>()
                 .difference(&self.doc_versions.keys().collect::<HashSet<_>>())
-                .collect::<Vec<_>>()
-                .len()
-                > 0;
+                .collect::<Vec<_>>().is_empty();
             let should_start_sync = {
                 if direction == ResolvedDirection::Accepting {
                     false
@@ -140,7 +138,7 @@ impl SyncLoops {
                             .collect::<Vec<UploadItem>>();
                         if !to_upload.is_empty() {
                             ctx.requests()
-                                .upload_commits(stream_id.into(), doc_id.clone(), to_upload)
+                                .upload_commits(stream_id.into(), doc_id, to_upload)
                                 .await?;
                         }
                     }

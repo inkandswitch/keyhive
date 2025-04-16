@@ -8,7 +8,7 @@ use keyhive_core::{
     event::{static_event::StaticEvent, Event},
     listener::no_listener::NoListener,
     principal::{
-        group::membership_operation::MembershipOperation, identifier::Identifier,
+        group::membership_operation::MembershipOperation,
         individual::op::KeyOp,
     },
 };

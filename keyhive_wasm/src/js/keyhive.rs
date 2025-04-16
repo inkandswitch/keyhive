@@ -102,9 +102,7 @@ impl JsKeyhive {
                 NonEmpty {
                     head: initial_content_ref_head,
                     tail: more_initial_content_refs
-                        .into_iter()
-                        .map(Into::into)
-                        .collect(),
+                        .into_iter().collect(),
                 },
             )
             .await?
@@ -193,7 +191,7 @@ impl JsKeyhive {
 
         Ok(res
             .revocations()
-            .into_iter()
+            .iter()
             .duped()
             .map(JsSignedRevocation)
             .collect())
@@ -218,7 +216,7 @@ impl JsKeyhive {
         self.0
             .force_pcs_update(doc.0.dupe())
             .await
-            .map_err(|e| EncryptContentError::from(e))?;
+            .map_err(EncryptContentError::from)?;
         Ok(())
     }
 

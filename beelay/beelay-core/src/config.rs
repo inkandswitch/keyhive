@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use ed25519_dalek::VerifyingKey;
 
-use crate::loading;
 
 pub struct Config<R> {
     pub(crate) session_duration: Duration,

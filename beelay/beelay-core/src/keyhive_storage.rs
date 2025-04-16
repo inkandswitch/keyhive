@@ -118,11 +118,10 @@ pub(crate) async fn load_archives<S: Storage>(
     tracing::trace!(num_archives = raw_archives.len(), "loading raw archives");
     for (key, v) in raw_archives {
         keys.push(key);
-        if let Some(archive) = bincode::deserialize(&v)
+        if let Ok(archive) = bincode::deserialize(&v)
             .inspect_err(|e| {
                 tracing::error!(err=?e, "failed to decode stored keyhive archive");
             })
-            .ok()
         {
             archives.push(archive);
         }

@@ -60,7 +60,7 @@ pub(super) async fn add_commits<R: rand::Rng + rand::CryptoRng + 'static>(
     // If any of the commits might be a bundle boundary, load the sedimentree
     // and see if any new bundles are needed
     if has_commit_boundary {
-        let storage = ctx.storage().doc_storage(doc_id.clone());
+        let storage = ctx.storage().doc_storage(doc_id);
         let tree = sedimentree::storage::load(storage).await;
         if let Ok(Some(tree)) = tree {
             Ok(tree.missing_bundles(doc_id))

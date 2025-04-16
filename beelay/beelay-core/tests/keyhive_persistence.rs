@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use beelay_core::{Commit, CommitOrBundle};
-use keyhive_core::principal::public::Public;
 use network::Network;
 use test_utils::init_logging;
 

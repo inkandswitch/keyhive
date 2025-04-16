@@ -62,7 +62,7 @@ impl BeelayHandle<'_> {
     pub fn doc_status(&mut self, doc: &DocumentId) -> beelay_core::doc_status::DocStatus {
         let command = {
             let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
-            let (command, event) = beelay_core::Event::query_status(doc.clone());
+            let (command, event) = beelay_core::Event::query_status(*doc);
             beelay.inbox.push_back(event);
             command
         };

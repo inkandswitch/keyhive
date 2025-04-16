@@ -1,6 +1,5 @@
-use crate::{auth::audience::Audience, network::endpoint, streams, TaskContext};
+use crate::{network::endpoint, streams};
 
-pub use error::BadTransport;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PeerAddress {

@@ -101,7 +101,7 @@ impl<R: rand::Rng + rand::CryptoRng> AuthCtx for TaskContext<R> {
     }
 }
 
-impl<'a, A: AuthCtx> AuthCtx for &'a A {
+impl<A: AuthCtx> AuthCtx for &A {
     fn authenticate_received_msg<T>(
         &self,
         msg: auth::Signed<auth::Message>,
@@ -744,7 +744,7 @@ mod tests {
         }
 
         fn new_with_clock(signer: Signer, clock: UnixTimestamp) -> Self {
-            let our_peer_id = signer.verifying_key().clone().into();
+            let our_peer_id = signer.verifying_key().into();
             let auth = crate::auth::manager::Manager::new(signer);
             Self {
                 our_peer_id,
@@ -793,7 +793,7 @@ mod tests {
         }
 
         fn our_peer_id(&self) -> crate::PeerId {
-            self.our_peer_id.clone()
+            self.our_peer_id
         }
     }
 

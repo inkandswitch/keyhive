@@ -1,6 +1,5 @@
-use crate::{doc_status::DocEvent, network::PeerAddress, DocumentId, PeerId, TaskContext};
+use crate::{network::PeerAddress, DocumentId, PeerId, TaskContext};
 
-pub use error::SyncDocError;
 
 use super::SessionId;
 

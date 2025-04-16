@@ -7,7 +7,6 @@ use std::{
 use keyhive_core::{crypto::digest::Digest, event::static_event::StaticEvent};
 
 use crate::{
-    doc_status::DocEvent,
     network::{messages::session::NextSyncPhase, PeerAddress},
     parse::{self, Parse},
     riblt::{self, CodedSymbol},

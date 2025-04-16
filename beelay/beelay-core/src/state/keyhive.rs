@@ -171,7 +171,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             Err(CgkaError::NotInitialized) => Ok(vec![]),
             Err(other) => Err(other),
         }?;
-        Ok(ops.into_iter().map(|op| Rc::unwrap_or_clone(op)).collect())
+        Ok(ops.into_iter().map(Rc::unwrap_or_clone).collect())
     }
 
     pub(crate) async fn ingest_cgka_ops(

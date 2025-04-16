@@ -77,7 +77,7 @@ impl PrekeyState {
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
         let cell = Rc::new(RefCell::new(csprng));
-        let ops = stream::iter((0..size.into()).map(|x| Ok(x)))
+        let ops = stream::iter((0..size.into()).map(Ok))
             .try_fold(CaMap::new(), |mut ops, _| async {
                 let secret_key = ShareSecretKey::generate(*cell.borrow_mut());
 

@@ -62,8 +62,10 @@ impl Driver {
             rx_tick,
         };
         let fut = f(spawn_args);
-        let executor = executor::LocalExecutor::spawn(fut);
-        let driver = Self {
+        let executor = futures::executor::LocalPool::new();
+        executor.spawner().spawn_local(fut).unwrap();
+
+        Self {
             now,
             io_tasks: HashMap::new(),
             endpoint_requests: HashMap::new(),
@@ -71,8 +73,7 @@ impl Driver {
             tx_tick,
             tx_commands,
             executor,
-        };
-        driver
+        }
     }
 
     pub(crate) fn handle_io_complete(&mut self, io_result: IoResult) {

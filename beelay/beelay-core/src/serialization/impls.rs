@@ -109,7 +109,7 @@ impl<T: Encode> Encode for Option<T> {
 
 mod keyhive {
     use keyhive_core::{
-        cgka::operation::CgkaOperation, crypto::signed::Signed, event::static_event::StaticEvent,
+        cgka::operation::CgkaOperation, crypto::signed::Signed,
     };
     use serde::{Deserialize, Serialize};
     use std::fmt::Debug;
@@ -117,7 +117,6 @@ mod keyhive {
     use crate::{
         parse::{self, Parse},
         serialization::{leb128, Encode},
-        CommitHash,
     };
 
     impl<T: Serialize + Debug> Encode for Signed<T> {

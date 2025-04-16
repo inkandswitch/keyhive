@@ -203,7 +203,7 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
                         }
                         Ok(envelope) => {
                             for (ancestor_ref, ancestor_key) in envelope.ancestors.iter() {
-                                match self.get_ciphertext(&ancestor_ref).await {
+                                match self.get_ciphertext(ancestor_ref).await {
                                     Err(e) => {
                                         seen.remove(&content_ref);
                                         cannot.insert(

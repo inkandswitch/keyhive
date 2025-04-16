@@ -1,10 +1,7 @@
 use crate::{
     auth,
     blob::BlobMeta,
-    network::{
-        messages::{self, FetchedSedimentree, TreePart, UploadItem},
-        PeerAddress,
-    },
+    network::messages::{self, FetchedSedimentree, TreePart, UploadItem},
     sedimentree::{self},
     state::DocUpdateBuilder,
     Audience, Commit, CommitBundle, CommitOrBundle, DocumentId, OutgoingResponse, PeerId, Response,
@@ -120,7 +117,7 @@ where
 
             let doc_ids = ops
                 .iter()
-                .map(|op| DocumentId::from(op.payload().doc_id().clone()))
+                .map(|op| DocumentId::from(*op.payload().doc_id()))
                 .collect::<Vec<_>>();
 
             // Process CGKA operations as a batch
