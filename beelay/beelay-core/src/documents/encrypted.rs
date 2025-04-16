@@ -75,39 +75,3 @@ pub(crate) enum EncryptedCommitOrBundle {
     Commit(EncryptedCommit),
     Bundle(EncryptedCommitBundle),
 }
-
-impl EncryptedCommitOrBundle {
-    pub(crate) async fn decrypt<R: rand::Rng + rand::CryptoRng>(
-        self,
-        ctx: TaskContext<R>,
-        doc: DocumentId,
-    ) -> Result<CommitOrBundle, crate::state::keyhive::DecryptError> {
-        match self {
-            EncryptedCommitOrBundle::Commit(c) => {
-                let decrypted = ctx
-                    .state()
-                    .keyhive()
-                    .decrypt(doc, &c.parents, c.hash, c.content.0)
-                    .await?;
-                Ok(CommitOrBundle::Commit(super::Commit::new(
-                    c.parents, decrypted, c.hash,
-                )))
-            }
-            EncryptedCommitOrBundle::Bundle(b) => {
-                let decrypted = ctx
-                    .state()
-                    .keyhive()
-                    .decrypt(doc, &[b.start], b.hash, b.content.0)
-                    .await?;
-                Ok(CommitOrBundle::Bundle(
-                    super::CommitBundle::builder()
-                        .start(b.start)
-                        .end(b.end)
-                        .bundled_commits(decrypted)
-                        .checkpoints(b.checkpoints)
-                        .build(),
-                ))
-            }
-        }
-    }
-}

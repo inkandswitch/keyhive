@@ -14,7 +14,6 @@ use keyhive_core::{
         verifiable::Verifiable,
     },
     event::static_event::StaticEvent,
-    keyhive::Keyhive,
     principal::{
         document::id::DocumentId as KeyhiveDocumentId,
         group::{membership_operation::MembershipOperation, RevokeMemberError},
@@ -23,7 +22,6 @@ use keyhive_core::{
         membered::Membered,
         public::Public,
     },
-    store::ciphertext::memory::MemoryCiphertextStore,
 };
 use nonempty::NonEmpty;
 

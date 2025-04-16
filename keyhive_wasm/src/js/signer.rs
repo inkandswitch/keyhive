@@ -131,7 +131,8 @@ impl JsSigner {
         Box::new(self.0.verifying_key().to_bytes())
     }
 
-    pub fn clone(&self) -> Self {
+    #[wasm_bindgen(js_name = clone)]
+    pub fn js_clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
