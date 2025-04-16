@@ -106,7 +106,7 @@ impl Driver {
 
     pub(crate) fn step(&mut self, now: UnixTimestampMillis) -> EventResults {
         if self.tx_commands.is_closed() {
-            let mut result = EventResults {
+            let result = EventResults {
                 stopped: true,
                 ..Default::default()
             };
