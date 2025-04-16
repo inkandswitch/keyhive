@@ -9,8 +9,8 @@ use beelay_core::{
     doc_status::DocEvent,
     io::IoResult,
     keyhive::{AddMemberToGroup, KeyhiveCommandResult, RemoveMemberFromGroup},
-    loading, CommandId, CommandResult, DocumentId, Event, PeerId, StreamEvent,
-    StreamId, UnixTimestampMillis,
+    loading, CommandId, CommandResult, DocumentId, Event, PeerId, StreamEvent, StreamId,
+    UnixTimestampMillis,
 };
 use futures::{channel::oneshot, stream::FuturesUnordered, StreamExt};
 use js_sys::{Array, Function, Object, Reflect};
@@ -709,9 +709,9 @@ impl Beelay {
                             serde_wasm_bindgen::to_value(&JsCommitOrBundle::from(item)).unwrap();
                         arr.push(&item);
                     }
-                    return Ok(Some(arr.into()));
+                    Ok(Some(arr.into()))
                 } else {
-                    return Ok(None);
+                    Ok(None)
                 }
             }
             _ => Err(JsError::new("Unexpected command result")),
@@ -1012,11 +1012,10 @@ impl Beelay {
 pub fn parse_beelay_doc_id(
     #[wasm_bindgen(unchecked_param_type = "string")] val: &JsValue,
 ) -> Result<JsValue, JsError> {
-    if let Some(doc_id) = val
+    if let Ok(doc_id) = val
         .as_string()
         .ok_or(JsError::new("document id was not a string"))?
         .parse::<DocumentId>()
-        .ok()
     {
         Ok(JsValue::from(doc_id.to_string()))
     } else {

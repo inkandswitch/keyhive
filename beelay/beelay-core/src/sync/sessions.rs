@@ -133,10 +133,6 @@ impl Sessions {
         session.doc_cgka_ops(doc_id, op_hashes)
     }
 
-    pub(crate) fn session_exists(&self, session_id: &SessionId) -> bool {
-        self.sessions.contains_key(session_id)
-    }
-
     pub(crate) fn expire_sessions(&mut self, now: UnixTimestampMillis) {
         // When we expire sessions we remove them from the active sessions but
         // we retain them in the expired sessions list for some time so that we

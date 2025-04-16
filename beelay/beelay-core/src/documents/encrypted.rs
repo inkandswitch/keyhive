@@ -2,7 +2,7 @@ use keyhive_core::{cgka::operation::CgkaOperation, crypto::signed::Signed};
 
 use crate::TaskContext;
 
-use super::{Commit, CommitHash, CommitOrBundle, DocumentId};
+use super::{Commit, CommitHash, DocumentId};
 
 pub(crate) struct EncryptedBytes(Vec<u8>);
 

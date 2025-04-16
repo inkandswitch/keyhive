@@ -168,7 +168,7 @@ async fn test_decrypt_after_fork_and_merge() {
         .collect::<Vec<_>>();
 
     if let Some(op) = encrypted.update_op() {
-        events.push(StaticEvent::from(op.clone()));
+        events.push(StaticEvent::from(Box::new(op.clone())));
     }
 
     let mut reloaded = {

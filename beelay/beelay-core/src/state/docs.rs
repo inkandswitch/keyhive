@@ -30,15 +30,8 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Docs<'a, R> {
         self.state.borrow_mut().docs_with_changes.insert(doc_id);
     }
 
-    pub(crate) fn has_doc(&self, doc_id: &DocumentId) -> bool {
-        self.state.borrow().docs.contains_key(doc_id)
-    }
-
     pub(crate) fn mark_changed(&self, doc_id: &DocumentId) {
-        self.state
-            .borrow_mut()
-            .docs_with_changes
-            .insert(*doc_id);
+        self.state.borrow_mut().docs_with_changes.insert(*doc_id);
     }
 
     pub(crate) fn sedimentree(&self, doc: &DocumentId) -> Option<crate::sedimentree::Sedimentree> {
