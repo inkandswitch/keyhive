@@ -186,12 +186,8 @@ impl Streams {
         std::mem::take(&mut self.modified)
             .into_iter()
             .filter_map(|stream_id| {
-                let Some(meta) = self.streams.get(&stream_id) else {
-                    return None;
-                };
-                let Some(handshake) = meta.handshake.as_ref() else {
-                    return None;
-                };
+                let meta = self.streams.get(&stream_id)?;
+                let handshake = meta.handshake.as_ref()?;
                 Some(conn_info::ConnectionInfo {
                     peer_id: handshake.their_peer_id,
                     state: meta.sync_phase.into(),

@@ -682,7 +682,6 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         let parents = parents
             .into_iter()
             .filter_map(|parent| get_peer(&mut *keyhive, parent))
-            .map(|p| p.into())
             .collect();
 
         let group = keyhive.generate_group(parents).await?;

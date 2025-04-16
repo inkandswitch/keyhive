@@ -465,7 +465,7 @@ mod tests {
                     .collect::<HashSet<_>>();
 
                 let expected_to_download: HashSet<_> =
-                    only_server_ops.iter().map(|op| Digest::hash(op)).collect();
+                    only_server_ops.iter().map(Digest::hash).collect();
 
                 assert_eq!(
                     to_download, expected_to_download,
@@ -480,7 +480,7 @@ mod tests {
                     .collect::<HashSet<_>>();
 
                 let expected_to_upload: HashSet<_> =
-                    only_client_ops.iter().map(|op| Digest::hash(op)).collect();
+                    only_client_ops.iter().map(Digest::hash).collect();
 
                 assert_eq!(
                     to_upload, expected_to_upload,

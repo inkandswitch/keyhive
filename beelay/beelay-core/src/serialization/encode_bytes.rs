@@ -2,7 +2,7 @@ use super::{leb128, parse, Encode, Parse};
 
 pub(crate) struct EncodeBytes<'a>(&'a [u8]);
 
-impl<'a> Encode for EncodeBytes<'a> {
+impl Encode for EncodeBytes<'_> {
     fn encode_into(&self, out: &mut Vec<u8>) {
         leb128::encode_uleb128(out, self.0.len() as u64);
         out.extend_from_slice(self.0);

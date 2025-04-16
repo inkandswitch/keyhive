@@ -87,7 +87,7 @@ impl<'a, T: Parse<'a>> Parse<'a> for Box<T> {
 impl<'a, T: Parse<'a>> Parse<'a> for Option<T> {
     fn parse(input: parse::Input<'a>) -> Result<(parse::Input<'a>, Self), parse::ParseError> {
         let (input, present) = parse::u8(input)?;
-        if !(present == 1) {
+        if present != 1 {
             return Ok((input, None));
         }
         let (input, item) = T::parse(input)?;

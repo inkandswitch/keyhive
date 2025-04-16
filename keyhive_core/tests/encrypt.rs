@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
 use keyhive_core::{
     access::Access,
@@ -6,9 +6,7 @@ use keyhive_core::{
     event::static_event::StaticEvent,
     keyhive::Keyhive,
     listener::{log::Log, no_listener::NoListener},
-    principal::{individual::Individual, peer::Peer},
     store::ciphertext::memory::MemoryCiphertextStore,
-    transact::merge::Merge,
 };
 use nonempty::nonempty;
 use testresult::TestResult;

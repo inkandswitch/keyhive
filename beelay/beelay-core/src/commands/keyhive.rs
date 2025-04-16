@@ -455,8 +455,7 @@ impl MembershipListener<Signer, CommitHash> for Listener {
             >,
         >,
     ) {
-        let _ = self
-            .send
+        self.send
             .unbounded_send(keyhive_core::event::Event::from(data.clone()))
             .unwrap();
     }
