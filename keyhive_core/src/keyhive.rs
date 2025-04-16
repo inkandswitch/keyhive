@@ -73,7 +73,7 @@ use tracing::instrument;
 #[derive(Derivative)]
 #[derivative(PartialEq, Eq, Clone)]
 pub struct Keyhive<
-    S: AsyncSigner,
+    S: AsyncSigner + Clone,
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
     C: CiphertextStore<T, P> = MemoryCiphertextStore<T, P>,
@@ -87,9 +87,11 @@ pub struct Keyhive<
     individuals: HashMap<IndividualId, Rc<RefCell<Individual>>>,
 
     /// The [`Group`]s that are known to this agent.
+    #[allow(clippy::type_complexity)]
     groups: HashMap<GroupId, Rc<RefCell<Group<S, T, L>>>>,
 
     /// The [`Document`]s that are known to this agent.
+    #[allow(clippy::type_complexity)]
     docs: HashMap<DocumentId, Rc<RefCell<Document<S, T, L>>>>,
 
     /// All applied [`Delegation`]s
@@ -113,7 +115,7 @@ pub struct Keyhive<
 }
 
 impl<
-        S: AsyncSigner,
+        S: AsyncSigner + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
@@ -174,16 +176,19 @@ impl<
         self.active.borrow().individual().clone()
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn groups(&self) -> &HashMap<GroupId, Rc<RefCell<Group<S, T, L>>>> {
         &self.groups
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn documents(&self) -> &HashMap<DocumentId, Rc<RefCell<Document<S, T, L>>>> {
         &self.docs
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip_all, fields(khid = %self.id()))]
     pub async fn generate_group(
         &mut self,
@@ -208,6 +213,7 @@ impl<
         Ok(g)
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip_all, fields(khid = %self.id()))]
     pub async fn generate_doc(
         &mut self,
@@ -220,6 +226,7 @@ impl<
             }
         }
 
+        let signer = self.active.borrow().signer.clone();
         let new_doc = Document::generate(
             NonEmpty {
                 head: self.active.dupe().into(),
@@ -229,7 +236,7 @@ impl<
             self.delegations.dupe(),
             self.revocations.dupe(),
             self.event_listener.clone(),
-            &self.active.borrow().signer,
+            &signer,
             &mut self.csprng,
         )
         .await?;
@@ -299,7 +306,8 @@ impl<
 
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn try_sign<U: Serialize + Debug>(&self, data: U) -> Result<Signed<U>, SigningError> {
-        self.active.borrow().try_sign_async(data).await
+        let signer = self.active.borrow().signer.clone();
+        signer.try_sign_async(data).await
     }
 
     #[instrument(skip(self), fields(khid = %self.id()))]
@@ -480,9 +488,8 @@ impl<
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
-        doc.borrow_mut()
-            .pcs_update(&self.active.borrow().signer, &mut self.csprng)
-            .await
+        let signer = self.active.borrow().signer.clone();
+        doc.borrow_mut().pcs_update(&signer, &mut self.csprng).await
     }
 
     #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
@@ -610,6 +617,7 @@ impl<
         Ok(Some(ops))
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip_all, fields(khid = %self.id()))]
     pub fn membership_ops_for_agent(
         &self,
@@ -1077,14 +1085,18 @@ impl<
 
         let signed_op = Rc::new(signed_op);
         if let CgkaOperation::Add { added_id, pk, .. } = signed_op.payload {
-            let active = self.active.borrow();
-            if active.id() == added_id {
+            let active_id = self.active.borrow().id();
+            if active_id == added_id {
                 tracing::info!("one of us!");
-                let sk = active
-                    .prekey_pairs
-                    .get(&pk)
-                    .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?;
-                doc.merge_cgka_invite_op(signed_op.clone(), sk)?;
+                let sk = {
+                    let active = self.active.borrow();
+                    active
+                        .prekey_pairs
+                        .get(&pk)
+                        .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?
+                        .clone()
+                };
+                doc.merge_cgka_invite_op(signed_op.clone(), &sk)?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
             } else if Public.individual().id() == added_id {
@@ -1110,9 +1122,10 @@ impl<
         individual: Rc<RefCell<Individual>>,
         head: Rc<Signed<Delegation<S, T, L>>>,
     ) -> Rc<RefCell<Group<S, T, L>>> {
+        let indie = individual.borrow().clone();
         let group = Rc::new(RefCell::new(
             Group::from_individual(
-                individual.borrow().clone(),
+                indie,
                 head,
                 self.delegations.dupe(),
                 self.revocations.dupe(),
@@ -1516,7 +1529,7 @@ impl<
 }
 
 impl<
-        S: AsyncSigner,
+        S: AsyncSigner + Clone,
         T: ContentRef + Debug,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
@@ -1609,7 +1622,7 @@ impl<
 }
 
 impl<
-        S: AsyncSigner,
+        S: AsyncSigner + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
@@ -1623,7 +1636,7 @@ impl<
 }
 
 impl<
-        S: AsyncSigner,
+        S: AsyncSigner + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
@@ -1842,7 +1855,7 @@ mod tests {
         hive.generate_doc(vec![indie.into()], nonempty![[1u8; 32], [2u8; 32]])
             .await?;
 
-        assert!(hive.active.borrow().prekey_pairs.len() > 0);
+        assert!(!hive.active.borrow().prekey_pairs.len().is_empty());
         assert_eq!(hive.individuals.len(), 2);
         assert_eq!(hive.groups.len(), 1);
         assert_eq!(hive.docs.len(), 1);
@@ -2015,10 +2028,7 @@ mod tests {
         assert_eq!(right.delegations.borrow().len(), 2);
 
         assert!(right.groups.len() == 1 || right.docs.len() == 1);
-        assert!(right
-            .docs
-            .get(&DocumentId(left_doc.borrow().id()))
-            .is_some());
+        assert!(right.docs.contains_key(&DocumentId(left_doc.borrow().id())));
         assert!(right.groups.get(&left_group.borrow().group_id()).is_none()); // NOTE: *None*
 
         assert_eq!(right.individuals.len(), 3);

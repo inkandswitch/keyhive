@@ -181,7 +181,7 @@ impl DebugEventRow {
                             sharekey: Hash::new(pk.as_bytes(), nicknames),
                             leaf_index: *leaf_index,
                             predecessors: predecessors
-                                .into_iter()
+                                .iter()
                                 .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
                                 .collect(),
                         };
@@ -198,11 +198,11 @@ impl DebugEventRow {
                             id: Hash::new(id.as_bytes(), nicknames),
                             leaf_index: *leaf_idx,
                             removed_keys: removed_keys
-                                .into_iter()
+                                .iter()
                                 .map(|key| Hash::new(key.as_bytes(), nicknames))
                                 .collect(),
                             predecessors: predecessors
-                                .into_iter()
+                                .iter()
                                 .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
                                 .collect(),
                         };
@@ -231,7 +231,7 @@ impl DebugEventRow {
                             new_keys,
                             path_length: new_path.path.len(),
                             predecessors: predecessors
-                                .into_iter()
+                                .iter()
                                 .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
                                 .collect(),
                         };

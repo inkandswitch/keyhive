@@ -48,7 +48,6 @@ impl SyncLoops {
     ) {
         let established = ctx.state().streams().established();
         let doc_changes = ctx.state().docs().take_doc_changes();
-        if !doc_changes.is_empty() {}
         for EstablishedStream {
             their_peer_id,
             direction,
@@ -106,7 +105,7 @@ impl SyncLoops {
 
             // forward everything which has changed and which the remote has access
             for (doc_id, changes) in &doc_changes {
-                match self.doc_versions.entry(doc_id.clone()) {
+                match self.doc_versions.entry(*doc_id) {
                     Entry::Occupied(mut entry) => {
                         *entry.get_mut() += 1;
                         *entry.get()
@@ -118,14 +117,14 @@ impl SyncLoops {
                 };
                 self.doc_events_pending_decryption
                     .extend(changes.iter().map(|c| EventPendingDecryption {
-                        doc: doc_id.clone(),
+                        doc: *doc_id,
                         version_last_attempted_decryption_at: None,
                         payload: c.payload.clone().into(),
                     }));
 
-                let doc_id = doc_id.clone();
+                let doc_id = *doc_id;
                 let changes = changes.clone();
-                let their_peer_id = their_peer_id.clone();
+                let their_peer_id = their_peer_id;
                 let ctx = ctx.clone();
                 let upload_task = async move {
                     if ctx.state().keyhive().can_pull(their_peer_id, &doc_id).await {

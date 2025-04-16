@@ -481,8 +481,7 @@ impl CgkaListener for Listener {
             keyhive_core::crypto::signed::Signed<keyhive_core::cgka::operation::CgkaOperation>,
         >,
     ) {
-        let _ = self
-            .send
+        self.send
             .unbounded_send(keyhive_core::event::Event::from(data.clone()))
             .unwrap();
     }

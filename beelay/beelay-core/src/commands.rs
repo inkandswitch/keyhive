@@ -219,9 +219,7 @@ async fn load_doc_commits<R>(
 where
     R: rand::Rng + rand::CryptoRng + Clone + 'static,
 {
-    let Some(tree) = ctx.state().docs().sedimentree(doc_id) else {
-        return None;
-    };
+    let tree = ctx.state().docs().sedimentree(doc_id)?;
     let tree_storage = ctx.storage().doc_storage(doc_id.clone());
     let tree_data = sedimentree::storage::data(tree_storage, tree)
         .try_filter_map(|commit_or_bundle| async {

@@ -601,14 +601,17 @@ pub struct RevokeMemberUpdate<
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevokeMemberUpdate<S, T, L> {
+    #[allow(clippy::type_complexity)]
     pub fn revocations(&self) -> &[Rc<Signed<Revocation<S, T, L>>>] {
         &self.revocations
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn redelegations(&self) -> &[Rc<Signed<Delegation<S, T, L>>>] {
         &self.redelegations
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn cgka_ops(&self) -> &[Signed<CgkaOperation>] {
         &self.cgka_ops
     }

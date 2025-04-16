@@ -111,7 +111,7 @@ where
         async move {
             let response = task.await?;
             match response.content {
-                NonErrorPayload::Pong => Ok(response.from.into()),
+                NonErrorPayload::Pong => Ok(response.from),
                 _ => Err(RpcError::IncorrectResponseType),
             }
         }
@@ -164,7 +164,7 @@ where
         }
     }
 
-    pub(crate) fn sessions<'b>(&'b self) -> Sessions<'b, R> {
+    pub(crate) fn sessions(&self) -> Sessions<'_, R> {
         Sessions::new(self)
     }
 
@@ -179,7 +179,7 @@ where
         async move {
             let resp = match target {
                 PeerAddress::Endpoint(endpoint_id) => {
-                    let now = now.borrow().clone();
+                    let now = *now.borrow();
                     let endpoint_audience =
                         state.endpoints().audience_of(endpoint_id).expect("FIXME");
                     let authed = state

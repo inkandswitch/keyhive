@@ -138,7 +138,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     pub fn remove_all(&mut self, content_ref: &Cr) -> bool {
         if let Some(digests) = self.refs_to_digests.remove(content_ref) {
             for digest in digests.iter() {
-                self.store.remove(&digest);
+                self.store.remove(digest);
             }
             true
         } else {

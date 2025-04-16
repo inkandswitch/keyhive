@@ -4,9 +4,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use futures::channel::mpsc;
 use futures::channel::oneshot;
 use keyhive_core::keyhive::Keyhive;
-use keyhive_core::listener::log::Log;
 use keyhive_core::store::ciphertext::memory::MemoryCiphertextStore;
-use keyhive_core::transact::merge::Merge;
 
 use crate::doc_state::DocState;
 use crate::io::{IoHandle, IoResult};

@@ -206,7 +206,10 @@ pub struct AfterAuth<
     T: ContentRef = [u8; 32],
     L: MembershipListener<S, T> = NoListener,
 > {
+    #[allow(clippy::type_complexity)]
     pub(crate) optional_delegation: Option<Rc<Signed<Delegation<S, T, L>>>>,
+
+    #[allow(clippy::type_complexity)]
     pub(crate) revocations: &'a [Rc<Signed<Revocation<S, T, L>>>],
 }
 

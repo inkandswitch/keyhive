@@ -229,10 +229,13 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
             docs,
             session_duration,
         )));
-        if let Err(_) = load_complete.send(loading::LoadedParts {
-            state: state.clone(),
-            peer_id,
-        }) {
+        if load_complete
+            .send(loading::LoadedParts {
+                state: state.clone(),
+                peer_id,
+            })
+            .is_err()
+        {
             tracing::warn!("load complete listener went away, stopping driver");
             return;
         }
@@ -347,7 +350,7 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         }
 
         loops.reconcile(&ctx);
-        ctx.state().sessions().expire_sessions(now.borrow().clone());
+        ctx.state().sessions().expire_sessions(*now.borrow());
         let changed = ctx.state().streams().take_changed();
         if !changed.is_empty() {
             let _ = tx_driver_events.unbounded_send(DriverEvent::PeersChanged(
@@ -361,7 +364,7 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
             if docs_after != known_docs {
                 let new_docs = docs_after.difference(&known_docs);
                 for doc in new_docs {
-                    ctx.io().new_doc_event(doc.clone(), DocEvent::Discovered);
+                    ctx.io().new_doc_event(*doc, DocEvent::Discovered);
                 }
                 known_docs = docs_after;
             }

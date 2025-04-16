@@ -10,11 +10,10 @@ use keyhive_core::{
     cgka::{error::CgkaError, operation::CgkaOperation},
     crypto::{
         digest::Digest,
-        encrypted::EncryptedContent,
         signed::{Signed, SigningError},
         verifiable::Verifiable,
     },
-    event::{static_event::StaticEvent, Event},
+    event::static_event::StaticEvent,
     keyhive::Keyhive,
     principal::{
         document::id::DocumentId as KeyhiveDocumentId,
@@ -54,7 +53,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         doc_id: &DocumentId,
         access: KeyhiveAccess,
     ) -> bool {
-        let doc_id = doc_id.clone();
+        let doc_id = *doc_id;
         tracing::trace!("checking access");
 
         let k_mutex = self.0.borrow().keyhive.clone();
@@ -262,7 +261,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
                             try_later.push(event);
                         } else {
                             tracing::error!(?event, err=?e, "failed to process keyhive event");
-                            return Err(e.into());
+                            return Err(e);
                         }
                     }
                 }
@@ -296,7 +295,6 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         let parents = other_owners
             .into_iter()
             .filter_map(|parent| get_peer(&mut *keyhive, parent))
-            .map(|p| p.into())
             .collect();
         let doc = keyhive.generate_doc(parents, initial_heads).await.unwrap();
         let key = doc.borrow().doc_id().verifying_key();
@@ -333,7 +331,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         let k_mutex = self.0.borrow().keyhive.clone();
         let keyhive = k_mutex.lock().await;
 
-        keyhive.get_document(doc.clone().into()).is_some()
+        keyhive.get_document((*doc).into()).is_some()
     }
 
     pub(crate) async fn add_member_to_doc(
@@ -458,15 +456,12 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         let k_mutex = self.0.borrow().keyhive.clone();
         let keyhive = k_mutex.lock().await;
 
-        let Some(agent) = keyhive.get_agent(agent_id) else {
-            return None;
-        };
+        let agent = keyhive.get_agent(agent_id)?;
         Some(
             keyhive
                 .events_for_agent(&agent)
                 .unwrap()
                 .into_values()
-                .map(|op| op.into())
                 .collect(),
         )
     }
@@ -490,9 +485,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         let k_mutex = self.0.borrow().keyhive.clone();
         let keyhive = k_mutex.lock().await;
 
-        let Some(doc) = keyhive.get_document(doc_id.into()) else {
-            return None;
-        };
+        let doc = keyhive.get_document(doc_id.into())?;
         let result = doc
             .borrow()
             .transitive_members()
@@ -561,10 +554,10 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         let cgka_op = enc_result.update_op().cloned();
         let enc_result = enc_result.encrypted_content();
         let encrypted = encryption::EncryptionWrapper {
-            nonce: enc_result.nonce.clone(),
+            nonce: enc_result.nonce,
             ciphertext: enc_result.ciphertext.clone(),
-            pcs_key_hash: enc_result.pcs_key_hash.clone(),
-            pcs_update_op_hash: enc_result.pcs_update_op_hash.clone(),
+            pcs_key_hash: enc_result.pcs_key_hash,
+            pcs_update_op_hash: enc_result.pcs_update_op_hash,
         };
         tracing::trace!(?doc_id, ?hash, wrapper=?encrypted, "encrypting");
         Ok((encrypted.encode(), cgka_op))
@@ -704,7 +697,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
                 keyhive
                     .docs_reachable_by_agent(&peer)
                     .into_keys()
-                    .map(|d| DocumentId::from(d)),
+                    .map(DocumentId::from),
             );
         } else {
             tracing::trace!("agent not found in local keyhive");
@@ -723,11 +716,10 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         let events = keyhive
             .events_for_agent(&keyhive.active().clone().into())
             .unwrap();
-        let table = keyhive_core::debug_events::DebugEventTable::from_events(
+        keyhive_core::debug_events::DebugEventTable::from_events(
             events.into_values().collect(),
             nicknames,
-        );
-        table
+        )
     }
 
     pub(crate) async fn contact_card(
@@ -749,9 +741,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
 
     pub(crate) fn try_known_docs(&self) -> Option<HashSet<DocumentId>> {
         let k_mutex = self.0.borrow().keyhive.clone();
-        let Some(keyhive) = k_mutex.try_lock() else {
-            return None;
-        };
+        let keyhive = k_mutex.try_lock()?;
 
         Some(
             keyhive

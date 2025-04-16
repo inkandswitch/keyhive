@@ -73,6 +73,7 @@ pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener
     pub(crate) members: HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>>,
 
     /// Current view of revocations
+    #[allow(clippy::type_complexity)]
     pub(crate) active_revocations: HashMap<[u8; 64], Rc<Signed<Revocation<S, T, L>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
@@ -334,6 +335,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         &self.state.revocation_heads
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn get_capability(
         &self,
@@ -365,6 +367,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             .collect()
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip_all, fields(group_id = %self.group_id()))]
     pub fn receive_delegation(
         &mut self,
@@ -376,6 +379,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         Ok(digest)
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub async fn receive_revocation(
         &mut self,
@@ -387,6 +391,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         Ok(digest)
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(
         skip_all,
         fields(
@@ -1509,7 +1514,6 @@ mod tests {
         let carol_signer = carol.borrow().signer.clone();
 
         let dan_id = dan.borrow().id().into();
-        let dan_signer = dan.borrow().signer.clone();
 
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();

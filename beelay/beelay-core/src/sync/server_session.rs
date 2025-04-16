@@ -373,7 +373,7 @@ mod tests {
     impl<'a> arbitrary::Arbitrary<'a> for Scenario {
         fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
             let all_ops = Vec::<Signed<CgkaOperation>>::arbitrary(u)?;
-            if all_ops.len() == 0 {
+            if all_ops.is_empty() {
                 return Ok(Scenario {
                     only_server_ops: vec![],
                     only_client_ops: vec![],
@@ -411,12 +411,8 @@ mod tests {
                  joint_ops,
              }| {
                 // Create client and server sessions
-                let mut server_session = RibltSession::new(
-                    only_server_ops
-                        .clone()
-                        .into_iter()
-                        .chain(joint_ops.clone().into_iter()),
-                );
+                let mut server_session =
+                    RibltSession::new(only_server_ops.clone().into_iter().chain(joint_ops.clone()));
 
                 // Create client decoder
                 let mut client_decoder = riblt::Decoder::new();

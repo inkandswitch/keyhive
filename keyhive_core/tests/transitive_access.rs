@@ -50,7 +50,7 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
             bob_on_alice.dupe().into(),
             &mut group.dupe().into(),
             Access::Read,
-            &vec![],
+            &[],
         )
         .await?;
 
@@ -117,7 +117,7 @@ async fn test_group_members_cycle() -> TestResult {
             bob_on_alice.dupe().into(),
             &mut group.dupe().into(),
             Access::Read,
-            &vec![],
+            &[],
         )
         .await?;
 
@@ -130,7 +130,7 @@ async fn test_group_members_cycle() -> TestResult {
             group.dupe().into(),
             &mut doc.dupe().into(),
             Access::Read,
-            &vec![],
+            &[],
         )
         .await?;
 

@@ -68,10 +68,10 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Docs<'a, R> {
         let commits = update.take_commits();
         if !commits.is_empty() {
             if let Some(doc) = state.docs.get_mut(&doc_id) {
-                doc.add_commits(commits.into_iter(), update.sender.clone());
+                doc.add_commits(commits.into_iter(), update.sender);
             } else {
                 let mut doc = DocState::new(crate::sedimentree::Sedimentree::default());
-                doc.add_commits(commits.into_iter(), update.sender.clone());
+                doc.add_commits(commits.into_iter(), update.sender);
                 state.docs.insert(doc_id, doc);
             }
         }
@@ -79,10 +79,10 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Docs<'a, R> {
         let bundles = update.take_bundles();
         if !bundles.is_empty() {
             if let Some(doc) = state.docs.get_mut(&doc_id) {
-                doc.add_bundles(bundles.into_iter(), update.sender.clone());
+                doc.add_bundles(bundles.into_iter(), update.sender);
             } else if !bundles.is_empty() {
                 let mut doc = DocState::new(crate::sedimentree::Sedimentree::default());
-                doc.add_bundles(bundles.into_iter(), update.sender.clone());
+                doc.add_bundles(bundles.into_iter(), update.sender);
                 state.docs.insert(doc_id, doc);
             }
         }
@@ -97,7 +97,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Docs<'a, R> {
                 tracing::warn!("doc marked as changed but not found");
                 continue;
             };
-            changes.insert(doc_id.clone(), doc.take_changes());
+            changes.insert(doc_id, doc.take_changes());
         }
         changes
     }
