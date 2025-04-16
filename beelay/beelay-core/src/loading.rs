@@ -142,9 +142,7 @@ pub(crate) async fn load_docs(io: IoHandle) -> HashMap<DocumentId, DocState> {
         .await;
     tracing::debug!(num_docs = docs.len(), "loading documents");
     let load_futs = docs.into_iter().filter_map(|doc_id_key| {
-        let Some(name) = doc_id_key.name() else {
-            return None;
-        };
+        let name = doc_id_key.name()?;
         let doc_id = match DocumentId::from_str(name) {
             Ok(d) => d,
             Err(e) => {

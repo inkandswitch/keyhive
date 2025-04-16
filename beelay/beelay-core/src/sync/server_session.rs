@@ -300,13 +300,7 @@ mod tests {
     };
     use std::collections::HashSet;
 
-    use crate::{
-        riblt,
-        sync::{
-            server_session::{MakeSymbols, RibltSession},
-            CgkaSymbol,
-        },
-    };
+    use crate::{riblt, sync::CgkaSymbol};
 
     #[derive(Debug)]
     struct Scenario {

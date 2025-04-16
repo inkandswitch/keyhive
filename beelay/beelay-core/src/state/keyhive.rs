@@ -202,9 +202,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
                 }
             }
 
-            if try_later.is_empty() {
-                break;
-            } else if !ingested {
+            if try_later.is_empty() || !ingested {
                 break;
             } else {
                 ops = try_later;

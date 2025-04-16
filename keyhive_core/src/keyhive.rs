@@ -392,18 +392,13 @@ impl<
         can: Access,
         other_relevant_docs: &[Rc<RefCell<Document<S, T, L>>>], // TODO make this automatic
     ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError> {
+        let signer = self.active.borrow().signer.clone();
         match resource {
             Membered::Group(group) => Ok(group
                 .borrow_mut()
-                .add_member(
-                    to_add,
-                    can,
-                    &self.active.borrow().signer,
-                    other_relevant_docs,
-                )
+                .add_member(to_add, can, &signer, other_relevant_docs)
                 .await?),
             Membered::Document(doc) => {
-                let signer = self.active.borrow().signer.clone();
                 doc.borrow_mut()
                     .add_member(to_add, can, &signer, other_relevant_docs)
                     .await
@@ -1511,6 +1506,7 @@ impl<
         }
     }
 
+    #[allow(clippy::type_complexity)]
     #[cfg(any(test, feature = "test_utils"))]
     #[instrument(level = "trace", skip_all, fields(khid = %self.id()))]
     pub async fn ingest_event_table(
@@ -2023,7 +2019,7 @@ mod tests {
 
         assert!(right.groups.len() == 1 || right.docs.len() == 1);
         assert!(right.docs.contains_key(&DocumentId(left_doc.borrow().id())));
-        assert!(right.groups.get(&left_group.borrow().group_id()).is_none()); // NOTE: *None*
+        assert!(!right.groups.contains_key(&left_group.borrow().group_id())); // NOTE: *None*
 
         assert_eq!(right.individuals.len(), 3);
         assert_eq!(right.groups.len(), 0);
