@@ -119,7 +119,7 @@ impl From<DocumentId> for KeyhiveEntityId {
 }
 
 impl From<Public> for KeyhiveEntityId {
-    fn from(public: Public) -> Self {
+    fn from(_public: Public) -> Self {
         KeyhiveEntityId::Public
     }
 }
@@ -293,8 +293,6 @@ pub(crate) mod error {
 
     #[derive(Debug, thiserror::Error)]
     pub(crate) enum ReceiveEventError {
-        #[error("missing dependency")]
-        MissingDependency,
         #[error(transparent)]
         Receive(
             #[from]

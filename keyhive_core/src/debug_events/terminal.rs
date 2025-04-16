@@ -92,26 +92,14 @@ fn print_event_table_internal(debug_table: DebugEventTable, verbose: bool) {
 fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
     match details {
         DebugEventDetails::PrekeysExpanded { share_key } => {
-            if verbose {
-                format!("Share Key: {}", share_key.short_hex())
-            } else {
-                format!("Share Key: {}", share_key.short_hex())
-            }
+            format!("Share Key: {}", share_key.short_hex())
         }
         DebugEventDetails::PrekeyRotated { old_key, new_key } => {
-            if verbose {
-                format!(
-                    "Old Key: {}\nNew Key: {}",
-                    old_key.short_hex(),
-                    new_key.short_hex()
-                )
-            } else {
-                format!(
-                    "Old Key: {}\nNew Key: {}",
-                    old_key.short_hex(),
-                    new_key.short_hex()
-                )
-            }
+            format!(
+                "Old Key: {}\nNew Key: {}",
+                old_key.short_hex(),
+                new_key.short_hex()
+            )
         }
         DebugEventDetails::CgkaOperation {
             op_type,

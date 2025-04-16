@@ -1,7 +1,6 @@
 use beelay_core::{Commit, CommitHash};
 use serde::{Deserialize, Serialize};
 
-use super::JsCommitHash;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct JsCommit {

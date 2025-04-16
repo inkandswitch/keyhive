@@ -7,10 +7,7 @@ use keyhive_core::{
     crypto::{digest::Digest, signer::memory::MemorySigner},
     event::{static_event::StaticEvent, Event},
     listener::no_listener::NoListener,
-    principal::{
-        group::membership_operation::MembershipOperation,
-        individual::op::KeyOp,
-    },
+    principal::{group::membership_operation::MembershipOperation, individual::op::KeyOp},
 };
 
 use crate::{keyhive::Listener, CommitHash, PeerId, Signer, TaskContext};
@@ -26,13 +23,6 @@ pub(crate) struct MembershipState {
 }
 
 impl MembershipState {
-    pub(crate) fn empty() -> Self {
-        Self {
-            membership_ops: HashMap::new(),
-            prekey_ops: HashSet::new(),
-        }
-    }
-
     pub(crate) async fn load<R: rand::Rng + rand::CryptoRng>(
         ctx: TaskContext<R>,
         remote: PeerId,

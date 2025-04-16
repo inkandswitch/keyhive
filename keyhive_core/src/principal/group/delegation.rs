@@ -56,10 +56,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         self.can
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn proof(&self) -> Option<&Rc<Signed<Delegation<S, T, L>>>> {
         self.proof.as_ref()
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn after_revocations(&self) -> &[Rc<Signed<Revocation<S, T, L>>>] {
         &self.after_revocations
     }

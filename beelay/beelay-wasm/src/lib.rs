@@ -9,7 +9,7 @@ use beelay_core::{
     doc_status::DocEvent,
     io::IoResult,
     keyhive::{AddMemberToGroup, KeyhiveCommandResult, RemoveMemberFromGroup},
-    loading, CommandId, CommandResult, CommitOrBundle, DocumentId, Event, PeerId, StreamEvent,
+    loading, CommandId, CommandResult, DocumentId, Event, PeerId, StreamEvent,
     StreamId, UnixTimestampMillis,
 };
 use futures::{channel::oneshot, stream::FuturesUnordered, StreamExt};

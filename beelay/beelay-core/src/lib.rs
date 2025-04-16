@@ -201,7 +201,7 @@ impl<R: rand::Rng + rand::CryptoRng> Beelay<R> {
                     .handle_response(outbound_request_id, inner_rpc_response);
             }
             EventInner::BeginCommand(command_id, command) => {
-                self.driver.dispatch_command(command_id, command);
+                self.driver.dispatch_command(command_id, *command);
             }
             EventInner::Tick => {
                 self.driver.tick();

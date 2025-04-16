@@ -292,61 +292,6 @@ impl Session {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum Error {
-    #[error("invalid sequence number")]
-    InvalidSequenceNumber,
-}
-
-pub(crate) struct MakeSymbols {
-    pub(crate) offset: usize,
-    pub(crate) count: usize,
-}
-
-struct RibltSession<K: riblt::Symbol + Copy> {
-    encoder: riblt::Encoder<K>,
-    symbols: Vec<riblt::CodedSymbol<K>>,
-}
-
-impl<K> RibltSession<K>
-where
-    K: riblt::Symbol + Copy,
-{
-    fn new<I, V>(items: I) -> Self
-    where
-        I: Iterator<Item = V>,
-        K: for<'a> From<&'a V> + Eq + std::hash::Hash,
-    {
-        let mut encoder = riblt::Encoder::new();
-        for item in items {
-            let symbol = K::from(&item);
-            encoder.add_symbol(&symbol);
-        }
-        Self {
-            encoder,
-            symbols: Vec::new(),
-        }
-    }
-}
-
-impl<K> RibltSession<K>
-where
-    K: riblt::Symbol + Copy + Eq + std::hash::Hash,
-{
-    fn symbols(
-        &mut self,
-        MakeSymbols { offset, count }: MakeSymbols,
-    ) -> Vec<riblt::CodedSymbol<K>> {
-        if offset + count >= self.symbols.len() {
-            let num_new_symbols_to_make = offset + count - self.symbols.len() + 1;
-            self.symbols
-                .extend(self.encoder.next_n_symbols(num_new_symbols_to_make as u64));
-        }
-        assert!(offset + count <= self.symbols.len() - 1);
-        self.symbols[offset..offset + count].to_vec()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use keyhive_core::{

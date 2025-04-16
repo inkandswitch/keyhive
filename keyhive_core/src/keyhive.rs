@@ -384,6 +384,7 @@ impl<
             })
     }
 
+    #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &mut self,
         to_add: Agent<S, T, L>,
@@ -402,13 +403,9 @@ impl<
                 )
                 .await?),
             Membered::Document(doc) => {
+                let signer = self.active.borrow().signer.clone();
                 doc.borrow_mut()
-                    .add_member(
-                        to_add,
-                        can,
-                        &self.active.borrow().signer,
-                        other_relevant_docs,
-                    )
+                    .add_member(to_add, can, &signer, other_relevant_docs)
                     .await
             }
         }
@@ -427,11 +424,12 @@ impl<
             relevant_docs.insert(doc_id, doc.borrow().content_heads.iter().cloned().collect());
         }
 
+        let signer = self.active.borrow().signer.clone();
         resource
             .revoke_member(
                 to_revoke,
                 retain_all_other_members,
-                &self.active.borrow().signer,
+                &signer,
                 &mut relevant_docs,
             )
             .await
@@ -445,15 +443,10 @@ impl<
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError> {
+        let signer = self.active.borrow().signer.clone();
         let result = doc
             .borrow_mut()
-            .try_encrypt_content(
-                content_ref,
-                content,
-                pred_refs,
-                &self.active.borrow().signer,
-                &mut self.csprng,
-            )
+            .try_encrypt_content(content_ref, content, pred_refs, &signer, &mut self.csprng)
             .await?;
         if let Some(op) = &result.update_op {
             self.event_listener.on_cgka_op(&Rc::new(op.clone())).await;
@@ -550,6 +543,7 @@ impl<
         caps
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip_all, fields(khid = %self.id()))]
     pub fn events_for_agent(
         &self,
@@ -771,11 +765,13 @@ impl<
         self.individuals.get(&id)
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn get_group(&self, id: GroupId) -> Option<&Rc<RefCell<Group<S, T, L>>>> {
         self.groups.get(&id)
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn get_document(&self, id: DocumentId) -> Option<&Rc<RefCell<Document<S, T, L>>>> {
         self.docs.get(&id)
@@ -1077,11 +1073,10 @@ impl<
         signed_op.try_verify()?;
 
         let doc_id = signed_op.payload.doc_id();
-        let mut doc = self
+        let doc = self
             .docs
             .get(doc_id)
-            .ok_or(ReceiveCgkaOpError::UnknownDocument(*doc_id))?
-            .borrow_mut();
+            .ok_or(ReceiveCgkaOpError::UnknownDocument(*doc_id))?;
 
         let signed_op = Rc::new(signed_op);
         if let CgkaOperation::Add { added_id, pk, .. } = signed_op.payload {
@@ -1095,17 +1090,19 @@ impl<
                         .get(&pk)
                         .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?
                 };
-                doc.merge_cgka_invite_op(signed_op.clone(), &sk)?;
+                doc.borrow_mut()
+                    .merge_cgka_invite_op(signed_op.clone(), &sk)?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
             } else if Public.individual().id() == added_id {
                 let sk = Public.share_secret_key();
-                doc.merge_cgka_invite_op(signed_op.clone(), &sk)?;
+                doc.borrow_mut()
+                    .merge_cgka_invite_op(signed_op.clone(), &sk)?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
             }
         }
-        doc.merge_cgka_op(signed_op.clone())?;
+        doc.borrow_mut().merge_cgka_op(signed_op.clone())?;
         self.event_listener.on_cgka_op(&signed_op).await;
         Ok(())
     }
@@ -1601,7 +1598,8 @@ impl<
             }
         }
 
-        for event in fork.event_listener.0.borrow().iter() {
+        let forked_listener = fork.event_listener.0.borrow().clone();
+        for event in forked_listener.iter() {
             match event {
                 Event::PrekeysExpanded(_add_op) => {
                     continue; // NOTE: handled above
@@ -1854,7 +1852,7 @@ mod tests {
         hive.generate_doc(vec![indie.into()], nonempty![[1u8; 32], [2u8; 32]])
             .await?;
 
-        assert!(!hive.active.borrow().prekey_pairs.len().is_empty());
+        assert!(!hive.active.borrow().prekey_pairs.is_empty());
         assert_eq!(hive.individuals.len(), 2);
         assert_eq!(hive.groups.len(), 1);
         assert_eq!(hive.docs.len(), 1);
@@ -1915,7 +1913,8 @@ mod tests {
         assert_eq!(hive2.groups.len(), 0);
         assert_eq!(hive2.docs.len(), 0);
 
-        for dlg in group1_on_hive1.borrow().delegation_heads().values() {
+        let heads = group1_on_hive1.borrow().delegation_heads().clone();
+        for dlg in heads.values() {
             let static_dlg = dlg.as_ref().clone().map(|d| d.into()); // TODO add From instance
             hive2.receive_delegation(&static_dlg).await.unwrap();
         }
@@ -1955,19 +1954,15 @@ mod tests {
         assert_eq!(left.groups.len(), 1);
         assert_eq!(left.docs.len(), 1);
 
-        assert!(left.docs.get(&left_doc.borrow().doc_id()).is_some());
-        assert!(left.groups.get(&left_group.borrow().group_id()).is_some());
+        assert!(left.docs.contains_key(&left_doc.borrow().doc_id()));
+        assert!(left.groups.contains_key(&left_group.borrow().group_id()));
 
         // NOTE: *NOT* the group
         let left_membered = left.membered_reachable_by_agent(&Public.individual().into());
 
         assert_eq!(left_membered.len(), 1);
-        assert!(left_membered
-            .get(&left_doc.borrow().doc_id().into())
-            .is_some());
-        assert!(left_membered
-            .get(&left_group.borrow().group_id().into())
-            .is_none()); // NOTE *not* included because Public is not a member
+        assert!(left_membered.contains_key(&left_doc.borrow().doc_id().into()));
+        assert!(!left_membered.contains_key(&left_group.borrow().group_id().into())); // NOTE *not* included because Public is not a member
 
         let left_to_mid_ops = left.events_for_agent(&Public.individual().into()).unwrap();
         assert_eq!(left_to_mid_ops.len(), 14);
@@ -1981,8 +1976,8 @@ mod tests {
         assert_eq!(left.revocations.borrow().len(), 0);
 
         // Middle should now look the same
-        assert!(middle.docs.get(&left_doc.borrow().doc_id()).is_some());
-        assert!(middle.groups.get(&left_group.borrow().group_id()).is_none()); // NOTE: *None*
+        assert!(middle.docs.contains_key(&left_doc.borrow().doc_id()));
+        assert!(!middle.groups.contains_key(&left_group.borrow().group_id())); // NOTE: *None*
 
         assert_eq!(middle.individuals.len(), 2); // NOTE: includes Left
         assert_eq!(middle.groups.len(), 0);

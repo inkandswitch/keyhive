@@ -22,7 +22,7 @@ use tracing::instrument;
 #[derive(From, Into, PartialEq, Eq)]
 #[derive_where(Debug; T)]
 pub struct Log<S: AsyncSigner, T: ContentRef = [u8; 32]>(
-    pub Rc<RefCell<Vec<Event<S, T, Log<S, T>>>>>,
+    #[allow(clippy::type_complexity)] pub Rc<RefCell<Vec<Event<S, T, Log<S, T>>>>>,
 );
 
 impl<S: AsyncSigner, T: ContentRef> Log<S, T> {

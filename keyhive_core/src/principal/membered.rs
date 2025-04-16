@@ -83,6 +83,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, 
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &mut self,
         member_to_add: Agent<S, T, L>,
@@ -104,6 +105,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, 
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub async fn revoke_member(
         &mut self,
         member_id: Identifier,
@@ -137,6 +139,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, 
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn receive_delegation(
         &self,
         delegation: Rc<Signed<Delegation<S, T, L>>>,

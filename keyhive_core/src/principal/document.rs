@@ -137,6 +137,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.group.revocation_heads()
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn get_capability(
         &self,
         member_id: &Identifier,
@@ -211,6 +212,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         })
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(
         skip(self, member_to_add, can, signer),
         fields(doc_id = ?self.doc_id(), member_id = %member_to_add.id())
@@ -341,6 +343,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         // FIXME also rebuild CGKA?
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn receive_delegation(
         &mut self,
         delegation: Rc<Signed<Delegation<S, T, L>>>,

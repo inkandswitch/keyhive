@@ -1,6 +1,6 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
-use beelay_core::{CommandId, Event, StreamId};
+use beelay_core::{Event, StreamId};
 use js_sys::{Function, Uint8Array};
 use wasm_bindgen::{prelude::wasm_bindgen, JsCast, JsError, JsValue};
 
@@ -72,7 +72,7 @@ impl Stream {
                 };
             }
             StreamOutbox::Listener(listener) => {
-                listener.call1(&JsValue::null(), &Uint8Array::from(message.as_slice()));
+                let _ = listener.call1(&JsValue::null(), &Uint8Array::from(message.as_slice()));
             }
         }
     }

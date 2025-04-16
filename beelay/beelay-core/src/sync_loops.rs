@@ -19,6 +19,8 @@ pub(crate) struct SyncLoops {
     doc_events_pending_decryption: Vec<EventPendingDecryption>,
     running_sync_loops: FuturesUnordered<Pin<Box<dyn Future<Output = StreamId>>>>,
     running_uploads: FuturesUnordered<Pin<Box<dyn Future<Output = Result<(), RpcError>>>>>,
+
+    #[allow(clippy::type_complexity)]
     running_decryptions:
         FuturesUnordered<Pin<Box<dyn Future<Output = Vec<(batch::DecryptResponse, u64)>>>>>,
 }
@@ -60,7 +62,8 @@ impl SyncLoops {
                 .keys()
                 .collect::<HashSet<_>>()
                 .difference(&self.doc_versions.keys().collect::<HashSet<_>>())
-                .collect::<Vec<_>>().is_empty();
+                .collect::<Vec<_>>()
+                .is_empty();
             let should_start_sync = {
                 if direction == ResolvedDirection::Accepting {
                     false
@@ -122,7 +125,6 @@ impl SyncLoops {
 
                 let doc_id = *doc_id;
                 let changes = changes.clone();
-                let their_peer_id = their_peer_id;
                 let ctx = ctx.clone();
                 let upload_task = async move {
                     if ctx.state().keyhive().can_pull(their_peer_id, &doc_id).await {

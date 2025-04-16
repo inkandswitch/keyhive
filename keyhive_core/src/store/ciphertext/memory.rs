@@ -14,6 +14,8 @@ use tracing::instrument;
 pub struct MemoryCiphertextStore<Cr: ContentRef, P> {
     pub(crate) ops_to_refs: HashMap<Digest<Signed<CgkaOperation>>, HashSet<Cr>>,
     pub(crate) refs_to_digests: HashMap<Cr, HashSet<Digest<EncryptedContent<P, Cr>>>>,
+
+    #[allow(clippy::type_complexity)]
     pub(crate) store:
         HashMap<Digest<EncryptedContent<P, Cr>>, (ByteSize, Rc<EncryptedContent<P, Cr>>)>,
 }
