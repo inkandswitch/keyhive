@@ -41,18 +41,13 @@ impl ReachableDocs {
         let doc_states = docs.iter().map(|doc_id| {
             let ctx = ctx.clone();
             async move {
-                let tree =
-                    sedimentree::storage::load(ctx.storage().doc_storage(doc_id.clone())).await?;
+                let tree = sedimentree::storage::load(ctx.storage().doc_storage(*doc_id)).await?;
                 if let Some(tree) = tree {
                     let summary = tree.minimize().summarize();
-                    let cgka_ops = ctx
-                        .state()
-                        .keyhive()
-                        .cgka_ops_for_doc(doc_id.clone())
-                        .await?;
-                    let hash = DocStateHash::construct(&doc_id, tree.minimal_hash(), &cgka_ops);
+                    let cgka_ops = ctx.state().keyhive().cgka_ops_for_doc(*doc_id).await?;
+                    let hash = DocStateHash::construct(doc_id, tree.minimal_hash(), &cgka_ops);
                     Ok::<_, Error>(Some((
-                        doc_id.clone(),
+                        *doc_id,
                         DocState {
                             hash,
                             cgka_ops,
@@ -67,7 +62,7 @@ impl ReachableDocs {
         });
         let doc_states = futures::future::try_join_all(doc_states).await?;
         Ok(Self {
-            doc_states: doc_states.into_iter().filter_map(|state| state).collect(),
+            doc_states: doc_states.into_iter().flatten().collect(),
         })
     }
 }

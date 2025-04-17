@@ -1,8 +1,6 @@
 use beelay_core::{Commit, CommitHash};
 use serde::{Deserialize, Serialize};
 
-use super::JsCommitHash;
-
 #[derive(Serialize, Deserialize)]
 pub(crate) struct JsCommit {
     #[serde(with = "crate::js_wrappers::commit_hash::serde_impl")]
@@ -15,8 +13,8 @@ pub(crate) struct JsCommit {
 
 impl From<JsCommit> for Commit {
     fn from(js_commit: JsCommit) -> Self {
-        let parents = js_commit.parents.into_iter().map(Into::into).collect();
-        Commit::new(parents, js_commit.contents.to_vec(), js_commit.hash.into())
+        let parents = js_commit.parents.into_iter().collect();
+        Commit::new(parents, js_commit.contents.to_vec(), js_commit.hash)
     }
 }
 

@@ -80,7 +80,7 @@ pub(super) async fn sync_docs<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         .collect::<Result<HashMap<_, _>, _>>()?;
 
     let (in_sync, local_out_of_sync) = local_docs.keys().partition::<HashSet<_>, _>(|doc_id| {
-        only_remote_states.get(doc_id).is_none() && only_local_states.get(doc_id).is_none()
+        !only_remote_states.contains_key(doc_id) && !only_local_states.contains_key(doc_id)
     });
 
     let out_of_sync = local_out_of_sync
@@ -105,11 +105,11 @@ impl DocStateHash {
     pub(crate) fn construct(
         doc: &DocumentId,
         tree: MinimalTreeHash,
-        cgka_ops: &Vec<Signed<CgkaOperation>>,
+        cgka_ops: &[Signed<CgkaOperation>],
     ) -> Self {
         let mut hasher = blake3::Hasher::new();
         hasher.update(tree.as_bytes());
-        let mut cgka = cgka_ops.iter().map(|o| Digest::hash(o)).collect::<Vec<_>>();
+        let mut cgka = cgka_ops.iter().map(Digest::hash).collect::<Vec<_>>();
         cgka.sort();
         for op in cgka {
             hasher.update(op.as_slice());
@@ -187,11 +187,5 @@ pub(crate) mod error {
         BadSymbol,
         #[error(transparent)]
         Rpc(#[from] RpcError),
-        #[error("session expired")]
-        SessionExpired,
-        #[error("session not found")]
-        SessionNotFound,
-        #[error("session error: {0}")]
-        Session(String),
     }
 }

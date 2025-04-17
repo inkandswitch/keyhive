@@ -903,7 +903,7 @@ mod tests {
 
             let a = (alice_hash, alice_op.clone());
             let b = (bob_hash, bob_op.clone());
-            let r = (rev_hash.into(), alice_revokes_bob.into());
+            let r = (rev_hash, alice_revokes_bob.into());
 
             assert_eq!(observed.clone().len(), 3);
 

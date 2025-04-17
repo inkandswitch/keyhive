@@ -9,8 +9,8 @@ use beelay_core::{
     doc_status::DocEvent,
     io::IoResult,
     keyhive::{AddMemberToGroup, KeyhiveCommandResult, RemoveMemberFromGroup},
-    loading, CommandId, CommandResult, CommitOrBundle, DocumentId, Event, PeerId, StreamEvent,
-    StreamId, UnixTimestampMillis,
+    loading, CommandId, CommandResult, DocumentId, Event, PeerId, StreamEvent, StreamId,
+    UnixTimestampMillis,
 };
 use futures::{channel::oneshot, stream::FuturesUnordered, StreamExt};
 use js_sys::{Array, Function, Object, Reflect};
@@ -297,7 +297,7 @@ impl Beelay {
                         e
                     ))),
                 },
-                _ => return Err(JsError::new("unexpected command result")),
+                _ => Err(JsError::new("unexpected command result")),
             },
             Err(err) => Err(JsError::new(&format!(
                 "Failed to get contact card: {}",
@@ -314,9 +314,9 @@ impl Beelay {
         if !args.is_object() {
             return Err(JsError::new("args must be an object"));
         }
-        let initial_commit = Reflect::get(&args, &"initialCommit".into())
+        let initial_commit = Reflect::get(args, &"initialCommit".into())
             .map_err(|_| JsError::new("Failed to get initial commit"))?;
-        let other_parents = Reflect::get(&args, &"otherParents".into())
+        let other_parents = Reflect::get(args, &"otherParents".into())
             .map_err(|_| JsError::new("Failed to get additional parents"))?;
 
         let js_commit: js_wrappers::JsCommit = serde_wasm_bindgen::from_value(initial_commit)
@@ -376,7 +376,7 @@ impl Beelay {
             if other_parents.is_null() || other_parents.is_undefined() {
                 Vec::new()
             } else {
-                let other_parents = other_parents
+                other_parents
                     .dyn_into::<Array>()
                     .map_err(|_| JsError::new("Failed to convert additional parents to array"))?
                     .iter()
@@ -391,8 +391,7 @@ impl Beelay {
                             })?;
                         Ok::<_, JsError>(parent.into())
                     })
-                    .collect::<Result<Vec<_>, _>>()?;
-                other_parents
+                    .collect::<Result<Vec<_>, _>>()?
             }
         } else {
             Vec::new()
@@ -658,7 +657,7 @@ impl Beelay {
             .map_err(|e| JsError::new(&format!("invalid document Id: {:?}", e)))?;
 
         let result = self.load_document_impl(doc_id).await?;
-        Ok(result.unwrap_or_else(|| JsValue::null()))
+        Ok(result.unwrap_or(JsValue::null()))
     }
 
     #[wasm_bindgen(
@@ -709,9 +708,9 @@ impl Beelay {
                             serde_wasm_bindgen::to_value(&JsCommitOrBundle::from(item)).unwrap();
                         arr.push(&item);
                     }
-                    return Ok(Some(arr.into()));
+                    Ok(Some(arr.into()))
                 } else {
-                    return Ok(None);
+                    Ok(None)
                 }
             }
             _ => Err(JsError::new("Unexpected command result")),
@@ -751,10 +750,10 @@ impl Beelay {
     pub fn on(&self, event_type: &JsValue, callback: JsValue) -> Result<(), JsError> {
         let event_type = event_type
             .as_string()
-            .ok_or_else(|| JsError::new(&"event type must be a string"))?;
+            .ok_or_else(|| JsError::new("event type must be a string"))?;
         let callback = callback
             .dyn_into::<Function>()
-            .map_err(|_| JsError::new(&"peer callback must be a function"))?;
+            .map_err(|_| JsError::new("peer callback must be a function"))?;
         let mut inner = self.inner.borrow_mut();
         match event_type.as_str() {
             "peer-sync-state" => inner.peer_listeners.push(callback),
@@ -768,10 +767,10 @@ impl Beelay {
     pub fn off(&self, event_type: &JsValue, callback: JsValue) -> Result<(), JsError> {
         let event_type = event_type
             .as_string()
-            .ok_or_else(|| JsError::new(&"event type must be a string"))?;
+            .ok_or_else(|| JsError::new("event type must be a string"))?;
         let callback = callback
             .dyn_into::<Function>()
-            .map_err(|_| JsError::new(&"peer callback must be a function"))?;
+            .map_err(|_| JsError::new("peer callback must be a function"))?;
         let mut inner = self.inner.borrow_mut();
         match event_type.as_str() {
             "peer-sync-state" => inner.peer_listeners.retain(|c| c != &callback),
@@ -796,7 +795,7 @@ impl Beelay {
     ) -> Result<(), JsError> {
         let peer_id = peer_id
             .as_string()
-            .ok_or_else(|| JsError::new(&"peerId must be a string"))?
+            .ok_or(JsError::new("peerId must be a string"))?
             .parse()
             .map_err(|e| JsError::new(&format!("invalid peerId: {}", e)))?;
         let rx = {
@@ -1004,7 +1003,7 @@ impl Beelay {
 
     #[wasm_bindgen(js_name=isStopped)]
     pub fn is_stopped(&self) -> bool {
-        self.inner.borrow_mut().stopped.into()
+        self.inner.borrow_mut().stopped
     }
 }
 
@@ -1012,11 +1011,10 @@ impl Beelay {
 pub fn parse_beelay_doc_id(
     #[wasm_bindgen(unchecked_param_type = "string")] val: &JsValue,
 ) -> Result<JsValue, JsError> {
-    if let Some(doc_id) = val
+    if let Ok(doc_id) = val
         .as_string()
         .ok_or(JsError::new("document id was not a string"))?
         .parse::<DocumentId>()
-        .ok()
     {
         Ok(JsValue::from(doc_id.to_string()))
     } else {

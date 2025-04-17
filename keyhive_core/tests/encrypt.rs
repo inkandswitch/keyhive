@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
 use keyhive_core::{
     access::Access,
@@ -6,13 +6,12 @@ use keyhive_core::{
     event::static_event::StaticEvent,
     keyhive::Keyhive,
     listener::{log::Log, no_listener::NoListener},
-    principal::{individual::Individual, peer::Peer},
     store::ciphertext::memory::MemoryCiphertextStore,
-    transact::merge::Merge,
 };
 use nonempty::nonempty;
 use testresult::TestResult;
 
+#[allow(clippy::type_complexity)]
 struct NewKeyhive {
     signer: MemorySigner,
     log: Log<MemorySigner>,
@@ -170,7 +169,7 @@ async fn test_decrypt_after_fork_and_merge() {
         .collect::<Vec<_>>();
 
     if let Some(op) = encrypted.update_op() {
-        events.push(StaticEvent::from(op.clone()));
+        events.push(StaticEvent::from(Box::new(op.clone())));
     }
 
     let mut reloaded = {

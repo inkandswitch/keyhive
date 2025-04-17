@@ -4,9 +4,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use futures::channel::mpsc;
 use futures::channel::oneshot;
 use keyhive_core::keyhive::Keyhive;
-use keyhive_core::listener::log::Log;
 use keyhive_core::store::ciphertext::memory::MemoryCiphertextStore;
-use keyhive_core::transact::merge::Merge;
 
 use crate::doc_state::DocState;
 use crate::io::{IoHandle, IoResult};
@@ -31,7 +29,7 @@ pub enum Step<R: rand::Rng + rand::CryptoRng + Clone + 'static> {
 }
 
 impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Loading<R> {
-    pub(crate) fn new(
+    pub(crate) fn loading(
         now: UnixTimestampMillis,
         driver: driver::Driver,
         rx_loaded: oneshot::Receiver<LoadedParts<R>>,
@@ -144,9 +142,7 @@ pub(crate) async fn load_docs(io: IoHandle) -> HashMap<DocumentId, DocState> {
         .await;
     tracing::debug!(num_docs = docs.len(), "loading documents");
     let load_futs = docs.into_iter().filter_map(|doc_id_key| {
-        let Some(name) = doc_id_key.name() else {
-            return None;
-        };
+        let name = doc_id_key.name()?;
         let doc_id = match DocumentId::from_str(name) {
             Ok(d) => d,
             Err(e) => {

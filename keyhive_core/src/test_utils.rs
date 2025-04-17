@@ -19,5 +19,5 @@ pub async fn make_simple_keyhive() -> Result<
 > {
     let mut csprng = rand::thread_rng();
     let sk = MemorySigner::generate(&mut csprng);
-    Ok(Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng).await?)
+    Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng).await
 }

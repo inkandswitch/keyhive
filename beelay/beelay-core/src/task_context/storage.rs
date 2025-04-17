@@ -80,7 +80,7 @@ impl<'a> Storage<'a> {
 
     async fn io_task(&self, task: IoTask) -> IoResultPayload {
         let (reply_tx, reply_rx) = oneshot::channel();
-        let _ = self.io_handle.new_task(task, reply_tx);
+        self.io_handle.new_task(task, reply_tx);
         let result = JobFuture(reply_rx).await;
         result.take_payload()
     }

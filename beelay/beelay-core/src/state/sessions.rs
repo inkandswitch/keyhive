@@ -130,11 +130,6 @@ impl<'a, R: rand::Rng + rand::CryptoRng + Clone + 'static> Sessions<'a, R> {
             .get_membership_ops(session_id, op_hashes)
     }
 
-    /// Check if a session exists
-    pub(crate) fn session_exists(&self, session_id: &SessionId) -> bool {
-        self.state.borrow().sync_sessions.session_exists(session_id)
-    }
-
     pub(crate) fn expire_sessions(&self, now: UnixTimestampMillis) {
         self.state.borrow_mut().sync_sessions.expire_sessions(now);
     }

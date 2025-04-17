@@ -1,6 +1,4 @@
-use crate::{doc_status::DocEvent, network::PeerAddress, DocumentId, PeerId, TaskContext};
-
-pub use error::SyncDocError;
+use crate::{network::PeerAddress, DocumentId, PeerId, TaskContext};
 
 use super::SessionId;
 
@@ -34,9 +32,5 @@ pub(crate) mod error {
     pub enum SyncDocError {
         #[error(transparent)]
         Sedimentree(#[from] super::sync_sedimentree::SyncSedimentreeError),
-        #[error("session expired")]
-        SessionExpired,
-        #[error("session not found")]
-        SessionNotFound,
     }
 }

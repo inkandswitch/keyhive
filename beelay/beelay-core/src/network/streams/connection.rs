@@ -101,7 +101,7 @@ impl<R: rand::Rng + rand::CryptoRng> AuthCtx for TaskContext<R> {
     }
 }
 
-impl<'a, A: AuthCtx> AuthCtx for &'a A {
+impl<A: AuthCtx> AuthCtx for &A {
     fn authenticate_received_msg<T>(
         &self,
         msg: auth::Signed<auth::Message>,
@@ -269,7 +269,7 @@ pub(crate) enum Connecting {
     /// Still in progress
     Handshaking(Handshake),
     /// Finished successfully
-    Complete(Connection),
+    Complete(Box<Connection>),
     /// Failed for the given reason
     Failed(String),
 }
@@ -302,7 +302,7 @@ impl Encode for Failure {
             }
             Self::Error(description) => {
                 FailureType::Error.encode_into(out);
-                leb128::encode_uleb128(out, description.as_bytes().len() as u64);
+                leb128::encode_uleb128(out, description.len() as u64);
                 out.extend_from_slice(description.as_bytes());
             }
             Self::BadTimestamp { receivers_clock } => {
@@ -468,12 +468,12 @@ impl Handshake {
                     .await
                     .encode();
                 Ok(Step {
-                    state: Connecting::Complete(Connection {
+                    state: Connecting::Complete(Box::new(Connection {
                         last_req_id: ConnRequestId::acceptors_request_id(),
                         our_peer_id: ctx.our_peer_id(),
                         their_peer_id,
                         direction: ResolvedDirection::Accepting,
-                    }),
+                    })),
                     next_msg: Some(hello_back),
                 })
             }
@@ -485,12 +485,12 @@ impl Handshake {
                     return Ok(Self::handle_auth_failure(ctx.now(), e));
                 }
                 Ok(Step {
-                    state: Connecting::Complete(Connection {
+                    state: Connecting::Complete(Box::new(Connection {
                         last_req_id: ConnRequestId::connectors_request_id(),
                         our_peer_id: ctx.our_peer_id(),
                         their_peer_id,
                         direction: ResolvedDirection::Connecting,
-                    }),
+                    })),
                     next_msg: None,
                 })
             }
@@ -504,12 +504,12 @@ impl Handshake {
                 if ctx.our_peer_id().as_key().as_bytes() < sender_key.as_bytes() {
                     let hello_back = Message::new_hello_back(ctx, remote_audience).await.encode();
                     Ok(Step {
-                        state: Connecting::Complete(Connection {
+                        state: Connecting::Complete(Box::new(Connection {
                             last_req_id: ConnRequestId::acceptors_request_id(),
                             our_peer_id: ctx.our_peer_id(),
                             their_peer_id: sender_key.into(),
                             direction: ResolvedDirection::Accepting,
-                        }),
+                        })),
                         next_msg: Some(hello_back),
                     })
                 } else {
@@ -744,7 +744,7 @@ mod tests {
         }
 
         fn new_with_clock(signer: Signer, clock: UnixTimestamp) -> Self {
-            let our_peer_id = signer.verifying_key().clone().into();
+            let our_peer_id = signer.verifying_key().into();
             let auth = crate::auth::manager::Manager::new(signer);
             Self {
                 our_peer_id,
@@ -776,10 +776,9 @@ mod tests {
         where
             T: Encode,
         {
-            self.auth
-                .borrow_mut()
-                .send(self.clock, audience, msg.encode())
-                .await
+            // TODO make more efficient
+            let local = self.auth.borrow().clone();
+            local.send(self.clock, audience, msg.encode()).await
         }
 
         fn update_offset(&self, remote_audience: Audience, their_clock: UnixTimestamp) {
@@ -793,7 +792,7 @@ mod tests {
         }
 
         fn our_peer_id(&self) -> crate::PeerId {
-            self.our_peer_id.clone()
+            self.our_peer_id
         }
     }
 
@@ -1058,7 +1057,10 @@ mod tests {
                 self.right_state.clock += Duration::from_secs(1);
                 match (left, right) {
                     (Connecting::Complete(left), Connecting::Complete(right)) => {
-                        return Ok(Connected { left, right })
+                        return Ok(Connected {
+                            left: *left,
+                            right: *right,
+                        })
                     }
                     (Connecting::Failed(f), _) => {
                         return Err(ConnectError::LeftFailed(f.to_string()))

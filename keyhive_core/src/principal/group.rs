@@ -73,6 +73,7 @@ pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener
     pub(crate) members: HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>>,
 
     /// Current view of revocations
+    #[allow(clippy::type_complexity)]
     pub(crate) active_revocations: HashMap<[u8; 64], Rc<Signed<Revocation<S, T, L>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
@@ -334,6 +335,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         &self.state.revocation_heads
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn get_capability(
         &self,
@@ -365,6 +367,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             .collect()
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip_all, fields(group_id = %self.group_id()))]
     pub fn receive_delegation(
         &mut self,
@@ -376,6 +379,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         Ok(digest)
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub async fn receive_revocation(
         &mut self,
@@ -387,6 +391,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         Ok(digest)
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(
         skip_all,
         fields(
@@ -467,6 +472,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         })
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(
         skip_all,
         fields(group_id = %self.group_id(), member_id = %delegation.payload.delegate.id())
@@ -494,6 +500,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                 delegation.payload.delegate.id(),
                 doc.borrow().doc_id()
             );
+
             for op in doc
                 .borrow_mut()
                 .add_cgka_member(&delegation, signer)
@@ -506,6 +513,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[allow(clippy::type_complexity)]
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(skip(self, signer), fields(group_id = %self.group_id()))]
     pub async fn revoke_member(
         &mut self,
@@ -611,7 +619,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         }
 
         for r in revocations.iter() {
-            self.listener.on_revocation(&r).await
+            self.listener.on_revocation(r).await
         }
 
         let mut cgka_ops = Vec::new();
@@ -699,6 +707,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         self.members.clear();
         self.active_revocations.clear();
 
+        #[allow(clippy::type_complexity)]
         let mut dlgs_in_play: HashMap<[u8; 64], Rc<Signed<Delegation<S, T, L>>>> = HashMap::new();
         let mut revoked_dlgs: HashSet<[u8; 64]> = HashSet::new();
 
@@ -1024,6 +1033,7 @@ mod tests {
         [g0, g1, g2, g3]
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     async fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         alice: Rc<RefCell<Active<MemorySigner, T>>>,
         bob: Rc<RefCell<Active<MemorySigner, T>>>,
@@ -1158,11 +1168,12 @@ mod tests {
             .unwrap()
             .dupe();
 
+        let alice_signer = alice.borrow().signer.clone();
+
         group0
             .borrow_mut()
             .receive_delegation(Rc::new(
-                alice
-                    .borrow()
+                alice_signer
                     .try_sign_async(Delegation {
                         delegate: group9.clone().into(),
                         can: Access::Admin,
@@ -1334,6 +1345,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[tokio::test]
     async fn test_add_member() {
         test_utils::init_logging();
@@ -1354,6 +1366,9 @@ mod tests {
                 .await
                 .unwrap(),
         ));
+
+        let active_id = active.borrow().id();
+        let active_signer = active.borrow().signer.clone();
 
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
@@ -1395,12 +1410,7 @@ mod tests {
         ));
 
         g0.borrow_mut()
-            .add_member(
-                carol_agent.dupe(),
-                Access::Write,
-                &active.borrow().signer,
-                &[],
-            )
+            .add_member(carol_agent.dupe(), Access::Write, &active_signer, &[])
             .await
             .unwrap();
 
@@ -1419,7 +1429,7 @@ mod tests {
         assert_eq!(g0_mems.len(), 2);
 
         assert_eq!(
-            g0_mems.get(&active.dupe().borrow().id().into()),
+            g0_mems.get(&active_id.into()),
             Some(&(active.dupe().into(), Access::Admin))
         );
 
@@ -1499,6 +1509,17 @@ mod tests {
         let dan = Rc::new(RefCell::new(setup_user(&mut csprng).await));
         let dan_agent: Agent<MemorySigner> = dan.dupe().into();
 
+        let alice_id = alice.borrow().id().into();
+        let alice_signer = alice.borrow().signer.dupe();
+
+        let bob_id = bob.borrow().id().into();
+        let bob_signer = bob.borrow().signer.dupe();
+
+        let carol_id = carol.borrow().id().into();
+        let carol_signer = carol.borrow().signer.clone();
+
+        let dan_id = dan.borrow().id().into();
+
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
 
@@ -1513,38 +1534,33 @@ mod tests {
         .unwrap();
 
         let _alice_adds_bob = g1
-            .add_member(bob_agent.dupe(), Access::Write, &alice.borrow().signer, &[])
+            .add_member(bob_agent.dupe(), Access::Write, &alice_signer, &[])
             .await
             .unwrap();
 
         let _bob_adds_carol = g1
-            .add_member(carol_agent.dupe(), Access::Read, &bob.borrow().signer, &[])
+            .add_member(carol_agent.dupe(), Access::Read, &bob_signer, &[])
             .await
             .unwrap();
 
-        assert!(g1.members().contains_key(&alice.borrow().id().into()));
-        assert!(g1.members().contains_key(&bob.borrow().id().into()));
-        assert!(g1.members().contains_key(&carol.borrow().id().into()));
-        assert!(!g1.members().contains_key(&dan.borrow().id().into()));
+        assert!(g1.members().contains_key(&alice_id));
+        assert!(g1.members().contains_key(&bob_id));
+        assert!(g1.members().contains_key(&carol_id));
+        assert!(!g1.members().contains_key(&dan_id));
 
         let _carol_adds_dan = g1
-            .add_member(dan_agent.dupe(), Access::Read, &carol.borrow().signer, &[])
+            .add_member(dan_agent.dupe(), Access::Read, &carol_signer, &[])
             .await
             .unwrap();
 
-        assert!(g1.members.contains_key(&alice.borrow().id().into()));
-        assert!(g1.members.contains_key(&bob.borrow().id().into()));
-        assert!(g1.members.contains_key(&carol.borrow().id().into()));
-        assert!(g1.members.contains_key(&dan.borrow().id().into()));
+        assert!(g1.members.contains_key(&alice_id));
+        assert!(g1.members.contains_key(&bob_id));
+        assert!(g1.members.contains_key(&carol_id));
+        assert!(g1.members.contains_key(&dan_id));
         assert_eq!(g1.members.len(), 4);
 
         let _alice_revokes_bob = g1
-            .revoke_member(
-                bob.borrow().id().into(),
-                true,
-                &alice.borrow().signer,
-                &BTreeMap::new(),
-            )
+            .revoke_member(bob_id, true, &alice_signer, &BTreeMap::new())
             .await
             .unwrap();
 
@@ -1555,7 +1571,7 @@ mod tests {
         assert!(g1.members.contains_key(&dan.borrow().id().into()));
 
         let _bob_to_carol = g1
-            .add_member(bob_agent.dupe(), Access::Read, &carol.borrow().signer, &[])
+            .add_member(bob_agent.dupe(), Access::Read, &carol_signer, &[])
             .await
             .unwrap();
 
@@ -1564,12 +1580,7 @@ mod tests {
         assert!(g1.members.contains_key(&dan.borrow().id().into()));
 
         let _alice_revokes_carol = g1
-            .revoke_member(
-                carol.borrow().id().into(),
-                false,
-                &alice.borrow().signer,
-                &BTreeMap::new(),
-            )
+            .revoke_member(carol_id, false, &alice_signer, &BTreeMap::new())
             .await
             .unwrap();
 
@@ -1577,14 +1588,9 @@ mod tests {
         assert!(!g1.members.contains_key(&carol.borrow().id().into()));
         // FIXME assert!(!g1.members.contains_key(&dan.borrow().id().into()));
 
-        g1.revoke_member(
-            alice.borrow().id().into(),
-            false,
-            &alice.borrow().signer,
-            &BTreeMap::new(),
-        )
-        .await
-        .unwrap();
+        g1.revoke_member(alice_id, false, &alice_signer, &BTreeMap::new())
+            .await
+            .unwrap();
 
         assert!(!g1.members.contains_key(&alice.borrow().id().into()));
         assert!(!g1.members.contains_key(&carol.borrow().id().into()));

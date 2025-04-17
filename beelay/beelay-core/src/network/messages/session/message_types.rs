@@ -131,9 +131,9 @@ pub(super) enum SessionMsgType {
     FetchCgkaOps,
 }
 
-impl Into<u8> for SessionMsgType {
-    fn into(self) -> u8 {
-        match self {
+impl From<SessionMsgType> for u8 {
+    fn from(val: SessionMsgType) -> Self {
+        match val {
             SessionMsgType::FetchMembershipSymbols => 0,
             SessionMsgType::FetchDocSymbols => 1,
             SessionMsgType::FinishMembership => 2,

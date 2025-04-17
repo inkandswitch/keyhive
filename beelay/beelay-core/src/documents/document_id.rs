@@ -8,7 +8,7 @@ pub struct DocumentId(VerifyingKey);
 
 impl PartialOrd for DocumentId {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.0.as_bytes().partial_cmp(other.0.as_bytes())
+        Some(self.cmp(other))
     }
 }
 
@@ -27,7 +27,7 @@ impl From<DocumentId> for keyhive_core::principal::document::id::DocumentId {
 
 impl From<keyhive_core::principal::document::id::DocumentId> for DocumentId {
     fn from(value: keyhive_core::principal::document::id::DocumentId) -> Self {
-        DocumentId(value.verifying_key().into())
+        DocumentId(value.verifying_key())
     }
 }
 
@@ -136,7 +136,7 @@ impl DocumentId {
     }
 
     pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0.as_bytes()
+        self.0.as_bytes()
     }
 
     pub fn as_key(&self) -> &VerifyingKey {

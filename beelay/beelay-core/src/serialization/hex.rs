@@ -16,7 +16,7 @@ pub(crate) fn decode<S: AsRef<str>>(s: S) -> Result<Vec<u8>, FromHexError> {
 
     s.chunks(2)
         .enumerate()
-        .map(|(i, pair)| Ok(val(pair[0], 2 * i)? << 4 | val(pair[1], 2 * i + 1)?))
+        .map(|(i, pair)| Ok((val(pair[0], 2 * i)? << 4) | val(pair[1], 2 * i + 1)?))
         .collect()
 }
 

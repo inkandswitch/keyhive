@@ -44,7 +44,7 @@ impl<R: rand::Rng + rand::CryptoRng> TaskContext<R> {
     }
 
     pub(crate) fn now(&self) -> UnixTimestampMillis {
-        self.now.borrow().clone()
+        *self.now.borrow()
     }
 
     pub(crate) fn io(&self) -> &crate::io::IoHandle {

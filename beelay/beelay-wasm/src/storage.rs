@@ -219,6 +219,7 @@ impl JsStorage {
 }
 
 #[wasm_bindgen]
+#[derive(Debug, Default)]
 pub struct MemoryStorageAdapter {
     data: HashMap<StorageKey, Vec<u8>>,
 }

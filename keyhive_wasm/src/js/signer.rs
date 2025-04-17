@@ -46,7 +46,7 @@ impl JsSigner {
             vec!["sign".to_string().into(), "verify".to_string().into()];
 
         let fut: JsFuture = subtle
-            .generate_key_with_str(&"Ed25519", false, &usages.into())
+            .generate_key_with_str("Ed25519", false, &usages.into())
             .map_err(GenerateWebCryptoError::JsError)?
             .into();
 
@@ -54,7 +54,7 @@ impl JsSigner {
             fut.await.map_err(GenerateWebCryptoError::JsError)?.into();
 
         let pk_buf_fut: JsFuture = subtle
-            .export_key(&"raw", &keypair.get_public_key())
+            .export_key("raw", &keypair.get_public_key())
             .map_err(GenerateWebCryptoError::JsError)?
             .into();
         let pk_buf: js_sys::ArrayBuffer = pk_buf_fut
@@ -94,7 +94,7 @@ impl JsSigner {
         let subtle = crypto.subtle();
 
         let pk_buf_fut: JsFuture = subtle
-            .export_key(&"raw", &keypair.get_public_key())
+            .export_key("raw", &keypair.get_public_key())
             .map_err(GenerateWebCryptoError::JsError)?
             .into();
         let pk_buf: js_sys::ArrayBuffer = pk_buf_fut
@@ -131,7 +131,8 @@ impl JsSigner {
         Box::new(self.0.verifying_key().to_bytes())
     }
 
-    pub fn clone(&self) -> Self {
+    #[wasm_bindgen(js_name = clone)]
+    pub fn js_clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
@@ -190,7 +191,7 @@ impl AsyncSigner for JsSignerOptions {
                     .subtle()
                     .sign_with_object_and_u8_array(
                         &js_sys::JsString::from("Ed25519").into(),
-                        &web_sys::CryptoKey::from(signing_key.clone()),
+                        &signing_key.clone(),
                         bytes,
                     )
                     .map_err(|_| {

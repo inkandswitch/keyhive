@@ -125,7 +125,7 @@ unsafe impl<R: rand::Rng + rand::CryptoRng> Send for Beelay<R> {}
 impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
     pub fn load(config: config::Config<R>, now: UnixTimestampMillis) -> loading::Step<R> {
         let (tx_load_complete, rx_load_complete) = oneshot::channel();
-        let local_peer_id = PeerId::from(config.verifying_key.clone());
+        let local_peer_id = PeerId::from(config.verifying_key);
         let run_span = tracing::info_span!("run", %local_peer_id);
         let driver = driver::Driver::start(config.rng, now, |spawn_args| {
             driver::run(driver::DriveBeelayArgs {
@@ -141,7 +141,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
             })
             .instrument(run_span)
         });
-        loading::Loading::new(now, driver, rx_load_complete)
+        loading::Loading::loading(now, driver, rx_load_complete)
     }
 
     pub(crate) fn loaded(
@@ -201,7 +201,7 @@ impl<R: rand::Rng + rand::CryptoRng> Beelay<R> {
                     .handle_response(outbound_request_id, inner_rpc_response);
             }
             EventInner::BeginCommand(command_id, command) => {
-                self.driver.dispatch_command(command_id, command);
+                self.driver.dispatch_command(command_id, *command);
             }
             EventInner::Tick => {
                 self.driver.tick();

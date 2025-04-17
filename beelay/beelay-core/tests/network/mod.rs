@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     time::Duration,
@@ -14,14 +16,12 @@ use beelay_core::{
 use ed25519_dalek::SigningKey;
 use signature::SignerMut;
 
-#[allow(dead_code)]
 pub struct BeelayHandle<'a> {
     pub network: &'a mut Network,
     pub peer_id: beelay_core::PeerId,
 }
 
 impl BeelayHandle<'_> {
-    #[allow(dead_code)]
     pub fn create_doc(
         &mut self,
         other_owners: Vec<KeyhiveEntityId>,
@@ -29,7 +29,6 @@ impl BeelayHandle<'_> {
         self.create_doc_with_contents(vec![9, 9, 9, 8, 8, 8], other_owners)
     }
 
-    #[allow(dead_code)]
     pub fn create_doc_with_contents(
         &mut self,
         content: Vec<u8>,
@@ -58,11 +57,10 @@ impl BeelayHandle<'_> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn doc_status(&mut self, doc: &DocumentId) -> beelay_core::doc_status::DocStatus {
         let command = {
             let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
-            let (command, event) = beelay_core::Event::query_status(doc.clone());
+            let (command, event) = beelay_core::Event::query_status(*doc);
             beelay.inbox.push_back(event);
             command
         };
@@ -76,7 +74,6 @@ impl BeelayHandle<'_> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn add_commits(
         &mut self,
         doc_id: DocumentId,
@@ -99,7 +96,6 @@ impl BeelayHandle<'_> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn load_doc(&mut self, doc_id: DocumentId) -> Option<Vec<CommitOrBundle>> {
         let command = {
             let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
@@ -116,7 +112,6 @@ impl BeelayHandle<'_> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn load_doc_encrypted(&mut self, doc_id: DocumentId) -> Option<Vec<CommitOrBundle>> {
         let command = {
             let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
@@ -133,7 +128,6 @@ impl BeelayHandle<'_> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn pop_notifications(
         &mut self,
     ) -> HashMap<DocumentId, Vec<beelay_core::doc_status::DocEvent>> {
@@ -147,7 +141,6 @@ impl BeelayHandle<'_> {
         )
     }
 
-    #[allow(dead_code)]
     pub fn register_endpoint(&mut self, other: &PeerId) -> beelay_core::EndpointId {
         let command = {
             let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
@@ -167,7 +160,6 @@ impl BeelayHandle<'_> {
         endpoint_id
     }
 
-    #[allow(dead_code)]
     pub fn dirty_shutdown(&mut self) {
         self.network
             .beelays
@@ -176,7 +168,6 @@ impl BeelayHandle<'_> {
             .shutdown = true;
     }
 
-    #[allow(dead_code)]
     pub fn shutdown(&mut self) {
         {
             let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
@@ -198,7 +189,6 @@ impl BeelayHandle<'_> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn add_member_to_doc(
         &mut self,
         doc: DocumentId,
@@ -219,7 +209,6 @@ impl BeelayHandle<'_> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn remove_member_from_doc(
         &mut self,
         doc: DocumentId,
@@ -239,7 +228,6 @@ impl BeelayHandle<'_> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn create_group(
         &mut self,
         other_parents: Vec<KeyhiveEntityId>,
@@ -258,7 +246,6 @@ impl BeelayHandle<'_> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn add_member_to_group(
         &mut self,
         add: beelay_core::keyhive::AddMemberToGroup,
@@ -277,7 +264,6 @@ impl BeelayHandle<'_> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn remove_member_from_group(
         &mut self,
         remove: beelay_core::keyhive::RemoveMemberFromGroup,
@@ -296,7 +282,6 @@ impl BeelayHandle<'_> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn query_access(
         &mut self,
         doc: DocumentId,
@@ -318,7 +303,6 @@ impl BeelayHandle<'_> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn storage(&self) -> &BTreeMap<beelay_core::StorageKey, Vec<u8>> {
         &self.network.beelays.get(&self.peer_id).unwrap().storage
     }
@@ -425,14 +409,12 @@ pub struct Network {
 }
 
 impl Network {
-    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             beelays: HashMap::new(),
         }
     }
 
-    #[allow(dead_code)]
     pub fn beelay(&mut self, peer: &PeerId) -> BeelayHandle {
         assert!(self.beelays.contains_key(peer));
         BeelayHandle {
@@ -441,7 +423,6 @@ impl Network {
         }
     }
 
-    #[allow(dead_code)]
     pub fn create_peer(&mut self, nickname: &'static str) -> PeerBuilder {
         PeerBuilder {
             network: self,
@@ -512,7 +493,6 @@ impl Network {
     }
 
     // Create a stream from left to right (i.e. the left peer will send the hello message)
-    #[allow(dead_code)]
     pub fn connect_stream(&mut self, left: &PeerId, right: &PeerId) -> ConnectedPair {
         let left_stream_id = {
             let beelay = self.beelays.get_mut(left).unwrap();
@@ -632,7 +612,6 @@ enum Message {
 }
 
 pub struct BeelayWrapper<R: rand::Rng + rand::CryptoRng> {
-    #[allow(dead_code)]
     nickname: String,
     signing_key: SigningKey,
     storage: BTreeMap<beelay_core::StorageKey, Vec<u8>>,
@@ -654,7 +633,6 @@ pub struct BeelayWrapper<R: rand::Rng + rand::CryptoRng> {
 }
 
 impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> BeelayWrapper<R> {
-    #[allow(dead_code)]
     fn new(signing_key: SigningKey, nickname: &str, core: beelay_core::Beelay<R>) -> Self {
         Self {
             nickname: nickname.to_string(),
@@ -769,7 +747,6 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> BeelayWrapper<R> {
         beelay_core::Event::io_complete(result)
     }
 
-    #[allow(dead_code)]
     pub fn pop_notifications(
         &mut self,
     ) -> HashMap<DocumentId, Vec<beelay_core::doc_status::DocEvent>> {
@@ -826,9 +803,7 @@ fn handle_task(
 }
 
 pub struct ConnectedPair {
-    #[allow(dead_code)]
     pub left_to_right: beelay_core::StreamId,
-    #[allow(dead_code)]
     pub right_to_left: beelay_core::StreamId,
 }
 
@@ -840,7 +815,7 @@ pub struct PeerBuilder<'a> {
     storage: BTreeMap<beelay_core::StorageKey, Vec<u8>>,
 }
 
-impl<'a> PeerBuilder<'a> {
+impl PeerBuilder<'_> {
     pub fn session_duration(mut self, duration: Duration) -> Self {
         self.session_duration = duration;
         self

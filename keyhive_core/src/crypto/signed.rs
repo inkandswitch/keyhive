@@ -106,8 +106,8 @@ mod arb {
     use signature::SignerMut;
     use std::fmt::Debug;
 
-    fn arb_signing_key<'a>(
-        unstructured: &mut arbitrary::Unstructured<'a>,
+    fn arb_signing_key(
+        unstructured: &mut arbitrary::Unstructured,
     ) -> arbitrary::Result<ed25519_dalek::SigningKey> {
         let bytes = unstructured.bytes(32)?;
         let arr = <[u8; 32]>::try_from(bytes).unwrap();

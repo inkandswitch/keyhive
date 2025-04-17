@@ -47,7 +47,7 @@ where
     }
 }
 
-impl<'a, R> Requests<'a, R>
+impl<R> Requests<'_, R>
 where
     R: rand::Rng + rand::CryptoRng + 'static,
 {
@@ -111,23 +111,7 @@ where
         async move {
             let response = task.await?;
             match response.content {
-                NonErrorPayload::Pong => Ok(response.from.into()),
-                _ => Err(RpcError::IncorrectResponseType),
-            }
-        }
-    }
-
-    pub(crate) fn upload_membership_ops(
-        &self,
-        from_peer: PeerAddress,
-        ops: Vec<StaticEvent<CommitHash>>,
-    ) -> impl Future<Output = Result<(), RpcError>> + 'static {
-        let request = crate::Request::UploadMembershipOps { ops };
-        let task = self.request(from_peer, request);
-        async move {
-            let response = task.await?;
-            match response.content {
-                NonErrorPayload::UploadMembershipOps => Ok(()),
+                NonErrorPayload::Pong => Ok(response.from),
                 _ => Err(RpcError::IncorrectResponseType),
             }
         }
@@ -164,7 +148,7 @@ where
         }
     }
 
-    pub(crate) fn sessions<'b>(&'b self) -> Sessions<'b, R> {
+    pub(crate) fn sessions(&self) -> Sessions<'_, R> {
         Sessions::new(self)
     }
 
@@ -179,7 +163,7 @@ where
         async move {
             let resp = match target {
                 PeerAddress::Endpoint(endpoint_id) => {
-                    let now = now.borrow().clone();
+                    let now = *now.borrow();
                     let endpoint_audience =
                         state.endpoints().audience_of(endpoint_id).expect("FIXME");
                     let authed = state

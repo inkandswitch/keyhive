@@ -186,12 +186,8 @@ impl Streams {
         std::mem::take(&mut self.modified)
             .into_iter()
             .filter_map(|stream_id| {
-                let Some(meta) = self.streams.get(&stream_id) else {
-                    return None;
-                };
-                let Some(handshake) = meta.handshake.as_ref() else {
-                    return None;
-                };
+                let meta = self.streams.get(&stream_id)?;
+                let handshake = meta.handshake.as_ref()?;
                 Some(conn_info::ConnectionInfo {
                     peer_id: handshake.their_peer_id,
                     state: meta.sync_phase.into(),
@@ -254,8 +250,6 @@ pub(crate) mod error {
 
     #[derive(Debug)]
     pub(crate) enum EncodeResponse {
-        NoSuchStream,
-        StreamClosed,
         StreamError(StreamError),
     }
 
@@ -268,8 +262,6 @@ pub(crate) mod error {
     impl std::fmt::Display for EncodeResponse {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
-                Self::NoSuchStream => write!(f, "no such stream"),
-                Self::StreamClosed => write!(f, "stream closed"),
                 Self::StreamError(e) => write!(f, "stream error: {}", e),
             }
         }

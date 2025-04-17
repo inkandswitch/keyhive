@@ -5,7 +5,6 @@ use futures::{
     channel::{mpsc, oneshot},
     pin_mut,
     stream::FuturesUnordered,
-    task::LocalSpawnExt,
     FutureExt, StreamExt,
 };
 use keyhive_core::crypto::verifiable::Verifiable;
@@ -63,7 +62,8 @@ impl Driver {
         };
         let fut = f(spawn_args);
         let executor = executor::LocalExecutor::spawn(fut);
-        let driver = Self {
+
+        Self {
             now,
             io_tasks: HashMap::new(),
             endpoint_requests: HashMap::new(),
@@ -71,8 +71,7 @@ impl Driver {
             tx_tick,
             tx_commands,
             executor,
-        };
-        driver
+        }
     }
 
     pub(crate) fn handle_io_complete(&mut self, io_result: IoResult) {
@@ -105,8 +104,10 @@ impl Driver {
 
     pub(crate) fn step(&mut self, now: UnixTimestampMillis) -> EventResults {
         if self.tx_commands.is_closed() {
-            let mut result = EventResults::default();
-            result.stopped = true;
+            let result = EventResults {
+                stopped: true,
+                ..Default::default()
+            };
             return result;
         }
         *self.now.borrow_mut() = now;
@@ -229,10 +230,13 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
             docs,
             session_duration,
         )));
-        if let Err(_) = load_complete.send(loading::LoadedParts {
-            state: state.clone(),
-            peer_id,
-        }) {
+        if load_complete
+            .send(loading::LoadedParts {
+                state: state.clone(),
+                peer_id,
+            })
+            .is_err()
+        {
             tracing::warn!("load complete listener went away, stopping driver");
             return;
         }
@@ -347,7 +351,7 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         }
 
         loops.reconcile(&ctx);
-        ctx.state().sessions().expire_sessions(now.borrow().clone());
+        ctx.state().sessions().expire_sessions(*now.borrow());
         let changed = ctx.state().streams().take_changed();
         if !changed.is_empty() {
             let _ = tx_driver_events.unbounded_send(DriverEvent::PeersChanged(
@@ -361,7 +365,7 @@ async fn run_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
             if docs_after != known_docs {
                 let new_docs = docs_after.difference(&known_docs);
                 for doc in new_docs {
-                    ctx.io().new_doc_event(doc.clone(), DocEvent::Discovered);
+                    ctx.io().new_doc_event(*doc, DocEvent::Discovered);
                 }
                 known_docs = docs_after;
             }

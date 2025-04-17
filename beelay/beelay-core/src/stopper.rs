@@ -28,6 +28,7 @@ struct StopState {
 
 impl Stopper {
     pub(super) fn new() -> Self {
+        #[allow(clippy::arc_with_non_send_sync)] // TODO might be unsound
         Self(Arc::new(StopState {
             stopped: AtomicBool::new(false),
             waiters: Rc::new(RefCell::new(HashMap::new())),

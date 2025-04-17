@@ -4,20 +4,56 @@ use crate::{
     crypto::share_key::{ShareKey, ShareSecretKey},
     principal::individual::Individual,
 };
-use derivative::Derivative;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    fmt::{Debug, Formatter},
+    hash::{Hash, Hasher},
+};
 
-#[derive(Clone, Derivative, Serialize, Deserialize)]
-#[derivative(Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ActiveArchive {
-    #[derivative(
-        Debug(format_with = "crate::util::debug::prekey_fmt"),
-        Hash(hash_with = "crate::util::hasher::keys"),
-        PartialEq(compare_with = "crate::util::partial_eq::prekey_partial_eq")
-    )]
     pub(crate) prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>,
 
     /// The [`Individual`] representation (how others see this agent).
     pub(crate) individual: Individual,
 }
+
+impl Debug for ActiveArchive {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // NOTE this pattern ensures that all fields are used
+        let Self {
+            prekey_pairs,
+            individual,
+        } = self;
+        f.debug_struct("ActiveArchive")
+            .field("prekey_pairs", &prekey_pairs.keys())
+            .field("individual", &individual)
+            .finish()
+    }
+}
+
+impl Hash for ActiveArchive {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // NOTE this pattern ensures that all fields are used
+        let Self {
+            prekey_pairs,
+            individual,
+        } = self;
+        prekey_pairs.keys().collect::<Vec<_>>().hash(state);
+        individual.hash(state);
+    }
+}
+
+impl PartialEq for ActiveArchive {
+    fn eq(&self, other: &Self) -> bool {
+        // NOTE this pattern ensures that all fields are used
+        let Self {
+            prekey_pairs,
+            individual,
+        } = self;
+        *prekey_pairs == other.prekey_pairs && *individual == other.individual
+    }
+}
+
+impl Eq for ActiveArchive {}

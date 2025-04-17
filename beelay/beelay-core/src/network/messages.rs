@@ -191,7 +191,7 @@ impl UploadItem {
             blob: data,
             cgka_op,
             tree_part: TreePart::Commit {
-                hash: commit.hash().clone(),
+                hash: commit.hash(),
                 parents: commit.parents().to_vec(),
             },
         }
@@ -206,10 +206,10 @@ impl UploadItem {
             blob: data,
             cgka_op,
             tree_part: TreePart::Stratum {
-                start: stratum.start().clone(),
-                end: stratum.end().clone(),
+                start: stratum.start(),
+                end: stratum.end(),
                 checkpoints: stratum.checkpoints().to_vec(),
-                hash: stratum.hash().clone(),
+                hash: stratum.hash(),
             },
         }
     }

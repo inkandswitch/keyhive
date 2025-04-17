@@ -38,6 +38,7 @@ impl Sessions {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn create<R: rand::Rng + rand::CryptoRng>(
         &mut self,
         rng: &mut R,
@@ -76,7 +77,8 @@ impl Sessions {
 
     pub(crate) fn start_reloading(&mut self, session_id: &SessionId) -> Result<(), SessionError> {
         let session = self.get_session(session_id)?;
-        Ok(session.start_reloading())
+        session.start_reloading();
+        Ok(())
     }
 
     pub(crate) fn reload_complete(
@@ -131,10 +133,6 @@ impl Sessions {
         session.doc_cgka_ops(doc_id, op_hashes)
     }
 
-    pub(crate) fn session_exists(&self, session_id: &SessionId) -> bool {
-        self.sessions.contains_key(session_id)
-    }
-
     pub(crate) fn expire_sessions(&mut self, now: UnixTimestampMillis) {
         // When we expire sessions we remove them from the active sessions but
         // we retain them in the expired sessions list for some time so that we
@@ -175,10 +173,10 @@ impl Sessions {
     }
 
     fn get_session(&mut self, session_id: &SessionId) -> Result<&mut Session, SessionError> {
-        if let Some(session) = self.sessions.get_mut(&session_id) {
+        if let Some(session) = self.sessions.get_mut(session_id) {
             return Ok(session);
         };
-        if self.expired_sessions.contains(&session_id) {
+        if self.expired_sessions.contains(session_id) {
             Err(SessionError::Expired)
         } else {
             Err(SessionError::NotFound)
@@ -192,10 +190,6 @@ pub(crate) enum SessionError {
     NotFound,
     #[error("session expired")]
     Expired,
-    #[error("already begun doc collection sync")]
-    DocCollectionSyncAlreadyBegun,
-    #[error("doc collection sync not started")]
-    DocCollectionSyncNotStarted,
     #[error("request received while loading state")]
     Loading,
     #[error("Invalid request")]

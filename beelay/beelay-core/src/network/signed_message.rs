@@ -1,4 +1,3 @@
-use ed25519_dalek::VerifyingKey;
 
 use crate::{
     auth,

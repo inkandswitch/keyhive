@@ -96,7 +96,7 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
             })?;
 
         let borrowed_signer = &signer;
-        let ops = stream::iter(prekey_pairs.keys().map(|x| Ok::<_, SigningError>(x)))
+        let ops = stream::iter(prekey_pairs.keys().map(Ok::<_, SigningError>))
             .try_fold(vec![], |mut acc, pk| async move {
                 acc.push(
                     Rc::new(
@@ -149,8 +149,7 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
         let share_key = self.individual.pick_prekey(DocumentId(self.id().into())); // Hack
         let contact_key = self.rotate_prekey(*share_key, csprng).await?;
-        self.rotate_prekey(contact_key.payload.new.clone(), csprng)
-            .await?;
+        self.rotate_prekey(contact_key.payload.new, csprng).await?;
 
         Ok(contact_key)
     }
@@ -209,7 +208,7 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
 
         self.individual
             .prekey_state
-            .insert_op(KeyOp::Add(op.dupe()).into())
+            .insert_op(KeyOp::Add(op.dupe()))
             .expect("the op we just signed to be valid");
         self.individual.prekeys.insert(new_public);
         self.prekey_pairs.insert(new_public, new_secret);

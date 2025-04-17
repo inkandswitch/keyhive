@@ -131,23 +131,6 @@ pub(crate) async fn sync_inner<R: rand::Rng + rand::CryptoRng + Clone + 'static>
     Ok(())
 }
 
-#[derive(Clone)]
-pub(crate) struct SyncContext<R: rand::Rng + rand::CryptoRng> {
-    ctx: TaskContext<R>,
-    target: PeerAddress,
-    remote_peer_id: PeerId,
-}
-
-impl<R: rand::Rng + rand::CryptoRng> SyncContext<R> {
-    pub(crate) fn new(ctx: TaskContext<R>, target: PeerAddress, remote_peer_id: PeerId) -> Self {
-        Self {
-            ctx,
-            target,
-            remote_peer_id,
-        }
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
     #[error(transparent)]

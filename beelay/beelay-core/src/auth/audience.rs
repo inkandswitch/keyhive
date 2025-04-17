@@ -76,7 +76,7 @@ impl From<ed25519_dalek::VerifyingKey> for Audience {
 
 impl<'a> From<&'a ed25519_dalek::VerifyingKey> for Audience {
     fn from(vk: &'a ed25519_dalek::VerifyingKey) -> Self {
-        Self::verifying_key(vk.clone())
+        Self::verifying_key(*vk)
     }
 }
 

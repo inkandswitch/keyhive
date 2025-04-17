@@ -124,7 +124,6 @@ pub(crate) async fn load_loose_commit_data<S: Storage>(
     storage
         .load_blob(commit.blob().hash())
         .await
-        .map_err(|e| e.into())
 }
 
 pub(crate) async fn load_stratum_data<S: Storage>(
@@ -134,7 +133,6 @@ pub(crate) async fn load_stratum_data<S: Storage>(
     storage
         .load_blob(stratum.meta().blob().hash())
         .await
-        .map_err(|e| e.into())
 }
 
 mod error {

@@ -13,6 +13,7 @@ use super::{InnerRpcResponse, StreamDirection, StreamError, StreamEvent, StreamI
 
 struct RunningStreamHandle {
     tx: mpsc::UnboundedSender<Vec<u8>>,
+    #[allow(clippy::type_complexity)]
     outbound_requests: mpsc::UnboundedSender<(
         OutboundRequestId,
         Request,
@@ -73,9 +74,7 @@ pub(crate) fn run_streams<
                     continue;
                 }
                 next_evt = running.incoming.next() => {
-                    let Some(next_evt) = next_evt else {
-                        return None;
-                    };
+                    let next_evt = next_evt?;
                     match next_evt {
                         IncomingStreamEvent::Create(stream_id, stream_direction) => {
                             if running.stopping {
@@ -91,7 +90,6 @@ pub(crate) fn run_streams<
                                 disconnect: tx_disconnect,
                             };
                             let handler = {
-                                let stream_id = stream_id.clone();
                                 let stream = StreamToRun {
                                     ctx: running.ctx.clone(),
                                     direction: stream_direction,
@@ -154,6 +152,8 @@ struct StreamToRun<R: rand::Rng + rand::CryptoRng + Clone> {
     direction: crate::StreamDirection,
     stream_id: StreamId,
     incoming: mpsc::UnboundedReceiver<Vec<u8>>,
+
+    #[allow(clippy::type_complexity)]
     outbound_requests: mpsc::UnboundedReceiver<(
         OutboundRequestId,
         Request,
@@ -350,7 +350,7 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> StreamToRun<R> {
                             Err(_) => InnerRpcResponse::AuthFailed,
                         };
                         let msg = connection.encode_response(conn_id, response);
-                        if let Err(_) = out_tx.unbounded_send(StreamEvent::Send(msg)) {
+                        if out_tx.unbounded_send(StreamEvent::Send(msg)).is_err() {
                             tracing::debug!("stream closed in response");
                             return;
                         }

@@ -73,7 +73,7 @@ use tracing::instrument;
 #[derive(Derivative)]
 #[derivative(PartialEq, Eq, Clone)]
 pub struct Keyhive<
-    S: AsyncSigner,
+    S: AsyncSigner + Clone,
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
     C: CiphertextStore<T, P> = MemoryCiphertextStore<T, P>,
@@ -87,9 +87,11 @@ pub struct Keyhive<
     individuals: HashMap<IndividualId, Rc<RefCell<Individual>>>,
 
     /// The [`Group`]s that are known to this agent.
+    #[allow(clippy::type_complexity)]
     groups: HashMap<GroupId, Rc<RefCell<Group<S, T, L>>>>,
 
     /// The [`Document`]s that are known to this agent.
+    #[allow(clippy::type_complexity)]
     docs: HashMap<DocumentId, Rc<RefCell<Document<S, T, L>>>>,
 
     /// All applied [`Delegation`]s
@@ -113,7 +115,7 @@ pub struct Keyhive<
 }
 
 impl<
-        S: AsyncSigner,
+        S: AsyncSigner + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
@@ -174,16 +176,19 @@ impl<
         self.active.borrow().individual().clone()
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn groups(&self) -> &HashMap<GroupId, Rc<RefCell<Group<S, T, L>>>> {
         &self.groups
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn documents(&self) -> &HashMap<DocumentId, Rc<RefCell<Document<S, T, L>>>> {
         &self.docs
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip_all, fields(khid = %self.id()))]
     pub async fn generate_group(
         &mut self,
@@ -208,6 +213,7 @@ impl<
         Ok(g)
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip_all, fields(khid = %self.id()))]
     pub async fn generate_doc(
         &mut self,
@@ -220,6 +226,7 @@ impl<
             }
         }
 
+        let signer = self.active.borrow().signer.clone();
         let new_doc = Document::generate(
             NonEmpty {
                 head: self.active.dupe().into(),
@@ -229,7 +236,7 @@ impl<
             self.delegations.dupe(),
             self.revocations.dupe(),
             self.event_listener.clone(),
-            &self.active.borrow().signer,
+            &signer,
             &mut self.csprng,
         )
         .await?;
@@ -249,6 +256,7 @@ impl<
         Ok(doc)
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn contact_card(&mut self) -> Result<ContactCard, SigningError> {
         let rot_key_op = self
@@ -278,6 +286,7 @@ impl<
         }
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn rotate_prekey(
         &mut self,
@@ -289,6 +298,7 @@ impl<
             .await
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn expand_prekeys(&mut self) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
         self.active
@@ -299,7 +309,8 @@ impl<
 
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn try_sign<U: Serialize + Debug>(&self, data: U) -> Result<Signed<U>, SigningError> {
-        self.active.borrow().try_sign_async(data).await
+        let signer = self.active.borrow().signer.clone();
+        signer.try_sign_async(data).await
     }
 
     #[instrument(skip(self), fields(khid = %self.id()))]
@@ -376,6 +387,8 @@ impl<
             })
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
+    #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &mut self,
         to_add: Agent<S, T, L>,
@@ -383,24 +396,15 @@ impl<
         can: Access,
         other_relevant_docs: &[Rc<RefCell<Document<S, T, L>>>], // TODO make this automatic
     ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError> {
+        let signer = self.active.borrow().signer.clone();
         match resource {
             Membered::Group(group) => Ok(group
                 .borrow_mut()
-                .add_member(
-                    to_add,
-                    can,
-                    &self.active.borrow().signer,
-                    other_relevant_docs,
-                )
+                .add_member(to_add, can, &signer, other_relevant_docs)
                 .await?),
             Membered::Document(doc) => {
                 doc.borrow_mut()
-                    .add_member(
-                        to_add,
-                        can,
-                        &self.active.borrow().signer,
-                        other_relevant_docs,
-                    )
+                    .add_member(to_add, can, &signer, other_relevant_docs)
                     .await
             }
         }
@@ -419,16 +423,18 @@ impl<
             relevant_docs.insert(doc_id, doc.borrow().content_heads.iter().cloned().collect());
         }
 
+        let signer = self.active.borrow().signer.clone();
         resource
             .revoke_member(
                 to_revoke,
                 retain_all_other_members,
-                &self.active.borrow().signer,
+                &signer,
                 &mut relevant_docs,
             )
             .await
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(skip_all, fields(khid = %self.id(), doc_id = %doc.borrow().id(), content_ref))]
     pub async fn try_encrypt_content(
         &mut self,
@@ -437,15 +443,10 @@ impl<
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError> {
+        let signer = self.active.borrow().signer.clone();
         let result = doc
             .borrow_mut()
-            .try_encrypt_content(
-                content_ref,
-                content,
-                pred_refs,
-                &self.active.borrow().signer,
-                &mut self.csprng,
-            )
+            .try_encrypt_content(content_ref, content, pred_refs, &signer, &mut self.csprng)
             .await?;
         if let Some(op) = &result.update_op {
             self.event_listener.on_cgka_op(&Rc::new(op.clone())).await;
@@ -461,6 +462,7 @@ impl<
         doc.borrow_mut().try_decrypt_content(encrypted)
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     pub async fn try_causal_decrypt_content(
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
@@ -475,14 +477,14 @@ impl<
             .await
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
     pub async fn force_pcs_update(
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
-        doc.borrow_mut()
-            .pcs_update(&self.active.borrow().signer, &mut self.csprng)
-            .await
+        let signer = self.active.borrow().signer.clone();
+        doc.borrow_mut().pcs_update(&signer, &mut self.csprng).await
     }
 
     #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
@@ -543,6 +545,7 @@ impl<
         caps
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip_all, fields(khid = %self.id()))]
     pub fn events_for_agent(
         &self,
@@ -610,6 +613,7 @@ impl<
         Ok(Some(ops))
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip_all, fields(khid = %self.id()))]
     pub fn membership_ops_for_agent(
         &self,
@@ -763,11 +767,13 @@ impl<
         self.individuals.get(&id)
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn get_group(&self, id: GroupId) -> Option<&Rc<RefCell<Group<S, T, L>>>> {
         self.groups.get(&id)
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn get_document(&self, id: DocumentId) -> Option<&Rc<RefCell<Document<S, T, L>>>> {
         self.docs.get(&id)
@@ -947,6 +953,7 @@ impl<
         Ok(())
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn receive_revocation(
         &mut self,
@@ -1037,12 +1044,12 @@ impl<
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
         match static_event {
             StaticEvent::PrekeysExpanded(add_op) => {
-                self.receive_prekey_op(&Rc::new(add_op).into())?
+                self.receive_prekey_op(&Rc::new(*add_op).into())?
             }
             StaticEvent::PrekeyRotated(rot_op) => {
-                self.receive_prekey_op(&Rc::new(rot_op).into())?
+                self.receive_prekey_op(&Rc::new(*rot_op).into())?
             }
-            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(cgka_op).await?,
+            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(*cgka_op).await?,
             StaticEvent::Delegated(dlg) => self.receive_delegation(&dlg).await?,
             StaticEvent::Revoked(rev) => self.receive_revocation(&rev).await?,
         }
@@ -1069,32 +1076,36 @@ impl<
         signed_op.try_verify()?;
 
         let doc_id = signed_op.payload.doc_id();
-        let mut doc = self
+        let doc = self
             .docs
             .get(doc_id)
-            .ok_or(ReceiveCgkaOpError::UnknownDocument(*doc_id))?
-            .borrow_mut();
+            .ok_or(ReceiveCgkaOpError::UnknownDocument(*doc_id))?;
 
         let signed_op = Rc::new(signed_op);
         if let CgkaOperation::Add { added_id, pk, .. } = signed_op.payload {
-            let active = self.active.borrow();
-            if active.id() == added_id {
+            let active_id = self.active.borrow().id();
+            if active_id == added_id {
                 tracing::info!("one of us!");
-                let sk = active
-                    .prekey_pairs
-                    .get(&pk)
-                    .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?;
-                doc.merge_cgka_invite_op(signed_op.clone(), sk)?;
+                let sk = {
+                    let active = self.active.borrow();
+                    *active
+                        .prekey_pairs
+                        .get(&pk)
+                        .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?
+                };
+                doc.borrow_mut()
+                    .merge_cgka_invite_op(signed_op.clone(), &sk)?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
             } else if Public.individual().id() == added_id {
                 let sk = Public.share_secret_key();
-                doc.merge_cgka_invite_op(signed_op.clone(), &sk)?;
+                doc.borrow_mut()
+                    .merge_cgka_invite_op(signed_op.clone(), &sk)?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
             }
         }
-        doc.merge_cgka_op(signed_op.clone())?;
+        doc.borrow_mut().merge_cgka_op(signed_op.clone())?;
         self.event_listener.on_cgka_op(&signed_op).await;
         Ok(())
     }
@@ -1110,9 +1121,10 @@ impl<
         individual: Rc<RefCell<Individual>>,
         head: Rc<Signed<Delegation<S, T, L>>>,
     ) -> Rc<RefCell<Group<S, T, L>>> {
+        let indie = individual.borrow().clone();
         let group = Rc::new(RefCell::new(
             Group::from_individual(
-                individual.borrow().clone(),
+                indie,
                 head,
                 self.delegations.dupe(),
                 self.revocations.dupe(),
@@ -1502,6 +1514,7 @@ impl<
         }
     }
 
+    #[allow(clippy::type_complexity)]
     #[cfg(any(test, feature = "test_utils"))]
     #[instrument(level = "trace", skip_all, fields(khid = %self.id()))]
     pub async fn ingest_event_table(
@@ -1516,7 +1529,7 @@ impl<
 }
 
 impl<
-        S: AsyncSigner,
+        S: AsyncSigner + Clone,
         T: ContentRef + Debug,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
@@ -1550,6 +1563,7 @@ impl<
     type Forked = Keyhive<S, T, P, C, Log<S, T>, R>;
 
     fn fork(&self) -> Self::Forked {
+        // TODO this is probably fairly slow, and due to the logger type changing
         Keyhive::try_from_archive(
             &self.into_archive(),
             self.active.borrow().signer.clone(),
@@ -1570,6 +1584,7 @@ impl<
         R: rand::CryptoRng + rand::RngCore + Clone,
     > MergeAsync for Rc<RefCell<Keyhive<S, T, P, C, L, R>>>
 {
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     async fn merge_async(&self, mut fork: Self::AsyncForked) {
         self.borrow()
             .active
@@ -1589,7 +1604,8 @@ impl<
             }
         }
 
-        for event in fork.event_listener.0.borrow().iter() {
+        let forked_listener = fork.event_listener.0.borrow().clone();
+        for event in forked_listener.iter() {
             match event {
                 Event::PrekeysExpanded(_add_op) => {
                     continue; // NOTE: handled above
@@ -1609,7 +1625,7 @@ impl<
 }
 
 impl<
-        S: AsyncSigner,
+        S: AsyncSigner + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
@@ -1623,7 +1639,7 @@ impl<
 }
 
 impl<
-        S: AsyncSigner,
+        S: AsyncSigner + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
@@ -1842,7 +1858,7 @@ mod tests {
         hive.generate_doc(vec![indie.into()], nonempty![[1u8; 32], [2u8; 32]])
             .await?;
 
-        assert!(hive.active.borrow().prekey_pairs.len() > 0);
+        assert!(!hive.active.borrow().prekey_pairs.is_empty());
         assert_eq!(hive.individuals.len(), 2);
         assert_eq!(hive.groups.len(), 1);
         assert_eq!(hive.docs.len(), 1);
@@ -1903,7 +1919,8 @@ mod tests {
         assert_eq!(hive2.groups.len(), 0);
         assert_eq!(hive2.docs.len(), 0);
 
-        for dlg in group1_on_hive1.borrow().delegation_heads().values() {
+        let heads = group1_on_hive1.borrow().delegation_heads().clone();
+        for dlg in heads.values() {
             let static_dlg = dlg.as_ref().clone().map(|d| d.into()); // TODO add From instance
             hive2.receive_delegation(&static_dlg).await.unwrap();
         }
@@ -1938,24 +1955,20 @@ mod tests {
         assert_eq!(left.revocations.borrow().len(), 0);
 
         assert_eq!(left.individuals.len(), 1);
-        assert!(left.individuals.get(&IndividualId(Public.id())).is_some());
+        assert!(left.individuals.contains_key(&IndividualId(Public.id())));
 
         assert_eq!(left.groups.len(), 1);
         assert_eq!(left.docs.len(), 1);
 
-        assert!(left.docs.get(&left_doc.borrow().doc_id()).is_some());
-        assert!(left.groups.get(&left_group.borrow().group_id()).is_some());
+        assert!(left.docs.contains_key(&left_doc.borrow().doc_id()));
+        assert!(left.groups.contains_key(&left_group.borrow().group_id()));
 
         // NOTE: *NOT* the group
         let left_membered = left.membered_reachable_by_agent(&Public.individual().into());
 
         assert_eq!(left_membered.len(), 1);
-        assert!(left_membered
-            .get(&left_doc.borrow().doc_id().into())
-            .is_some());
-        assert!(left_membered
-            .get(&left_group.borrow().group_id().into())
-            .is_none()); // NOTE *not* included because Public is not a member
+        assert!(left_membered.contains_key(&left_doc.borrow().doc_id().into()));
+        assert!(!left_membered.contains_key(&left_group.borrow().group_id().into())); // NOTE *not* included because Public is not a member
 
         let left_to_mid_ops = left.events_for_agent(&Public.individual().into()).unwrap();
         assert_eq!(left_to_mid_ops.len(), 14);
@@ -1969,8 +1982,8 @@ mod tests {
         assert_eq!(left.revocations.borrow().len(), 0);
 
         // Middle should now look the same
-        assert!(middle.docs.get(&left_doc.borrow().doc_id()).is_some());
-        assert!(middle.groups.get(&left_group.borrow().group_id()).is_none()); // NOTE: *None*
+        assert!(middle.docs.contains_key(&left_doc.borrow().doc_id()));
+        assert!(!middle.groups.contains_key(&left_group.borrow().group_id())); // NOTE: *None*
 
         assert_eq!(middle.individuals.len(), 2); // NOTE: includes Left
         assert_eq!(middle.groups.len(), 0);
@@ -2015,11 +2028,8 @@ mod tests {
         assert_eq!(right.delegations.borrow().len(), 2);
 
         assert!(right.groups.len() == 1 || right.docs.len() == 1);
-        assert!(right
-            .docs
-            .get(&DocumentId(left_doc.borrow().id()))
-            .is_some());
-        assert!(right.groups.get(&left_group.borrow().group_id()).is_none()); // NOTE: *None*
+        assert!(right.docs.contains_key(&DocumentId(left_doc.borrow().id())));
+        assert!(!right.groups.contains_key(&left_group.borrow().group_id())); // NOTE: *None*
 
         assert_eq!(right.individuals.len(), 3);
         assert_eq!(right.groups.len(), 0);
@@ -2061,6 +2071,7 @@ mod tests {
         assert_eq!(middle.delegations.borrow().len(), 4);
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[tokio::test]
     async fn test_add_member() {
         test_utils::init_logging();
@@ -2082,6 +2093,7 @@ mod tests {
         assert_eq!(dlg.delegation.subject_id(), doc.borrow().doc_id().into());
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[tokio::test]
     async fn receiving_an_event_with_added_or_rotated_prekeys_works() {
         test_utils::init_logging();
@@ -2144,6 +2156,7 @@ mod tests {
         bob.ingest_event_table(events).await.unwrap();
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[tokio::test]
     async fn test_async_transaction() -> TestResult {
         test_utils::init_logging();
@@ -2260,7 +2273,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(trunk.borrow().docs.len() >= 1);
+        assert!(!trunk.borrow().docs.is_empty());
         assert!(trunk.borrow().docs.len() <= 3);
 
         // FIXME add transact right on Keyhive taht aslo dispatches new events

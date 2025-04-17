@@ -1,17 +1,15 @@
 use std::{array, collections::HashMap, hash::Hash};
 
 use keyhive_core::{
-    cgka::{error::CgkaError, operation::CgkaOperation},
+    cgka::operation::CgkaOperation,
     crypto::{digest::Digest, signed::Signed},
-    keyhive::ReceiveCgkaOpError,
 };
 
 use crate::{
-    network::{PeerAddress, RpcError},
+    network::PeerAddress,
     parse::{self, Parse},
     riblt,
     serialization::Encode,
-    state::keyhive::error::Ingest,
     sync::SessionId,
     DocumentId, TaskContext,
 };
@@ -36,14 +34,14 @@ pub(super) async fn sync_cgka<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         .map(|op| (Digest::hash(&op), op))
         .collect::<HashMap<_, _>>();
 
-    for (hash, _) in &local_ops {
+    for hash in local_ops.keys() {
         decoder.add_symbol(&CgkaSymbol(*hash));
     }
 
     let mut remote_symbols = ctx
         .requests()
         .sessions()
-        .fetch_cgka_symbols(peer_address, session_id, doc_id.clone(), 10)
+        .fetch_cgka_symbols(peer_address, session_id, doc_id, 10)
         .await??;
     const BATCH_SIZE: usize = 100;
 
@@ -58,7 +56,7 @@ pub(super) async fn sync_cgka<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
         remote_symbols = ctx
             .requests()
             .sessions()
-            .fetch_cgka_symbols(peer_address, session_id, doc_id.clone(), BATCH_SIZE as u32)
+            .fetch_cgka_symbols(peer_address, session_id, doc_id, BATCH_SIZE as u32)
             .await??;
     }
 
@@ -74,13 +72,13 @@ pub(super) async fn sync_cgka<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
             let ops = ctx
                 .requests()
                 .sessions()
-                .fetch_cgka_ops(peer_address, session_id, doc_id.clone(), to_download)
+                .fetch_cgka_ops(peer_address, session_id, doc_id, to_download)
                 .await??;
             ctx.state()
                 .keyhive()
                 .ingest_cgka_ops(ops)
                 .await
-                .map_err(|e| super::super::Error::Other(e.to_string()));
+                .map_err(|e| super::super::Error::Other(e.to_string()))?;
             ctx.state().docs().mark_changed(&doc_id);
         } else {
             tracing::trace!("no cgka ops to download");
@@ -150,7 +148,7 @@ impl riblt::Symbol for CgkaSymbol {
 
 impl Encode for CgkaSymbol {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.0.as_slice());
+        out.extend_from_slice(self.0.as_slice());
     }
 }
 

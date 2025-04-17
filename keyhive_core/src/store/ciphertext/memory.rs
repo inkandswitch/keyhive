@@ -14,6 +14,8 @@ use tracing::instrument;
 pub struct MemoryCiphertextStore<Cr: ContentRef, P> {
     pub(crate) ops_to_refs: HashMap<Digest<Signed<CgkaOperation>>, HashSet<Cr>>,
     pub(crate) refs_to_digests: HashMap<Cr, HashSet<Digest<EncryptedContent<P, Cr>>>>,
+
+    #[allow(clippy::type_complexity)]
     pub(crate) store:
         HashMap<Digest<EncryptedContent<P, Cr>>, (ByteSize, Rc<EncryptedContent<P, Cr>>)>,
 }
@@ -138,7 +140,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     pub fn remove_all(&mut self, content_ref: &Cr) -> bool {
         if let Some(digests) = self.refs_to_digests.remove(content_ref) {
             for digest in digests.iter() {
-                self.store.remove(&digest);
+                self.store.remove(digest);
             }
             true
         } else {

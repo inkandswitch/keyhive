@@ -32,18 +32,7 @@ pub(crate) struct State<R: rand::Rng + rand::CryptoRng> {
     docs: HashMap<DocumentId, DocState>,
     docs_with_changes: HashSet<DocumentId>,
     auth: crate::auth::manager::Manager,
-    keyhive: Rc<
-        futures::lock::Mutex<
-            Keyhive<
-                Signer,
-                CommitHash,
-                Vec<u8>,
-                MemoryCiphertextStore<CommitHash, Vec<u8>>,
-                crate::keyhive::Listener,
-                R,
-            >,
-        >,
-    >,
+    keyhive: Rc<futures::lock::Mutex<Beehive<R>>>,
     streams: crate::streams::Streams,
     endpoints: endpoint::Endpoints,
     rng: Rc<RefCell<R>>,
@@ -52,18 +41,21 @@ pub(crate) struct State<R: rand::Rng + rand::CryptoRng> {
     our_peer_id: PeerId,
 }
 
+/// The Beelay-visible Keyhive
+type Beehive<R> = Keyhive<
+    Signer,
+    CommitHash,
+    Vec<u8>,
+    MemoryCiphertextStore<CommitHash, Vec<u8>>,
+    crate::keyhive::Listener,
+    R,
+>;
+
 impl<R: rand::Rng + rand::CryptoRng> State<R> {
     pub(crate) fn new(
         rng: R,
         signer: Signer,
-        keyhive: Keyhive<
-            Signer,
-            CommitHash,
-            Vec<u8>,
-            MemoryCiphertextStore<CommitHash, Vec<u8>>,
-            crate::keyhive::Listener,
-            R,
-        >,
+        keyhive: Beehive<R>,
         docs: HashMap<DocumentId, DocState>,
         session_duration: Duration,
     ) -> Self {

@@ -49,6 +49,7 @@ pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> {
+    #[allow(clippy::type_complexity)]
     #[instrument(level = "debug", skip(ciphertext_store))]
     pub async fn now_decryptable<P, C: CiphertextStore<T, P>>(
         new_events: &[Event<S, T, L>],
@@ -100,13 +101,15 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Event<S, T
             Event::Delegated(d) => StaticEvent::Delegated(Rc::unwrap_or_clone(d).map(Into::into)),
             Event::Revoked(r) => StaticEvent::Revoked(Rc::unwrap_or_clone(r).map(Into::into)),
 
-            Event::CgkaOperation(cgka) => StaticEvent::CgkaOperation(Rc::unwrap_or_clone(cgka)),
+            Event::CgkaOperation(cgka) => {
+                StaticEvent::CgkaOperation(Box::new(Rc::unwrap_or_clone(cgka)))
+            }
 
             Event::PrekeyRotated(pkr) => {
-                StaticEvent::PrekeyRotated(Rc::unwrap_or_clone(pkr).map(Into::into))
+                StaticEvent::PrekeyRotated(Box::new(Rc::unwrap_or_clone(pkr).map(Into::into)))
             }
             Event::PrekeysExpanded(pke) => {
-                StaticEvent::PrekeysExpanded(Rc::unwrap_or_clone(pke).map(Into::into))
+                StaticEvent::PrekeysExpanded(Box::new(Rc::unwrap_or_clone(pke).map(Into::into)))
             }
         }
     }

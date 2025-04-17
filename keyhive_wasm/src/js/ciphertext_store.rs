@@ -45,12 +45,12 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
         id: &JsChangeRef,
     ) -> Result<Option<Rc<EncryptedContent<Vec<u8>, JsChangeRef>>>, Self::GetCiphertextError> {
         match self.inner {
-            JsCiphertextStoreInner::Memory(ref mem_store) => Ok(mem_store.get_by_content_ref(&id)),
+            JsCiphertextStoreInner::Memory(ref mem_store) => Ok(mem_store.get_by_content_ref(id)),
 
             #[cfg(feature = "web-sys")]
             JsCiphertextStoreInner::WebStorage(ref store) => {
                 if let Some(b64) = store
-                    .get_item(&id.to_base64().as_str())
+                    .get_item(id.to_base64().as_str())
                     .map_err(JsWebStorageError::RetrievalError)?
                 {
                     let bytes = Base64(b64).into_vec().map_err(|e| {
@@ -73,7 +73,7 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
     ) -> Result<Vec<Rc<EncryptedContent<Vec<u8>, JsChangeRef>>>, Self::GetCiphertextError> {
         match self.inner {
             JsCiphertextStoreInner::Memory(ref mem_store) => {
-                Ok(mem_store.get_by_pcs_update(&pcs_update))
+                Ok(mem_store.get_by_pcs_update(pcs_update))
             }
 
             // TODO add index
@@ -115,7 +115,7 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
             #[cfg(feature = "web-sys")]
             JsCiphertextStoreInner::WebStorage(ref store) => {
                 store
-                    .remove_item(&id.to_base64().as_str())
+                    .remove_item(id.to_base64().as_str())
                     .map_err(JsRemoveCiphertextError)?;
             }
         };

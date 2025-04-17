@@ -1,6 +1,4 @@
-use crate::{auth::audience::Audience, network::endpoint, streams, TaskContext};
-
-pub use error::BadTransport;
+use crate::{network::endpoint, streams};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PeerAddress {
@@ -27,29 +25,4 @@ impl std::fmt::Display for PeerAddress {
             Self::Endpoint(endpoint) => write!(f, "endpoint({:?})", endpoint),
         }
     }
-}
-
-mod error {
-    use crate::{network::endpoint, streams};
-
-    #[derive(Debug)]
-    pub enum BadTransport {
-        MissingEndpoint(endpoint::EndpointId),
-        MissingStream(streams::StreamId),
-    }
-
-    impl std::fmt::Display for BadTransport {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Self::MissingEndpoint(endpoint_id) => {
-                    write!(f, "missing endpoint: {:?}", endpoint_id)
-                }
-                Self::MissingStream(stream_id) => {
-                    write!(f, "missing stream: {:?}", stream_id)
-                }
-            }
-        }
-    }
-
-    impl std::error::Error for BadTransport {}
 }

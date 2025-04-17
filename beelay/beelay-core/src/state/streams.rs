@@ -1,4 +1,4 @@
-use std::{borrow::Cow, cell::RefCell, collections::HashSet, rc::Rc};
+use std::{borrow::Cow, cell::RefCell, rc::Rc};
 
 use crate::{
     conn_info::ConnectionInfo,

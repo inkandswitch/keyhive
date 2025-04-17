@@ -2,10 +2,12 @@ use keyhive_core::{cgka::operation::CgkaOperation, crypto::signed::Signed};
 
 use crate::TaskContext;
 
-use super::{Commit, CommitHash, CommitOrBundle, DocumentId};
+use super::{Commit, CommitHash, DocumentId};
 
+#[allow(dead_code)] // FIXME
 pub(crate) struct EncryptedBytes(Vec<u8>);
 
+#[allow(dead_code)] // FIXME
 pub(crate) struct EncryptedCommitBundle {
     start: CommitHash,
     end: CommitHash,
@@ -43,6 +45,7 @@ impl EncryptedCommitBundle {
     }
 }
 
+#[allow(dead_code)] // FIXME
 pub(crate) struct EncryptedCommit {
     parents: Vec<CommitHash>,
     hash: CommitHash,
@@ -72,42 +75,6 @@ impl EncryptedCommit {
 }
 
 pub(crate) enum EncryptedCommitOrBundle {
-    Commit(EncryptedCommit),
-    Bundle(EncryptedCommitBundle),
-}
-
-impl EncryptedCommitOrBundle {
-    pub(crate) async fn decrypt<R: rand::Rng + rand::CryptoRng>(
-        self,
-        ctx: TaskContext<R>,
-        doc: DocumentId,
-    ) -> Result<CommitOrBundle, crate::state::keyhive::DecryptError> {
-        match self {
-            EncryptedCommitOrBundle::Commit(c) => {
-                let decrypted = ctx
-                    .state()
-                    .keyhive()
-                    .decrypt(doc, &c.parents, c.hash, c.content.0)
-                    .await?;
-                Ok(CommitOrBundle::Commit(super::Commit::new(
-                    c.parents, decrypted, c.hash,
-                )))
-            }
-            EncryptedCommitOrBundle::Bundle(b) => {
-                let decrypted = ctx
-                    .state()
-                    .keyhive()
-                    .decrypt(doc, &[b.start], b.hash, b.content.0)
-                    .await?;
-                Ok(CommitOrBundle::Bundle(
-                    super::CommitBundle::builder()
-                        .start(b.start)
-                        .end(b.end)
-                        .bundled_commits(decrypted)
-                        .checkpoints(b.checkpoints)
-                        .build(),
-                ))
-            }
-        }
-    }
+    Commit,
+    Bundle,
 }

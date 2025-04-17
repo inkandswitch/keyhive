@@ -119,7 +119,7 @@ impl From<DocumentId> for KeyhiveEntityId {
 }
 
 impl From<Public> for KeyhiveEntityId {
-    fn from(public: Public) -> Self {
+    fn from(_public: Public) -> Self {
         KeyhiveEntityId::Public
     }
 }
@@ -293,8 +293,6 @@ pub(crate) mod error {
 
     #[derive(Debug, thiserror::Error)]
     pub(crate) enum ReceiveEventError {
-        #[error("missing dependency")]
-        MissingDependency,
         #[error(transparent)]
         Receive(
             #[from]
@@ -455,8 +453,7 @@ impl MembershipListener<Signer, CommitHash> for Listener {
             >,
         >,
     ) {
-        let _ = self
-            .send
+        self.send
             .unbounded_send(keyhive_core::event::Event::from(data.clone()))
             .unwrap();
     }
@@ -482,8 +479,7 @@ impl CgkaListener for Listener {
             keyhive_core::crypto::signed::Signed<keyhive_core::cgka::operation::CgkaOperation>,
         >,
     ) {
-        let _ = self
-            .send
+        self.send
             .unbounded_send(keyhive_core::event::Event::from(data.clone()))
             .unwrap();
     }

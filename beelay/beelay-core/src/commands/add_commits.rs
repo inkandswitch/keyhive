@@ -54,13 +54,13 @@ pub(super) async fn add_commits<R: rand::Rng + rand::CryptoRng + 'static>(
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
     let mut update = DocUpdateBuilder::new(doc_id, None);
-    update.add_commits(commits.into_iter().filter_map(|c| c));
+    update.add_commits(commits.into_iter().flatten());
     ctx.state().docs().apply_doc_update(update);
 
     // If any of the commits might be a bundle boundary, load the sedimentree
     // and see if any new bundles are needed
     if has_commit_boundary {
-        let storage = ctx.storage().doc_storage(doc_id.clone());
+        let storage = ctx.storage().doc_storage(doc_id);
         let tree = sedimentree::storage::load(storage).await;
         if let Ok(Some(tree)) = tree {
             Ok(tree.missing_bundles(doc_id))

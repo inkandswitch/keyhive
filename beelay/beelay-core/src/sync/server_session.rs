@@ -6,7 +6,7 @@ use keyhive_core::{
     event::static_event::StaticEvent,
 };
 
-use crate::{riblt, sedimentree, CommitHash, DocumentId, PeerId};
+use crate::{riblt, CommitHash, DocumentId, PeerId};
 
 use super::{
     sessions::SessionError, sync_doc, sync_docs, sync_membership, CgkaSymbol, DocStateHash,
@@ -14,7 +14,7 @@ use super::{
 };
 
 pub(crate) struct Session {
-    remote_peer: PeerId,
+    // remote_peer: PeerId,
     state: State,
 }
 
@@ -22,7 +22,7 @@ enum State {
     Loading,
     Loaded {
         docs: DocsSession,
-        membership: MembershipSession,
+        membership: Box<MembershipSession>,
     },
 }
 
@@ -37,14 +37,13 @@ struct MembershipSession {
 
 struct DocsSession {
     encoder: riblt::Encoder<sync_docs::DocStateHash>,
-    trees: HashMap<
-        DocumentId,
-        (
-            riblt::Encoder<sync_doc::CgkaSymbol>,
-            HashMap<Digest<Signed<CgkaOperation>>, Signed<CgkaOperation>>,
-            sedimentree::SedimentreeSummary,
-        ),
-    >,
+    trees: HashMap<DocumentId, SessionDocMeta>,
+}
+
+struct SessionDocMeta {
+    encoder: riblt::Encoder<sync_doc::CgkaSymbol>,
+    ops: HashMap<Digest<Signed<CgkaOperation>>, Signed<CgkaOperation>>,
+    // sedimentree_summary: sedimentree::SedimentreeSummary,
 }
 
 pub(crate) enum GraphSyncPhase {
@@ -70,10 +69,7 @@ impl DocsSession {
                 encoder.add_symbol(&CgkaSymbol::from(op));
                 ops.insert(Digest::hash(op), op.clone());
             }
-            trees.insert(
-                doc_id.clone(),
-                (encoder, ops, doc_state.sedimentree.clone()),
-            );
+            trees.insert(doc_id, SessionDocMeta { encoder, ops });
         }
 
         (
@@ -88,7 +84,7 @@ impl DocsSession {
 
 impl Session {
     pub(crate) fn new(
-        remote_peer: PeerId,
+        _remote_peer: PeerId,
         membership_state: super::MembershipState,
         docs: ReachableDocs,
         remote_membership: Vec<riblt::CodedSymbol<MembershipSymbol>>,
@@ -144,13 +140,13 @@ impl Session {
 
         (
             Self {
-                remote_peer,
+                // remote_peer,
                 state: State::Loaded {
                     docs: doc_session,
-                    membership: MembershipSession {
+                    membership: Box::new(MembershipSession {
                         encoder: membership_riblt,
                         ops: membership_ops,
-                    },
+                    }),
                 },
             },
             phase,
@@ -215,10 +211,10 @@ impl Session {
 
         self.state = State::Loaded {
             docs,
-            membership: MembershipSession {
+            membership: Box::new(MembershipSession {
                 encoder: membership_riblt,
                 ops: membership_ops,
-            },
+            }),
         };
 
         Ok(phase)
@@ -265,7 +261,11 @@ impl Session {
         let State::Loaded { docs, .. } = &mut self.state else {
             return Err(SessionError::Loading);
         };
-        let symbols = if let Some((cgka_session, _, _)) = docs.trees.get_mut(&doc) {
+        let symbols = if let Some(SessionDocMeta {
+            encoder: cgka_session,
+            ..
+        }) = docs.trees.get_mut(doc)
+        {
             cgka_session.next_n_symbols(count as u64)
         } else {
             // make an empty session and return the first 10 symbols
@@ -283,7 +283,7 @@ impl Session {
         let State::Loaded { docs, .. } = &self.state else {
             return Err(SessionError::Loading);
         };
-        let ops = if let Some((_, ops, _)) = docs.trees.get(&doc) {
+        let ops = if let Some(SessionDocMeta { ops, .. }) = docs.trees.get(doc) {
             op_hashes
                 .into_iter()
                 .filter_map(|h| ops.get(&h).cloned())
@@ -295,61 +295,6 @@ impl Session {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum Error {
-    #[error("invalid sequence number")]
-    InvalidSequenceNumber,
-}
-
-pub(crate) struct MakeSymbols {
-    pub(crate) offset: usize,
-    pub(crate) count: usize,
-}
-
-struct RibltSession<K: riblt::Symbol + Copy> {
-    encoder: riblt::Encoder<K>,
-    symbols: Vec<riblt::CodedSymbol<K>>,
-}
-
-impl<K> RibltSession<K>
-where
-    K: riblt::Symbol + Copy,
-{
-    fn new<I, V>(items: I) -> Self
-    where
-        I: Iterator<Item = V>,
-        K: for<'a> From<&'a V> + Eq + std::hash::Hash,
-    {
-        let mut encoder = riblt::Encoder::new();
-        for item in items {
-            let symbol = K::from(&item);
-            encoder.add_symbol(&symbol);
-        }
-        Self {
-            encoder,
-            symbols: Vec::new(),
-        }
-    }
-}
-
-impl<K> RibltSession<K>
-where
-    K: riblt::Symbol + Copy + Eq + std::hash::Hash,
-{
-    fn symbols(
-        &mut self,
-        MakeSymbols { offset, count }: MakeSymbols,
-    ) -> Vec<riblt::CodedSymbol<K>> {
-        if offset + count >= self.symbols.len() {
-            let num_new_symbols_to_make = offset + count - self.symbols.len() + 1;
-            self.symbols
-                .extend(self.encoder.next_n_symbols(num_new_symbols_to_make as u64));
-        }
-        assert!(offset + count <= self.symbols.len() - 1);
-        self.symbols[offset..offset + count].to_vec()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use keyhive_core::{
@@ -358,13 +303,56 @@ mod tests {
     };
     use std::collections::HashSet;
 
-    use crate::{
-        riblt,
-        sync::{
-            server_session::{MakeSymbols, RibltSession},
-            CgkaSymbol,
-        },
-    };
+    use crate::{riblt, sync::CgkaSymbol};
+
+    pub(crate) struct MakeSymbols {
+        pub(crate) offset: usize,
+        pub(crate) count: usize,
+    }
+
+    struct RibltSession<K: riblt::Symbol + Copy> {
+        encoder: riblt::Encoder<K>,
+        symbols: Vec<riblt::CodedSymbol<K>>,
+    }
+
+    impl<K> RibltSession<K>
+    where
+        K: riblt::Symbol + Copy,
+    {
+        fn new<I, V>(items: I) -> Self
+        where
+            I: Iterator<Item = V>,
+            K: for<'a> From<&'a V> + Eq + std::hash::Hash,
+        {
+            let mut encoder = riblt::Encoder::new();
+            for item in items {
+                let symbol = K::from(&item);
+                encoder.add_symbol(&symbol);
+            }
+            Self {
+                encoder,
+                symbols: Vec::new(),
+            }
+        }
+    }
+
+    impl<K> RibltSession<K>
+    where
+        K: riblt::Symbol + Copy + Eq + std::hash::Hash,
+    {
+        fn symbols(
+            &mut self,
+            MakeSymbols { offset, count }: MakeSymbols,
+        ) -> Vec<riblt::CodedSymbol<K>> {
+            if offset + count >= self.symbols.len() {
+                let num_new_symbols_to_make = offset + count - self.symbols.len() + 1;
+                self.symbols
+                    .extend(self.encoder.next_n_symbols(num_new_symbols_to_make as u64));
+            }
+            assert!(offset + count <= self.symbols.len() - 1);
+            self.symbols[offset..offset + count].to_vec()
+        }
+    }
 
     #[derive(Debug)]
     struct Scenario {
@@ -376,7 +364,7 @@ mod tests {
     impl<'a> arbitrary::Arbitrary<'a> for Scenario {
         fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
             let all_ops = Vec::<Signed<CgkaOperation>>::arbitrary(u)?;
-            if all_ops.len() == 0 {
+            if all_ops.is_empty() {
                 return Ok(Scenario {
                     only_server_ops: vec![],
                     only_client_ops: vec![],
@@ -414,12 +402,8 @@ mod tests {
                  joint_ops,
              }| {
                 // Create client and server sessions
-                let mut server_session = RibltSession::new(
-                    only_server_ops
-                        .clone()
-                        .into_iter()
-                        .chain(joint_ops.clone().into_iter()),
-                );
+                let mut server_session =
+                    RibltSession::new(only_server_ops.clone().into_iter().chain(joint_ops.clone()));
 
                 // Create client decoder
                 let mut client_decoder = riblt::Decoder::new();
@@ -468,7 +452,7 @@ mod tests {
                     .collect::<HashSet<_>>();
 
                 let expected_to_download: HashSet<_> =
-                    only_server_ops.iter().map(|op| Digest::hash(op)).collect();
+                    only_server_ops.iter().map(Digest::hash).collect();
 
                 assert_eq!(
                     to_download, expected_to_download,
@@ -483,7 +467,7 @@ mod tests {
                     .collect::<HashSet<_>>();
 
                 let expected_to_upload: HashSet<_> =
-                    only_client_ops.iter().map(|op| Digest::hash(op)).collect();
+                    only_client_ops.iter().map(Digest::hash).collect();
 
                 assert_eq!(
                     to_upload, expected_to_upload,

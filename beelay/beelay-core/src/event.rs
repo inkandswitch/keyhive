@@ -3,7 +3,6 @@ use crate::{
         keyhive::{self, AddMemberToGroup, KeyhiveEntityId, MemberAccess, RemoveMemberFromGroup},
         Command,
     },
-    contact_card::ContactCard,
     io::{self, IoResult},
     network::InnerRpcResponse,
     Audience, CommandId, Commit, CommitBundle, DocumentId, EndpointId, OutboundRequestId,
@@ -27,10 +26,10 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::HandleRequest {
+            Box::new(Command::HandleRequest {
                 request: request.0,
                 receive_audience,
-            },
+            }),
         ));
         (command_id, event)
     }
@@ -48,10 +47,10 @@ impl Event {
             command_id,
             Event(EventInner::BeginCommand(
                 command_id,
-                Command::AddCommits {
+                Box::new(Command::AddCommits {
                     doc_id: root_id,
                     commits,
-                },
+                }),
             )),
         )
     }
@@ -64,10 +63,10 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::CreateDoc {
+            Box::new(Command::CreateDoc {
                 initial_commit,
                 other_owners,
-            },
+            }),
         ));
         (command_id, event)
     }
@@ -77,10 +76,10 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::LoadDoc {
+            Box::new(Command::LoadDoc {
                 doc_id,
                 decrypt: true,
-            },
+            }),
         ));
         (command_id, event)
     }
@@ -89,10 +88,10 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::LoadDoc {
+            Box::new(Command::LoadDoc {
                 doc_id,
                 decrypt: false,
-            },
+            }),
         ));
         (command_id, event)
     }
@@ -102,10 +101,10 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::AddBundle {
+            Box::new(Command::AddBundle {
                 doc_id: doc,
                 bundle,
-            },
+            }),
         ));
         (command_id, event)
     }
@@ -114,7 +113,7 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::CreateStream(direction),
+            Box::new(Command::CreateStream(direction)),
         ));
         (command_id, event)
     }
@@ -123,7 +122,7 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::DisconnectStream { stream_id },
+            Box::new(Command::DisconnectStream { stream_id }),
         ));
         (command_id, event)
     }
@@ -132,10 +131,10 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::HandleStreamMessage {
+            Box::new(Command::HandleStreamMessage {
                 stream_id,
                 msg: message,
-            },
+            }),
         ));
         (command_id, event)
     }
@@ -144,7 +143,7 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::RegisterEndpoint(audience),
+            Box::new(Command::RegisterEndpoint(audience)),
         ));
         (command_id, event)
     }
@@ -153,14 +152,17 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::UnregisterEndpoints(endpoint_id),
+            Box::new(Command::UnregisterEndpoints(endpoint_id)),
         ));
         (command_id, event)
     }
 
     pub fn stop() -> Event {
         let command_id = CommandId::new();
-        Event(EventInner::BeginCommand(command_id, Command::Stop))
+        Event(EventInner::BeginCommand(
+            command_id,
+            Box::new(Command::Stop),
+        ))
     }
 
     pub fn add_member_to_doc(
@@ -171,9 +173,9 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::Keyhive(keyhive::KeyhiveCommand::AddMemberToDoc(
+            Box::new(Command::Keyhive(keyhive::KeyhiveCommand::AddMemberToDoc(
                 doc_id, member, access,
-            )),
+            ))),
         ));
         (command_id, event)
     }
@@ -185,7 +187,9 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::Keyhive(keyhive::KeyhiveCommand::RemoveMemberFromDoc(doc_id, member)),
+            Box::new(Command::Keyhive(
+                keyhive::KeyhiveCommand::RemoveMemberFromDoc(doc_id, member),
+            )),
         ));
         (command_id, event)
     }
@@ -194,7 +198,9 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::Keyhive(keyhive::KeyhiveCommand::QueryAccess(doc_id)),
+            Box::new(Command::Keyhive(keyhive::KeyhiveCommand::QueryAccess(
+                doc_id,
+            ))),
         ));
         (command_id, event)
     }
@@ -203,7 +209,9 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::Keyhive(keyhive::KeyhiveCommand::CreateGroup(other_owners)),
+            Box::new(Command::Keyhive(keyhive::KeyhiveCommand::CreateGroup(
+                other_owners,
+            ))),
         ));
         (command_id, event)
     }
@@ -212,7 +220,9 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::Keyhive(keyhive::KeyhiveCommand::AddMemberToGroup(add)),
+            Box::new(Command::Keyhive(keyhive::KeyhiveCommand::AddMemberToGroup(
+                add,
+            ))),
         ));
         (command_id, event)
     }
@@ -221,7 +231,9 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::Keyhive(keyhive::KeyhiveCommand::RemoveMemberFromGroup(remove)),
+            Box::new(Command::Keyhive(
+                keyhive::KeyhiveCommand::RemoveMemberFromGroup(remove),
+            )),
         ));
         (command_id, event)
     }
@@ -230,7 +242,7 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::QueryStatus(doc_id),
+            Box::new(Command::QueryStatus(doc_id)),
         ));
         (command_id, event)
     }
@@ -242,7 +254,9 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::Keyhive(keyhive::KeyhiveCommand::DebugEvents(nicknames)),
+            Box::new(Command::Keyhive(keyhive::KeyhiveCommand::DebugEvents(
+                nicknames,
+            ))),
         ));
         (command_id, event)
     }
@@ -251,7 +265,7 @@ impl Event {
         let command_id = CommandId::new();
         let event = Event(EventInner::BeginCommand(
             command_id,
-            Command::Keyhive(keyhive::KeyhiveCommand::CreateContactCard),
+            Box::new(Command::Keyhive(keyhive::KeyhiveCommand::CreateContactCard)),
         ));
         (command_id, event)
     }
@@ -265,6 +279,6 @@ impl Event {
 pub(super) enum EventInner {
     IoComplete(io::IoResult),
     HandleResponse(OutboundRequestId, InnerRpcResponse),
-    BeginCommand(CommandId, Command),
+    BeginCommand(CommandId, Box<Command>),
     Tick,
 }

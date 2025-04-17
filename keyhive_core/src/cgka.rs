@@ -178,7 +178,7 @@ impl Cgka {
         Ok((
             current_pcs_key.derive_application_secret(
                 &nonce,
-                &content_ref,
+                content_ref,
                 &Digest::hash(pred_refs),
                 self.pcs_key_ops
                     .get(&pcs_key_hash)

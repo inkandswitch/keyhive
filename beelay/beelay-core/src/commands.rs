@@ -18,7 +18,6 @@ pub use command_id::CommandId;
 use futures::{channel::oneshot, TryStreamExt};
 pub mod keyhive;
 use keyhive::KeyhiveEntityId;
-use keyhive_core::contact_card::ContactCard;
 
 #[derive(Debug)]
 pub(crate) enum Command {
@@ -202,7 +201,7 @@ where
     let initial_loose = LooseCommit::new(initial_commit.hash(), vec![], init_blob);
     let tree = sedimentree::Sedimentree::new(Vec::new(), vec![initial_loose]);
 
-    let storage = ctx.storage().doc_storage(doc_id.clone());
+    let storage = ctx.storage().doc_storage(doc_id);
     sedimentree::storage::update(storage, None, &tree).await?;
 
     ctx.state().docs().add_doc(doc_id, tree, cgka_op);
@@ -219,13 +218,11 @@ async fn load_doc_commits<R>(
 where
     R: rand::Rng + rand::CryptoRng + Clone + 'static,
 {
-    let Some(tree) = ctx.state().docs().sedimentree(doc_id) else {
-        return None;
-    };
-    let tree_storage = ctx.storage().doc_storage(doc_id.clone());
+    let tree = ctx.state().docs().sedimentree(doc_id)?;
+    let tree_storage = ctx.storage().doc_storage(*doc_id);
     let tree_data = sedimentree::storage::data(tree_storage, tree)
         .try_filter_map(|commit_or_bundle| async {
-            let doc_id = doc_id.clone();
+            let doc_id = *doc_id;
             match commit_or_bundle {
                 (CommitOrStratum::Commit(c), data) => {
                     let content = if decrypt {

@@ -15,7 +15,6 @@ pub(crate) trait Storage {
         &self,
         prefix: StorageKey,
     ) -> std::collections::HashMap<StorageKey, Vec<u8>>;
-    async fn load(&self, key: StorageKey) -> Option<Vec<u8>>;
     async fn put(&self, storage_key: StorageKey, value: Vec<u8>);
 }
 
@@ -27,10 +26,6 @@ impl crate::keyhive_storage::Storage for crate::io::IoHandle {
         crate::task_context::Storage::new(self)
             .load_range(prefix)
             .await
-    }
-
-    async fn load(&self, key: StorageKey) -> Option<Vec<u8>> {
-        crate::task_context::Storage::new(self).load(key).await
     }
 
     async fn put(&self, storage_key: StorageKey, value: Vec<u8>) {
@@ -51,25 +46,17 @@ where
         self.storage().load_range(prefix).await
     }
 
-    async fn load(&self, key: StorageKey) -> Option<Vec<u8>> {
-        self.storage().load(key).await
-    }
-
     async fn put(&self, storage_key: StorageKey, value: Vec<u8>) {
         self.storage().put(storage_key, value).await;
     }
 }
 
-impl<'a> Storage for crate::task_context::Storage<'a> {
+impl Storage for crate::task_context::Storage<'_> {
     async fn load_range(
         &self,
         prefix: StorageKey,
     ) -> std::collections::HashMap<StorageKey, Vec<u8>> {
         self.load_range(prefix).await
-    }
-
-    async fn load(&self, key: StorageKey) -> Option<Vec<u8>> {
-        self.load(key).await
     }
 
     async fn put(&self, storage_key: StorageKey, value: Vec<u8>) {
@@ -118,12 +105,9 @@ pub(crate) async fn load_archives<S: Storage>(
     tracing::trace!(num_archives = raw_archives.len(), "loading raw archives");
     for (key, v) in raw_archives {
         keys.push(key);
-        if let Some(archive) = bincode::deserialize(&v)
-            .inspect_err(|e| {
-                tracing::error!(err=?e, "failed to decode stored keyhive archive");
-            })
-            .ok()
-        {
+        if let Ok(archive) = bincode::deserialize(&v).inspect_err(|e| {
+            tracing::error!(err=?e, "failed to decode stored keyhive archive");
+        }) {
             archives.push(archive);
         }
     }

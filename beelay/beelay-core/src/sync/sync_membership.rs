@@ -7,7 +7,6 @@ use std::{
 use keyhive_core::{crypto::digest::Digest, event::static_event::StaticEvent};
 
 use crate::{
-    doc_status::DocEvent,
     network::{messages::session::NextSyncPhase, PeerAddress},
     parse::{self, Parse},
     riblt::{self, CodedSymbol},
@@ -51,7 +50,7 @@ impl riblt::Symbol for MembershipSymbol {
 
 impl Encode for MembershipSymbol {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.hash.as_slice())
+        out.extend_from_slice(self.hash.as_slice())
     }
 }
 
@@ -148,9 +147,7 @@ pub(crate) async fn run_once<R: rand::Rng + rand::CryptoRng + Clone + 'static>(
 ) -> Result<(), super::Error> {
     let mut decoder = riblt::Decoder::new();
     for op_hash in local_ops.keys() {
-        decoder.add_symbol(&MembershipSymbol {
-            hash: op_hash.clone(),
-        });
+        decoder.add_symbol(&MembershipSymbol { hash: *op_hash });
     }
 
     const BATCH_SIZE: usize = 100;

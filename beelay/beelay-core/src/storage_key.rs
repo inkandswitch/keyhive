@@ -197,8 +197,10 @@ impl StorageKey {
         std::iter::once(self.namespace.as_ref()).chain(self.remaining.iter().map(|s| s.as_str()))
     }
 
+    // NOTE Impossible to be empty
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
-        self.remaining.len() + 1 //Namespace is included
+        self.remaining.len() + 1 // Namespace is included
     }
 
     /// Returns the last component of the key, if any (i.e. this does not include the namespace).

@@ -20,13 +20,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, From, TryInto, Serialize, Deserialize)]
 pub enum StaticEvent<T: ContentRef = [u8; 32]> {
     /// Prekeys were expanded.
-    PrekeysExpanded(Signed<AddKeyOp>),
+    PrekeysExpanded(Box<Signed<AddKeyOp>>),
 
     /// A prekey was rotated.
-    PrekeyRotated(Signed<RotateKeyOp>),
+    PrekeyRotated(Box<Signed<RotateKeyOp>>),
 
     /// A CGKA operation was performed.
-    CgkaOperation(Signed<CgkaOperation>),
+    CgkaOperation(Box<Signed<CgkaOperation>>),
 
     /// A delegation was created.
     Delegated(Signed<StaticDelegation<T>>),
@@ -40,9 +40,9 @@ impl<'a, T: arbitrary::Arbitrary<'a> + ContentRef> arbitrary::Arbitrary<'a> for 
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let variant = u.int_in_range(0..=4)?;
         match variant {
-            0 => Ok(Self::PrekeysExpanded(Signed::arbitrary(u)?)),
-            1 => Ok(Self::PrekeyRotated(Signed::arbitrary(u)?)),
-            2 => Ok(Self::CgkaOperation(Signed::arbitrary(u)?)),
+            0 => Ok(Self::PrekeysExpanded(Box::new(Signed::arbitrary(u)?))),
+            1 => Ok(Self::PrekeyRotated(Box::new(Signed::arbitrary(u)?))),
+            2 => Ok(Self::CgkaOperation(Box::new(Signed::arbitrary(u)?))),
             3 => Ok(Self::Delegated(Signed::arbitrary(u)?)),
             4 => Ok(Self::Revoked(Signed::arbitrary(u)?)),
             _ => unreachable!(),

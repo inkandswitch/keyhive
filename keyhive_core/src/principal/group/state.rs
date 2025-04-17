@@ -133,6 +133,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
         &self.revocation_heads
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn add_delegation(
         &mut self,
         delegation: Rc<Signed<Delegation<S, T, L>>>,
@@ -183,6 +184,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
         Ok(hash)
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn add_revocation(
         &mut self,
         revocation: Rc<Signed<Revocation<S, T, L>>>,
