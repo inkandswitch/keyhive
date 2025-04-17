@@ -4,8 +4,10 @@ use crate::TaskContext;
 
 use super::{Commit, CommitHash, DocumentId};
 
+#[allow(dead_code)] // FIXME
 pub(crate) struct EncryptedBytes(Vec<u8>);
 
+#[allow(dead_code)] // FIXME
 pub(crate) struct EncryptedCommitBundle {
     start: CommitHash,
     end: CommitHash,
@@ -43,6 +45,7 @@ impl EncryptedCommitBundle {
     }
 }
 
+#[allow(dead_code)] // FIXME
 pub(crate) struct EncryptedCommit {
     parents: Vec<CommitHash>,
     hash: CommitHash,
@@ -72,6 +75,6 @@ impl EncryptedCommit {
 }
 
 pub(crate) enum EncryptedCommitOrBundle {
-    Commit(EncryptedCommit),
-    Bundle(EncryptedCommitBundle),
+    Commit,
+    Bundle,
 }

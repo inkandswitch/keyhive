@@ -9,7 +9,6 @@ pub(crate) mod contact_card;
 pub(crate) mod doc_id;
 pub(crate) use commit::JsCommit;
 mod commit_hash;
-pub(crate) use commit_hash::JsCommitHash;
 mod commit_or_bundle;
 pub(crate) use commit_or_bundle::JsCommitOrBundle;
 pub(crate) mod keyhive_entity;

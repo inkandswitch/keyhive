@@ -39,20 +39,14 @@ impl CommitOrBundle {
     {
         match self {
             CommitOrBundle::Commit(c) => {
-                let (encrypted, cgka_op) =
+                let (_encrypted, cgka_op) =
                     encrypted::EncryptedCommit::encrypt(ctx, doc_id, c).await?;
-                Ok((
-                    encrypted::EncryptedCommitOrBundle::Commit(encrypted),
-                    cgka_op,
-                ))
+                Ok((encrypted::EncryptedCommitOrBundle::Commit, cgka_op))
             }
             CommitOrBundle::Bundle(b) => {
-                let (encrypted, cgka_op) =
+                let (_encrypted, cgka_op) =
                     encrypted::EncryptedCommitBundle::encrypt(ctx, doc_id, b).await?;
-                Ok((
-                    encrypted::EncryptedCommitOrBundle::Bundle(encrypted),
-                    cgka_op,
-                ))
+                Ok((encrypted::EncryptedCommitOrBundle::Bundle, cgka_op))
             }
         }
     }

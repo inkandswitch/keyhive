@@ -264,7 +264,7 @@ fn sync_loops_are_rerun() {
 }
 
 #[test]
-fn newly_created_documents_are_synced__alice_to_bob() {
+fn newly_created_documents_are_synced_alice_to_bob() {
     init_logging();
     let mut network = Network::new();
     let alice = network.create_peer("alice").build();
@@ -287,7 +287,7 @@ fn newly_created_documents_are_synced__alice_to_bob() {
 }
 
 #[test]
-fn newly_created_documents_are_synced__bob_to_alice() {
+fn newly_created_documents_are_synced_bob_to_alice() {
     init_logging();
     let mut network = Network::new();
     let alice = network.create_peer("alice").build();
@@ -370,10 +370,7 @@ fn newly_accessible_documents_are_synced() {
         .unwrap();
 
     // Connect bob to alice
-    let ConnectedPair {
-        left_to_right: bob_to_alice,
-        ..
-    } = network.connect_stream(&bob, &alice);
+    network.connect_stream(&bob, &alice);
 
     // We should now be able to download the document
 

@@ -11,6 +11,7 @@ use keyhive_core::{
 use nonempty::nonempty;
 use testresult::TestResult;
 
+#[allow(clippy::type_complexity)]
 struct NewKeyhive {
     signer: MemorySigner,
     log: Log<MemorySigner>,

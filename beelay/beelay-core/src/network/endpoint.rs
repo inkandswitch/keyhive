@@ -18,7 +18,7 @@ impl Endpoints {
 
     pub(crate) fn register_endpoint(&mut self, audience: Audience) -> EndpointId {
         let id = EndpointId::new();
-        self.endpoints.insert(id, Endpoint { id, audience });
+        self.endpoints.insert(id, Endpoint { audience });
         id
     }
 
@@ -51,6 +51,6 @@ impl EndpointId {
 }
 
 pub struct Endpoint {
-    id: EndpointId,
+    // id: EndpointId,
     audience: Audience,
 }

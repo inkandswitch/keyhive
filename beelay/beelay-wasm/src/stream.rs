@@ -122,7 +122,7 @@ impl StreamHandle {
                 stream.disconnect_listeners.push(callback);
                 Ok(())
             }
-            other => return Err(JsError::new(&format!("unknown event: {}", other))),
+            other => Err(JsError::new(&format!("unknown event: {}", other))),
         }
     }
 

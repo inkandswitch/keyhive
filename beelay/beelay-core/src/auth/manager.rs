@@ -10,6 +10,7 @@ use super::{
 };
 use std::{collections::HashMap, future::Future, time::Duration};
 
+#[derive(Debug, Clone)]
 pub struct Manager {
     /// Time offsets for each audience
     pub offsets: HashMap<Audience, OffsetSeconds>,
@@ -40,6 +41,10 @@ impl Manager {
         } else {
             now
         }
+    }
+
+    pub(crate) fn signer(&self) -> &Signer {
+        &self.signer
     }
 
     pub(crate) fn send(

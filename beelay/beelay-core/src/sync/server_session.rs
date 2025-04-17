@@ -6,7 +6,7 @@ use keyhive_core::{
     event::static_event::StaticEvent,
 };
 
-use crate::{riblt, sedimentree, CommitHash, DocumentId, PeerId};
+use crate::{riblt, CommitHash, DocumentId, PeerId};
 
 use super::{
     sessions::SessionError, sync_doc, sync_docs, sync_membership, CgkaSymbol, DocStateHash,
@@ -14,7 +14,7 @@ use super::{
 };
 
 pub(crate) struct Session {
-    remote_peer: PeerId,
+    // remote_peer: PeerId,
     state: State,
 }
 
@@ -43,7 +43,7 @@ struct DocsSession {
 struct SessionDocMeta {
     encoder: riblt::Encoder<sync_doc::CgkaSymbol>,
     ops: HashMap<Digest<Signed<CgkaOperation>>, Signed<CgkaOperation>>,
-    sedimentree_summary: sedimentree::SedimentreeSummary,
+    // sedimentree_summary: sedimentree::SedimentreeSummary,
 }
 
 pub(crate) enum GraphSyncPhase {
@@ -69,14 +69,7 @@ impl DocsSession {
                 encoder.add_symbol(&CgkaSymbol::from(op));
                 ops.insert(Digest::hash(op), op.clone());
             }
-            trees.insert(
-                doc_id,
-                SessionDocMeta {
-                    encoder,
-                    ops,
-                    sedimentree_summary: doc_state.sedimentree.clone(),
-                },
-            );
+            trees.insert(doc_id, SessionDocMeta { encoder, ops });
         }
 
         (
@@ -91,7 +84,7 @@ impl DocsSession {
 
 impl Session {
     pub(crate) fn new(
-        remote_peer: PeerId,
+        _remote_peer: PeerId,
         membership_state: super::MembershipState,
         docs: ReachableDocs,
         remote_membership: Vec<riblt::CodedSymbol<MembershipSymbol>>,
@@ -147,7 +140,7 @@ impl Session {
 
         (
             Self {
-                remote_peer,
+                // remote_peer,
                 state: State::Loaded {
                     docs: doc_session,
                     membership: Box::new(MembershipSession {
@@ -311,12 +304,6 @@ mod tests {
     use std::collections::HashSet;
 
     use crate::{riblt, sync::CgkaSymbol};
-
-    #[derive(Debug, thiserror::Error)]
-    pub(crate) enum Error {
-        #[error("invalid sequence number")]
-        InvalidSequenceNumber,
-    }
 
     pub(crate) struct MakeSymbols {
         pub(crate) offset: usize,

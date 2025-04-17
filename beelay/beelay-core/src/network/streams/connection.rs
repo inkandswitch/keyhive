@@ -776,10 +776,9 @@ mod tests {
         where
             T: Encode,
         {
-            self.auth
-                .borrow_mut()
-                .send(self.clock, audience, msg.encode())
-                .await
+            // TODO make more efficient
+            let local = self.auth.borrow().clone();
+            local.send(self.clock, audience, msg.encode()).await
         }
 
         fn update_offset(&self, remote_audience: Audience, their_clock: UnixTimestamp) {
