@@ -882,21 +882,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for 
     }
 }
 
-// impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Fork for Group<S, T, L> {
-//     type Forked = Group<S, T, Log<S, T>>;
-//
-//     fn fork(&self) -> Self::Forked {
-//         let archive = self.into_archive();
-//         let mut forked = Group::dummy_from_archive(archive, delegations, revocations, listener);
-//
-//         // id_or_indie: self.id_or_indie.clone(),
-//         // members: self.members.clone(),
-//         // state: self.state.clone(),
-//         // active_revocations: self.active_revocations.clone(),
-//         // listener: Log::new(),
-//     }
-// }
-
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IdOrIndividual {
     GroupId(GroupId),
