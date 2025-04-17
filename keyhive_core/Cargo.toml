@@ -82,3 +82,6 @@ ingest_static = []
 name = "bench_cgka"
 harness = false
 required-features = ["test_utils"]
+
+[lints.clippy]
+doc_overindented_list_items = "allow"

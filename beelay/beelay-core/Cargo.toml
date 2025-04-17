@@ -53,3 +53,6 @@ viuer = "0.7.1"
 
 [features]
 debug_events = ["keyhive_core/debug_events"]
+
+[lints.clippy]
+doc_overindented_list_items = "allow"
