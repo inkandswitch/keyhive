@@ -5,7 +5,6 @@ use futures::{
     channel::{mpsc, oneshot},
     pin_mut,
     stream::FuturesUnordered,
-    task::LocalSpawnExt,
     FutureExt, StreamExt,
 };
 use keyhive_core::crypto::verifiable::Verifiable;
@@ -62,8 +61,7 @@ impl Driver {
             rx_tick,
         };
         let fut = f(spawn_args);
-        let executor = futures::executor::LocalPool::new();
-        executor.spawner().spawn_local(fut).unwrap();
+        let executor = executor::LocalExecutor::spawn(fut);
 
         Self {
             now,
