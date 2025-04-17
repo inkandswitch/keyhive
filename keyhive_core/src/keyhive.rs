@@ -256,6 +256,7 @@ impl<
         Ok(doc)
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn contact_card(&mut self) -> Result<ContactCard, SigningError> {
         let rot_key_op = self
@@ -285,6 +286,7 @@ impl<
         }
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn rotate_prekey(
         &mut self,
@@ -296,6 +298,7 @@ impl<
             .await
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn expand_prekeys(&mut self) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
         self.active
@@ -384,6 +387,7 @@ impl<
             })
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &mut self,
@@ -430,6 +434,7 @@ impl<
             .await
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(skip_all, fields(khid = %self.id(), doc_id = %doc.borrow().id(), content_ref))]
     pub async fn try_encrypt_content(
         &mut self,
@@ -457,6 +462,7 @@ impl<
         doc.borrow_mut().try_decrypt_content(encrypted)
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     pub async fn try_causal_decrypt_content(
         &mut self,
         doc: Rc<RefCell<Document<S, T, L>>>,
@@ -471,6 +477,7 @@ impl<
             .await
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
     pub async fn force_pcs_update(
         &mut self,
@@ -946,6 +953,7 @@ impl<
         Ok(())
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn receive_revocation(
         &mut self,
@@ -1555,6 +1563,7 @@ impl<
     type Forked = Keyhive<S, T, P, C, Log<S, T>, R>;
 
     fn fork(&self) -> Self::Forked {
+        // TODO this is probably fairly slow, and due to the logger type changing
         Keyhive::try_from_archive(
             &self.into_archive(),
             self.active.borrow().signer.clone(),
@@ -1575,6 +1584,7 @@ impl<
         R: rand::CryptoRng + rand::RngCore + Clone,
     > MergeAsync for Rc<RefCell<Keyhive<S, T, P, C, L, R>>>
 {
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     async fn merge_async(&self, mut fork: Self::AsyncForked) {
         self.borrow()
             .active
@@ -2061,6 +2071,7 @@ mod tests {
         assert_eq!(middle.delegations.borrow().len(), 4);
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[tokio::test]
     async fn test_add_member() {
         test_utils::init_logging();
@@ -2082,6 +2093,7 @@ mod tests {
         assert_eq!(dlg.delegation.subject_id(), doc.borrow().doc_id().into());
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[tokio::test]
     async fn receiving_an_event_with_added_or_rotated_prekeys_works() {
         test_utils::init_logging();
@@ -2144,6 +2156,7 @@ mod tests {
         bob.ingest_event_table(events).await.unwrap();
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[tokio::test]
     async fn test_async_transaction() -> TestResult {
         test_utils::init_logging();

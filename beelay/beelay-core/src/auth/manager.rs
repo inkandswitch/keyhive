@@ -43,10 +43,6 @@ impl Manager {
         }
     }
 
-    pub(crate) fn signer(&self) -> &Signer {
-        &self.signer
-    }
-
     pub(crate) fn send(
         &self,
         now: UnixTimestamp,

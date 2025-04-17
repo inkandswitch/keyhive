@@ -117,22 +117,6 @@ where
         }
     }
 
-    pub(crate) fn upload_membership_ops(
-        &self,
-        from_peer: PeerAddress,
-        ops: Vec<StaticEvent<CommitHash>>,
-    ) -> impl Future<Output = Result<(), RpcError>> + 'static {
-        let request = crate::Request::UploadMembershipOps { ops };
-        let task = self.request(from_peer, request);
-        async move {
-            let response = task.await?;
-            match response.content {
-                NonErrorPayload::UploadMembershipOps => Ok(()),
-                _ => Err(RpcError::IncorrectResponseType),
-            }
-        }
-    }
-
     pub(crate) fn upload_cgka_ops(
         &self,
         to_peer: PeerAddress,

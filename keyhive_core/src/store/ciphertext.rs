@@ -265,6 +265,7 @@ impl<Cr: ContentRef, T, C: CiphertextStore<Cr, T>> CiphertextStore<Cr, T> for Rc
     type GetCiphertextError = C::GetCiphertextError;
     type MarkDecryptedError = C::MarkDecryptedError;
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(level = "debug", skip(self))]
     async fn get_ciphertext(
         &self,
@@ -273,6 +274,7 @@ impl<Cr: ContentRef, T, C: CiphertextStore<Cr, T>> CiphertextStore<Cr, T> for Rc
         self.borrow().get_ciphertext(cr).await
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(level = "debug", skip(self))]
     async fn get_ciphertext_by_pcs_update(
         &self,
@@ -281,6 +283,7 @@ impl<Cr: ContentRef, T, C: CiphertextStore<Cr, T>> CiphertextStore<Cr, T> for Rc
         self.borrow().get_ciphertext_by_pcs_update(pcs_update).await
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(level = "debug", skip(self))]
     async fn mark_decrypted(&mut self, content_ref: &Cr) -> Result<(), Self::MarkDecryptedError> {
         self.borrow_mut().mark_decrypted(content_ref).await

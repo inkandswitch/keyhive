@@ -83,6 +83,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, 
         }
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &mut self,
@@ -105,6 +106,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, 
         }
     }
 
+    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[allow(clippy::type_complexity)]
     pub async fn revoke_member(
         &mut self,
