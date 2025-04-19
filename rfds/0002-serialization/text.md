@@ -62,7 +62,7 @@ Development was originally done with [Bincode]. This is a popular choice in Rust
 for it's flexibility, speed, low size overhead, and fails loudly on malicious input.
 A [specification][Bincode Spec] exists, though the primacy of Rust is clear:
 
-> ![QUOTE]
+> ![NOTE]
 > This specification is primarily defined in the context of Rust,
 > but aims to be implementable across different programming languages.
 > 
