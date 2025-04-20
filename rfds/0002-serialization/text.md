@@ -41,7 +41,7 @@ is a good fit for the Keyhive use case.
 Protobuf is attractive from a pure engineering perspective:
 * Packages are available in all major languages
 * It is extensively battle tested in critical applications at scale
-* Protobuf is fast to both encode and decode
+* Protobuf is reasonably fast to both encode and decode
 * Has among the lowest space overhead of all formats considered
 
 Protobuf schema definitions may be given in a special [Protobuf IDL]. 
@@ -90,6 +90,12 @@ may act as a provider, we expect that most implementations will store
 the ciphertexts directly, thus we assume that the exact bytes are assumed
 to be stored.
 
+## Decoding Performance
+
+While streaming decoders are possible to build for Protobuf data, decoding Protobufs
+can be costly in both memory and cycles some cases. FlatBuffers have advantages over
+Protobuf with better support for features like zero-copy deserialization.
+
 # Alternatives Considered
 
 Many other formats were considered. Some of the front runners are listed below.
@@ -98,7 +104,14 @@ across all languages surveyed (by the rough metric of "recent downloads").
 
 ## Bespoke Keyhive Serialization Format
 
+In short: if we're concerned about security, maturity, tooling, and performance,
+we should not "roll our own". The advantage would be total control of the byte-level
+layout with zero overhead tailored exactly to our use case. This comes with
+serious downsides:
 
+* Every implementation would need to implement a correct codec from scratch
+* Must consider all possible edge cases (liable to make mistakes others have already mitigated)
+* Labor intensive to plug into serialization tools like Serde, kkyv, Pickle, Cereal, etc
 
 ## Bincode v2
 
@@ -130,13 +143,22 @@ to schemas that upgrade easily. It is also not the most efficient format on this
 
 ## Parquet
 
-## Arrow
+[Parquet] is a column-oriented format 
+
+Parquet had a critical [remote-code execution CVE in early 2025][CVE-2025-30065].
+
+
+
 
 ## Avro
 
 ## Flatbuf
 
 ## Capt'n Proto
+
+[Capt'n Proto] is 
+
+Limited language support
 
 ## CBOR
 
@@ -188,9 +210,11 @@ compaction more than flexibility).
 [Bluesky]:  https://bsky.app/
 [CBOR]: https://cbor.io/spec.html
 [CDDL]: https://www.rfc-editor.org/rfc/rfc8610.html
+[CVE-2025-30065]: https://nvd.nist.gov/vuln/detail/CVE-2025-30065
 [DAG-CBOR]: https://ipld.io/specs/codecs/dag-cbor/spec/
 [How (not) to sign a JSON object]: https://latacora.micro.blog/2019/07/24/how-not-to.html
 [IPLD]: https://ipld.io/
+[Parquet]: https://parquet.apache.org/
 [Parse Don't Validate]: https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
 [Protobuf IDL]: https://protobuf.com/docs/language-spec
 [Protobuf]: https://protobuf.dev/
