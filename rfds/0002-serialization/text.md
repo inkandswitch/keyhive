@@ -3,40 +3,40 @@
 ## Motivation
 
 Serialization is important for signed data since the payload 
-must be exact in order to verify a signature or hash
+must be exact (down to the bit) in order to 
+[verify a signature or hash][How (not) to sign a JSON object].
+There are many serialization format for a reason: one true format
+does not exist. For Keyhive, the primary concern is security,
+followed by adoptability.
+
+Security is always subtle; there are a [plethora of attacks][Taxonomy of Attacks]
+that can be an unintended consequence of representation.
 
 
-
-
-...
-...
-.....
-...
-..
 
 # Desired Properties
 
 The selection criteria for an appropriate codec are broadly about ease
 of implementation and security concerns.
 
-## Security Considerations
+## Security
 
 * Maturity of format and ecosystem
 * Strict with, and resistant to, malicious input
-* Able to mitigate [canonicalization attacks]
+* Able to mitigate especially [canonicalization attacks]
 
-## Engineering Considerations
+## Engineering
 
-* Availability in popular languages
+* Availability in popular ecosystems
 * Minimal encoded size overhead
 * Good average performance (both cycles and memory)
 * Extensibility (e.g. for future fields)
 * Permissively licensed
 
-# Protocol Buffers v3
+# Choice: Protocol Buffers v3
 
-We believe that [Protocol Buffers] v3 ("Protobuf" or "proto3") is a good fit
-for the Keyhive use case.
+We believe that [Protocol Buffers] version 3 ("Protobuf" or "proto3")
+is a good fit for the Keyhive use case.
 
 Protobuf is attractive from a pure engineering perspective:
 * Packages are available in all major languages
@@ -44,10 +44,14 @@ Protobuf is attractive from a pure engineering perspective:
 * Protobuf is fast to both encode and decode
 * Has among the lowest space overhead of all formats considered
 
-Protobuf definitions include definitions in a special [Protobuf IDL]. 
+Protobuf schema definitions may be given in a special [Protobuf IDL]. 
 This is a double-edged sword. On one hand it requires implementers of Keyhive
 be able to read this IDL. On the other, most libraries provide codegen capabilities.
 Further, this decides the format in which to formally define Keyhive schemata.
+A challenge of the Protobuf IDL for us is that it's limited to Protobuf types,
+and cannot check arbitrary properties like inequalities. We will likely need
+to specify more about the types than the raw serialization, especially to help
+implementers [maintain invariants up front][Parse Don't Validate].
 
 Despite not being perfect (see [contraindications]), Protobuf also fares reasonably
 well from a security perspective. We believe that the most serious security challenges
@@ -131,8 +135,12 @@ It is little known outside of Rust (which does have significant Bincode adoption
 
 <!-- Extenral Links -->
 
-[Bincode]: https://github.com/bincode-org/bincode
 [Bincode Spec]: https://github.com/bincode-org/bincode/blob/trunk/docs/spec.md
+[Bincode]: https://github.com/bincode-org/bincode
+[How (not) to sign a JSON object]: https://latacora.micro.blog/2019/07/24/how-not-to.html
+[Parse Don't Validate]: https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
 [Protobuf IDL]: https://protobuf.com/docs/language-spec
 [Protobuf]: https://protobuf.dev/
+[Taxonomy of Attacks]: https://www.blackhat.com/presentations/bh-usa-07/Hill/Whitepaper/bh-usa-07-hill-WP.pdf
+[canonicalization attacks]: https://soatok.blog/2021/07/30/canonicalization-attacks-against-macs-and-signatures/
 [proto3 map features]: https://protobuf.dev/programming-guides/proto3#maps-features
