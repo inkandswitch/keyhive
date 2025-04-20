@@ -178,7 +178,7 @@ compaction more than flexibility).
 
 <!-- Internal links -->
 
-[contraindictions]: #contraindictions
+[contraindictions]: #contraindications
 
 <!-- Extenral Links -->
 
