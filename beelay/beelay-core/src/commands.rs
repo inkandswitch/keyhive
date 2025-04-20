@@ -218,7 +218,23 @@ async fn load_doc_commits<R>(
 where
     R: rand::Rng + rand::CryptoRng + Clone + 'static,
 {
-    let tree = ctx.state().docs().sedimentree(doc_id)?;
+    let tree = match ctx.state().docs().sedimentree(doc_id) {
+        Some(tree) => tree,
+        None => {
+            if ctx.state().keyhive().has_doc(doc_id).await {
+                // It's possible that the document arrived since we started the has_doc check
+                if let Some(tree) = ctx.state().docs().sedimentree(doc_id) {
+                    tree
+                } else {
+                    // If we don't have any commits but we do have the document
+                    // in keyhive, return an empty set of commits
+                    return Some(Vec::new());
+                }
+            } else {
+                return None;
+            }
+        }
+    };
     let tree_storage = ctx.storage().doc_storage(*doc_id);
     let tree_data = sedimentree::storage::data(tree_storage, tree)
         .try_filter_map(|commit_or_bundle| async {
