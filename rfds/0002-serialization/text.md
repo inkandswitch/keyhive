@@ -3,7 +3,7 @@
 ## Motivation
 
 Serialization is important for signed data since the payload 
-must be exact in order to verify the signature.
+must be exact in order to verify a signature or hash
 
 
 
@@ -16,12 +16,13 @@ must be exact in order to verify the signature.
 
 # Desired Properties
 
-The selection criteria for an appropriate codec are as follows:
+The selection criteria for an appropriate codec are broadly about ease
+of implementation and security concerns.
 
 ## Security Considerations
 
 * Maturity of format and ecosystem
-* Strict with, and resistent to, malicious input
+* Strict with, and resistant to, malicious input
 * Able to mitigate [canonicalization attacks]
 
 ## Engineering Considerations
@@ -32,9 +33,10 @@ The selection criteria for an appropriate codec are as follows:
 * Extensibility (e.g. for future fields)
 * Permissively licensed
 
-# Protocol Buffers
+# Protocol Buffers v3
 
-We believe that [Protocol Buffers] ("Protobuf") is a good fit for our use case.
+We believe that [Protocol Buffers] v3 ("Protobuf" or "proto3") is a good fit
+for the Keyhive use case.
 
 Protobuf is attractive from a pure engineering perspective:
 * Packages are available in all major languages
@@ -47,29 +49,67 @@ This is a double-edged sword. On one hand it requires implementers of Keyhive
 be able to read this IDL. On the other, most libraries provide codegen capabilities.
 Further, this decides the format in which to formally define Keyhive schemata.
 
-Protobuf also fares well from a security perspective. If a schema allows for
-duplicate fields, the last field of that label MUST be used.
+Despite not being perfect (see [contraindications]), Protobuf also fares reasonably
+well from a security perspective. We believe that the most serious security challenges
+can be managed at the schema layer.
+
+## Contraindications
+
+### Duplicate Map Keys
+
+One problem with the specification is that it allows for multiple behaviors in the
+case of duplicate map keys.
+
+> When parsing from the wire or when merging, if there are duplicate map keys 
+> the last key seen is used. When parsing a map from text format,
+> parsing may fail if there are duplicate keys.
+>
+> [...]
+>
+> clients using the `repeated` field definition will produce a 
+> semantically identical result; however, clients using the map field definition 
+> may reorder entries and drop entries with duplicate keys.
+>
+> — [Proto3 Spec][proto3 map features]
+
+At time of writing, we do not have a need for user-defined maps or repeated fields.
+Going forward, we must remember to never use this feature.
+
+### Lack of Deterministic Serialization
+
+Very few serialization formats are deterministic, and Protobuf also lacks determinism.
+This means that the serialized payload MUST be stored verbatim in order 
+to check hashes or signatures.
+
+Given that Keyhive uses end-to-end encryption, and any node in local-first 
+may act as a provider, we expect that most implementations will store 
+the ciphertexts directly, thus we assume that the exact bytes are assumed
+to be stored.
 
 # Alternatives Considered
 
-## Bespoke Keyhive Serializer
+Many other formats were considered. Some of the front runners are listed below.
+A general observation is that Protobuf and Arrow were _by far_ the most popular
+across all languages surveyed (by the rough metric of "recent downloads").
+
+## Bespoke Keyhive Serialization Format
 
 
 
-## Bincode 2
+## Bincode v2
 
 Development was originally done with [Bincode]. This is a popular choice in Rust
 for it's flexibility, speed, low size overhead, and fails loudly on malicious input.
 A [specification][Bincode Spec] exists, though the primacy of Rust is clear:
 
-> ![NOTE]
 > This specification is primarily defined in the context of Rust,
 > but aims to be implementable across different programming languages.
-> 
+>
 > —  [Bincode Spec]
 
 Bincode is not widely used in other ecosystems. Many languages lack a Bincode
-implementation, which increases the bar for future implementations. 
+implementation, which increases the bar for future implementations.
+It is little known outside of Rust (which does have significant Bincode adoption).
 
 ## Parquet
 
@@ -85,6 +125,9 @@ implementation, which increases the bar for future implementations.
 
 ## DAG-CBOR
 
+<!-- Internal links -->
+
+[contraindictions]: #contraindictions
 
 <!-- Extenral Links -->
 
@@ -92,3 +135,4 @@ implementation, which increases the bar for future implementations.
 [Bincode Spec]: https://github.com/bincode-org/bincode/blob/trunk/docs/spec.md
 [Protobuf IDL]: https://protobuf.com/docs/language-spec
 [Protobuf]: https://protobuf.dev/
+[proto3 map features]: https://protobuf.dev/programming-guides/proto3#maps-features
