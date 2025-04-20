@@ -115,6 +115,19 @@ Bincode is not widely used in other ecosystems. Many languages lack a Bincode
 implementation, which increases the bar for future implementations.
 It is little known outside of Rust (which does have significant Bincode adoption).
 
+## ASN.1 DER
+
+[ASN.1] is a well known IDL that has been used extensively in 
+cryptographic applications such as PCKS and X.509.
+It is the oldest format considered by decades[^older].
+
+We consider its maturity a virtue, but it lacks many of the niceties 
+and packaging that have come in the years since. ASN.1 is often cited
+as having a steep learning curve, having limited tooling, and being resistant 
+to schemas that upgrade easily. It is also not the most efficient format on this list.
+
+[^older]: It is even older than the author of this document(!)
+
 ## Parquet
 
 ## Arrow
@@ -127,7 +140,41 @@ It is little known outside of Rust (which does have significant Bincode adoption
 
 ## CBOR
 
+[CBOR] is an IETF-standardized format in wide use.
+It is a non-human-readable binary format which aims
+at being a reasonably compact, schemaless,
+extensible for applications that would otherwise
+reach for JSON.
+
+There are CBOR implementations in all languages surveyed.
+An IDL exists outside of the core CBOR spec ([CDDL]).
+It is easy to read and write, but lacks the expressive
+power and adoption of many other IDLs on this list.
+
+CBOR is significantly more compact than JSON, but is
+among the higher overhead formats on this list.
+It is also possible to express ambiguous data,
+and map key order is not specified unless
+Canonical CBOR is opted into (which is not available 
+in all libraries).
+
 ## DAG-CBOR
+
+[DAG-CBOR] is an [IPLD] codec that further constrains CBOR.
+It has canonicalized encoding, an in-built hash link type,
+and has existing tooling to deterministically convert to
+and from a more developer-friendly JSON representation.
+The best known application that uses DAG-CBOR is [Bluesky],
+which has tens-of-millions of users at time of writing.
+
+Unfortunately, DAG-CBOR comes with some drawbacks.
+Chief among them is that it is a young format with
+few implementations. Malformed input (e.g. duplicate keys) 
+are not strictly enforced in all implementations, and it
+inherits many of the drawbacks of regular CBOR:
+it is more compact than JSON but less compact than Protobuf,
+as is self-describing (usually a feature but we need
+compaction more than flexibility).
 
 <!-- Internal links -->
 
@@ -135,9 +182,15 @@ It is little known outside of Rust (which does have significant Bincode adoption
 
 <!-- Extenral Links -->
 
+[ASN.1]: https://www.itu.int/rec/T-REC-X.680/
 [Bincode Spec]: https://github.com/bincode-org/bincode/blob/trunk/docs/spec.md
 [Bincode]: https://github.com/bincode-org/bincode
+[Bluesky]:  https://bsky.app/
+[CBOR]: https://cbor.io/spec.html
+[CDDL]: https://www.rfc-editor.org/rfc/rfc8610.html
+[DAG-CBOR]: https://ipld.io/specs/codecs/dag-cbor/spec/
 [How (not) to sign a JSON object]: https://latacora.micro.blog/2019/07/24/how-not-to.html
+[IPLD]: https://ipld.io/
 [Parse Don't Validate]: https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/
 [Protobuf IDL]: https://protobuf.com/docs/language-spec
 [Protobuf]: https://protobuf.dev/
