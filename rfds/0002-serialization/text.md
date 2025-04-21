@@ -12,8 +12,6 @@ followed by adoptability.
 Security is always subtle; there are a [plethora of attacks][Taxonomy of Attacks]
 that can be an unintended consequence of representation.
 
-
-
 # Desired Properties
 
 The selection criteria for an appropriate codec are broadly about ease
@@ -43,6 +41,7 @@ Protobuf is attractive from a pure engineering perspective:
 * It is extensively battle tested in critical applications at scale
 * Protobuf is reasonably fast to both encode and decode
 * Has among the lowest space overhead of all formats considered
+* Tags for type integrity
 
 Protobuf schema definitions may be given in a special [Protobuf IDL]. 
 This is a double-edged sword. On one hand it requires implementers of Keyhive
@@ -95,6 +94,12 @@ to be stored.
 While streaming decoders are possible to build for Protobuf data, decoding Protobufs
 can be costly in both memory and cycles some cases. FlatBuffers have advantages over
 Protobuf with better support for features like zero-copy deserialization.
+
+## Default vs Unset Fieldso
+
+Unset fields are indistinguishable from default values. This can present a security
+hazard if not handled properly. In general, Keyhive should not have optional fields,
+where any optionals are explicitly tagged.
 
 # Alternatives Considered
 
