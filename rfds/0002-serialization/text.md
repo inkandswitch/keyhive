@@ -142,7 +142,7 @@ It is the oldest format considered by decades[^older].
 We consider its maturity a virtue, but it lacks many of the niceties 
 and packaging that have come in the years since. ASN.1 is often cited
 as having a steep learning curve, having limited tooling, and being resistant 
-to schemas that upgrade easily. It is also not the most efficient format on this list.
+to schemata that upgrade easily. It is also not the most efficient format on this list.
 
 [^older]: It is even older than the author of this document(!)
 
