@@ -1,20 +1,27 @@
 APIs
+ASN.1
 ATProto
 Auth
 Automerge
+Avro
 BCP
 BChaCha
 BeeKEM
 Beelay
 BigCo
+Bincode
+Bluesky
 CGKA
 CRDT
 CRDTs
+CVE
+Capt'n Proto
 ChaCha
 ChaCha's
 Cohn-Gordon
 Crypto
 Cryptree
+DAG-CBOR
 DCGKA
 DCGKA's
 DNS
@@ -23,8 +30,12 @@ ECDH
 EE
 EdDSA
 FIXME
+FlatBuffers
+Flatbuf
 GroupId
 HChaCha
+IDL
+IDLs
 Invariants
 JS
 JS-imported
@@ -43,6 +54,8 @@ PN
 PQC
 PeerId
 PoLA
+Protobuf
+Protobufs
 README
 RLE
 RPC
@@ -87,6 +100,7 @@ decrypted
 decrypting
 deduplicate
 delegator
+deserialization
 edgenames
 encrypter
 encryptment
@@ -123,6 +137,7 @@ probabilistically
 recurse
 repo
 revoker
+schemaless
 sedimentree
 sedimentrees
 sexualized
