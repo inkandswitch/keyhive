@@ -95,7 +95,7 @@ While streaming decoders are possible to build for Protobuf data, decoding Proto
 can be costly in both memory and cycles some cases. FlatBuffers have advantages over
 Protobuf with better support for features like zero-copy deserialization.
 
-## Default vs Unset Fieldso
+## Default vs Unset Fields
 
 Unset fields are indistinguishable from default values. This can present a security
 hazard if not handled properly. In general, Keyhive should not have optional fields,
