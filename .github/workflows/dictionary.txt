@@ -1,4 +1,5 @@
 APIs
+ASN
 ASN.1
 ATProto
 Auth
@@ -11,10 +12,12 @@ Beelay
 BigCo
 Bincode
 Bluesky
+CBOR
 CGKA
 CRDT
 CRDTs
 CVE
+CVEs
 Capt'n Proto
 ChaCha
 ChaCha's
@@ -24,6 +27,7 @@ Cryptree
 DAG-CBOR
 DCGKA
 DCGKA's
+DER
 DNS
 Dev
 ECDH
@@ -36,10 +40,13 @@ GroupId
 HChaCha
 IDL
 IDLs
+IETF
+IPLD
 Invariants
 JS
 JS-imported
 JS-representation
+JSON
 Keyhive
 Keyoxide
 MLS
@@ -49,11 +56,13 @@ Nonces
 OCAP's
 OCap
 OpenPGP
+PKCS
 PKI
 PN
 PQC
 PeerId
 PoLA
+Proto
 Protobuf
 Protobufs
 README
@@ -75,6 +84,7 @@ Wasm
 WebAssembly
 WebCrypto
 XChaCha
+adoptability
 al
 assignees
 async
@@ -87,8 +97,11 @@ backoff
 bchacha-note
 bindgen
 blake
+canonicalized
 ciphertext
+ciphertexts
 cleartext
+codegen
 composable
 concap
 crypto
@@ -111,6 +124,7 @@ fs
 html
 https
 img
+implementers
 invariant
 invariants
 keyhive
@@ -126,6 +140,7 @@ nodejs
 non-extractable
 npm
 ocap
+optionals
 perf
 petnames
 plaintext
@@ -137,6 +152,7 @@ probabilistically
 recurse
 repo
 revoker
+rkyv
 schemaless
 sedimentree
 sedimentrees

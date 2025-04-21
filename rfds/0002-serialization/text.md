@@ -116,7 +116,7 @@ serious downsides:
 
 * Every implementation would need to implement a correct codec from scratch
 * Must consider all possible edge cases (liable to make mistakes others have already mitigated)
-* Labor intensive to plug into serialization tools like Serde, kkyv, Pickle, Cereal, etc
+* Labor intensive to plug into serialization tools like Serde, rkyv, Pickle, Cereal, etc
 
 ## Bincode v2
 
@@ -183,7 +183,7 @@ of Flatbuf over Protobuf aren't a huge advantage for Keyhive & Beelay.
 We can still get zero-copy deserialization with Protobuf and some extra effort, 
 and we need to decrypt data before use (so we have at least one necessary 
 level of duplication). A [2022 study][A Benchmark of JSON paper] also found that Flatbufs
-has the most variable space overhead ofthe surveyed formats, with the most negative
+has the most variable space overhead of the surveyed formats, with the most negative
 compression cases.
 
 ## Capt'n Proto
