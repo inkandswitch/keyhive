@@ -13,11 +13,13 @@ BigCo
 Bincode
 Bluesky
 CBOR
+CDDL
 CGKA
 CRDT
 CRDTs
 CVE
 CVEs
+Capt'n
 Capt'n Proto
 ChaCha
 ChaCha's
@@ -35,6 +37,7 @@ EdDSA
 FIXME
 FlatBuffers
 Flatbuf
+Flatbufs
 GroupId
 HChaCha
 IDL
@@ -69,6 +72,7 @@ SDK
 SPKI
 Sedimentree
 Sedimentrees
+Serde
 ShareSecretKeys
 Stateful
 TLS
@@ -91,10 +95,12 @@ authz
 backoff
 bchacha-note
 blake
+canonicalization
 canonicalized
 ciphertext
 ciphertexts
 cleartext
+codec
 codegen
 composable
 concap
@@ -143,6 +149,7 @@ preimage
 prekey
 priori
 probabilistically
+proto
 recurse
 revoker
 rkyv
