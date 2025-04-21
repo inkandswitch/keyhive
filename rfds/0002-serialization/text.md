@@ -131,7 +131,7 @@ It is little known outside of Rust (which does have significant Bincode adoption
 ## ASN.1 DER
 
 [ASN.1] is a well known IDL that has been used extensively in 
-cryptographic applications such as PCKS and X.509.
+cryptographic applications such as PKCS and X.509.
 It is the oldest format considered by decades[^older].
 
 We consider its maturity a virtue, but it lacks many of the niceties 
@@ -143,22 +143,50 @@ to schemas that upgrade easily. It is also not the most efficient format on this
 
 ## Parquet
 
-[Parquet] is a column-oriented format 
+Apache [Parquet] is a column-oriented format. It has middling popularity,
+well behind CBOR. The columnar layout is attractive given that this
+is used in other parts of the Automerge ecosystem (e.g. Automerge compression).
 
 Parquet had a critical [remote-code execution CVE in early 2025][CVE-2025-30065].
-
-
-
+This is both a good and bad sign: it's popular enough to have CVEs reported,
+but also recently-discovered remote code execution is very scary in the
+context of a security project.
 
 ## Avro
 
-## Flatbuf
+Apache [Avro] is a widely-available, schema-based serialization format.
+It came a close second in the popularity contest.
+
+It is dynamically typed, and does not require codegen. It does not
+tag data with type information, which reduces serialization size.
+Schemata are defined via an Avro IDL.
+
+## FlatBuffers
+
+[FlatBuffers] ("Flatbuf") is in many ways "better Protobuf".
+Its design directly supports zero-copy deserialization, and is faster
+than Protobuf in some cases. Implementations of Flatbuf tend to be small.
+It has reasonably good language support, but is not anywhere close to as 
+popular as Protobuf.
+
+> Protocol Buffers is indeed relatively similar to FlatBuffers, with the primary difference being that FlatBuffers does not need a parsing/unpacking step to a secondary representation before you can access data, often coupled with per-object memory allocation. The code is an order of magnitude bigger, too.
+> 
+> — [FlatBuffers] website
+
+Flatbufs are an attractive option for our use case. However, the benefits 
+of Flatbuf over Protobuf aren't a huge advantage for Keyhive & Beelay.
+We can still get zero-copy deserialization with Protobuf and some extra effort, 
+and we need to decrypt data before use (so we have at least one necessary 
+level of duplication). A [2022 study][A Benchmark of JSON paper] also found that Flatbufs
+has the most variable space overhead ofthe surveyed formats, with the most negative
+compression cases.
 
 ## Capt'n Proto
 
-[Capt'n Proto] is 
-
-Limited language support
+[Capt'n Proto] is many things, including a serialization format. It was developed
+to address many of the shortcomings of Protobufs. Unfortunately Capt'n Proto is
+the format with the fewest downloads and the where the fewest languages have existing
+support for it.
 
 ## CBOR
 
@@ -204,14 +232,18 @@ compaction more than flexibility).
 
 <!-- Extenral Links -->
 
+[Benchmark of JSON paper]: https://arxiv.org/pdf/2201.03051
 [ASN.1]: https://www.itu.int/rec/T-REC-X.680/
+[Avro]: https://avro.apache.org/
 [Bincode Spec]: https://github.com/bincode-org/bincode/blob/trunk/docs/spec.md
 [Bincode]: https://github.com/bincode-org/bincode
 [Bluesky]:  https://bsky.app/
 [CBOR]: https://cbor.io/spec.html
 [CDDL]: https://www.rfc-editor.org/rfc/rfc8610.html
 [CVE-2025-30065]: https://nvd.nist.gov/vuln/detail/CVE-2025-30065
+[Capt'n Proto]: https://capnproto.org/
 [DAG-CBOR]: https://ipld.io/specs/codecs/dag-cbor/spec/
+[FlatBuffers]: https://flatbuffers.dev/
 [How (not) to sign a JSON object]: https://latacora.micro.blog/2019/07/24/how-not-to.html
 [IPLD]: https://ipld.io/
 [Parquet]: https://parquet.apache.org/
