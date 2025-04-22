@@ -145,7 +145,7 @@ impl StreamHandle {
                 StreamInbox::Ready(stream_id) => stream_id,
             }
         };
-        let (_, event) = Event::handle_message(stream_id, msg);
+        let event = Event::handle_message(stream_id, msg);
         self.beelay.handle_event(event);
         Ok(())
     }

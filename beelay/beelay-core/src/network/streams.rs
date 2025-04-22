@@ -3,18 +3,25 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+pub(crate) use connection::ConnRequestId;
+use connection::Connection;
 pub use error::StreamError;
-use futures::channel::oneshot;
 
 mod connection;
-mod run_streams;
-pub(crate) use run_streams::{run_streams, IncomingStreamEvent};
+mod handshake;
+mod message;
+use futures::channel::{mpsc, oneshot};
+use handshake::{Connecting, Handshake, Step};
+pub(crate) use message::StreamMessage;
 
 use crate::{
+    auth::{self, Signed},
     conn_info,
-    network::{messages::Request, InnerRpcResponse},
-    Audience, OutboundRequestId, PeerId, TaskContext, UnixTimestampMillis,
+    serialization::Encode,
+    Audience, PeerId, Request, Response, Signer, UnixTimestamp, UnixTimestampMillis,
 };
+
+use super::messages::Envelope;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StreamId(u64);
@@ -41,6 +48,12 @@ pub enum StreamEvent {
     Send(Vec<u8>),
 }
 
+#[derive(Debug)]
+pub(crate) enum UnsignedStreamEvent {
+    Close,
+    Send(OutboundMessage),
+}
+
 impl std::fmt::Debug for StreamEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -50,22 +63,28 @@ impl std::fmt::Debug for StreamEvent {
     }
 }
 
-pub struct SendRequest {
-    pub(crate) stream_id: StreamId,
-    pub(crate) req_id: OutboundRequestId,
-    pub(crate) request: Request,
-    pub(crate) reply: oneshot::Sender<Option<Result<InnerRpcResponse, StreamError>>>,
-}
-
 pub(crate) struct Streams {
     streams: HashMap<StreamId, StreamMeta>,
+    // This is the tx end of a channel which is created in the driver. The other end is
+    // polled by the driver and used to send outgoing stream evenst
+    outbox: mpsc::UnboundedSender<(StreamId, UnsignedStreamEvent)>,
+    #[allow(clippy::type_complexity)]
+    pending_requests:
+        HashMap<StreamId, HashMap<ConnRequestId, oneshot::Sender<Option<(PeerId, Response)>>>>,
     modified: HashSet<StreamId>,
+    our_peer_id: PeerId,
+    stopping: bool,
 }
 
 struct StreamMeta {
-    handshake: Option<CompletedHandshake>,
+    state: StreamState,
     received_sync_needed: bool,
     sync_phase: SyncPhase,
+}
+
+enum StreamState {
+    Connecting(Option<Handshake>),
+    Established(Connection),
 }
 
 pub(crate) struct EstablishedStream {
@@ -77,58 +96,96 @@ pub(crate) struct EstablishedStream {
 }
 
 impl Streams {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(
+        outbox: mpsc::UnboundedSender<(StreamId, UnsignedStreamEvent)>,
+        verifying_key: ed25519_dalek::VerifyingKey,
+    ) -> Self {
         Self {
+            our_peer_id: PeerId::from(verifying_key),
+            pending_requests: HashMap::new(),
+            outbox,
             streams: HashMap::new(),
             modified: HashSet::new(),
+            stopping: false,
         }
     }
 
-    pub(crate) fn new_stream(&mut self, stream_direction: StreamDirection) -> StreamId {
+    pub(crate) fn new_stream(
+        &mut self,
+        now: UnixTimestamp,
+        stream_direction: StreamDirection,
+    ) -> StreamId {
         let stream_id = StreamId::new();
-        tracing::debug!(?stream_id, ?stream_direction, "creating new stream");
-        self.streams.insert(
-            stream_id,
-            StreamMeta {
-                handshake: None,
-                received_sync_needed: false,
-                sync_phase: SyncPhase::Listening {
-                    last_synced_at: None,
-                },
+        if self.stopping {
+            let _ = self
+                .outbox
+                .unbounded_send((stream_id, UnsignedStreamEvent::Close));
+            return stream_id;
+        }
+        let handshake = match stream_direction {
+            StreamDirection::Connecting { remote_audience } => {
+                let (hs, msg) = Handshake::connect(now, remote_audience);
+                let _ = self
+                    .outbox
+                    .unbounded_send((stream_id, UnsignedStreamEvent::Send(msg)));
+                hs
+            }
+            StreamDirection::Accepting { receive_audience } => {
+                Handshake::accept(receive_audience.map(Audience::service_name))
+            }
+        };
+        let stream = StreamMeta {
+            state: StreamState::Connecting(Some(handshake)),
+            received_sync_needed: false,
+            sync_phase: SyncPhase::Listening {
+                last_synced_at: None,
             },
-        );
-        self.modified.insert(stream_id);
+        };
+        self.streams.insert(stream_id, stream);
         stream_id
     }
 
     pub(crate) fn established(&self) -> impl Iterator<Item = EstablishedStream> + '_ {
         self.streams.iter().filter_map(|(id, meta)| {
-            meta.handshake.clone().map(|hs| EstablishedStream {
-                id: *id,
-                their_peer_id: hs.their_peer_id,
-                direction: hs.resolved_direction,
-                sync_phase: meta.sync_phase,
-                received_sync_needed: meta.received_sync_needed,
-            })
+            if let StreamState::Established(connection) = &meta.state {
+                Some(EstablishedStream {
+                    id: *id,
+                    their_peer_id: connection.their_peer_id(),
+                    direction: connection.direction(),
+                    received_sync_needed: meta.received_sync_needed,
+                    sync_phase: meta.sync_phase,
+                })
+            } else {
+                None
+            }
         })
     }
 
+    /// Called when the stream is closed by a disconnect command
     pub(crate) fn remove(&mut self, stream: StreamId) {
         self.streams.remove(&stream);
+        for tx in self
+            .pending_requests
+            .remove(&stream)
+            .unwrap_or_default()
+            .into_values()
+        {
+            let _ = tx.send(None);
+        }
     }
 
-    pub(crate) fn mark_handshake_complete(
-        &mut self,
-        stream_id: StreamId,
-        handshake: CompletedHandshake,
-    ) {
-        if let Some(meta) = self.streams.get_mut(&stream_id) {
-            meta.handshake = Some(handshake);
-        } else {
-            tracing::warn!(
-                ?stream_id,
-                "attempted to mark nonexistent stream as handshake complete"
-            );
+    fn disconnect(&mut self, stream: StreamId) {
+        let _ = self
+            .outbox
+            .unbounded_send((stream, UnsignedStreamEvent::Close));
+        self.streams.remove(&stream);
+        for tx in self
+            .pending_requests
+            .remove(&stream)
+            .unwrap_or_default()
+            .into_values()
+        {
+            let _ = tx.send(None);
         }
     }
 
@@ -187,13 +244,173 @@ impl Streams {
             .into_iter()
             .filter_map(|stream_id| {
                 let meta = self.streams.get(&stream_id)?;
-                let handshake = meta.handshake.as_ref()?;
+                let StreamState::Established(connection) = &meta.state else {
+                    return None;
+                };
                 Some(conn_info::ConnectionInfo {
-                    peer_id: handshake.their_peer_id,
+                    peer_id: connection.their_peer_id(),
                     state: meta.sync_phase.into(),
                 })
             })
             .collect()
+    }
+
+    pub(crate) fn handle_stream_message(
+        &mut self,
+        now: UnixTimestamp,
+        stream_id: StreamId,
+        msg: Vec<u8>,
+    ) -> Result<Option<HandledMessage>, error::StreamError> {
+        let Some(stream) = self.streams.get_mut(&stream_id) else {
+            return Err(error::StreamError::NoSuchStream);
+        };
+        match &mut stream.state {
+            StreamState::Connecting(handshake) => {
+                let hs = handshake
+                    .take()
+                    .expect("handshake should never be empty except in this code block");
+                let Step { state, next_msg } = hs.receive_message(now, &self.our_peer_id, msg);
+                if let Some(msg) = next_msg {
+                    let _ = self
+                        .outbox
+                        .unbounded_send((stream_id, UnsignedStreamEvent::Send(msg)));
+                }
+                match state {
+                    Connecting::Complete(connection) => {
+                        tracing::trace!(?stream_id, their_peer_id=%connection.their_peer_id(), "handshake complete");
+                        self.modified.insert(stream_id);
+                        stream.state = StreamState::Established(*connection)
+                    }
+                    Connecting::Handshaking(handshake) => {
+                        stream.state = StreamState::Connecting(Some(handshake))
+                    }
+                    Connecting::Failed(reason) => {
+                        tracing::debug!(reason, "handshake failed, disconnecting");
+                        let _ = self
+                            .outbox
+                            .unbounded_send((stream_id, UnsignedStreamEvent::Close));
+                    }
+                }
+                Ok(None)
+            }
+            StreamState::Established(connection) => {
+                match connection.receive_message(now, &self.our_peer_id, msg) {
+                    Ok(msg) => match msg {
+                        connection::ConnectionMessage::Request { id, req } => {
+                            Ok(Some(HandledMessage::NewRequest {
+                                from: connection.their_peer_id(),
+                                id,
+                                req,
+                            }))
+                        }
+                        connection::ConnectionMessage::Response { id, msg } => {
+                            if let Some(request) = self
+                                .pending_requests
+                                .get_mut(&stream_id)
+                                .and_then(|requests| requests.remove(&id))
+                            {
+                                let _ = request.send(Some((connection.their_peer_id(), msg)));
+                            }
+                            if self.stopping
+                                && self
+                                    .pending_requests
+                                    .get(&stream_id)
+                                    .map(|r| r.is_empty())
+                                    .unwrap_or(true)
+                            {
+                                self.pending_requests.remove(&stream_id);
+                                self.disconnect(stream_id);
+                            }
+                            Ok(None)
+                        }
+                    },
+                    Err(e) => {
+                        tracing::error!(err=?e, "error handling stream message, disconnnecting");
+                        let _ = self
+                            .outbox
+                            .unbounded_send((stream_id, UnsignedStreamEvent::Close));
+                        self.streams.remove(&stream_id);
+                        Ok(None)
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn send_request(
+        &mut self,
+        now: UnixTimestamp,
+        stream_id: StreamId,
+        request: Request,
+        reply: oneshot::Sender<Option<(PeerId, Response)>>,
+    ) -> Result<ConnRequestId, StreamError> {
+        let Some(stream) = self.streams.get_mut(&stream_id) else {
+            return Err(StreamError::NoSuchStream);
+        };
+        let StreamState::Established(connection) = &mut stream.state else {
+            return Err(StreamError::InvalidState);
+        };
+        let req_id = connection.next_req_id();
+        let msg = auth::send(
+            now,
+            connection.clock_skew(),
+            Audience::peer(&connection.their_peer_id()),
+            StreamMessage::Request {
+                id: req_id,
+                req: Box::new(request),
+            }
+            .encode(),
+        );
+        let msg = OutboundMessage::Signed(msg);
+        self.pending_requests
+            .entry(stream_id)
+            .or_default()
+            .insert(req_id, reply);
+        let _ = self
+            .outbox
+            .unbounded_send((stream_id, UnsignedStreamEvent::Send(msg)));
+        Ok(req_id)
+    }
+
+    pub(crate) fn send_response(
+        &mut self,
+        now: UnixTimestamp,
+        stream_id: StreamId,
+        req_id: ConnRequestId,
+        resp: crate::Response,
+    ) -> Result<(), StreamError> {
+        let Some(stream) = self.streams.get_mut(&stream_id) else {
+            return Err(StreamError::NoSuchStream);
+        };
+        let StreamState::Established(connection) = &mut stream.state else {
+            return Err(StreamError::InvalidState);
+        };
+        let msg = auth::send(
+            now,
+            connection.clock_skew(),
+            Audience::peer(&connection.their_peer_id()),
+            StreamMessage::Response {
+                id: req_id,
+                resp: Box::new(resp),
+            }
+            .encode(),
+        );
+        let msg = OutboundMessage::Signed(msg);
+        let _ = self
+            .outbox
+            .unbounded_send((stream_id, UnsignedStreamEvent::Send(msg)));
+        Ok(())
+    }
+
+    pub(crate) fn stop(&mut self) {
+        self.stopping = true;
+        for stream in self.streams.keys().copied().collect::<Vec<_>>() {
+            self.disconnect(stream);
+        }
+    }
+
+    pub(crate) fn finished(&self) -> bool {
+        self.stopping && self.streams.is_empty() && self.outbox.is_empty()
     }
 }
 
@@ -201,12 +418,6 @@ impl Streams {
 pub enum StreamDirection {
     Connecting { remote_audience: Audience },
     Accepting { receive_audience: Option<String> },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct CompletedHandshake {
-    pub(crate) their_peer_id: PeerId,
-    pub(crate) resolved_direction: ResolvedDirection,
 }
 
 // Once handshake is complete, which direction is labelled as the "Accepting"
@@ -225,6 +436,33 @@ pub(crate) enum SyncPhase {
     },
     Syncing {
         started_at: UnixTimestampMillis,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum OutboundMessage {
+    Signed(crate::auth::Message),
+    Unsigned(Vec<u8>),
+}
+
+impl OutboundMessage {
+    pub(crate) async fn sign(self, signer: Signer) -> Envelope {
+        match self {
+            Self::Signed(message) => Envelope::Signed(Box::new(
+                Signed::try_sign(signer, message)
+                    .await
+                    .expect("should never fail"),
+            )),
+            Self::Unsigned(payload) => Envelope::Unsigned(payload),
+        }
+    }
+}
+
+pub(crate) enum HandledMessage {
+    NewRequest {
+        from: PeerId,
+        id: ConnRequestId,
+        req: Box<Request>,
     },
 }
 

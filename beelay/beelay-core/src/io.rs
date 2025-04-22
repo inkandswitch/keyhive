@@ -6,62 +6,30 @@ use std::{
 use futures::channel::{mpsc, oneshot};
 
 use crate::{
-    doc_status::DocEvent, driver, network, serialization::hex, streams::IncomingStreamEvent,
-    task_context::JobFuture, DocumentId, EndpointId, NewRequest, StorageKey,
+    doc_status::DocEvent, driver, serialization::hex, task_context::JobFuture, DocumentId,
+    StorageKey,
 };
 
 #[derive(Clone)]
-pub(crate) enum IoHandle {
-    Driver(crate::driver::TinCans),
-    Loading(mpsc::UnboundedSender<driver::DriverEvent>),
-}
+pub(crate) struct IoHandle(mpsc::UnboundedSender<driver::DriverOutput>);
 
 impl IoHandle {
-    pub(crate) fn new_driver(driver: crate::driver::TinCans) -> Self {
-        Self::Driver(driver)
-    }
-
-    pub(crate) fn new_loading(tx: mpsc::UnboundedSender<driver::DriverEvent>) -> Self {
-        Self::Loading(tx)
+    pub(crate) fn new(tx: mpsc::UnboundedSender<driver::DriverOutput>) -> Self {
+        Self(tx)
     }
 
     /// Request a new storage task be executed, the result to be sent to `reply`
     pub(crate) fn new_task(&self, task: IoTask, reply: oneshot::Sender<IoResult>) {
-        match self {
-            Self::Driver(d) => d.new_task(task, reply),
-            Self::Loading(tx) => {
-                let _ = tx.unbounded_send(driver::DriverEvent::Task { task, reply });
-            }
-        }
-    }
-
-    /// Request a new request be made to `endpoint_id`, the result to be sent to `reply`
-    pub(crate) fn new_endpoint_request(
-        &self,
-        endpoint_id: EndpointId,
-        request: NewRequest,
-        reply: oneshot::Sender<network::InnerRpcResponse>,
-    ) {
-        match self {
-            Self::Driver(d) => d.new_endpoint_request(endpoint_id, request, reply),
-            Self::Loading(_ctx) => {}
-        }
+        let _ = self
+            .0
+            .unbounded_send(driver::DriverOutput::Task { task, reply });
     }
 
     /// Emit a new document event
     pub(crate) fn new_doc_event(&self, doc_id: DocumentId, event: DocEvent) {
-        match self {
-            Self::Driver(d) => d.new_doc_event(doc_id, event),
-            Self::Loading(_) => {}
-        }
-    }
-
-    /// Send a new event to be handled by the stream processing subsystem (streams::run_streams)
-    pub(crate) fn new_inbound_stream_event(&self, event: IncomingStreamEvent) {
-        match self {
-            Self::Driver(d) => d.new_inbound_stream_event(event),
-            Self::Loading(_) => {}
-        }
+        let _ = self
+            .0
+            .unbounded_send(driver::DriverOutput::DocEvent { doc_id, event });
     }
 }
 

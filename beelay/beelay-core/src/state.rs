@@ -6,14 +6,13 @@ use std::{
     time::Duration,
 };
 
+use futures::channel::mpsc;
 use keyhive::KeyhiveCtx;
 use keyhive_core::{
     crypto::verifiable::Verifiable, keyhive::Keyhive,
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 
-mod auth;
-pub(crate) use auth::Auth;
 mod docs;
 pub(crate) use docs::{DocUpdateBuilder, Docs};
 mod endpoints;
@@ -25,18 +24,18 @@ mod streams;
 pub(crate) use streams::Streams;
 
 use crate::{
-    doc_state::DocState, io::Signer, network::endpoint, sync, CommitHash, DocumentId, PeerId,
+    auth, doc_state::DocState, io::Signer, network::endpoint, streams::UnsignedStreamEvent, sync,
+    CommitHash, DocumentId, EndpointId, OutboundRequestId, PeerId, StreamId,
 };
 
 pub(crate) struct State<R: rand::Rng + rand::CryptoRng> {
+    signer: Signer,
     docs: HashMap<DocumentId, DocState>,
     docs_with_changes: HashSet<DocumentId>,
-    auth: crate::auth::manager::Manager,
     keyhive: Rc<futures::lock::Mutex<Beehive<R>>>,
     streams: crate::streams::Streams,
     endpoints: endpoint::Endpoints,
     rng: Rc<RefCell<R>>,
-    // results: EventResults,
     sync_sessions: sync::Sessions,
     our_peer_id: PeerId,
 }
@@ -58,19 +57,30 @@ impl<R: rand::Rng + rand::CryptoRng> State<R> {
         keyhive: Beehive<R>,
         docs: HashMap<DocumentId, DocState>,
         session_duration: Duration,
+        tx_outbound_stream_msgs: mpsc::UnboundedSender<(StreamId, UnsignedStreamEvent)>,
+        tx_outbound_endpoint_msgs: mpsc::UnboundedSender<(
+            EndpointId,
+            OutboundRequestId,
+            auth::Message,
+        )>,
     ) -> Self {
         let our_peer_id = keyhive.active().borrow().verifying_key().into();
+        let verifying_key = signer.verifying_key();
         Self {
+            signer,
             our_peer_id,
             docs,
             docs_with_changes: HashSet::new(),
-            auth: crate::auth::manager::Manager::new(signer),
             keyhive: Rc::new(futures::lock::Mutex::new(keyhive)),
-            streams: crate::streams::Streams::new(),
-            endpoints: endpoint::Endpoints::new(),
+            streams: crate::streams::Streams::new(tx_outbound_stream_msgs, verifying_key),
+            endpoints: endpoint::Endpoints::new(tx_outbound_endpoint_msgs),
             rng: Rc::new(RefCell::new(rng)),
             sync_sessions: sync::Sessions::new(session_duration),
         }
+    }
+
+    pub(crate) fn signer(&self) -> Signer {
+        self.signer.clone()
     }
 }
 
@@ -87,10 +97,6 @@ impl<'a, R: rand::Rng + rand::CryptoRng> StateAccessor<'a, R> {
 
     pub(crate) fn docs(&self) -> Docs<'a, R> {
         Docs::new(self.0.clone())
-    }
-
-    pub(crate) fn auth(&self) -> Auth<'a, R> {
-        Auth::new(self.0.clone())
     }
 
     pub(crate) fn keyhive(&self) -> KeyhiveCtx<'a, R> {

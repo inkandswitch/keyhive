@@ -8,16 +8,14 @@ use keyhive_core::{
 };
 
 use crate::{
-    auth,
     network::{
         messages::{self, session, Response},
-        InnerRpcResponse, PeerAddress, RpcError,
+        PeerAddress, RpcError,
     },
     riblt::{self, CodedSymbol},
     state::StateAccessor,
-    streams,
     sync::{CgkaSymbol, DocStateHash, MembershipSymbol, SessionId},
-    CommitHash, DocumentId, OutboundRequestId, SignedMessage, UnixTimestampMillis,
+    CommitHash, DocumentId, OutboundRequestId, UnixTimestampMillis,
 };
 
 use self::messages::FetchedSedimentree;
@@ -26,7 +24,6 @@ use super::JobFuture;
 
 pub(crate) struct Requests<'a, R: rand::Rng + rand::CryptoRng> {
     pub(super) state: StateAccessor<'a, R>,
-    pub(super) io_handle: &'a crate::io::IoHandle,
     pub(super) now: &'a Rc<RefCell<UnixTimestampMillis>>,
 }
 
@@ -36,14 +33,9 @@ where
 {
     pub(crate) fn new(
         state: StateAccessor<'a, R>,
-        io_handle: &'a crate::io::IoHandle,
         now: &'a Rc<RefCell<UnixTimestampMillis>>,
     ) -> Self {
-        Self {
-            state,
-            io_handle,
-            now,
-        }
+        Self { state, now }
     }
 }
 
@@ -159,90 +151,34 @@ where
     ) -> impl Future<Output = Result<ValidatedResponse, RpcError>> + 'static {
         let state = self.state.to_owned();
         let now = self.now.clone();
-        let io_handle = self.io_handle.clone();
         async move {
-            let resp = match target {
+            let (sender, resp) = match target {
                 PeerAddress::Endpoint(endpoint_id) => {
-                    let now = *now.borrow();
-                    let endpoint_audience =
-                        state.endpoints().audience_of(endpoint_id).expect("FIXME");
-                    let authed = state
-                        .auth()
-                        .sign_message(now.as_secs(), endpoint_audience, request)
-                        .await;
-
                     let req_id = OutboundRequestId::new();
+
                     let (tx, rx) = oneshot::channel();
-                    io_handle.new_endpoint_request(
-                        endpoint_id,
-                        crate::NewRequest {
-                            id: req_id,
-                            request: SignedMessage(authed),
-                        },
-                        tx,
-                    );
-                    Ok(JobFuture(rx).await)
+                    state
+                        .endpoints()
+                        .send_request(now.borrow().as_secs(), endpoint_id, req_id, request, tx)
+                        .map_err(|_| RpcError::NoResponse)?;
+
+                    JobFuture(rx).await.ok_or(RpcError::NoResponse)
                 }
                 PeerAddress::Stream(stream_id) => {
-                    let req_id = OutboundRequestId::new();
                     let (tx, rx) = oneshot::channel();
-                    io_handle.new_inbound_stream_event(streams::IncomingStreamEvent::SendRequest(
-                        streams::SendRequest {
-                            stream_id,
-                            req_id,
-                            request,
-                            reply: tx,
-                        },
-                    ));
-                    match JobFuture(rx).await {
-                        Some(r) => r.map_err(|e| {
-                            tracing::error!(err=?e, "error attempting to send request on stream");
-                            RpcError::StreamDisconnected
-                        }),
-                        None => Err(RpcError::NoResponse),
-                    }
+                    state
+                        .streams()
+                        .send_request(now.borrow().as_secs(), stream_id, request, tx)
+                        .expect("FIXME");
+                    JobFuture(rx).await.ok_or(RpcError::NoResponse)
                 }
             }?;
-            match resp {
-                InnerRpcResponse::AuthFailed => {
-                    tracing::debug!("received auth  failed response");
-                    Err(RpcError::AuthenticatedFailed)
-                }
-                InnerRpcResponse::Response(resp) => {
-                    let resp = state.auth().authenticate_received_msg::<Response>(
-                        now.borrow().as_secs(),
-                        *resp,
-                        None,
-                    );
-                    match resp {
-                        Ok(r) => {
-                            let from_peer = crate::PeerId::from(r.from);
-                            tracing::trace!(response=%r.content, %from_peer, "successful response received");
-                            let valid = NonErrorPayload::try_from(r.content)?;
-                            Ok(ValidatedResponse {
-                                from: r.from.into(),
-                                content: valid,
-                            })
-                        }
-                        Err(e) => Err(match e {
-                            auth::manager::ReceiveMessageError::ValidationFailed { reason: _ } => {
-                                tracing::debug!("response failed validation");
-                                RpcError::ResponseAuthFailed
-                            }
-                            auth::manager::ReceiveMessageError::Expired => {
-                                tracing::debug!("the message has an expired timestamp");
-                                RpcError::ResponseAuthFailed
-                            }
-                            auth::manager::ReceiveMessageError::InvalidPayload {
-                                reason, ..
-                            } => {
-                                tracing::debug!(?reason, "message was invalid");
-                                RpcError::InvalidResponse
-                            }
-                        }),
-                    }
-                }
-            }
+            tracing::trace!(response=%resp, from_peer=%sender, "successful response received");
+            let valid = NonErrorPayload::try_from(resp)?;
+            Ok(ValidatedResponse {
+                from: sender,
+                content: valid,
+            })
         }
     }
 }

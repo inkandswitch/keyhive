@@ -103,7 +103,7 @@ describe("Beelay WASM Basic Tests", () => {
 
     afterEach(async () => {
       for (const beelay of beelays) {
-        beelay.stop();
+        await beelay.stop();
       }
     });
 

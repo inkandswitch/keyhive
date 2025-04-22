@@ -11,6 +11,8 @@ use crate::{
 mod decode;
 mod encode;
 mod encoding_types;
+mod envelope;
+pub(crate) use envelope::Envelope;
 pub(crate) mod session;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

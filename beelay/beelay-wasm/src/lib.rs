@@ -868,7 +868,7 @@ impl Beelay {
                         to_handle.push_back(event);
                     } else {
                         for msg in pending_messages {
-                            let (_, event) = Event::handle_message(stream_id, msg);
+                            let event = Event::handle_message(stream_id, msg);
                             to_handle.push_back(event);
                         }
                     }

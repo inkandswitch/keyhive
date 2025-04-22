@@ -8,3 +8,9 @@ impl<'a> Parse<'a> for DecodeBytes {
         Ok((input, Self(slice.to_vec())))
     }
 }
+
+impl From<DecodeBytes> for Vec<u8> {
+    fn from(value: DecodeBytes) -> Self {
+        value.0
+    }
+}

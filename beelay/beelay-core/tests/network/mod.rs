@@ -2,6 +2,10 @@
 
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -372,20 +376,27 @@ impl BeelayHandle<'_> {
             Some(other) => panic!("unexpected command result: {:?}", other),
             None => panic!("no command result"),
         };
-        if let Some(other_peer) = other_peer {
+        if let Some(StreamState {
+            remote_peer: other_peer,
+            ..
+        }) = other_peer
+        {
             let other_beelay = self.network.beelays.get_mut(&other_peer).unwrap();
-            if let Some(other_stream_id) =
-                other_beelay
-                    .streams
-                    .iter()
-                    .find_map(|(other_stream_id, peer_id)| {
-                        if peer_id == &other_peer {
-                            Some(other_stream_id)
-                        } else {
-                            None
-                        }
-                    })
-            {
+            if let Some(other_stream_id) = other_beelay.streams.iter().find_map(
+                |(
+                    other_stream_id,
+                    StreamState {
+                        remote_peer: peer_id,
+                        ..
+                    },
+                )| {
+                    if peer_id == &other_peer {
+                        Some(other_stream_id)
+                    } else {
+                        None
+                    }
+                },
+            ) {
                 let (_, evt) = Event::disconnect_stream(*other_stream_id);
                 other_beelay.inbox.push_back(evt);
             }
@@ -494,6 +505,9 @@ impl Network {
 
     // Create a stream from left to right (i.e. the left peer will send the hello message)
     pub fn connect_stream(&mut self, left: &PeerId, right: &PeerId) -> ConnectedPair {
+        let left_closed = Arc::new(AtomicBool::new(false));
+        let right_closed = Arc::new(AtomicBool::new(false));
+
         let left_stream_id = {
             let beelay = self.beelays.get_mut(left).unwrap();
             beelay.create_stream(
@@ -501,6 +515,7 @@ impl Network {
                 beelay_core::StreamDirection::Connecting {
                     remote_audience: beelay_core::Audience::peer(right),
                 },
+                left_closed.clone(),
             )
         };
         let right_stream_id = {
@@ -510,11 +525,14 @@ impl Network {
                 beelay_core::StreamDirection::Accepting {
                     receive_audience: None,
                 },
+                right_closed.clone(),
             )
         };
         self.run_until_quiescent();
         ConnectedPair {
+            left_closed,
             left_to_right: left_stream_id,
+            right_closed,
             right_to_left: right_stream_id,
         }
     }
@@ -556,8 +574,10 @@ impl Network {
                             response,
                         } => {
                             let target = self.beelays.get_mut(&target).unwrap();
-                            let response = beelay_core::RpcResponse::decode(&response).unwrap();
-                            let event = beelay_core::Event::handle_response(id, response);
+                            let response =
+                                beelay_core::EndpointResponse::decode(&response).unwrap();
+                            let (_command_id, event) =
+                                beelay_core::Event::handle_response(id, response);
                             target.inbox.push_back(event);
                         }
                         Message::Stream { target, msg } => {
@@ -566,7 +586,12 @@ impl Network {
                                 .streams
                                 .iter()
                                 .find_map(
-                                    |(stream, peer)| {
+                                    |(
+                                        stream,
+                                        StreamState {
+                                            remote_peer: peer, ..
+                                        },
+                                    )| {
                                         if *peer == sender {
                                             Some(stream)
                                         } else {
@@ -575,7 +600,7 @@ impl Network {
                                     },
                                 )
                                 .unwrap();
-                            let (_command, event) =
+                            let event =
                                 beelay_core::Event::handle_message(*incoming_stream_id, msg);
                             target_beelay.inbox.push_back(event);
                         }
@@ -626,8 +651,8 @@ pub struct BeelayWrapper<R: rand::Rng + rand::CryptoRng> {
     peer_changes: HashMap<PeerId, Vec<beelay_core::conn_info::ConnectionInfo>>,
     handling_requests: HashMap<beelay_core::CommandId, (beelay_core::OutboundRequestId, PeerId)>,
     endpoints: HashMap<beelay_core::EndpointId, beelay_core::PeerId>,
-    streams: HashMap<beelay_core::StreamId, beelay_core::PeerId>,
-    starting_streams: HashMap<beelay_core::CommandId, beelay_core::PeerId>,
+    streams: HashMap<beelay_core::StreamId, StreamState>,
+    starting_streams: HashMap<beelay_core::CommandId, StreamState>,
     shutdown: bool,
     now: UnixTimestampMillis,
 }
@@ -657,9 +682,16 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> BeelayWrapper<R> {
         &mut self,
         target: &PeerId,
         direction: beelay_core::StreamDirection,
+        closed: Arc<AtomicBool>,
     ) -> beelay_core::StreamId {
         let (command, event) = beelay_core::Event::create_stream(direction);
-        self.starting_streams.insert(command, *target);
+        self.starting_streams.insert(
+            command,
+            StreamState {
+                remote_peer: *target,
+                closed,
+            },
+        );
         self.inbox.push_back(event);
         self.handle_events();
         match self.completed_commands.remove(&command) {
@@ -718,15 +750,18 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> BeelayWrapper<R> {
             for (id, events) in results.new_stream_events {
                 for event in events {
                     tracing::trace!(?event, "stream event");
+                    let StreamState {
+                        remote_peer: target,
+                        closed,
+                    } = self.streams.get(&id).unwrap();
                     match event {
-                        beelay_core::StreamEvent::Send(msg) => {
-                            let target = self.streams.get(&id).unwrap();
-                            self.outbox.push(Message::Stream {
-                                target: *target,
-                                msg,
-                            })
+                        beelay_core::StreamEvent::Send(msg) => self.outbox.push(Message::Stream {
+                            target: *target,
+                            msg,
+                        }),
+                        beelay_core::StreamEvent::Close => {
+                            closed.store(true, Ordering::SeqCst);
                         }
-                        beelay_core::StreamEvent::Close => {}
                     }
                 }
             }
@@ -803,8 +838,15 @@ fn handle_task(
 }
 
 pub struct ConnectedPair {
+    pub left_closed: Arc<AtomicBool>,
     pub left_to_right: beelay_core::StreamId,
+    pub right_closed: Arc<AtomicBool>,
     pub right_to_left: beelay_core::StreamId,
+}
+
+pub struct StreamState {
+    remote_peer: PeerId,
+    closed: Arc<AtomicBool>,
 }
 
 pub struct PeerBuilder<'a> {
