@@ -1,11 +1,10 @@
 use crate::{
-    auth,
     blob::BlobMeta,
     network::messages::{self, FetchedSedimentree, TreePart, UploadItem},
     sedimentree::{self},
     state::DocUpdateBuilder,
-    Audience, Commit, CommitBundle, CommitOrBundle, DocumentId, OutgoingResponse, PeerId, Response,
-    StorageKey, StreamId, TaskContext,
+    Commit, CommitBundle, CommitOrBundle, DocumentId, PeerId, Request, Response, StorageKey,
+    StreamId, TaskContext,
 };
 
 mod sync;
@@ -14,39 +13,22 @@ mod sync;
 #[error("auth failed")]
 pub struct AuthenticationFailed;
 
-#[tracing::instrument(skip(ctx, request, receive_audience), fields(from_peer))]
+#[tracing::instrument(skip(ctx, request), fields(from_peer))]
 pub(super) async fn handle_request<R>(
     ctx: TaskContext<R>,
     source: Option<StreamId>,
-    request: auth::Signed<auth::Message>,
-    receive_audience: Option<String>,
-) -> Result<OutgoingResponse, AuthenticationFailed>
+    request: Request,
+    from: crate::PeerId,
+) -> Response
 where
     R: rand::Rng + rand::CryptoRng + Clone + 'static,
 {
-    let recv_aud = receive_audience.map(Audience::service_name);
-    let (request, from) =
-        match ctx
-            .state()
-            .auth()
-            .authenticate_received_msg(ctx.now().as_secs(), request, recv_aud)
-        {
-            Ok(authed) => (authed.content, PeerId::from(authed.from)),
-            Err(e) => {
-                tracing::debug!(err=?e, "failed to authenticate incoming message");
-                return Err(AuthenticationFailed);
-            }
-        };
-    tracing::Span::current().record("from_peer", from.to_string());
     let response = match request {
         crate::Request::UploadCommits { doc, data } => {
             tracing::debug!(doc=%doc, "upload commits");
             if !ctx.state().keyhive().can_write(from, &doc).await {
                 tracing::trace!("not authorized to write to doc");
-                return Ok(OutgoingResponse {
-                    audience: Audience::peer(&from),
-                    response: Response::AuthorizationFailed,
-                });
+                return Response::AuthorizationFailed;
             }
             upload_commits(ctx, from, doc, data).await;
             Response::UploadCommits
@@ -56,10 +38,7 @@ where
             if !ctx.state().keyhive().can_pull(from, &doc_id).await {
                 tracing::trace!("not authorized to read doc");
                 // TODO: Return an empty response rather than an authorization failure?
-                return Ok(OutgoingResponse {
-                    audience: Audience::peer(&from),
-                    response: Response::AuthorizationFailed,
-                });
+                return Response::AuthorizationFailed;
             }
             let trees = fetch_sedimentree(ctx, doc_id).await;
             Response::FetchSedimentree(trees)
@@ -101,13 +80,7 @@ where
             // Process membership operations as a batch
             if let Err(e) = ctx.state().keyhive().ingest_membership_ops(ops).await {
                 tracing::error!(error = ?e, "Failed to ingest membership operations");
-                return Ok(OutgoingResponse {
-                    audience: Audience::peer(&from),
-                    response: Response::Error(format!(
-                        "Failed to ingest membership operations: {}",
-                        e
-                    )),
-                });
+                return Response::Error(format!("Failed to ingest membership operations: {}", e));
             }
 
             Response::UploadMembershipOps
@@ -123,10 +96,7 @@ where
             // Process CGKA operations as a batch
             if let Err(e) = ctx.state().keyhive().ingest_cgka_ops(ops).await {
                 tracing::error!(error = ?e, "Failed to ingest CGKA operations");
-                return Ok(OutgoingResponse {
-                    audience: Audience::peer(&from),
-                    response: Response::Error(format!("Failed to ingest CGKA operations: {}", e)),
-                });
+                return Response::Error(format!("Failed to ingest CGKA operations: {}", e));
             }
 
             for doc_id in doc_ids {
@@ -136,10 +106,7 @@ where
             Response::UploadCgkaOps
         }
     };
-    Ok(OutgoingResponse {
-        audience: Audience::peer(&from),
-        response,
-    })
+    response
 }
 
 async fn fetch_sedimentree<R>(ctx: TaskContext<R>, doc_id: DocumentId) -> FetchedSedimentree

@@ -1,21 +1,20 @@
 use crate::{
-    auth,
+    auth::{self, offset_seconds::OffsetSeconds, Signed},
     blob::BlobMeta,
     doc_status::DocStatus,
-    network::{endpoint, InnerRpcResponse, RpcResponse},
+    network::{endpoint, EndpointResponse},
     sedimentree::{self, CommitOrStratum, LooseCommit},
+    serialization::Encode,
     state::DocUpdateBuilder,
-    streams,
-    task_context::JobFuture,
-    Audience, BundleSpec, Commit, CommitBundle, CommitOrBundle, DocumentId, StorageKey, StreamId,
-    TaskContext,
+    streams, Audience, BundleSpec, Commit, CommitBundle, CommitOrBundle, DocumentId,
+    OutboundRequestId, Response, StorageKey, StreamId, TaskContext,
 };
 
 mod add_commits;
 use add_commits::add_commits;
 mod command_id;
 pub use command_id::CommandId;
-use futures::{channel::oneshot, TryStreamExt};
+use futures::TryStreamExt;
 pub mod keyhive;
 use keyhive::KeyhiveEntityId;
 
@@ -25,11 +24,11 @@ pub(crate) enum Command {
         request: auth::Signed<auth::Message>,
         receive_audience: Option<String>,
     },
-    CreateStream(streams::StreamDirection),
-    HandleStreamMessage {
-        stream_id: StreamId,
-        msg: Vec<u8>,
+    HandleResponse {
+        request_id: OutboundRequestId,
+        response: auth::Signed<auth::Message>,
     },
+    CreateStream(streams::StreamDirection),
     DisconnectStream {
         stream_id: StreamId,
     },
@@ -63,9 +62,9 @@ pub enum CommandResult {
     CreateDoc(Result<DocumentId, error::Create>),
     LoadDoc(Option<Vec<CommitOrBundle>>),
     CreateStream(streams::StreamId),
-    HandleMessage(Result<(), crate::StreamError>),
     DisconnectStream,
-    HandleRequest(Result<RpcResponse, crate::error::Stopping>),
+    HandleRequest(Result<EndpointResponse, crate::error::Stopping>),
+    HandleResponse,
     RegisterEndpoint(endpoint::EndpointId),
     UnregisterEndpoint,
     Keyhive(crate::keyhive::KeyhiveCommandResult),
@@ -82,46 +81,63 @@ where
             request,
             receive_audience,
         } => {
-            let result = crate::request_handlers::handle_request(
-                ctx.clone(),
-                None,
+            let recv_aud = receive_audience.map(Audience::service_name);
+            let (request, from) = match auth::receive(
+                ctx.now().as_secs(),
                 request,
-                receive_audience,
-            )
-            .await;
-            let response = match result {
-                Ok(r) => InnerRpcResponse::Response(Box::new(
-                    ctx.state()
-                        .auth()
-                        .sign_message(ctx.now().as_secs(), r.audience, r.response)
-                        .await,
-                )),
-                Err(_) => InnerRpcResponse::AuthFailed,
+                &ctx.state().our_peer_id(),
+                recv_aud,
+            ) {
+                Ok(authed) => (authed.content, crate::PeerId::from(authed.from)),
+                Err(e) => {
+                    tracing::debug!(err=?e, "failed to authenticate incoming message");
+                    let response = Response::AuthenticationFailed;
+                    let msg = auth::send(
+                        ctx.now().as_secs(),
+                        OffsetSeconds(0),
+                        Audience::peer(&ctx.state().our_peer_id()),
+                        response.encode(),
+                    );
+                    let signed = Signed::try_sign(ctx.signer(), msg)
+                        .await
+                        .expect("should never fail");
+                    return CommandResult::HandleRequest(Ok(EndpointResponse(signed)));
+                }
             };
-            let response = RpcResponse(response);
+            let result =
+                crate::request_handlers::handle_request(ctx.clone(), None, request, from).await;
+            let response = auth::send(
+                ctx.now().as_secs(),
+                OffsetSeconds(0),
+                Audience::peer(&from),
+                result.encode(),
+            );
+            let signed = Signed::try_sign(ctx.signer(), response)
+                .await
+                .expect("should never fail");
+            let response = EndpointResponse(signed);
             CommandResult::HandleRequest(Ok(response))
         }
-        Command::CreateStream(direction) => {
-            let stream_id = ctx.state().streams().new_stream(direction.clone());
-            ctx.io()
-                .new_inbound_stream_event(streams::IncomingStreamEvent::Create(
-                    stream_id, direction,
-                ));
-            CommandResult::CreateStream(stream_id)
+        Command::HandleResponse {
+            request_id,
+            response,
+        } => {
+            ctx.state()
+                .endpoints()
+                .handle_response(ctx.now().as_secs(), request_id, response);
+            CommandResult::HandleResponse
         }
-        Command::HandleStreamMessage { stream_id, msg } => {
-            let (tx_reply, rx_reply) = oneshot::channel();
-            ctx.io()
-                .new_inbound_stream_event(streams::IncomingStreamEvent::Message(
-                    stream_id, msg, tx_reply,
-                ));
-            let result = JobFuture(rx_reply).await;
-            CommandResult::HandleMessage(result)
+        Command::CreateStream(direction) => {
+            let stream_id = ctx
+                .state()
+                .streams()
+                .new_stream(ctx.now().as_secs(), direction.clone());
+            CommandResult::CreateStream(stream_id)
         }
         Command::DisconnectStream { stream_id } => {
             let _result = ctx.state().streams().disconnect(stream_id);
-            ctx.io()
-                .new_inbound_stream_event(streams::IncomingStreamEvent::Disconnect(stream_id));
+            // ctx.io()
+            //     .new_inbound_stream_event(streams::IncomingStreamEvent::Disconnect(stream_id));
             CommandResult::DisconnectStream
         }
         Command::RegisterEndpoint(audience) => {

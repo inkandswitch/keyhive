@@ -17,6 +17,4 @@
 events we received since the load was started into the return value so that
 callers know they only have to listen to events from the point the document is
 returned.
-* Stop using async for stream processing, it's confusing
-* Make connection tests clearer
 * Consider whether we can get rid of the list-one-level thing by keeping an index of all documents somewhere

@@ -1,4 +1,4 @@
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, sync::atomic::Ordering, time::Duration};
 
 use beelay_core::{
     conn_info,
@@ -213,7 +213,7 @@ fn save_and_load() {
         tracing::info!("Key: {}, Value: {}", key, value.len());
     }
 
-    // Now creaet a new network and peer with the same storage
+    // Now create a new network and peer with the same storage
     let mut network2 = Network::new();
     let peer2 = network2
         .create_peer("peer2")
@@ -245,7 +245,7 @@ fn sync_loops_are_rerun() {
         last_synced_at: Some(first_sync),
     } = conn_info.state.clone()
     else {
-        panic!("expected Listening state");
+        panic!("expected Listening state, got {:?}", conn_info);
     };
 
     // Now wait until longer than the sync timeout
@@ -472,4 +472,22 @@ fn public_docs_are_synced() {
     keyhive_core::debug_events::terminal::print_event_table_verbose(table);
 
     assert_eq!(commits_on_2, expected_commits);
+}
+
+#[test]
+fn stream_close_emitted_on_shutdown() {
+    init_logging();
+    let mut network = Network::new();
+    let peer1 = network.create_peer("peer1").build();
+    let peer2 = network.create_peer("peer2").build();
+
+    // Now connect the other peer
+    let ConnectedPair {
+        left_closed,
+        right_closed: _,
+        ..
+    } = network.connect_stream(&peer2, &peer1);
+
+    network.beelay(&peer2).shutdown();
+    assert!(left_closed.load(Ordering::SeqCst));
 }

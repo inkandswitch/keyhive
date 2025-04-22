@@ -35,7 +35,10 @@ mod sync_loops;
 use commands::Command;
 use futures::channel::oneshot;
 use io::Signer;
-use network::messages::{Request, Response};
+use network::{
+    endpoint::EndpointRequest,
+    messages::{Request, Response},
+};
 use serialization::parse;
 use tracing::Instrument;
 
@@ -80,8 +83,8 @@ use event::EventInner;
 mod network;
 use network::streams;
 pub use network::{
-    signed_message::SignedMessage, EndpointId, OutboundRequestId, RpcResponse, StreamDirection,
-    StreamError, StreamEvent, StreamId,
+    signed_message::SignedMessage, EndpointId, EndpointResponse, OutboundRequestId,
+    StreamDirection, StreamError, StreamEvent, StreamId,
 };
 mod serialization;
 mod stopper;
@@ -131,9 +134,8 @@ impl<R: rand::Rng + rand::CryptoRng + Clone + 'static> Beelay<R> {
             driver::run(driver::DriveBeelayArgs {
                 rng: spawn_args.rng,
                 now: spawn_args.now,
-                rx_commands: spawn_args.rx_commands,
-                tx_driver_events: spawn_args.tx_driver_events,
-                rx_tick: spawn_args.rx_tick,
+                tx_driver_events: spawn_args.tx_output,
+                rx_input: spawn_args.rx_input,
 
                 verifying_key: config.verifying_key,
                 load_complete: tx_load_complete,
@@ -196,9 +198,8 @@ impl<R: rand::Rng + rand::CryptoRng> Beelay<R> {
             EventInner::IoComplete(io_result) => {
                 self.driver.handle_io_complete(io_result);
             }
-            EventInner::HandleResponse(outbound_request_id, inner_rpc_response) => {
-                self.driver
-                    .handle_response(outbound_request_id, inner_rpc_response);
+            EventInner::StreamMessage(stream_id, msg) => {
+                self.driver.handle_stream_message(stream_id, msg);
             }
             EventInner::BeginCommand(command_id, command) => {
                 self.driver.dispatch_command(command_id, *command);
@@ -231,15 +232,10 @@ pub struct EventResults {
     pub stopped: bool,
 }
 
-pub(crate) struct OutgoingResponse {
-    audience: Audience,
-    response: Response,
-}
-
 #[derive(Debug)]
 pub struct NewRequest {
     pub id: OutboundRequestId,
-    pub request: SignedMessage,
+    pub request: EndpointRequest,
 }
 
 pub mod error {

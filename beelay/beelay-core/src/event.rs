@@ -4,9 +4,8 @@ use crate::{
         Command,
     },
     io::{self, IoResult},
-    network::InnerRpcResponse,
-    Audience, CommandId, Commit, CommitBundle, DocumentId, EndpointId, OutboundRequestId,
-    RpcResponse, SignedMessage, StreamDirection, StreamId,
+    Audience, CommandId, Commit, CommitBundle, DocumentId, EndpointId, EndpointResponse,
+    OutboundRequestId, SignedMessage, StreamDirection, StreamId,
 };
 
 #[derive(Debug)]
@@ -35,8 +34,21 @@ impl Event {
     }
 
     // Submit the response to an outgoing request
-    pub fn handle_response(id: OutboundRequestId, response: RpcResponse) -> Event {
-        Event(EventInner::HandleResponse(id, response.0))
+    pub fn handle_response(
+        request_id: OutboundRequestId,
+        response: EndpointResponse,
+    ) -> (CommandId, Event) {
+        let command_id = CommandId::new();
+        (
+            command_id,
+            Event(EventInner::BeginCommand(
+                command_id,
+                Box::new(Command::HandleResponse {
+                    request_id,
+                    response: response.0,
+                }),
+            )),
+        )
     }
 
     // Add some commits to a document
@@ -127,16 +139,8 @@ impl Event {
         (command_id, event)
     }
 
-    pub fn handle_message(stream_id: StreamId, message: Vec<u8>) -> (CommandId, Event) {
-        let command_id = CommandId::new();
-        let event = Event(EventInner::BeginCommand(
-            command_id,
-            Box::new(Command::HandleStreamMessage {
-                stream_id,
-                msg: message,
-            }),
-        ));
-        (command_id, event)
+    pub fn handle_message(stream_id: StreamId, message: Vec<u8>) -> Event {
+        Event(EventInner::StreamMessage(stream_id, message))
     }
 
     pub fn register_endpoint(audience: Audience) -> (CommandId, Event) {
@@ -278,7 +282,7 @@ impl Event {
 #[derive(Debug)]
 pub(super) enum EventInner {
     IoComplete(io::IoResult),
-    HandleResponse(OutboundRequestId, InnerRpcResponse),
     BeginCommand(CommandId, Box<Command>),
+    StreamMessage(StreamId, Vec<u8>),
     Tick,
 }

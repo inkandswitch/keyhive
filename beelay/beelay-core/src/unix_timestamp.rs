@@ -127,6 +127,12 @@ impl UnixTimestampMillis {
     }
 }
 
+impl From<UnixTimestampMillis> for UnixTimestamp {
+    fn from(millis: UnixTimestampMillis) -> Self {
+        Self((millis.0 / 1000) as u64)
+    }
+}
+
 impl AddAssign<Duration> for UnixTimestampMillis {
     fn add_assign(&mut self, rhs: Duration) {
         self.0 += rhs.as_millis();

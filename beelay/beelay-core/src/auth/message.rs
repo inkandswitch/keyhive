@@ -46,9 +46,14 @@ impl Encode for Message {
 }
 
 impl Message {
-    pub fn new(offset: OffsetSeconds, audience: Audience, content: Vec<u8>) -> Self {
+    pub fn new(
+        now: UnixTimestamp,
+        offset: OffsetSeconds,
+        audience: Audience,
+        content: Vec<u8>,
+    ) -> Self {
         Self {
-            expires_at: UnixTimestamp::now_with_offset(offset),
+            expires_at: now + offset,
             audience,
             content,
         }
@@ -95,6 +100,7 @@ mod tests {
     #[test]
     fn test_encode_decode() {
         let message = Message::new(
+            UnixTimestamp::now(),
             OffsetSeconds(123),
             Audience::service_name("sync.example.com"),
             b"hello".to_vec(),

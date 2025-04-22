@@ -1,5 +1,6 @@
 use std::{cell::RefCell, future::Future, rc::Rc};
 
+use crate::Signer;
 use crate::{state::State, UnixTimestampMillis};
 
 mod requests;
@@ -55,12 +56,16 @@ impl<R: rand::Rng + rand::CryptoRng> TaskContext<R> {
         crate::state::StateAccessor::new(&self.state)
     }
 
+    pub(crate) fn signer(&self) -> Signer {
+        self.state.borrow().signer()
+    }
+
     pub(crate) fn stopping(&self) -> impl Future<Output = ()> {
         self.stopper.stopped()
     }
 
     pub(crate) fn requests(&self) -> Requests<'_, R> {
-        Requests::new(self.state(), &self.io_handle, &self.now)
+        Requests::new(self.state(), &self.now)
     }
 
     pub(crate) fn storage(&self) -> Storage<'_> {
