@@ -276,6 +276,7 @@ impl<T: AsyncSecretKey> AsyncSecretKey for Rc<T> {
     }
 }
 
+// FIXME move to /store
 pub trait ShareSecretStore: Clone {
     type SecretKey: AsyncSecretKey + Debug + Clone;
 
