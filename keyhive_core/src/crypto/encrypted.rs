@@ -1,9 +1,8 @@
 //! Ciphertext with public metadata.
 
 use super::{
-    application_secret::PcsKey,
     digest::Digest,
-    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
+    share_key::{AsyncSecretKey, ShareKey},
     signed::Signed,
     siv::Siv,
     symmetric_key::SymmetricKey,

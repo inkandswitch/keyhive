@@ -42,7 +42,6 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
-use derive_where::derive_where;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use id::DocumentId;
@@ -191,7 +190,10 @@ impl<
             .filter(|(id, _sk)| **id != owner_id)
             .map(|(id, pk)| (*id, *pk))
             .collect();
-        owner_sks.import_secret_key(owner_share_secret_key).await;
+        owner_sks
+            .import_secret_key(owner_share_secret_key)
+            .await
+            .expect("FIXME");
         let mut cgka = Cgka::new(doc_id, owner_id, owner_share_key, owner_sks.clone(), signer)
             .await?
             .with_new_owner(owner_id)?;
@@ -391,11 +393,10 @@ impl<
         Ok(())
     }
 
-    #[instrument(skip(self, sk), fields(doc_id = ?self.doc_id()))]
+    #[instrument(skip(self), fields(doc_id = ?self.doc_id()))]
     pub async fn merge_cgka_invite_op(
         &mut self,
         op: Rc<Signed<CgkaOperation>>,
-        sk: ShareSecretKey,
     ) -> Result<(), CgkaError> {
         let CgkaOperation::Add {
             added_id,
@@ -411,11 +412,6 @@ impl<
         {
             return Err(CgkaError::OutOfOrderOperation);
         }
-        self.cgka_mut()?
-            .store
-            .import_secret_key(sk)
-            .await
-            .expect("FIXME");
         self.cgka = Some(self.cgka()?.with_new_owner(added_id)?);
         self.merge_cgka_op(op).await
     }

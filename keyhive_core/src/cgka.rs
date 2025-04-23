@@ -22,7 +22,6 @@ use crate::{
         symmetric_key::SymmetricKey,
     },
     principal::{document::id::DocumentId, individual::id::IndividualId},
-    transact::fork::Fork,
 };
 use archive::CgkaArchive;
 use beekem::BeeKem;
@@ -31,7 +30,6 @@ use dupe::Dupe;
 use error::CgkaError;
 use nonempty::NonEmpty;
 use operation::{CgkaEpoch, CgkaOperation, CgkaOperationGraph};
-use serde::Serialize;
 use std::{
     borrow::Borrow,
     collections::{BTreeSet, HashMap, HashSet},
@@ -525,7 +523,7 @@ impl<K: ShareSecretStore + Clone> Cgka<K> {
     async fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
         let ordered_ops = self.ops_graph.topsort_graph()?;
         let rebuilt_cgka = self.rebuild_cgka(ordered_ops).await?;
-        self.update_cgka_from(&rebuilt_cgka);
+        self.update_cgka_from(&rebuilt_cgka).await;
         self.pending_ops_for_structural_change = false;
         Ok(())
     }

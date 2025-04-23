@@ -3,7 +3,7 @@
 use super::{signed::Signed, signer::async_signer::AsyncSigner};
 use crate::{
     content::reference::ContentRef,
-    crypto::{share_key::ShareSecretStore, signed::SigningError},
+    crypto::share_key::ShareSecretStore,
     event::{static_event::StaticEvent, Event},
     listener::membership::MembershipListener,
     principal::group::{
@@ -460,8 +460,8 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
     }
 }
 
-impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> From<Digest<Event<S, K, T, L>>>
-    for Digest<StaticEvent<T>>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    From<Digest<Event<S, K, T, L>>> for Digest<StaticEvent<T>>
 {
     fn from(hash: Digest<Event<S, K, T, L>>) -> Self {
         hash.coerce()

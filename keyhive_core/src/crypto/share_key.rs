@@ -183,48 +183,66 @@ pub trait AsyncSecretKey {
 
     fn to_share_key(&self) -> ShareKey;
 
-    async fn ecdh_derive_shared_secret(
+    fn ecdh_derive_shared_secret(
         &self,
         counterparty: ShareKey,
-    ) -> Result<x25519_dalek::SharedSecret, Self::EcdhError>;
+    ) -> impl Future<Output = Result<x25519_dalek::SharedSecret, Self::EcdhError>>;
 
+    // FIXME
     // FIXME derive against public key of initial signer... or something
-    async fn derive_bytes(&self, counterparty: ShareKey) -> Result<[u8; 32], Self::EcdhError> {
-        let secret = self
-            .ecdh_derive_shared_secret(counterparty)
-            .await?
-            .to_bytes();
+    fn derive_bytes(
+        &self,
+        counterparty: ShareKey,
+    ) -> impl Future<Output = Result<[u8; 32], Self::EcdhError>> {
+        async move {
+            let secret = self
+                .ecdh_derive_shared_secret(counterparty)
+                .await?
+                .to_bytes();
 
-        let extended = secret.to_vec().extend(b"/keyhive/ecdh/derive-bytes/");
-        Ok(Digest::hash(&extended).into())
+            let extended = secret.to_vec().extend(b"/keyhive/ecdh/derive-bytes/");
+            Ok(Digest::hash(&extended).into())
+        }
     }
 
     #[instrument(skip(self), fields(pk = %self.to_share_key()))]
-    async fn derive_symmetric_key(&self, other: ShareKey) -> Result<SymmetricKey, Self::EcdhError> {
-        let secret = self.derive_bytes(other).await?;
-        Ok(SymmetricKey::from(secret))
+    fn derive_symmetric_key(
+        &self,
+        other: ShareKey,
+    ) -> impl Future<Output = Result<SymmetricKey, Self::EcdhError>> {
+        async {
+            let secret = self.derive_bytes(other).await?;
+            Ok(SymmetricKey::from(secret))
+        }
     }
 
     #[instrument(skip(self), fields(pk = %self.to_share_key()))]
-    async fn ratchet_forward(&self, other: ShareKey) -> Result<ShareSecretKey, Self::EcdhError> {
-        let bytes = self.derive_bytes(other).await?;
-        Ok(ShareSecretKey::force_from_bytes(bytes))
+    fn ratchet_forward(
+        &self,
+        other: ShareKey,
+    ) -> impl Future<Output = Result<ShareSecretKey, Self::EcdhError>> {
+        async {
+            let bytes = self.derive_bytes(other).await?;
+            Ok(ShareSecretKey::force_from_bytes(bytes))
+        }
     }
 
     #[instrument(skip(self), fields(pk = %self.to_share_key()))]
-    async fn ratchet_n_forward(
+    fn ratchet_n_forward(
         &self,
         other: ShareKey,
         n: NonZero<usize>,
-    ) -> Result<ShareSecretKey, Self::EcdhError> {
-        let mut acc = self.derive_bytes(other).await?;
-        let max = n.get() - 1;
-        for _ in 0..max {
-            let acc_sk = ShareSecretKey::force_from_bytes(acc);
-            let acc_pk = acc_sk.share_key();
-            acc = self.derive_bytes(acc_pk).await?;
+    ) -> impl Future<Output = Result<ShareSecretKey, Self::EcdhError>> {
+        async {
+            let mut acc = self.derive_bytes(other).await?;
+            let max = n.get() - 1;
+            for _ in 0..max {
+                let acc_sk = ShareSecretKey::force_from_bytes(acc);
+                let acc_pk = acc_sk.share_key();
+                acc = self.derive_bytes(acc_pk).await?;
+            }
+            Ok(ShareSecretKey::force_from_bytes(acc))
         }
-        Ok(ShareSecretKey::force_from_bytes(acc))
     }
 }
 
@@ -266,7 +284,9 @@ pub trait ShareSecretStore: Clone {
     type ImportKeyError: Debug;
     type GenerateSecretError: Debug;
 
-    async fn get_index(&self) -> Result<HashMap<ShareKey, Self::SecretKey>, Self::GetIndexError>;
+    fn get_index(
+        &self,
+    ) -> impl Future<Output = Result<HashMap<ShareKey, Self::SecretKey>, Self::GetIndexError>>;
 
     fn get_secret_key(
         &self,
@@ -278,29 +298,31 @@ pub trait ShareSecretStore: Clone {
         secret_key: ShareSecretKey,
     ) -> impl Future<Output = Result<Self::SecretKey, Self::ImportKeyError>>;
 
-    async fn import_secret_key_directly(
+    fn import_secret_key_directly(
         &mut self,
         secret_key: Self::SecretKey,
-    ) -> Result<Self::SecretKey, Self::ImportKeyError>;
+    ) -> impl Future<Output = Result<Self::SecretKey, Self::ImportKeyError>>;
 
     fn generate_share_secret_key(
         &mut self,
     ) -> impl Future<Output = Result<Self::SecretKey, Self::GenerateSecretError>>;
 
-    async fn try_decrypt_encryption(
+    fn try_decrypt_encryption(
         &self,
         encrypter_pk: ShareKey,
         encrypted: &EncryptedSecret<ShareSecretKey>,
-    ) -> Result<Vec<u8>, ()> {
-        let sk = self
-            .get_secret_key(&encrypted.paired_pk)
-            .await
-            .expect("FIXME")
-            .expect("FIXME");
-        let key = sk.derive_symmetric_key(encrypter_pk).await.expect("FIXME");
-        let mut buf = encrypted.ciphertext.clone();
-        key.try_decrypt(encrypted.nonce, &mut buf).expect("FIXME");
-        Ok(buf)
+    ) -> impl Future<Output = Result<Vec<u8>, ()>> {
+        async move {
+            let sk = self
+                .get_secret_key(&encrypted.paired_pk)
+                .await
+                .expect("FIXME")
+                .expect("FIXME");
+            let key = sk.derive_symmetric_key(encrypter_pk).await.expect("FIXME");
+            let mut buf = encrypted.ciphertext.clone();
+            key.try_decrypt(encrypted.nonce, &mut buf).expect("FIXME");
+            Ok(buf)
+        }
     }
 }
 

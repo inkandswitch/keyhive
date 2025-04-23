@@ -13,7 +13,7 @@ use crate::{
     listener::prekey::PrekeyListener,
 };
 use dupe::Dupe;
-use std::{collections::BTreeMap, rc::Rc};
+use std::rc::Rc;
 
 /// A well-known agent that can be used by anyone. ⚠ USE WITH CAUTION ⚠
 ///

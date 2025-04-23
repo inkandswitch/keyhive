@@ -50,7 +50,7 @@ use crate::{
         revocation::RevocationStore,
     },
     transact::{
-        fork::{Fork, ForkAsync},
+        fork::ForkAsync,
         merge::{Merge, MergeAsync},
     },
 };
@@ -410,7 +410,6 @@ impl<
         can: Access,
         other_relevant_docs: &[Rc<RefCell<Document<S, K, T, L>>>], // TODO make this automatic
     ) -> Result<AddMemberUpdate<S, K, T, L>, AddMemberError> {
-        let signer = self.active.borrow().signer.clone();
         match resource {
             Membered::Group(group) => Ok(group
                 .borrow_mut()
@@ -467,7 +466,6 @@ impl<
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError> {
-        let signer = self.active.borrow().signer.clone();
         let result = doc
             .borrow_mut()
             .try_encrypt_content(
@@ -1112,28 +1110,21 @@ impl<
             .ok_or(ReceiveCgkaOpError::UnknownDocument(*doc_id))?;
 
         let signed_op = Rc::new(signed_op);
-        if let CgkaOperation::Add { added_id, pk, .. } = signed_op.payload {
+        if let CgkaOperation::Add { added_id, .. } = signed_op.payload {
             let active_id = self.active.borrow().id();
             if active_id == added_id {
-                tracing::info!("one of us!");
-                let sk = {
-                    let active = self.active.borrow();
-                    active
-                        .secret_store
-                        .get_secret_key(&pk)
-                        .await
-                        .expect("FIXME")
-                        .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?
-                };
                 doc.borrow_mut()
-                    .merge_cgka_invite_op(signed_op.dupe(), sk)
+                    .merge_cgka_invite_op(signed_op.dupe())
                     .await?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
             } else if Public.individual().id() == added_id {
-                let sk = Public.share_secret_key(); // FIXME rename Public -> World
+                self.share_secret_store
+                    .import_secret_key(Public.share_secret_key())
+                    .await
+                    .expect("FIXME");
                 doc.borrow_mut()
-                    .merge_cgka_invite_op(signed_op.clone(), sk)
+                    .merge_cgka_invite_op(signed_op.clone())
                     .await?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());

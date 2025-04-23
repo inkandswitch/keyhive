@@ -8,8 +8,8 @@ use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{
-        digest::Digest, encrypted::EncryptedContent, separable::Separable,
-        share_key::ShareSecretKey, siv::Siv, symmetric_key::SymmetricKey,
+        digest::Digest, encrypted::EncryptedContent, separable::Separable, siv::Siv,
+        symmetric_key::SymmetricKey,
     },
     principal::document::id::DocumentId,
 };
