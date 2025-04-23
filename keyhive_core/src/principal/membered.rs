@@ -92,7 +92,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
 
     #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[allow(clippy::type_complexity)]
-    pub async fn add_member<K: ShareSecretStore>(
+    pub async fn add_member(
         &mut self,
         member_to_add: Agent<S, K, T, L>,
         can: Access,
@@ -115,7 +115,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
 
     #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[allow(clippy::type_complexity)]
-    pub async fn revoke_member<K: ShareSecretStore>(
+    pub async fn revoke_member(
         &mut self,
         member_id: Identifier,
         retain_all_other_members: bool,

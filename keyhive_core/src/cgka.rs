@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod beekem;
 pub mod error;
 pub mod keys;

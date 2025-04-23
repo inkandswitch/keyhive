@@ -90,7 +90,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: PrekeyListener> Acti
         let mut prekey_state = PrekeyState::new(init_op);
         let mut local_store = vec![];
         for _ in 0..6 {
-            let sk = secret_store.generate_share_secret_key(csprng).await?;
+            let sk = secret_store.generate_share_secret_key().await?;
             local_store.push(sk);
         }
 
@@ -194,7 +194,6 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: PrekeyListener> Acti
     /// Add a new prekey, expanding the number of currently available prekeys.
     pub async fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
-        csprng: &mut R,
     ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
         let new_secret = self
             .secret_store

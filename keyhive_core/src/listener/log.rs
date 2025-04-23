@@ -22,7 +22,7 @@ use tracing::instrument;
 #[derive(From, Into, PartialEq, Eq)]
 #[derive_where(Debug; T)]
 pub struct Log<S: AsyncSigner, K: ShareSecretStore, T: ContentRef = [u8; 32]>(
-    #[allow(clippy::type_complexity)] pub Rc<RefCell<Vec<Event<S, K, T, Log<S, T>>>>>,
+    #[allow(clippy::type_complexity)] pub Rc<RefCell<Vec<Event<S, K, T, Log<S, K, T>>>>>,
 );
 
 impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef> Log<S, K, T> {
@@ -78,7 +78,7 @@ where
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Default for Log<S, T> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef> Default for Log<S, K, T> {
     fn default() -> Self {
         Self::new()
     }

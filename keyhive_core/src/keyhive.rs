@@ -78,7 +78,7 @@ pub struct Keyhive<
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
     C: CiphertextStore<T, P> = MemoryCiphertextStore<T, P>,
-    L: MembershipListener<S, K, T> + CgkaListener = NoListener,
+    L: MembershipListener<S, K, T> = NoListener,
     R: rand::CryptoRng = rand::rngs::ThreadRng,
 > {
     /// The [`Active`] user agent.
@@ -517,9 +517,7 @@ impl<
         doc: Rc<RefCell<Document<S, K, T, L>>>,
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
         let signer = self.active.borrow().signer.clone();
-        doc.borrow_mut()
-            .pcs_update(&signer, &mut self.share_secret_store, &mut self.csprng)
-            .await
+        doc.borrow_mut().pcs_update(&signer, &mut self.csprng).await
     }
 
     #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
@@ -1129,20 +1127,20 @@ impl<
                         .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?
                 };
                 doc.borrow_mut()
-                    .merge_cgka_invite_op(signed_op.clone(), &sk)?;
+                    .merge_cgka_invite_op(signed_op.clone(), &sk)
+                    .await?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
             } else if Public.individual().id() == added_id {
                 let sk = Public.share_secret_key();
                 doc.borrow_mut()
-                    .merge_cgka_invite_op(signed_op.clone(), &sk)?;
+                    .merge_cgka_invite_op(signed_op.clone(), &sk)
+                    .await?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
             }
         }
-        doc.borrow_mut()
-            .merge_cgka_op(owner_sks, signed_op.clone())
-            .await?;
+        doc.borrow_mut().merge_cgka_op(signed_op.clone()).await?;
         self.event_listener.on_cgka_op(&signed_op).await;
         Ok(())
     }
@@ -1323,8 +1321,7 @@ impl<
                     }
 
                     let id = sd.payload.delegate;
-                    let delegate: Agent<S, K, T, L> = if id == archive.active.individual.id().into()
-                    {
+                    let delegate: Agent<S, K, T, L> = if id == archive.active.id().into() {
                         active.dupe().into()
                     } else {
                         individuals
@@ -1494,7 +1491,7 @@ impl<
     pub async fn ingest_archive(
         &mut self,
         archive: Archive<T>,
-    ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+    ) -> Result<(), ReceiveStaticEventError<S, K, T, L>> {
         self.active
             .borrow_mut()
             .prekey_pairs
@@ -1580,7 +1577,7 @@ impl<
         T: ContentRef + Debug,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P>,
-        L: MembershipListener<S, K, T> + CgkaListener,
+        L: MembershipListener<S, K, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Debug for Keyhive<S, K, T, P, C, L, R>
 {

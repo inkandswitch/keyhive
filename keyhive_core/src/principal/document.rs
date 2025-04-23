@@ -199,12 +199,7 @@ impl<
         let mut ops: Vec<Signed<CgkaOperation>> = Vec::new();
         ops.push(cgka.init_add_op());
         if let Some(others) = NonEmpty::from_vec(other_members) {
-            ops.extend(
-                cgka.add_multiple(others, signer, owner_sks)
-                    .await?
-                    .iter()
-                    .cloned(),
-            );
+            ops.extend(cgka.add_multiple(others, signer).await?.iter().cloned());
         }
         let (_pcs_key, update_op) = cgka
             .update(owner_share_key, owner_share_secret_key, signer, csprng)
@@ -383,13 +378,13 @@ impl<
                     if !predecessors.is_empty() {
                         return Err(CgkaError::OutOfOrderOperation);
                     }
-                    self.cgka = Some(Cgka::new_from_init_add(
+                    self.cgka = Cgka::new_from_init_add(
                         self.doc_id(),
                         added_id,
                         pk,
                         (*op).clone(),
                         self.cgka.clone(),
-                    )?)
+                    )?
                 }
                 _ => return Err(CgkaError::UnexpectedInitialOperation),
             },

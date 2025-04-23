@@ -396,9 +396,9 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         &mut self,
         revocation: Rc<Signed<Revocation<S, K, T, L>>>,
     ) -> Result<Digest<Signed<Revocation<S, K, T, L>>>, error::AddError> {
+        self.listener.on_revocation(&revocation).await;
         let digest = self.state.add_revocation(revocation)?;
         self.rebuild();
-        self.listener.on_revocation(&revocation).await;
         Ok(digest)
     }
 
@@ -525,8 +525,8 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
 
     #[allow(clippy::type_complexity)]
     #[allow(clippy::await_holding_refcell_ref)] // FIXME
-    #[instrument(skip(self, signer, owner_sks), fields(group_id = %self.group_id()))]
-    pub async fn revoke_member<K: ShareSecretStore>(
+    #[instrument(skip(self, signer), fields(group_id = %self.group_id()))]
+    pub async fn revoke_member(
         &mut self,
         member_to_remove: Identifier,
         retain_all_other_members: bool,

@@ -105,7 +105,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef> MembershipListener<S, K
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> CgkaListener for Deque<S, T> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef> CgkaListener for Deque<S, K, T> {
     #[instrument(skip(self))]
     async fn on_cgka_op(&self, op: &Rc<Signed<CgkaOperation>>) {
         self.push(Event::CgkaOperation(op.dupe()))

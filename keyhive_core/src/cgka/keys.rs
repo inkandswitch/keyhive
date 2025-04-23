@@ -1,14 +1,9 @@
 use crate::{
-    crypto::{
-        encrypted::EncryptedSecret,
-        share_key::{ShareKey, ShareSecretKey},
-    },
+    crypto::share_key::{ShareKey, ShareSecretKey},
     transact::{fork::Fork, merge::Merge},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-
-use super::error::CgkaError;
 
 /// A [`ShareKeyMap`] is used to store the secret keys for all of the public keys
 /// on your path that you have encountered so far (either because you added them
@@ -33,6 +28,7 @@ impl ShareKeyMap {
         self.0.contains_key(pk)
     }
 
+    // FIXME
     // pub fn try_decrypt_encryption(
     //     &self,
     //     encrypter_pk: ShareKey,
