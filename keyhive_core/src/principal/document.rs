@@ -193,11 +193,11 @@ impl<
         owner_sks
             .import_secret_key(owner_share_secret_key)
             .await
-            .expect("FIXME");
+            .map_err(GenerateDocError::ImportKeyError)?;
         let mut cgka = Cgka::new(doc_id, owner_id, owner_share_key, owner_sks.clone(), signer)
             .await?
             .with_new_owner(owner_id)?;
-        let mut ops: Vec<Signed<CgkaOperation>> = Vec::new();
+        let mut ops: Vec<Signed<CgkaOperation>> = vec![];
         ops.push(cgka.init_add_op());
         if let Some(others) = NonEmpty::from_vec(other_members) {
             ops.extend(cgka.add_multiple(others, signer).await?.iter().cloned());
