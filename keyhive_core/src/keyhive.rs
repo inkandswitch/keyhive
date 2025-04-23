@@ -50,7 +50,7 @@ use crate::{
         revocation::RevocationStore,
     },
     transact::{
-        fork::Fork,
+        fork::{Fork, ForkAsync},
         merge::{Merge, MergeAsync},
     },
 };
@@ -249,8 +249,8 @@ impl<
             self.delegations.dupe(),
             self.revocations.dupe(),
             self.event_listener.clone(),
-            &mut self.share_secret_store,
-            signer,
+            self.share_secret_store.clone(),
+            &signer,
             &mut self.csprng,
         )
         .await?;
@@ -315,10 +315,7 @@ impl<
     #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub async fn expand_prekeys(&mut self) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
-        self.active
-            .borrow_mut()
-            .expand_prekeys(&mut self.csprng)
-            .await
+        self.active.borrow_mut().expand_prekeys::<R>().await
     }
 
     #[instrument(skip(self), fields(khid = %self.id()))]
@@ -1121,20 +1118,22 @@ impl<
                 tracing::info!("one of us!");
                 let sk = {
                     let active = self.active.borrow();
-                    *active
-                        .prekey_pairs
-                        .get(&pk)
+                    active
+                        .secret_store
+                        .get_secret_key(&pk)
+                        .await
+                        .expect("FIXME")
                         .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?
                 };
                 doc.borrow_mut()
-                    .merge_cgka_invite_op(signed_op.clone(), &sk)
+                    .merge_cgka_invite_op(signed_op.dupe(), sk)
                     .await?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
             } else if Public.individual().id() == added_id {
-                let sk = Public.share_secret_key();
+                let sk = Public.share_secret_key(); // FIXME rename Public -> World
                 doc.borrow_mut()
-                    .merge_cgka_invite_op(signed_op.clone(), &sk)
+                    .merge_cgka_invite_op(signed_op.clone(), sk)
                     .await?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
@@ -1247,7 +1246,7 @@ impl<
     }
 
     #[instrument(skip_all, fields(archive_id = %archive.id()))]
-    pub fn try_from_archive(
+    pub async fn try_from_archive(
         archive: &Archive<T>,
         signer: S,
         share_secret_store: K,
@@ -1287,12 +1286,16 @@ impl<
         for (doc_id, doc_archive) in archive.docs.iter() {
             docs.insert(
                 *doc_id,
-                Rc::new(RefCell::new(Document::<S, K, T, L>::dummy_from_archive(
-                    doc_archive.clone(),
-                    delegations.dupe(),
-                    revocations.dupe(),
-                    listener.clone(),
-                )?)),
+                Rc::new(RefCell::new(
+                    Document::<S, K, T, L>::dummy_from_archive(
+                        doc_archive.clone(),
+                        delegations.dupe(),
+                        revocations.dupe(),
+                        share_secret_store.clone(),
+                        listener.clone(),
+                    )
+                    .await?,
+                )),
             );
         }
 
@@ -1492,14 +1495,14 @@ impl<
         &mut self,
         archive: Archive<T>,
     ) -> Result<(), ReceiveStaticEventError<S, K, T, L>> {
-        self.active
-            .borrow_mut()
-            .prekey_pairs
-            .extend(archive.active.prekey_pairs);
-        self.active
-            .borrow_mut()
-            .individual
-            .merge(archive.active.individual);
+        for share_key in archive.active.prekeys.iter() {
+            self.share_secret_store
+                .get_secret_key(share_key)
+                .await
+                .expect("FIXME")
+                .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(*share_key))?;
+        }
+        self.active.borrow_mut().individual.merge(archive.active);
         for (id, indie) in archive.individuals {
             if let Some(our_indie) = self.individuals.get_mut(&id) {
                 our_indie.merge(indie);
@@ -1604,11 +1607,11 @@ impl<
         C: CiphertextStore<T, P> + Clone, // FIXME make the default Rc<RefCell<...>>
         L: MembershipListener<S, K, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > Fork for Keyhive<S, K, T, P, C, L, R>
+    > ForkAsync for Keyhive<S, K, T, P, C, L, R>
 {
-    type Forked = Keyhive<S, K, T, P, C, Log<S, K, T>, R>;
+    type AsyncForked = Keyhive<S, K, T, P, C, Log<S, K, T>, R>;
 
-    fn fork(&self) -> Self::Forked {
+    async fn fork_async(&self) -> Self::AsyncForked {
         // TODO this is probably fairly slow, and due to the logger type changing
         Keyhive::try_from_archive(
             &self.into_archive(),
@@ -1618,7 +1621,35 @@ impl<
             Log::new(),
             self.csprng.clone(),
         )
-        .expect("local round trip to work")
+        .await
+        .expect("local round trip to work") // FIXME
+    }
+}
+
+impl<
+        S: AsyncSigner + Clone,
+        K: ShareSecretStore + Clone,
+        T: ContentRef + Clone,
+        P: for<'de> Deserialize<'de> + Clone,
+        C: CiphertextStore<T, P> + Clone, // FIXME make the default Rc<RefCell<...>>
+        L: MembershipListener<S, K, T>,
+        R: rand::CryptoRng + rand::RngCore + Clone,
+    > ForkAsync for Rc<RefCell<Keyhive<S, K, T, P, C, L, R>>>
+{
+    type AsyncForked = Keyhive<S, K, T, P, C, Log<S, K, T>, R>;
+
+    async fn fork_async(&self) -> Self::AsyncForked {
+        // TODO this is probably fairly slow, and due to the logger type changing
+        Keyhive::try_from_archive(
+            &self.borrow().into_archive(),
+            self.borrow().active.borrow().signer.clone(),
+            self.borrow().share_secret_store.clone(),
+            self.borrow().ciphertext_store.clone(),
+            Log::new(),
+            self.borrow().csprng.clone(),
+        )
+        .await
+        .expect("local round trip to work") // FIXME
     }
 }
 

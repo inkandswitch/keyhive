@@ -7,7 +7,6 @@ use crate::{
     access::Access,
     cgka::{
         error::CgkaError,
-        keys::ShareKeyMap,
         operation::{CgkaEpoch, CgkaOperation},
         Cgka,
     },
@@ -52,6 +51,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
+    fmt::Debug,
     hash::{Hash, Hasher},
     rc::Rc,
 };
@@ -59,7 +59,6 @@ use thiserror::Error;
 use tracing::instrument;
 
 #[derive(Clone, Derivative)]
-#[derive_where(Debug; T)]
 pub struct Document<
     S: AsyncSigner,
     K: ShareSecretStore,
@@ -378,13 +377,13 @@ impl<
                     if !predecessors.is_empty() {
                         return Err(CgkaError::OutOfOrderOperation);
                     }
-                    self.cgka = Cgka::new_from_init_add(
+                    self.cgka = Some(Cgka::new_from_init_add(
                         self.doc_id(),
                         added_id,
                         pk,
                         (*op).clone(),
-                        self.cgka.clone(),
-                    )?
+                        self.cgka.clone().expect("FIXME").store, // FIXME
+                    )?)
                 }
                 _ => return Err(CgkaError::UnexpectedInitialOperation),
             },
@@ -396,11 +395,10 @@ impl<
     pub async fn merge_cgka_invite_op(
         &mut self,
         op: Rc<Signed<CgkaOperation>>,
-        sk: &ShareSecretKey,
+        sk: ShareSecretKey,
     ) -> Result<(), CgkaError> {
         let CgkaOperation::Add {
             added_id,
-            pk,
             ref predecessors,
             ..
         } = op.payload
@@ -415,7 +413,7 @@ impl<
         }
         self.cgka_mut()?
             .store
-            .import_secret_key(*sk)
+            .import_secret_key(sk)
             .await
             .expect("FIXME");
         self.cgka = Some(self.cgka()?.with_new_owner(added_id)?);
@@ -550,14 +548,15 @@ impl<
             group: self.group.into_archive(),
             content_heads: self.content_heads.clone(),
             content_state: self.content_state.clone(),
-            cgka: self.cgka.clone(),
+            cgka: self.cgka.as_ref().expect("FIXME").into_archive(),
         }
     }
 
-    pub(crate) fn dummy_from_archive(
+    pub(crate) async fn dummy_from_archive(
         archive: DocumentArchive<T>,
         delegations: DelegationStore<S, K, T, L>,
         revocations: RevocationStore<S, K, T, L>,
+        share_secret_store: K,
         listener: L,
     ) -> Result<Self, MissingIndividualError> {
         Ok(Document {
@@ -570,8 +569,38 @@ impl<
             content_heads: archive.content_heads,
             content_state: archive.content_state,
             known_decryption_keys: HashMap::new(),
-            cgka: archive.cgka,
+            cgka: Some(
+                Cgka::try_from_archive(&archive.cgka, share_secret_store)
+                    .await
+                    .expect("FIXME"),
+            ),
         })
+    }
+}
+
+impl<
+        S: AsyncSigner,
+        K: ShareSecretStore + Clone,
+        T: ContentRef,
+        L: MembershipListener<S, K, T>,
+    > Debug for Document<S, K, T, L>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Ensures that we don't skip fields by accident
+        let Document {
+            group,
+            content_heads,
+            content_state,
+            known_decryption_keys,
+            cgka,
+        } = self;
+        f.debug_struct("Document")
+            .field("group", group)
+            .field("content_heads", content_heads)
+            .field("content_state", content_state)
+            .field("known_decryption_keys", known_decryption_keys)
+            .field("cgka", cgka)
+            .finish()
     }
 }
 

@@ -74,7 +74,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: PrekeyListener> Acti
     /// * `csprng` - The cryptographically secure random number generator.
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
         signer: S,
-        secret_store: K,
+        mut secret_store: K,
         listener: L,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
@@ -90,12 +90,15 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: PrekeyListener> Acti
         let mut prekey_state = PrekeyState::new(init_op);
         let mut local_store = vec![];
         for _ in 0..6 {
-            let sk = secret_store.generate_share_secret_key().await?;
+            let sk = secret_store
+                .generate_share_secret_key()
+                .await
+                .expect("FIXME");
             local_store.push(sk);
         }
 
         let borrowed_signer = &signer;
-        let ops = stream::iter(local_store.map(|x| Ok::<_, SigningError>(x)))
+        let ops = stream::iter(local_store.iter().map(|x| Ok::<_, SigningError>(x)))
             .try_fold(vec![], |mut acc, sk| async move {
                 acc.push(
                     Rc::new(
@@ -177,7 +180,10 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: PrekeyListener> Acti
             .await?,
         );
 
-        self.secret_store.import_secret_key(new_secret).await?;
+        self.secret_store
+            .import_secret_key(new_secret)
+            .await
+            .expect("FIXME");
 
         self.individual
             .prekey_state

@@ -24,6 +24,7 @@ use crate::{
     principal::{document::id::DocumentId, individual::id::IndividualId},
     transact::fork::Fork,
 };
+use archive::CgkaArchive;
 use beekem::BeeKem;
 use derivative::Derivative;
 use dupe::Dupe;
@@ -34,6 +35,7 @@ use serde::Serialize;
 use std::{
     borrow::Borrow,
     collections::{BTreeSet, HashMap, HashSet},
+    fmt::Debug,
     hash::{Hash, Hasher},
     rc::Rc,
 };
@@ -49,7 +51,7 @@ use tracing::{info, instrument};
 ///
 /// We assume that all operations are received in causal order (a property
 /// guaranteed by Keyhive as a whole).
-#[derive(Debug, Clone, Eq, Derivative)]
+#[derive(Clone, Eq, Derivative)]
 #[derivative(Hash, PartialEq)]
 pub struct Cgka<K: ShareSecretStore + Clone> {
     doc_id: DocumentId,
@@ -62,7 +64,10 @@ pub struct Cgka<K: ShareSecretStore + Clone> {
     ///tree due to a structural change.
     pending_ops_for_structural_change: bool,
 
-    #[derivative(Hash(hash_with = "hash_pcs_keys"))]
+    #[derivative(
+        PartialEq(compare_with = "crate::util::partial_eq::hash_map_key_partial_eq"),
+        Hash(hash_with = "hash_pcs_keys")
+    )]
     pcs_keys: HashMap<ShareKey, PcsKey<K::SecretKey>>,
 
     /// The update operations for each PCS key.
@@ -594,6 +599,45 @@ impl<K: ShareSecretStore + Clone> Cgka<K> {
         self.pcs_key_ops.extend(other.pcs_key_ops.iter());
         self.pending_ops_for_structural_change = other.pending_ops_for_structural_change;
     }
+
+    #[instrument(skip_all, fields(doc_id))]
+    pub fn into_archive(&self) -> CgkaArchive {
+        CgkaArchive {
+            doc_id: self.doc_id,
+            owner_id: self.owner_id,
+            tree: self.tree.clone(),
+            ops_graph: self.ops_graph.clone(),
+            pending_ops_for_structural_change: self.pending_ops_for_structural_change,
+            pcs_keys: self.pcs_keys.keys().cloned().collect(),
+            original_member: self.original_member.clone(),
+            init_add_op: self.init_add_op.clone(),
+            pcs_key_ops: self.pcs_key_ops.iter().map(|(k, v)| (*k, *v)).collect(),
+        }
+    }
+
+    pub async fn try_from_archive(
+        archive: &CgkaArchive,
+        secret_store: K,
+    ) -> Result<Self, K::GetSecretError> {
+        let mut pcs_keys = HashMap::new();
+        for k in archive.pcs_keys.iter() {
+            let v = secret_store.get_secret_key(k).await?.expect("FIXME");
+            pcs_keys.insert(*k, PcsKey(v));
+        }
+
+        Ok(Self {
+            doc_id: archive.doc_id,
+            owner_id: archive.owner_id,
+            tree: archive.tree.clone(),
+            ops_graph: archive.ops_graph.clone(),
+            pending_ops_for_structural_change: archive.pending_ops_for_structural_change,
+            pcs_keys,
+            pcs_key_ops: archive.pcs_key_ops.iter().cloned().collect(),
+            original_member: archive.original_member,
+            init_add_op: archive.init_add_op.clone(),
+            store: secret_store,
+        })
+    }
 }
 
 // impl Fork for Cgka {
@@ -614,6 +658,39 @@ impl<K: ShareSecretStore + Clone> Cgka<K> {
 //             .expect("two valid graphs should always merge causal consistency");
 //     }
 // }
+
+impl<K: ShareSecretStore + Clone> Debug for Cgka<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Cgka {
+            doc_id,
+            owner_id,
+            tree,
+            ops_graph,
+            pending_ops_for_structural_change,
+            pcs_keys,
+            pcs_key_ops,
+            original_member,
+            init_add_op,
+            store: _,
+        } = self;
+
+        f.debug_struct("Cgka")
+            .field("doc_id", doc_id)
+            .field("owner_id", owner_id)
+            .field("tree", tree)
+            .field("ops_graph", ops_graph)
+            .field(
+                "pending_ops_for_structural_change",
+                pending_ops_for_structural_change,
+            )
+            .field("pcs_keys", pcs_keys)
+            .field("pcs_key_ops", pcs_key_ops)
+            .field("original_member", original_member)
+            .field("init_add_op", init_add_op)
+            .field("store", &"<SHARE_SECRET_STORE>")
+            .finish()
+    }
+}
 
 #[cfg(feature = "test_utils")]
 impl<K: ShareSecretStore + Clone> Cgka<K> {

@@ -15,6 +15,31 @@ pub(crate) fn prekey_partial_eq(
             .all(|((xk, xv), (yk, yv))| xk == yk && xv.to_bytes() == yv.to_bytes())
 }
 
+pub(crate) fn hash_map_key_partial_eq<K: Hash, V>(
+    map1: &HashMap<K, V>,
+    map2: &HashMap<K, V>,
+) -> bool {
+    let ordered1: BTreeSet<_> = map1
+        .keys()
+        .map(|k| {
+            let mut hasher = DefaultHasher::new();
+            (*k).hash(&mut hasher);
+            hasher.finish()
+        })
+        .collect();
+
+    let ordered2: BTreeSet<_> = map2
+        .keys()
+        .map(|k| {
+            let mut hasher = DefaultHasher::new();
+            (*k).hash(&mut hasher);
+            hasher.finish()
+        })
+        .collect();
+
+    ordered1 == ordered2
+}
+
 #[allow(dead_code)] // Not dead code; just used in a macro
 pub(crate) fn hash_map_keys<K: Hash, V>(
     map1: HashMap<K, V>,
