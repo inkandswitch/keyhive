@@ -163,7 +163,7 @@ impl<
         mut owner_sks: K,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<Self, GenerateDocError> {
+    ) -> Result<Self, GenerateDocError<K>> {
         let (group_result, group_vk) = EphemeralSigner::with_signer(csprng, |verifier, signer| {
             Group::generate_after_content(
                 signer,
@@ -737,7 +737,7 @@ pub enum EncryptError {
 }
 
 #[derive(Debug, Error)]
-pub enum GenerateDocError {
+pub enum GenerateDocError<K: ShareSecretStore> {
     #[error(transparent)]
     DelegationError(#[from] DelegationError),
 
@@ -746,6 +746,9 @@ pub enum GenerateDocError {
 
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
+
+    #[error("Import key error: {0}")]
+    ImportKeyError(K::ImportKeyError),
 }
 
 #[derive(Debug, Error)]

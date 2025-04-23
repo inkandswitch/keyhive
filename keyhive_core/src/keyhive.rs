@@ -232,7 +232,7 @@ impl<
         &mut self,
         coparents: Vec<Peer<S, K, T, L>>,
         initial_content_heads: NonEmpty<T>,
-    ) -> Result<Rc<RefCell<Document<S, K, T, L>>>, GenerateDocError> {
+    ) -> Result<Rc<RefCell<Document<S, K, T, L>>>, GenerateDocError<K>> {
         for peer in coparents.iter() {
             if self.get_agent(peer.id()).is_none() {
                 self.register_peer(peer.dupe());

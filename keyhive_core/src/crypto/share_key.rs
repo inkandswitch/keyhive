@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     convert::Infallible,
-    fmt::{self, Debug},
+    fmt::{self, Debug, Display},
     future::Future,
     num::NonZero,
     rc::Rc,
@@ -280,10 +280,10 @@ impl<T: AsyncSecretKey> AsyncSecretKey for Rc<T> {
 pub trait ShareSecretStore: Clone {
     type SecretKey: AsyncSecretKey + Debug + Clone;
 
-    type GetSecretError: Debug;
-    type GetIndexError: Debug;
-    type ImportKeyError: Debug;
-    type GenerateSecretError: Debug;
+    type GetSecretError: Debug + Display;
+    type GetIndexError: Debug + Display;
+    type ImportKeyError: Debug + Display;
+    type GenerateSecretError: Debug + Display;
 
     fn get_index(
         &self,
