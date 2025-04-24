@@ -2,7 +2,7 @@ use super::{
     error::CgkaError,
     keys::NodeKey,
     secret_store::{DecryptSecretError, SecretStore},
-    treemath,
+    treemath, UpdateLeafError,
 };
 use crate::{
     crypto::{
@@ -15,7 +15,11 @@ use crate::{
     store::secret_key::traits::ShareSecretStore,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fmt::Debug,
+};
+use thiserror::Error;
 use tracing::instrument;
 use treemath::{InnerNodeIndex, LeafNodeIndex, TreeNodeIndex, TreeSize};
 
@@ -210,7 +214,7 @@ impl BeeKem {
         &self,
         owner_id: IndividualId,
         owner_sks: &mut S,
-    ) -> Result<S::SecretKey, DecryptSecretError<S>> {
+    ) -> Result<S::SecretKey, DecryptTreeSecretError<S>> {
         let local_pk: ShareKey = x25519_dalek::PublicKey::from(self.doc_id.to_bytes()).into();
         let leaf_idx = *self.leaf_index_for_id(owner_id)?;
         if !self.has_root_key() {
@@ -227,17 +231,23 @@ impl BeeKem {
             let secret = owner_sks
                 .get_secret_key(&pk)
                 .await
-                .expect("FIXME")
+                .map_err(DecryptTreeSecretError::GetSecretError)?
                 .ok_or(CgkaError::ShareKeyNotFound)?;
 
             if let Some(nz) =
                 std::num::NonZero::new(treemath::direct_path(leaf_idx.into(), self.tree_size).len())
             {
-                let new_sk = secret.ratchet_n_forward(local_pk, nz).await.expect("FIXME");
-                let imported = owner_sks.import_secret_key(new_sk).await.expect("FIXME");
+                let new_sk = secret
+                    .ratchet_n_forward(local_pk, nz)
+                    .await
+                    .map_err(DecryptTreeSecretError::EcdhError)?;
+                let imported = owner_sks
+                    .import_secret_key(new_sk)
+                    .await
+                    .map_err(DecryptTreeSecretError::ImportKeyError)?;
                 return Ok(imported);
             } else {
-                todo!(/* FIXME */)
+                return Err(DecryptTreeSecretError::CannotRatchet);
             }
         }
         let lca_with_encrypter = treemath::lowest_common_ancestor(
@@ -271,12 +281,15 @@ impl BeeKem {
                 if let Some(nz) =
                     std::num::NonZero::new(treemath::direct_path(parent_idx, self.tree_size).len())
                 {
-                    let ratchetted = secret.ratchet_n_forward(local_pk, nz).await.expect("FIXME");
+                    let ratchetted = secret
+                        .ratchet_n_forward(local_pk, nz)
+                        .await
+                        .map_err(DecryptTreeSecretError::EcdhError)?;
 
                     let imported = owner_sks
                         .import_secret_key(ratchetted)
                         .await
-                        .expect("FIXME");
+                        .map_err(DecryptTreeSecretError::ImportKeyError)?;
 
                     return Ok(imported);
                 }
@@ -309,7 +322,7 @@ impl BeeKem {
         pk: ShareKey,
         sks: &mut S,
         csprng: &mut R,
-    ) -> Result<Option<(PcsKey<S::SecretKey>, PathChange)>, CgkaError> {
+    ) -> Result<Option<(PcsKey<S::SecretKey>, PathChange)>, DecryptTreeSecretError<S>> {
         let local_pk: ShareKey = x25519_dalek::PublicKey::from(self.doc_id.to_bytes()).into();
         let leaf_idx = *self.leaf_index_for_id(id)?;
         debug_assert!(self.id_for_leaf(leaf_idx).unwrap() == id);
@@ -330,18 +343,21 @@ impl BeeKem {
         let mut child_sk = sks
             .get_secret_key(&pk)
             .await
-            .expect("FIXME")
+            .map_err(DecryptTreeSecretError::GetSecretError)?
             .ok_or(CgkaError::SecretKeyNotFound)?;
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
             if let Some(store) = self.inner_node(parent_idx) {
                 new_path.removed_keys.append(&mut store.node_key().keys());
             }
-            let mem_new_parent_sk = child_sk.ratchet_forward(local_pk).await.expect("FIXME");
+            let mem_new_parent_sk = child_sk
+                .ratchet_forward(local_pk)
+                .await
+                .map_err(DecryptTreeSecretError::EcdhError)?;
             let new_parent_sk = sks
                 .import_secret_key(mem_new_parent_sk)
                 .await
-                .expect("FIXME");
+                .map_err(DecryptTreeSecretError::ImportKeyError)?;
             let new_parent_pk = new_parent_sk.to_share_key();
             self.encrypt_key_for_parent(
                 child_idx,
@@ -684,14 +700,58 @@ pub struct LeafNode {
 
 async fn encrypt_secret(
     doc_id: DocumentId,
-    secret: ShareSecretKey, // FIXME change to our repr
+    secret: ShareSecretKey,
     paired_pk: ShareKey,
 ) -> Result<EncryptedSecret<ShareSecretKey>, CgkaError> {
-    let key = secret.derive_symmetric_key(paired_pk).await.expect("FIXME");
+    let key = secret
+        .derive_symmetric_key(paired_pk)
+        .await
+        .expect("infallable");
+
     let mut ciphertext: Vec<u8> = (&secret).into();
     let nonce = Siv::new(&key, &ciphertext, doc_id)
         .map_err(|e| CgkaError::DeriveNonce(format!("{:?}", e)))?;
+
     key.try_encrypt(nonce, &mut ciphertext)
         .map_err(CgkaError::Encryption)?;
+
     Ok(EncryptedSecret::new(nonce, ciphertext, paired_pk))
+}
+
+#[derive(Error)]
+pub enum DecryptTreeSecretError<S: ShareSecretStore> {
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
+
+    #[error("Cannot get secret: {0}")]
+    GetSecretError(S::GetSecretError),
+
+    #[error("Error importing key: {0}")]
+    ImportKeyError(S::ImportKeyError),
+
+    #[error(transparent)]
+    UpdateLeafError(#[from] UpdateLeafError<S>),
+
+    #[error("ECDH error: {0}")]
+    EcdhError(<S::SecretKey as AsyncSecretKey>::EcdhError),
+
+    #[error(transparent)]
+    DecryptSecretError(#[from] DecryptSecretError<S>),
+
+    #[error("Cannot ratchet")]
+    CannotRatchet,
+}
+
+impl<S: ShareSecretStore> Debug for DecryptTreeSecretError<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DecryptTreeSecretError::CgkaError(e) => e.fmt(f),
+            DecryptTreeSecretError::GetSecretError(e) => e.fmt(f),
+            DecryptTreeSecretError::ImportKeyError(e) => e.fmt(f),
+            DecryptTreeSecretError::UpdateLeafError(e) => e.fmt(f),
+            DecryptTreeSecretError::EcdhError(e) => e.fmt(f),
+            DecryptTreeSecretError::DecryptSecretError(e) => e.fmt(f),
+            DecryptTreeSecretError::CannotRatchet => f.write_str("Cannot ratchet"),
+        }
+    }
 }

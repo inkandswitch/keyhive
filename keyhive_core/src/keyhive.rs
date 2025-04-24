@@ -5,8 +5,8 @@ use crate::{
     access::Access,
     archive::Archive,
     cgka::{
-        error::CgkaError, operation::CgkaOperation, secret_store::DecryptSecretError,
-        TryCgkaFromArchiveError,
+        beekem::DecryptTreeSecretError, error::CgkaError, operation::CgkaOperation,
+        secret_store::DecryptSecretError, TryCgkaFromArchiveError,
     },
     contact_card::ContactCard,
     content::reference::ContentRef,
@@ -1743,11 +1743,9 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         match self {
-            Self::ReceivePrekeyOpError(e) => write!(f, "ReceivePrekeyOpError: {e}"),
-            Self::ReceiveCgkaOpError(e) => write!(f, "ReceiveCgkaOpError: {e}"),
-            Self::ReceieveStaticMembershipError(e) => {
-                write!(f, "ReceieveStaticMembershipError: {e}")
-            }
+            Self::ReceivePrekeyOpError(e) => e.fmt(f),
+            Self::ReceiveCgkaOpError(e) => e.fmt(f),
+            Self::ReceieveStaticMembershipError(e) => e.fmt(f),
         }
     }
 }
@@ -1844,7 +1842,7 @@ pub enum TryFromArchiveError<
     DocFromArchiveError(#[from] TryCgkaFromArchiveError<K>),
 }
 
-#[derive(Debug, Error)]
+#[derive(Error)]
 pub enum ReceiveCgkaOpError<K: ShareSecretStore> {
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
@@ -1860,6 +1858,22 @@ pub enum ReceiveCgkaOpError<K: ShareSecretStore> {
 
     #[error(transparent)]
     DecryptSecretError(#[from] DecryptSecretError<K>),
+
+    #[error(transparent)]
+    DecryptTreeSecretError(#[from] DecryptTreeSecretError<K>),
+}
+
+impl<K: ShareSecretStore> Debug for ReceiveCgkaOpError<K> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Self::CgkaError(e) => e.fmt(f),
+            Self::VerificationError(e) => e.fmt(f),
+            Self::UnknownDocument(e) => e.fmt(f),
+            Self::UnknownInvitePrekey(e) => e.fmt(f),
+            Self::DecryptSecretError(e) => e.fmt(f),
+            Self::DecryptTreeSecretError(e) => e.fmt(f),
+        }
+    }
 }
 
 impl<K: ShareSecretStore> ReceiveCgkaOpError<K> {
@@ -1870,6 +1884,7 @@ impl<K: ShareSecretStore> ReceiveCgkaOpError<K> {
             Self::UnknownDocument(_) => false,
             Self::UnknownInvitePrekey(_) => false,
             Self::DecryptSecretError(_) => false,
+            Self::DecryptTreeSecretError(_) => false,
         }
     }
 }

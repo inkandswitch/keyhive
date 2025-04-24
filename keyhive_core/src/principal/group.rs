@@ -23,7 +23,10 @@ use super::{
 };
 use crate::{
     access::Access,
-    cgka::{error::CgkaError, operation::CgkaOperation, secret_store::DecryptSecretError},
+    cgka::{
+        beekem::DecryptTreeSecretError, error::CgkaError, operation::CgkaOperation,
+        secret_store::DecryptSecretError, RemoveError,
+    },
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -495,7 +498,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         &mut self,
         delegation: Rc<Signed<Delegation<S, K, T, L>>>,
         signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, DecryptSecretError<K>> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, DecryptTreeSecretError<K>> {
         let mut cgka_ops = Vec::new();
         let docs: Vec<Rc<RefCell<Document<S, K, T, L>>>> = self
             .transitive_members()
@@ -932,7 +935,7 @@ pub enum AddGroupMemberError<K: ShareSecretStore> {
     CgkaError(#[from] CgkaError),
 
     #[error(transparent)]
-    DecryptSecretError(#[from] DecryptSecretError<K>),
+    DecryptTreeSecretError(#[from] DecryptTreeSecretError<K>),
 }
 
 #[derive(Debug, Error)]
@@ -954,6 +957,9 @@ pub enum RevokeMemberError<K: ShareSecretStore> {
 
     #[error("Revocation error")]
     DecryptSecretError(#[from] DecryptSecretError<K>),
+
+    #[error(transparent)]
+    RemoveError(#[from] RemoveError<K>),
 }
 
 #[cfg(test)]

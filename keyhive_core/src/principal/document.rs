@@ -6,10 +6,10 @@ use super::{group::AddGroupMemberError, individual::id::IndividualId};
 use crate::{
     access::Access,
     cgka::{
+        beekem::DecryptTreeSecretError,
         error::CgkaError,
         operation::{CgkaEpoch, CgkaOperation},
-        secret_store::DecryptSecretError,
-        Cgka, NewAppSecretError, TryCgkaFromArchiveError, UpdateLeafError,
+        Cgka, NewAppSecretError, RemoveError, TryCgkaFromArchiveError, UpdateLeafError,
     },
     content::reference::ContentRef,
     crypto::{
@@ -261,7 +261,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         &mut self,
         delegation: &Signed<Delegation<S, K, T, L>>,
         signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, DecryptSecretError<K>> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, DecryptTreeSecretError<K>> {
         let prekeys = delegation
             .payload
             .delegate
@@ -328,7 +328,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         &mut self,
         id: IndividualId,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, DecryptSecretError<K>> {
+    ) -> Result<Option<Signed<CgkaOperation>>, RemoveError<K>> {
         self.cgka.remove(id, signer).await
     }
 
@@ -362,7 +362,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
     pub async fn merge_cgka_op(
         &mut self,
         op: Rc<Signed<CgkaOperation>>,
-    ) -> Result<(), DecryptSecretError<K>> {
+    ) -> Result<(), DecryptTreeSecretError<K>> {
         self.cgka.merge_concurrent_operation(op).await
     }
 
@@ -370,7 +370,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
     pub async fn merge_cgka_invite_op(
         &mut self,
         op: Rc<Signed<CgkaOperation>>,
-    ) -> Result<(), DecryptSecretError<K>> {
+    ) -> Result<(), DecryptTreeSecretError<K>> {
         let CgkaOperation::Add {
             added_id,
             ref predecessors,
@@ -684,7 +684,7 @@ pub enum AddMemberError<K: ShareSecretStore> {
     CgkaError(#[from] CgkaError),
 
     #[error(transparent)]
-    DecryptSecretError(#[from] DecryptSecretError<K>),
+    DecryptTreeSecretError(#[from] DecryptTreeSecretError<K>),
 }
 
 #[derive(Debug, Error)]
@@ -744,7 +744,7 @@ pub enum GenerateDocError<K: ShareSecretStore> {
     GenerateSecretError(K::GenerateSecretError),
 
     #[error(transparent)]
-    DecryptSecretError(#[from] DecryptSecretError<K>),
+    DecryptTreeSecretError(#[from] DecryptTreeSecretError<K>),
 }
 
 #[derive(Debug, Error)]
