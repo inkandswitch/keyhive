@@ -185,8 +185,6 @@ pub trait AsyncSecretKey {
         counterparty: ShareKey,
     ) -> impl Future<Output = Result<x25519_dalek::SharedSecret, Self::EcdhError>>;
 
-    // FIXME
-    // FIXME derive against public key of initial signer... or something
     fn derive_bytes(
         &self,
         counterparty: ShareKey,

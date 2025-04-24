@@ -683,8 +683,6 @@ pub enum NewAppSecretError<K: ShareSecretStore> {
     #[error("ECDH error: {0}")]
     EcdhError(<K::SecretKey as AsyncSecretKey>::EcdhError),
 
-    // #[error(transparent)]
-    // DecryptSecretError(#[from] DecryptSecretError<K>),
     #[error(transparent)]
     DecryptTreeSecretError(#[from] DecryptTreeSecretError<K>),
 }
