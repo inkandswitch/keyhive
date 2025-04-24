@@ -3,8 +3,9 @@
 use super::{cgka::CgkaListener, prekey::PrekeyListener};
 use crate::{
     content::reference::ContentRef,
-    crypto::{share_key::ShareSecretStore, signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
     principal::group::{delegation::Delegation, revocation::Revocation},
+    store::secret_key::traits::ShareSecretStore,
 };
 use std::rc::Rc;
 

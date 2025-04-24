@@ -7,10 +7,10 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         digest::Digest, signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable,
-        share_key::ShareSecretStore,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{document::id::DocumentId, identifier::Identifier},
+    store::secret_key::traits::ShareSecretStore,
     util::content_addressed_map::CaMap,
 };
 use derive_more::{From, Into};
@@ -37,8 +37,8 @@ pub enum MembershipOperation<
     Revocation(Rc<Signed<Revocation<S, K, T, L>>>),
 }
 
-impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> std::hash::Hash
-    for MembershipOperation<S, K, T, L>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    std::hash::Hash for MembershipOperation<S, K, T, L>
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
@@ -64,8 +64,12 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
     }
 }
 
-impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef + Serialize, L: MembershipListener<S, K, T>> Serialize
-    for MembershipOperation<S, K, T, L>
+impl<
+        S: AsyncSigner,
+        K: ShareSecretStore,
+        T: ContentRef + Serialize,
+        L: MembershipListener<S, K, T>,
+    > Serialize for MembershipOperation<S, K, T, L>
 {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         match self {
@@ -75,7 +79,9 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef + Serialize, L: Membersh
     }
 }
 
-impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> MembershipOperation<S, K, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    MembershipOperation<S, K, T, L>
+{
     pub fn subject_id(&self) -> Identifier {
         match self {
             MembershipOperation::Delegation(delegation) => delegation.subject_id(),
@@ -400,8 +406,8 @@ pub enum StaticMembershipOperation<T: ContentRef> {
     Revocation(Signed<StaticRevocation<T>>),
 }
 
-impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> From<MembershipOperation<S, K, T, L>>
-    for StaticMembershipOperation<T>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    From<MembershipOperation<S, K, T, L>> for StaticMembershipOperation<T>
 {
     fn from(op: MembershipOperation<S, K, T, L>) -> Self {
         match op {

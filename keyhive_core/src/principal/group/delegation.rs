@@ -7,7 +7,6 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
-        share_key::ShareSecretStore,
         signed::{Signed, SigningError},
         signer::async_signer::AsyncSigner,
     },
@@ -17,6 +16,7 @@ use crate::{
         document::id::DocumentId,
         identifier::Identifier,
     },
+    store::secret_key::traits::ShareSecretStore,
 };
 use derive_where::derive_where;
 use dupe::Dupe;

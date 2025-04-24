@@ -7,14 +7,16 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
-        share_key::ShareSecretStore,
         signed::Signed,
         signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSigner},
         verifiable::Verifiable,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::Agent, group::delegation::DelegationError, identifier::Identifier},
-    store::{delegation::DelegationStore, revocation::RevocationStore},
+    store::{
+        delegation::DelegationStore, revocation::RevocationStore,
+        secret_key::traits::ShareSecretStore,
+    },
     util::content_addressed_map::CaMap,
 };
 use derive_where::derive_where;

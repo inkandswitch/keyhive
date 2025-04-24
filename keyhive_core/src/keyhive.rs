@@ -10,7 +10,7 @@ use crate::{
     crypto::{
         digest::Digest,
         encrypted::EncryptedContent,
-        share_key::{ShareKey, ShareSecretStore},
+        share_key::ShareKey,
         signed::{Signed, SigningError, VerificationError},
         signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
@@ -48,6 +48,7 @@ use crate::{
         ciphertext::{memory::MemoryCiphertextStore, CausalDecryptionState, CiphertextStore},
         delegation::DelegationStore,
         revocation::RevocationStore,
+        secret_key::traits::ShareSecretStore,
     },
     transact::{
         fork::ForkAsync,
@@ -74,7 +75,7 @@ use tracing::instrument;
 #[derivative(PartialEq, Eq, Clone)]
 pub struct Keyhive<
     S: AsyncSigner + Clone,
-    K: ShareSecretStore + Clone,
+    K: ShareSecretStore,
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
     C: CiphertextStore<T, P> = MemoryCiphertextStore<T, P>,
@@ -1585,7 +1586,7 @@ impl<
 
 impl<
         S: AsyncSigner + Clone,
-        K: ShareSecretStore + Clone,
+        K: ShareSecretStore,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone, // FIXME make the default Rc<RefCell<...>>
@@ -1612,7 +1613,7 @@ impl<
 
 impl<
         S: AsyncSigner + Clone,
-        K: ShareSecretStore + Clone,
+        K: ShareSecretStore,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone, // FIXME make the default Rc<RefCell<...>>
@@ -1639,7 +1640,7 @@ impl<
 
 impl<
         S: AsyncSigner + Clone,
-        K: ShareSecretStore + Clone,
+        K: ShareSecretStore,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone,

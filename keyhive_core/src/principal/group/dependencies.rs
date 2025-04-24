@@ -1,9 +1,10 @@
 use super::{delegation::Delegation, revocation::Revocation};
 use crate::{
     content::reference::ContentRef,
-    crypto::{signed::Signed, signer::async_signer::AsyncSigner, share_key::ShareSecretStore},
+    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::document::id::DocumentId,
+    store::secret_key::traits::ShareSecretStore,
 };
 use std::{collections::BTreeMap, hash::Hash, rc::Rc};
 

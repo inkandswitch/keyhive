@@ -12,10 +12,10 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::{
-        digest::Digest, share_key::ShareSecretStore, signed::Signed,
-        signer::async_signer::AsyncSigner, verifiable::Verifiable,
+        digest::Digest, signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
+    store::secret_key::traits::ShareSecretStore,
     util::content_addressed_map::CaMap,
 };
 use derive_where::derive_where;

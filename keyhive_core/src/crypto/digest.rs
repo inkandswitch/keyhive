@@ -3,7 +3,6 @@
 use super::{signed::Signed, signer::async_signer::AsyncSigner};
 use crate::{
     content::reference::ContentRef,
-    crypto::share_key::ShareSecretStore,
     event::{static_event::StaticEvent, Event},
     listener::membership::MembershipListener,
     principal::group::{
@@ -11,6 +10,7 @@ use crate::{
         membership_operation::{MembershipOperation, StaticMembershipOperation},
         revocation::{Revocation, StaticRevocation},
     },
+    store::secret_key::traits::ShareSecretStore,
 };
 use serde::{Deserialize, Serialize};
 use std::{

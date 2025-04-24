@@ -6,11 +6,12 @@ use super::{
 use crate::{
     content::reference::ContentRef,
     crypto::{
-        share_key::{ShareKey, ShareSecretKey, ShareSecretStore},
+        share_key::{ShareKey, ShareSecretKey},
         signer::{memory::MemorySigner, sync_signer::SyncSigner},
         verifiable::Verifiable,
     },
     listener::prekey::PrekeyListener,
+    store::secret_key::traits::ShareSecretStore,
 };
 use dupe::Dupe;
 use std::rc::Rc;

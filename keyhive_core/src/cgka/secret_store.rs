@@ -3,9 +3,12 @@ use super::{
     keys::{ConflictKeys, NodeKey},
     treemath::TreeNodeIndex,
 };
-use crate::crypto::{
-    encrypted::EncryptedSecret,
-    share_key::{ShareKey, ShareSecretKey, ShareSecretStore},
+use crate::{
+    crypto::{
+        encrypted::EncryptedSecret,
+        share_key::{ShareKey, ShareSecretKey},
+    },
+    store::secret_key::traits::ShareSecretStore,
 };
 use serde::{Deserialize, Serialize};
 use std::{

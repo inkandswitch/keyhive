@@ -2,13 +2,10 @@
 //!
 //! [ECDH]: https://wikipedia.org/wiki/Elliptic-curve_Diffie%E2%80%93Hellman
 
-use super::{
-    digest::Digest, encrypted::EncryptedSecret, separable::Separable, symmetric_key::SymmetricKey,
-};
+use super::{digest::Digest, separable::Separable, symmetric_key::SymmetricKey};
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
     convert::Infallible,
     fmt::{self, Debug, Display},
     future::Future,
@@ -273,103 +270,5 @@ impl<T: AsyncSecretKey> AsyncSecretKey for Rc<T> {
         counterparty: ShareKey,
     ) -> Result<x25519_dalek::SharedSecret, Self::EcdhError> {
         self.as_ref().ecdh_derive_shared_secret(counterparty).await
-    }
-}
-
-// FIXME move to /store
-pub trait ShareSecretStore: Clone {
-    type SecretKey: AsyncSecretKey + Debug + Clone;
-
-    type GetSecretError: Debug + Display;
-    type GetIndexError: Debug + Display;
-    type ImportKeyError: Debug + Display;
-    type GenerateSecretError: Debug + Display;
-
-    fn get_index(
-        &self,
-    ) -> impl Future<Output = Result<HashMap<ShareKey, Self::SecretKey>, Self::GetIndexError>>;
-
-    fn get_secret_key(
-        &self,
-        public_key: &ShareKey,
-    ) -> impl Future<Output = Result<Option<Self::SecretKey>, Self::GetSecretError>>;
-
-    fn import_secret_key(
-        &mut self,
-        secret_key: ShareSecretKey,
-    ) -> impl Future<Output = Result<Self::SecretKey, Self::ImportKeyError>>;
-
-    fn import_secret_key_directly(
-        &mut self,
-        secret_key: Self::SecretKey,
-    ) -> impl Future<Output = Result<Self::SecretKey, Self::ImportKeyError>>;
-
-    fn generate_share_secret_key(
-        &mut self,
-    ) -> impl Future<Output = Result<Self::SecretKey, Self::GenerateSecretError>>;
-
-    fn try_decrypt_encryption(
-        &self,
-        encrypter_pk: ShareKey,
-        encrypted: &EncryptedSecret<ShareSecretKey>,
-    ) -> impl Future<Output = Result<Vec<u8>, ()>> {
-        async move {
-            let sk = self
-                .get_secret_key(&encrypted.paired_pk)
-                .await
-                .expect("FIXME")
-                .expect("FIXME");
-            let key = sk.derive_symmetric_key(encrypter_pk).await.expect("FIXME");
-            let mut buf = encrypted.ciphertext.clone();
-            key.try_decrypt(encrypted.nonce, &mut buf).expect("FIXME");
-            Ok(buf)
-        }
-    }
-}
-
-// FIXME Memory and include a csrpng directy
-impl ShareSecretStore for HashMap<ShareKey, Rc<ShareSecretKey>> {
-    type SecretKey = Rc<ShareSecretKey>;
-
-    type GetSecretError = Infallible;
-    type GetIndexError = Infallible;
-    type ImportKeyError = Infallible;
-    type GenerateSecretError = Infallible;
-
-    async fn get_index(&self) -> Result<HashMap<ShareKey, Self::SecretKey>, Self::GetIndexError> {
-        Ok(self.clone())
-    }
-
-    async fn get_secret_key(
-        &self,
-        public_key: &ShareKey,
-    ) -> Result<Option<Self::SecretKey>, Self::GetSecretError> {
-        Ok(self.get(public_key).cloned())
-    }
-
-    async fn import_secret_key(
-        &mut self,
-        secret_key: ShareSecretKey,
-    ) -> Result<Self::SecretKey, Self::ImportKeyError> {
-        let rc = Rc::new(secret_key);
-        self.insert(secret_key.share_key(), rc.dupe());
-        Ok(rc)
-    }
-
-    async fn import_secret_key_directly(
-        &mut self,
-        secret_key: Self::SecretKey,
-    ) -> Result<Self::SecretKey, Self::ImportKeyError> {
-        self.insert(secret_key.to_share_key(), secret_key.dupe());
-        Ok(secret_key)
-    }
-
-    async fn generate_share_secret_key(
-        &mut self,
-    ) -> Result<Self::SecretKey, Self::GenerateSecretError> {
-        let sk = Rc::new(ShareSecretKey::generate(&mut rand::thread_rng()));
-        let pk = sk.share_key();
-        self.insert(pk, sk.dupe());
-        Ok(sk)
     }
 }

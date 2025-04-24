@@ -15,7 +15,7 @@ use crate::{
         digest::Digest,
         encrypted::EncryptedContent,
         envelope::Envelope,
-        share_key::{AsyncSecretKey, ShareKey, ShareSecretKey, ShareSecretStore},
+        share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
         signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
         symmetric_key::SymmetricKey,
@@ -38,6 +38,7 @@ use crate::{
         ciphertext::{CausalDecryptionError, CausalDecryptionState, CiphertextStore, ErrorReason},
         delegation::DelegationStore,
         revocation::RevocationStore,
+        secret_key::traits::ShareSecretStore,
     },
     util::content_addressed_map::CaMap,
 };
@@ -72,12 +73,8 @@ pub struct Document<
     pub(crate) cgka: Cgka<K>,
 }
 
-impl<
-        S: AsyncSigner,
-        K: ShareSecretStore + Clone,
-        T: ContentRef,
-        L: MembershipListener<S, K, T>,
-    > Document<S, K, T, L>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    Document<S, K, T, L>
 {
     // NOTE doesn't register into the top-level Keyhive context
     #[instrument(skip_all, fields(group_id = %group.id(), viewer_id = %viewer.id()))]
@@ -540,12 +537,8 @@ impl<
     }
 }
 
-impl<
-        S: AsyncSigner,
-        K: ShareSecretStore + Clone,
-        T: ContentRef,
-        L: MembershipListener<S, K, T>,
-    > Debug for Document<S, K, T, L>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Debug
+    for Document<S, K, T, L>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Ensures that we don't skip fields by accident

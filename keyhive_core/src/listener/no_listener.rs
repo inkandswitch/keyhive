@@ -4,11 +4,12 @@ use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyLi
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::{share_key::ShareSecretStore, signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
+    store::secret_key::traits::ShareSecretStore,
 };
 use derive_more::derive::Debug;
 use dupe::Dupe;

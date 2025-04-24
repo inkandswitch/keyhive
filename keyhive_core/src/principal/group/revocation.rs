@@ -4,12 +4,10 @@ use super::{
 };
 use crate::{
     content::reference::ContentRef,
-    crypto::{
-        digest::Digest, share_key::ShareSecretStore, signed::Signed,
-        signer::async_signer::AsyncSigner,
-    },
+    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::id::AgentId, document::id::DocumentId, identifier::Identifier},
+    store::secret_key::traits::ShareSecretStore,
 };
 use derive_where::derive_where;
 use dupe::Dupe;

@@ -3,10 +3,11 @@ use crate::{
     crypto::{
         application_secret::PcsKey,
         encrypted::EncryptedSecret,
-        share_key::{AsyncSecretKey, ShareKey, ShareSecretKey, ShareSecretStore},
+        share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
         siv::Siv,
     },
     principal::{document::id::DocumentId, individual::id::IndividualId},
+    store::secret_key::traits::ShareSecretStore,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};

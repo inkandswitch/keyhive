@@ -14,7 +14,7 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::{
-        share_key::{AsyncSecretKey, ShareKey, ShareSecretStore},
+        share_key::{AsyncSecretKey, ShareKey},
         signed::{Signed, SigningError},
         signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
@@ -27,6 +27,7 @@ use crate::{
         group::delegation::{Delegation, DelegationError},
         membered::Membered,
     },
+    store::secret_key::traits::ShareSecretStore,
     transact::{fork::Fork, merge::Merge},
 };
 use derivative::Derivative;

@@ -27,7 +27,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
-        share_key::{ShareKey, ShareSecretStore},
+        share_key::ShareKey,
         signed::{Signed, SigningError},
         signer::{
             async_signer::AsyncSigner,
@@ -37,7 +37,10 @@ use crate::{
         verifiable::Verifiable,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
-    store::{delegation::DelegationStore, revocation::RevocationStore},
+    store::{
+        delegation::DelegationStore, revocation::RevocationStore,
+        secret_key::traits::ShareSecretStore,
+    },
     util::{content_addressed_map::CaMap, hex::ToHexString},
 };
 use derivative::Derivative;

@@ -7,7 +7,7 @@ use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{
-        digest::Digest, encrypted::EncryptedContent, share_key::ShareSecretStore, signed::Signed,
+        digest::Digest, encrypted::EncryptedContent, signed::Signed,
         signer::async_signer::AsyncSigner,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
@@ -19,7 +19,7 @@ use crate::{
         },
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
     },
-    store::ciphertext::CiphertextStore,
+    store::{ciphertext::CiphertextStore, secret_key::traits::ShareSecretStore},
 };
 use derive_more::{From, TryInto};
 use derive_where::derive_where;

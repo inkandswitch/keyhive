@@ -10,12 +10,9 @@ use super::{
 };
 use crate::{
     content::reference::ContentRef,
-    crypto::{
-        share_key::{ShareKey, ShareSecretStore},
-        signer::async_signer::AsyncSigner,
-        verifiable::Verifiable,
-    },
+    crypto::{share_key::ShareKey, signer::async_signer::AsyncSigner, verifiable::Verifiable},
     listener::{membership::MembershipListener, no_listener::NoListener},
+    store::secret_key::traits::ShareSecretStore,
 };
 use derivative::Derivative;
 use derive_more::{From, TryInto};

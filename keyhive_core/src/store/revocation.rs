@@ -1,11 +1,9 @@
 //! [`Revocation`] storage.
 
+use super::secret_key::traits::ShareSecretStore;
 use crate::{
     content::reference::ContentRef,
-    crypto::{
-        digest::Digest, share_key::ShareSecretStore, signed::Signed,
-        signer::async_signer::AsyncSigner,
-    },
+    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::group::revocation::Revocation,
     util::content_addressed_map::CaMap,

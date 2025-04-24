@@ -15,13 +15,14 @@ use crate::{
         application_secret::{ApplicationSecret, PcsKey},
         digest::Digest,
         encrypted::EncryptedContent,
-        share_key::{AsyncSecretKey, ShareKey, ShareSecretKey, ShareSecretStore},
+        share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
         signer::async_signer::AsyncSigner,
         siv::Siv,
         symmetric_key::SymmetricKey,
     },
     principal::{document::id::DocumentId, individual::id::IndividualId},
+    store::secret_key::traits::ShareSecretStore,
     transact::{fork::Fork, merge::Merge},
 };
 use archive::CgkaArchive;
@@ -53,7 +54,7 @@ use tracing::{info, instrument};
 /// guaranteed by Keyhive as a whole).
 #[derive(Clone, Eq, Derivative)]
 #[derivative(Hash, PartialEq)]
-pub struct Cgka<K: ShareSecretStore + Clone> {
+pub struct Cgka<K: ShareSecretStore> {
     doc_id: DocumentId,
     /// The id of the member who owns this tree.
     pub owner_id: IndividualId,
@@ -95,7 +96,7 @@ fn hashed_key_bytes<H: Hasher>(
         .hash(state)
 }
 
-impl<K: ShareSecretStore + Clone> Cgka<K> {
+impl<K: ShareSecretStore> Cgka<K> {
     pub async fn new<A: AsyncSigner>(
         doc_id: DocumentId,
         owner_id: IndividualId,
@@ -720,7 +721,7 @@ impl<K: ShareSecretStore> Merge for Cgka<K> {
     }
 }
 
-impl<K: ShareSecretStore + Clone> Debug for Cgka<K> {
+impl<K: ShareSecretStore> Debug for Cgka<K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Cgka {
             doc_id,
@@ -754,7 +755,7 @@ impl<K: ShareSecretStore + Clone> Debug for Cgka<K> {
 }
 
 #[cfg(feature = "test_utils")]
-impl<K: ShareSecretStore + Clone> Cgka<K> {
+impl<K: ShareSecretStore> Cgka<K> {
     pub async fn secret_from_root(&mut self) -> Result<PcsKey<K::SecretKey>, CgkaError> {
         self.pcs_key_from_tree_root().await
     }
