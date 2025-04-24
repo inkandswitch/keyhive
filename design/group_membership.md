@@ -18,7 +18,7 @@ There are several diagrams below. We use the following graphical conventions:
 flowchart
     subgraph Legend
         direction RL
-        successor["Successor Op Author\n--------------------------\nSuccessor Op Payload"] -->|after| predecessor["Predessor Op Author\n-----------------------------\nPredecessor Op Payload"]
+        successor["Successor Op Author<br>--------------------------<br>Successor Op Payload"] -->|after| predecessor["Predessor Op Author<br>-----------------------------<br>Predecessor Op Payload"]
     end
 ```
 
@@ -75,13 +75,13 @@ flowchart TB
         _groupPK["Group Root (Public Key)"]
 
         subgraph membership[Group Membership]
-            rootAddsAlice[Group Root\n-------------\nAdd Alice] --> groupRoot[Group Root\n----------------------\nSelf Certifying Init]
-            rootAddsBob[Group Root\n-------------\nAdd Bob] --> groupRoot
-            aliceAddsCarol[Alice\n------------\nAdd Carol] --> rootAddsAlice
+            rootAddsAlice[Group Root<br>-------------<br>Add Alice] --> groupRoot[Group Root<br>----------------------<br>Self Certifying Init]
+            rootAddsBob[Group Root<br>-------------<br>Add Bob] --> groupRoot
+            aliceAddsCarol[Alice<br>------------<br>Add Carol] --> rootAddsAlice
 
-            removeCarol[Bob\n----------------\nRemove Carol] --> rootAddsBob
+            removeCarol[Bob<br>----------------<br>Remove Carol] --> rootAddsBob
             removeCarol --> aliceAddsCarol
-            bobAddsIas[Bob\n-----------------------------\nAdd Ink & Switch Group] ---> rootAddsBob
+            bobAddsIas[Bob<br>-----------------------------<br>Add Ink & Switch Group] ---> rootAddsBob
         end
     end
 
@@ -100,16 +100,16 @@ flowchart TB
         _docPK["Document Root (Public Key)"]
 
         subgraph docGroup[Document Membership]
-            docRootAddsSingleton["Doc Root\n--------------------\nAdd Singleton PK"] --> docRoot[Document Root\n----------------------\nSelf Certifying Init]
-            docRootAddsAnotherGroup["Doc Root\n------------------------------\nAdd Ink & Switch Group"] --> docRoot
-            singetonRemovesAnotherGroup[Singleton\n----------------------------------\nRemove Ink & Switch Group] --> docRootAddsSingleton
+            docRootAddsSingleton["Doc Root<br>--------------------<br>Add Singleton PK"] --> docRoot[Document Root<br>----------------------<br>Self Certifying Init]
+            docRootAddsAnotherGroup["Doc Root<br>------------------------------<br>Add Ink & Switch Group"] --> docRoot
+            singetonRemovesAnotherGroup[Singleton<br>----------------------------------<br>Remove Ink & Switch Group] --> docRootAddsSingleton
             singetonRemovesAnotherGroup --> docRootAddsAnotherGroup
         end
 
         subgraph ops[Document Operations]
-            addKeyFoo["Ink & Switch\n---------------\nfoo := 1"] --> InitMap[Document Root\n------------------\nInitialize Map]
-            removeKeyFoo["Singleton\n---------------------\nRemove Key ''foo''"] --> addKeyFoo
-            addKeyBar["Singleton\n-----------\nbar := 2"] --> addKeyFoo
+            addKeyFoo["Ink & Switch<br>---------------<br>foo := 1"] --> InitMap[Document Root<br>------------------<br>Initialize Map]
+            removeKeyFoo["Singleton<br>---------------------<br>Remove Key ''foo''"] --> addKeyFoo
+            addKeyBar["Singleton<br>-----------<br>bar := 2"] --> addKeyFoo
         end
     end
 
@@ -129,9 +129,9 @@ flowchart TB
         _docPK["Document Root (Public Key)"]
 
         subgraph docGroup[Document Membership]
-            docRootAddsSingleton["Doc Root\n--------------------\nAdd Singleton PK"] --> docRoot[Document Root\n----------------------\nSelf Certifying Init]
-            docRootAddsAnotherGroup["Doc Root\n------------------------------\nAdd Ink & Switch Group"] --> docRoot
-            singetonRemovesAnotherGroup[Singleton\n----------------------------------\nRemove Ink & Switch Group] --> docRootAddsSingleton
+            docRootAddsSingleton["Doc Root<br>--------------------<br>Add Singleton PK"] --> docRoot[Document Root<br>----------------------<br>Self Certifying Init]
+            docRootAddsAnotherGroup["Doc Root<br>------------------------------<br>Add Ink & Switch Group"] --> docRoot
+            singetonRemovesAnotherGroup[Singleton<br>----------------------------------<br>Remove Ink & Switch Group] --> docRootAddsSingleton
             singetonRemovesAnotherGroup --> docRootAddsAnotherGroup
         end
 
@@ -174,14 +174,14 @@ flowchart
         end
     end
 
-    removeKeyFoo["Carol\n---------------------\nRemove Key ''foo''"] --> addKeyFoo
-    addKeyFoo["Dan\n---------------\nfoo := 1"] --> InitMap[Document Root\n------------------\nInitialize Map]
+    removeKeyFoo["Carol<br>---------------------<br>Remove Key ''foo''"] --> addKeyFoo
+    addKeyFoo["Dan<br>---------------<br>foo := 1"] --> InitMap[Document Root<br>------------------<br>Initialize Map]
 
-    addKeyBar["Carol\n-----------------------\nbar := Document B"] ----> addKeyFoo
+    addKeyBar["Carol<br>-----------------------<br>bar := Document B"] ----> addKeyFoo
     
-    docRootAddsSingleton["Doc A Root\n--------------------\nAdd Carol PK"] --> docRoot[Document Root\n----------------------\nSelf Certifying Init]
-    docRootAddsAnotherGroup["Doc Root\n-----------\nAdd Dan"] --> docRoot
-    singetonRemovesAnotherGroup[Carol\n---------------\nRemove Dan] --> docRootAddsSingleton
+    docRootAddsSingleton["Doc A Root<br>--------------------<br>Add Carol PK"] --> docRoot[Document Root<br>----------------------<br>Self Certifying Init]
+    docRootAddsAnotherGroup["Doc Root<br>-----------<br>Add Dan"] --> docRoot
+    singetonRemovesAnotherGroup[Carol<br>---------------<br>Remove Dan] --> docRootAddsSingleton
     singetonRemovesAnotherGroup --> docRootAddsAnotherGroup
 
     singetonRemovesAnotherGroup -.->|lock state after| addKeyFoo
@@ -201,9 +201,9 @@ flowchart
         end
 
         subgraph opsB[Document B Content]
-            addCharH["Alice\n----------\npush('H')"] --> InitStringB[Document Root\n------------------\nInitialize String]
-            addCharI["Alice\n---------\npush('i')"] --> addCharH
-            addCharExp["Bob\n----------\npush('!')"] --> addCharI
+            addCharH["Alice<br>----------<br>push('H')"] --> InitStringB[Document Root<br>------------------<br>Initialize String]
+            addCharI["Alice<br>---------<br>push('i')"] --> addCharH
+            addCharExp["Bob<br>----------<br>push('!')"] --> addCharI
         end
     end
 
@@ -214,10 +214,10 @@ flowchart
 
     addKeyBar -.-> addCharExp
 
-    docBRootAddsSingleton["Doc Root\n--------------\nAdd Bob PK"] --> docBRoot[Document Root\n----------------------\nSelf Certifying Init]
-    docBRootAddsAnotherGroup["Doc Root\n-----------\nAdd Alice"] --> docBRoot
+    docBRootAddsSingleton["Doc Root<br>--------------<br>Add Bob PK"] --> docBRoot[Document Root<br>----------------------<br>Self Certifying Init]
+    docBRootAddsAnotherGroup["Doc Root<br>-----------<br>Add Alice"] --> docBRoot
 
-    bobAddsDocA["Bob\n-----------\nAdd Document A"] -..-> docRoot
+    bobAddsDocA["Bob<br>-----------<br>Add Document A"] -..-> docRoot
     bobAddsDocA --> docBRootAddsAnotherGroup
 
     style docBGroup fill:green;
@@ -242,7 +242,7 @@ flowchart RL
         end
 
         subgraph DocAAuth[Doc Auth]
-            addAdminsGroup["Doc A Root\n----------------------\nAdd Team Group"] --> initDocAAuth["Doc A Root\n---------------------\nSelf Certified Init"]
+            addAdminsGroup["Doc A Root<br>----------------------<br>Add Team Group"] --> initDocAAuth["Doc A Root<br>---------------------<br>Self Certified Init"]
         end
     end
 
@@ -256,22 +256,22 @@ flowchart RL
             direction TB
         
             addAdminsGroupB --> initDocBAuth
-            addFrancine["Doc B Root\n----------------\nAdd Francine"] --> initDocBAuth["Doc B Root\n---------------------\nSelf-Certified Init"]
+            addFrancine["Doc B Root<br>----------------<br>Add Francine"] --> initDocBAuth["Doc B Root<br>---------------------<br>Self-Certified Init"]
         end
     end
 
     subgraph admins[Team Group]
-        rootAdminAddsBob["Team Root\n---------------\nAdd Bob"] --> initAdmins["Team Root\n---------------------\nSelf-Certified Init"]
-        rootAdminAddsAlice["Team Root\n---------------\nAdd Alice"] --> initAdmins
-        aliceAddsCarol["Alice\n------------\nAdd Carol"] ----> rootAdminAddsAlice
-        bobRemovesCarol["Bob\n-----------------\nRemove Carol"] --> rootAdminAddsBob
+        rootAdminAddsBob["Team Root<br>---------------<br>Add Bob"] --> initAdmins["Team Root<br>---------------------<br>Self-Certified Init"]
+        rootAdminAddsAlice["Team Root<br>---------------<br>Add Alice"] --> initAdmins
+        aliceAddsCarol["Alice<br>------------<br>Add Carol"] ----> rootAdminAddsAlice
+        bobRemovesCarol["Bob<br>-----------------<br>Remove Carol"] --> rootAdminAddsBob
 
-        aliceAddsReaders["Alice\n-----------------------\nAdd Readers Group"] --> rootAdminAddsAlice
+        aliceAddsReaders["Alice<br>-----------------------<br>Add Readers Group"] --> rootAdminAddsAlice
     end
 
     subgraph readers[Readers Group]
-        bobAddsErin["Bob\n----------\nAdd Erin"] --> initReaders["Readers Root\n---------------------\nSelf-Certified Init"]
-        aliceAddsDan["Alice\n----------\nAdd Dan"] --> initReaders
+        bobAddsErin["Bob<br>----------<br>Add Erin"] --> initReaders["Readers Root<br>---------------------<br>Self-Certified Init"]
+        aliceAddsDan["Alice<br>----------<br>Add Dan"] --> initReaders
     end
 
     bobRemovesCarol -.-> opA3
@@ -475,8 +475,8 @@ Group delegations MUST form a directed graph, which MAY contain cycles. For exam
 ``` mermaid
 flowchart LR
     subgraph Docs
-        j["LaTeX Document\n(Jacquard)"]
-        p["Meeting Notes\n(Patchwork)"]
+        j["LaTeX Document<br>(Jacquard)"]
+        p["Meeting Notes<br>(Patchwork)"]
     end
 
     subgraph Groups
@@ -513,14 +513,14 @@ This strategy does not distinguish between users, groups, and public keys. In a 
 
 ```mermaid
 flowchart TB
-    doc1["Meeting Notes\n(Patchwork)"] -->|read only| ias
-    doc2["LaTeX Paper\n(Jacquard)"] -->|read & write| ias
-    doc3["Kid's Homework\n(Patchwork)"] -->|read| alice
+    doc1["Meeting Notes<br>(Patchwork)"] -->|read only| ias
+    doc2["LaTeX Paper<br>(Jacquard)"] -->|read & write| ias
+    doc3["Kid's Homework<br>(Patchwork)"] -->|read| alice
 
-    ias["Ink & Switch\n(Keyhive Group)"] -->|all| alice
+    ias["Ink & Switch<br>(Keyhive Group)"] -->|all| alice
 
     subgraph alicedomain[" "]
-        alice["''Alice''\n(Keyhive Group)"]
+        alice["''Alice''<br>(Keyhive Group)"]
 
         aliceLaptop[Alice's Laptop]
         aliceTablet[Alice's Tablet]

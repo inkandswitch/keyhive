@@ -29,9 +29,9 @@ flowchart
     doc --- capRR ---> alice
     doc --- capRW --> alice
 
-    abRR -.-o|"Proven by\nearlier capability"| capRR
+    abRR -.-o|"Proven by<br>earlier capability"| capRR
 
-    alice ---|Alice delegates\nDoc Read\nto Bob| abRR --> bob
+    alice ---|Alice delegates<br>Doc Read<br>to Bob| abRR --> bob
 ```
 
 
