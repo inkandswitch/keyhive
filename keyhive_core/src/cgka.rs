@@ -763,7 +763,7 @@ impl<K: ShareSecretStore + Clone> Cgka<K> {
         &mut self,
         pcs_pubkey: ShareKey,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<PcsKey<K::SecretKey>, CgkaError> {
+    ) -> Result<PcsKey<K::SecretKey>, PcsKeyFromHashesError<K>> {
         self.pcs_key_from_hashes(pcs_pubkey, update_op_hash).await
     }
 }
