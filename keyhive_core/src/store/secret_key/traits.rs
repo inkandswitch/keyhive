@@ -1,13 +1,14 @@
+use crate::crypto::{
+    encrypted::EncryptedSecret,
+    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
+};
+use derive_where::derive_where;
 use std::{
     collections::HashMap,
     fmt::{Debug, Display},
     future::Future,
 };
-
-use crate::crypto::{
-    encrypted::EncryptedSecret,
-    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
-};
+use thiserror::Error;
 
 pub trait ShareSecretStore: Clone {
     type SecretKey: AsyncSecretKey + Debug + Clone;
@@ -44,17 +45,40 @@ pub trait ShareSecretStore: Clone {
         &self,
         encrypter_pk: ShareKey,
         encrypted: &EncryptedSecret<ShareSecretKey>,
-    ) -> impl Future<Output = Result<Vec<u8>, ()>> {
+    ) -> impl Future<Output = Result<Vec<u8>, DecryptionError<Self>>> {
         async move {
             let sk = self
                 .get_secret_key(&encrypted.paired_pk)
                 .await
-                .expect("FIXME")
-                .expect("FIXME");
-            let key = sk.derive_symmetric_key(encrypter_pk).await.expect("FIXME");
+                .map_err(DecryptionError::GetSecretError)?
+                .ok_or(DecryptionError::CannotFindKey(encrypted.paired_pk))?;
+
+            let key = sk
+                .derive_symmetric_key(encrypter_pk)
+                .await
+                .map_err(DecryptionError::EcdhError)?;
+
             let mut buf = encrypted.ciphertext.clone();
-            key.try_decrypt(encrypted.nonce, &mut buf).expect("FIXME");
+            key.try_decrypt(encrypted.nonce, &mut buf)
+                .map_err(DecryptionError::DecryptionError)?;
+
             Ok(buf)
         }
     }
+}
+
+#[derive(Error)]
+#[derive_where(Debug)]
+pub enum DecryptionError<K: ShareSecretStore> {
+    #[error("Failed to decrypt the ciphertext: {0}")]
+    DecryptionError(chacha20poly1305::Error),
+
+    #[error("Failed to find the secret key for the given public key: {0}")]
+    CannotFindKey(ShareKey),
+
+    #[error("Failed to get the secret key: {0}")]
+    GetSecretError(K::GetSecretError),
+
+    #[error("ECDH error: {0}")]
+    EcdhError(<K::SecretKey as AsyncSecretKey>::EcdhError),
 }

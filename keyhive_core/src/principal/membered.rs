@@ -98,7 +98,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         can: Access,
         signer: &S,
         other_relevant_docs: &[Rc<RefCell<Document<S, K, T, L>>>],
-    ) -> Result<AddMemberUpdate<S, K, T, L>, AddMemberError> {
+    ) -> Result<AddMemberUpdate<S, K, T, L>, AddMemberError<K>> {
         match self {
             Membered::Group(group) => Ok(group
                 .borrow_mut()
@@ -121,7 +121,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         retain_all_other_members: bool,
         signer: &S,
         relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<RevokeMemberUpdate<S, K, T, L>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<S, K, T, L>, RevokeMemberError<K>> {
         match self {
             Membered::Group(group) => {
                 group

@@ -1,4 +1,9 @@
-use super::{error::CgkaError, keys::NodeKey, secret_store::SecretStore, treemath};
+use super::{
+    error::CgkaError,
+    keys::NodeKey,
+    secret_store::{DecryptSecretError, SecretStore},
+    treemath,
+};
 use crate::{
     crypto::{
         application_secret::PcsKey,
@@ -205,11 +210,11 @@ impl BeeKem {
         &self,
         owner_id: IndividualId,
         owner_sks: &mut S,
-    ) -> Result<S::SecretKey, CgkaError> {
+    ) -> Result<S::SecretKey, DecryptSecretError<S>> {
         let local_pk: ShareKey = x25519_dalek::PublicKey::from(self.doc_id.to_bytes()).into();
         let leaf_idx = *self.leaf_index_for_id(owner_id)?;
         if !self.has_root_key() {
-            return Err(CgkaError::NoRootKey);
+            return Err(CgkaError::NoRootKey)?;
         }
         let leaf = self
             .leaf(leaf_idx)
@@ -217,7 +222,7 @@ impl BeeKem {
             .expect("Leaf should not be blank");
         if Some(leaf_idx) == self.current_secret_encrypter_leaf_idx {
             let NodeKey::ShareKey(pk) = leaf.pk else {
-                return Err(CgkaError::ShareKeyNotFound);
+                return Err(CgkaError::ShareKeyNotFound)?;
             };
             let secret = owner_sks
                 .get_secret_key(&pk)
@@ -281,7 +286,7 @@ impl BeeKem {
             child_node_key = self.node_key_for_index(child_idx)?;
             parent_idx = treemath::parent(child_idx).into();
         }
-        maybe_last_secret_decrypted.ok_or(CgkaError::NoRootKey)
+        Ok(maybe_last_secret_decrypted.ok_or(CgkaError::NoRootKey)?)
     }
 
     /// Rotate key and encrypt new secrets along the provided [`IndividualId`]'s path.
@@ -435,7 +440,7 @@ impl BeeKem {
         child_node_key: &NodeKey,
         seen_idxs: &[TreeNodeIndex],
         child_sks: &mut S,
-    ) -> Result<Option<S::SecretKey>, CgkaError> {
+    ) -> Result<Option<S::SecretKey>, DecryptSecretError<S>> {
         debug_assert!(!self.is_root(child_idx));
         let parent_idx = treemath::parent(child_idx);
         let Some(parent) = self.inner_node(parent_idx) else {
@@ -445,12 +450,17 @@ impl BeeKem {
         let maybe_secret = match parent.node_key() {
             NodeKey::ConflictKeys(_) => None,
             NodeKey::ShareKey(parent_pk) => {
-                if let Some(child_sk) = child_sks.get_secret_key(&parent_pk).await.expect("FIXME") {
+                if let Some(child_sk) = child_sks
+                    .get_secret_key(&parent_pk)
+                    .await
+                    .map_err(DecryptSecretError::GetSecretError)?
+                {
                     return Ok(Some(child_sk));
                 }
                 let secret = parent
                     .decrypt_secret(child_node_key, child_sks, seen_idxs)
                     .await?;
+
                 Some(secret)
             }
         };

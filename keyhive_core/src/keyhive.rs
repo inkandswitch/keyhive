@@ -4,7 +4,10 @@ use crate::{
     ability::Ability,
     access::Access,
     archive::Archive,
-    cgka::{error::CgkaError, operation::CgkaOperation, TryCgkaFromArchiveError},
+    cgka::{
+        error::CgkaError, operation::CgkaOperation, secret_store::DecryptSecretError,
+        TryCgkaFromArchiveError,
+    },
     contact_card::ContactCard,
     content::reference::ContentRef,
     crypto::{
@@ -397,7 +400,7 @@ impl<
         resource: &mut Membered<S, K, T, L>,
         can: Access,
         other_relevant_docs: &[Rc<RefCell<Document<S, K, T, L>>>], // TODO make this automatic
-    ) -> Result<AddMemberUpdate<S, K, T, L>, AddMemberError> {
+    ) -> Result<AddMemberUpdate<S, K, T, L>, AddMemberError<K>> {
         match resource {
             Membered::Group(group) => Ok(group
                 .borrow_mut()
@@ -428,7 +431,7 @@ impl<
         to_revoke: Identifier,
         retain_all_other_members: bool,
         resource: &mut Membered<S, K, T, L>,
-    ) -> Result<RevokeMemberUpdate<S, K, T, L>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<S, K, T, L>, RevokeMemberError<K>> {
         let mut relevant_docs = BTreeMap::new();
         for (doc_id, Ability { doc, .. }) in self.reachable_docs() {
             relevant_docs.insert(doc_id, doc.borrow().content_heads.iter().cloned().collect());
@@ -1094,7 +1097,7 @@ impl<
     pub async fn receive_cgka_op(
         &mut self,
         signed_op: Signed<CgkaOperation>,
-    ) -> Result<(), ReceiveCgkaOpError> {
+    ) -> Result<(), ReceiveCgkaOpError<K>> {
         signed_op.try_verify()?;
 
         let doc_id = signed_op.payload.doc_id();
@@ -1719,7 +1722,6 @@ impl<
 }
 
 #[derive(Error)]
-#[derive_where(Debug; T)]
 pub enum ReceiveStaticEventError<
     S: AsyncSigner,
     K: ShareSecretStore,
@@ -1730,10 +1732,24 @@ pub enum ReceiveStaticEventError<
     ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
 
     #[error(transparent)]
-    ReceiveCgkaOpError(#[from] ReceiveCgkaOpError),
+    ReceiveCgkaOpError(#[from] ReceiveCgkaOpError<K>),
 
     #[error(transparent)]
     ReceieveStaticMembershipError(#[from] ReceieveStaticDelegationError<S, K, T, L>),
+}
+
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Debug
+    for ReceiveStaticEventError<S, K, T, L>
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Self::ReceivePrekeyOpError(e) => write!(f, "ReceivePrekeyOpError: {e}"),
+            Self::ReceiveCgkaOpError(e) => write!(f, "ReceiveCgkaOpError: {e}"),
+            Self::ReceieveStaticMembershipError(e) => {
+                write!(f, "ReceieveStaticMembershipError: {e}")
+            }
+        }
+    }
 }
 
 impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
@@ -1829,7 +1845,7 @@ pub enum TryFromArchiveError<
 }
 
 #[derive(Debug, Error)]
-pub enum ReceiveCgkaOpError {
+pub enum ReceiveCgkaOpError<K: ShareSecretStore> {
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
 
@@ -1841,15 +1857,19 @@ pub enum ReceiveCgkaOpError {
 
     #[error("Unknown invite prekey for received CGKA add op: {0}")]
     UnknownInvitePrekey(ShareKey),
+
+    #[error(transparent)]
+    DecryptSecretError(#[from] DecryptSecretError<K>),
 }
 
-impl ReceiveCgkaOpError {
+impl<K: ShareSecretStore> ReceiveCgkaOpError<K> {
     pub fn is_missing_dependency(&self) -> bool {
         match self {
             Self::CgkaError(e) => e.is_missing_dependency(),
             Self::VerificationError(_) => false,
             Self::UnknownDocument(_) => false,
             Self::UnknownInvitePrekey(_) => false,
+            Self::DecryptSecretError(_) => false,
         }
     }
 }
@@ -1877,7 +1897,7 @@ pub enum ReceiveEventError<
     ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
 
     #[error(transparent)]
-    ReceiveCgkaOpError(#[from] ReceiveCgkaOpError),
+    ReceiveCgkaOpError(#[from] ReceiveCgkaOpError<K>),
 }
 
 #[cfg(test)]

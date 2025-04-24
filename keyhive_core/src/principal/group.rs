@@ -23,7 +23,7 @@ use super::{
 };
 use crate::{
     access::Access,
-    cgka::{error::CgkaError, operation::CgkaOperation},
+    cgka::{error::CgkaError, operation::CgkaOperation, secret_store::DecryptSecretError},
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -421,7 +421,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         can: Access,
         signer: &S,
         relevant_docs: &[Rc<RefCell<Document<S, K, T, L>>>],
-    ) -> Result<AddMemberUpdate<S, K, T, L>, AddGroupMemberError> {
+    ) -> Result<AddMemberUpdate<S, K, T, L>, AddGroupMemberError<K>> {
         let after_content = relevant_docs
             .iter()
             .map(|d| {
@@ -442,7 +442,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         can: Access,
         signer: &S,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<AddMemberUpdate<S, K, T, L>, AddGroupMemberError> {
+    ) -> Result<AddMemberUpdate<S, K, T, L>, AddGroupMemberError<K>> {
         let proof = if self.verifying_key() == signer.verifying_key() {
             None
         } else {
@@ -495,7 +495,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         &mut self,
         delegation: Rc<Signed<Delegation<S, K, T, L>>>,
         signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, DecryptSecretError<K>> {
         let mut cgka_ops = Vec::new();
         let docs: Vec<Rc<RefCell<Document<S, K, T, L>>>> = self
             .transitive_members()
@@ -535,7 +535,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         retain_all_other_members: bool,
         signer: &S,
         after_content: &BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<RevokeMemberUpdate<S, K, T, L>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<S, K, T, L>, RevokeMemberError<K>> {
         let vk = signer.verifying_key();
         let mut revocations = vec![];
         let og_dlgs: Vec<_> = self.members.values().flatten().cloned().collect();
@@ -915,7 +915,7 @@ pub struct GroupArchive<T: ContentRef> {
 }
 
 #[derive(Debug, Error)]
-pub enum AddGroupMemberError {
+pub enum AddGroupMemberError<K: ShareSecretStore> {
     #[error(transparent)]
     SigningError(#[from] SigningError),
 
@@ -930,10 +930,13 @@ pub enum AddGroupMemberError {
 
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
+
+    #[error(transparent)]
+    DecryptSecretError(#[from] DecryptSecretError<K>),
 }
 
 #[derive(Debug, Error)]
-pub enum RevokeMemberError {
+pub enum RevokeMemberError<K: ShareSecretStore> {
     #[error(transparent)]
     AddError(#[from] error::AddError),
 
@@ -947,7 +950,10 @@ pub enum RevokeMemberError {
     CgkaError(#[from] CgkaError),
 
     #[error("Redelagation error")]
-    RedelegationError(#[from] AddGroupMemberError),
+    RedelegationError(#[from] AddGroupMemberError<K>),
+
+    #[error("Revocation error")]
+    DecryptSecretError(#[from] DecryptSecretError<K>),
 }
 
 #[cfg(test)]

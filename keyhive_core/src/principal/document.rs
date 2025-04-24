@@ -8,6 +8,7 @@ use crate::{
     cgka::{
         error::CgkaError,
         operation::{CgkaEpoch, CgkaOperation},
+        secret_store::DecryptSecretError,
         Cgka, NewAppSecretError, TryCgkaFromArchiveError, UpdateLeafError,
     },
     content::reference::ContentRef,
@@ -223,7 +224,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         can: Access,
         signer: &S,
         other_relevant_docs: &[Rc<RefCell<Document<S, K, T, L>>>],
-    ) -> Result<AddMemberUpdate<S, K, T, L>, AddMemberError> {
+    ) -> Result<AddMemberUpdate<S, K, T, L>, AddMemberError<K>> {
         let mut after_content: BTreeMap<DocumentId, Vec<T>> = other_relevant_docs
             .iter()
             .map(|d| {
@@ -260,7 +261,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         &mut self,
         delegation: &Signed<Delegation<S, K, T, L>>,
         signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, DecryptSecretError<K>> {
         let prekeys = delegation
             .payload
             .delegate
@@ -282,7 +283,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         retain_all_other_members: bool,
         signer: &S,
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<RevokeMemberUpdate<S, K, T, L>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<S, K, T, L>, RevokeMemberError<K>> {
         let RevokeMemberUpdate {
             revocations,
             redelegations,
@@ -327,7 +328,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         &mut self,
         id: IndividualId,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Signed<CgkaOperation>>, DecryptSecretError<K>> {
         self.cgka.remove(id, signer).await
     }
 
@@ -358,7 +359,10 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         self.group.receive_revocation(revocation).await
     }
 
-    pub async fn merge_cgka_op(&mut self, op: Rc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
+    pub async fn merge_cgka_op(
+        &mut self,
+        op: Rc<Signed<CgkaOperation>>,
+    ) -> Result<(), DecryptSecretError<K>> {
         self.cgka.merge_concurrent_operation(op).await
     }
 
@@ -366,20 +370,20 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
     pub async fn merge_cgka_invite_op(
         &mut self,
         op: Rc<Signed<CgkaOperation>>,
-    ) -> Result<(), CgkaError> {
+    ) -> Result<(), DecryptSecretError<K>> {
         let CgkaOperation::Add {
             added_id,
             ref predecessors,
             ..
         } = op.payload
         else {
-            return Err(CgkaError::UnexpectedInviteOperation);
+            return Err(CgkaError::UnexpectedInviteOperation)?;
         };
         if !self
             .cgka
             .contains_predecessors(&HashSet::from_iter(predecessors.iter().cloned()))
         {
-            return Err(CgkaError::OutOfOrderOperation);
+            return Err(CgkaError::OutOfOrderOperation)?;
         }
         self.cgka = self.cgka.with_new_owner(added_id)?;
         self.merge_cgka_op(op).await
@@ -672,12 +676,15 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
 }
 
 #[derive(Debug, Error)]
-pub enum AddMemberError {
+pub enum AddMemberError<K: ShareSecretStore> {
     #[error(transparent)]
-    AddMemberError(#[from] AddGroupMemberError),
+    AddMemberError(#[from] AddGroupMemberError<K>),
 
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
+
+    #[error(transparent)]
+    DecryptSecretError(#[from] DecryptSecretError<K>),
 }
 
 #[derive(Debug, Error)]
@@ -735,6 +742,9 @@ pub enum GenerateDocError<K: ShareSecretStore> {
 
     #[error("Generate share secret key error: {0}")]
     GenerateSecretError(K::GenerateSecretError),
+
+    #[error(transparent)]
+    DecryptSecretError(#[from] DecryptSecretError<K>),
 }
 
 #[derive(Debug, Error)]

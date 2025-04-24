@@ -32,6 +32,7 @@ use dupe::Dupe;
 use error::CgkaError;
 use nonempty::NonEmpty;
 use operation::{CgkaEpoch, CgkaOperation, CgkaOperationGraph};
+use secret_store::DecryptSecretError;
 use std::{
     borrow::Borrow,
     collections::{BTreeSet, HashMap, HashSet},
@@ -245,7 +246,7 @@ impl<K: ShareSecretStore> Cgka<K> {
         id: IndividualId,
         pk: ShareKey,
         signer: &A,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Signed<CgkaOperation>>, DecryptSecretError<K>> {
         if self.tree.contains_id(&id) {
             return Ok(None);
         }
@@ -264,7 +265,11 @@ impl<K: ShareSecretStore> Cgka<K> {
             doc_id: self.doc_id,
         };
 
-        let signed_op = signer.try_sign_async(op).await?;
+        let signed_op = signer
+            .try_sign_async(op)
+            .await
+            .map_err(DecryptSecretError::SigningError)?;
+
         self.ops_graph.add_local_op(&signed_op);
         Ok(Some(signed_op))
     }
@@ -274,7 +279,7 @@ impl<K: ShareSecretStore> Cgka<K> {
         &mut self,
         members: NonEmpty<(IndividualId, ShareKey)>,
         signer: &A,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, DecryptSecretError<K>> {
         let mut ops = Vec::new();
         for m in members {
             ops.push(self.add(m.0, m.1, signer).await?);
@@ -288,7 +293,7 @@ impl<K: ShareSecretStore> Cgka<K> {
         &mut self,
         id: IndividualId,
         signer: &A,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Signed<CgkaOperation>>, DecryptSecretError<K>> {
         if !self.tree.contains_id(&id) {
             return Ok(None);
         }
@@ -296,7 +301,7 @@ impl<K: ShareSecretStore> Cgka<K> {
             self.replay_ops_graph().await?;
         }
         if self.group_size() == 1 {
-            return Err(CgkaError::RemoveLastMember);
+            return Err(CgkaError::RemoveLastMember)?;
         }
         let (leaf_idx, removed_keys) = self.tree.remove_id(id)?;
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
@@ -366,13 +371,13 @@ impl<K: ShareSecretStore> Cgka<K> {
     pub async fn merge_concurrent_operation(
         &mut self,
         op: Rc<Signed<CgkaOperation>>,
-    ) -> Result<(), CgkaError> {
+    ) -> Result<(), DecryptSecretError<K>> {
         if self.ops_graph.contains_op_hash(&Digest::hash(op.borrow())) {
             return Ok(());
         }
         let predecessors = op.payload.predecessors();
         if !self.ops_graph.contains_predecessors(&predecessors) {
-            return Err(CgkaError::OutOfOrderOperation);
+            Err(CgkaError::OutOfOrderOperation)?;
         }
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
@@ -473,7 +478,9 @@ impl<K: ShareSecretStore> Cgka<K> {
     }
 
     /// Decrypt tree secret to derive [`PcsKey`].
-    async fn pcs_key_from_tree_root(&mut self) -> Result<PcsKey<K::SecretKey>, CgkaError> {
+    async fn pcs_key_from_tree_root(
+        &mut self,
+    ) -> Result<PcsKey<K::SecretKey>, DecryptSecretError<K>> {
         let key = self
             .tree
             .decrypt_tree_secret(self.owner_id, &mut self.store)
@@ -514,9 +521,9 @@ impl<K: ShareSecretStore> Cgka<K> {
     async fn derive_pcs_key_for_op(
         &mut self,
         op_hash: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<PcsKey<K::SecretKey>, CgkaError> {
+    ) -> Result<PcsKey<K::SecretKey>, DecryptSecretError<K>> {
         if !self.ops_graph.contains_op_hash(op_hash) {
-            return Err(CgkaError::UnknownPcsKey);
+            return Err(CgkaError::UnknownPcsKey)?;
         }
         let mut heads = HashSet::new();
         heads.insert(*op_hash);
@@ -532,7 +539,7 @@ impl<K: ShareSecretStore> Cgka<K> {
 
     /// Replay all ops in our graph in a deterministic order.
     #[instrument(skip_all, fields(doc_id))]
-    async fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
+    async fn replay_ops_graph(&mut self) -> Result<(), DecryptSecretError<K>> {
         let ordered_ops = self.ops_graph.topsort_graph()?;
         let rebuilt_cgka = self.rebuild_cgka(ordered_ops).await?;
         self.update_cgka_from(&rebuilt_cgka).await;
@@ -542,7 +549,10 @@ impl<K: ShareSecretStore> Cgka<K> {
 
     /// Build a new [`Cgka`] for the provided non-empty list of [`CgkaEpoch`]s.
     #[instrument(skip_all, fields(doc_id, epochs))]
-    async fn rebuild_cgka(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<Self, CgkaError> {
+    async fn rebuild_cgka(
+        &mut self,
+        epochs: NonEmpty<CgkaEpoch>,
+    ) -> Result<Self, DecryptSecretError<K>> {
         let mut rebuilt_cgka = Cgka::new_from_init_add(
             self.doc_id,
             self.original_member.0,
@@ -565,7 +575,7 @@ impl<K: ShareSecretStore> Cgka<K> {
     async fn rebuild_pcs_key(
         &mut self,
         epochs: NonEmpty<CgkaEpoch>,
-    ) -> Result<PcsKey<K::SecretKey>, CgkaError> {
+    ) -> Result<PcsKey<K::SecretKey>, DecryptSecretError<K>> {
         debug_assert!(matches!(
             epochs.last()[0].payload,
             CgkaOperation::Update { .. }
@@ -667,6 +677,9 @@ pub enum NewAppSecretError<K: ShareSecretStore> {
 
     #[error("ECDH error: {0}")]
     EcdhError(<K::SecretKey as AsyncSecretKey>::EcdhError),
+
+    #[error(transparent)]
+    DecryptSecretError(#[from] DecryptSecretError<K>),
 }
 
 #[derive(Error, Debug)]
@@ -679,6 +692,9 @@ pub enum UpdateLeafError<K: ShareSecretStore> {
 
     #[error("Error while trying to import key into the secret key store: {0}")]
     ImportKeyError(K::ImportKeyError),
+
+    #[error(transparent)]
+    DecryptSecretError(#[from] DecryptSecretError<K>),
 }
 
 #[derive(Error, Debug)]
@@ -688,6 +704,9 @@ pub enum PcsKeyFromHashesError<K: ShareSecretStore> {
 
     #[error("Error while trying to access secret key store: {0}")]
     GetSecretError(K::GetSecretError),
+
+    #[error(transparent)]
+    DecryptSecretError(#[from] DecryptSecretError<K>),
 }
 
 #[derive(Error)]
