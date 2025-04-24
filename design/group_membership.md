@@ -72,7 +72,7 @@ flowchart TB
     subgraph StatefulAgent[Stateful Agent]
         direction TB
 
-        _groupPK["Group Root (Public Key)"]
+        _groupPK["Group Root<br>(Public Key)"]
 
         subgraph membership[Group Membership]
             rootAddsAlice[Group Root<br>-------------<br>Add Alice] --> groupRoot[Group Root<br>----------------------<br>Self Certifying Init]
@@ -97,7 +97,7 @@ flowchart TB
     subgraph DocumentAgent[Document Agent]
         direction TB
 
-        _docPK["Document Root (Public Key)"]
+        _docPK["Document Root<br>(Public Key)"]
 
         subgraph docGroup[Document Membership]
             docRootAddsSingleton["Doc Root<br>--------------------<br>Add Singleton PK"] --> docRoot[Document Root<br>----------------------<br>Self Certifying Init]
@@ -126,7 +126,7 @@ flowchart TB
     subgraph DocumentAgent[Document Agent]
         direction TB
 
-        _docPK["Document Root (Public Key)"]
+        _docPK["Document Root<br>(Public Key)"]
 
         subgraph docGroup[Document Membership]
             docRootAddsSingleton["Doc Root<br>--------------------<br>Add Singleton PK"] --> docRoot[Document Root<br>----------------------<br>Self Certifying Init]
@@ -155,7 +155,7 @@ In addition to content and authority operations depending on each other inside a
 ``` mermaid
 flowchart
     subgraph DocumentAgent[Document A Agent]
-        _docPK["Document A Root (Public Key)"]
+        _docPK["Document A Root<br>(Public Key)"]
 
         subgraph docAGroup[Document A Membership]
             docRoot
@@ -189,7 +189,7 @@ flowchart
     InitMap -.->|self-certified by| docRoot -.->|self-certified by| _docPK
 
     subgraph DocumentAgent2[Document B Agent]
-        _docBPK["Document B Root (Public Key)"]
+        _docBPK["Document B Root<br>(Public Key)"]
 
         subgraph docBGroup[Document B Membership]
         
