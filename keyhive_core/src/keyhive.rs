@@ -19,7 +19,7 @@ use crate::{
     event::{static_event::StaticEvent, Event},
     listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
     principal::{
-        active::Active,
+        active::{Active, ExpandPrekeyError, GenerateActiveError, RotatePrekeyError},
         agent::{id::AgentId, Agent},
         document::{
             id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError,
@@ -144,17 +144,12 @@ impl<
         share_secret_store: K,
         ciphertext_store: C,
         event_listener: L,
-        mut csprng: R,
-    ) -> Result<Self, SigningError> {
+        csprng: R,
+    ) -> Result<Self, GenerateActiveError<K>> {
         Ok(Self {
             active: Rc::new(RefCell::new(
-                Active::generate(
-                    signer,
-                    share_secret_store.clone(),
-                    event_listener.clone(),
-                    &mut csprng,
-                )
-                .await?,
+                Active::generate(signer, share_secret_store.clone(), event_listener.clone())
+                    .await?,
             )),
             individuals: HashMap::from_iter([(
                 Public.id().into(),
@@ -272,13 +267,8 @@ impl<
 
     #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(skip(self), fields(khid = %self.id()))]
-    pub async fn contact_card(&mut self) -> Result<ContactCard, SigningError> {
-        let rot_key_op = self
-            .active
-            .borrow_mut()
-            .generate_private_prekey(&mut self.csprng)
-            .await?;
-
+    pub async fn contact_card(&mut self) -> Result<ContactCard, RotatePrekeyError<K>> {
+        let rot_key_op = self.active.borrow_mut().generate_private_prekey().await?;
         Ok(ContactCard(KeyOp::Rotate(rot_key_op)))
     }
 
@@ -305,17 +295,14 @@ impl<
     pub async fn rotate_prekey(
         &mut self,
         prekey: ShareKey,
-    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
-        self.active
-            .borrow_mut()
-            .rotate_prekey(prekey, &mut self.csprng)
-            .await
+    ) -> Result<Rc<Signed<RotateKeyOp>>, RotatePrekeyError<K>> {
+        self.active.borrow_mut().rotate_prekey(prekey).await
     }
 
     #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(skip(self), fields(khid = %self.id()))]
-    pub async fn expand_prekeys(&mut self) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
-        self.active.borrow_mut().expand_prekeys::<R>().await
+    pub async fn expand_prekeys(&mut self) -> Result<Rc<Signed<AddKeyOp>>, ExpandPrekeyError<K>> {
+        self.active.borrow_mut().expand_prekeys().await
     }
 
     #[instrument(skip(self), fields(khid = %self.id()))]

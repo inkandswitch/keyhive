@@ -14,7 +14,7 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::{
-        share_key::{AsyncSecretKey, ShareKey, ShareSecretKey, ShareSecretStore},
+        share_key::{AsyncSecretKey, ShareKey, ShareSecretStore},
         signed::{Signed, SigningError},
         signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
@@ -71,15 +71,16 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: PrekeyListener> Acti
     ///
     /// * `signer` - The signing key of the active agent.
     /// * `listener` - The listener for changes to this agent's prekeys.
-    /// * `csprng` - The cryptographically secure random number generator.
-    pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
+    pub async fn generate(
         signer: S,
         mut secret_store: K,
         listener: L,
-        csprng: &mut R,
-    ) -> Result<Self, SigningError> {
-        let init_sk = ShareSecretKey::generate(csprng);
-        let init_pk = init_sk.share_key();
+    ) -> Result<Self, GenerateActiveError<K>> {
+        let init_sk = secret_store
+            .generate_share_secret_key()
+            .await
+            .map_err(GenerateActiveError::GenerateSecretKeyError)?;
+        let init_pk = init_sk.to_share_key();
         let init_op = Rc::new(
             signer
                 .try_sign_async(AddKeyOp { share_key: init_pk })
@@ -93,7 +94,8 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: PrekeyListener> Acti
             let sk = secret_store
                 .generate_share_secret_key()
                 .await
-                .expect("FIXME");
+                .map_err(GenerateActiveError::GenerateSecretKeyError)?;
+
             local_store.push(sk);
         }
 
@@ -147,13 +149,12 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: PrekeyListener> Acti
     }
 
     /// Create a [`ShareKey`] that is not broadcast via the prekey state.
-    pub async fn generate_private_prekey<R: rand::CryptoRng + rand::RngCore>(
+    pub async fn generate_private_prekey(
         &mut self,
-        csprng: &mut R,
-    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
+    ) -> Result<Rc<Signed<RotateKeyOp>>, RotatePrekeyError<K>> {
         let share_key = self.individual.pick_prekey(DocumentId(self.id().into())); // Hack
-        let contact_key = self.rotate_prekey(*share_key, csprng).await?;
-        self.rotate_prekey(contact_key.payload.new, csprng).await?;
+        let contact_key = self.rotate_prekey(*share_key).await?;
+        self.rotate_prekey(contact_key.payload.new).await?;
 
         Ok(contact_key)
     }
@@ -164,13 +165,16 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: PrekeyListener> Acti
     }
 
     /// Replace a particular prekey with a new one.
-    pub async fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
+    pub async fn rotate_prekey(
         &mut self,
         old_prekey: ShareKey,
-        csprng: &mut R,
-    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
-        let new_secret = ShareSecretKey::generate(csprng);
-        let new_public = new_secret.share_key();
+    ) -> Result<Rc<Signed<RotateKeyOp>>, RotatePrekeyError<K>> {
+        let new_secret = self
+            .secret_store
+            .generate_share_secret_key()
+            .await
+            .map_err(RotatePrekeyError::GenerateShareSecretKeyError)?;
+        let new_public = new_secret.to_share_key();
 
         let rot_op = Rc::new(
             self.try_sign_async(RotateKeyOp {
@@ -179,11 +183,6 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: PrekeyListener> Acti
             })
             .await?,
         );
-
-        self.secret_store
-            .import_secret_key(new_secret)
-            .await
-            .expect("FIXME");
 
         self.individual
             .prekey_state
@@ -198,14 +197,13 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: PrekeyListener> Acti
     }
 
     /// Add a new prekey, expanding the number of currently available prekeys.
-    pub async fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
-        &mut self,
-    ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
+    pub async fn expand_prekeys(&mut self) -> Result<Rc<Signed<AddKeyOp>>, ExpandPrekeyError<K>> {
         let new_secret = self
             .secret_store
             .generate_share_secret_key()
             .await
-            .expect("FIXME");
+            .map_err(ExpandPrekeyError::GenerateShareSecretKeyError)?;
+
         let new_public = new_secret.to_share_key();
 
         let op = Rc::new(
@@ -310,6 +308,15 @@ impl<S: AsyncSigner + Clone, K: ShareSecretStore, T: ContentRef, L: PrekeyListen
     }
 }
 
+#[derive(Debug, Error)]
+pub enum GenerateActiveError<K: ShareSecretStore> {
+    #[error(transparent)]
+    SigningError(#[from] SigningError),
+
+    #[error("Failed to generate a new share secret key: {0}")]
+    GenerateSecretKeyError(K::GenerateSecretError),
+}
+
 /// Errors when sharing encrypted content.
 #[derive(Debug, Error)]
 pub enum ShareError {
@@ -344,6 +351,24 @@ pub enum ActiveDelegationError {
     /// Invalid delegation.
     #[error(transparent)]
     DelegationError(#[from] DelegationError),
+}
+
+#[derive(Debug, Error)]
+pub enum RotatePrekeyError<K: ShareSecretStore> {
+    #[error(transparent)]
+    SigningError(#[from] SigningError),
+
+    #[error("Failed to generate a new share secret key: {0}")]
+    GenerateShareSecretKeyError(K::GenerateSecretError),
+}
+
+#[derive(Debug, Error)]
+pub enum ExpandPrekeyError<K: ShareSecretStore> {
+    #[error(transparent)]
+    SigningError(#[from] SigningError),
+
+    #[error("Failed to generate a new share secret key: {0}")]
+    GenerateShareSecretKeyError(K::GenerateSecretError),
 }
 
 #[cfg(test)]
