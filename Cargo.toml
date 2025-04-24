@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "beelay/beelay",
     "beelay/beelay-core",
     "beelay/beelay-wasm",
     "keyhive_core",

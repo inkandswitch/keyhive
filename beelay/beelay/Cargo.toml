@@ -1,0 +1,16 @@
+[package]
+name = "beelay"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+beelay-core = { path = "../beelay-core" }
+keyhive_core = { path = "../../keyhive_core" }
+ed25519-dalek.workspace = true
+rand.workspace = true
+tokio = { version = "1.44.2", features = ["full"] }
+futures.workspace = true
