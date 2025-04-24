@@ -10,6 +10,7 @@ use super::{
 use crate::{cgka::operation::CgkaOperation, content::reference::ContentRef};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
+use thiserror::Error;
 use tracing::instrument;
 
 /// The public information for an encrypted content ciphertext.
@@ -98,13 +99,16 @@ impl<T> EncryptedSecret<T> {
     pub async fn try_encrypter_decrypt<Sk: AsyncSecretKey>(
         &self,
         encrypter_secret_key: &Sk,
-    ) -> Result<Vec<u8>, chacha20poly1305::Error> {
+    ) -> Result<Vec<u8>, TryDecryptError<Sk>> {
         let mut buf: Vec<u8> = self.ciphertext.clone();
         let key = encrypter_secret_key
             .derive_symmetric_key(self.paired_pk)
             .await
-            .expect("FIXME");
-        key.try_decrypt(self.nonce, &mut buf)?;
+            .map_err(TryDecryptError::EcdhError)?;
+
+        key.try_decrypt(self.nonce, &mut buf)
+            .map_err(TryDecryptError::DecryptionError)?;
+
         Ok(buf)
     }
 }
@@ -128,4 +132,13 @@ impl<T: std::hash::Hash, Cr: ContentRef> std::hash::Hash for EncryptedContent<T,
         content_ref.hash(state);
         pred_refs.hash(state);
     }
+}
+
+#[derive(Debug, Error)]
+pub enum TryDecryptError<Sk: AsyncSecretKey> {
+    #[error("Failed to decrypt the ciphertext: {0}")]
+    DecryptionError(chacha20poly1305::Error),
+
+    #[error("Failed to derive the symmetric key: {0}")]
+    EcdhError(Sk::EcdhError),
 }

@@ -401,7 +401,7 @@ impl<
         signer: &S,
         csprng: &mut R,
     ) -> Result<Signed<CgkaOperation>, PcsUpdateErrorError<K>> {
-        let new_share_secret_key = ShareSecretKey::generate(csprng);
+        let new_share_secret_key = ShareSecretKey::generate(csprng); // FIXME use the keystore
         let new_share_key = new_share_secret_key.share_key();
         let (_, op) = self
             .cgka
