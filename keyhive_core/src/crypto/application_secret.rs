@@ -95,24 +95,24 @@ impl<T: AsyncSecretKey + Clone> PcsKey<T> {
         content_ref: &Cr,
         pred_refs: &Digest<Vec<Cr>>,
         pcs_update_op_hash: &Digest<Signed<CgkaOperation>>,
-    ) -> ApplicationSecret<Cr> {
+    ) -> Result<ApplicationSecret<Cr>, T::EcdhError> {
         let pcs_hash = Digest::hash(&self.0.to_share_key());
         let display_ref = Digest::hash(&content_ref);
         let mut app_secret_context =
             format!("epoch:{pcs_hash}/pred:{pred_refs}/content:{display_ref}").into_bytes();
         let local_pk: ShareKey = x25519_dalek::PublicKey::from(doc_id.to_bytes()).into();
-        let mut key_material = self.0.derive_bytes(local_pk).await.expect("FIXME").to_vec();
+        let mut key_material = self.0.derive_bytes(local_pk).await?.to_vec();
         key_material.append(&mut app_secret_context);
         let app_secret_bytes = blake3::derive_key(STATIC_CONTEXT, key_material.as_slice());
         let symmetric_key = SymmetricKey::derive_from_bytes(&app_secret_bytes);
-        ApplicationSecret::new(
+        Ok(ApplicationSecret::new(
             symmetric_key,
             self.0.to_share_key(),
             *pcs_update_op_hash,
             *nonce,
             content_ref.clone(),
             *pred_refs,
-        )
+        ))
     }
 
     pub(crate) async fn to_symmetric_key(

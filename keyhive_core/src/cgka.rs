@@ -201,7 +201,8 @@ impl<K: ShareSecretStore> Cgka<K> {
                         .get(&pcs_pk)
                         .expect("PcsKey hash should be present becuase we derived it above"),
                 )
-                .await,
+                .await
+                .map_err(NewAppSecretError::EcdhError)?,
             op,
         ))
     }
@@ -229,7 +230,8 @@ impl<K: ShareSecretStore> Cgka<K> {
                 &encrypted.pred_refs,
                 &encrypted.pcs_update_op_hash,
             )
-            .await;
+            .await
+            .map_err(PcsKeyFromHashesError::EcdhError)?;
         Ok(app_secret.key())
     }
 
@@ -730,6 +732,9 @@ pub enum PcsKeyFromHashesError<K: ShareSecretStore> {
 
     #[error(transparent)]
     DecryptTreeSecretError(#[from] DecryptTreeSecretError<K>),
+
+    #[error("Error while trying to derive a PcsKey: {0}")]
+    EcdhError(<K::SecretKey as AsyncSecretKey>::EcdhError),
 }
 
 #[derive(Error)]
