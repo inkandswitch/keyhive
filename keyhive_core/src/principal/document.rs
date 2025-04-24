@@ -15,7 +15,7 @@ use crate::{
         digest::Digest,
         encrypted::EncryptedContent,
         envelope::Envelope,
-        share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
+        share_key::{AsyncSecretKey, ShareKey},
         signed::{Signed, SigningError},
         signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
         symmetric_key::SymmetricKey,
@@ -177,18 +177,17 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         let group = group_result.await?;
         let owner_id = IndividualId(group_vk.into());
         let doc_id = DocumentId(group.id());
-        let owner_share_secret_key = ShareSecretKey::generate(csprng);
-        let owner_share_key = owner_share_secret_key.share_key();
+        let owner_share_secret_key = owner_sks
+            .generate_share_secret_key()
+            .await
+            .map_err(GenerateDocError::GenerateSecretError)?;
+        let owner_share_key = owner_share_secret_key.to_share_key();
         let group_members = group.pick_individual_prekeys(doc_id);
         let other_members: Vec<(IndividualId, ShareKey)> = group_members
             .iter()
             .filter(|(id, _sk)| **id != owner_id)
             .map(|(id, pk)| (*id, *pk))
             .collect();
-        owner_sks
-            .import_secret_key(owner_share_secret_key)
-            .await
-            .map_err(GenerateDocError::ImportKeyError)?;
         let mut cgka = Cgka::new(doc_id, owner_id, owner_share_key, owner_sks.clone(), signer)
             .await?
             .with_new_owner(owner_id)?;
@@ -197,9 +196,7 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         if let Some(others) = NonEmpty::from_vec(other_members) {
             ops.extend(cgka.add_multiple(others, signer).await?.iter().cloned());
         }
-        let (_pcs_key, update_op) = cgka
-            .update(owner_share_key, owner_share_secret_key, signer, csprng)
-            .await?;
+        let (_pcs_key, update_op) = cgka.update(&owner_share_secret_key, signer, csprng).await?;
 
         ops.push(update_op);
         for op in ops {
@@ -398,11 +395,15 @@ impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S
         signer: &S,
         csprng: &mut R,
     ) -> Result<Signed<CgkaOperation>, PcsUpdateErrorError<K>> {
-        let new_share_secret_key = ShareSecretKey::generate(csprng); // FIXME use the keystore
-        let new_share_key = new_share_secret_key.share_key();
+        let new_share_secret_key = self
+            .cgka
+            .store
+            .generate_share_secret_key()
+            .await
+            .map_err(PcsUpdateErrorError::GenerateSecretError)?;
         let (_, op) = self
             .cgka
-            .update(new_share_key, new_share_secret_key, signer, csprng)
+            .update(&new_share_secret_key, signer, csprng)
             .await?;
         Ok(op)
     }
@@ -686,6 +687,9 @@ pub enum PcsUpdateErrorError<K: ShareSecretStore> {
 
     #[error(transparent)]
     UpdateLeafError(#[from] UpdateLeafError<K>),
+
+    #[error("Generate share secret key error: {0}")]
+    GenerateSecretError(K::GenerateSecretError),
 }
 
 #[derive(Debug, Error)]
@@ -726,18 +730,11 @@ pub enum GenerateDocError<K: ShareSecretStore> {
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
 
-    #[error("Import key error: {0}")]
-    ImportKeyError(K::ImportKeyError),
-}
+    #[error(transparent)]
+    UpdateLeafError(#[from] UpdateLeafError<K>),
 
-impl<K: ShareSecretStore> From<UpdateLeafError<K>> for GenerateDocError<K> {
-    fn from(e: UpdateLeafError<K>) -> Self {
-        match e {
-            UpdateLeafError::SigningError(e) => GenerateDocError::SigningError(e),
-            UpdateLeafError::CgkaError(e) => GenerateDocError::CgkaError(e),
-            UpdateLeafError::ImportKeyError(e) => GenerateDocError::ImportKeyError(e),
-        }
-    }
+    #[error("Generate share secret key error: {0}")]
+    GenerateSecretError(K::GenerateSecretError),
 }
 
 #[derive(Debug, Error)]

@@ -15,7 +15,7 @@ use crate::{
         application_secret::{ApplicationSecret, PcsKey},
         digest::Digest,
         encrypted::EncryptedContent,
-        share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
+        share_key::{AsyncSecretKey, ShareKey},
         signed::{Signed, SigningError},
         signer::async_signer::AsyncSigner,
         siv::Siv,
@@ -167,11 +167,12 @@ impl<K: ShareSecretStore> Cgka<K> {
     ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), NewAppSecretError<K>> {
         let mut op = None;
         let current_pcs_key = if !self.has_pcs_key() {
-            let new_share_secret_key = ShareSecretKey::generate(csprng);
-            let new_share_key = new_share_secret_key.share_key();
-            let (pcs_key, update_op) = self
-                .update(new_share_key, new_share_secret_key, signer, csprng)
-                .await?;
+            let new_share_secret_key = self
+                .store
+                .generate_share_secret_key()
+                .await
+                .map_err(NewAppSecretError::GenerateSecretError)?;
+            let (pcs_key, update_op) = self.update(&new_share_secret_key, signer, csprng).await?;
             self.insert_pcs_key(pcs_key.clone(), Digest::hash(&update_op));
             op = Some(update_op);
             pcs_key
@@ -316,21 +317,21 @@ impl<K: ShareSecretStore> Cgka<K> {
     #[instrument(skip_all, fields(doc_id, new_pk))]
     pub async fn update<A: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
-        new_pk: ShareKey,
-        new_sk: ShareSecretKey,
+        new_sk: &K::SecretKey, // Proof that there's a storeed SK
         signer: &A,
         csprng: &mut R,
     ) -> Result<(PcsKey<K::SecretKey>, Signed<CgkaOperation>), UpdateLeafError<K>> {
         if self.should_replay() {
             self.replay_ops_graph().await?;
         }
-        self.store
-            .import_secret_key(new_sk)
-            .await
-            .map_err(UpdateLeafError::ImportKeyError)?;
         let maybe_key_and_path = self
             .tree
-            .encrypt_path(self.owner_id, new_pk, &mut self.store, csprng)
+            .encrypt_path(
+                self.owner_id,
+                new_sk.to_share_key(),
+                &mut self.store,
+                csprng,
+            )
             .await?;
         if let Some((pcs_key, new_path)) = maybe_key_and_path {
             let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
@@ -660,6 +661,9 @@ pub enum NewAppSecretError<K: ShareSecretStore> {
 
     #[error(transparent)]
     UpdateLeafError(#[from] UpdateLeafError<K>),
+
+    #[error("Error while trying to access secret key store: {0}")]
+    GenerateSecretError(K::GenerateSecretError),
 
     #[error("ECDH error: {0}")]
     EcdhError(<K::SecretKey as AsyncSecretKey>::EcdhError),
