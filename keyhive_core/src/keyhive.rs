@@ -4,7 +4,7 @@ use crate::{
     ability::Ability,
     access::Access,
     archive::Archive,
-    cgka::{error::CgkaError, operation::CgkaOperation},
+    cgka::{error::CgkaError, operation::CgkaOperation, TryCgkaFromArchiveError},
     contact_card::ContactCard,
     content::reference::ContentRef,
     crypto::{
@@ -23,8 +23,8 @@ use crate::{
         agent::{id::AgentId, Agent},
         document::{
             id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError,
-            DocCausalDecryptionError, DocFromArchiveError, DocFromGroupError, Document,
-            EncryptError, EncryptedContentWithUpdate, GenerateDocError, RevokeMemberUpdate,
+            DocCausalDecryptionError, DocFromGroupError, Document, EncryptedContentWithUpdate,
+            GenerateDocError, PcsUpdateErrorError, RevokeMemberUpdate, TryEncryptError,
         },
         group::{
             delegation::{Delegation, StaticDelegation},
@@ -452,7 +452,7 @@ impl<
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
-    ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError> {
+    ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError<K>> {
         let result = doc
             .borrow_mut()
             .try_encrypt_content(
@@ -497,7 +497,7 @@ impl<
     pub async fn force_pcs_update(
         &mut self,
         doc: Rc<RefCell<Document<S, K, T, L>>>,
-    ) -> Result<Signed<CgkaOperation>, EncryptError> {
+    ) -> Result<Signed<CgkaOperation>, PcsUpdateErrorError<K>> {
         let signer = self.active.borrow().signer.clone();
         doc.borrow_mut().pcs_update(&signer, &mut self.csprng).await
     }
@@ -1824,7 +1824,7 @@ pub enum TryFromArchiveError<
     MissingAgent(Box<Identifier>),
 
     #[error(transparent)]
-    DocFromArchiveError(#[from] DocFromArchiveError<K>),
+    DocFromArchiveError(#[from] TryCgkaFromArchiveError<K>),
 }
 
 #[derive(Debug, Error)]
@@ -1854,9 +1854,9 @@ impl ReceiveCgkaOpError {
 }
 
 #[derive(Debug, Error)]
-pub enum EncryptContentError {
+pub enum EncryptContentError<K: ShareSecretStore> {
     #[error(transparent)]
-    EncryptError(#[from] EncryptError),
+    EncryptError(#[from] TryEncryptError<K>),
 
     #[error("Error signing Cgka op: {0}")]
     SignCgkaOpError(SigningError),

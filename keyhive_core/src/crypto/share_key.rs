@@ -179,7 +179,7 @@ impl fmt::Debug for ShareSecretKey {
 }
 
 pub trait AsyncSecretKey {
-    type EcdhError: Debug;
+    type EcdhError: Debug + Display;
 
     fn to_share_key(&self) -> ShareKey;
 

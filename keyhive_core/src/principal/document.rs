@@ -8,7 +8,7 @@ use crate::{
     cgka::{
         error::CgkaError,
         operation::{CgkaEpoch, CgkaOperation},
-        Cgka,
+        Cgka, NewAppSecretError, TryCgkaFromArchiveError, UpdateLeafError,
     },
     content::reference::ContentRef,
     crypto::{
@@ -400,14 +400,13 @@ impl<
         &mut self,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<Signed<CgkaOperation>, EncryptError> {
+    ) -> Result<Signed<CgkaOperation>, PcsUpdateErrorError<K>> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
         let (_, op) = self
             .cgka
             .update(new_share_key, new_share_secret_key, signer, csprng)
-            .await
-            .map_err(EncryptError::UnableToPcsUpdate)?;
+            .await?;
         Ok(op)
     }
 
@@ -419,12 +418,11 @@ impl<
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<EncryptedContentWithUpdate<T>, EncryptError> {
+    ) -> Result<EncryptedContentWithUpdate<T>, TryEncryptError<K>> {
         let (app_secret, maybe_update_op) = self
             .cgka
             .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
-            .await
-            .map_err(EncryptError::FailedToMakeAppSecret)?;
+            .await?;
 
         self.known_decryption_keys
             .insert(content_ref.clone(), app_secret.key());
@@ -432,7 +430,7 @@ impl<
         Ok(EncryptedContentWithUpdate {
             encrypted_content: app_secret
                 .try_encrypt(content)
-                .map_err(EncryptError::EncryptionFailed)?,
+                .map_err(TryEncryptError::EncryptionFailed)?,
             update_op: maybe_update_op,
         })
     }
@@ -526,7 +524,7 @@ impl<
         revocations: RevocationStore<S, K, T, L>,
         share_secret_store: K,
         listener: L,
-    ) -> Result<Self, DocFromArchiveError<K>> {
+    ) -> Result<Self, TryCgkaFromArchiveError<K>> {
         Ok(Document {
             group: Group::<S, K, T, L>::dummy_from_archive(
                 archive.group,
@@ -537,9 +535,7 @@ impl<
             content_heads: archive.content_heads,
             content_state: archive.content_state,
             known_decryption_keys: HashMap::new(),
-            cgka: Cgka::try_from_archive(&archive.cgka, share_secret_store)
-                .await
-                .map_err(DocFromArchiveError::GetSecretError)?,
+            cgka: Cgka::try_from_archive(&archive.cgka, share_secret_store).await?,
         })
     }
 }
@@ -638,20 +634,6 @@ pub struct AddMemberUpdate<
     pub cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
-#[derive(Clone, PartialEq, Eq, Error)]
-pub enum DocFromArchiveError<K: ShareSecretStore> {
-    #[error("Unable to get sceret from store: {0}")]
-    GetSecretError(K::GetSecretError),
-}
-
-impl<K: ShareSecretStore> Debug for DocFromArchiveError<K> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DocFromArchiveError::GetSecretError(e) => e.fmt(f),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct RevokeMemberUpdate<
     S: AsyncSigner,
@@ -705,15 +687,21 @@ pub enum AddMemberError {
 }
 
 #[derive(Debug, Error)]
-pub enum EncryptError {
+pub enum PcsUpdateErrorError<K: ShareSecretStore> {
     #[error("Encryption failed: {0}")]
     EncryptionFailed(chacha20poly1305::Error),
 
-    #[error("Unable to PCS update: {0}")]
-    UnableToPcsUpdate(CgkaError),
+    #[error(transparent)]
+    UpdateLeafError(#[from] UpdateLeafError<K>),
+}
 
-    #[error("Failed to make app secret: {0}")]
-    FailedToMakeAppSecret(CgkaError),
+#[derive(Debug, Error)]
+pub enum TryEncryptError<K: ShareSecretStore> {
+    #[error("Encryption failed: {0}")]
+    EncryptionFailed(chacha20poly1305::Error),
+
+    #[error(transparent)]
+    NewAppSecretError(#[from] NewAppSecretError<K>),
 }
 
 #[derive(Error)]
@@ -747,6 +735,16 @@ pub enum GenerateDocError<K: ShareSecretStore> {
 
     #[error("Import key error: {0}")]
     ImportKeyError(K::ImportKeyError),
+}
+
+impl<K: ShareSecretStore> From<UpdateLeafError<K>> for GenerateDocError<K> {
+    fn from(e: UpdateLeafError<K>) -> Self {
+        match e {
+            UpdateLeafError::SigningError(e) => GenerateDocError::SigningError(e),
+            UpdateLeafError::CgkaError(e) => GenerateDocError::CgkaError(e),
+            UpdateLeafError::ImportKeyError(e) => GenerateDocError::ImportKeyError(e),
+        }
+    }
 }
 
 #[derive(Debug, Error)]

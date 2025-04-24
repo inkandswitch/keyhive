@@ -16,12 +16,13 @@ use crate::{
         digest::Digest,
         encrypted::EncryptedContent,
         share_key::{AsyncSecretKey, ShareKey, ShareSecretKey, ShareSecretStore},
-        signed::Signed,
+        signed::{Signed, SigningError},
         signer::async_signer::AsyncSigner,
         siv::Siv,
         symmetric_key::SymmetricKey,
     },
     principal::{document::id::DocumentId, individual::id::IndividualId},
+    transact::{fork::Fork, merge::Merge},
 };
 use archive::CgkaArchive;
 use beekem::BeeKem;
@@ -37,6 +38,7 @@ use std::{
     hash::{Hash, Hasher},
     rc::Rc,
 };
+use thiserror::Error;
 use tracing::{info, instrument};
 
 /// Exposes CGKA (Continuous Group Key Agreement) operations like deriving
@@ -161,7 +163,7 @@ impl<K: ShareSecretStore + Clone> Cgka<K> {
         pred_refs: &Vec<T>,
         signer: &A,
         csprng: &mut R,
-    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
+    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), NewAppSecretError<K>> {
         let mut op = None;
         let current_pcs_key = if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
@@ -180,7 +182,7 @@ impl<K: ShareSecretStore + Clone> Cgka<K> {
             &current_pcs_key
                 .to_symmetric_key(self.doc_id)
                 .await
-                .expect("FIXME"),
+                .map_err(NewAppSecretError::EcdhError)?,
             content,
             self.doc_id,
         )
@@ -209,7 +211,7 @@ impl<K: ShareSecretStore + Clone> Cgka<K> {
     pub async fn decryption_key_for<T, Cr: ContentRef>(
         &mut self,
         encrypted: &EncryptedContent<T, Cr>,
-    ) -> Result<SymmetricKey, CgkaError> {
+    ) -> Result<SymmetricKey, PcsKeyFromHashesError<K>> {
         let pcs_key = self
             .pcs_key_from_hashes(encrypted.pcs_pubkey, &encrypted.pcs_update_op_hash)
             .await?;
@@ -317,11 +319,14 @@ impl<K: ShareSecretStore + Clone> Cgka<K> {
         new_sk: ShareSecretKey,
         signer: &A,
         csprng: &mut R,
-    ) -> Result<(PcsKey<K::SecretKey>, Signed<CgkaOperation>), CgkaError> {
+    ) -> Result<(PcsKey<K::SecretKey>, Signed<CgkaOperation>), UpdateLeafError<K>> {
         if self.should_replay() {
             self.replay_ops_graph().await?;
         }
-        self.store.import_secret_key(new_sk).await.expect("FIXME");
+        self.store
+            .import_secret_key(new_sk)
+            .await
+            .map_err(UpdateLeafError::ImportKeyError)?;
         let maybe_key_and_path = self
             .tree
             .encrypt_path(self.owner_id, new_pk, &mut self.store, csprng)
@@ -340,7 +345,7 @@ impl<K: ShareSecretStore + Clone> Cgka<K> {
             self.insert_pcs_key(pcs_key.clone(), Digest::hash(&signed_op));
             Ok((pcs_key, signed_op))
         } else {
-            Err(CgkaError::IdentifierNotFound)
+            Err(CgkaError::IdentifierNotFound)?
         }
     }
 
@@ -483,8 +488,13 @@ impl<K: ShareSecretStore + Clone> Cgka<K> {
         &mut self,
         pcs_pubkey: ShareKey,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<PcsKey<K::SecretKey>, CgkaError> {
-        if let Some(pcs_key) = self.store.get_secret_key(&pcs_pubkey).await.expect("FIXME") {
+    ) -> Result<PcsKey<K::SecretKey>, PcsKeyFromHashesError<K>> {
+        if let Some(pcs_key) = self
+            .store
+            .get_secret_key(&pcs_pubkey)
+            .await
+            .map_err(PcsKeyFromHashesError::GetSecretError)?
+        {
             Ok(PcsKey(pcs_key))
         } else {
             if self.has_pcs_key() {
@@ -493,7 +503,7 @@ impl<K: ShareSecretStore + Clone> Cgka<K> {
                     return Ok(pcs_key);
                 }
             }
-            self.derive_pcs_key_for_op(update_op_hash).await
+            Ok(self.derive_pcs_key_for_op(update_op_hash).await?)
         }
     }
 
@@ -616,10 +626,14 @@ impl<K: ShareSecretStore + Clone> Cgka<K> {
     pub async fn try_from_archive(
         archive: &CgkaArchive,
         secret_store: K,
-    ) -> Result<Self, K::GetSecretError> {
+    ) -> Result<Self, TryCgkaFromArchiveError<K>> {
         let mut pcs_keys = HashMap::new();
         for k in archive.pcs_keys.iter() {
-            let v = secret_store.get_secret_key(k).await?.expect("FIXME");
+            let v = secret_store
+                .get_secret_key(k)
+                .await
+                .map_err(TryCgkaFromArchiveError::GetSecretError)?
+                .ok_or(TryCgkaFromArchiveError::CannotFindSecret(*k))?;
             pcs_keys.insert(*k, PcsKey(v));
         }
 
@@ -638,24 +652,73 @@ impl<K: ShareSecretStore + Clone> Cgka<K> {
     }
 }
 
-// impl Fork for Cgka {
-//     type Forked = Self;
-//
-//     fn fork(&self) -> Self::Forked {
-//         self.clone()
-//     }
-// }
+#[derive(Error, Debug)]
+pub enum NewAppSecretError<K: ShareSecretStore> {
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
 
-// impl MergeAsync for Cgka {
-//     async fn merge_async(&mut self, fork: Self::AsyncForked) {
-//         self.owner_sks.merge(fork.owner_sks);
-//         self.ops_graph.merge(fork.ops_graph);
-//         self.pcs_keys.merge(fork.pcs_keys);
-//         self.replay_ops_graph()
-//             .await
-//             .expect("two valid graphs should always merge causal consistency");
-//     }
-// }
+    #[error(transparent)]
+    UpdateLeafError(#[from] UpdateLeafError<K>),
+
+    #[error("ECDH error: {0}")]
+    EcdhError(<K::SecretKey as AsyncSecretKey>::EcdhError),
+}
+
+#[derive(Error, Debug)]
+pub enum UpdateLeafError<K: ShareSecretStore> {
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
+
+    #[error(transparent)]
+    SigningError(#[from] SigningError),
+
+    #[error("Error while trying to import key into the secret key store: {0}")]
+    ImportKeyError(K::ImportKeyError),
+}
+
+#[derive(Error, Debug)]
+pub enum PcsKeyFromHashesError<K: ShareSecretStore> {
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
+
+    #[error("Error while trying to access secret key store: {0}")]
+    GetSecretError(K::GetSecretError),
+}
+
+#[derive(Error)]
+pub enum TryCgkaFromArchiveError<K: ShareSecretStore> {
+    #[error("Error while trying to access secret key store: {0}")]
+    GetSecretError(K::GetSecretError),
+
+    #[error("Secret key not found for public key: {0}")]
+    CannotFindSecret(ShareKey),
+}
+
+impl<K: ShareSecretStore> Debug for TryCgkaFromArchiveError<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TryCgkaFromArchiveError::GetSecretError(e) => e.fmt(f),
+            TryCgkaFromArchiveError::CannotFindSecret(k) => {
+                write!(f, "Cannot find secret for key: {k}")
+            }
+        }
+    }
+}
+
+impl<K: ShareSecretStore> Fork for Cgka<K> {
+    type Forked = Self;
+
+    fn fork(&self) -> Self::Forked {
+        self.clone()
+    }
+}
+
+impl<K: ShareSecretStore> Merge for Cgka<K> {
+    fn merge(&mut self, fork: Self::Forked) {
+        self.ops_graph.merge(fork.ops_graph);
+        self.pcs_keys.merge(fork.pcs_keys);
+    }
+}
 
 impl<K: ShareSecretStore + Clone> Debug for Cgka<K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

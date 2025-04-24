@@ -49,7 +49,6 @@ pub struct Active<
     #[derivative(Debug = "ignore")]
     pub(crate) signer: S,
 
-    // TODO generalize to use e.g. KMS for X25519 secret keys
     #[derivative(Debug = "ignore", Hash = "ignore", PartialEq = "ignore")]
     pub(crate) secret_store: K,
 
