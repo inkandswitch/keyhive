@@ -23,8 +23,8 @@ use crate::{
         agent::{id::AgentId, Agent},
         document::{
             id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError,
-            DocCausalDecryptionError, Document, EncryptError, EncryptedContentWithUpdate,
-            GenerateDocError, MissingIndividualError, RevokeMemberUpdate,
+            DocCausalDecryptionError, DocFromArchiveError, DocFromGroupError, Document,
+            EncryptError, EncryptedContentWithUpdate, GenerateDocError, RevokeMemberUpdate,
         },
         group::{
             delegation::{Delegation, StaticDelegation},
@@ -967,7 +967,13 @@ impl<
                 .get(&subject_id.into())
                 .and_then(|content_heads| NonEmpty::collect(content_heads.iter().cloned()))
             {
-                let doc = Document::from_group(group, &self.active.borrow(), content_heads)?;
+                let doc = Document::from_group(
+                    group,
+                    &self.active.borrow(),
+                    self.share_secret_store.clone(),
+                    content_heads,
+                )
+                .await?;
                 self.docs.insert(doc.doc_id(), Rc::new(RefCell::new(doc)));
             } else {
                 self.groups
@@ -1779,6 +1785,9 @@ pub enum ReceieveStaticDelegationError<
 
     #[error("Missing agent: {0}")]
     UnknownAgent(Identifier),
+
+    #[error(transparent)]
+    DocFromGroupError(#[from] DocFromGroupError<K>),
 }
 
 impl<S, K, T, L> ReceieveStaticDelegationError<S, K, T, L>
@@ -1796,12 +1805,13 @@ where
             Self::GroupReceiveError(_) => false,
             Self::UnknownAgent(_) => true,
             Self::VerificationError(_) => false,
+            Self::DocFromGroupError(_) => false,
         }
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Error)]
-#[derive_where(Debug)]
+#[derive(Error)]
+#[derive_where(Debug; T)]
 pub enum TryFromArchiveError<
     S: AsyncSigner,
     K: ShareSecretStore,
@@ -1825,6 +1835,9 @@ pub enum TryFromArchiveError<
 
     #[error("Missing agent: {0}")]
     MissingAgent(Box<Identifier>),
+
+    #[error(transparent)]
+    DocFromArchiveError(#[from] DocFromArchiveError<K>),
 }
 
 #[derive(Debug, Error)]
@@ -1850,14 +1863,6 @@ impl ReceiveCgkaOpError {
             Self::UnknownDocument(_) => false,
             Self::UnknownInvitePrekey(_) => false,
         }
-    }
-}
-
-impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
-    From<MissingIndividualError> for TryFromArchiveError<S, K, T, L>
-{
-    fn from(e: MissingIndividualError) -> Self {
-        TryFromArchiveError::MissingIndividual(e.0)
     }
 }
 

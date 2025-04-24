@@ -15,7 +15,7 @@ use crate::{
         digest::Digest,
         encrypted::EncryptedContent,
         envelope::Envelope,
-        share_key::{ShareKey, ShareSecretKey, ShareSecretStore},
+        share_key::{AsyncSecretKey, ShareKey, ShareSecretKey, ShareSecretStore},
         signed::{Signed, SigningError},
         signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
         symmetric_key::SymmetricKey,
@@ -69,7 +69,7 @@ pub struct Document<
     pub(crate) content_state: HashSet<T>,
 
     known_decryption_keys: HashMap<T, SymmetricKey>,
-    cgka: Option<Cgka<K>>,
+    pub(crate) cgka: Cgka<K>,
 }
 
 impl<
@@ -79,17 +79,29 @@ impl<
         L: MembershipListener<S, K, T>,
     > Document<S, K, T, L>
 {
-    // FIXME: We need a signing key for initializing Cgka and we need to share
-    // the init add op.
     // NOTE doesn't register into the top-level Keyhive context
-    #[instrument(skip(group, viewer), fields(group_id = %group.id(), viewer_id = %viewer.id()))]
-    pub fn from_group(
+    #[instrument(skip_all, fields(group_id = %group.id(), viewer_id = %viewer.id()))]
+    pub async fn from_group(
         group: Group<S, K, T, L>,
         viewer: &Active<S, K, T, L>,
+        mut share_secret_store: K,
         content_heads: NonEmpty<T>,
-    ) -> Result<Self, CgkaError> {
+    ) -> Result<Self, DocFromGroupError<K>> {
+        let doc_id = DocumentId(group.id());
+        let initial_secret_key = share_secret_store
+            .generate_share_secret_key()
+            .await
+            .map_err(DocFromGroupError::GenerateInitialKeyError)?;
+        let initial_pk = initial_secret_key.to_share_key();
         let mut doc = Document {
-            cgka: None,
+            cgka: Cgka::new(
+                doc_id,
+                viewer.id(),
+                initial_pk,
+                share_secret_store,
+                &viewer.signer,
+            )
+            .await?,
             group,
             content_heads: content_heads.iter().cloned().collect(),
             content_state: Default::default(),
@@ -109,20 +121,6 @@ impl<
 
     pub fn agent_id(&self) -> AgentId {
         self.doc_id().into()
-    }
-
-    pub fn cgka(&self) -> Result<&Cgka<K>, CgkaError> {
-        match &self.cgka {
-            Some(cgka) => Ok(cgka),
-            None => Err(CgkaError::NotInitialized),
-        }
-    }
-
-    pub fn cgka_mut(&mut self) -> Result<&mut Cgka<K>, CgkaError> {
-        match &mut self.cgka {
-            Some(cgka) => Ok(cgka),
-            None => Err(CgkaError::NotInitialized),
-        }
     }
 
     #[allow(clippy::type_complexity)]
@@ -216,7 +214,7 @@ impl<
             content_state: HashSet::new(),
             content_heads: initial_content_heads.iter().cloned().collect(),
             known_decryption_keys: HashMap::new(),
-            cgka: Some(cgka),
+            cgka,
         })
     }
 
@@ -276,7 +274,7 @@ impl<
 
         let mut acc = vec![];
         for (id, prekey) in prekeys.iter() {
-            if let Some(op) = self.cgka_mut()?.add(*id, *prekey, signer).await? {
+            if let Some(op) = self.cgka.add(*id, *prekey, signer).await? {
                 acc.push(op);
             }
         }
@@ -319,7 +317,7 @@ impl<
         }
 
         for id in ids_to_remove {
-            if let Some(op) = self.cgka_mut()?.remove(id, signer).await? {
+            if let Some(op) = self.cgka.remove(id, signer).await? {
                 ops.push(op);
             }
         }
@@ -336,7 +334,7 @@ impl<
         id: IndividualId,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        self.cgka_mut()?.remove(id, signer).await
+        self.cgka.remove(id, signer).await
     }
 
     pub fn get_agent_revocations(
@@ -367,30 +365,7 @@ impl<
     }
 
     pub async fn merge_cgka_op(&mut self, op: Rc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
-        match &mut self.cgka {
-            Some(cgka) => return cgka.merge_concurrent_operation(op).await,
-            None => match op.payload.clone() {
-                CgkaOperation::Add {
-                    added_id,
-                    pk,
-                    ref predecessors,
-                    ..
-                } => {
-                    if !predecessors.is_empty() {
-                        return Err(CgkaError::OutOfOrderOperation);
-                    }
-                    self.cgka = Some(Cgka::new_from_init_add(
-                        self.doc_id(),
-                        added_id,
-                        pk,
-                        (*op).clone(),
-                        self.cgka.clone().expect("FIXME").store, // FIXME
-                    )?)
-                }
-                _ => return Err(CgkaError::UnexpectedInitialOperation),
-            },
-        }
-        Ok(())
+        self.cgka.merge_concurrent_operation(op).await
     }
 
     #[instrument(skip(self), fields(doc_id = ?self.doc_id()))]
@@ -407,17 +382,17 @@ impl<
             return Err(CgkaError::UnexpectedInviteOperation);
         };
         if !self
-            .cgka()?
+            .cgka
             .contains_predecessors(&HashSet::from_iter(predecessors.iter().cloned()))
         {
             return Err(CgkaError::OutOfOrderOperation);
         }
-        self.cgka = Some(self.cgka()?.with_new_owner(added_id)?);
+        self.cgka = self.cgka.with_new_owner(added_id)?;
         self.merge_cgka_op(op).await
     }
 
     pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
-        self.cgka()?.ops()
+        self.cgka.ops()
     }
 
     #[instrument(skip_all, fields(doc_id = ?self.doc_id()))]
@@ -429,8 +404,7 @@ impl<
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
         let (_, op) = self
-            .cgka_mut()
-            .map_err(EncryptError::UnableToPcsUpdate)?
+            .cgka
             .update(new_share_key, new_share_secret_key, signer, csprng)
             .await
             .map_err(EncryptError::UnableToPcsUpdate)?;
@@ -447,8 +421,7 @@ impl<
         csprng: &mut R,
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptError> {
         let (app_secret, maybe_update_op) = self
-            .cgka_mut()
-            .map_err(EncryptError::FailedToMakeAppSecret)?
+            .cgka
             .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
             .await
             .map_err(EncryptError::FailedToMakeAppSecret)?;
@@ -470,8 +443,7 @@ impl<
         encrypted_content: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
         let decrypt_key = self
-            .cgka_mut()
-            .map_err(|_| DecryptError::KeyNotFound)?
+            .cgka
             .decryption_key_for(encrypted_content)
             .await
             .map_err(|_| DecryptError::KeyNotFound)?;
@@ -544,7 +516,7 @@ impl<
             group: self.group.into_archive(),
             content_heads: self.content_heads.clone(),
             content_state: self.content_state.clone(),
-            cgka: self.cgka.as_ref().expect("FIXME").into_archive(),
+            cgka: self.cgka.into_archive(),
         }
     }
 
@@ -554,7 +526,7 @@ impl<
         revocations: RevocationStore<S, K, T, L>,
         share_secret_store: K,
         listener: L,
-    ) -> Result<Self, MissingIndividualError> {
+    ) -> Result<Self, DocFromArchiveError<K>> {
         Ok(Document {
             group: Group::<S, K, T, L>::dummy_from_archive(
                 archive.group,
@@ -565,11 +537,9 @@ impl<
             content_heads: archive.content_heads,
             content_state: archive.content_state,
             known_decryption_keys: HashMap::new(),
-            cgka: Some(
-                Cgka::try_from_archive(&archive.cgka, share_secret_store)
-                    .await
-                    .expect("FIXME"),
-            ),
+            cgka: Cgka::try_from_archive(&archive.cgka, share_secret_store)
+                .await
+                .map_err(DocFromArchiveError::GetSecretError)?,
         })
     }
 }
@@ -668,9 +638,19 @@ pub struct AddMemberUpdate<
     pub cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("Missing individual: {0}")]
-pub struct MissingIndividualError(pub Box<IndividualId>);
+#[derive(Clone, PartialEq, Eq, Error)]
+pub enum DocFromArchiveError<K: ShareSecretStore> {
+    #[error("Unable to get sceret from store: {0}")]
+    GetSecretError(K::GetSecretError),
+}
+
+impl<K: ShareSecretStore> Debug for DocFromArchiveError<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DocFromArchiveError::GetSecretError(e) => e.fmt(f),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RevokeMemberUpdate<
@@ -734,6 +714,24 @@ pub enum EncryptError {
 
     #[error("Failed to make app secret: {0}")]
     FailedToMakeAppSecret(CgkaError),
+}
+
+#[derive(Error)]
+pub enum DocFromGroupError<K: ShareSecretStore> {
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
+
+    #[error("Generate initial key error: {0}")]
+    GenerateInitialKeyError(K::GenerateSecretError),
+}
+
+impl<K: ShareSecretStore> Debug for DocFromGroupError<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DocFromGroupError::CgkaError(e) => e.fmt(f),
+            DocFromGroupError::GenerateInitialKeyError(e) => e.fmt(f),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
