@@ -2,7 +2,7 @@
 
 ## Motivation
 
-A core goal of the keyhive/beelay project is to allow developers to write 
+A core goal of the keyhive/Beelay project is to allow developers to write 
 applications which are agnostic as to the sync server(s) they are using, and 
 even as to whether they are using servers at all (vs p2p channels, or 
 asynchronous email-only communication). This means that interoperability is 
