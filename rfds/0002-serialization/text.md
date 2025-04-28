@@ -5,24 +5,24 @@
 A core goal of the keyhive/beelay project is to allow developers to write 
 applications which are agnostic as to the sync server(s) they are using, and 
 even as to whether they are using servers at all (vs p2p channels, or 
-asynchonous email-only communication). This means that interoperability is 
-crucially important. At the very least we expect multiple versions of beelay to 
+asynchronous email-only communication). This means that interoperability is 
+crucially important. At the very least we expect multiple versions of Beelay to 
 be communicating with each other and reading and writing from the same shared 
-storage (imagine multiple independent beelay applications sharing file system 
+storage (imagine multiple independent Beelay applications sharing file system 
 storage for example). We also want to make it easy to write other 
 implementations of Beelay - even if those implementations are only for small 
 parts of the overall protocol, such as reading the current state of a document 
 out of storage. 
 
-In the codebase so far, serialization is handled in a somewhat ad-hoc manner. 
+In the code base so far, serialization is handled in a somewhat ad-hoc manner. 
 The primitives in `keyhive_core` are encoded using 
 [`bincode`](https://docs.rs/bincode/latest/bincode/) via `serde`; whilst the 
 data in `beelay` is encoded using a very minimal custom serialization 
 framework. These choices have been great for getting prototypes built, but for 
 interoperable production deployments they pose problems. In both cases, 
 understanding what exactly is written to disk or wire requires reading through 
-various disparate parts of the codebase, then guessing at how that will 
-actually be encoded. For maintainers of the codebase this means it's actually 
+various disparate parts of the code base, then guessing at how that will 
+actually be encoded. For maintainers of the code base this means it's actually 
 extremely difficult to tell if you are making a backwards incompatible change, 
 whilst for folks who might want to just hack on utilities which read storage or 
 otherwise mess around with the protocol there's no easy reference to look at. 
