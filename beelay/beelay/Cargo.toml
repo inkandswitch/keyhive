@@ -14,3 +14,5 @@ ed25519-dalek.workspace = true
 rand.workspace = true
 tokio = { version = "1.44.2", features = ["full"] }
 futures.workspace = true
+thiserror.workspace = true
+blake3.workspace = true
