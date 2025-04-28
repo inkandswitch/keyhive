@@ -2,22 +2,52 @@
 
 ## Motivation
 
-Serialization is important for signed data since the payload 
-must be exact (down to the bit) in order to 
-[verify a signature or hash][How (not) to sign a JSON object].
-There are many serialization format for a reason: one true format
-does not exist. For Keyhive, the primary concern is security,
-followed by adoptability.
+A core goal of the keyhive/beelay project is to allow developers to write 
+applications which are agnostic as to the sync server(s) they are using, and 
+even as to whether they are using servers at all (vs p2p channels, or 
+asynchonous email-only communication). This means that interoperability is 
+crucially important. At the very least we expect multiple versions of beelay to 
+be communicating with each other and reading and writing from the same shared 
+storage (imagine multiple independent beelay applications sharing file system 
+storage for example). We also want to make it easy to write other 
+implementations of Beelay - even if those implementations are only for small 
+parts of the overall protocol, such as reading the current state of a document 
+out of storage. 
 
-Security is always subtle; there are a [plethora of attacks][Taxonomy of Attacks]
-that can be an unintended consequence of representation.
+In the codebase so far, serialization is handled in a somewhat ad-hoc manner. 
+The primitives in `keyhive_core` are encoded using 
+[`bincode`](https://docs.rs/bincode/latest/bincode/) via `serde`; whilst the 
+data in `beelay` is encoded using a very minimal custom serialization 
+framework. These choices have been great for getting prototypes built, but for 
+interoperable production deployments they pose problems. In both cases, 
+understanding what exactly is written to disk or wire requires reading through 
+various disparate parts of the codebase, then guessing at how that will 
+actually be encoded. For maintainers of the codebase this means it's actually 
+extremely difficult to tell if you are making a backwards incompatible change, 
+whilst for folks who might want to just hack on utilities which read storage or 
+otherwise mess around with the protocol there's no easy reference to look at. 
+
+Thus, we want to find some schema based method for defining our binary formats. 
+The core goal being that for maintainers, any changes to data types are 
+reflected in schema files in this repository which can be read during code 
+review to discuss compatibility and other design issues. For developers, we can 
+point people at a set of schema files if they want to understand how data is 
+laid out on disk or wire. This is also obviously a nice resource for future 
+specification efforts.
+
 
 # Desired Properties
 
-The selection criteria for an appropriate codec are broadly about ease
-of implementation and security concerns.
+Beyond being based on some declarative, human readable schema file, we care
+about the security of the serialization format, and engineering concerns.
 
 ## Security
+
+For signed data the payload must be exact (down to the bit) in order to 
+[verify a signature or hash][How (not) to sign a JSON object]. This is 
+subtle; there are a [plethora of attacks][Taxonomy of Attacks]
+that can be an unintended consequence of representation. Three key things we
+consider are:
 
 * Maturity of format and ecosystem
 * Strict with, and resistant to, malicious input
