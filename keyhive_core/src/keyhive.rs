@@ -1118,8 +1118,7 @@ impl<
             } else if Public.individual().id() == added_id {
                 self.share_secret_store
                     .import_secret_key(Public.share_secret_key())
-                    .await
-                    .expect("FIXME");
+                    .await?;
                 doc.borrow_mut()
                     .merge_cgka_invite_op(signed_op.clone())
                     .await?;
@@ -1861,6 +1860,9 @@ pub enum ReceiveCgkaOpError<K: ShareSecretStore> {
 
     #[error(transparent)]
     DecryptTreeSecretError(#[from] DecryptTreeSecretError<K>),
+
+    #[error("Error importing secret key: {0}")]
+    ImportKeyError(K::ImportKeyError),
 }
 
 impl<K: ShareSecretStore> Debug for ReceiveCgkaOpError<K> {
