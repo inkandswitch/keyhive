@@ -5,6 +5,7 @@ use keyhive_core::crypto::verifiable::Verifiable;
 
 use super::Signing;
 
+#[derive(Clone)]
 pub struct MemorySigner(Rc<RefCell<ed25519_dalek::SigningKey>>);
 
 impl MemorySigner {
@@ -19,7 +20,7 @@ impl MemorySigner {
 
 impl Verifiable for MemorySigner {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.0.verifying_key()
+        self.0.borrow().verifying_key()
     }
 }
 
