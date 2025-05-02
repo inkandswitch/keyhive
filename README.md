@@ -1,6 +1,9 @@
 # Keyhive 🗝 🐝
 
-🦀 Rust workspace for Keyhive and related crates
+> [!NOTE]
+> For background on this project, you can read the [Ink & Switch Keyhive Dev Notebook](https://www.inkandswitch.com/keyhive/notebook/).
+
+🦀 This repo contains the Rust workspace for Keyhive and related crates
 
 We're excited to announce that we're opening the _pre-alpha_ code for the following libraries:
 
@@ -8,7 +11,9 @@ We're excited to announce that we're opening the _pre-alpha_ code for the follow
 * [`keyhive_core`]: The core signing, encryption, and delegation system
 * [`keyhive_wasm`]: [Wasm] wrapper around `keyhive_core`, plus TypeScript bindings
 
-⚠️ **DO NOT use this release in production applications** ⚠️
+
+> [!WARNING]
+> DO NOT use this release in production applications
 
 We want to emphasize that this is an early preview release for those that are curious about the project. Expect there to be bugs, inconsistencies, and unstable APIs. This code has also not been through a security audit at time of writing.
 
