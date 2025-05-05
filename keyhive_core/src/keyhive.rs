@@ -1118,7 +1118,8 @@ impl<
             } else if Public.individual().id() == added_id {
                 self.share_secret_store
                     .import_secret_key(Public.share_secret_key())
-                    .await?;
+                    .await
+                    .map_err(ReceiveCgkaOpError::ImportKeyError)?;
                 doc.borrow_mut()
                     .merge_cgka_invite_op(signed_op.clone())
                     .await?;
@@ -1874,6 +1875,7 @@ impl<K: ShareSecretStore> Debug for ReceiveCgkaOpError<K> {
             Self::UnknownInvitePrekey(e) => e.fmt(f),
             Self::DecryptSecretError(e) => e.fmt(f),
             Self::DecryptTreeSecretError(e) => e.fmt(f),
+            Self::ImportKeyError(e) => e.fmt(f),
         }
     }
 }
@@ -1887,6 +1889,7 @@ impl<K: ShareSecretStore> ReceiveCgkaOpError<K> {
             Self::UnknownInvitePrekey(_) => false,
             Self::DecryptSecretError(_) => false,
             Self::DecryptTreeSecretError(_) => false,
+            Self::ImportKeyError(_) => false,
         }
     }
 }

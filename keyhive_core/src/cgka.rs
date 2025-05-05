@@ -36,7 +36,7 @@ use secret_store::DecryptSecretError;
 use std::{
     borrow::Borrow,
     collections::{BTreeSet, HashMap, HashSet},
-    fmt::Debug,
+    fmt::{Debug, Display},
     hash::{Hash, Hasher},
     rc::Rc,
 };
@@ -689,32 +689,58 @@ pub enum NewAppSecretError<K: ShareSecretStore> {
     DecryptTreeSecretError(#[from] DecryptTreeSecretError<K>),
 }
 
-#[derive(Error)]
 pub enum UpdateLeafError<K: ShareSecretStore> {
-    #[error(transparent)]
-    CgkaError(#[from] CgkaError),
-
-    #[error(transparent)]
-    SigningError(#[from] SigningError),
-
-    #[error("Error while trying to import key into the secret key store: {0}")]
+    CgkaError(CgkaError),
+    SigningError(SigningError),
     ImportKeyError(K::ImportKeyError),
-
-    #[error(transparent)]
-    DecryptSecretError(#[from] DecryptSecretError<K>),
-
-    #[error(transparent)]
+    DecryptSecretError(DecryptSecretError<K>),
     DecryptTreeSecretError(Box<DecryptTreeSecretError<K>>),
+}
+
+impl<K: ShareSecretStore> From<SigningError> for UpdateLeafError<K> {
+    fn from(e: SigningError) -> Self {
+        UpdateLeafError::SigningError(e)
+    }
+}
+
+impl<K: ShareSecretStore> From<CgkaError> for UpdateLeafError<K> {
+    fn from(e: CgkaError) -> Self {
+        UpdateLeafError::CgkaError(e)
+    }
+}
+
+impl<K: ShareSecretStore> From<DecryptSecretError<K>> for UpdateLeafError<K> {
+    fn from(e: DecryptSecretError<K>) -> Self {
+        UpdateLeafError::DecryptSecretError(e)
+    }
 }
 
 impl<K: ShareSecretStore> Debug for UpdateLeafError<K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UpdateLeafError::CgkaError(e) => e.fmt(f),
-            UpdateLeafError::SigningError(e) => e.fmt(f),
-            UpdateLeafError::ImportKeyError(e) => e.fmt(f),
-            UpdateLeafError::DecryptSecretError(e) => e.fmt(f),
-            UpdateLeafError::DecryptTreeSecretError(e) => e.fmt(f),
+            UpdateLeafError::CgkaError(e) => Debug::fmt(e, f),
+            UpdateLeafError::SigningError(e) => Debug::fmt(e, f),
+            UpdateLeafError::ImportKeyError(e) => Debug::fmt(e, f),
+            UpdateLeafError::DecryptSecretError(e) => Debug::fmt(e, f),
+            UpdateLeafError::DecryptTreeSecretError(e) => Debug::fmt(e, f),
+        }
+    }
+}
+
+impl<K: ShareSecretStore> Display for UpdateLeafError<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UpdateLeafError::CgkaError(e) => Display::fmt(e, f),
+            UpdateLeafError::SigningError(e) => Display::fmt(e, f),
+            UpdateLeafError::ImportKeyError(e) => Display::fmt(
+                &format!(
+                    "Error while trying to import key into the secret key store: {}",
+                    e
+                ),
+                f,
+            ),
+            UpdateLeafError::DecryptSecretError(e) => Display::fmt(e, f),
+            UpdateLeafError::DecryptTreeSecretError(e) => Display::fmt(e, f),
         }
     }
 }
@@ -749,7 +775,7 @@ pub enum TryCgkaFromArchiveError<K: ShareSecretStore> {
 impl<K: ShareSecretStore> Debug for TryCgkaFromArchiveError<K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TryCgkaFromArchiveError::GetSecretError(e) => e.fmt(f),
+            TryCgkaFromArchiveError::GetSecretError(e) => Debug::fmt(e, f),
             TryCgkaFromArchiveError::CannotFindSecret(k) => {
                 write!(f, "Cannot find secret for key: {k}")
             }
@@ -807,7 +833,9 @@ impl<K: ShareSecretStore> Debug for Cgka<K> {
 
 #[cfg(feature = "test_utils")]
 impl<K: ShareSecretStore> Cgka<K> {
-    pub async fn secret_from_root(&mut self) -> Result<PcsKey<K::SecretKey>, CgkaError> {
+    pub async fn secret_from_root(
+        &mut self,
+    ) -> Result<PcsKey<K::SecretKey>, DecryptTreeSecretError<K>> {
         self.pcs_key_from_tree_root().await
     }
 

@@ -8,9 +8,19 @@ use super::traits::ShareSecretStore;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemorySecretKeyStore<R: rand::CryptoRng + rand::RngCore + Clone> {
-    csprng: R,
-    keys: HashMap<ShareKey, Rc<ShareSecretKey>>,
+    pub csprng: R,
+    pub keys: HashMap<ShareKey, Rc<ShareSecretKey>>,
 }
+
+impl<R: rand::CryptoRng + rand::RngCore + Clone> MemorySecretKeyStore<R> {
+    pub fn new(csprng: R) -> Self {
+        Self {
+            csprng,
+            keys: HashMap::new(),
+        }
+    }
+}
+
 
 impl<R: rand::CryptoRng + rand::RngCore + Clone> ShareSecretStore for MemorySecretKeyStore<R> {
     type SecretKey = Rc<ShareSecretKey>;

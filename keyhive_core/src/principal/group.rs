@@ -968,22 +968,22 @@ mod tests {
     use super::*;
     use crate::crypto::signer::memory::MemorySigner;
     use crate::principal::active::Active;
+    use crate::store::secret_key::memory::MemorySecretKeyStore;
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
+    use rand::rngs::ThreadRng;
     use std::cell::RefCell;
 
-    async fn setup_user<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        csprng: &mut R,
-    ) -> Active<MemorySigner, T> {
-        let sk = MemorySigner::generate(csprng);
-        Active::generate(sk, NoListener, csprng).await.unwrap()
+    async fn setup_user<T: ContentRef>() -> Active<MemorySigner, MemorySecretKeyStore<ThreadRng>> {
+        let sk = MemorySigner::generate(&mut rand::thread_rng());
+        Active::generate(sk, MemorySecretKeyStore { csprng: rand::thread_rng(), keys: HashMap::new() }, NoListener).await.unwrap()
     }
 
-    async fn setup_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        alice: Rc<RefCell<Active<MemorySigner, T>>>,
-        bob: Rc<RefCell<Active<MemorySigner, T>>>,
-        csprng: &mut R,
-    ) -> [Rc<RefCell<Group<MemorySigner, T>>>; 4] {
+    async fn setup_groups<T: ContentRef>(
+        alice: Rc<RefCell<Active<MemorySigner, MemorySecretKeyStore<ThreadRng>, T>>>,
+        bob: Rc<RefCell<Active<MemorySigner, MemorySecretKeyStore<ThreadRng>, T>>>,
+        csprng: &mut ThreadRng,
+    ) -> [Rc<RefCell<Group<MemorySigner, MemorySecretKeyStore<ThreadRng>, T>>>; 4] {
         /*              ┌───────────┐        ┌───────────┐
                         │           │        │           │
         ╔══════════════▶│   Alice   │        │    Bob    │
@@ -1007,7 +1007,7 @@ mod tests {
                         │           │
                         └───────────┘ */
 
-        let alice_agent: Agent<MemorySigner, T, _> = alice.into();
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>, T, _> = alice.into();
         let bob_agent = bob.into();
 
         let dlg_store = DelegationStore::new();
@@ -1066,10 +1066,10 @@ mod tests {
 
     #[allow(clippy::await_holding_refcell_ref)] // FIXME
     async fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        alice: Rc<RefCell<Active<MemorySigner, T>>>,
-        bob: Rc<RefCell<Active<MemorySigner, T>>>,
+        alice: Rc<RefCell<Active<MemorySigner, MemorySecretKeyStore<ThreadRng>, T>>>,
+        bob: Rc<RefCell<Active<MemorySigner, MemorySecretKeyStore<ThreadRng>, T>>>,
         csprng: &mut R,
-    ) -> [Rc<RefCell<Group<MemorySigner, T>>>; 10] {
+    ) -> [Rc<RefCell<Group<MemorySigner, MemorySecretKeyStore<ThreadRng>, T>>>; 10] {
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
 
@@ -1227,13 +1227,13 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
+        let bob = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
 
-        let [g0, ..]: [Rc<RefCell<Group<MemorySigner, String>>>; 4] =
+        let [g0, ..]: [Rc<RefCell<Group<MemorySigner, MemorySecretKeyStore<ThreadRng>>>>; 4] =
             setup_groups(alice.dupe(), bob, csprng).await;
         let g0_mems = g0.borrow().transitive_members();
 
@@ -1247,11 +1247,11 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
+        let bob = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
 
         let [g0, g1, ..] = setup_groups(alice.dupe(), bob, csprng).await;
         let g1_mems = g1.borrow().transitive_members();
@@ -1262,14 +1262,14 @@ mod tests {
                 (
                     alice_id,
                     (
-                        Agent::<MemorySigner, String>::from(alice.dupe()),
+                        Agent::<MemorySigner,MemorySecretKeyStore<ThreadRng>>::from(alice.dupe()),
                         Access::Admin
                     )
                 ),
                 (
                     g0.borrow().id(),
                     (
-                        Agent::<MemorySigner, String>::from(g0.dupe()),
+                        Agent::<MemorySigner, MemorySecretKeyStore<ThreadRng>>::from(g0.dupe()),
                         Access::Admin
                     )
                 )
@@ -1282,15 +1282,15 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
-        let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let bob_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = bob.dupe().into();
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, _g3]: [Rc<RefCell<Group<MemorySigner, String>>>; 4] =
+        let [g0, g1, g2, _g3]: [Rc<RefCell<Group<MemorySigner, MemorySecretKeyStore<ThreadRng>>>>; 4] =
             setup_groups(alice.dupe(), bob.dupe(), csprng).await;
         let g1_mems = g2.borrow().transitive_members();
 
@@ -1310,15 +1310,15 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
-        let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let bob_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = bob.dupe().into();
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, g3]: [Rc<RefCell<Group<MemorySigner, String>>>; 4] =
+        let [g0, g1, g2, g3]: [Rc<RefCell<Group<MemorySigner, MemorySecretKeyStore<ThreadRng>>>>; 4] =
             setup_groups(alice.dupe(), bob.dupe(), csprng).await;
         let g3_mems = g3.borrow().transitive_members();
 
@@ -1341,15 +1341,15 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
-        let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let bob_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = bob.dupe().into();
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]: [Rc<RefCell<Group<MemorySigner, String>>>;
+        let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]: [Rc<RefCell<Group<MemorySigner, MemorySecretKeyStore<ThreadRng>>>>;
             10] = setup_cyclic_groups(alice.dupe(), bob.dupe(), csprng).await;
         let g0_mems = g0.borrow().transitive_members();
 
@@ -1360,7 +1360,7 @@ mod tests {
             HashMap::from_iter([
                 (
                     alice_id,
-                    (Agent::<_, String, _>::from(alice), Access::Admin)
+                    (Agent::from(alice), Access::Admin)
                 ),
                 (bob_id, (bob.into(), Access::Admin)),
                 (g1.borrow().id(), (g1.dupe().into(), Access::Admin)),
@@ -1382,18 +1382,18 @@ mod tests {
         test_utils::init_logging();
         let mut csprng = rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(&mut csprng).await));
-        let alice_agent: Agent<MemorySigner> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = alice.dupe().into();
 
-        let bob = Rc::new(RefCell::new(setup_user(&mut csprng).await));
-        let bob_agent: Agent<MemorySigner> = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let bob_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = bob.dupe().into();
 
-        let carol = Rc::new(RefCell::new(setup_user(&mut csprng).await));
-        let carol_agent: Agent<MemorySigner> = carol.dupe().into();
+        let carol = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let carol_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = carol.dupe().into();
 
         let signer = MemorySigner::generate(&mut csprng);
         let active = Rc::new(RefCell::new(
-            Active::generate(signer, NoListener, &mut csprng)
+            Active::generate(signer, MemorySecretKeyStore::new(rand::thread_rng()), NoListener)
                 .await
                 .unwrap(),
         ));
@@ -1526,19 +1526,18 @@ mod tests {
         // └─────────┘
 
         test_utils::init_logging();
-        let mut csprng = rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(&mut csprng).await));
-        let alice_agent: Agent<MemorySigner> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = alice.dupe().into();
 
-        let bob = Rc::new(RefCell::new(setup_user(&mut csprng).await));
-        let bob_agent: Agent<MemorySigner> = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let bob_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = bob.dupe().into();
 
-        let carol = Rc::new(RefCell::new(setup_user(&mut csprng).await));
-        let carol_agent: Agent<MemorySigner> = carol.dupe().into();
+        let carol = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let carol_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = carol.dupe().into();
 
-        let dan = Rc::new(RefCell::new(setup_user(&mut csprng).await));
-        let dan_agent: Agent<MemorySigner> = dan.dupe().into();
+        let dan = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let dan_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = dan.dupe().into();
 
         let alice_id = alice.borrow().id().into();
         let alice_signer = alice.borrow().signer.dupe();
@@ -1559,7 +1558,7 @@ mod tests {
             dlg_store.dupe(),
             rev_store.dupe(),
             NoListener,
-            &mut csprng,
+            &mut rand::thread_rng(),
         )
         .await
         .unwrap();
