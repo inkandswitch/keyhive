@@ -373,17 +373,25 @@ pub enum ExpandPrekeyError<K: ShareSecretStore> {
 
 #[cfg(test)]
 mod tests {
+    use rand::rngs::ThreadRng;
+
     use super::*;
-    use crate::crypto::signer::memory::MemorySigner;
+    use crate::{
+        crypto::signer::memory::MemorySigner, store::secret_key::memory::MemorySecretKeyStore,
+    };
 
     #[tokio::test]
     async fn test_seal() {
         test_utils::init_logging();
 
-        let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let active: Active<_, [u8; 32], _> =
-            Active::generate(signer, NoListener, csprng).await.unwrap();
+        let active: Active<MemorySigner, MemorySecretKeyStore<ThreadRng>> = Active::generate(
+            signer,
+            MemorySecretKeyStore::new(rand::thread_rng()),
+            NoListener,
+        )
+        .await
+        .unwrap();
         let message = "hello world".as_bytes();
         let signed = active.try_sign_async(message).await.unwrap();
 

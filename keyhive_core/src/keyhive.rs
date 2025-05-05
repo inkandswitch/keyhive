@@ -1925,14 +1925,16 @@ mod tests {
     use super::*;
     use crate::{
         access::Access, crypto::signer::memory::MemorySigner, principal::public::Public,
-        transact::transact_async,
+        store::secret_key::memory::MemorySecretKeyStore, transact::transact_async,
     };
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
+    use rand::rngs::ThreadRng;
     use testresult::TestResult;
 
     async fn make_keyhive() -> Keyhive<
         MemorySigner,
+        MemorySecretKeyStore<ThreadRng>,
         [u8; 32],
         Vec<u8>,
         Rc<RefCell<MemoryCiphertextStore<[u8; 32], Vec<u8>>>>,
@@ -1960,8 +1962,14 @@ mod tests {
         let store = Rc::new(RefCell::new(
             MemoryCiphertextStore::<[u8; 32], String>::new(),
         ));
-        let mut hive =
-            Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::thread_rng()).await?;
+        let mut hive = Keyhive::generate(
+            sk.clone(),
+            MemorySecretKeyStore::new(rand::thread_rng()),
+            store.clone(),
+            NoListener,
+            rand::thread_rng(),
+        )
+        .await?;
 
         let indie_sk = MemorySigner::generate(&mut csprng);
         let indie = Rc::new(RefCell::new(

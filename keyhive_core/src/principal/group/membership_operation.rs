@@ -14,19 +14,18 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use derive_more::{From, Into};
-use derive_where::derive_where;
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
+    fmt::Debug,
     hash::Hash,
     rc::Rc,
 };
 use topological_sort::TopologicalSort;
 use tracing::instrument;
 
-#[derive_where(Debug, Clone, Eq; T)]
 pub enum MembershipOperation<
     S: AsyncSigner,
     K: ShareSecretStore,
@@ -35,6 +34,33 @@ pub enum MembershipOperation<
 > {
     Delegation(Rc<Signed<Delegation<S, K, T, L>>>),
     Revocation(Rc<Signed<Revocation<S, K, T, L>>>),
+}
+
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Debug
+    for MembershipOperation<S, K, T, L>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MembershipOperation::Delegation(delegation) => delegation.fmt(f),
+            MembershipOperation::Revocation(revocation) => revocation.fmt(f),
+        }
+    }
+}
+
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Clone
+    for MembershipOperation<S, K, T, L>
+{
+    fn clone(&self) -> Self {
+        match self {
+            MembershipOperation::Delegation(rc) => MembershipOperation::Delegation(rc.dupe()),
+            MembershipOperation::Revocation(rc) => MembershipOperation::Revocation(rc.dupe()),
+        }
+    }
+}
+
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Eq
+    for MembershipOperation<S, K, T, L>
+{
 }
 
 impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
@@ -427,10 +453,11 @@ mod tests {
     use crate::{
         access::Access,
         crypto::signer::{memory::MemorySigner, sync_signer::SyncSigner},
-        principal::agent::Agent,
-        principal::individual::Individual,
+        principal::{agent::Agent, individual::Individual},
+        store::secret_key::memory::MemorySecretKeyStore,
     };
     use dupe::Dupe;
+    use rand::rngs::ThreadRng;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -485,10 +512,8 @@ mod tests {
                          └───────┘
     */
 
-    async fn add_alice<R: rand::CryptoRng + rand::RngCore>(
-        csprng: &mut R,
-    ) -> Rc<Signed<Delegation<MemorySigner, String>>> {
-        let alice = Individual::generate(fixture(&ALICE_SIGNER), csprng)
+    async fn add_alice() -> Rc<Signed<Delegation<MemorySigner, MemorySecretKeyStore<ThreadRng>>>> {
+        let alice = Individual::generate(fixture(&ALICE_SIGNER), &mut rand::thread_rng())
             .await
             .unwrap();
         let group_sk = LazyLock::force(&GROUP_SIGNER).clone();
@@ -507,10 +532,8 @@ mod tests {
         .dupe()
     }
 
-    async fn add_bob<R: rand::CryptoRng + rand::RngCore>(
-        csprng: &mut R,
-    ) -> Rc<Signed<Delegation<MemorySigner, String>>> {
-        let bob = Individual::generate(fixture(&BOB_SIGNER), csprng)
+    async fn add_bob() -> Rc<Signed<Delegation<MemorySigner, MemorySecretKeyStore<ThreadRng>>>> {
+        let bob = Individual::generate(fixture(&BOB_SIGNER), &mut rand::thread_rng())
             .await
             .unwrap();
 
@@ -519,7 +542,7 @@ mod tests {
                 .try_sign_sync(Delegation {
                     delegate: Agent::Individual(Rc::new(RefCell::new(bob))),
                     can: Access::Write,
-                    proof: Some(add_alice(csprng).await),
+                    proof: Some(add_alice().await),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
                 })
@@ -527,10 +550,8 @@ mod tests {
         )
     }
 
-    async fn add_carol<R: rand::CryptoRng + rand::RngCore>(
-        csprng: &mut R,
-    ) -> Rc<Signed<Delegation<MemorySigner, String>>> {
-        let carol = Individual::generate(fixture(&CAROL_SIGNER), csprng)
+    async fn add_carol() -> Rc<Signed<Delegation<MemorySigner, MemorySecretKeyStore<ThreadRng>>>> {
+        let carol = Individual::generate(fixture(&CAROL_SIGNER), &mut rand::thread_rng())
             .await
             .unwrap();
 
@@ -539,7 +560,7 @@ mod tests {
                 .try_sign_sync(Delegation {
                     delegate: carol.into(),
                     can: Access::Write,
-                    proof: Some(add_alice(csprng).await),
+                    proof: Some(add_alice().await),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
                 })
@@ -547,10 +568,8 @@ mod tests {
         )
     }
 
-    async fn add_dan<R: rand::CryptoRng + rand::RngCore>(
-        csprng: &mut R,
-    ) -> Rc<Signed<Delegation<MemorySigner, String>>> {
-        let dan = Individual::generate(fixture(&DAN_SIGNER), csprng)
+    async fn add_dan() -> Rc<Signed<Delegation<MemorySigner, MemorySecretKeyStore<ThreadRng>>>> {
+        let dan = Individual::generate(fixture(&DAN_SIGNER), &mut rand::thread_rng())
             .await
             .unwrap();
 
@@ -559,7 +578,7 @@ mod tests {
                 .try_sign_sync(Delegation {
                     delegate: dan.into(),
                     can: Access::Write,
-                    proof: Some(add_carol(csprng).await),
+                    proof: Some(add_carol().await),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
                 })
@@ -567,10 +586,8 @@ mod tests {
         )
     }
 
-    async fn add_erin<R: rand::CryptoRng + rand::RngCore>(
-        csprng: &mut R,
-    ) -> Rc<Signed<Delegation<MemorySigner, String>>> {
-        let erin = Individual::generate(fixture(&ERIN_SIGNER), csprng)
+    async fn add_erin() -> Rc<Signed<Delegation<MemorySigner, MemorySecretKeyStore<ThreadRng>>>> {
+        let erin = Individual::generate(fixture(&ERIN_SIGNER), &mut rand::thread_rng())
             .await
             .unwrap();
 
@@ -579,7 +596,7 @@ mod tests {
                 .try_sign_sync(Delegation {
                     delegate: erin.into(),
                     can: Access::Write,
-                    proof: Some(add_bob(csprng).await),
+                    proof: Some(add_bob().await),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
                 })
@@ -587,28 +604,25 @@ mod tests {
         )
     }
 
-    async fn remove_carol<R: rand::CryptoRng + rand::RngCore>(
-        csprng: &mut R,
-    ) -> Rc<Signed<Revocation<MemorySigner, String>>> {
+    async fn remove_carol() -> Rc<Signed<Revocation<MemorySigner, MemorySecretKeyStore<ThreadRng>>>>
+    {
         Rc::new(
             fixture(&ALICE_SIGNER)
                 .try_sign_sync(Revocation {
-                    revoke: add_carol(csprng).await,
-                    proof: Some(add_alice(csprng).await),
+                    revoke: add_carol().await,
+                    proof: Some(add_alice().await),
                     after_content: BTreeMap::new(),
                 })
                 .unwrap(),
         )
     }
 
-    async fn remove_dan<R: rand::CryptoRng + rand::RngCore>(
-        csprng: &mut R,
-    ) -> Rc<Signed<Revocation<MemorySigner, String>>> {
+    async fn remove_dan() -> Rc<Signed<Revocation<MemorySigner, MemorySecretKeyStore<ThreadRng>>>> {
         Rc::new(
             fixture(&BOB_SIGNER)
                 .try_sign_sync(Revocation {
-                    revoke: add_dan(csprng).await,
-                    proof: Some(add_bob(csprng).await),
+                    revoke: add_dan().await,
+                    proof: Some(add_bob().await),
                     after_content: BTreeMap::new(),
                 })
                 .unwrap(),
@@ -625,8 +639,7 @@ mod tests {
         #[tokio::test]
         async fn test_singleton() {
             test_utils::init_logging();
-            let csprng = &mut rand::thread_rng();
-            let alice_dlg = add_alice(csprng).await;
+            let alice_dlg = add_alice().await;
             let (ancestors, longest) = MembershipOperation::from(alice_dlg).ancestors();
             assert!(ancestors.is_empty());
             assert_eq!(longest, 1);
@@ -635,8 +648,7 @@ mod tests {
         #[tokio::test]
         async fn test_two_direct() {
             test_utils::init_logging();
-            let csprng = &mut rand::thread_rng();
-            let bob_dlg = add_bob(csprng).await;
+            let bob_dlg = add_bob().await;
             let (ancestors, longest) = MembershipOperation::from(bob_dlg).ancestors();
             assert_eq!(ancestors.len(), 1);
             assert_eq!(longest, 2);
@@ -645,9 +657,8 @@ mod tests {
         #[tokio::test]
         async fn test_concurrent() {
             test_utils::init_logging();
-            let csprng = &mut rand::thread_rng();
-            let bob_dlg = add_bob(csprng).await;
-            let carol_dlg = add_carol(csprng).await;
+            let bob_dlg = add_bob().await;
+            let carol_dlg = add_carol().await;
 
             let (bob_ancestors, bob_longest) = MembershipOperation::from(bob_dlg).ancestors();
             let (carol_ancestors, carol_longest) = MembershipOperation::from(carol_dlg).ancestors();
@@ -659,8 +670,7 @@ mod tests {
         #[tokio::test]
         async fn test_longer() {
             test_utils::init_logging();
-            let csprng = &mut rand::thread_rng();
-            let erin_dlg = add_erin(csprng).await;
+            let erin_dlg = add_erin().await;
             let (ancestors, longest) = MembershipOperation::from(erin_dlg).ancestors();
             assert_eq!(ancestors.len(), 2);
             assert_eq!(longest, 2);
@@ -669,8 +679,7 @@ mod tests {
         #[tokio::test]
         async fn test_revocation() {
             test_utils::init_logging();
-            let csprng = &mut rand::thread_rng();
-            let rev = remove_carol(csprng).await;
+            let rev = remove_carol().await;
             let (ancestors, longest) = MembershipOperation::from(rev).ancestors();
             assert_eq!(ancestors.len(), 2);
             assert_eq!(longest, 2);
@@ -678,9 +687,9 @@ mod tests {
     }
 
     mod topsort {
-        use crate::principal::active::Active;
-
         use super::*;
+        use crate::{principal::active::Active, store::secret_key::memory::MemorySecretKeyStore};
+        use rand::rngs::ThreadRng;
 
         #[test]
         fn test_empty() {
@@ -689,16 +698,18 @@ mod tests {
             let dlgs = CaMap::new();
             let revs = CaMap::new();
 
-            let observed = MembershipOperation::<MemorySigner, String>::topsort(&dlgs, &revs);
+            let observed =
+                MembershipOperation::<MemorySigner, MemorySecretKeyStore<ThreadRng>>::topsort(
+                    &dlgs, &revs,
+                );
             assert_eq!(observed, vec![]);
         }
 
         #[tokio::test]
         async fn test_one_delegation() {
             test_utils::init_logging();
-            let csprng = &mut rand::thread_rng();
 
-            let dlg = add_alice(csprng).await;
+            let dlg = add_alice().await;
 
             let dlgs = CaMap::from_iter_direct([dlg.dupe()]);
             let revs = CaMap::new();
@@ -712,10 +723,9 @@ mod tests {
         #[tokio::test]
         async fn test_delegation_sequence() {
             test_utils::init_logging();
-            let csprng = &mut rand::thread_rng();
 
-            let alice_dlg = add_alice(csprng).await;
-            let bob_dlg = add_bob(csprng).await;
+            let alice_dlg = add_alice().await;
+            let bob_dlg = add_bob().await;
 
             let dlg_heads = CaMap::from_iter_direct([bob_dlg.dupe()]);
             let rev_heads = CaMap::new();
@@ -737,24 +747,26 @@ mod tests {
         #[tokio::test]
         async fn test_longer_delegation_chain() {
             test_utils::init_logging();
-            let csprng = &mut rand::thread_rng();
 
-            let alice_dlg = add_alice(csprng).await;
-            let carol_dlg = add_carol(csprng).await;
-            let dan_dlg = add_dan(csprng).await;
+            let alice_dlg = add_alice().await;
+            let carol_dlg = add_carol().await;
+            let dan_dlg = add_dan().await;
 
             let dlg_heads = CaMap::from_iter_direct([dan_dlg.dupe()]);
             let rev_heads = CaMap::new();
 
             let observed = MembershipOperation::topsort(&dlg_heads, &rev_heads);
 
-            let alice_op: MembershipOperation<MemorySigner, String> = alice_dlg.into();
+            let alice_op: MembershipOperation<MemorySigner, MemorySecretKeyStore<ThreadRng>> =
+                alice_dlg.into();
             let alice_hash = Digest::hash(&alice_op);
 
-            let carol_op: MembershipOperation<MemorySigner, String> = carol_dlg.into();
+            let carol_op: MembershipOperation<MemorySigner, MemorySecretKeyStore<ThreadRng>> =
+                carol_dlg.into();
             let carol_hash = Digest::hash(&carol_op);
 
-            let dan_op: MembershipOperation<MemorySigner, String> = dan_dlg.into();
+            let dan_op: MembershipOperation<MemorySigner, MemorySecretKeyStore<ThreadRng>> =
+                dan_dlg.into();
             let dan_hash = Digest::hash(&dan_op);
 
             let a = (alice_hash, alice_op.clone());
@@ -785,33 +797,54 @@ mod tests {
             // │  Carol  │
             // └─────────┘
             test_utils::init_logging();
-            let csprng = &mut rand::thread_rng();
 
             let alice_sk = fixture(&ALICE_SIGNER).clone();
             let alice = Rc::new(RefCell::new(
-                Active::<_, [u8; 32], _>::generate(alice_sk, NoListener, csprng)
-                    .await
-                    .unwrap(),
+                Active::<MemorySigner, MemorySecretKeyStore<ThreadRng>>::generate(
+                    alice_sk,
+                    MemorySecretKeyStore::new(rand::thread_rng()),
+                    NoListener,
+                )
+                .await
+                .unwrap(),
             ));
 
             let bob_sk = fixture(&BOB_SIGNER).clone();
             let bob = Rc::new(RefCell::new(
-                Active::generate(bob_sk, NoListener, csprng).await.unwrap(),
+                Active::generate(
+                    bob_sk,
+                    MemorySecretKeyStore::new(rand::thread_rng()),
+                    NoListener,
+                )
+                .await
+                .unwrap(),
             ));
 
             let carol_sk = fixture(&CAROL_SIGNER).clone();
             let carol = Rc::new(RefCell::new(
-                Active::generate(carol_sk, NoListener, csprng)
-                    .await
-                    .unwrap(),
+                Active::generate(
+                    carol_sk,
+                    MemorySecretKeyStore::new(rand::thread_rng()),
+                    NoListener,
+                )
+                .await
+                .unwrap(),
             ));
 
             let dan_sk = fixture(&DAN_SIGNER).clone();
             let dan = Rc::new(RefCell::new(
-                Active::generate(dan_sk, NoListener, csprng).await.unwrap(),
+                Active::generate(
+                    dan_sk,
+                    MemorySecretKeyStore::new(rand::thread_rng()),
+                    NoListener,
+                )
+                .await
+                .unwrap(),
             ));
 
-            let alice_to_bob: Rc<Signed<Delegation<MemorySigner>>> = Rc::new(
+            let alice_to_bob: Rc<
+                Signed<Delegation<MemorySigner, MemorySecretKeyStore<ThreadRng>>>,
+            > = Rc::new(
                 alice
                     .borrow()
                     .signer
@@ -881,10 +914,9 @@ mod tests {
         async fn test_one_revocation() {
             test_utils::init_logging();
 
-            let csprng = &mut rand::thread_rng();
             let alice_sk = fixture(&ALICE_SIGNER).clone();
-            let alice_dlg = add_alice(csprng).await;
-            let bob_dlg = add_bob(csprng).await;
+            let alice_dlg = add_alice().await;
+            let bob_dlg = add_bob().await;
 
             let alice_revokes_bob = Rc::new(
                 alice_sk
@@ -895,7 +927,8 @@ mod tests {
                     })
                     .unwrap(),
             );
-            let rev_op: MembershipOperation<MemorySigner, String> = alice_revokes_bob.dupe().into();
+            let rev_op: MembershipOperation<MemorySigner, MemorySecretKeyStore<ThreadRng>> =
+                alice_revokes_bob.dupe().into();
             let rev_hash = Digest::hash(&rev_op);
 
             let dlgs = CaMap::new();
@@ -903,10 +936,12 @@ mod tests {
 
             let mut observed = MembershipOperation::topsort(&dlgs, &revs);
 
-            let alice_op: MembershipOperation<MemorySigner, String> = alice_dlg.into();
+            let alice_op: MembershipOperation<MemorySigner, MemorySecretKeyStore<ThreadRng>> =
+                alice_dlg.into();
             let alice_hash = Digest::hash(&alice_op);
 
-            let bob_op: MembershipOperation<MemorySigner, String> = bob_dlg.into();
+            let bob_op: MembershipOperation<MemorySigner, MemorySecretKeyStore<ThreadRng>> =
+                bob_dlg.into();
             let bob_hash = Digest::hash(&bob_op);
 
             let a = (alice_hash, alice_op.clone());
@@ -924,23 +959,22 @@ mod tests {
         #[tokio::test]
         async fn test_many_revocations() {
             test_utils::init_logging();
-            let csprng = &mut rand::thread_rng();
 
-            let alice_dlg = add_alice(csprng).await;
-            let bob_dlg = add_bob(csprng).await;
+            let alice_dlg = add_alice().await;
+            let bob_dlg = add_bob().await;
 
-            let carol_dlg = add_carol(csprng).await;
-            let dan_dlg = add_dan(csprng).await;
-            let erin_dlg = add_erin(csprng).await;
+            let carol_dlg = add_carol().await;
+            let dan_dlg = add_dan().await;
+            let erin_dlg = add_erin().await;
 
-            let alice_revokes_carol = remove_carol(csprng).await;
-            let bob_revokes_dan = remove_dan(csprng).await;
+            let alice_revokes_carol = remove_carol().await;
+            let bob_revokes_dan = remove_dan().await;
 
-            let rev_carol_op: MembershipOperation<MemorySigner, String> =
+            let rev_carol_op: MembershipOperation<MemorySigner, MemorySecretKeyStore<ThreadRng>> =
                 alice_revokes_carol.dupe().into();
             let rev_carol_hash = Digest::hash(&rev_carol_op);
 
-            let rev_dan_op: MembershipOperation<MemorySigner, String> =
+            let rev_dan_op: MembershipOperation<MemorySigner, MemorySecretKeyStore<ThreadRng>> =
                 bob_revokes_dan.dupe().into();
             let rev_dan_hash = Digest::hash(&rev_dan_op);
 
@@ -950,19 +984,24 @@ mod tests {
 
             let observed = MembershipOperation::topsort(&dlg_heads, &rev_heads);
 
-            let alice_op: MembershipOperation<MemorySigner, String> = alice_dlg.clone().into();
+            let alice_op: MembershipOperation<MemorySigner, MemorySecretKeyStore<ThreadRng>> =
+                alice_dlg.clone().into();
             let alice_hash = Digest::hash(&alice_op);
 
-            let bob_op: MembershipOperation<MemorySigner, String> = bob_dlg.clone().into();
+            let bob_op: MembershipOperation<MemorySigner, MemorySecretKeyStore<ThreadRng>> =
+                bob_dlg.clone().into();
             let bob_hash = Digest::hash(&bob_op);
 
-            let carol_op: MembershipOperation<MemorySigner, String> = carol_dlg.clone().into();
+            let carol_op: MembershipOperation<MemorySigner, MemorySecretKeyStore<ThreadRng>> =
+                carol_dlg.clone().into();
             let carol_hash = Digest::hash(&carol_op);
 
-            let dan_op: MembershipOperation<MemorySigner, String> = dan_dlg.clone().into();
+            let dan_op: MembershipOperation<MemorySigner, MemorySecretKeyStore<ThreadRng>> =
+                dan_dlg.clone().into();
             let dan_hash = Digest::hash(&dan_op);
 
-            let erin_op: MembershipOperation<MemorySigner, String> = erin_dlg.clone().into();
+            let erin_op: MembershipOperation<MemorySigner, MemorySecretKeyStore<ThreadRng>> =
+                erin_dlg.clone().into();
             let erin_hash = Digest::hash(&erin_op);
 
             let mut bob_and_revoke_carol = [

@@ -1,4 +1,9 @@
-use std::{collections::HashMap, convert::Infallible, rc::Rc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    convert::Infallible,
+    hash::Hash,
+    rc::Rc,
+};
 
 use dupe::Dupe;
 
@@ -6,7 +11,7 @@ use crate::crypto::share_key::{AsyncSecretKey, ShareKey, ShareSecretKey};
 
 use super::traits::ShareSecretStore;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct MemorySecretKeyStore<R: rand::CryptoRng + rand::RngCore + Clone> {
     pub csprng: R,
     pub keys: HashMap<ShareKey, Rc<ShareSecretKey>>,
@@ -21,6 +26,19 @@ impl<R: rand::CryptoRng + rand::RngCore + Clone> MemorySecretKeyStore<R> {
     }
 }
 
+impl<R: rand::CryptoRng + rand::RngCore + Clone> PartialEq for MemorySecretKeyStore<R> {
+    fn eq(&self, other: &Self) -> bool {
+        self.keys == other.keys
+    }
+}
+
+impl<R: rand::CryptoRng + rand::RngCore + Clone> Hash for MemorySecretKeyStore<R> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.keys.keys().collect::<BTreeSet<_>>().hash(state);
+    }
+}
+
+impl<R: rand::CryptoRng + rand::RngCore + Clone> Eq for MemorySecretKeyStore<R> {}
 
 impl<R: rand::CryptoRng + rand::RngCore + Clone> ShareSecretStore for MemorySecretKeyStore<R> {
     type SecretKey = Rc<ShareSecretKey>;
