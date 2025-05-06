@@ -1944,6 +1944,7 @@ mod tests {
         let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
         Keyhive::generate(
             sk,
+            MemorySecretKeyStore::new(rand::thread_rng()),
             Rc::new(RefCell::new(store)),
             NoListener,
             rand::thread_rng(),
@@ -1981,7 +1982,7 @@ mod tests {
         hive.generate_doc(vec![indie.into()], nonempty![[1u8; 32], [2u8; 32]])
             .await?;
 
-        assert!(!hive.active.borrow().prekey_pairs.is_empty());
+        assert!(!hive.share_secret_store.keys.is_empty());
         assert_eq!(hive.individuals.len(), 2);
         assert_eq!(hive.groups.len(), 1);
         assert_eq!(hive.docs.len(), 1);
@@ -1996,8 +1997,16 @@ mod tests {
         assert_eq!(archive.docs.len(), 1);
         assert_eq!(archive.topsorted_ops.len(), 4);
 
-        let hive_from_archive =
-            Keyhive::try_from_archive(&archive, sk, store, NoListener, rand::thread_rng()).unwrap();
+        let hive_from_archive = Keyhive::try_from_archive(
+            &archive,
+            sk,
+            hive.share_secret_store.clone(),
+            store,
+            NoListener,
+            rand::thread_rng(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(hive, hive_from_archive);
 
@@ -2279,14 +2288,15 @@ mod tests {
         bob.ingest_event_table(events).await.unwrap();
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
+    #[allow(clippy::await_holding_refcell_ref)]
     #[tokio::test]
     async fn test_async_transaction() -> TestResult {
         test_utils::init_logging();
 
         let sk = MemorySigner::generate(&mut rand::thread_rng());
-        let hive = Keyhive::<_, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
+        let hive = Keyhive::<_, _, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
             sk,
+            MemorySecretKeyStore::new(rand::thread_rng()),
             Rc::new(RefCell::new(MemoryCiphertextStore::new())),
             NoListener,
             rand::rngs::OsRng,
@@ -2295,14 +2305,15 @@ mod tests {
 
         let trunk = Rc::new(RefCell::new(hive));
 
-        let alice: Peer<MemorySigner, [u8; 32], NoListener> = Rc::new(RefCell::new(
-            Individual::generate(
-                &MemorySigner::generate(&mut rand::rngs::OsRng),
-                &mut rand::rngs::OsRng,
-            )
-            .await?,
-        ))
-        .into();
+        let alice: Peer<MemorySigner, MemorySecretKeyStore<ThreadRng>, [u8; 32], NoListener> =
+            Rc::new(RefCell::new(
+                Individual::generate(
+                    &MemorySigner::generate(&mut rand::rngs::OsRng),
+                    &mut rand::rngs::OsRng,
+                )
+                .await?,
+            ))
+            .into();
 
         trunk
             .borrow_mut()
@@ -2314,14 +2325,22 @@ mod tests {
             .generate_group(vec![alice.dupe()])
             .await?;
 
-        assert_eq!(trunk.borrow().active.borrow().prekey_pairs.len(), 7);
+        assert_eq!(trunk.borrow().active.borrow().secret_store.len(), 7);
         assert_eq!(trunk.borrow().delegations.borrow().len(), 4);
         assert_eq!(trunk.borrow().groups.len(), 1);
         assert_eq!(trunk.borrow().docs.len(), 1);
 
         let tx = transact_async(
             &trunk,
-            |mut fork: Keyhive<_, _, _, _, Log<_, [u8; 32]>, _>| async move {
+            |mut fork: Keyhive<
+                MemorySigner,
+                MemorySecretKeyStore<ThreadRng>,
+                _,
+                _,
+                _,
+                Log<_, _, [u8; 32]>,
+                _,
+            >| async move {
                 // Depending on when the async runs
                 let init_dlg_count = fork.delegations.borrow().len();
                 assert!(init_dlg_count >= 4);
@@ -2335,11 +2354,16 @@ mod tests {
                 let init_group_count = fork.groups.len();
                 assert_eq!(init_group_count, 1);
 
-                assert_eq!(fork.active.borrow().prekey_pairs.len(), 7);
+                assert_eq!(fork.active.borrow().secret_store.len(), 7);
                 fork.expand_prekeys().await.unwrap(); // 1 event (prekey)
-                assert_eq!(fork.active.borrow().prekey_pairs.len(), 8);
+                assert_eq!(fork.active.borrow().secret_store.len(), 8);
 
-                let bob: Peer<MemorySigner, [u8; 32], Log<MemorySigner>> = Rc::new(RefCell::new(
+                let bob: Peer<
+                    MemorySigner,
+                    MemorySecretKeyStore<ThreadRng>,
+                    [u8; 32],
+                    Log<MemorySigner, _, [u8; 32]>,
+                > = Rc::new(RefCell::new(
                     Individual::generate(
                         &MemorySigner::generate(&mut rand::rngs::OsRng),
                         &mut rand::rngs::OsRng,
@@ -2399,11 +2423,11 @@ mod tests {
         assert!(!trunk.borrow().docs.is_empty());
         assert!(trunk.borrow().docs.len() <= 3);
 
-        // FIXME add transact right on Keyhive taht aslo dispatches new events
+        // FIXME add transact right on Keyhive that aslo dispatches new events
         let () = tx?;
 
         // tx is done, so should be all caught up. Counts are now certain.
-        assert_eq!(trunk.borrow().active.borrow().prekey_pairs.len(), 8);
+        assert_eq!(trunk.borrow().active.borrow().secret_store.keys.len(), 8);
         assert_eq!(trunk.borrow().docs.len(), 3);
         assert_eq!(trunk.borrow().groups.len(), 4);
 

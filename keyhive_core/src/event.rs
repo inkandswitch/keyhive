@@ -171,8 +171,11 @@ mod tests {
             agent::Agent,
             individual::{id::IndividualId, Individual},
         },
-        store::ciphertext::memory::MemoryCiphertextStore,
+        store::{
+            ciphertext::memory::MemoryCiphertextStore, secret_key::memory::MemorySecretKeyStore,
+        },
     };
+    use rand::rngs::ThreadRng;
     use std::{cell::RefCell, collections::BTreeMap};
     use test_utils::init_logging;
     use testresult::TestResult;
@@ -216,7 +219,9 @@ mod tests {
         let hash2 = Digest::hash(&cgka_op_2);
         let hash3 = Digest::hash(&cgka_op_3);
 
-        let events: Vec<Event<MemorySigner, [u8; 32], NoListener>> = vec![
+        let events: Vec<
+            Event<MemorySigner, MemorySecretKeyStore<ThreadRng>, [u8; 32], NoListener>,
+        > = vec![
             Event::CgkaOperation(Rc::new(cgka_op_1)),
             Event::CgkaOperation(Rc::new(cgka_op_2)),
             Event::PrekeysExpanded(Rc::new(
@@ -242,7 +247,7 @@ mod tests {
         let ciphertext1 = Rc::new(EncryptedContent::new(
             Siv::new(&SymmetricKey::generate(&mut csprng), &[4, 5, 6], doc_id1)?,
             vec![4, 5, 6],
-            [1u8; 32].into(),
+            ShareKey::from([1u8; 32]),
             hash1,
             [1u8; 32],
             [1u8; 32].into(),

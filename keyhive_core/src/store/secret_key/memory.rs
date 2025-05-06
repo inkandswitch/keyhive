@@ -24,6 +24,10 @@ impl<R: rand::CryptoRng + rand::RngCore + Clone> MemorySecretKeyStore<R> {
             keys: HashMap::new(),
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
 }
 
 impl<R: rand::CryptoRng + rand::RngCore + Clone> PartialEq for MemorySecretKeyStore<R> {

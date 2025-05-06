@@ -50,6 +50,12 @@ impl Dupe for ShareKey {
     }
 }
 
+impl From<[u8; 32]> for ShareKey {
+    fn from(bytes: [u8; 32]) -> Self {
+        Self(x25519_dalek::PublicKey::from(bytes))
+    }
+}
+
 impl fmt::LowerHex for ShareKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         crate::util::hex::bytes_as_hex(self.0.as_bytes().iter(), f)
