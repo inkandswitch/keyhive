@@ -2,12 +2,12 @@ use std::fmt;
 
 /// A wrapper around a byte array representing a hash
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Hash {
+pub enum DebugHash {
     Hash(Vec<u8>),
     Nickname { original: Vec<u8>, nickname: String },
 }
 
-impl Hash {
+impl DebugHash {
     /// Create a new Hash from bytes
     pub fn new(bytes: &[u8], nicknames: &super::Nicknames) -> Self {
         if let Some(nickname) = nicknames.names.get(bytes) {
@@ -40,7 +40,7 @@ impl Hash {
     }
 }
 
-impl fmt::Display for Hash {
+impl fmt::Display for DebugHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.short_hex())
     }

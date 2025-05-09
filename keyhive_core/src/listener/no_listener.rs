@@ -9,6 +9,7 @@ use crate::{
         group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
+    store::secret_key::traits::ShareSecretStore,
 };
 use derive_more::derive::Debug;
 use dupe::Dupe;
@@ -26,9 +27,11 @@ impl PrekeyListener for NoListener {
     async fn on_prekey_rotated(&self, _e: &Rc<Signed<RotateKeyOp>>) {}
 }
 
-impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for NoListener {
-    async fn on_delegation(&self, _data: &Rc<Signed<Delegation<S, T, NoListener>>>) {}
-    async fn on_revocation(&self, _data: &Rc<Signed<Revocation<S, T, NoListener>>>) {}
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef> MembershipListener<S, K, T>
+    for NoListener
+{
+    async fn on_delegation(&self, _data: &Rc<Signed<Delegation<S, K, T, NoListener>>>) {}
+    async fn on_revocation(&self, _data: &Rc<Signed<Revocation<S, K, T, NoListener>>>) {}
 }
 
 impl CgkaListener for NoListener {

@@ -5,6 +5,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{signed::Signed, signer::async_signer::AsyncSigner},
     principal::group::{delegation::Delegation, revocation::Revocation},
+    store::secret_key::traits::ShareSecretStore,
 };
 use std::rc::Rc;
 
@@ -23,10 +24,12 @@ use std::rc::Rc;
 /// [`Group`]: crate::principal::group::Group
 /// [`Document`]: crate::principal::document::Document
 #[allow(async_fn_in_trait)]
-pub trait MembershipListener<S: AsyncSigner, T: ContentRef>: PrekeyListener + CgkaListener {
+pub trait MembershipListener<S: AsyncSigner, K: ShareSecretStore, T: ContentRef>:
+    PrekeyListener + CgkaListener
+{
     /// React to new [`Delegation`]s.
-    async fn on_delegation(&self, data: &Rc<Signed<Delegation<S, T, Self>>>);
+    async fn on_delegation(&self, data: &Rc<Signed<Delegation<S, K, T, Self>>>);
 
     /// React to new [`Revocation`]s.
-    async fn on_revocation(&self, data: &Rc<Signed<Revocation<S, T, Self>>>);
+    async fn on_revocation(&self, data: &Rc<Signed<Revocation<S, K, T, Self>>>);
 }

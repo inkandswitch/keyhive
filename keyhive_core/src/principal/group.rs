@@ -23,7 +23,10 @@ use super::{
 };
 use crate::{
     access::Access,
-    cgka::{error::CgkaError, operation::CgkaOperation},
+    cgka::{
+        beekem::DecryptTreeSecretError, error::CgkaError, operation::CgkaOperation,
+        secret_store::DecryptSecretError, RemoveError,
+    },
     content::reference::ContentRef,
     crypto::{
         digest::Digest,
@@ -37,7 +40,10 @@ use crate::{
         verifiable::Verifiable,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
-    store::{delegation::DelegationStore, revocation::RevocationStore},
+    store::{
+        delegation::DelegationStore, revocation::RevocationStore,
+        secret_key::traits::ShareSecretStore,
+    },
     util::{content_addressed_map::CaMap, hex::ToHexString},
 };
 use derivative::Derivative;
@@ -64,35 +70,41 @@ use tracing::{debug, info, instrument};
 /// through the network of [`Agent`]s.
 #[derive(Clone, Derivative)]
 #[derive_where(Debug, PartialEq; T)]
-pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener>
-{
+pub struct Group<
+    S: AsyncSigner,
+    K: ShareSecretStore,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<S, K, T> = NoListener,
+> {
     pub(crate) id_or_indie: IdOrIndividual,
 
     /// The current view of members of a group.
     #[allow(clippy::type_complexity)]
-    pub(crate) members: HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>>,
+    pub(crate) members: HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, K, T, L>>>>>,
 
     /// Current view of revocations
     #[allow(clippy::type_complexity)]
-    pub(crate) active_revocations: HashMap<[u8; 64], Rc<Signed<Revocation<S, T, L>>>>,
+    pub(crate) active_revocations: HashMap<[u8; 64], Rc<Signed<Revocation<S, K, T, L>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
-    pub(crate) state: GroupState<S, T, L>,
+    pub(crate) state: GroupState<S, K, T, L>,
 
     #[derive_where(skip)]
     pub(crate) listener: L,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    Group<S, K, T, L>
+{
     #[instrument(
         skip_all,
         fields(group_id = %group_id, head_sig = ?head.signature.to_bytes())
     )]
     pub async fn new(
         group_id: GroupId,
-        head: Rc<Signed<Delegation<S, T, L>>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        head: Rc<Signed<Delegation<S, K, T, L>>>,
+        delegations: DelegationStore<S, K, T, L>,
+        revocations: RevocationStore<S, K, T, L>,
         listener: L,
     ) -> Self {
         listener.on_delegation(&head).await;
@@ -111,9 +123,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     #[instrument(skip(delegations, revocations, listener))]
     pub async fn from_individual(
         individual: Individual,
-        head: Rc<Signed<Delegation<S, T, L>>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        head: Rc<Signed<Delegation<S, K, T, L>>>,
+        delegations: DelegationStore<S, K, T, L>,
+        revocations: RevocationStore<S, K, T, L>,
         listener: L,
     ) -> Self {
         listener.on_delegation(&head).await;
@@ -130,12 +142,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
 
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
-        parents: NonEmpty<Agent<S, T, L>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        parents: NonEmpty<Agent<S, K, T, L>>,
+        delegations: DelegationStore<S, K, T, L>,
+        revocations: RevocationStore<S, K, T, L>,
         listener: L,
         csprng: &mut R,
-    ) -> Result<Group<S, T, L>, SigningError> {
+    ) -> Result<Group<S, K, T, L>, SigningError> {
         let (group_result, _vk) = EphemeralSigner::with_signer(csprng, |verifier, signer| {
             Self::generate_after_content(
                 signer,
@@ -161,9 +173,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     pub(crate) async fn generate_after_content(
         signer: Box<dyn SyncSignerBasic>,
         verifier: ed25519_dalek::VerifyingKey,
-        parents: NonEmpty<Agent<S, T, L>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        parents: NonEmpty<Agent<S, K, T, L>>,
+        delegations: DelegationStore<S, K, T, L>,
+        revocations: RevocationStore<S, K, T, L>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
         listener: L,
     ) -> Result<Self, SigningError> {
@@ -247,19 +259,24 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>> {
+    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, K, T, L>>>>> {
         &self.members
     }
 
     #[instrument(skip(self), fields(group_id = %self.group_id()))]
-    pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
-        struct GroupAccess<Z: AsyncSigner, U: ContentRef, M: MembershipListener<Z, U>> {
-            agent: Agent<Z, U, M>,
+    pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<S, K, T, L>, Access)> {
+        struct GroupAccess<
+            Z: AsyncSigner,
+            V: ShareSecretStore,
+            U: ContentRef,
+            M: MembershipListener<Z, V, U>,
+        > {
+            agent: Agent<Z, V, U, M>,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess<S, T, L>> = vec![];
+        let mut explore: Vec<GroupAccess<S, K, T, L>> = vec![];
         let mut seen: HashSet<([u8; 64], Access)> = HashSet::new();
 
         for member in self.members.keys() {
@@ -276,7 +293,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             });
         }
 
-        let mut caps: HashMap<Identifier, (Agent<S, T, L>, Access)> = HashMap::new();
+        let mut caps: HashMap<Identifier, (Agent<S, K, T, L>, Access)> = HashMap::new();
 
         while let Some(GroupAccess {
             agent: member,
@@ -298,7 +315,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             caps.insert(member.id(), (member.dupe(), current_path_access));
 
             if let Some(membered) = match member {
-                Agent::Group(inner_group) => Some(Membered::<S, T, L>::from(inner_group)),
+                Agent::Group(inner_group) => Some(Membered::<S, K, T, L>::from(inner_group)),
                 Agent::Document(doc) => Some(doc.into()),
                 _ => None,
             } {
@@ -327,11 +344,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         caps
     }
 
-    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<S, T, L>>> {
+    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<S, K, T, L>>> {
         &self.state.delegation_heads
     }
 
-    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<S, T, L>>> {
+    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<S, K, T, L>>> {
         &self.state.revocation_heads
     }
 
@@ -340,7 +357,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     pub fn get_capability(
         &self,
         member_id: &Identifier,
-    ) -> Option<&Rc<Signed<Delegation<S, T, L>>>> {
+    ) -> Option<&Rc<Signed<Delegation<S, K, T, L>>>> {
         self.members.get(member_id).and_then(|delegations| {
             delegations
                 .iter()
@@ -351,8 +368,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn get_agent_revocations(
         &self,
-        agent: &Agent<S, T, L>,
-    ) -> Vec<Rc<Signed<Revocation<S, T, L>>>> {
+        agent: &Agent<S, K, T, L>,
+    ) -> Vec<Rc<Signed<Revocation<S, K, T, L>>>> {
         self.state
             .revocations
             .borrow()
@@ -371,8 +388,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     #[instrument(skip_all, fields(group_id = %self.group_id()))]
     pub fn receive_delegation(
         &mut self,
-        delegation: Rc<Signed<Delegation<S, T, L>>>,
-    ) -> Result<Digest<Signed<Delegation<S, T, L>>>, error::AddError> {
+        delegation: Rc<Signed<Delegation<S, K, T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<S, K, T, L>>>, error::AddError> {
         let digest = self.state.add_delegation(delegation)?;
         info!("{:x?}", &digest);
         self.rebuild();
@@ -383,8 +400,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     #[instrument(skip(self), fields(group_id = %self.group_id()))]
     pub async fn receive_revocation(
         &mut self,
-        revocation: Rc<Signed<Revocation<S, T, L>>>,
-    ) -> Result<Digest<Signed<Revocation<S, T, L>>>, error::AddError> {
+        revocation: Rc<Signed<Revocation<S, K, T, L>>>,
+    ) -> Result<Digest<Signed<Revocation<S, K, T, L>>>, error::AddError> {
         self.listener.on_revocation(&revocation).await;
         let digest = self.state.add_revocation(revocation)?;
         self.rebuild();
@@ -403,11 +420,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     ]
     pub async fn add_member(
         &mut self,
-        member_to_add: Agent<S, T, L>,
+        member_to_add: Agent<S, K, T, L>,
         can: Access,
         signer: &S,
-        relevant_docs: &[Rc<RefCell<Document<S, T, L>>>],
-    ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError> {
+        relevant_docs: &[Rc<RefCell<Document<S, K, T, L>>>],
+    ) -> Result<AddMemberUpdate<S, K, T, L>, AddGroupMemberError<K>> {
         let after_content = relevant_docs
             .iter()
             .map(|d| {
@@ -424,11 +441,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
 
     pub(crate) async fn add_member_with_manual_content(
         &mut self,
-        member_to_add: Agent<S, T, L>,
+        member_to_add: Agent<S, K, T, L>,
         can: Access,
         signer: &S,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError> {
+    ) -> Result<AddMemberUpdate<S, K, T, L>, AddGroupMemberError<K>> {
         let proof = if self.verifying_key() == signer.verifying_key() {
             None
         } else {
@@ -479,11 +496,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     )]
     pub(crate) async fn add_cgka_member(
         &mut self,
-        delegation: Rc<Signed<Delegation<S, T, L>>>,
+        delegation: Rc<Signed<Delegation<S, K, T, L>>>,
         signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, DecryptTreeSecretError<K>> {
         let mut cgka_ops = Vec::new();
-        let docs: Vec<Rc<RefCell<Document<S, T, L>>>> = self
+        let docs: Vec<Rc<RefCell<Document<S, K, T, L>>>> = self
             .transitive_members()
             .values()
             .filter_map(|(agent, _)| {
@@ -521,12 +538,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         retain_all_other_members: bool,
         signer: &S,
         after_content: &BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<S, K, T, L>, RevokeMemberError<K>> {
         let vk = signer.verifying_key();
         let mut revocations = vec![];
         let og_dlgs: Vec<_> = self.members.values().flatten().cloned().collect();
 
-        let all_to_revoke: Vec<Rc<Signed<Delegation<S, T, L>>>> = self
+        let all_to_revoke: Vec<Rc<Signed<Delegation<S, K, T, L>>>> = self
             .members()
             .get(&member_to_remove)
             .map(|ne| Vec::<_>::from(ne.clone())) // Semi-inexpensive because `Vec<Rc<_>>`
@@ -625,7 +642,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         let mut cgka_ops = Vec::new();
         let (individuals, docs): (
             Vec<Rc<RefCell<Individual>>>,
-            Vec<Rc<RefCell<Document<S, T, L>>>>,
+            Vec<Rc<RefCell<Document<S, K, T, L>>>>,
         ) = self.transitive_members().values().fold(
             (vec![], vec![]),
             |(mut indies, mut docs), (agent, _)| {
@@ -687,10 +704,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     async fn build_revocation(
         &mut self,
         signer: &S,
-        revoke: Rc<Signed<Delegation<S, T, L>>>,
-        proof: Option<Rc<Signed<Delegation<S, T, L>>>>,
+        revoke: Rc<Signed<Delegation<S, K, T, L>>>,
+        proof: Option<Rc<Signed<Delegation<S, K, T, L>>>>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Rc<Signed<Revocation<S, T, L>>>, SigningError> {
+    ) -> Result<Rc<Signed<Revocation<S, K, T, L>>>, SigningError> {
         let revocation = signer
             .try_sign_async(Revocation {
                 revoke,
@@ -708,7 +725,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         self.active_revocations.clear();
 
         #[allow(clippy::type_complexity)]
-        let mut dlgs_in_play: HashMap<[u8; 64], Rc<Signed<Delegation<S, T, L>>>> = HashMap::new();
+        let mut dlgs_in_play: HashMap<[u8; 64], Rc<Signed<Delegation<S, K, T, L>>>> =
+            HashMap::new();
         let mut revoked_dlgs: HashSet<[u8; 64]> = HashSet::new();
 
         // {dlg_dep => Set<dlgs that depend on it>}
@@ -835,8 +853,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
 
     pub(crate) fn dummy_from_archive(
         archive: GroupArchive<T>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        delegations: DelegationStore<S, K, T, L>,
+        revocations: RevocationStore<S, K, T, L>,
         listener: L,
     ) -> Self {
         Self {
@@ -868,7 +886,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Group<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Hash
+    for Group<S, K, T, L>
+{
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id_or_indie.hash(state);
         self.members.iter().collect::<BTreeMap<_, _>>().hash(state);
@@ -876,7 +896,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Group<
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Group<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Verifiable
+    for Group<S, K, T, L>
+{
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }
@@ -896,7 +918,7 @@ pub struct GroupArchive<T: ContentRef> {
 }
 
 #[derive(Debug, Error)]
-pub enum AddGroupMemberError {
+pub enum AddGroupMemberError<K: ShareSecretStore> {
     #[error(transparent)]
     SigningError(#[from] SigningError),
 
@@ -911,10 +933,13 @@ pub enum AddGroupMemberError {
 
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
+
+    #[error(transparent)]
+    DecryptTreeSecretError(#[from] DecryptTreeSecretError<K>),
 }
 
 #[derive(Debug, Error)]
-pub enum RevokeMemberError {
+pub enum RevokeMemberError<K: ShareSecretStore> {
     #[error(transparent)]
     AddError(#[from] error::AddError),
 
@@ -928,7 +953,13 @@ pub enum RevokeMemberError {
     CgkaError(#[from] CgkaError),
 
     #[error("Redelagation error")]
-    RedelegationError(#[from] AddGroupMemberError),
+    RedelegationError(#[from] AddGroupMemberError<K>),
+
+    #[error("Revocation error")]
+    DecryptSecretError(#[from] DecryptSecretError<K>),
+
+    #[error(transparent)]
+    RemoveError(#[from] RemoveError<K>),
 }
 
 #[cfg(test)]
@@ -937,22 +968,31 @@ mod tests {
     use super::*;
     use crate::crypto::signer::memory::MemorySigner;
     use crate::principal::active::Active;
+    use crate::store::secret_key::memory::MemorySecretKeyStore;
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
+    use rand::rngs::ThreadRng;
     use std::cell::RefCell;
 
-    async fn setup_user<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        csprng: &mut R,
-    ) -> Active<MemorySigner, T> {
-        let sk = MemorySigner::generate(csprng);
-        Active::generate(sk, NoListener, csprng).await.unwrap()
+    async fn setup_user<T: ContentRef>() -> Active<MemorySigner, MemorySecretKeyStore<ThreadRng>> {
+        let sk = MemorySigner::generate(&mut rand::thread_rng());
+        Active::generate(
+            sk,
+            MemorySecretKeyStore {
+                csprng: rand::thread_rng(),
+                keys: HashMap::new(),
+            },
+            NoListener,
+        )
+        .await
+        .unwrap()
     }
 
-    async fn setup_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        alice: Rc<RefCell<Active<MemorySigner, T>>>,
-        bob: Rc<RefCell<Active<MemorySigner, T>>>,
-        csprng: &mut R,
-    ) -> [Rc<RefCell<Group<MemorySigner, T>>>; 4] {
+    async fn setup_groups<T: ContentRef>(
+        alice: Rc<RefCell<Active<MemorySigner, MemorySecretKeyStore<ThreadRng>, T>>>,
+        bob: Rc<RefCell<Active<MemorySigner, MemorySecretKeyStore<ThreadRng>, T>>>,
+        csprng: &mut ThreadRng,
+    ) -> [Rc<RefCell<Group<MemorySigner, MemorySecretKeyStore<ThreadRng>, T>>>; 4] {
         /*              ┌───────────┐        ┌───────────┐
                         │           │        │           │
         ╔══════════════▶│   Alice   │        │    Bob    │
@@ -976,7 +1016,7 @@ mod tests {
                         │           │
                         └───────────┘ */
 
-        let alice_agent: Agent<MemorySigner, T, _> = alice.into();
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>, T, _> = alice.into();
         let bob_agent = bob.into();
 
         let dlg_store = DelegationStore::new();
@@ -1035,10 +1075,10 @@ mod tests {
 
     #[allow(clippy::await_holding_refcell_ref)] // FIXME
     async fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        alice: Rc<RefCell<Active<MemorySigner, T>>>,
-        bob: Rc<RefCell<Active<MemorySigner, T>>>,
+        alice: Rc<RefCell<Active<MemorySigner, MemorySecretKeyStore<ThreadRng>, T>>>,
+        bob: Rc<RefCell<Active<MemorySigner, MemorySecretKeyStore<ThreadRng>, T>>>,
         csprng: &mut R,
-    ) -> [Rc<RefCell<Group<MemorySigner, T>>>; 10] {
+    ) -> [Rc<RefCell<Group<MemorySigner, MemorySecretKeyStore<ThreadRng>, T>>>; 10] {
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
 
@@ -1196,13 +1236,13 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
+        let bob = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
 
-        let [g0, ..]: [Rc<RefCell<Group<MemorySigner, String>>>; 4] =
+        let [g0, ..]: [Rc<RefCell<Group<MemorySigner, MemorySecretKeyStore<ThreadRng>>>>; 4] =
             setup_groups(alice.dupe(), bob, csprng).await;
         let g0_mems = g0.borrow().transitive_members();
 
@@ -1216,11 +1256,11 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
+        let bob = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
 
         let [g0, g1, ..] = setup_groups(alice.dupe(), bob, csprng).await;
         let g1_mems = g1.borrow().transitive_members();
@@ -1231,14 +1271,14 @@ mod tests {
                 (
                     alice_id,
                     (
-                        Agent::<MemorySigner, String>::from(alice.dupe()),
+                        Agent::<MemorySigner, MemorySecretKeyStore<ThreadRng>>::from(alice.dupe()),
                         Access::Admin
                     )
                 ),
                 (
                     g0.borrow().id(),
                     (
-                        Agent::<MemorySigner, String>::from(g0.dupe()),
+                        Agent::<MemorySigner, MemorySecretKeyStore<ThreadRng>>::from(g0.dupe()),
                         Access::Admin
                     )
                 )
@@ -1251,16 +1291,16 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
-        let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let bob_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = bob.dupe().into();
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, _g3]: [Rc<RefCell<Group<MemorySigner, String>>>; 4] =
-            setup_groups(alice.dupe(), bob.dupe(), csprng).await;
+        let [g0, g1, g2, _g3]: [Rc<RefCell<Group<MemorySigner, MemorySecretKeyStore<ThreadRng>>>>;
+            4] = setup_groups(alice.dupe(), bob.dupe(), csprng).await;
         let g1_mems = g2.borrow().transitive_members();
 
         assert_eq!(
@@ -1279,16 +1319,16 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
-        let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let bob_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = bob.dupe().into();
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, g3]: [Rc<RefCell<Group<MemorySigner, String>>>; 4] =
-            setup_groups(alice.dupe(), bob.dupe(), csprng).await;
+        let [g0, g1, g2, g3]: [Rc<RefCell<Group<MemorySigner, MemorySecretKeyStore<ThreadRng>>>>;
+            4] = setup_groups(alice.dupe(), bob.dupe(), csprng).await;
         let g3_mems = g3.borrow().transitive_members();
 
         assert_eq!(g3_mems.len(), 5);
@@ -1310,16 +1350,17 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
-        let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let bob_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = bob.dupe().into();
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]: [Rc<RefCell<Group<MemorySigner, String>>>;
-            10] = setup_cyclic_groups(alice.dupe(), bob.dupe(), csprng).await;
+        let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]: [Rc<
+            RefCell<Group<MemorySigner, MemorySecretKeyStore<ThreadRng>>>,
+        >; 10] = setup_cyclic_groups(alice.dupe(), bob.dupe(), csprng).await;
         let g0_mems = g0.borrow().transitive_members();
 
         assert_eq!(g0_mems.len(), 11);
@@ -1327,10 +1368,7 @@ mod tests {
         assert_eq!(
             g0_mems,
             HashMap::from_iter([
-                (
-                    alice_id,
-                    (Agent::<_, String, _>::from(alice), Access::Admin)
-                ),
+                (alice_id, (Agent::from(alice), Access::Admin)),
                 (bob_id, (bob.into(), Access::Admin)),
                 (g1.borrow().id(), (g1.dupe().into(), Access::Admin)),
                 (g2.borrow().id(), (g2.dupe().into(), Access::Admin)),
@@ -1351,20 +1389,24 @@ mod tests {
         test_utils::init_logging();
         let mut csprng = rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(&mut csprng).await));
-        let alice_agent: Agent<MemorySigner> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = alice.dupe().into();
 
-        let bob = Rc::new(RefCell::new(setup_user(&mut csprng).await));
-        let bob_agent: Agent<MemorySigner> = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let bob_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = bob.dupe().into();
 
-        let carol = Rc::new(RefCell::new(setup_user(&mut csprng).await));
-        let carol_agent: Agent<MemorySigner> = carol.dupe().into();
+        let carol = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let carol_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = carol.dupe().into();
 
         let signer = MemorySigner::generate(&mut csprng);
         let active = Rc::new(RefCell::new(
-            Active::generate(signer, NoListener, &mut csprng)
-                .await
-                .unwrap(),
+            Active::generate(
+                signer,
+                MemorySecretKeyStore::new(rand::thread_rng()),
+                NoListener,
+            )
+            .await
+            .unwrap(),
         ));
 
         let active_id = active.borrow().id();
@@ -1495,19 +1537,18 @@ mod tests {
         // └─────────┘
 
         test_utils::init_logging();
-        let mut csprng = rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(&mut csprng).await));
-        let alice_agent: Agent<MemorySigner> = alice.dupe().into();
+        let alice = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let alice_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = alice.dupe().into();
 
-        let bob = Rc::new(RefCell::new(setup_user(&mut csprng).await));
-        let bob_agent: Agent<MemorySigner> = bob.dupe().into();
+        let bob = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let bob_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = bob.dupe().into();
 
-        let carol = Rc::new(RefCell::new(setup_user(&mut csprng).await));
-        let carol_agent: Agent<MemorySigner> = carol.dupe().into();
+        let carol = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let carol_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = carol.dupe().into();
 
-        let dan = Rc::new(RefCell::new(setup_user(&mut csprng).await));
-        let dan_agent: Agent<MemorySigner> = dan.dupe().into();
+        let dan = Rc::new(RefCell::new(setup_user::<[u8; 32]>().await));
+        let dan_agent: Agent<MemorySigner, MemorySecretKeyStore<ThreadRng>> = dan.dupe().into();
 
         let alice_id = alice.borrow().id().into();
         let alice_signer = alice.borrow().signer.dupe();
@@ -1528,7 +1569,7 @@ mod tests {
             dlg_store.dupe(),
             rev_store.dupe(),
             NoListener,
-            &mut csprng,
+            &mut rand::thread_rng(),
         )
         .await
         .unwrap();

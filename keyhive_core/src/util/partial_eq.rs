@@ -1,18 +1,31 @@
-use crate::crypto::share_key::{ShareKey, ShareSecretKey};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap},
     hash::{DefaultHasher, Hash, Hasher},
 };
 
-pub(crate) fn prekey_partial_eq(
-    xs: &BTreeMap<ShareKey, ShareSecretKey>,
-    ys: &BTreeMap<ShareKey, ShareSecretKey>,
+pub(crate) fn hash_map_key_partial_eq<K: Hash, V>(
+    map1: &HashMap<K, V>,
+    map2: &HashMap<K, V>,
 ) -> bool {
-    xs.len() == ys.len()
-        && xs
-            .iter()
-            .zip(ys.iter())
-            .all(|((xk, xv), (yk, yv))| xk == yk && xv.to_bytes() == yv.to_bytes())
+    let ordered1: BTreeSet<_> = map1
+        .keys()
+        .map(|k| {
+            let mut hasher = DefaultHasher::new();
+            (*k).hash(&mut hasher);
+            hasher.finish()
+        })
+        .collect();
+
+    let ordered2: BTreeSet<_> = map2
+        .keys()
+        .map(|k| {
+            let mut hasher = DefaultHasher::new();
+            (*k).hash(&mut hasher);
+            hasher.finish()
+        })
+        .collect();
+
+    ordered1 == ordered2
 }
 
 #[allow(dead_code)] // Not dead code; just used in a macro

@@ -1,17 +1,23 @@
 use super::{
     error::CgkaError,
-    keys::{ConflictKeys, NodeKey, ShareKeyMap},
+    keys::{ConflictKeys, NodeKey},
     treemath::TreeNodeIndex,
 };
-use crate::crypto::{
-    encrypted::EncryptedSecret,
-    share_key::{ShareKey, ShareSecretKey},
+use crate::{
+    crypto::{
+        encrypted::EncryptedSecret,
+        share_key::{ShareKey, ShareSecretKey},
+        signed::SigningError,
+    },
+    store::secret_key::traits::{DecryptionError, ShareSecretStore},
 };
+use derive_where::derive_where;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashSet},
 };
+use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
@@ -72,16 +78,26 @@ impl SecretStore {
         }
     }
 
-    pub fn decrypt_secret(
+    pub async fn decrypt_secret<S: ShareSecretStore>(
         &self,
         child_node_key: &NodeKey,
-        child_sks: &mut ShareKeyMap,
+        child_sks: &mut S,
         seen_idxs: &[TreeNodeIndex],
-    ) -> Result<ShareSecretKey, CgkaError> {
+    ) -> Result<S::SecretKey, DecryptSecretError<S>> {
         if self.has_conflict() {
-            return Err(CgkaError::UnexpectedKeyConflict);
+            return Err(CgkaError::UnexpectedKeyConflict)?;
         }
-        self.versions[0].decrypt_secret(child_node_key, child_sks, seen_idxs)
+
+        let secret = self.versions[0]
+            .decrypt_secret(child_node_key, child_sks, seen_idxs)
+            .await?;
+
+        let imported = child_sks
+            .import_secret_key(secret)
+            .await
+            .map_err(DecryptSecretError::ImportKeyError)?;
+
+        Ok(imported)
     }
 
     // TODO: Is it possible we're bringing in duplicate keys here?
@@ -104,6 +120,25 @@ impl SecretStore {
     }
 }
 
+#[derive(Error)]
+#[derive_where(Debug)]
+pub enum DecryptSecretError<K: ShareSecretStore> {
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
+
+    #[error("Failed to decrypt the secret: {0}")]
+    DecryptSecretError(#[from] StoreDecryptSecretError<K>),
+
+    #[error("Failed to find a secret key: {0}")]
+    GetSecretError(K::GetSecretError),
+
+    #[error("Failed to import the secret key: {0}")]
+    ImportKeyError(K::ImportKeyError),
+
+    #[error("Unable to sign: {0}")]
+    SigningError(#[from] SigningError),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub(crate) struct SecretStoreVersion {
@@ -118,12 +153,12 @@ pub(crate) struct SecretStoreVersion {
 }
 
 impl SecretStoreVersion {
-    pub(crate) fn decrypt_secret(
+    pub(crate) async fn decrypt_secret<S: ShareSecretStore>(
         &self,
         child_node_key: &NodeKey,
-        child_sks: &ShareKeyMap,
+        child_sks: &S,
         seen_idxs: &[TreeNodeIndex],
-    ) -> Result<ShareSecretKey, CgkaError> {
+    ) -> Result<ShareSecretKey, StoreDecryptSecretError<S>> {
         let is_encrypter = child_node_key.contains_key(&self.encrypter_pk);
         let mut lookup_idx = seen_idxs.last().ok_or(CgkaError::EncryptedSecretNotFound)?;
         if !self.sk.contains_key(lookup_idx) {
@@ -136,7 +171,7 @@ impl SecretStoreVersion {
                 }
             }
             if !found {
-                return Err(CgkaError::EncryptedSecretNotFound);
+                return Err(CgkaError::EncryptedSecretNotFound)?;
             }
         }
         let encrypted = self
@@ -146,14 +181,19 @@ impl SecretStoreVersion {
 
         let decrypted: Vec<u8> = if is_encrypter {
             let secret_key = child_sks
-                .get(&self.encrypter_pk)
+                .get_secret_key(&self.encrypter_pk)
+                .await
+                .map_err(StoreDecryptSecretError::GetSecretError)?
                 .ok_or(CgkaError::SecretKeyNotFound)?;
 
             encrypted
-                .try_encrypter_decrypt(secret_key)
+                .try_encrypter_decrypt(&secret_key)
+                .await
                 .map_err(|e| CgkaError::Decryption(e.to_string()))?
         } else {
-            child_sks.try_decrypt_encryption(self.encrypter_pk, encrypted)?
+            child_sks
+                .try_decrypt_encryption(self.encrypter_pk, encrypted)
+                .await?
         };
 
         let arr: [u8; 32] = decrypted.try_into().map_err(|_| CgkaError::Conversion)?;
@@ -171,4 +211,17 @@ impl PartialOrd for SecretStoreVersion {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
+}
+
+#[derive(Error)]
+#[derive_where(Debug)]
+pub enum StoreDecryptSecretError<K: ShareSecretStore> {
+    #[error(transparent)]
+    DecryptionError(#[from] DecryptionError<K>),
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
+
+    #[error("Failed to get the secret key: {0}")]
+    GetSecretError(K::GetSecretError),
 }

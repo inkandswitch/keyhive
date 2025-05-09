@@ -2,11 +2,12 @@ use crate::{
     crypto::{digest::Digest, signer::async_signer::AsyncSigner},
     event::Event,
     listener::membership::MembershipListener,
+    store::secret_key::traits::ShareSecretStore,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
-mod hash;
-pub use hash::Hash;
+pub mod hash;
+use hash::DebugHash;
 use serde::Serialize;
 pub mod terminal;
 
@@ -24,8 +25,8 @@ pub struct DebugEventTable {
 pub struct DebugEventRow {
     pub index: usize,
     pub event_type: String,
-    pub event_hash: Hash,
-    pub issuer: Hash,
+    pub event_hash: DebugHash,
+    pub issuer: DebugHash,
     pub details: DebugEventDetails,
 }
 
@@ -33,27 +34,27 @@ pub struct DebugEventRow {
 #[derive(Debug, Clone)]
 pub enum DebugEventDetails {
     PrekeysExpanded {
-        share_key: Hash,
+        share_key: DebugHash,
     },
     PrekeyRotated {
-        old_key: Hash,
-        new_key: Hash,
+        old_key: DebugHash,
+        new_key: DebugHash,
     },
     CgkaOperation {
         op_type: String,
-        doc_id: Hash,
+        doc_id: DebugHash,
         op_details: CgkaOperationDetails,
     },
     Delegated {
-        subject: Hash,
+        subject: DebugHash,
         can_access: String,
-        delegate: Hash,
+        delegate: DebugHash,
         after_revocations_count: usize,
         after_content_count: usize,
     },
     Revoked {
-        subject: Hash,
-        revoke: Hash,
+        subject: DebugHash,
+        revoke: DebugHash,
         has_proof: bool,
         after_content_count: usize,
     },
@@ -63,33 +64,36 @@ pub enum DebugEventDetails {
 #[derive(Debug, Clone)]
 pub enum CgkaOperationDetails {
     Add {
-        id: Hash,
-        sharekey: Hash,
+        id: DebugHash,
+        sharekey: DebugHash,
         leaf_index: u32,
-        predecessors: Vec<Hash>,
+        predecessors: Vec<DebugHash>,
     },
     Remove {
-        id: Hash,
+        id: DebugHash,
         leaf_index: u32,
-        removed_keys: Vec<Hash>,
-        predecessors: Vec<Hash>,
+        removed_keys: Vec<DebugHash>,
+        predecessors: Vec<DebugHash>,
     },
     Update {
-        id: Hash,
-        new_keys: Vec<Hash>,
+        id: DebugHash,
+        new_keys: Vec<DebugHash>,
         path_length: usize,
-        predecessors: Vec<Hash>,
+        predecessors: Vec<DebugHash>,
     },
 }
 
 impl DebugEventTable {
     /// Create a new debug event table from a vector of events.
-    pub fn from_events<S, T, L>(events: Vec<Event<S, T, L>>, nicknames: Nicknames) -> Self
-    where
+    pub fn from_events<
         S: AsyncSigner,
-        T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-        L: MembershipListener<S, T>,
-    {
+        T: Debug + Eq + Clone + Hash + PartialOrd + Serialize,
+        K: ShareSecretStore,
+        L: MembershipListener<S, K, T>,
+    >(
+        events: Vec<Event<S, K, T, L>>,
+        nicknames: Nicknames,
+    ) -> Self {
         if events.is_empty() {
             return Self {
                 rows: Vec::new(),
@@ -122,19 +126,24 @@ impl DebugEventTable {
 
 impl DebugEventRow {
     /// Create a new debug event row from an event.
-    pub fn from_event<S, T, L>(idx: usize, event: &Event<S, T, L>, nicknames: &Nicknames) -> Self
+    pub fn from_event<S, K, T, L>(
+        idx: usize,
+        event: &Event<S, K, T, L>,
+        nicknames: &Nicknames,
+    ) -> Self
     where
         S: AsyncSigner,
+        K: ShareSecretStore,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-        L: MembershipListener<S, T>,
+        L: MembershipListener<S, K, T>,
     {
         match event {
             Event::PrekeysExpanded(signed) => {
                 let payload = signed.payload();
-                let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
-                let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
+                let event_hash = DebugHash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
+                let issuer = DebugHash::new(signed.issuer().as_bytes(), nicknames);
                 let details = DebugEventDetails::PrekeysExpanded {
-                    share_key: Hash::new(payload.share_key.as_bytes(), nicknames),
+                    share_key: DebugHash::new(payload.share_key.as_bytes(), nicknames),
                 };
 
                 Self {
@@ -147,11 +156,11 @@ impl DebugEventRow {
             }
             Event::PrekeyRotated(signed) => {
                 let payload = signed.payload();
-                let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
-                let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
+                let event_hash = DebugHash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
+                let issuer = DebugHash::new(signed.issuer().as_bytes(), nicknames);
                 let details = DebugEventDetails::PrekeyRotated {
-                    old_key: Hash::new(payload.old.as_bytes(), nicknames),
-                    new_key: Hash::new(payload.new.as_bytes(), nicknames),
+                    old_key: DebugHash::new(payload.old.as_bytes(), nicknames),
+                    new_key: DebugHash::new(payload.new.as_bytes(), nicknames),
                 };
 
                 Self {
@@ -164,9 +173,9 @@ impl DebugEventRow {
             }
             Event::CgkaOperation(signed) => {
                 let payload = signed.payload();
-                let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
-                let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
-                let doc_id = Hash::new(payload.doc_id().as_bytes(), nicknames);
+                let event_hash = DebugHash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
+                let issuer = DebugHash::new(signed.issuer().as_bytes(), nicknames);
+                let doc_id = DebugHash::new(payload.doc_id().as_bytes(), nicknames);
 
                 let (op_type, op_details) = match payload {
                     crate::cgka::operation::CgkaOperation::Add {
@@ -177,12 +186,14 @@ impl DebugEventRow {
                         ..
                     } => {
                         let op_details = CgkaOperationDetails::Add {
-                            id: Hash::new(added_id.as_bytes(), nicknames),
-                            sharekey: Hash::new(pk.as_bytes(), nicknames),
+                            id: DebugHash::new(added_id.as_bytes(), nicknames),
+                            sharekey: DebugHash::new(pk.as_bytes(), nicknames),
                             leaf_index: *leaf_index,
                             predecessors: predecessors
                                 .iter()
-                                .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
+                                .map(|predecessor| {
+                                    DebugHash::new(predecessor.as_slice(), nicknames)
+                                })
                                 .collect(),
                         };
                         ("Add", op_details)
@@ -195,15 +206,17 @@ impl DebugEventRow {
                         ..
                     } => {
                         let op_details = CgkaOperationDetails::Remove {
-                            id: Hash::new(id.as_bytes(), nicknames),
+                            id: DebugHash::new(id.as_bytes(), nicknames),
                             leaf_index: *leaf_idx,
                             removed_keys: removed_keys
                                 .iter()
-                                .map(|key| Hash::new(key.as_bytes(), nicknames))
+                                .map(|key| DebugHash::new(key.as_bytes(), nicknames))
                                 .collect(),
                             predecessors: predecessors
                                 .iter()
-                                .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
+                                .map(|predecessor| {
+                                    DebugHash::new(predecessor.as_slice(), nicknames)
+                                })
                                 .collect(),
                         };
                         ("Remove", op_details)
@@ -216,23 +229,25 @@ impl DebugEventRow {
                     } => {
                         let new_keys = match &new_path.leaf_pk {
                             crate::cgka::keys::NodeKey::ShareKey(share_key) => {
-                                vec![Hash::new(share_key.as_bytes(), nicknames)]
+                                vec![DebugHash::new(share_key.as_bytes(), nicknames)]
                             }
                             crate::cgka::keys::NodeKey::ConflictKeys(conflict_keys) => {
                                 // For conflict keys, we'll just use the first one for display purposes
                                 conflict_keys
                                     .iter()
-                                    .map(|k| Hash::new(k.as_bytes(), nicknames))
+                                    .map(|k| DebugHash::new(k.as_bytes(), nicknames))
                                     .collect()
                             }
                         };
                         let op_details = CgkaOperationDetails::Update {
-                            id: Hash::new(id.as_bytes(), nicknames),
+                            id: DebugHash::new(id.as_bytes(), nicknames),
                             new_keys,
                             path_length: new_path.path.len(),
                             predecessors: predecessors
                                 .iter()
-                                .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
+                                .map(|predecessor| {
+                                    DebugHash::new(predecessor.as_slice(), nicknames)
+                                })
                                 .collect(),
                         };
                         ("Update", op_details)
@@ -255,17 +270,17 @@ impl DebugEventRow {
             }
             Event::Delegated(signed) => {
                 let payload = signed.payload();
-                let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
-                let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
+                let event_hash = DebugHash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
+                let issuer = DebugHash::new(signed.issuer().as_bytes(), nicknames);
                 let subject = if let Some(proof) = &payload.proof {
-                    Hash::new(proof.subject_id().as_bytes(), nicknames)
+                    DebugHash::new(proof.subject_id().as_bytes(), nicknames)
                 } else {
-                    Hash::new(signed.issuer().as_bytes(), nicknames)
+                    DebugHash::new(signed.issuer().as_bytes(), nicknames)
                 };
                 let details = DebugEventDetails::Delegated {
                     subject,
                     can_access: format!("{:?}", payload.can),
-                    delegate: Hash::new(payload.delegate.id().as_bytes(), nicknames),
+                    delegate: DebugHash::new(payload.delegate.id().as_bytes(), nicknames),
                     after_revocations_count: payload.after_revocations.len(),
                     after_content_count: payload.after_content.len(),
                 };
@@ -280,16 +295,16 @@ impl DebugEventRow {
             }
             Event::Revoked(signed) => {
                 let payload = signed.payload();
-                let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
-                let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
+                let event_hash = DebugHash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
+                let issuer = DebugHash::new(signed.issuer().as_bytes(), nicknames);
                 let subject = if let Some(proof) = &payload.proof {
-                    Hash::new(proof.subject_id().as_bytes(), nicknames)
+                    DebugHash::new(proof.subject_id().as_bytes(), nicknames)
                 } else {
-                    Hash::new(signed.issuer().as_bytes(), nicknames)
+                    DebugHash::new(signed.issuer().as_bytes(), nicknames)
                 };
                 let details = DebugEventDetails::Revoked {
                     subject,
-                    revoke: Hash::new(Digest::hash(&payload.revoke).as_slice(), nicknames),
+                    revoke: DebugHash::new(Digest::hash(&payload.revoke).as_slice(), nicknames),
                     has_proof: payload.proof.is_some(),
                     after_content_count: payload.after_content.len(),
                 };
