@@ -17,6 +17,7 @@ Crypto
 Cryptree
 DCGKA
 DCGKA's
+Dev
 DNS
 ECDH
 EE
@@ -115,6 +116,7 @@ prekey
 priori
 probabilistically
 recurse
+repo
 revoker
 sedimentree
 sedimentrees
