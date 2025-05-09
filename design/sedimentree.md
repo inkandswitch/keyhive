@@ -55,10 +55,10 @@ Recall that in the current sync protocol if a peer is performing initial synchro
 
 ```mermaid
 flowchart LR
-A[A\n encrypted chunk] --> B
+A[A<br> encrypted chunk] --> B
 A --> C
-B[B\n encrypted chunk]
-C[C\n encrypted chunk] 
+B[B<br> encrypted chunk]
+C[C<br> encrypted chunk]
 ```
 
 There is now no way for the sync server to produce a compressed document for initial sync. One way around this is to have plaintext nodes upload compressed documents to the sync server every so often. This raises questions: when should a plaintext node perform compression and how should sync servers decide which compressed chunk to send?

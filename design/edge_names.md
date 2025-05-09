@@ -34,13 +34,13 @@ flowchart TD
 
     you -->|PvH| pvh
     pvh -->|Ink & Switch| ias
-    ias --->|Peter\nvan\nHardenberg| pvh
+    ias --->|Peter<br>van<br>Hardenberg| pvh
     ias -->|Geoffrey Litt| gl
     ias -->|Alex Good| alex
 
 
     alex -->|Peter| pvh
-    alex -->|That Person\nThat I Met\nOnce in Berlin| you
+    alex -->|That Person<br>That I Met<br>Once in Berlin| you
 
     gl --->|Ink and Switch| ias
     gl -->|Pete| pvh
