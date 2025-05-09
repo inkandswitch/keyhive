@@ -17,7 +17,7 @@ We're excited to announce that we're opening the _pre-alpha_ code for the follow
 
 We want to emphasize that this is an early preview release for those that are curious about the project. Expect there to be bugs, inconsistencies, and unstable APIs. This code has also not been through a security audit at time of writing.
 
-If you have any questions, thoughts, or feedback, please contact the team at by filing a [GitHub Issue], or in the [`keyhive-beelay` channel in the Automerge Discord][Channel].
+If you have any questions, thoughts, or feedback, please contact the team at by filing a [GitHub Issue], or in the [`keyhive-beelay` channel in the Automerge Discord][Channel] (if you're not part of the Automerge Discord you can join [here](https://discord.gg/cEYmnaduTX)).
 
 <!-- External Links -->
 
