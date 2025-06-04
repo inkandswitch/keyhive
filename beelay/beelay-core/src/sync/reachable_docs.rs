@@ -5,7 +5,7 @@ use keyhive_core::{
     crypto::signed::Signed,
 };
 
-use crate::{sedimentree, task_context, DocumentId, PeerId, TaskContext};
+use crate::{task_context, DocumentId, PeerId, TaskContext};
 
 use super::DocStateHash;
 

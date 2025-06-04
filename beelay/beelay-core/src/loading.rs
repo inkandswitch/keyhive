@@ -152,7 +152,7 @@ pub(crate) async fn load_docs(io: IoHandle) -> HashMap<DocumentId, DocState> {
         };
         let doc_storage = DocStorage::new(io.clone(), doc_id);
         Some(async move {
-            let doc = crate::sedimentree::storage::load(doc_storage).await;
+            let doc = sedimentree::storage::load(doc_storage).await;
             (doc_id, doc)
         })
     });

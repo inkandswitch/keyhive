@@ -6,6 +6,17 @@ use crate::serialization::{parse, Encode, Parse};
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct DocumentId(VerifyingKey);
 
+impl From<sedimentree::DocumentId> for DocumentId {
+    fn from(value: sedimentree::DocumentId) -> Self {
+        DocumentId(VerifyingKey::from_bytes(&value.0).expect("Invalid DocumentID"))
+    }
+}
+impl From<DocumentId> for sedimentree::DocumentId {
+    fn from(val: DocumentId) -> Self {
+        sedimentree::DocumentId(val.0.to_bytes())
+    }
+}
+
 impl PartialOrd for DocumentId {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))

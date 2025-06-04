@@ -8,9 +8,10 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+sedimentree = { path = "../../sedimentree" }
 bs58 = { version = "0.5.1", features = ["check"] }
 futures = { workspace = true }
-num = { version = "0.4.3", features = ["num-bigint"] }
+num.workspace = true
 rand = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
@@ -30,6 +31,7 @@ x25519-dalek = { workspace = true }
 nonempty = { workspace = true, features = ["arbitrary"] }
 
 [dev-dependencies]
+sedimentree = { path = "../../sedimentree", features = ["arbitrary"] }
 keyhive_core = { path = "../../keyhive_core", features = [
     "arbitrary",
     "debug_events",
@@ -37,8 +39,8 @@ keyhive_core = { path = "../../keyhive_core", features = [
 ] }
 beelay-core = { path = ".", features = ["debug_events"] }
 test-utils = { path = "../../test-utils" }
-arbitrary = { version = "1.3.2", features = ["derive"] }
-bolero = { version = "0.11.1", features = ["arbitrary"] }
+arbitrary.workspace = true
+bolero.workspace = true
 image = "0.24.7"
 lazy_static = "1.5.0"
 nu-ansi-term = "0.50.1"

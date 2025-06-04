@@ -12,7 +12,6 @@ use keyhive_core::{
 use crate::{
     network::PeerAddress,
     parse::{self, Parse},
-    sedimentree::MinimalTreeHash,
     serialization::Encode,
     DocumentId, PeerId, TaskContext,
 };
@@ -104,7 +103,7 @@ pub(crate) struct DocStateHash {
 impl DocStateHash {
     pub(crate) fn construct(
         doc: &DocumentId,
-        tree: MinimalTreeHash,
+        tree: sedimentree::MinimalTreeHash,
         cgka_ops: &[Signed<CgkaOperation>],
     ) -> Self {
         let mut hasher = blake3::Hasher::new();

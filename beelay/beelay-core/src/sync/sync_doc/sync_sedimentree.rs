@@ -5,7 +5,6 @@ use crate::{
         PeerAddress, RpcError,
     },
     parse::{self, Parse},
-    sedimentree,
     state::DocUpdateBuilder,
     BlobHash, Commit, CommitBundle, DocumentId, PeerId, StorageKey, TaskContext,
 };
@@ -82,7 +81,7 @@ where
         async move {
             let blob = ctx
                 .requests()
-                .fetch_blob(peer_address, doc_id, s.blob().hash())
+                .fetch_blob(peer_address, doc_id, s.blob().hash().into())
                 .await?
                 .ok_or(SyncSedimentreeError::MissingBlob)?;
             let (_, stratum) = sedimentree::Stratum::parse(parse::Input::new(&blob))
@@ -94,9 +93,16 @@ where
                 .await
                 .map_err(|e| SyncSedimentreeError::Storage(e.to_string()))?;
             let bundle = CommitBundle::builder()
-                .start(stratum.start())
-                .end(stratum.end())
-                .checkpoints(stratum.checkpoints().to_vec())
+                .start(stratum.start().into())
+                .end(stratum.end().into())
+                .checkpoints(
+                    stratum
+                        .checkpoints()
+                        .iter()
+                        .copied()
+                        .map(Into::into)
+                        .collect(),
+                )
                 .bundled_commits(blob)
                 .build();
             Ok::<_, SyncSedimentreeError>(bundle)
@@ -107,7 +113,7 @@ where
         async move {
             let blob = ctx
                 .requests()
-                .fetch_blob(peer_address, doc_id, c.blob().hash())
+                .fetch_blob(peer_address, doc_id, c.blob().hash().into())
                 .await?
                 .ok_or(SyncSedimentreeError::MissingBlob)?;
             ctx.storage()
@@ -116,7 +122,11 @@ where
             sedimentree::storage::write_loose_commit(ctx.storage().doc_storage(doc_id), c)
                 .await
                 .map_err(|e| SyncSedimentreeError::Storage(e.to_string()))?;
-            let commit = Commit::new(c.parents().to_vec(), blob, c.hash());
+            let commit = Commit::new(
+                c.parents().iter().copied().map(Into::into).collect(),
+                blob,
+                c.hash().into(),
+            );
             Ok::<_, SyncSedimentreeError>(commit)
         }
     });

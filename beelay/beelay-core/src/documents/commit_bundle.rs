@@ -1,5 +1,3 @@
-use crate::{blob::BlobMeta, sedimentree};
-
 use super::CommitHash;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -123,14 +121,24 @@ impl BundleBuilder<Set<CommitHash>, Set<CommitHash>, Set<Vec<u8>>> {
 
 impl From<CommitBundle> for sedimentree::Stratum {
     fn from(bundle: CommitBundle) -> Self {
-        let blob = BlobMeta::new(bundle.bundled_commits());
-        sedimentree::Stratum::new(bundle.start, bundle.end, bundle.checkpoints, blob)
+        let blob = sedimentree::BlobMeta::new(bundle.bundled_commits());
+        sedimentree::Stratum::new(
+            bundle.start.into(),
+            bundle.end.into(),
+            bundle.checkpoints.into_iter().map(Into::into).collect(),
+            blob,
+        )
     }
 }
 
 impl<'a> From<&'a CommitBundle> for sedimentree::Stratum {
     fn from(bundle: &'a CommitBundle) -> Self {
-        let blob = BlobMeta::new(bundle.bundled_commits());
-        sedimentree::Stratum::new(bundle.start, bundle.end, bundle.checkpoints.clone(), blob)
+        let blob = sedimentree::BlobMeta::new(bundle.bundled_commits());
+        sedimentree::Stratum::new(
+            bundle.start.into(),
+            bundle.end.into(),
+            bundle.checkpoints.iter().cloned().map(Into::into).collect(),
+            blob,
+        )
     }
 }

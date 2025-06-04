@@ -9,6 +9,23 @@ use crate::serialization::{hex, parse, Encode, Parse};
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct CommitHash([u8; 32]);
 
+impl CommitHash {
+    pub fn to_sedimentree(&self) -> sedimentree::Digest {
+        (*self).into()
+    }
+}
+
+impl From<CommitHash> for sedimentree::Digest {
+    fn from(val: CommitHash) -> Self {
+        sedimentree::Digest::from_raw_bytes(val.0)
+    }
+}
+impl From<sedimentree::Digest> for CommitHash {
+    fn from(value: sedimentree::Digest) -> Self {
+        Self(*value.as_bytes())
+    }
+}
+
 impl Encode for CommitHash {
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.0);

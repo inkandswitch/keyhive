@@ -30,6 +30,7 @@
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
 
+pub use sedimentree;
 pub use auth::audience::Audience;
 mod sync_loops;
 use commands::Command;
@@ -61,7 +62,6 @@ pub use commands::{keyhive, CommandId, CommandResult};
 pub mod auth;
 pub mod doc_status;
 pub(crate) mod riblt;
-mod sedimentree;
 mod state;
 mod task_context;
 use task_context::TaskContext;
@@ -72,8 +72,7 @@ mod peer_id;
 pub use peer_id::PeerId;
 mod documents;
 pub use documents::{
-    BundleBuilder, BundleSpec, Commit, CommitBundle, CommitHash, CommitOrBundle, DocumentHeads,
-    DocumentId,
+    BundleBuilder, Commit, CommitBundle, CommitHash, CommitOrBundle, DocumentHeads, DocumentId,
 };
 mod event;
 mod keyhive_storage;
@@ -92,6 +91,8 @@ mod sync;
 pub use keyhive_core::contact_card::ContactCard;
 
 pub const SYNC_INTERVAL: Duration = Duration::from_secs(10);
+
+pub const TOP_STRATA_LEVEL: sedimentree::Level = sedimentree::Level(2);
 
 /// The main entrypoint for this library
 ///

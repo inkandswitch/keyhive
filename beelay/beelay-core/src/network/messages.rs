@@ -1,9 +1,9 @@
 use keyhive_core::{
     cgka::operation::CgkaOperation, crypto::signed::Signed, event::static_event::StaticEvent,
 };
+use sedimentree::SedimentreeSummary;
 
 use crate::{
-    sedimentree::{self, SedimentreeSummary},
     serialization::{parse, Encode, Parse},
     CommitHash, DocumentId,
 };
@@ -193,8 +193,13 @@ impl UploadItem {
             blob: data,
             cgka_op,
             tree_part: TreePart::Commit {
-                hash: commit.hash(),
-                parents: commit.parents().to_vec(),
+                hash: commit.hash().into(),
+                parents: commit
+                    .parents()
+                    .iter()
+                    .cloned()
+                    .map(CommitHash::from)
+                    .collect(),
             },
         }
     }
@@ -208,10 +213,15 @@ impl UploadItem {
             blob: data,
             cgka_op,
             tree_part: TreePart::Stratum {
-                start: stratum.start(),
-                end: stratum.end(),
-                checkpoints: stratum.checkpoints().to_vec(),
-                hash: stratum.hash(),
+                start: stratum.start().into(),
+                end: stratum.end().into(),
+                checkpoints: stratum
+                    .checkpoints()
+                    .iter()
+                    .cloned()
+                    .map(CommitHash::from)
+                    .collect(),
+                hash: stratum.hash().into(),
             },
         }
     }

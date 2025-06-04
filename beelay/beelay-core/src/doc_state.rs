@@ -1,8 +1,8 @@
 use keyhive_core::{cgka::operation::CgkaOperation, crypto::signed::Signed};
 
 use crate::{
-    doc_status::DocStatus, network::messages::UploadItem, sedimentree, Commit, CommitBundle,
-    CommitHash, CommitOrBundle, PeerId,
+    doc_status::DocStatus, network::messages::UploadItem, Commit, CommitBundle, CommitHash,
+    CommitOrBundle, PeerId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -20,7 +20,7 @@ impl DocState {
     }
 
     pub(crate) fn heads(&self) -> Vec<CommitHash> {
-        self.tree.heads()
+        self.tree.heads().into_iter().map(Into::into).collect()
     }
 
     pub(crate) fn tree(&self) -> &sedimentree::Sedimentree {

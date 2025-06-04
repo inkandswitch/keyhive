@@ -1,20 +1,17 @@
-use crate::{
-    blob::BlobMeta, sedimentree, state::DocUpdateBuilder, BundleSpec, Commit, DocumentId,
-    StorageKey, TaskContext,
-};
+use crate::{blob::BlobMeta, state::DocUpdateBuilder, Commit, DocumentId, StorageKey, TaskContext};
 
 #[tracing::instrument(skip(ctx, commits))]
 pub(super) async fn add_commits<R: rand::Rng + rand::CryptoRng + 'static>(
     ctx: TaskContext<R>,
     doc_id: DocumentId,
     commits: Vec<Commit>,
-) -> Result<Vec<BundleSpec>, error::AddCommits> {
+) -> Result<Vec<sedimentree::BundleSpec>, error::AddCommits> {
     // TODO: This function should return an error if we are missing a chain from
     // each commit back to the last bundle boundary.
 
     let has_commit_boundary = commits
         .iter()
-        .any(|c| sedimentree::Level::from(c.hash()) <= sedimentree::TOP_STRATA_LEVEL);
+        .any(|c| sedimentree::Level::from(c.hash().to_sedimentree()) <= crate::TOP_STRATA_LEVEL);
 
     let save_tasks = commits.into_iter().map(|commit| {
         let ctx = ctx.clone();
@@ -63,7 +60,7 @@ pub(super) async fn add_commits<R: rand::Rng + rand::CryptoRng + 'static>(
         let storage = ctx.storage().doc_storage(doc_id);
         let tree = sedimentree::storage::load(storage).await;
         if let Ok(Some(tree)) = tree {
-            Ok(tree.missing_bundles(doc_id))
+            Ok(tree.missing_bundles(crate::TOP_STRATA_LEVEL, doc_id.into()))
         } else {
             Ok(Vec::new())
         }

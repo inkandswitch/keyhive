@@ -9,6 +9,20 @@ pub struct BlobMeta {
     size_bytes: u64,
 }
 
+impl From<BlobMeta> for sedimentree::BlobMeta {
+    fn from(val: BlobMeta) -> Self {
+        sedimentree::BlobMeta::from_hash_size(val.hash.into(), val.size_bytes)
+    }
+}
+impl From<sedimentree::BlobMeta> for BlobMeta {
+    fn from(value: sedimentree::BlobMeta) -> Self {
+        Self {
+            hash: value.hash().into(),
+            size_bytes: value.size_bytes(),
+        }
+    }
+}
+
 impl Encode for BlobMeta {
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.hash.encode_into(out);
@@ -36,15 +50,22 @@ impl BlobMeta {
     pub fn hash(&self) -> BlobHash {
         self.hash
     }
-
-    pub fn size_bytes(&self) -> u64 {
-        self.size_bytes
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, Hash, PartialOrd, Ord)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct BlobHash([u8; 32]);
+
+impl From<BlobHash> for sedimentree::Digest {
+    fn from(val: BlobHash) -> Self {
+        sedimentree::Digest::from_raw_bytes(val.0)
+    }
+}
+impl From<sedimentree::Digest> for BlobHash {
+    fn from(value: sedimentree::Digest) -> Self {
+        BlobHash(*value.as_bytes())
+    }
+}
 
 impl Encode for BlobHash {
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -77,10 +98,6 @@ impl BlobHash {
         let mut bytes = [0; 32];
         bytes.copy_from_slice(hash.as_bytes());
         Self(bytes)
-    }
-
-    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
     }
 }
 
