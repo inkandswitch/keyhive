@@ -1,6 +1,7 @@
 use crate::{
     auth::{self, offset_seconds::OffsetSeconds, Signed},
     doc_status::DocStatus,
+    documents::{IntoCommitHashes, IntoSedimentreeDigests},
     network::{endpoint, EndpointResponse},
     serialization::Encode,
     state::DocUpdateBuilder,
@@ -263,11 +264,7 @@ where
                             .keyhive()
                             .decrypt(
                                 doc_id,
-                                &c.parents()
-                                    .iter()
-                                    .copied()
-                                    .map(Into::into)
-                                    .collect::<Vec<_>>(),
+                                &c.parents().to_commit_hashes(),
                                 c.hash().into(),
                                 data,
                             )
@@ -282,11 +279,8 @@ where
                     } else {
                         data
                     };
-                    let commit = Commit::new(
-                        c.parents().iter().copied().map(Into::into).collect(),
-                        content,
-                        c.hash().into(),
-                    );
+                    let commit =
+                        Commit::new(c.parents().to_commit_hashes(), content, c.hash().into());
                     Ok(Some(CommitOrBundle::Commit(commit)))
                 }
                 (sedimentree::CommitOrStratum::Stratum(s), data) => {
@@ -309,13 +303,7 @@ where
                     let bundle = CommitBundle::builder()
                         .start(s.start().into())
                         .end(s.end().into())
-                        .checkpoints(
-                            s.checkpoints()
-                                .iter()
-                                .copied()
-                                .map(Into::into)
-                                .collect(),
-                        )
+                        .checkpoints(s.checkpoints().to_commit_hashes())
                         .bundled_commits(content)
                         .build();
                     Ok(Some(CommitOrBundle::Bundle(bundle)))
@@ -354,12 +342,7 @@ where
     let stratum = sedimentree::Stratum::new(
         bundle.start().into(),
         bundle.end().into(),
-        bundle
-            .checkpoints()
-            .iter()
-            .copied()
-            .map(Into::into)
-            .collect(),
+        bundle.checkpoints().to_sedimentree_digests(),
         blob,
     );
     let doc_storage = ctx.storage().doc_storage(doc_id);

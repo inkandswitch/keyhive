@@ -9,6 +9,24 @@ use crate::serialization::{hex, parse, Encode, Parse};
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct CommitHash([u8; 32]);
 
+pub(crate) trait IntoCommitHashes {
+    fn to_commit_hashes(&self) -> Vec<CommitHash>;
+}
+pub(crate) trait IntoSedimentreeDigests {
+    fn to_sedimentree_digests(&self) -> Vec<sedimentree::Digest>;
+}
+
+impl IntoCommitHashes for &'_ [sedimentree::Digest] {
+    fn to_commit_hashes(&self) -> Vec<CommitHash> {
+        self.iter().copied().map(Into::into).collect()
+    }
+}
+impl IntoSedimentreeDigests for &'_ [CommitHash] {
+    fn to_sedimentree_digests(&self) -> Vec<sedimentree::Digest> {
+        self.iter().copied().map(Into::into).collect()
+    }
+}
+
 impl CommitHash {
     pub fn to_sedimentree(&self) -> sedimentree::Digest {
         (*self).into()

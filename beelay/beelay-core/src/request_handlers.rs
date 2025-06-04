@@ -1,5 +1,6 @@
 use crate::{
     blob::BlobMeta,
+    documents::IntoSedimentreeDigests,
     network::messages::{self, FetchedSedimentree, TreePart, UploadItem},
     state::DocUpdateBuilder,
     Commit, CommitBundle, CommitOrBundle, DocumentId, PeerId, Request, Response, StorageKey,
@@ -164,7 +165,7 @@ async fn upload_commits<R>(
                     let stratum = sedimentree::Stratum::new(
                         start.into(),
                         end.into(),
-                        checkpoints.iter().copied().map(Into::into).collect(),
+                        checkpoints.as_slice().to_sedimentree_digests(),
                         blob,
                     );
                     let doc_storage = ctx.storage().doc_storage(doc);

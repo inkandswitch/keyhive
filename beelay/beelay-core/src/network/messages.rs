@@ -4,6 +4,7 @@ use keyhive_core::{
 use sedimentree::SedimentreeSummary;
 
 use crate::{
+    documents::IntoCommitHashes,
     serialization::{parse, Encode, Parse},
     CommitHash, DocumentId,
 };
@@ -194,12 +195,7 @@ impl UploadItem {
             cgka_op,
             tree_part: TreePart::Commit {
                 hash: commit.hash().into(),
-                parents: commit
-                    .parents()
-                    .iter()
-                    .cloned()
-                    .map(CommitHash::from)
-                    .collect(),
+                parents: commit.parents().to_commit_hashes(),
             },
         }
     }
@@ -215,12 +211,7 @@ impl UploadItem {
             tree_part: TreePart::Stratum {
                 start: stratum.start().into(),
                 end: stratum.end().into(),
-                checkpoints: stratum
-                    .checkpoints()
-                    .iter()
-                    .cloned()
-                    .map(CommitHash::from)
-                    .collect(),
+                checkpoints: stratum.checkpoints().to_commit_hashes(),
                 hash: stratum.hash().into(),
             },
         }

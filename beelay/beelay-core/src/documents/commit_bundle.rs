@@ -1,4 +1,4 @@
-use super::CommitHash;
+use super::{CommitHash, IntoSedimentreeDigests};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CommitBundle {
@@ -125,7 +125,7 @@ impl From<CommitBundle> for sedimentree::Stratum {
         sedimentree::Stratum::new(
             bundle.start.into(),
             bundle.end.into(),
-            bundle.checkpoints.into_iter().map(Into::into).collect(),
+            bundle.checkpoints.as_slice().to_sedimentree_digests(),
             blob,
         )
     }
@@ -137,7 +137,7 @@ impl<'a> From<&'a CommitBundle> for sedimentree::Stratum {
         sedimentree::Stratum::new(
             bundle.start.into(),
             bundle.end.into(),
-            bundle.checkpoints.iter().cloned().map(Into::into).collect(),
+            bundle.checkpoints.as_slice().to_sedimentree_digests(),
             blob,
         )
     }

@@ -1,3 +1,5 @@
+use crate::documents::{IntoCommitHashes, IntoSedimentreeDigests};
+
 use super::{parse, Encode, Parse};
 
 impl Encode for sedimentree::StratumMeta {
@@ -24,11 +26,7 @@ impl Parse<'_> for sedimentree::StratumMeta {
 impl Encode for sedimentree::LooseCommit {
     fn encode_into(&self, out: &mut Vec<u8>) {
         crate::CommitHash::from(self.hash()).encode_into(out);
-        self.parents()
-            .iter()
-            .map(|x| crate::CommitHash::from(*x))
-            .collect::<Vec<_>>()
-            .encode_into(out);
+        self.parents().to_commit_hashes().encode_into(out);
         crate::blob::BlobMeta::from(*self.blob()).encode_into(out);
     }
 }
@@ -43,7 +41,7 @@ impl Parse<'_> for sedimentree::LooseCommit {
                 input,
                 sedimentree::LooseCommit::new(
                     hash.into(),
-                    parents.into_iter().map(Into::into).collect(),
+                    parents.as_slice().to_sedimentree_digests(),
                     blob.into(),
                 ),
             ))
@@ -56,11 +54,7 @@ impl Encode for sedimentree::Stratum {
         crate::CommitHash::from(self.meta().start()).encode_into(out);
         crate::CommitHash::from(self.meta().end()).encode_into(out);
         crate::blob::BlobMeta::from(self.meta().blob()).encode_into(out);
-        self.checkpoints()
-            .iter()
-            .map(|x| crate::CommitHash::from(*x))
-            .collect::<Vec<_>>()
-            .encode_into(out);
+        self.checkpoints().to_commit_hashes().encode_into(out);
         crate::CommitHash::from(self.hash()).encode_into(out);
     }
 }
@@ -78,7 +72,7 @@ impl Parse<'_> for sedimentree::Stratum {
                 input,
                 sedimentree::Stratum::from_raw(
                     sedimentree::StratumMeta::new(start.into(), end.into(), blob.into()),
-                    checkpoints.into_iter().map(Into::into).collect(),
+                    checkpoints.as_slice().to_sedimentree_digests(),
                     hash.into(),
                 ),
             ))

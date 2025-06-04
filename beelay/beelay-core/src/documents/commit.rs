@@ -1,6 +1,6 @@
 use sedimentree::LooseCommit;
 
-use super::CommitHash;
+use super::{CommitHash, IntoSedimentreeDigests};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct Commit {
@@ -50,7 +50,7 @@ impl From<Commit> for LooseCommit {
         let blob = sedimentree::BlobMeta::new(commit.contents());
         LooseCommit::new(
             commit.hash.into(),
-            commit.parents.into_iter().map(Into::into).collect(),
+            commit.parents.as_slice().to_sedimentree_digests(),
             blob,
         )
     }
@@ -61,7 +61,7 @@ impl<'a> From<&'a Commit> for LooseCommit {
         let blob = sedimentree::BlobMeta::new(commit.contents());
         LooseCommit::new(
             commit.hash.into(),
-            commit.parents.iter().cloned().map(Into::into).collect(),
+            commit.parents.as_slice().to_sedimentree_digests(),
             blob,
         )
     }

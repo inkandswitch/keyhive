@@ -1,5 +1,6 @@
 use crate::{
     blob::BlobMeta,
+    documents::IntoCommitHashes,
     network::{
         messages::{FetchedSedimentree, UploadItem},
         PeerAddress, RpcError,
@@ -95,14 +96,7 @@ where
             let bundle = CommitBundle::builder()
                 .start(stratum.start().into())
                 .end(stratum.end().into())
-                .checkpoints(
-                    stratum
-                        .checkpoints()
-                        .iter()
-                        .copied()
-                        .map(Into::into)
-                        .collect(),
-                )
+                .checkpoints(stratum.checkpoints().to_commit_hashes())
                 .bundled_commits(blob)
                 .build();
             Ok::<_, SyncSedimentreeError>(bundle)
@@ -122,11 +116,7 @@ where
             sedimentree::storage::write_loose_commit(ctx.storage().doc_storage(doc_id), c)
                 .await
                 .map_err(|e| SyncSedimentreeError::Storage(e.to_string()))?;
-            let commit = Commit::new(
-                c.parents().iter().copied().map(Into::into).collect(),
-                blob,
-                c.hash().into(),
-            );
+            let commit = Commit::new(c.parents().to_commit_hashes(), blob, c.hash().into());
             Ok::<_, SyncSedimentreeError>(commit)
         }
     });

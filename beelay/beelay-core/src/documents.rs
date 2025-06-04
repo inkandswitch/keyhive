@@ -2,6 +2,7 @@ mod commit_bundle;
 pub use commit_bundle::{BundleBuilder, CommitBundle};
 mod commit_hash;
 pub use commit_hash::CommitHash;
+pub(crate) use commit_hash::{IntoCommitHashes, IntoSedimentreeDigests};
 mod commit;
 pub use commit::Commit;
 mod document_heads;
