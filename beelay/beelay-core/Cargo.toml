@@ -11,7 +11,7 @@ version.workspace = true
 sedimentree = { path = "../../sedimentree" }
 bs58 = { version = "0.5.1", features = ["check"] }
 futures = { workspace = true }
-num.workspace = true
+num = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
@@ -39,8 +39,8 @@ keyhive_core = { path = "../../keyhive_core", features = [
 ] }
 beelay-core = { path = ".", features = ["debug_events"] }
 test-utils = { path = "../../test-utils" }
-arbitrary.workspace = true
-bolero.workspace = true
+arbitrary = { workspace = true }
+bolero = { workspace = true }
 image = "0.24.7"
 lazy_static = "1.5.0"
 nu-ansi-term = "0.50.1"
