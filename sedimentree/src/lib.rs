@@ -526,6 +526,12 @@ impl From<[u8; 32]> for MinimalTreeHash {
     }
 }
 
+pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<Digest>>(commits: I) -> bool {
+    commits
+        .into_iter()
+        .any(|digest| Level::from(digest.into()) <= TOP_STRATA_LEVEL)
+}
+
 #[cfg(test)]
 mod tests {
     use num::Num;
