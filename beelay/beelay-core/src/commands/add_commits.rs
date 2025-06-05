@@ -9,9 +9,9 @@ pub(super) async fn add_commits<R: rand::Rng + rand::CryptoRng + 'static>(
     // TODO: This function should return an error if we are missing a chain from
     // each commit back to the last bundle boundary.
 
-    let has_commit_boundary = commits
-        .iter()
-        .any(|c| sedimentree::Level::from(c.hash().to_sedimentree()) <= crate::TOP_STRATA_LEVEL);
+    let has_commit_boundary = commits.iter().any(|c| {
+        sedimentree::Level::from(c.hash().to_sedimentree()) <= sedimentree::TOP_STRATA_LEVEL
+    });
 
     let save_tasks = commits.into_iter().map(|commit| {
         let ctx = ctx.clone();
@@ -60,7 +60,7 @@ pub(super) async fn add_commits<R: rand::Rng + rand::CryptoRng + 'static>(
         let storage = ctx.storage().doc_storage(doc_id);
         let tree = sedimentree::storage::load(storage).await;
         if let Ok(Some(tree)) = tree {
-            Ok(tree.missing_bundles(crate::TOP_STRATA_LEVEL, doc_id.into()))
+            Ok(tree.missing_bundles(doc_id.into()))
         } else {
             Ok(Vec::new())
         }

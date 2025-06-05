@@ -6,6 +6,8 @@ pub mod storage;
 
 pub use blob::*;
 
+pub const TOP_STRATA_LEVEL: Level = Level(2);
+
 #[derive(Debug, Clone, Hash, Copy)]
 pub struct DocumentId(pub [u8; 32]);
 
@@ -35,7 +37,6 @@ impl BundleSpec {
 #[derive(Clone, PartialEq, Eq, Default, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Sedimentree {
-    top_strata_level: Level,
     strata: BTreeSet<Stratum>,
     commits: BTreeSet<LooseCommit>,
 }
@@ -278,9 +279,8 @@ impl StratumMeta {
 }
 
 impl Sedimentree {
-    pub fn new(top_strata_level: Level, strata: Vec<Stratum>, commits: Vec<LooseCommit>) -> Self {
+    pub fn new(strata: Vec<Stratum>, commits: Vec<LooseCommit>) -> Self {
         Self {
-            top_strata_level,
             strata: strata.into_iter().collect(),
             commits: commits.into_iter().collect(),
         }
@@ -387,7 +387,7 @@ impl Sedimentree {
         }
 
         // Now, form a commit graph from the loose commits and simplify it relative to the minimized strata
-        let dag = commit_dag::CommitDag::from_commits(self.top_strata_level, self.commits.iter());
+        let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
         let simplified_dag = dag.simplify(&minimized_strata);
 
         let commits = self
@@ -397,7 +397,7 @@ impl Sedimentree {
             .cloned()
             .collect();
 
-        Sedimentree::new(self.top_strata_level, minimized_strata, commits)
+        Sedimentree::new(minimized_strata, commits)
     }
 
     pub fn summarize(&self) -> SedimentreeSummary {
@@ -417,8 +417,7 @@ impl Sedimentree {
         // and which do not appear in the loose commit graph, plus the heads of
         // the loose commit graph.
         let minimized = self.minimize();
-        let dag =
-            commit_dag::CommitDag::from_commits(self.top_strata_level, minimized.commits.iter());
+        let dag = commit_dag::CommitDag::from_commits(minimized.commits.iter());
         let mut heads = Vec::<Digest>::new();
         for stratum in minimized.strata.iter() {
             if !minimized.strata.iter().any(|s| s.end() == stratum.start())
@@ -438,8 +437,8 @@ impl Sedimentree {
             .chain(self.commits.into_iter().map(CommitOrStratum::Commit))
     }
 
-    pub fn missing_bundles(&self, top_strata_level: Level, doc: DocumentId) -> Vec<BundleSpec> {
-        let dag = commit_dag::CommitDag::from_commits(top_strata_level, self.commits.iter());
+    pub fn missing_bundles(&self, doc: DocumentId) -> Vec<BundleSpec> {
+        let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
         let mut runs_by_level = BTreeMap::<Level, (Digest, Vec<Digest>)>::new();
         let mut all_bundles = Vec::new();
         for commit_hash in dag.canonical_sequence(self.strata.iter()) {
@@ -449,7 +448,7 @@ impl Sedimentree {
                     checkpoints.push(commit_hash);
                 }
             }
-            if level <= top_strata_level {
+            if level <= crate::TOP_STRATA_LEVEL {
                 if let Some((start, checkpoints)) = runs_by_level.remove(&level) {
                     if !self.strata.iter().any(|s| s.supports_block(commit_hash)) {
                         all_bundles.push(BundleSpec {
@@ -674,7 +673,7 @@ mod tests {
         bolero::check!()
             .with_arbitrary::<Scenario>()
             .for_each(|Scenario { commits }| {
-                let tree = super::Sedimentree::new(Level(2), vec![], commits.clone());
+                let tree = super::Sedimentree::new(vec![], commits.clone());
                 let minimized = tree.minimize();
                 assert_eq!(tree, minimized);
             })

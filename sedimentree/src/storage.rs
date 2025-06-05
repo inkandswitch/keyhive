@@ -27,7 +27,7 @@ pub async fn load<S: Storage + Clone>(storage: S) -> Result<Option<Sedimentree>,
     if stratum.is_empty() && commits.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(Sedimentree::new(crate::Level(2), stratum, commits)))
+        Ok(Some(Sedimentree::new(stratum, commits)))
     }
 }
 

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{Digest, Level, LooseCommit};
+use crate::{Digest, LooseCommit};
 
 use super::Stratum;
 
@@ -8,7 +8,6 @@ use super::Stratum;
 // `nodes` and `edges` vectors instead of pointers in order to please the borrow checker.
 #[derive(Debug, Clone)]
 pub struct CommitDag {
-    top_strata_level: Level,
     nodes: Vec<Node>,
     node_map: HashMap<crate::Digest, NodeIdx>,
     edges: Vec<Edge>,
@@ -36,10 +35,7 @@ struct NodeIdx(usize);
 struct EdgeIdx(usize);
 
 impl CommitDag {
-    pub fn from_commits<'a, I: Iterator<Item = &'a LooseCommit> + Clone>(
-        top_strata_level: Level,
-        commits: I,
-    ) -> Self {
+    pub fn from_commits<'a, I: Iterator<Item = &'a LooseCommit> + Clone>(commits: I) -> Self {
         let nodes = commits
             .clone()
             .map(|c| Node {
@@ -55,7 +51,6 @@ impl CommitDag {
             .collect::<HashMap<_, _>>();
 
         let mut dag = CommitDag {
-            top_strata_level,
             nodes,
             node_map,
             edges: Vec::new(),
@@ -178,7 +173,7 @@ impl CommitDag {
             let mut block: Option<(Digest, Vec<Digest>)> = None;
             for hash in self.reverse_topo(tip) {
                 let level = super::Level::from(hash);
-                if level <= self.top_strata_level {
+                if level <= crate::TOP_STRATA_LEVEL {
                     // We're in a block and we just found a checkpoint, this must be the start hash
                     // for the block we're in. Flush the current block and start a new one.
                     if let Some((block, commits)) = block.take() {
@@ -193,10 +188,11 @@ impl CommitDag {
                     block = Some((hash, vec![hash]));
                 }
                 if let Some((_, commits)) = &mut block {
-                    if level > self.top_strata_level {
+                    if level > crate::TOP_STRATA_LEVEL {
                         commits.push(hash);
                     }
-                } else if !commits_to_blocks.contains_key(&hash) && level > self.top_strata_level {
+                } else if !commits_to_blocks.contains_key(&hash) && level > crate::TOP_STRATA_LEVEL
+                {
                     blockless_commits.insert(hash);
                 }
             }
@@ -246,7 +242,6 @@ impl CommitDag {
             .collect::<HashMap<_, _>>();
 
         let mut dag = CommitDag {
-            top_strata_level: self.top_strata_level,
             nodes,
             node_map,
             edges: Vec::new(),
@@ -448,7 +443,7 @@ mod tests {
     };
     use std::collections::{HashMap, HashSet};
 
-    use crate::{blob::BlobMeta, Digest, Level};
+    use crate::{blob::BlobMeta, Digest};
 
     pub fn hash_with_trailing_zeros<R: rand::Rng>(
         rng: &mut R,
@@ -539,7 +534,7 @@ mod tests {
         }
 
         fn as_dag(&self) -> CommitDag {
-            CommitDag::from_commits(Level(2), self.commits().iter())
+            CommitDag::from_commits(self.commits().iter())
         }
     }
 
@@ -716,7 +711,7 @@ mod tests {
             vec![c.digest()],
             random_blob(&mut rng),
         );
-        let graph = CommitDag::from_commits(Level(2), vec![&a, &b, &c, &d].into_iter());
+        let graph = CommitDag::from_commits(vec![&a, &b, &c, &d].into_iter());
         assert_eq!(
             graph.parents_of_hash(c.digest()).collect::<HashSet<_>>(),
             vec![a.digest(), b.digest()]

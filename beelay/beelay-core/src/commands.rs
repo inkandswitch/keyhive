@@ -215,8 +215,7 @@ where
 
     let initial_loose =
         sedimentree::LooseCommit::new(initial_commit.hash().into(), vec![], init_blob);
-    let tree =
-        sedimentree::Sedimentree::new(crate::TOP_STRATA_LEVEL, Vec::new(), vec![initial_loose]);
+    let tree = sedimentree::Sedimentree::new(Vec::new(), vec![initial_loose]);
 
     let storage = ctx.storage().doc_storage(doc_id);
     sedimentree::storage::update(storage, None, &tree).await?;

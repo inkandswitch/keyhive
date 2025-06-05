@@ -92,8 +92,6 @@ pub use keyhive_core::contact_card::ContactCard;
 
 pub const SYNC_INTERVAL: Duration = Duration::from_secs(10);
 
-pub const TOP_STRATA_LEVEL: sedimentree::Level = sedimentree::Level(2);
-
 /// The main entrypoint for this library
 ///
 /// A `Beelay` is a little state machine. You interact with it by creating [`Event`]s and passing
