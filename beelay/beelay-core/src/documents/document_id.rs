@@ -1,4 +1,4 @@
-use ed25519_dalek::VerifyingKey;
+use ed25519_dalek::{SignatureError, VerifyingKey};
 use keyhive_core::crypto::verifiable::Verifiable;
 
 use crate::serialization::{parse, Encode, Parse};
@@ -6,9 +6,11 @@ use crate::serialization::{parse, Encode, Parse};
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct DocumentId(VerifyingKey);
 
-impl From<sedimentree::DocumentId> for DocumentId {
-    fn from(value: sedimentree::DocumentId) -> Self {
-        DocumentId(VerifyingKey::from_bytes(&value.0).expect("Invalid DocumentID"))
+impl TryFrom<sedimentree::DocumentId> for DocumentId {
+    type Error = SignatureError;
+
+    fn try_from(value: sedimentree::DocumentId) -> Result<Self, Self::Error> {
+        Ok(DocumentId(VerifyingKey::from_bytes(&value.0)?))
     }
 }
 impl From<DocumentId> for sedimentree::DocumentId {

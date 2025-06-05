@@ -16,7 +16,7 @@ pub(crate) struct JsBundleSpec {
 impl From<BundleSpec> for JsBundleSpec {
     fn from(bundle_spec: BundleSpec) -> Self {
         JsBundleSpec {
-            doc: bundle_spec.doc().into(),
+            doc: bundle_spec.doc().try_into().expect("Invalid DocumentId"),
             start: bundle_spec.start().into(),
             end: bundle_spec.end().into(),
             checkpoints: bundle_spec
