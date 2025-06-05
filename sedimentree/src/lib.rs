@@ -32,7 +32,7 @@ impl BundleSpec {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, serde::Serialize, Default, Hash)]
+#[derive(Clone, PartialEq, Eq, Default, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Sedimentree {
     top_strata_level: Level,
@@ -40,7 +40,7 @@ pub struct Sedimentree {
     commits: BTreeSet<LooseCommit>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Default, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct SedimentreeSummary {
     strata: BTreeSet<StratumMeta>,
@@ -72,7 +72,7 @@ impl SedimentreeSummary {
     }
 }
 
-#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Level(pub u32);
 impl Default for Level {
@@ -117,7 +117,7 @@ impl Ord for Level {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Stratum {
     meta: StratumMeta,
@@ -125,7 +125,7 @@ pub struct Stratum {
     hash: Digest,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct StratumMeta {
     start: Digest,
@@ -145,7 +145,7 @@ impl StratumMeta {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct LooseCommit {
     hash: Digest,

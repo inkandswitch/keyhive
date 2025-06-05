@@ -8,15 +8,14 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-hex.workspace = true
-tracing.workspace = true
-thiserror.workspace = true
-serde.workspace = true
-blake3.workspace = true
-futures.workspace = true
-num.workspace = true
+hex = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+blake3 = { workspace = true }
+futures = { workspace = true }
+num = { workspace = true }
 arbitrary = { workspace = true, optional = true }
 
 [dev-dependencies]
-bolero.workspace = true
-rand.workspace = true
+bolero = { workspace = true }
+rand = { workspace = true }

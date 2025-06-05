@@ -74,7 +74,6 @@ impl std::fmt::Display for Response {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
-#[derive(serde::Serialize)]
 pub(crate) enum FetchedSedimentree {
     NotFound,
     Found(SedimentreeSummary),
