@@ -3,23 +3,23 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct BlobMeta {
-    hash: Digest,
+    digest: Digest,
     size_bytes: u64,
 }
 
 impl BlobMeta {
     pub fn new(contents: &[u8]) -> Self {
-        let hash = Digest::new(contents);
+        let digest = Digest::new(contents);
         let size_bytes = contents.len() as u64;
-        Self { hash, size_bytes }
+        Self { digest, size_bytes }
     }
 
-    pub fn from_hash_size(hash: Digest, size_bytes: u64) -> Self {
-        BlobMeta { hash, size_bytes }
+    pub fn from_digest_size(digest: Digest, size_bytes: u64) -> Self {
+        BlobMeta { digest, size_bytes }
     }
 
-    pub fn hash(&self) -> Digest {
-        self.hash
+    pub fn digest(&self) -> Digest {
+        self.digest
     }
 
     pub fn size_bytes(&self) -> u64 {

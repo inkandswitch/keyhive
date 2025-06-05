@@ -210,7 +210,7 @@ where
     tracing::trace!(?doc_id, "creating doc");
 
     let init_blob = sedimentree::BlobMeta::new(&encrypted);
-    let blob_key = StorageKey::blob(init_blob.hash().into());
+    let blob_key = StorageKey::blob(init_blob.digest().into());
     ctx.storage().put(blob_key, encrypted).await;
 
     let initial_loose =
@@ -265,7 +265,7 @@ where
                             .decrypt(
                                 doc_id,
                                 &c.parents().to_commit_hashes(),
-                                c.hash().into(),
+                                c.digest().into(),
                                 data,
                             )
                             .await
@@ -280,7 +280,7 @@ where
                         data
                     };
                     let commit =
-                        Commit::new(c.parents().to_commit_hashes(), content, c.hash().into());
+                        Commit::new(c.parents().to_commit_hashes(), content, c.digest().into());
                     Ok(Some(CommitOrBundle::Commit(commit)))
                 }
                 (sedimentree::CommitOrStratum::Stratum(s), data) => {
@@ -288,7 +288,7 @@ where
                         match ctx
                             .state()
                             .keyhive()
-                            .decrypt(doc_id, &[s.start().into()], s.hash().into(), data)
+                            .decrypt(doc_id, &[s.start().into()], s.digest().into(), data)
                             .await
                         {
                             Ok(d) => d,
@@ -336,7 +336,7 @@ where
         )
         .await?;
     let blob = sedimentree::BlobMeta::new(&encrypted);
-    let blob_path = StorageKey::blob(blob.hash().into());
+    let blob_path = StorageKey::blob(blob.digest().into());
     ctx.storage().put(blob_path, encrypted.clone()).await;
 
     let stratum = sedimentree::Stratum::new(

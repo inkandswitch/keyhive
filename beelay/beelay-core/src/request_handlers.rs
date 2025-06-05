@@ -135,7 +135,7 @@ async fn upload_commits<R>(
         async move {
             let blob = sedimentree::BlobMeta::new(&d.blob);
             ctx.storage()
-                .put(StorageKey::blob(blob.hash().into()), d.blob.clone())
+                .put(StorageKey::blob(blob.digest().into()), d.blob.clone())
                 .await;
             if let Some(op) = &d.cgka_op {
                 if let Err(err) = ctx

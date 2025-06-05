@@ -122,7 +122,7 @@ impl Ord for Level {
 pub struct Stratum {
     meta: StratumMeta,
     checkpoints: Vec<Digest>,
-    hash: Digest,
+    digest: Digest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -148,7 +148,7 @@ impl StratumMeta {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct LooseCommit {
-    hash: Digest,
+    digest: Digest,
     parents: Vec<Digest>,
     blob: BlobMeta,
 }
@@ -168,16 +168,16 @@ pub struct RemoteDiff<'a> {
 }
 
 impl LooseCommit {
-    pub fn new(hash: Digest, parents: Vec<Digest>, blob: BlobMeta) -> Self {
+    pub fn new(digest: Digest, parents: Vec<Digest>, blob: BlobMeta) -> Self {
         Self {
-            hash,
+            digest,
             parents,
             blob,
         }
     }
 
-    pub fn hash(&self) -> Digest {
-        self.hash
+    pub fn digest(&self) -> Digest {
+        self.digest
     }
 
     pub fn parents(&self) -> &[Digest] {
@@ -192,11 +192,11 @@ impl LooseCommit {
 impl Stratum {
     pub fn new(start: Digest, end: Digest, checkpoints: Vec<Digest>, blob: BlobMeta) -> Self {
         let meta = StratumMeta { start, end, blob };
-        let hash = {
+        let digest = {
             let mut hasher = blake3::Hasher::new();
             hasher.update(start.as_bytes());
             hasher.update(end.as_bytes());
-            hasher.update(blob.hash().as_bytes());
+            hasher.update(blob.digest().as_bytes());
             for checkpoint in &checkpoints {
                 hasher.update(checkpoint.as_bytes());
             }
@@ -205,15 +205,15 @@ impl Stratum {
         Self {
             meta,
             checkpoints,
-            hash,
+            digest,
         }
     }
 
-    pub fn from_raw(meta: StratumMeta, checkpoints: Vec<Digest>, hash: Digest) -> Self {
+    pub fn from_raw(meta: StratumMeta, checkpoints: Vec<Digest>, digest: Digest) -> Self {
         Stratum {
             meta,
             checkpoints,
-            hash,
+            digest,
         }
     }
 
@@ -260,8 +260,8 @@ impl Stratum {
         &self.checkpoints
     }
 
-    pub fn hash(&self) -> Digest {
-        self.hash
+    pub fn digest(&self) -> Digest {
+        self.digest
     }
 }
 
@@ -295,7 +295,7 @@ impl Sedimentree {
                     .chain(std::iter::once(s.end()))
                     .chain(s.checkpoints().iter().copied())
             })
-            .chain(minimal.commits.iter().map(|c| c.hash()))
+            .chain(minimal.commits.iter().map(|c| c.digest()))
             .collect::<Vec<_>>();
         hashes.sort();
         let mut hasher = blake3::Hasher::new();
@@ -393,7 +393,7 @@ impl Sedimentree {
         let commits = self
             .commits
             .iter()
-            .filter(|&c| simplified_dag.contains_commit(&c.hash()))
+            .filter(|&c| simplified_dag.contains_commit(&c.digest()))
             .cloned()
             .collect();
 
@@ -663,7 +663,7 @@ mod tests {
                     frontier.retain(|p| !parents.contains(p));
                     frontier.push(hash);
                     result.push(super::LooseCommit {
-                        hash,
+                        digest: hash,
                         parents,
                         blob,
                     });

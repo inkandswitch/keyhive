@@ -82,18 +82,18 @@ pub fn data<S: Storage + Clone>(
             match item {
                 super::CommitOrStratum::Commit(c) => {
                     let data = storage
-                        .load_blob(c.blob().hash())
+                        .load_blob(c.blob().digest())
                         .await
                         .map_err(|e| LoadTreeData::Storage(e.to_string()))?
-                        .ok_or_else(|| LoadTreeData::MissingBlob(c.blob().hash()))?;
+                        .ok_or_else(|| LoadTreeData::MissingBlob(c.blob().digest()))?;
                     Ok((CommitOrStratum::Commit(c), data))
                 }
                 super::CommitOrStratum::Stratum(s) => {
                     let data = storage
-                        .load_blob(s.meta().blob().hash())
+                        .load_blob(s.meta().blob().digest())
                         .await
                         .map_err(|e| LoadTreeData::Storage(e.to_string()))?
-                        .ok_or_else(|| LoadTreeData::MissingBlob(s.meta().blob().hash()))?;
+                        .ok_or_else(|| LoadTreeData::MissingBlob(s.meta().blob().digest()))?;
                     Ok((CommitOrStratum::Stratum(s), data))
                 }
             }
@@ -117,14 +117,14 @@ pub async fn load_loose_commit_data<S: Storage>(
     storage: S,
     commit: &LooseCommit,
 ) -> Result<Option<Vec<u8>>, S::Error> {
-    storage.load_blob(commit.blob().hash()).await
+    storage.load_blob(commit.blob().digest()).await
 }
 
 pub async fn load_stratum_data<S: Storage>(
     storage: S,
     stratum: &Stratum,
 ) -> Result<Option<Vec<u8>>, S::Error> {
-    storage.load_blob(stratum.meta().blob().hash()).await
+    storage.load_blob(stratum.meta().blob().digest()).await
 }
 
 mod error {

@@ -43,7 +43,7 @@ impl CommitDag {
         let nodes = commits
             .clone()
             .map(|c| Node {
-                hash: c.hash(),
+                hash: c.digest(),
                 parents: None,
                 children: None,
             })
@@ -62,7 +62,7 @@ impl CommitDag {
         };
 
         for commit in commits {
-            let child_idx = dag.node_map[&commit.hash()];
+            let child_idx = dag.node_map[&commit.digest()];
             for parent in commit.parents() {
                 if let Some(parent) = dag.node_map.get(parent) {
                     dag.add_edge(*parent, child_idx);
@@ -527,7 +527,7 @@ mod tests {
                 let parents = self.parents.get(hash).unwrap_or(&Vec::new()).clone();
                 commits.push(LooseCommit {
                     blob: *self.commits.get(hash).unwrap(),
-                    hash: *hash,
+                    digest: *hash,
                     parents,
                 })
             }
@@ -708,18 +708,20 @@ mod tests {
         let b = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));
         let c = LooseCommit::new(
             random_commit_hash(&mut rng),
-            vec![a.hash(), b.hash()],
+            vec![a.digest(), b.digest()],
             random_blob(&mut rng),
         );
         let d = LooseCommit::new(
             random_commit_hash(&mut rng),
-            vec![c.hash()],
+            vec![c.digest()],
             random_blob(&mut rng),
         );
         let graph = CommitDag::from_commits(Level(2), vec![&a, &b, &c, &d].into_iter());
         assert_eq!(
-            graph.parents_of_hash(c.hash()).collect::<HashSet<_>>(),
-            vec![a.hash(), b.hash()].into_iter().collect::<HashSet<_>>()
+            graph.parents_of_hash(c.digest()).collect::<HashSet<_>>(),
+            vec![a.digest(), b.digest()]
+                .into_iter()
+                .collect::<HashSet<_>>()
         );
     }
 }

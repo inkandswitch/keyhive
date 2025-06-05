@@ -11,13 +11,13 @@ pub struct BlobMeta {
 
 impl From<BlobMeta> for sedimentree::BlobMeta {
     fn from(val: BlobMeta) -> Self {
-        sedimentree::BlobMeta::from_hash_size(val.hash.into(), val.size_bytes)
+        sedimentree::BlobMeta::from_digest_size(val.hash.into(), val.size_bytes)
     }
 }
 impl From<sedimentree::BlobMeta> for BlobMeta {
     fn from(value: sedimentree::BlobMeta) -> Self {
         Self {
-            hash: value.hash().into(),
+            hash: value.digest().into(),
             size_bytes: value.size_bytes(),
         }
     }

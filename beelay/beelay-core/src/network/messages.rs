@@ -193,7 +193,7 @@ impl UploadItem {
             blob: data,
             cgka_op,
             tree_part: TreePart::Commit {
-                hash: commit.hash().into(),
+                hash: commit.digest().into(),
                 parents: commit.parents().to_commit_hashes(),
             },
         }
@@ -211,7 +211,7 @@ impl UploadItem {
                 start: stratum.start().into(),
                 end: stratum.end().into(),
                 checkpoints: stratum.checkpoints().to_commit_hashes(),
-                hash: stratum.hash().into(),
+                hash: stratum.digest().into(),
             },
         }
     }

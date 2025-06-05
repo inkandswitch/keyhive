@@ -62,7 +62,7 @@ impl sedimentree::storage::Storage for DocStorage {
             io_handle: &self.io_handle,
         }
         .put(
-            StorageKey::sedimentree_commit(&self.doc_id, commit.hash().into()),
+            StorageKey::sedimentree_commit(&self.doc_id, commit.digest().into()),
             raw,
         )
         .await;
@@ -75,7 +75,11 @@ impl sedimentree::storage::Storage for DocStorage {
             io_handle: &self.io_handle,
         }
         .put(
-            StorageKey::sedimentree_stratum(&self.doc_id, stratum.start().into(), stratum.end().into()),
+            StorageKey::sedimentree_stratum(
+                &self.doc_id,
+                stratum.start().into(),
+                stratum.end().into(),
+            ),
             raw,
         )
         .await;

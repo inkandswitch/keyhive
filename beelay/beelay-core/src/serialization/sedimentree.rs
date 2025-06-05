@@ -25,7 +25,7 @@ impl Parse<'_> for sedimentree::StratumMeta {
 
 impl Encode for sedimentree::LooseCommit {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        crate::CommitHash::from(self.hash()).encode_into(out);
+        crate::CommitHash::from(self.digest()).encode_into(out);
         self.parents().to_commit_hashes().encode_into(out);
         crate::blob::BlobMeta::from(*self.blob()).encode_into(out);
     }
@@ -55,7 +55,7 @@ impl Encode for sedimentree::Stratum {
         crate::CommitHash::from(self.meta().end()).encode_into(out);
         crate::blob::BlobMeta::from(self.meta().blob()).encode_into(out);
         self.checkpoints().to_commit_hashes().encode_into(out);
-        crate::CommitHash::from(self.hash()).encode_into(out);
+        crate::CommitHash::from(self.digest()).encode_into(out);
     }
 }
 
