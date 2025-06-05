@@ -10,12 +10,7 @@ use std::{
 };
 
 use beelay_core::{
-    conn_info,
-    contact_card::ContactCard,
-    io::{IoAction, IoResult},
-    keyhive::{KeyhiveCommandResult, KeyhiveEntityId, MemberAccess},
-    CommandResult, CommitHash, CommitOrBundle, DocumentId, Event, PeerId, StreamId,
-    UnixTimestampMillis,
+    conn_info, contact_card::ContactCard, io::{IoAction, IoResult}, keyhive::{KeyhiveCommandResult, KeyhiveEntityId, MemberAccess}, BundleSpec, CommandResult, CommitHash, CommitOrBundle, DocumentId, Event, PeerId, StreamId, UnixTimestampMillis
 };
 use ed25519_dalek::SigningKey;
 use signature::SignerMut;
@@ -82,7 +77,7 @@ impl BeelayHandle<'_> {
         &mut self,
         doc_id: DocumentId,
         commits: Vec<beelay_core::Commit>,
-    ) -> Result<Vec<sedimentree::BundleSpec>, beelay_core::error::AddCommits> {
+    ) -> Result<Vec<BundleSpec>, beelay_core::error::AddCommits> {
         let command = {
             let beelay = self.network.beelays.get_mut(&self.peer_id).unwrap();
             let (command, event) = beelay_core::Event::add_commits(doc_id, commits);

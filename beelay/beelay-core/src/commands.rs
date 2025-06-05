@@ -5,8 +5,8 @@ use crate::{
     network::{endpoint, EndpointResponse},
     serialization::Encode,
     state::DocUpdateBuilder,
-    streams, Audience, Commit, CommitBundle, CommitOrBundle, DocumentId, OutboundRequestId,
-    Response, StorageKey, StreamId, TaskContext,
+    streams, Audience, BundleSpec, Commit, CommitBundle, CommitOrBundle, DocumentId,
+    OutboundRequestId, Response, StorageKey, StreamId, TaskContext,
 };
 
 mod add_commits;
@@ -56,7 +56,7 @@ pub(crate) enum Command {
 
 #[derive(Debug)]
 pub enum CommandResult {
-    AddCommits(Result<Vec<sedimentree::BundleSpec>, error::AddCommits>),
+    AddCommits(Result<Vec<BundleSpec>, error::AddCommits>),
     AddBundle(Result<(), error::AddBundle>),
     CreateDoc(Result<DocumentId, error::Create>),
     LoadDoc(Option<Vec<CommitOrBundle>>),
@@ -151,7 +151,13 @@ where
             doc_id: dag_id,
             commits,
         } => {
-            let result = add_commits(ctx, dag_id, commits).await;
+            let result = add_commits(ctx, dag_id, commits).await.and_then(|bundles| {
+                bundles
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<Vec<BundleSpec>, _>>()
+                    .map_err(|e| error::AddCommits::Encrypt(e.to_string()))
+            });
             CommandResult::AddCommits(result)
         }
         Command::LoadDoc { doc_id, decrypt } => {

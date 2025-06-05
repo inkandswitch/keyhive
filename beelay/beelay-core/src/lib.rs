@@ -30,7 +30,6 @@
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
 
-pub use sedimentree;
 pub use auth::audience::Audience;
 mod sync_loops;
 use commands::Command;
@@ -72,7 +71,8 @@ mod peer_id;
 pub use peer_id::PeerId;
 mod documents;
 pub use documents::{
-    BundleBuilder, Commit, CommitBundle, CommitHash, CommitOrBundle, DocumentHeads, DocumentId,
+    BundleBuilder, BundleSpec, Commit, CommitBundle, CommitHash, CommitOrBundle, DocumentHeads,
+    DocumentId,
 };
 mod event;
 mod keyhive_storage;

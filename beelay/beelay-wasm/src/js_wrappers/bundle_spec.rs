@@ -1,4 +1,4 @@
-use beelay_core::{sedimentree::BundleSpec, CommitHash, DocumentId};
+use beelay_core::{BundleSpec, CommitHash, DocumentId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -16,15 +16,10 @@ pub(crate) struct JsBundleSpec {
 impl From<BundleSpec> for JsBundleSpec {
     fn from(bundle_spec: BundleSpec) -> Self {
         JsBundleSpec {
-            doc: bundle_spec.doc().try_into().expect("Invalid DocumentId"),
-            start: bundle_spec.start().into(),
-            end: bundle_spec.end().into(),
-            checkpoints: bundle_spec
-                .checkpoints()
-                .iter()
-                .copied()
-                .map(Into::into)
-                .collect(),
+            doc: bundle_spec.doc,
+            start: bundle_spec.start,
+            end: bundle_spec.end,
+            checkpoints: bundle_spec.checkpoints,
         }
     }
 }

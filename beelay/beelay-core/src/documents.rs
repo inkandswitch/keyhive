@@ -1,4 +1,6 @@
 mod commit_bundle;
+mod bundle_spec;
+pub use bundle_spec::BundleSpec;
 pub use commit_bundle::{BundleBuilder, CommitBundle};
 mod commit_hash;
 pub use commit_hash::CommitHash;
