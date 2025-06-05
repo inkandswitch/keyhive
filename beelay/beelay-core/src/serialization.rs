@@ -1,4 +1,5 @@
 pub(crate) mod encode;
+mod sedimentree;
 pub(crate) use encode::Encode;
 mod impls;
 pub(crate) mod leb128;

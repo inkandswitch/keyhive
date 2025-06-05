@@ -1,9 +1,8 @@
 use crate::{
     auth::{self, offset_seconds::OffsetSeconds, Signed},
-    blob::BlobMeta,
     doc_status::DocStatus,
+    documents::{IntoCommitHashes, IntoSedimentreeDigests},
     network::{endpoint, EndpointResponse},
-    sedimentree::{self, CommitOrStratum, LooseCommit},
     serialization::Encode,
     state::DocUpdateBuilder,
     streams, Audience, BundleSpec, Commit, CommitBundle, CommitOrBundle, DocumentId,
@@ -152,7 +151,13 @@ where
             doc_id: dag_id,
             commits,
         } => {
-            let result = add_commits(ctx, dag_id, commits).await;
+            let result = add_commits(ctx, dag_id, commits).await.and_then(|bundles| {
+                bundles
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<Vec<BundleSpec>, _>>()
+                    .map_err(|e| error::AddCommits::Encrypt(e.to_string()))
+            });
             CommandResult::AddCommits(result)
         }
         Command::LoadDoc { doc_id, decrypt } => {
@@ -210,11 +215,12 @@ where
         .expect("FIXME");
     tracing::trace!(?doc_id, "creating doc");
 
-    let init_blob = BlobMeta::new(&encrypted);
-    let blob_key = StorageKey::blob(init_blob.hash());
+    let init_blob = sedimentree::BlobMeta::new(&encrypted);
+    let blob_key = StorageKey::blob(init_blob.digest().into());
     ctx.storage().put(blob_key, encrypted).await;
 
-    let initial_loose = LooseCommit::new(initial_commit.hash(), vec![], init_blob);
+    let initial_loose =
+        sedimentree::LooseCommit::new(initial_commit.hash().into(), vec![], init_blob);
     let tree = sedimentree::Sedimentree::new(Vec::new(), vec![initial_loose]);
 
     let storage = ctx.storage().doc_storage(doc_id);
@@ -256,12 +262,17 @@ where
         .try_filter_map(|commit_or_bundle| async {
             let doc_id = *doc_id;
             match commit_or_bundle {
-                (CommitOrStratum::Commit(c), data) => {
+                (sedimentree::CommitOrStratum::Commit(c), data) => {
                     let content = if decrypt {
                         match ctx
                             .state()
                             .keyhive()
-                            .decrypt(doc_id, c.parents(), c.hash(), data)
+                            .decrypt(
+                                doc_id,
+                                &c.parents().to_commit_hashes(),
+                                c.digest().into(),
+                                data,
+                            )
                             .await
                         {
                             Ok(d) => d,
@@ -273,15 +284,16 @@ where
                     } else {
                         data
                     };
-                    let commit = Commit::new(c.parents().to_vec(), content, c.hash());
+                    let commit =
+                        Commit::new(c.parents().to_commit_hashes(), content, c.digest().into());
                     Ok(Some(CommitOrBundle::Commit(commit)))
                 }
-                (CommitOrStratum::Stratum(s), data) => {
+                (sedimentree::CommitOrStratum::Stratum(s), data) => {
                     let content = if decrypt {
                         match ctx
                             .state()
                             .keyhive()
-                            .decrypt(doc_id, &[s.start()], s.hash(), data)
+                            .decrypt(doc_id, &[s.start().into()], s.digest().into(), data)
                             .await
                         {
                             Ok(d) => d,
@@ -294,9 +306,9 @@ where
                         data
                     };
                     let bundle = CommitBundle::builder()
-                        .start(s.start())
-                        .end(s.end())
-                        .checkpoints(s.checkpoints().to_vec())
+                        .start(s.start().into())
+                        .end(s.end().into())
+                        .checkpoints(s.checkpoints().to_commit_hashes())
                         .bundled_commits(content)
                         .build();
                     Ok(Some(CommitOrBundle::Bundle(bundle)))
@@ -328,14 +340,14 @@ where
             bundle.bundled_commits(),
         )
         .await?;
-    let blob = BlobMeta::new(&encrypted);
-    let blob_path = StorageKey::blob(blob.hash());
+    let blob = sedimentree::BlobMeta::new(&encrypted);
+    let blob_path = StorageKey::blob(blob.digest().into());
     ctx.storage().put(blob_path, encrypted.clone()).await;
 
     let stratum = sedimentree::Stratum::new(
-        bundle.start(),
-        bundle.end(),
-        bundle.checkpoints().to_vec(),
+        bundle.start().into(),
+        bundle.end().into(),
+        bundle.checkpoints().to_sedimentree_digests(),
         blob,
     );
     let doc_storage = ctx.storage().doc_storage(doc_id);

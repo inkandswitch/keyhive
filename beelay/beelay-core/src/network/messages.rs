@@ -1,9 +1,10 @@
 use keyhive_core::{
     cgka::operation::CgkaOperation, crypto::signed::Signed, event::static_event::StaticEvent,
 };
+use sedimentree::SedimentreeSummary;
 
 use crate::{
-    sedimentree::{self, SedimentreeSummary},
+    documents::IntoCommitHashes,
     serialization::{parse, Encode, Parse},
     CommitHash, DocumentId,
 };
@@ -73,7 +74,6 @@ impl std::fmt::Display for Response {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
-#[derive(serde::Serialize)]
 pub(crate) enum FetchedSedimentree {
     NotFound,
     Found(SedimentreeSummary),
@@ -193,8 +193,8 @@ impl UploadItem {
             blob: data,
             cgka_op,
             tree_part: TreePart::Commit {
-                hash: commit.hash(),
-                parents: commit.parents().to_vec(),
+                hash: commit.digest().into(),
+                parents: commit.parents().to_commit_hashes(),
             },
         }
     }
@@ -208,10 +208,10 @@ impl UploadItem {
             blob: data,
             cgka_op,
             tree_part: TreePart::Stratum {
-                start: stratum.start(),
-                end: stratum.end(),
-                checkpoints: stratum.checkpoints().to_vec(),
-                hash: stratum.hash(),
+                start: stratum.start().into(),
+                end: stratum.end().into(),
+                checkpoints: stratum.checkpoints().to_commit_hashes(),
+                hash: stratum.digest().into(),
             },
         }
     }

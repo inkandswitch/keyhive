@@ -1,19 +1,18 @@
-use crate::BlobHash;
-
 use super::{CommitOrStratum, Diff, LooseCommit, Sedimentree, Stratum};
 pub use error::LoadTreeData;
 
+#[allow(async_fn_in_trait)] // TODO: re-evaluate this decision
 pub trait Storage {
     type Error: core::error::Error;
     async fn load_loose_commits(&self) -> Result<Vec<LooseCommit>, Self::Error>;
     async fn load_strata(&self) -> Result<Vec<Stratum>, Self::Error>;
     async fn save_loose_commit(&self, commit: LooseCommit) -> Result<(), Self::Error>;
     async fn save_stratum(&self, stratum: Stratum) -> Result<(), Self::Error>;
-    async fn load_blob(&self, blob_hash: BlobHash) -> Result<Option<Vec<u8>>, Self::Error>;
+    async fn load_blob(&self, blob_hash: crate::Digest) -> Result<Option<Vec<u8>>, Self::Error>;
 }
 
 #[tracing::instrument(skip(storage))]
-pub(crate) async fn load<S: Storage + Clone>(storage: S) -> Result<Option<Sedimentree>, S::Error> {
+pub async fn load<S: Storage + Clone>(storage: S) -> Result<Option<Sedimentree>, S::Error> {
     let strata = {
         let storage = storage.clone();
         async move { storage.load_strata().await }
@@ -32,7 +31,7 @@ pub(crate) async fn load<S: Storage + Clone>(storage: S) -> Result<Option<Sedime
     }
 }
 
-pub(crate) async fn update<S: Storage + Clone>(
+pub async fn update<S: Storage + Clone>(
     storage: S,
     original: Option<&Sedimentree>,
     new: &Sedimentree,
@@ -73,7 +72,7 @@ pub(crate) async fn update<S: Storage + Clone>(
     Ok(())
 }
 
-pub(crate) fn data<S: Storage + Clone>(
+pub fn data<S: Storage + Clone>(
     storage: S,
     tree: Sedimentree,
 ) -> impl futures::Stream<Item = Result<(CommitOrStratum, Vec<u8>), LoadTreeData>> {
@@ -83,18 +82,18 @@ pub(crate) fn data<S: Storage + Clone>(
             match item {
                 super::CommitOrStratum::Commit(c) => {
                     let data = storage
-                        .load_blob(c.blob().hash())
+                        .load_blob(c.blob().digest())
                         .await
                         .map_err(|e| LoadTreeData::Storage(e.to_string()))?
-                        .ok_or_else(|| LoadTreeData::MissingBlob(c.blob().hash()))?;
+                        .ok_or_else(|| LoadTreeData::MissingBlob(c.blob().digest()))?;
                     Ok((CommitOrStratum::Commit(c), data))
                 }
                 super::CommitOrStratum::Stratum(s) => {
                     let data = storage
-                        .load_blob(s.meta().blob().hash())
+                        .load_blob(s.meta().blob().digest())
                         .await
                         .map_err(|e| LoadTreeData::Storage(e.to_string()))?
-                        .ok_or_else(|| LoadTreeData::MissingBlob(s.meta().blob().hash()))?;
+                        .ok_or_else(|| LoadTreeData::MissingBlob(s.meta().blob().digest()))?;
                     Ok((CommitOrStratum::Stratum(s), data))
                 }
             }
@@ -103,46 +102,39 @@ pub(crate) fn data<S: Storage + Clone>(
     futures::stream::FuturesUnordered::from_iter(items)
 }
 
-pub(crate) async fn write_loose_commit<S: Storage>(
+pub async fn write_loose_commit<S: Storage>(
     storage: S,
     commit: &LooseCommit,
 ) -> Result<(), S::Error> {
     storage.save_loose_commit(commit.clone()).await
 }
 
-pub(crate) async fn write_stratum<S: Storage>(
-    storage: S,
-    stratum: Stratum,
-) -> Result<(), S::Error> {
+pub async fn write_stratum<S: Storage>(storage: S, stratum: Stratum) -> Result<(), S::Error> {
     storage.save_stratum(stratum).await
 }
 
-pub(crate) async fn load_loose_commit_data<S: Storage>(
+pub async fn load_loose_commit_data<S: Storage>(
     storage: S,
     commit: &LooseCommit,
 ) -> Result<Option<Vec<u8>>, S::Error> {
-    storage
-        .load_blob(commit.blob().hash())
-        .await
+    storage.load_blob(commit.blob().digest()).await
 }
 
-pub(crate) async fn load_stratum_data<S: Storage>(
+pub async fn load_stratum_data<S: Storage>(
     storage: S,
     stratum: &Stratum,
 ) -> Result<Option<Vec<u8>>, S::Error> {
-    storage
-        .load_blob(stratum.meta().blob().hash())
-        .await
+    storage.load_blob(stratum.meta().blob().digest()).await
 }
 
 mod error {
-    use crate::BlobHash;
+    use crate::Digest;
 
     #[derive(Debug, thiserror::Error)]
     pub enum LoadTreeData {
         #[error("error from storage: {0}")]
         Storage(String),
         #[error("missing blob: {0}")]
-        MissingBlob(BlobHash),
+        MissingBlob(Digest),
     }
 }

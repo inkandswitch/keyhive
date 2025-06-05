@@ -1,7 +1,7 @@
 use crate::{
     blob::BlobMeta,
+    documents::IntoSedimentreeDigests,
     network::messages::{self, FetchedSedimentree, TreePart, UploadItem},
-    sedimentree::{self},
     state::DocUpdateBuilder,
     Commit, CommitBundle, CommitOrBundle, DocumentId, PeerId, Request, Response, StorageKey,
     StreamId, TaskContext,
@@ -133,9 +133,9 @@ async fn upload_commits<R>(
     let tasks = data.into_iter().map(|d| {
         let ctx = ctx.clone();
         async move {
-            let blob = BlobMeta::new(&d.blob);
+            let blob = sedimentree::BlobMeta::new(&d.blob);
             ctx.storage()
-                .put(StorageKey::blob(blob.hash()), d.blob.clone())
+                .put(StorageKey::blob(blob.digest().into()), d.blob.clone())
                 .await;
             if let Some(op) = &d.cgka_op {
                 if let Err(err) = ctx
@@ -162,7 +162,12 @@ async fn upload_commits<R>(
                     checkpoints,
                     hash: _,
                 } => {
-                    let stratum = sedimentree::Stratum::new(start, end, checkpoints.clone(), blob);
+                    let stratum = sedimentree::Stratum::new(
+                        start.into(),
+                        end.into(),
+                        checkpoints.as_slice().to_sedimentree_digests(),
+                        blob,
+                    );
                     let doc_storage = ctx.storage().doc_storage(doc);
                     sedimentree::storage::write_stratum(doc_storage, stratum)
                         .await

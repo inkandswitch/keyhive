@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{sedimentree::LooseCommit, CommitHash};
+use crate::{Digest, LooseCommit};
 
 use super::Stratum;
 
@@ -9,13 +9,13 @@ use super::Stratum;
 #[derive(Debug, Clone)]
 pub struct CommitDag {
     nodes: Vec<Node>,
-    node_map: HashMap<crate::CommitHash, NodeIdx>,
+    node_map: HashMap<crate::Digest, NodeIdx>,
     edges: Vec<Edge>,
 }
 
 #[derive(Debug, Clone)]
 struct Node {
-    hash: crate::CommitHash,
+    hash: crate::Digest,
     parents: Option<EdgeIdx>,
     children: Option<EdgeIdx>,
 }
@@ -35,13 +35,11 @@ struct NodeIdx(usize);
 struct EdgeIdx(usize);
 
 impl CommitDag {
-    pub(crate) fn from_commits<'a, I: Iterator<Item = &'a LooseCommit> + Clone>(
-        commits: I,
-    ) -> Self {
+    pub fn from_commits<'a, I: Iterator<Item = &'a LooseCommit> + Clone>(commits: I) -> Self {
         let nodes = commits
             .clone()
             .map(|c| Node {
-                hash: c.hash(),
+                hash: c.digest(),
                 parents: None,
                 children: None,
             })
@@ -59,7 +57,7 @@ impl CommitDag {
         };
 
         for commit in commits {
-            let child_idx = dag.node_map[&commit.hash()];
+            let child_idx = dag.node_map[&commit.digest()];
             for parent in commit.parents() {
                 if let Some(parent) = dag.node_map.get(parent) {
                     dag.add_edge(*parent, child_idx);
@@ -111,7 +109,7 @@ impl CommitDag {
         }
     }
 
-    pub(crate) fn simplify(&self, strata: &[Stratum]) -> Self {
+    pub fn simplify(&self, strata: &[Stratum]) -> Self {
         // The work here is to identify which parts of a commit DAG can be
         // discarded based on the strata we have. This is a little bit fiddly.
         // Imagine this graph:
@@ -172,10 +170,10 @@ impl CommitDag {
         tips.sort_by_key(|idx| self.nodes[idx.0].hash);
 
         for tip in tips {
-            let mut block: Option<(CommitHash, Vec<CommitHash>)> = None;
+            let mut block: Option<(Digest, Vec<Digest>)> = None;
             for hash in self.reverse_topo(tip) {
                 let level = super::Level::from(hash);
-                if level <= super::TOP_STRATA_LEVEL {
+                if level <= crate::TOP_STRATA_LEVEL {
                     // We're in a block and we just found a checkpoint, this must be the start hash
                     // for the block we're in. Flush the current block and start a new one.
                     if let Some((block, commits)) = block.take() {
@@ -190,10 +188,10 @@ impl CommitDag {
                     block = Some((hash, vec![hash]));
                 }
                 if let Some((_, commits)) = &mut block {
-                    if level > super::TOP_STRATA_LEVEL {
+                    if level > crate::TOP_STRATA_LEVEL {
                         commits.push(hash);
                     }
-                } else if !commits_to_blocks.contains_key(&hash) && level > super::TOP_STRATA_LEVEL
+                } else if !commits_to_blocks.contains_key(&hash) && level > crate::TOP_STRATA_LEVEL
                 {
                     blockless_commits.insert(hash);
                 }
@@ -273,7 +271,7 @@ impl CommitDag {
         Parents::new(self, node)
     }
 
-    fn parents_of_hash(&self, hash: CommitHash) -> impl Iterator<Item = CommitHash> + '_ {
+    fn parents_of_hash(&self, hash: Digest) -> impl Iterator<Item = Digest> + '_ {
         self.node_map
             .get(&hash)
             .map(|idx| self.parents(*idx).map(|i| self.nodes[i.0].hash))
@@ -281,15 +279,15 @@ impl CommitDag {
             .flatten()
     }
 
-    fn reverse_topo(&self, start: NodeIdx) -> impl Iterator<Item = CommitHash> + '_ {
+    fn reverse_topo(&self, start: NodeIdx) -> impl Iterator<Item = Digest> + '_ {
         ReverseTopo::new(self, start)
     }
 
-    pub(crate) fn contains_commit(&self, commit: &CommitHash) -> bool {
+    pub fn contains_commit(&self, commit: &Digest) -> bool {
         self.node_map.contains_key(commit)
     }
 
-    pub(crate) fn heads(&self) -> impl Iterator<Item = CommitHash> + '_ {
+    pub fn heads(&self) -> impl Iterator<Item = Digest> + '_ {
         self.nodes.iter().filter_map(|node| {
             if node.children.is_none() {
                 Some(node.hash)
@@ -301,10 +299,10 @@ impl CommitDag {
 
     /// All the commit hashes in this dag plus the stratum in the order in which they should
     /// be bundled into strata
-    pub(crate) fn canonical_sequence<'a, I: Iterator<Item = &'a Stratum> + Clone + 'a>(
+    pub fn canonical_sequence<'a, I: Iterator<Item = &'a Stratum> + Clone + 'a>(
         &'a self,
         strata: I,
-    ) -> impl Iterator<Item = CommitHash> + 'a {
+    ) -> impl Iterator<Item = Digest> + 'a {
         // First find the tips of the DAG, which is the heads of the commit DAG,
         // plus the end hashes of any strata which are not contained in the
         // commit DAG
@@ -367,7 +365,7 @@ impl CommitDag {
     }
 
     #[cfg(test)]
-    pub(crate) fn commit_hashes(&self) -> impl Iterator<Item = CommitHash> + '_ {
+    fn commit_hashes(&self) -> impl Iterator<Item = Digest> + '_ {
         self.nodes.iter().map(|node| node.hash)
     }
 }
@@ -390,7 +388,7 @@ impl<'a> ReverseTopo<'a> {
 }
 
 impl Iterator for ReverseTopo<'_> {
-    type Item = CommitHash;
+    type Item = Digest;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.stack.pop() {
@@ -445,13 +443,13 @@ mod tests {
     };
     use std::collections::{HashMap, HashSet};
 
-    use crate::{blob::BlobMeta, CommitHash};
+    use crate::{blob::BlobMeta, Digest};
 
     pub fn hash_with_trailing_zeros<R: rand::Rng>(
         rng: &mut R,
         base: u32,
         trailing_zeros: u32,
-    ) -> CommitHash {
+    ) -> Digest {
         assert!(base > 1, "Base must be greater than 1");
         assert!(base <= 10, "Base must be less than 10");
 
@@ -475,14 +473,14 @@ mod tests {
             bytes = padded_bytes;
         }
         let byte_arr: [u8; 32] = bytes.try_into().unwrap();
-        CommitHash::from(byte_arr)
+        Digest::from(byte_arr)
     }
 
     #[derive(Debug)]
     struct TestGraph {
-        nodes: HashMap<String, CommitHash>,
-        parents: HashMap<CommitHash, Vec<CommitHash>>,
-        commits: HashMap<CommitHash, BlobMeta>,
+        nodes: HashMap<String, Digest>,
+        parents: HashMap<Digest, Vec<Digest>>,
+        commits: HashMap<Digest, BlobMeta>,
     }
 
     impl TestGraph {
@@ -524,14 +522,14 @@ mod tests {
                 let parents = self.parents.get(hash).unwrap_or(&Vec::new()).clone();
                 commits.push(LooseCommit {
                     blob: *self.commits.get(hash).unwrap(),
-                    hash: *hash,
+                    digest: *hash,
                     parents,
                 })
             }
             commits
         }
 
-        fn node_hash(&self, node: &str) -> CommitHash {
+        fn node_hash(&self, node: &str) -> Digest {
             *self.nodes.get(node).unwrap()
         }
 
@@ -546,7 +544,7 @@ mod tests {
     fn make_commit_hashes<R: rand::Rng>(
         rng: &mut R,
         names: Vec<(&'static str, usize)>,
-    ) -> HashMap<String, CommitHash> {
+    ) -> HashMap<String, Digest> {
         let mut commits = HashMap::new();
         let mut last_commit = None;
         for (name, level) in names {
@@ -568,10 +566,10 @@ mod tests {
         commits
     }
 
-    fn random_commit_hash<R: rand::Rng>(rng: &mut R) -> CommitHash {
+    fn random_commit_hash<R: rand::Rng>(rng: &mut R) -> Digest {
         let mut hash = [0; 32];
         rng.fill_bytes(&mut hash);
-        CommitHash::from(hash)
+        Digest::from(hash)
     }
 
     fn random_blob<R: rand::Rng>(rng: &mut R) -> BlobMeta {
@@ -597,7 +595,7 @@ mod tests {
                 random_blob($rng),
             ),)*];
             let dag = graph.as_dag();
-            let mut commit_name_map = HashMap::<CommitHash, _>::from_iter(vec![$((graph.node_hash(stringify!($from)), stringify!($from))),*]);
+            let mut commit_name_map = HashMap::<Digest, _>::from_iter(vec![$((graph.node_hash(stringify!($from)), stringify!($from))),*]);
             $(
                 commit_name_map.insert(graph.node_hash(stringify!($to)), stringify!($to));
             )*
@@ -610,8 +608,8 @@ mod tests {
     }
 
     fn pretty_hashes(
-        name_map: &HashMap<CommitHash, &'_ str>,
-        hashes: &HashSet<CommitHash>,
+        name_map: &HashMap<Digest, &'_ str>,
+        hashes: &HashSet<Digest>,
     ) -> HashSet<String> {
         hashes
             .iter()
@@ -705,18 +703,20 @@ mod tests {
         let b = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));
         let c = LooseCommit::new(
             random_commit_hash(&mut rng),
-            vec![a.hash(), b.hash()],
+            vec![a.digest(), b.digest()],
             random_blob(&mut rng),
         );
         let d = LooseCommit::new(
             random_commit_hash(&mut rng),
-            vec![c.hash()],
+            vec![c.digest()],
             random_blob(&mut rng),
         );
         let graph = CommitDag::from_commits(vec![&a, &b, &c, &d].into_iter());
         assert_eq!(
-            graph.parents_of_hash(c.hash()).collect::<HashSet<_>>(),
-            vec![a.hash(), b.hash()].into_iter().collect::<HashSet<_>>()
+            graph.parents_of_hash(c.digest()).collect::<HashSet<_>>(),
+            vec![a.digest(), b.digest()]
+                .into_iter()
+                .collect::<HashSet<_>>()
         );
     }
 }

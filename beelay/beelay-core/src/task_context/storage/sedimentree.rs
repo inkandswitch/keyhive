@@ -1,6 +1,5 @@
 use crate::{
     parse::{self, Parse},
-    sedimentree,
     serialization::Encode,
     DocumentId, StorageKey,
 };
@@ -63,7 +62,7 @@ impl sedimentree::storage::Storage for DocStorage {
             io_handle: &self.io_handle,
         }
         .put(
-            StorageKey::sedimentree_commit(&self.doc_id, commit.hash()),
+            StorageKey::sedimentree_commit(&self.doc_id, commit.digest().into()),
             raw,
         )
         .await;
@@ -76,18 +75,25 @@ impl sedimentree::storage::Storage for DocStorage {
             io_handle: &self.io_handle,
         }
         .put(
-            StorageKey::sedimentree_stratum(&self.doc_id, stratum.start(), stratum.end()),
+            StorageKey::sedimentree_stratum(
+                &self.doc_id,
+                stratum.start().into(),
+                stratum.end().into(),
+            ),
             raw,
         )
         .await;
         Ok(())
     }
 
-    async fn load_blob(&self, blob_hash: crate::BlobHash) -> Result<Option<Vec<u8>>, Self::Error> {
+    async fn load_blob(
+        &self,
+        blob_hash: sedimentree::Digest,
+    ) -> Result<Option<Vec<u8>>, Self::Error> {
         Ok(super::Storage {
             io_handle: &self.io_handle,
         }
-        .load(StorageKey::blob(blob_hash))
+        .load(StorageKey::blob(blob_hash.into()))
         .await)
     }
 }

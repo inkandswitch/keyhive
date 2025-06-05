@@ -1,0 +1,21 @@
+[package]
+name = "sedimentree"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+hex = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+blake3 = { workspace = true }
+futures = { workspace = true }
+num = { workspace = true }
+arbitrary = { workspace = true, optional = true }
+
+[dev-dependencies]
+bolero = { workspace = true }
+rand = { workspace = true }

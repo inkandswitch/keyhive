@@ -61,7 +61,6 @@ pub use commands::{keyhive, CommandId, CommandResult};
 pub mod auth;
 pub mod doc_status;
 pub(crate) mod riblt;
-mod sedimentree;
 mod state;
 mod task_context;
 use task_context::TaskContext;

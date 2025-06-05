@@ -23,7 +23,7 @@ rand.workspace = true
 ed25519-dalek.workspace = true
 wasm-bindgen-futures = "0.4.50"
 futures.workspace = true
-hex = "0.4.3"
+hex.workspace = true
 serde_bytes = "0.11.17"
 
 [dev-dependencies]

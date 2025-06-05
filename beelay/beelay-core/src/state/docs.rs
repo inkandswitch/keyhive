@@ -20,7 +20,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Docs<'a, R> {
     pub(crate) fn add_doc(
         &self,
         doc_id: DocumentId,
-        tree: crate::sedimentree::Sedimentree,
+        tree: sedimentree::Sedimentree,
         _cgka_op: Option<Signed<CgkaOperation>>,
     ) {
         self.state
@@ -34,7 +34,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Docs<'a, R> {
         self.state.borrow_mut().docs_with_changes.insert(*doc_id);
     }
 
-    pub(crate) fn sedimentree(&self, doc: &DocumentId) -> Option<crate::sedimentree::Sedimentree> {
+    pub(crate) fn sedimentree(&self, doc: &DocumentId) -> Option<sedimentree::Sedimentree> {
         self.state
             .borrow()
             .docs
@@ -63,7 +63,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Docs<'a, R> {
             if let Some(doc) = state.docs.get_mut(&doc_id) {
                 doc.add_commits(commits.into_iter(), update.sender);
             } else {
-                let mut doc = DocState::new(crate::sedimentree::Sedimentree::default());
+                let mut doc = DocState::new(sedimentree::Sedimentree::default());
                 doc.add_commits(commits.into_iter(), update.sender);
                 state.docs.insert(doc_id, doc);
             }
@@ -74,7 +74,7 @@ impl<'a, R: rand::Rng + rand::CryptoRng> Docs<'a, R> {
             if let Some(doc) = state.docs.get_mut(&doc_id) {
                 doc.add_bundles(bundles.into_iter(), update.sender);
             } else if !bundles.is_empty() {
-                let mut doc = DocState::new(crate::sedimentree::Sedimentree::default());
+                let mut doc = DocState::new(sedimentree::Sedimentree::default());
                 doc.add_bundles(bundles.into_iter(), update.sender);
                 state.docs.insert(doc_id, doc);
             }

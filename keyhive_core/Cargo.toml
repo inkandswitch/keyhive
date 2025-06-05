@@ -44,14 +44,14 @@ trait-variant = "0.1.2"
 # Testing
 proptest = { version = "1.5", optional = true }
 proptest-derive = { version = "0.5.0", optional = true }
-arbitrary = { version = "1.4.1", features = ["derive"], optional = true }
+arbitrary = { workspace = true, optional = true }
 prettytable-rs = { version = "0.10.0", optional = true }
 
 [dev-dependencies]
 keyhive_core = { path = ".", features = ["test_utils", "debug_events"] }
 test-utils = { path = "../test-utils" }
 
-arbitrary = { version = "1.4.1", features = ["derive"] }
+arbitrary.workspace = true
 lazy_static = "1.5"
 tokio = { version = "1.43", features = [
     "macros",
@@ -65,7 +65,7 @@ tokio-test = "0.4.4"
 divan = "0.1.15"
 
 # Test Helpers
-hex = "0.4.3"
+hex.workspace = true
 pretty_assertions = "1.4"
 testresult = "0.4.1"
 tracing-subscriber = { version = "0.3.19", features = ["ansi", "env-filter"] }
