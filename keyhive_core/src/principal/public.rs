@@ -11,9 +11,10 @@ use crate::{
         verifiable::Verifiable,
     },
     listener::prekey::PrekeyListener,
+    store::secret_key::traits::ShareSecretStore,
 };
 use dupe::Dupe;
-use std::{collections::BTreeMap, rc::Rc};
+use std::rc::Rc;
 
 /// A well-known agent that can be used by anyone. ⚠ USE WITH CAUTION ⚠
 ///
@@ -64,13 +65,14 @@ impl Public {
         }
     }
 
-    pub fn active<T: ContentRef, L: PrekeyListener>(
+    pub fn active<T: ContentRef, L: PrekeyListener, K: ShareSecretStore>(
         &self,
+        secret_store: K,
         listener: L,
-    ) -> Active<MemorySigner, T, L> {
+    ) -> Active<MemorySigner, K, T, L> {
         Active {
             signer: self.signer(),
-            prekey_pairs: BTreeMap::from_iter([(self.share_key(), self.share_secret_key())]),
+            secret_store,
             individual: self.individual(),
             listener,
             _phantom: std::marker::PhantomData,

@@ -7,6 +7,7 @@ use crate::{
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::id::AgentId, document::id::DocumentId, identifier::Identifier},
+    store::secret_key::traits::ShareSecretStore,
 };
 use derive_where::derive_where;
 use dupe::Dupe;
@@ -17,20 +18,23 @@ use std::{collections::BTreeMap, rc::Rc};
 #[derive_where(Debug, Clone; T)]
 pub struct Revocation<
     S: AsyncSigner,
+    K: ShareSecretStore,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<S, K, T> = NoListener,
 > {
-    pub(crate) revoke: Rc<Signed<Delegation<S, T, L>>>,
-    pub(crate) proof: Option<Rc<Signed<Delegation<S, T, L>>>>,
+    pub(crate) revoke: Rc<Signed<Delegation<S, K, T, L>>>,
+    pub(crate) proof: Option<Rc<Signed<Delegation<S, K, T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Revocation<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    Revocation<S, K, T, L>
+{
     pub fn subject_id(&self) -> Identifier {
         self.revoke.subject_id()
     }
 
-    pub fn revoked(&self) -> &Rc<Signed<Delegation<S, T, L>>> {
+    pub fn revoked(&self) -> &Rc<Signed<Delegation<S, K, T, L>>> {
         &self.revoke
     }
 
@@ -38,11 +42,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Revocation<S, T
         self.revoke.payload().delegate.agent_id()
     }
 
-    pub fn proof(&self) -> Option<Rc<Signed<Delegation<S, T, L>>>> {
+    pub fn proof(&self) -> Option<Rc<Signed<Delegation<S, K, T, L>>>> {
         self.proof.dupe()
     }
 
-    pub fn after(&self) -> Dependencies<S, T, L> {
+    pub fn after(&self) -> Dependencies<S, K, T, L> {
         let mut delegations = vec![self.revoke.dupe()];
         if let Some(dlg) = &self.proof {
             delegations.push(dlg.clone());
@@ -56,14 +60,16 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Revocation<S, T
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Signed<Revocation<S, T, L>> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    Signed<Revocation<S, K, T, L>>
+{
     pub fn subject_id(&self) -> Identifier {
         self.payload.subject_id()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
-    for Revocation<S, T, L>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    std::hash::Hash for Revocation<S, K, T, L>
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.revoke.hash(state);
@@ -75,7 +81,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for Revocation<S, T, L> {
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>> Serialize
+    for Revocation<S, K, T, L>
+{
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticRevocation::from(self.clone()).serialize(serializer)
     }
@@ -94,10 +102,10 @@ pub struct StaticRevocation<T: ContentRef = [u8; 32]> {
     pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Revocation<S, T, L>>
-    for StaticRevocation<T>
+impl<S: AsyncSigner, K: ShareSecretStore, T: ContentRef, L: MembershipListener<S, K, T>>
+    From<Revocation<S, K, T, L>> for StaticRevocation<T>
 {
-    fn from(revocation: Revocation<S, T, L>) -> Self {
+    fn from(revocation: Revocation<S, K, T, L>) -> Self {
         Self {
             revoke: Digest::hash(revocation.revoke.as_ref()).into(),
             proof: revocation.proof.map(|p| Digest::hash(p.as_ref()).into()),

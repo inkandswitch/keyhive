@@ -46,8 +46,9 @@ features = ["Crypto", "CryptoKey", "CryptoKeyPair", "Storage", "SubtleCrypto", "
 optional = false
 
 [profile.release]
-wasm-opt = ["-Oz"]
+opt-level = "z"
 lto = true
+codegen-units = 1
 
 [features]
 default = ["console_error_panic_hook", "web-sys"]

@@ -362,8 +362,7 @@ mod tests {
     use crate::{
         cgka::operation::CgkaOperation,
         crypto::{
-            application_secret::PcsKey, digest::Digest, envelope::Envelope,
-            share_key::ShareSecretKey, signed::Signed, siv::Siv,
+            digest::Digest, envelope::Envelope, share_key::ShareSecretKey, signed::Signed, siv::Siv,
         },
         principal::document::id::DocumentId,
     };
@@ -379,9 +378,7 @@ mod tests {
         doc_id: DocumentId,
         csprng: &mut ThreadRng,
     ) -> (Rc<EncryptedContent<String, [u8; 32]>>, SymmetricKey) {
-        let pcs_key: PcsKey = ShareSecretKey::generate(csprng).into();
-        let pcs_key_hash = Digest::hash(&pcs_key);
-
+        let secret_key = ShareSecretKey::generate(csprng);
         let key = SymmetricKey::generate(csprng);
         let envelope = Envelope {
             plaintext,
@@ -396,7 +393,7 @@ mod tests {
                 nonce,
                 bytes,
                 //
-                pcs_key_hash,
+                secret_key.share_key(),
                 pcs_update_op_hash,
                 //
                 cref,

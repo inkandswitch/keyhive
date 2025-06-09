@@ -1,9 +1,8 @@
 //! Ciphertext with public metadata.
 
 use super::{
-    application_secret::PcsKey,
     digest::Digest,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::{AsyncSecretKey, ShareKey},
     signed::Signed,
     siv::Siv,
     symmetric_key::SymmetricKey,
@@ -11,6 +10,7 @@ use super::{
 use crate::{cgka::operation::CgkaOperation, content::reference::ContentRef};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
+use thiserror::Error;
 use tracing::instrument;
 
 /// The public information for an encrypted content ciphertext.
@@ -24,7 +24,7 @@ pub struct EncryptedContent<T, Cr: ContentRef> {
     /// The encrypted data.
     pub ciphertext: Vec<u8>, // TODO wrap in newtype
     /// Hash of the PCS key used to derive the application secret for encrypting.
-    pub pcs_key_hash: Digest<PcsKey>, // TODO use pubkey instead of hash?
+    pub pcs_pubkey: ShareKey,
     /// Hash of the PCS update operation corresponding to the PCS key
     pub pcs_update_op_hash: Digest<Signed<CgkaOperation>>, // TODO check if thi really needs to be a digest?
     /// The content ref hash used to derive the application secret for encrypting.
@@ -41,7 +41,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
     pub fn new(
         nonce: Siv,
         ciphertext: Vec<u8>,
-        pcs_key_hash: Digest<PcsKey>,
+        pcs_pubkey: ShareKey,
         pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
         content_ref: Cr,
         pred_refs: Digest<Vec<Cr>>,
@@ -49,7 +49,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         EncryptedContent {
             nonce,
             ciphertext,
-            pcs_key_hash,
+            pcs_pubkey,
             pcs_update_op_hash,
             content_ref,
             pred_refs,
@@ -95,14 +95,20 @@ impl<T> EncryptedSecret<T> {
         }
     }
 
-    #[instrument(skip(self))]
-    pub fn try_encrypter_decrypt(
+    #[instrument(skip_all)]
+    pub async fn try_encrypter_decrypt<Sk: AsyncSecretKey>(
         &self,
-        encrypter_secret_key: &ShareSecretKey,
-    ) -> Result<Vec<u8>, chacha20poly1305::Error> {
+        encrypter_secret_key: &Sk,
+    ) -> Result<Vec<u8>, TryDecryptError<Sk>> {
         let mut buf: Vec<u8> = self.ciphertext.clone();
-        let key = encrypter_secret_key.derive_symmetric_key(&self.paired_pk);
-        key.try_decrypt(self.nonce, &mut buf)?;
+        let key = encrypter_secret_key
+            .derive_symmetric_key(self.paired_pk)
+            .await
+            .map_err(TryDecryptError::EcdhError)?;
+
+        key.try_decrypt(self.nonce, &mut buf)
+            .map_err(TryDecryptError::DecryptionError)?;
+
         Ok(buf)
     }
 }
@@ -112,7 +118,7 @@ impl<T: std::hash::Hash, Cr: ContentRef> std::hash::Hash for EncryptedContent<T,
         let EncryptedContent {
             nonce,
             ciphertext,
-            pcs_key_hash,
+            pcs_pubkey,
             pcs_update_op_hash,
             content_ref,
             pred_refs,
@@ -121,9 +127,18 @@ impl<T: std::hash::Hash, Cr: ContentRef> std::hash::Hash for EncryptedContent<T,
 
         nonce.hash(state);
         ciphertext.hash(state);
-        pcs_key_hash.hash(state);
+        pcs_pubkey.hash(state);
         pcs_update_op_hash.hash(state);
         content_ref.hash(state);
         pred_refs.hash(state);
     }
+}
+
+#[derive(Debug, Error)]
+pub enum TryDecryptError<Sk: AsyncSecretKey> {
+    #[error("Failed to decrypt the ciphertext: {0}")]
+    DecryptionError(chacha20poly1305::Error),
+
+    #[error("Failed to derive the symmetric key: {0}")]
+    EcdhError(Sk::EcdhError),
 }

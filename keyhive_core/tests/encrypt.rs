@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{collections::HashMap, rc::Rc};
 
 use keyhive_core::{
     access::Access,
@@ -6,30 +6,36 @@ use keyhive_core::{
     event::static_event::StaticEvent,
     keyhive::Keyhive,
     listener::{log::Log, no_listener::NoListener},
-    store::ciphertext::memory::MemoryCiphertextStore,
+    store::{ciphertext::memory::MemoryCiphertextStore, secret_key::memory::MemorySecretKeyStore},
 };
 use nonempty::nonempty;
+use rand::rngs::ThreadRng;
 use testresult::TestResult;
 
 #[allow(clippy::type_complexity)]
 struct NewKeyhive {
     signer: MemorySigner,
-    log: Log<MemorySigner>,
+    log: Log<MemorySigner, MemorySecretKeyStore<ThreadRng>>,
     keyhive: Keyhive<
         MemorySigner,
+        MemorySecretKeyStore<ThreadRng>,
         [u8; 32],
         Vec<u8>,
         MemoryCiphertextStore<[u8; 32], Vec<u8>>,
-        Log<MemorySigner>,
-        rand::rngs::ThreadRng,
+        Log<MemorySigner, MemorySecretKeyStore<ThreadRng>>,
+        ThreadRng,
     >,
 }
 
 async fn make_keyhive() -> NewKeyhive {
     let sk = MemorySigner::generate(&mut rand::thread_rng());
     let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
+    let keystore = MemorySecretKeyStore {
+        csprng: rand::thread_rng(),
+        keys: HashMap::new(),
+    };
     let log = Log::new();
-    let keyhive = Keyhive::generate(sk.clone(), store, log.clone(), rand::thread_rng())
+    let keyhive = Keyhive::generate(sk.clone(), keystore, store, log.clone(), rand::thread_rng())
         .await
         .unwrap();
     NewKeyhive {
@@ -78,7 +84,9 @@ async fn test_encrypt_to_added_member() -> TestResult {
 
     // Now attempt to decrypt on bob
     let doc_on_bob = bob.get_document(doc.borrow().doc_id()).unwrap();
-    let decrypted = bob.try_decrypt_content(doc_on_bob.clone(), encrypted.encrypted_content())?;
+    let decrypted = bob
+        .try_decrypt_content(doc_on_bob.clone(), encrypted.encrypted_content())
+        .await?;
 
     assert_eq!(decrypted, init_content);
     Ok(())
@@ -111,10 +119,15 @@ async fn test_decrypt_after_to_from_archive() {
     let mut alice = Keyhive::try_from_archive(
         &archive,
         sk,
+        MemorySecretKeyStore {
+            csprng: rand::thread_rng(),
+            keys: HashMap::new(),
+        },
         MemoryCiphertextStore::new(),
         NoListener,
         rand::thread_rng(),
     )
+    .await
     .unwrap();
     let mut events = Vec::new();
     while let Some(evt) = log.pop() {
@@ -126,6 +139,7 @@ async fn test_decrypt_after_to_from_archive() {
 
     let decrypted = alice
         .try_decrypt_content(doc.clone(), encrypted.encrypted_content())
+        .await
         .unwrap();
 
     assert_eq!(decrypted, init_content);
@@ -176,10 +190,15 @@ async fn test_decrypt_after_fork_and_merge() {
         let mut keyhive = Keyhive::try_from_archive(
             &archive1,
             sk.clone(),
+            MemorySecretKeyStore {
+                csprng: rand::thread_rng(),
+                keys: HashMap::new(),
+            },
             MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
             Log::new(),
             rand::thread_rng(),
         )
+        .await
         .unwrap();
 
         keyhive.ingest_archive(archive2).await.unwrap();
@@ -192,6 +211,7 @@ async fn test_decrypt_after_fork_and_merge() {
 
     let decrypted = reloaded
         .try_decrypt_content(doc.clone(), encrypted.encrypted_content())
+        .await
         .unwrap();
 
     assert_eq!(decrypted, init_content);

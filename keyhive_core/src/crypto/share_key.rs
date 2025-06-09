@@ -2,10 +2,16 @@
 //!
 //! [ECDH]: https://wikipedia.org/wiki/Elliptic-curve_Diffie%E2%80%93Hellman
 
-use super::{separable::Separable, symmetric_key::SymmetricKey};
+use super::{digest::Digest, separable::Separable, symmetric_key::SymmetricKey};
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::{
+    convert::Infallible,
+    fmt::{self, Debug, Display},
+    future::Future,
+    num::NonZero,
+    rc::Rc,
+};
 use tracing::instrument;
 
 /// Newtype around [x25519_dalek::PublicKey].
@@ -41,6 +47,12 @@ impl ShareKey {
 impl Dupe for ShareKey {
     fn dupe(&self) -> Self {
         Self(self.0)
+    }
+}
+
+impl From<[u8; 32]> for ShareKey {
+    fn from(bytes: [u8; 32]) -> Self {
+        Self(x25519_dalek::PublicKey::from(bytes))
     }
 }
 
@@ -110,36 +122,20 @@ impl ShareSecretKey {
         &self.0
     }
 
-    #[instrument]
-    pub fn derive_new_secret_key(&self, other: &ShareKey) -> Self {
-        let bytes: [u8; 32] = x25519_dalek::StaticSecret::from(*self)
-            .diffie_hellman(&other.0)
-            .to_bytes();
-
-        Self::derive_from_bytes(bytes.as_slice())
-    }
-
-    #[instrument]
-    pub fn derive_symmetric_key(&self, other: &ShareKey) -> SymmetricKey {
-        let secret = x25519_dalek::StaticSecret::from(*self)
-            .diffie_hellman(&other.0)
-            .to_bytes();
-
-        Self::derive_from_bytes(secret.as_slice()).0.into()
-    }
-
-    #[instrument]
-    pub fn ratchet_forward(&self) -> Self {
-        let bytes = self.to_bytes();
-        Self::derive_from_bytes(bytes.as_slice())
-    }
-
-    pub fn ratchet_n_forward(&self, n: usize) -> Self {
-        (0..n).fold(*self, |acc, _| acc.ratchet_forward())
-    }
-
     pub(crate) fn force_from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
+    }
+}
+
+impl From<ShareSecretKey> for ShareKey {
+    fn from(secret: ShareSecretKey) -> Self {
+        secret.share_key()
+    }
+}
+
+impl<T: Into<ShareKey>> From<Rc<T>> for ShareKey {
+    fn from(secret: Rc<T>) -> Self {
+        secret.into()
     }
 }
 
@@ -182,5 +178,101 @@ impl fmt::Display for ShareSecretKey {
 impl fmt::Debug for ShareSecretKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ShareSecretKey(SECRET)")
+    }
+}
+
+pub trait AsyncSecretKey {
+    type EcdhError: Debug + Display;
+
+    fn to_share_key(&self) -> ShareKey;
+
+    fn ecdh_derive_shared_secret(
+        &self,
+        counterparty: ShareKey,
+    ) -> impl Future<Output = Result<x25519_dalek::SharedSecret, Self::EcdhError>>;
+
+    fn derive_bytes(
+        &self,
+        counterparty: ShareKey,
+    ) -> impl Future<Output = Result<[u8; 32], Self::EcdhError>> {
+        async move {
+            let secret = self
+                .ecdh_derive_shared_secret(counterparty)
+                .await?
+                .to_bytes();
+
+            let extended = secret.to_vec().extend(b"/keyhive/ecdh/derive-bytes/");
+            Ok(Digest::hash(&extended).into())
+        }
+    }
+
+    #[instrument(skip(self), fields(pk = %self.to_share_key()))]
+    fn derive_symmetric_key(
+        &self,
+        other: ShareKey,
+    ) -> impl Future<Output = Result<SymmetricKey, Self::EcdhError>> {
+        async {
+            let secret = self.derive_bytes(other).await?;
+            Ok(SymmetricKey::from(secret))
+        }
+    }
+
+    #[instrument(skip(self), fields(pk = %self.to_share_key()))]
+    fn ratchet_forward(
+        &self,
+        other: ShareKey,
+    ) -> impl Future<Output = Result<ShareSecretKey, Self::EcdhError>> {
+        async {
+            let bytes = self.derive_bytes(other).await?;
+            Ok(ShareSecretKey::force_from_bytes(bytes))
+        }
+    }
+
+    #[instrument(skip(self), fields(pk = %self.to_share_key()))]
+    fn ratchet_n_forward(
+        &self,
+        other: ShareKey,
+        n: NonZero<usize>,
+    ) -> impl Future<Output = Result<ShareSecretKey, Self::EcdhError>> {
+        async {
+            let mut acc = self.derive_bytes(other).await?;
+            let max = n.get() - 1;
+            for _ in 0..max {
+                let acc_sk = ShareSecretKey::force_from_bytes(acc);
+                let acc_pk = acc_sk.share_key();
+                acc = self.derive_bytes(acc_pk).await?;
+            }
+            Ok(ShareSecretKey::force_from_bytes(acc))
+        }
+    }
+}
+
+impl AsyncSecretKey for ShareSecretKey {
+    type EcdhError = Infallible;
+
+    fn to_share_key(&self) -> ShareKey {
+        self.share_key()
+    }
+
+    async fn ecdh_derive_shared_secret(
+        &self,
+        counterparty: ShareKey,
+    ) -> Result<x25519_dalek::SharedSecret, Self::EcdhError> {
+        Ok(x25519_dalek::StaticSecret::from(*self).diffie_hellman(&counterparty.0))
+    }
+}
+
+impl<T: AsyncSecretKey> AsyncSecretKey for Rc<T> {
+    type EcdhError = T::EcdhError;
+
+    fn to_share_key(&self) -> ShareKey {
+        self.as_ref().to_share_key()
+    }
+
+    async fn ecdh_derive_shared_secret(
+        &self,
+        counterparty: ShareKey,
+    ) -> Result<x25519_dalek::SharedSecret, Self::EcdhError> {
+        self.as_ref().ecdh_derive_shared_secret(counterparty).await
     }
 }
