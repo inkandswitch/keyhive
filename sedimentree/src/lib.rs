@@ -36,6 +36,7 @@ impl BundleSpec {
 
 #[derive(Clone, PartialEq, Eq, Default, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Sedimentree {
     strata: BTreeSet<Stratum>,
     commits: BTreeSet<LooseCommit>,
@@ -43,6 +44,7 @@ pub struct Sedimentree {
 
 #[derive(Clone, Debug, PartialEq, Eq, Default, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SedimentreeSummary {
     strata: BTreeSet<StratumMeta>,
     commits: BTreeSet<LooseCommit>,
@@ -75,6 +77,7 @@ impl SedimentreeSummary {
 
 #[derive(Copy, Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Level(pub u32);
 impl Default for Level {
     fn default() -> Self {
@@ -120,6 +123,7 @@ impl Ord for Level {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Stratum {
     meta: StratumMeta,
     checkpoints: Vec<Digest>,
@@ -128,6 +132,7 @@ pub struct Stratum {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StratumMeta {
     start: Digest,
     end: Digest,
@@ -148,6 +153,7 @@ impl StratumMeta {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LooseCommit {
     digest: Digest,
     parents: Vec<Digest>,
@@ -512,6 +518,7 @@ impl std::fmt::Debug for Sedimentree {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MinimalTreeHash([u8; 32]);
 
 impl MinimalTreeHash {

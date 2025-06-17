@@ -7,6 +7,9 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+serde = ["dep:serde"]
+
 [dependencies]
 hex = { workspace = true }
 tracing = { workspace = true }
@@ -15,6 +18,7 @@ blake3 = { workspace = true }
 futures = { workspace = true }
 num = { workspace = true }
 arbitrary = { workspace = true, optional = true }
+serde = { workspace = true, optional = true, features = ["derive"] }
 
 [dev-dependencies]
 bolero = { workspace = true }
