@@ -8,8 +8,14 @@ pub use blob::*;
 
 pub const TOP_STRATA_LEVEL: Level = Level(2);
 
-#[derive(Debug, Clone, Hash, Copy)]
+#[derive(Clone, Hash, Copy)]
 pub struct DocumentId(pub [u8; 32]);
+
+impl std::fmt::Debug for DocumentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DocumentId({})", hex::encode(self.0))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct BundleSpec {
