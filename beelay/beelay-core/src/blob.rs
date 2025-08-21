@@ -160,38 +160,4 @@ mod error {
     }
 
     impl std::error::Error for InvalidBlobHash {}
-
-    pub enum InvalidBlobMeta {
-        NotEnoughInput,
-        InvalidBlobHash(InvalidBlobHash),
-    }
-
-    impl From<parse::NotEnoughInput> for InvalidBlobMeta {
-        fn from(_value: parse::NotEnoughInput) -> Self {
-            Self::NotEnoughInput
-        }
-    }
-
-    impl From<InvalidBlobHash> for InvalidBlobMeta {
-        fn from(value: InvalidBlobHash) -> Self {
-            Self::InvalidBlobHash(value)
-        }
-    }
-
-    impl std::fmt::Display for InvalidBlobMeta {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Self::NotEnoughInput => write!(f, "Not enough input"),
-                Self::InvalidBlobHash(e) => write!(f, "Invalid blob hash: {}", e),
-            }
-        }
-    }
-
-    impl std::fmt::Debug for InvalidBlobMeta {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            std::fmt::Display::fmt(self, f)
-        }
-    }
-
-    impl std::error::Error for InvalidBlobMeta {}
 }

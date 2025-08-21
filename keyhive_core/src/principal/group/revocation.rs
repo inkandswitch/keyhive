@@ -42,7 +42,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Revocation<S, T
         self.proof.dupe()
     }
 
-    pub fn after(&self) -> Dependencies<S, T, L> {
+    pub fn after(&self) -> Dependencies<'_, S, T, L> {
         let mut delegations = vec![self.revoke.dupe()];
         if let Some(dlg) = &self.proof {
             delegations.push(dlg.clone());

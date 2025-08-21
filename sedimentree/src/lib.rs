@@ -63,7 +63,7 @@ impl SedimentreeSummary {
         &self.commits
     }
 
-    pub fn as_remote_diff(&self) -> RemoteDiff {
+    pub fn as_remote_diff(&self) -> RemoteDiff<'_> {
         RemoteDiff {
             remote_strata: self.strata.iter().collect(),
             remote_commits: self.commits.iter().collect(),
@@ -466,7 +466,7 @@ impl Sedimentree {
         all_bundles
     }
 
-    pub fn as_local_diff(&self) -> RemoteDiff {
+    pub fn as_local_diff(&self) -> RemoteDiff<'_> {
         RemoteDiff {
             remote_strata: Vec::new(),
             remote_commits: Vec::new(),

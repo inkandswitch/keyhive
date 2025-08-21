@@ -66,7 +66,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         &self.after_revocations
     }
 
-    pub fn after(&self) -> Dependencies<S, T, L> {
+    pub fn after(&self) -> Dependencies<'_, S, T, L> {
         let AfterAuth {
             optional_delegation,
             revocations,
@@ -81,7 +81,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         }
     }
 
-    pub fn after_auth(&self) -> AfterAuth<S, T, L> {
+    pub fn after_auth(&self) -> AfterAuth<'_, S, T, L> {
         AfterAuth {
             optional_delegation: self.proof.dupe(),
             revocations: &self.after_revocations,

@@ -9,10 +9,6 @@ use crate::{
 
 mod sync;
 
-#[derive(Debug, thiserror::Error)]
-#[error("auth failed")]
-pub struct AuthenticationFailed;
-
 #[tracing::instrument(skip(ctx, request), fields(from_peer))]
 pub(super) async fn handle_request<R>(
     ctx: TaskContext<R>,

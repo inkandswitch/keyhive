@@ -59,12 +59,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore
     }
 
     /// Get an immutable reference to the underlying [`CaMap`].
-    pub fn borrow(&self) -> Ref<CaMap<Signed<Revocation<S, T, L>>>> {
+    pub fn borrow(&self) -> Ref<'_, CaMap<Signed<Revocation<S, T, L>>>> {
         self.0.borrow()
     }
 
     /// Get a mutable reference to the underlying [`CaMap`].
-    pub fn borrow_mut(&self) -> RefMut<CaMap<Signed<Revocation<S, T, L>>>> {
+    pub fn borrow_mut(&self) -> RefMut<'_, CaMap<Signed<Revocation<S, T, L>>>> {
         self.0.borrow_mut()
     }
 }

@@ -485,23 +485,4 @@ pub(crate) mod error {
     }
 
     impl std::error::Error for StreamError {}
-
-    #[derive(Debug)]
-    pub(crate) enum EncodeResponse {
-        StreamError(StreamError),
-    }
-
-    impl From<StreamError> for EncodeResponse {
-        fn from(value: StreamError) -> Self {
-            Self::StreamError(value)
-        }
-    }
-
-    impl std::fmt::Display for EncodeResponse {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Self::StreamError(e) => write!(f, "stream error: {}", e),
-            }
-        }
-    }
 }

@@ -59,7 +59,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> DelegationStore
         self.0.borrow_mut().insert(delegation)
     }
 
-    pub fn borrow(&self) -> Ref<CaMap<Signed<Delegation<S, T, L>>>> {
+    pub fn borrow(&self) -> Ref<'_, CaMap<Signed<Delegation<S, T, L>>>> {
         self.0.borrow()
     }
 }

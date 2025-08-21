@@ -181,15 +181,4 @@ pub mod error {
     }
 
     impl std::error::Error for Receive {}
-
-    #[derive(Debug)]
-    pub struct Encode(pub(super) String);
-
-    impl std::fmt::Display for Encode {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "error encoding msg: {}", self.0)
-        }
-    }
-
-    impl std::error::Error for Encode {}
 }

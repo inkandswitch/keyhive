@@ -32,7 +32,7 @@
           config.allowUnfree = true;
         };
 
-        rustVersion = "1.85.0";
+        rustVersion = "1.86.0";
 
         rust-toolchain = pkgs.rust-bin.stable.${rustVersion}.default.override {
           extensions = [
