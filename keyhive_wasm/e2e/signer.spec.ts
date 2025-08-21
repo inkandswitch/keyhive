@@ -23,18 +23,9 @@ test.describe("Signer", async () => {
         expect(out.key).toBeDefined()
       })
 
-      test('defaults to WebCrypto', async ({ page, browserName }) => {
-        test.skip(browserName === 'chromium', 'waiting for Ed25519 to come out of feature flag');
-
+      test('defaults to WebCrypto', async ({ page }) => {
         const out = await page.evaluate(scenario)
         expect(out.variant).toBe("WEB_CRYPTO")
-      })
-
-      test('falls back to an in-memory signer on Chrome (for now)', async ({ page, browserName }) => {
-        test.skip(browserName !== 'chromium', 'waiting for Ed25519 to come out of feature flag');
-
-        const out = await page.evaluate(scenario)
-        expect(out.variant).toBe("MEMORY")
       })
     })
   })
