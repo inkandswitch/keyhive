@@ -2,8 +2,7 @@
   description = "keyhive";
 
   inputs = {
-    nixpkgs.url = "nixpkgs/nixos-24.11";
-    nixos-unstable.url = "nixpkgs/nixos-unstable-small";
+    nixpkgs.url = "nixpkgs/nixos-25.05";
 
     command-utils.url = "github:expede/nix-command-utils";
     flake-utils.url = "github:numtide/flake-utils";
@@ -18,7 +17,6 @@
   outputs = {
     self,
     flake-utils,
-    nixos-unstable,
     nixpkgs,
     rust-overlay,
     command-utils
@@ -34,14 +32,9 @@
           config.allowUnfree = true;
         };
 
-        unstable = import nixos-unstable {
-          inherit system overlays;
-          config.allowUnfree = true;
-        };
-
         rustVersion = "1.85.0";
 
-        rust-toolchain = unstable.rust-bin.stable.${rustVersion}.default.override {
+        rust-toolchain = pkgs.rust-bin.stable.${rustVersion}.default.override {
           extensions = [
             "cargo"
             "clippy"
@@ -68,12 +61,6 @@
           taplo
         ];
 
-        darwin-installs = with pkgs.darwin.apple_sdk.frameworks; [
-          Security
-          CoreFoundation
-          Foundation
-        ];
-
         cargo-installs = with pkgs; [
           cargo-criterion
           cargo-deny
@@ -85,17 +72,17 @@
           cargo-watch
           # llvmPackages.bintools
           twiggy
-          unstable.cargo-component
+          pkgs.cargo-component
           wasm-bindgen-cli
           wasm-tools
         ];
 
-        cargo = "${unstable.cargo}/bin/cargo";
+        cargo = "${pkgs.cargo}/bin/cargo";
         gzip = "${pkgs.gzip}/bin/gzip";
-        node = "${unstable.nodejs_20}/bin/node";
-        pnpm = "${unstable.pnpm}/bin/pnpm";
+        node = "${pkgs.nodejs_20}/bin/node";
+        pnpm = "${pkgs.pnpm}/bin/pnpm";
         playwright = "${pnpm} --dir=./keyhive_wasm exec playwright";
-        wasm-pack = "${unstable.wasm-pack}/bin/wasm-pack";
+        wasm-pack = "${pkgs.wasm-pack}/bin/wasm-pack";
         wasm-opt = "${pkgs.binaryen}/bin/wasm-opt";
 
         cmd = command-utils.cmd.${system};
@@ -189,8 +176,24 @@
           "test:wasm:node" = cmd "Run wasm-pack tests in Node.js"
             "${wasm-pack} test --node keyhive_wasm";
 
-          "test:ts:web" = cmd "Run keyhive_wasm Typescript tests in Playwright"
-            "build:wasm:web && ${playwright} test";
+          "test:ts:web" = cmd "Run keyhive_wasm Typescript tests in Playwright" ''
+            cd ./keyhive_wasm
+            ${pnpm} exec playwright install --with-deps
+            cd ..
+
+            ${pkgs.http-server}/bin/http-server --silent &
+            bg_pid=$!
+
+            build:wasm:web
+            ${playwright} test ./keyhive_wasm
+
+            cleanup() {
+              echo "Killing background process $bg_pid"
+              kill "$bg_pid" 2>/dev/null || true
+            }
+            trap cleanup EXIT
+          '';
+
 
           "test:ts:web:report:latest" = cmd "Open the latest Playwright report"
             "${playwright} show-report";
@@ -234,23 +237,23 @@
               command_menu
 
               rust-toolchain
-              unstable.irust
+              pkgs.irust
 
               http-server
               pkgs.binaryen
-              unstable.chromedriver
+              pkgs.chromedriver
               pkgs.nodePackages.pnpm
               pkgs.nodePackages_latest.webpack-cli
               pkgs.nodejs_20
+              pkgs.playwright-driver
+              pkgs.playwright-driver.browsers
               pkgs.rust-analyzer
               pkgs.wasm-pack
             ]
             ++ format-pkgs
-            ++ cargo-installs
-            ++ lib.optionals stdenv.isDarwin darwin-installs;
+            ++ cargo-installs;
 
          shellHook = ''
-            # export RUSTC_WRAPPER="${pkgs.sccache}/bin/sccache"
             unset SOURCE_DATE_EPOCH
           ''
           + pkgs.lib.strings.optionalString pkgs.stdenv.isDarwin ''
