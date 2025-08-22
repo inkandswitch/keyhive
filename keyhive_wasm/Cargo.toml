@@ -23,6 +23,7 @@ ed25519-dalek = { workspace = true }
 nonempty = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+serde_json = "^1.0"
 
 rand = { workspace = true }
 getrandom = { version = "0.2", features = ["js"] }
@@ -34,7 +35,15 @@ wasm-bindgen-futures = "0.4.50"
 
 [dependencies.web-sys]
 version = "0.3.77"
-features = ["Crypto", "CryptoKey", "CryptoKeyPair", "Storage", "SubtleCrypto", "Window", "console"]
+features = [
+    "Crypto",
+    "CryptoKey",
+    "CryptoKeyPair",
+    "Storage",
+    "SubtleCrypto",
+    "Window",
+    "console",
+]
 optional = true
 
 [dev-dependencies]
@@ -42,7 +51,15 @@ wasm-bindgen-test = "0.3.50"
 
 [dev-dependencies.web-sys]
 version = "0.3.77"
-features = ["Crypto", "CryptoKey", "CryptoKeyPair", "Storage", "SubtleCrypto", "Window", "console"]
+features = [
+    "Crypto",
+    "CryptoKey",
+    "CryptoKeyPair",
+    "Storage",
+    "SubtleCrypto",
+    "Window",
+    "console",
+]
 optional = false
 
 [profile.release]

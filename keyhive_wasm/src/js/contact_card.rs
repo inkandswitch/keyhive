@@ -10,6 +10,13 @@ pub struct JsContactCard(ContactCard);
 
 #[wasm_bindgen(js_class = ContactCard)]
 impl JsContactCard {
+    #[wasm_bindgen(constructor)]
+    pub fn new(json: &str) -> Result<JsContactCard, JsValue> {
+        let contact_card: ContactCard = serde_json::from_str(json)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse JSON: {}", e)))?;
+        Ok(JsContactCard(contact_card))
+    }
+
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> JsIndividualId {
         self.0.id().into()
@@ -18,6 +25,12 @@ impl JsContactCard {
     #[wasm_bindgen(getter, js_name = "shareKey")]
     pub fn share_key(&self) -> JsShareKey {
         (*self.0.share_key()).into()
+    }
+
+    #[wasm_bindgen(js_name = "toJson")]
+    pub fn to_json(&self) -> Result<String, JsValue> {
+        serde_json::to_string(&self.0)
+            .map_err(|e| JsValue::from_str(&format!("Failed to serialize to JSON: {}", e)))
     }
 }
 

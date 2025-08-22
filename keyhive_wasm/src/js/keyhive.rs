@@ -1,8 +1,9 @@
-use super::ciphertext_store::JsCiphertextStore;
-use super::contact_card::JsContactCard;
+use crate::js::individual::JsIndividual;
+
 use super::{
     access::JsAccess, add_member_error::JsAddMemberError, agent::JsAgent, archive::JsArchive,
-    change_ref::JsChangeRef, document::JsDocument, encrypted::JsEncrypted,
+    change_ref::JsChangeRef, ciphertext_store::JsCiphertextStore, contact_card::JsContactCard,
+    document::JsDocument, encrypted::JsEncrypted,
     encrypted_content_with_update::JsEncryptedContentWithUpdate, event_handler::JsEventHandler,
     generate_doc_error::JsGenerateDocError, group::JsGroup, identifier::JsIdentifier,
     individual_id::JsIndividualId, membered::JsMembered, peer::JsPeer,
@@ -11,11 +12,10 @@ use super::{
     signing_error::JsSigningError, summary::Summary,
 };
 use derive_more::{From, Into};
-use dupe::Dupe;
-use dupe::IterDupedExt;
+use dupe::{Dupe, IterDupedExt};
 use keyhive_core::{
     keyhive::{EncryptContentError, Keyhive},
-    principal::document::DecryptError,
+    principal::{document::DecryptError, individual::ReceivePrekeyOpError},
 };
 use nonempty::NonEmpty;
 use thiserror::Error;
@@ -101,8 +101,7 @@ impl JsKeyhive {
                 coparents.into_iter().map(Into::into).collect::<Vec<_>>(),
                 NonEmpty {
                     head: initial_content_ref_head,
-                    tail: more_initial_content_refs
-                        .into_iter().collect(),
+                    tail: more_initial_content_refs.into_iter().collect(),
                 },
             )
             .await?
@@ -244,6 +243,17 @@ impl JsKeyhive {
             .map_err(Into::into)
     }
 
+    #[wasm_bindgen(js_name = receiveContactCard)]
+    pub fn receive_contact_card(
+        &mut self,
+        contact_card: JsContactCard,
+    ) -> Result<JsIndividual, JsReceivePreKeyOpError> {
+        match self.0.receive_contact_card(&contact_card) {
+            Ok(individual) => Ok(JsIndividual(individual)),
+            Err(err) => Err(JsReceivePreKeyOpError(err)),
+        }
+    }
+
     #[wasm_bindgen(js_name = getAgent)]
     pub fn get_agent(&self, id: JsIdentifier) -> Option<JsAgent> {
         self.0.get_agent(id.0).map(JsAgent)
@@ -254,6 +264,11 @@ impl JsKeyhive {
         self.0.into_archive().into()
     }
 }
+
+#[wasm_bindgen]
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct JsReceivePreKeyOpError(#[from] pub(crate) ReceivePrekeyOpError);
 
 #[wasm_bindgen]
 #[derive(Debug, Error)]
