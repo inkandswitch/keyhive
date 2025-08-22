@@ -136,22 +136,6 @@ impl From<ResponseType> for u8 {
 }
 
 mod error {
-    pub struct InvalidMessageDirection(pub(super) u8);
-
-    impl std::fmt::Display for InvalidMessageDirection {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "invalid message direction: {}", self.0)
-        }
-    }
-
-    impl std::fmt::Debug for InvalidMessageDirection {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "InvalidMessageDirection({})", self.0)
-        }
-    }
-
-    impl std::error::Error for InvalidMessageDirection {}
-
     pub struct InvalidRequestType(pub(super) u8);
 
     impl std::fmt::Display for InvalidRequestType {

@@ -108,7 +108,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
             .collect()
     }
 
-    pub fn after(&self) -> Dependencies<S, T, L> {
+    pub fn after(&self) -> Dependencies<'_, S, T, L> {
         match self {
             MembershipOperation::Delegation(delegation) => delegation.payload.after(),
             MembershipOperation::Revocation(revocation) => revocation.payload.after(),

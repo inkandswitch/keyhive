@@ -29,8 +29,8 @@ impl JsGroup {
         self.0
             .borrow()
             .members()
-            .iter()
-            .map(|(_agent_id, dlgs)| {
+            .values()
+            .map(|dlgs| {
                 let best = dlgs
                     .iter()
                     .max_by_key(|dlg| dlg.payload().can())

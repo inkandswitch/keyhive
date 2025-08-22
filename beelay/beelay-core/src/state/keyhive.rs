@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     cell::RefCell,
-    collections::{hash_map::Entry, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     rc::Rc,
 };
 
@@ -27,7 +27,6 @@ use nonempty::NonEmpty;
 
 use crate::{
     commands::keyhive::{KeyhiveEntityId, MemberAccess},
-    contact_card::ContactCard,
     io::Signer,
     keyhive::Listener,
     parse::{self, Parse},
@@ -91,11 +90,6 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
     /// Check if the given peer is allowed to write to the document
     pub(crate) async fn can_write(&self, peer_id: PeerId, doc_id: &DocumentId) -> bool {
         self.can_do(peer_id, doc_id, KeyhiveAccess::Write).await
-    }
-
-    /// Check if the given peer is allowed to read from the document
-    pub(crate) async fn can_read(&self, peer_id: PeerId, doc_id: &DocumentId) -> bool {
-        self.can_do(peer_id, doc_id, KeyhiveAccess::Read).await
     }
 
     pub(crate) async fn can_pull(&self, peer_id: PeerId, doc_id: &DocumentId) -> bool {
@@ -214,69 +208,6 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             Ok(())
         } else {
             Err(error::Ingest::MissingDependency)
-        }
-    }
-
-    /// Apply the given keyhive events locally
-    pub(crate) async fn apply_keyhive_events(
-        &self,
-        mut events: Vec<StaticEvent<CommitHash>>,
-    ) -> Result<
-        (),
-        keyhive_core::keyhive::ReceiveStaticEventError<
-            Signer,
-            CommitHash,
-            crate::keyhive::Listener,
-        >,
-    > {
-        let k_mutex = self.0.borrow().keyhive.clone();
-        let mut keyhive = k_mutex.lock().await;
-
-        let mut try_later = vec![];
-
-        // Make sure to do membership events first, sort so that StaticEvent::Delegated and StaticEvent::Revoked come first
-        events.sort_by(|a, b| match (a, b) {
-            (StaticEvent::Delegated(a), StaticEvent::Delegated(b)) => a.cmp(b),
-            (StaticEvent::Delegated(_), _) => std::cmp::Ordering::Less,
-            (StaticEvent::Revoked(a), StaticEvent::Revoked(b)) => a.cmp(b),
-            (StaticEvent::Revoked(_), StaticEvent::Delegated(_)) => std::cmp::Ordering::Greater,
-            (StaticEvent::Revoked(_), _) => std::cmp::Ordering::Less,
-            _ => std::cmp::Ordering::Equal,
-        });
-        events.reverse();
-
-        // Out of order & deduplicated ingestion
-        loop {
-            let mut ingested = false;
-            while let Some(event) = events.pop() {
-                match keyhive.receive_static_event(event.clone()).await {
-                    Ok(_) => {
-                        tracing::trace!(?event, "processing keyhive event");
-                        ingested = true;
-                    }
-                    Err(e) => {
-                        if e.is_missing_dependency() {
-                            try_later.push(event);
-                        } else {
-                            tracing::error!(?event, err=?e, "failed to process keyhive event");
-                            return Err(e);
-                        }
-                    }
-                }
-            }
-
-            if try_later.is_empty() || !ingested {
-                break;
-            } else {
-                events = try_later;
-                try_later = vec![];
-            }
-        }
-
-        if events.is_empty() {
-            Ok(())
-        } else {
-            panic!()
         }
     }
 
@@ -442,38 +373,6 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
         }
     }
 
-    #[tracing::instrument(skip(self, agent_id))]
-    pub(crate) async fn events_for_agent(
-        &self,
-        agent_id: keyhive_core::principal::identifier::Identifier,
-    ) -> Option<Vec<keyhive_core::event::Event<Signer, CommitHash, crate::keyhive::Listener>>> {
-        tracing::trace!("getting events for agent");
-
-        let k_mutex = self.0.borrow().keyhive.clone();
-        let keyhive = k_mutex.lock().await;
-
-        let agent = keyhive.get_agent(agent_id)?;
-        Some(
-            keyhive
-                .events_for_agent(&agent)
-                .unwrap()
-                .into_values()
-                .collect(),
-        )
-    }
-
-    pub(crate) async fn register_peer(
-        &self,
-        contact: ContactCard,
-    ) -> keyhive_core::principal::agent::Agent<Signer, CommitHash, crate::keyhive::Listener> {
-        let k_mutex = self.0.borrow().keyhive.clone();
-        let mut keyhive = k_mutex.lock().await;
-
-        let indie = Rc::new(RefCell::new(Individual::from(contact.0)));
-        keyhive.register_individual(indie.clone());
-        indie.into()
-    }
-
     pub(crate) async fn query_access(
         &self,
         doc_id: DocumentId,
@@ -489,45 +388,6 @@ impl<'a, R: rand::Rng + rand::CryptoRng> KeyhiveCtx<'a, R> {
             .map(|(id, (_, access))| (PeerId::from(id.0), MemberAccess::from(access)))
             .collect();
         Some(result)
-    }
-
-    pub(crate) async fn to_access_change(
-        &self,
-        evt: &keyhive_core::event::Event<Signer, CommitHash, crate::keyhive::Listener>,
-    ) -> Option<(DocumentId, HashMap<PeerId, MemberAccess>)> {
-        let k_mutex = self.0.borrow().keyhive.clone();
-        let keyhive = k_mutex.lock().await;
-
-        let doc_id = match evt {
-            keyhive_core::event::Event::Delegated(signed) => signed.subject_id(),
-            keyhive_core::event::Event::Revoked(signed) => signed.subject_id(),
-            _ => return None,
-        };
-        if let Some(doc) = keyhive.get_document(doc_id.into()) {
-            let mut result = HashMap::new();
-            for (id, (_, access)) in doc.borrow().transitive_members() {
-                match result.entry(PeerId::from(id.0)) {
-                    Entry::Vacant(entry) => {
-                        entry.insert(access);
-                    }
-                    Entry::Occupied(mut entry) => {
-                        if entry.get() < &access {
-                            entry.insert(access);
-                        }
-                    }
-                }
-            }
-            let result = result.into_iter().map(|(p, a)| (p, a.into())).collect();
-            // let result = doc
-            //     .borrow()
-            //     .transitive_members()
-            //     .into_iter()
-            //     .map(|(id, (_, access))| (PeerId::from(id.0), MemberAccess::from(access)))
-            //     .collect();
-            Some((DocumentId::from(doc_id.0), result))
-        } else {
-            None
-        }
     }
 
     pub(crate) async fn encrypt(

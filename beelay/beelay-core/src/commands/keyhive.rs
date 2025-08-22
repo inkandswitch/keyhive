@@ -279,8 +279,6 @@ where
 }
 
 pub(crate) mod error {
-    use crate::{CommitHash, Signer};
-
     #[derive(Debug, thiserror::Error)]
     pub enum AddMember {
         #[error("peer not found")]
@@ -290,15 +288,6 @@ pub(crate) mod error {
     #[derive(Debug, thiserror::Error)]
     #[error("{0}")]
     pub struct RemoveMember(pub(super) String);
-
-    #[derive(Debug, thiserror::Error)]
-    pub(crate) enum ReceiveEventError {
-        #[error(transparent)]
-        Receive(
-            #[from]
-            keyhive_core::keyhive::ReceiveEventError<Signer, CommitHash, crate::keyhive::Listener>,
-        ),
-    }
 
     #[derive(Debug, thiserror::Error)]
     pub enum QueryAccess {

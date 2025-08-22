@@ -10,7 +10,12 @@ use std::{
 };
 
 use beelay_core::{
-    conn_info, contact_card::ContactCard, io::{IoAction, IoResult}, keyhive::{KeyhiveCommandResult, KeyhiveEntityId, MemberAccess}, BundleSpec, CommandResult, CommitHash, CommitOrBundle, DocumentId, Event, PeerId, StreamId, UnixTimestampMillis
+    conn_info,
+    contact_card::ContactCard,
+    io::{IoAction, IoResult},
+    keyhive::{KeyhiveCommandResult, KeyhiveEntityId, MemberAccess},
+    BundleSpec, CommandResult, CommitHash, CommitOrBundle, DocumentId, Event, PeerId, StreamId,
+    UnixTimestampMillis,
 };
 use ed25519_dalek::SigningKey;
 use signature::SignerMut;
@@ -421,7 +426,7 @@ impl Network {
         }
     }
 
-    pub fn beelay(&mut self, peer: &PeerId) -> BeelayHandle {
+    pub fn beelay(&mut self, peer: &PeerId) -> BeelayHandle<'_> {
         assert!(self.beelays.contains_key(peer));
         BeelayHandle {
             network: self,
@@ -429,7 +434,7 @@ impl Network {
         }
     }
 
-    pub fn create_peer(&mut self, nickname: &'static str) -> PeerBuilder {
+    pub fn create_peer(&mut self, nickname: &'static str) -> PeerBuilder<'_> {
         PeerBuilder {
             network: self,
             storage: BTreeMap::new(),

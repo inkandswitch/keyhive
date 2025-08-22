@@ -488,7 +488,7 @@ impl<
     }
 
     #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
-    pub fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<S, T, L>> {
+    pub fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<'_, S, T, L>> {
         self.docs_reachable_by_agent(&self.active.dupe().into())
     }
 
@@ -507,7 +507,7 @@ impl<
     pub fn docs_reachable_by_agent(
         &self,
         agent: &Agent<S, T, L>,
-    ) -> BTreeMap<DocumentId, Ability<S, T, L>> {
+    ) -> BTreeMap<DocumentId, Ability<'_, S, T, L>> {
         let mut caps: BTreeMap<DocumentId, Ability<S, T, L>> = BTreeMap::new();
 
         // TODO will be very slow on large hives. Old code here: https://github.com/inkandswitch/keyhive/pull/111/files:
