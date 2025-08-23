@@ -1,7 +1,7 @@
 use crate::{
     crypto::{share_key::ShareKey, verifiable::Verifiable},
     principal::individual::{id::IndividualId, op::KeyOp, Individual},
-    util::hex,
+    util::hex::{self, ToHexString},
 };
 use derive_more::{From, Into};
 use serde::{Deserialize, Serialize};
@@ -19,8 +19,21 @@ impl ContactCard {
         self.0.new_key()
     }
 
+    pub fn signature(&self) -> &ed25519_dalek::Signature {
+        self.0.signature()
+    }
+
     pub fn op(&self) -> &KeyOp {
         &self.0
+    }
+}
+
+impl ToHexString for ContactCard {
+    fn to_hex_string(&self) -> String {
+        let mut buf = Vec::new();
+        bincode::serialize_into(&mut buf, &self)
+            .expect("ContactCard should always serialize successfully");
+        hex::bytes_to_hex_string(&buf)
     }
 }
 

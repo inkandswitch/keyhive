@@ -88,6 +88,13 @@ impl KeyOp {
             KeyOp::Rotate(rot) => &rot.issuer,
         }
     }
+
+    pub fn signature(&self) -> &ed25519_dalek::Signature {
+        match self {
+            KeyOp::Add(add) => &add.signature,
+            KeyOp::Rotate(rot) => &rot.signature,
+        }
+    }
 }
 
 impl Verifiable for KeyOp {

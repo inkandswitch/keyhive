@@ -20,13 +20,19 @@ impl JsContactCard {
         (*self.0.share_key()).into()
     }
 
-    #[wasm_bindgen(js_name = "fromJson)]
+    pub fn signature(&self) -> Vec<u8> {
+        self.0.signature().to_bytes().to_vec()
+    }
+
+    #[cfg(feature = "json")]
+    #[wasm_bindgen(js_name = "fromJson")]
     pub fn from_json(json: &str) -> Result<JsContactCard, JsValue> {
         let contact_card: ContactCard = serde_json::from_str(json)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse JSON: {}", e)))?;
         Ok(JsContactCard(contact_card))
     }
 
+    #[cfg(feature = "json")]
     #[wasm_bindgen(js_name = "toJson")]
     pub fn to_json(&self) -> Result<String, JsValue> {
         serde_json::to_string(&self.0)
