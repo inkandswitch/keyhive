@@ -10,8 +10,8 @@ pub struct JsContactCard(ContactCard);
 
 #[wasm_bindgen(js_class = ContactCard)]
 impl JsContactCard {
-    #[wasm_bindgen(constructor)]
-    pub fn new(json: &str) -> Result<JsContactCard, JsValue> {
+    #[wasm_bindgen(js_name = "fromJson)]
+    pub fn from_json(json: &str) -> Result<JsContactCard, JsValue> {
         let contact_card: ContactCard = serde_json::from_str(json)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse JSON: {}", e)))?;
         Ok(JsContactCard(contact_card))
