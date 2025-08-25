@@ -44,12 +44,44 @@ impl Digest {
         bytes.copy_from_slice(hash.as_bytes());
         Self(bytes)
     }
+
+    pub fn builder() -> DigestBuilder {
+        DigestBuilder::default()
+    }
+
     pub fn from_raw_bytes(bytes: [u8; 32]) -> Self {
         Digest(bytes)
     }
 
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+}
+
+/// Builder that allows you to create a [`Digest`] incrementally from bytes.
+#[derive(Default)]
+pub struct DigestBuilder {
+    hasher: blake3::Hasher,
+}
+
+impl DigestBuilder {
+    /// Create a new [`DigestBuilder`].
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Update the digest with the given bytes.
+    pub fn update(&mut self, data: &[u8]) {
+        self.hasher.update(data);
+    }
+
+    /// Get the [`Digest`] for the bytes that have been added with [`update()`][Self::update] so
+    /// far.
+    /// 
+    /// You can continue adding more bytes with `update()` after calling `digest()` and calling
+    /// `digest()` again will return the new digest.
+    pub fn digest(&self) -> Digest {
+        Digest::from_raw_bytes(*self.hasher.finalize().as_bytes())
     }
 }
 
