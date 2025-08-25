@@ -1,3 +1,5 @@
+use crate::js::membered::JsMembered;
+
 use super::{
     agent::JsAgent, capability::Capability, change_ref::JsChangeRef, event_handler::JsEventHandler,
     group_id::JsGroupId, identifier::JsIdentifier, peer::JsPeer, signer::JsSigner,
@@ -52,5 +54,10 @@ impl JsGroup {
     #[wasm_bindgen(js_name = toAgent)]
     pub fn to_agent(&self) -> JsAgent {
         JsAgent(self.0.dupe().into())
+    }
+
+    #[wasm_bindgen(js_name = toMembered)]
+    pub fn to_membered(&self) -> JsMembered {
+        JsMembered(self.0.dupe().into())
     }
 }
