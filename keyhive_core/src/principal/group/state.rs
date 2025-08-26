@@ -194,7 +194,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
         }
 
         if let Some(proof) = &revocation.payload.proof {
-            if revocation.payload.revoke != *proof
+
+            if proof.payload.can != Access::Admin && revocation.payload.revoke != *proof
                 && !revocation.payload.revoke.payload.is_descendant_of(proof)
             {
                 return Err(AddError::InvalidProofChain);
@@ -216,7 +217,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
                         return Err(AddError::InvalidProofChain);
                     }
 
-                    Ok(proof.as_ref())
+                    Ok(next_proof.as_ref())
                 })?;
         } else if revocation.issuer != self.verifying_key() {
             return Err(AddError::InvalidProofChain);
