@@ -90,7 +90,7 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     ) -> impl Future<Output = Result<(), Self::MarkDecryptedError>>;
 
     #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
-    /// Recursively decryptsa set of causally-related ciphertexts.
+    /// Recursively decrypts a set of causally-related ciphertexts.
     ///
     /// Consider the following causally encrypted graph:
     ///
@@ -159,7 +159,7 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     /// By passing in the entrypoint, futher keys are discovered, and can be pulled out
     /// the store, which contain more keys and references, and so on.
     ///
-    /// It is normal for this to stop decryption if it enounters an already-decrypted
+    /// It is normal for this to stop decryption if it encounters an already-decrypted
     /// ciphertext. There is no reason to decrypt it again if you already have the plaintext.
     #[allow(async_fn_in_trait)]
     #[instrument(skip(self, to_decrypt), fields(ciphertext_heads_count = %to_decrypt.len()))]

@@ -12,16 +12,16 @@ test.describe("Document", async () => {
       const { Keyhive, Signer, ChangeRef, CiphertextStore } = window.keyhive;
 
       const store = CiphertextStore.newInMemory();
-      const bh = await Keyhive.init(
+      const kh = await Keyhive.init(
         await Signer.generate(),
         store,
-        console.log,
+        console.log
       );
       const changeRef = new ChangeRef(new Uint8Array([1, 2, 3]));
 
-      const g = await bh.generateGroup([]);
-      const doc = await bh.generateDocument([g.toPeer()], changeRef, []);
-      const docId = doc.id;
+      const g = await kh.generateGroup([])
+      const doc = await kh.generateDocument([g.toPeer()], changeRef, [])
+      const docId = doc.id
 
       return { doc, docId };
     });
