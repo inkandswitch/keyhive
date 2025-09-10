@@ -24,6 +24,8 @@ nonempty = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { version = "1.0", optional = true }
+tracing = { workspace = true }
+tracing-wasm = { workspace = true }
 
 rand = { workspace = true }
 getrandom = { version = "0.2", features = ["js"] }
@@ -34,7 +36,7 @@ wasm-bindgen = "0.2.100"
 wasm-bindgen-futures = "0.4.50"
 
 [dependencies.web-sys]
-version = "0.3.77"
+version = "0.3.81"
 features = [
     "Crypto",
     "CryptoKey",
@@ -65,8 +67,10 @@ optional = false
 [profile.release]
 wasm-opt = ["-Oz"]
 lto = true
+debug = true
 
 [features]
 default = ["console_error_panic_hook", "web-sys", "json"]
 browser_test = []
 json = ["dep:serde_json"]
+ingest_static = ["keyhive_core/ingest_static"]

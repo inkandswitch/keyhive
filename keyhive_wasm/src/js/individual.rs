@@ -21,6 +21,7 @@ impl JsIndividual {
 
     #[wasm_bindgen(js_name = toAgent)]
     pub fn to_agent(&self) -> JsAgent {
+        tracing::debug!("JsIndividual::to_agent");
         JsAgent(self.0.dupe().into())
     }
 
