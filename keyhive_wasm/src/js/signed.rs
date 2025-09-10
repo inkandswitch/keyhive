@@ -1,12 +1,23 @@
 use keyhive_core::crypto::{signed::Signed, verifiable::Verifiable};
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Signed)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct JsSigned(pub(crate) Signed<Vec<u8>>);
 
 #[wasm_bindgen(js_class = Signed)]
 impl JsSigned {
+    #[wasm_bindgen(js_name = fromBytes)]
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        bincode::deserialize(bytes).expect("FIXME")
+    }
+
+    #[wasm_bindgen(js_name = toBytes)]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        bincode::serialize(self).expect("FIXME")
+    }
+
     pub fn verify(&self) -> bool {
         self.0.try_verify().is_ok()
     }

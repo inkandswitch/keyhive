@@ -36,12 +36,12 @@ impl JsArchive {
     pub async fn try_to_keyhive(
         &self,
         ciphertext_store: JsCiphertextStore,
-        signer: JsSigner,
+        signer: &JsSigner,
         event_handler: &js_sys::Function,
     ) -> Result<JsKeyhive, JsTryFromArchiveError> {
         Ok(Keyhive::try_from_archive(
             &self.0,
-            signer,
+            signer.clone(),
             ciphertext_store,
             event_handler.clone().into(),
             Arc::new(Mutex::new(OsRng)),

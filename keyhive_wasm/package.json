@@ -1,12 +1,15 @@
 {
   "name": "@keyhive/keyhive",
-  "version": "0.0.0-alpha.0",
+  "version": "0.0.0-alpha.28",
   "description": "",
   "main": "pkg/keyhive_wasm.js",
   "scripts": {
-    "build": "npm run build-node && npm run build-bundler",
-    "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release",
-    "build-bundler": "wasm-pack build --out-dir pkg --target bundler --release"
+    "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
+    "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release -- --features ingest_static",
+    "build-bundler": "wasm-pack build --out-dir pkg --target bundler --release -- --features ingest_static",
+    "build-web": "wasm-pack build --out-dir pkg-web --target web --release -- --features ingest_static",
+    "build-slim": "node build_slim.js",
+    "copy-e2e": "cp -r pkg-slim/* e2e/server/pkg/"
   },
   "keywords": [],
   "author": "",
@@ -16,7 +19,8 @@
   "types": "pkg/keyhive_wasm.d.ts",
   "files": [
     "pkg/*",
-    "pkg-node/*"
+    "pkg-node/*",
+    "pkg-slim/*"
   ],
   "exports": {
     ".": {
@@ -28,12 +32,22 @@
       "import": "./pkg/keyhive_wasm.js",
       "require": "./pkg/keyhive_wasm.js",
       "types": "./pkg/keyhive_wasm.d.ts"
+    },
+    "./slim": {
+      "types": "./pkg-slim/index.d.ts",
+      "import": "./pkg-slim/index.js"
+    },
+    "./keyhive_wasm.wasm": "./pkg-slim/keyhive_wasm_bg.wasm",
+    "./keyhive_wasm.base64.js": {
+      "import": "./pkg-slim/keyhive_wasm_bg.wasm.base64.js",
+      "types": "./pkg-slim/keyhive_wasm_bg.wasm.base64.d.ts"
     }
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",
     "@types/node": "^22.17.2",
     "html-webpack-plugin": "^5.6.4",
+    "http-server": "^14.1.1",
     "ts-loader": "^9.5.2",
     "typescript": "^5.9.2",
     "vite": "^5.4.19",

@@ -1170,6 +1170,7 @@ impl<
         &self,
         static_event: StaticEvent<T>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+        tracing::debug!("executing Keyhive::receive_static_event()");
         match static_event {
             StaticEvent::PrekeysExpanded(add_op) => {
                 self.receive_prekey_op(&Arc::new(*add_op).into()).await?
@@ -1331,6 +1332,7 @@ impl<
         };
 
         let mut individuals = HashMap::new();
+        individuals.insert(active_id, self.active.borrow().individual.dupe());
         {
             let locked_individuals = self.individuals.lock().await;
             for (k, arc) in locked_individuals.iter() {
@@ -1611,11 +1613,15 @@ impl<
         &self,
         archive: Archive<T>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+        tracing::debug!("Keyhive::ingest_archive()");
         {
-            let mut locked = self.active.lock().await;
-            locked.prekey_pairs.extend(archive.active.prekey_pairs);
-            locked.individual.merge(archive.active.individual);
+            let mut locked_active = self.active.lock().await;
+            locked_active
+                .prekey_pairs
+                .extend(archive.active.prekey_pairs);
+            locked_active.individual.merge(archive.active.individual);
         }
+
         for (id, indie) in archive.individuals {
             let mut locked_indies = self.individuals.lock().await;
             if let Some(our_indie) = locked_indies.get_mut(&id) {
@@ -1647,7 +1653,20 @@ impl<
         &self,
         events: Vec<StaticEvent<T>>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+        tracing::debug!("executing Keyhive::ingest_unsorted_static_events()");
         let mut epoch = events;
+
+        // FIXME: Remove
+        tracing::debug!("--Events (len: {:?}):", epoch.len());
+        for event in &epoch {
+            tracing::debug!("-- --event: {:?}", &event);
+            match event {
+                StaticEvent::Delegated(d) => {
+                    tracing::debug!("-- -- --delegate id: {:?}", &d.payload.delegate.to_bytes());
+                }
+                _ => {}
+            }
+        }
 
         loop {
             let mut next_epoch = vec![];
@@ -1667,6 +1686,11 @@ impl<
             }
 
             if next_epoch.len() == epoch_len {
+                tracing::debug!(
+                    "ingest_unsorted_static_events: Stuck on a fixed point: {:?}. Error: {:?}",
+                    epoch_len,
+                    err
+                );
                 // Stuck on a fixed point
                 tracing::warn!("Fixed point while ingesting static events");
                 return Err(err.unwrap());
@@ -1683,6 +1707,7 @@ impl<
         &self,
         events: HashMap<Digest<Event<S, T, L>>, Event<S, T, L>>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+        tracing::debug!("executing Keyhive::ingest_event_table()");
         self.ingest_unsorted_static_events(
             events.values().cloned().map(Into::into).collect::<Vec<_>>(),
         )

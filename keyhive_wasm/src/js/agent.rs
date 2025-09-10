@@ -1,4 +1,7 @@
-use super::{change_ref::JsChangeRef, event_handler::JsEventHandler, signer::JsSigner};
+use super::{
+    change_ref::JsChangeRef, event_handler::JsEventHandler, identifier::JsIdentifier,
+    signer::JsSigner,
+};
 use derive_more::{Deref, Display, From, Into};
 use keyhive_core::principal::agent::Agent;
 use wasm_bindgen::prelude::*;
@@ -34,5 +37,10 @@ impl JsAgent {
     #[wasm_bindgen(js_name = isDocument)]
     pub fn is_document(&self) -> bool {
         matches!(self.0, Agent::Document(_, _))
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> JsIdentifier {
+        JsIdentifier(self.0.id())
     }
 }
