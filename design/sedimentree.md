@@ -112,7 +112,7 @@ A "commit" refers to the abstract idea of a node in the DAG which has a payload,
 
 ![](./assets/sedimentree/sedimentree-3.png)
 
-Each stratum has a "depth". Stratum with larger depths are further down in the sedimentree - composed of larger ranges of the commit graph. The first level stratum is depth 1.
+Each stratum has a "depth". Stratum with larger depths are further down in the sedimentree - composed of larger ranges of the commit graph. The first level stratum is depth 1, and contains the most granular chunks (i.e. individual commits).
 
 A chunk which contains the data from some chunks or loose commits above it (with a smaller depth) is said to "support" the smaller chunks. A sedimentree can be simplified by removing all the chunks or loose commits which are supported by chunks below them recursively, such a simplified sedimentree is called "minimal".
 
@@ -176,7 +176,7 @@ c --> a
 
 Stating from `b` we still have `b,a` and from `e` we still have `e,c,a` but now we also have `d` as a loose commit.
 
-There is one detail remaining. Where do we start our traversal from? When we strart from the root it is easy as there is only one root, but starting from the heads of the document there are many options. To solve this we actually run the traversal starting from each head - that is, instead of having a single traversal over the graph, we have one traversal for each head. For Automerge documents this is not a huge problem because most documents are tall and narrow, so even with many heads most traversals consist of duplicate chunks.
+There is one detail remaining. Where do we start our traversal from? When we start from the root it is easy as there is only one root, but starting from the heads of the document there are many options. To solve this we actually run the traversal starting from each head - that is, instead of having a single traversal over the graph, we have one traversal for each head. For Automerge documents this is not a huge problem because most documents are tall and narrow, so even with many heads most traversals consist of duplicate chunks.
 
 ### Chunk Boundaries
 
