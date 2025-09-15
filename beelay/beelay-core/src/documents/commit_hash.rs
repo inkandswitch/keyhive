@@ -1,10 +1,9 @@
-use dupe::Dupe;
 pub use error::InvalidCommitHash;
 
 use crate::serialization::{hex, parse, Encode, Parse};
 
 #[derive(
-    Clone, Copy, Dupe, Eq, Hash, PartialEq, Ord, PartialOrd, serde::Serialize, serde::Deserialize,
+    Clone, Copy, Eq, Hash, PartialEq, Ord, PartialOrd, serde::Serialize, serde::Deserialize,
 )]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub struct CommitHash([u8; 32]);
