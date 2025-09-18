@@ -28,7 +28,7 @@ Run tests:
 npx playwright test
 ```
 
-To view Playwright report:
+View Playwright report:
 ```
 npx playwright show-report
 ```

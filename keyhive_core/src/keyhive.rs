@@ -1185,10 +1185,10 @@ impl<
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn into_archive(&self) -> Archive<T> {
         Archive {
-            active: self.active.clone().borrow().into_archive(),
+            active: self.active.borrow().into_archive(),
             topsorted_ops: MembershipOperation::<S, T, L>::topsort(
-                &self.delegations.clone().borrow(),
-                &self.revocations.clone().borrow(),
+                &self.delegations.borrow(),
+                &self.revocations.borrow(),
             )
             .into_iter()
             .map(|(k, v)| (k.into(), v.into()))
@@ -1196,17 +1196,17 @@ impl<
             individuals: self
                 .individuals
                 .iter()
-                .map(|(k, rc_v)| (*k, rc_v.clone().borrow().clone()))
+                .map(|(k, rc_v)| (*k, rc_v.borrow().clone()))
                 .collect(),
             groups: self
                 .groups
                 .iter()
-                .map(|(k, rc_v)| (*k, rc_v.clone().borrow().into_archive()))
+                .map(|(k, rc_v)| (*k, rc_v.borrow().into_archive()))
                 .collect(),
             docs: self
                 .docs
                 .iter()
-                .map(|(k, rc_v)| (*k, rc_v.clone().borrow().into_archive()))
+                .map(|(k, rc_v)| (*k, rc_v.borrow().into_archive()))
                 .collect(),
         }
     }
