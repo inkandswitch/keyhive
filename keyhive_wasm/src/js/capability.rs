@@ -3,6 +3,7 @@ use super::{
     signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use dupe::Dupe;
+use keyhive_core::access::Access;
 use keyhive_core::{
     crypto::signed::Signed,
     principal::{agent::Agent, group::delegation::Delegation},
@@ -32,5 +33,25 @@ impl Capability {
     #[wasm_bindgen(getter)]
     pub fn proof(&self) -> JsSignedDelegation {
         self.proof.dupe().into()
+    }
+}
+
+#[wasm_bindgen]
+#[derive(Debug, Clone, Dupe)]
+pub struct SimpleCapability {
+    pub(crate) who: Agent<JsSigner, JsChangeRef, JsEventHandler>,
+    pub(crate) can: Access,
+}
+
+#[wasm_bindgen]
+impl SimpleCapability {
+    #[wasm_bindgen(getter)]
+    pub fn who(&self) -> JsAgent {
+        JsAgent(self.who.dupe())
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn can(&self) -> JsAccess {
+        JsAccess(self.can.dupe())
     }
 }
