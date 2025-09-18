@@ -321,6 +321,16 @@ impl JsKeyhive {
     pub fn to_archive(&self) -> JsArchive {
         self.0.into_archive().into()
     }
+
+    #[cfg(any(test, feature = "ingest_static"))]
+    #[wasm_bindgen(js_name = ingestArchive)]
+    pub async fn ingest_archive(
+        &mut self,
+        archive: &JsArchive,
+    ) -> Result<(), JsReceiveStaticEventError> {
+        self.0.ingest_archive(archive.clone().0).await?;
+        Ok(())
+    }
 }
 
 #[wasm_bindgen]
