@@ -1,3 +1,5 @@
+use crate::js::document_id::JsDocumentId;
+
 use super::{
     agent::JsAgent, change_ref::JsChangeRef, event_handler::JsEventHandler,
     identifier::JsIdentifier, peer::JsPeer, signer::JsSigner,
@@ -17,6 +19,11 @@ impl JsDocument {
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> JsIdentifier {
         JsIdentifier(self.0.borrow().id())
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn doc_id(&self) -> JsDocumentId {
+        JsDocumentId(self.0.borrow().doc_id())
     }
 
     #[wasm_bindgen(js_name = toPeer)]

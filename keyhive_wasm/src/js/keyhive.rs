@@ -1,4 +1,4 @@
-use crate::js::{capability::SimpleCapability, individual::JsIndividual};
+use crate::js::{capability::SimpleCapability, document_id::JsDocumentId, individual::JsIndividual};
 
 use super::{
     access::JsAccess, add_member_error::JsAddMemberError, agent::JsAgent, archive::JsArchive,
@@ -15,7 +15,7 @@ use derive_more::{From, Into};
 use dupe::{Dupe, IterDupedExt};
 use keyhive_core::{
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
-    principal::{document::DecryptError, group::id::GroupId, individual::ReceivePrekeyOpError},
+    principal::{agent::Agent, document::DecryptError, group::id::GroupId, individual::ReceivePrekeyOpError},
 };
 use nonempty::NonEmpty;
 use thiserror::Error;
@@ -185,7 +185,7 @@ impl JsKeyhive {
     ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
         let res = self
             .0
-            .revoke_member(to_revoke.id().0, retain_all_other_members, membered)
+            .revoke_member(to_revoke.id().clone().0, retain_all_other_members, membered)
             .await?;
 
         Ok(res
@@ -256,60 +256,42 @@ impl JsKeyhive {
 
     #[wasm_bindgen(js_name = getAgent)]
     pub fn get_agent(&self, id: &JsIdentifier) -> Option<JsAgent> {
-        self.0.get_agent(id.clone().0).map(JsAgent)
+        self.0.get_agent(id.0).map(JsAgent)
     }
 
     #[wasm_bindgen(js_name = getGroup)]
     pub fn get_group(&self, id: &JsIdentifier) -> Option<JsGroup> {
         self.0
-            .get_group(GroupId::from(id.clone().0))
+            .get_group(GroupId::from(id.0))
             .map(|g| JsGroup(g.dupe()))
     }
 
     #[wasm_bindgen(js_name = docMemberCapabilities)]
-    pub fn doc_member_capabilities(&self, doc_id: &JsIdentifier) -> Vec<SimpleCapability> {
-        if let Some(doc_ref) = self.0.get_document(doc_id.0.into()) {
-            let mut capabilities = Vec::new();
-            let transitive_members = doc_ref.borrow().transitive_members();
-
-            for (id, (agent, access)) in transitive_members {
+    pub fn doc_member_capabilities(&self, doc_id: &JsDocumentId) -> Vec<SimpleCapability> {
+        if let Some(doc_ref) = self.0.get_document(doc_id.0) {
+            doc_ref.borrow()
+                .transitive_members()
+                .into_iter()
                 // Skip the document itself
-                if id == doc_id.0 {
-                    continue;
-                }
-
-                // Currently, we only return Individuals (and Active)
-                if !matches!(
-                    &agent,
-                    keyhive_core::principal::agent::Agent::Individual(_)
-                        | keyhive_core::principal::agent::Agent::Active(_)
-                ) {
-                    continue;
-                }
-
-                capabilities.push(SimpleCapability {
-                    who: agent,
-                    can: access,
-                });
-            }
-
-            capabilities
+                .filter(|(id, _)| *id != doc_id.0.into())
+                .filter_map(|(_, (agent, access))| {
+                    // Currently we only return Individuals and the Agent
+                    matches!(agent, Agent::Individual(_) | Agent::Active(_))
+                        .then(|| SimpleCapability { who: agent, can: access })
+                })
+                .collect()
         } else {
             Vec::new()
         }
     }
 
     #[wasm_bindgen(js_name = accessForDoc)]
-    pub fn access_for_doc(&self, id: &JsIdentifier, doc_id: &JsIdentifier) -> Option<JsAccess> {
-        if let Some(doc_ref) = self.0.get_document(doc_id.clone().0.into()) {
-            doc_ref
-                .borrow()
-                .transitive_members()
-                .get(&id.0)
-                .map(|(_, access)| JsAccess(*access))
-        } else {
-            None
-        }
+    pub fn access_for_doc(&self, id: &JsIdentifier, doc_id: &JsDocumentId) -> Option<JsAccess> {
+        self.0.get_document(doc_id.0)?
+            .borrow()
+            .transitive_members()
+            .get(&id.0)
+            .map(|(_, access)| JsAccess(*access))
     }
 
     #[wasm_bindgen(js_name = intoArchive)]
@@ -366,7 +348,7 @@ mod tests {
     #[allow(unused)]
     async fn setup() -> JsKeyhive {
         JsKeyhive::init(
-            JsSigner::generate().await,
+            &JsSigner::generate().await,
             JsCiphertextStore::new_in_memory(),
             &js_sys::Function::new_with_args("event", "console.log(event)"),
         )
