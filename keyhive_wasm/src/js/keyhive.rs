@@ -1,4 +1,4 @@
-use crate::js::individual::JsIndividual;
+use crate::js::{capability::SimpleCapability, individual::JsIndividual};
 
 use super::{
     access::JsAccess, add_member_error::JsAddMemberError, agent::JsAgent, archive::JsArchive,
@@ -14,8 +14,8 @@ use super::{
 use derive_more::{From, Into};
 use dupe::{Dupe, IterDupedExt};
 use keyhive_core::{
-    keyhive::{EncryptContentError, Keyhive},
-    principal::{document::DecryptError, individual::ReceivePrekeyOpError},
+    keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
+    principal::{document::DecryptError, group::id::GroupId, individual::ReceivePrekeyOpError},
 };
 use nonempty::NonEmpty;
 use thiserror::Error;
@@ -38,13 +38,13 @@ pub struct JsKeyhive(
 impl JsKeyhive {
     #[wasm_bindgen]
     pub async fn init(
-        signer: JsSigner,
+        signer: &JsSigner,
         ciphertext_store: JsCiphertextStore,
         event_handler: &js_sys::Function,
     ) -> Result<JsKeyhive, JsSigningError> {
         Ok(JsKeyhive(
             Keyhive::generate(
-                signer,
+                signer.clone(),
                 ciphertext_store,
                 JsEventHandler(event_handler.clone()),
                 rand::thread_rng(),
@@ -185,7 +185,7 @@ impl JsKeyhive {
     ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
         let res = self
             .0
-            .revoke_member(to_revoke.id(), retain_all_other_members, membered)
+            .revoke_member(to_revoke.id().0, retain_all_other_members, membered)
             .await?;
 
         Ok(res
@@ -255,12 +255,70 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = getAgent)]
-    pub fn get_agent(&self, id: JsIdentifier) -> Option<JsAgent> {
-        self.0.get_agent(id.0).map(JsAgent)
+    pub fn get_agent(&self, id: &JsIdentifier) -> Option<JsAgent> {
+        self.0.get_agent(id.clone().0).map(JsAgent)
+    }
+
+    #[wasm_bindgen(js_name = getGroup)]
+    pub fn get_group(&self, id: &JsIdentifier) -> Option<JsGroup> {
+        self.0
+            .get_group(GroupId::from(id.clone().0))
+            .map(|g| JsGroup(g.dupe()))
+    }
+
+    #[wasm_bindgen(js_name = docMemberCapabilities)]
+    pub fn doc_member_capabilities(&self, doc_id: &JsIdentifier) -> Vec<SimpleCapability> {
+        if let Some(doc_ref) = self.0.get_document(doc_id.0.into()) {
+            let mut capabilities = Vec::new();
+            let transitive_members = doc_ref.borrow().transitive_members();
+
+            for (id, (agent, access)) in transitive_members {
+                // Skip the document itself
+                if id == doc_id.0 {
+                    continue;
+                }
+
+                // Currently, we only return Individuals (and Active)
+                if !matches!(
+                    &agent,
+                    keyhive_core::principal::agent::Agent::Individual(_)
+                        | keyhive_core::principal::agent::Agent::Active(_)
+                ) {
+                    continue;
+                }
+
+                capabilities.push(SimpleCapability {
+                    who: agent,
+                    can: access,
+                });
+            }
+
+            capabilities
+        } else {
+            Vec::new()
+        }
+    }
+
+    #[wasm_bindgen(js_name = accessForDoc)]
+    pub fn access_for_doc(&self, id: &JsIdentifier, doc_id: &JsIdentifier) -> Option<JsAccess> {
+        if let Some(doc_ref) = self.0.get_document(doc_id.clone().0.into()) {
+            doc_ref
+                .borrow()
+                .transitive_members()
+                .get(&id.0)
+                .map(|(_, access)| JsAccess(*access))
+        } else {
+            None
+        }
     }
 
     #[wasm_bindgen(js_name = intoArchive)]
     pub fn into_archive(self) -> JsArchive {
+        self.0.into_archive().into()
+    }
+
+    #[wasm_bindgen(js_name = toArchive)]
+    pub fn to_archive(&self) -> JsArchive {
         self.0.into_archive().into()
     }
 }
@@ -279,6 +337,13 @@ pub struct JsEncryptError(#[from] pub(crate) EncryptContentError);
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct JsDecryptError(#[from] pub(crate) DecryptError);
+
+#[wasm_bindgen]
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct JsReceiveStaticEventError(
+    #[from] pub(crate) ReceiveStaticEventError<JsSigner, JsChangeRef, JsEventHandler>,
+);
 
 #[cfg(test)]
 mod tests {
