@@ -36,8 +36,8 @@ pub struct JsKeyhive(
 
 #[wasm_bindgen(js_class = Keyhive)]
 impl JsKeyhive {
-    #[wasm_bindgen(constructor)]
-    pub async fn new(
+    #[wasm_bindgen]
+    pub async fn init(
         signer: JsSigner,
         ciphertext_store: JsCiphertextStore,
         event_handler: &js_sys::Function,
@@ -290,7 +290,7 @@ mod tests {
 
     #[allow(unused)]
     async fn setup() -> JsKeyhive {
-        JsKeyhive::new(
+        JsKeyhive::init(
             JsSigner::generate().await,
             JsCiphertextStore::new_in_memory(),
             &js_sys::Function::new_with_args("event", "console.log(event)"),

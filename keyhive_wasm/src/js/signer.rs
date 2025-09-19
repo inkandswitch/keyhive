@@ -13,7 +13,7 @@ pub struct JsSigner(pub(crate) JsSignerOptions);
 #[wasm_bindgen(js_class = Signer)]
 impl JsSigner {
     #[cfg(feature = "web-sys")]
-    #[wasm_bindgen(constructor)]
+    #[wasm_bindgen]
     pub async fn generate() -> Self {
         Self::generate_web_crypto()
             .await
