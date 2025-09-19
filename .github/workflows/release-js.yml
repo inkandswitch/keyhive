@@ -1,0 +1,41 @@
+name: Publish Package to npmjs
+on:
+  release:
+    types: [published]
+jobs:
+  build:
+    # Only publish tags starting with keyhive-wasm as we will also
+    # want to manage rust releases from this repo
+    if: ${{ contains(github.ref, 'keyhive-wasm') }}
+    defaults:
+      run:
+        working-directory: "./keyhive_wasm"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      # Setup .npmrc file to publish to npm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          registry-url: "https://registry.npmjs.org"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Build package
+        run: "pnpm run build"
+      - run: pnpm ci
+      - name: "pnpm publish pre-release"
+        if: "github.event.release.prerelease"
+        run: pnpm publish --tag next --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: "npm publish release"
+        if: "!github.event.release.prerelease"
+        run: pnpm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
