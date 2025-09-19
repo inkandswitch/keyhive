@@ -3,8 +3,12 @@
   "version": "0.0.0-alpha.0",
   "description": "",
   "private": true,
-  "main": "./pkg/index.ts",
-  "scripts": {},
+  "main": "pkg/keyhive_wasm.js",
+  "scripts": {
+    "build": "npm run build-node && npm run build-bundler",
+    "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release",
+    "build-bundler": "wasm-pack build --out-dir pkg --target bundler --release"
+  },
   "keywords": [],
   "author": "",
   "license": "Apache-2.0",
@@ -12,8 +16,21 @@
   "module": "pkg/keyhive_wasm.js",
   "types": "pkg/keyhive_wasm.d.ts",
   "files": [
-    "dist"
+    "pkg/*",
+    "pkg-node/*"
   ],
+  "exports": {
+    ".": {
+      "node": {
+        "import": "./pkg-node/keyhive_wasm.js",
+        "require": "./pkg-node/keyhive_wasm.js",
+        "types": "./pkg-node/keyhive_wasm.d.ts"
+      },
+      "import": "./pkg/keyhive_wasm.js",
+      "require": "./pkg/keyhive_wasm.js",
+      "types": "./pkg/keyhive_wasm.d.ts"
+    }
+  },
   "devDependencies": {
     "@playwright/test": "^1.55.0",
     "@types/node": "^22.17.2",
