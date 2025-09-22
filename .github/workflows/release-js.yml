@@ -32,7 +32,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: "pnpm publish pre-release"
         if: "github.event.release.prerelease"
-        run: pnpm publish --tag next --access public
+        run: pnpm publish --tag next --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: "npm publish release"
