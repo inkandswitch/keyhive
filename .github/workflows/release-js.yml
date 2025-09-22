@@ -24,6 +24,7 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           run_install: false
+          version: "latest"
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - name: Build package
