@@ -250,9 +250,9 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = receiveContactCard)]
     pub fn receive_contact_card(
         &mut self,
-        contact_card: JsContactCard,
+        contact_card: &JsContactCard,
     ) -> Result<JsIndividual, JsReceivePreKeyOpError> {
-        match self.0.receive_contact_card(&contact_card) {
+        match self.0.receive_contact_card(&contact_card.clone()) {
             Ok(individual) => Ok(JsIndividual(individual)),
             Err(err) => Err(JsReceivePreKeyOpError(err)),
         }
