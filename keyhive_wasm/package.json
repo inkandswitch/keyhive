@@ -1,6 +1,6 @@
 {
   "name": "@keyhive/keyhive",
-  "version": "0.0.0-alpha.2",
+  "version": "0.0.0-alpha.3",
   "description": "",
   "main": "pkg/keyhive_wasm.js",
   "scripts": {
@@ -38,7 +38,7 @@
     "./keyhive_wasm.wasm": "./pkg-slim/keyhive_wasm_bg.wasm",
     "./keyhive_wasm.base64.js": {
       "import": "./pkg-slim/keyhive_wasm_bg.wasm.base64.js",
-      "type": "./pkg-slim/keyhive_wasm_bg.wasm.base64.d.ts"
+      "types": "./pkg-slim/keyhive_wasm_bg.wasm.base64.d.ts"
     }
   },
   "devDependencies": {
