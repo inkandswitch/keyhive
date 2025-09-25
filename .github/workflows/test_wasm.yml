@@ -11,25 +11,24 @@ env:
 
 jobs:
   build-lint-test-audit:
-
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - uses: pnpm/action-setup@v4
-      with:
-        version: 9
-    - name: Install wasm-pack
-      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - uses: actions/setup-node@v4
-      with:
-        node-version: 22
-    - name: Install dependencies
-      run: cd ./keyhive_wasm && npm i
-    - name: Install Playwright Browsers
-      run: cd ./keyhive_wasm && pnpm i && pnpm exec playwright install --with-deps
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: cd ./keyhive_wasm && npm i
+      - name: Install Playwright Browsers
+        run: cd ./keyhive_wasm && pnpm i && pnpm exec playwright install --with-deps
 
-    - name: Test on Wasm
-      run: wasm-pack test --node keyhive_wasm
-    - name: Test in browsers
-      run: wasm-pack build ./keyhive_wasm --release --target=web && cd ./keyhive_wasm && pnpm i && npm install --global http-server && pnpm exec playwright test
+      - name: Test on Wasm
+        run: wasm-pack test --node keyhive_wasm --features ingest_static
+      - name: Test in browsers
+        run: wasm-pack build ./keyhive_wasm --release --target=web --features ingest_static && cd ./keyhive_wasm && pnpm i && npm install --global http-server && pnpm exec playwright test
