@@ -1,4 +1,6 @@
-use crate::js::{capability::SimpleCapability, document_id::JsDocumentId, individual::JsIndividual};
+use crate::js::{
+    capability::SimpleCapability, document_id::JsDocumentId, individual::JsIndividual,
+};
 
 use super::{
     access::JsAccess, add_member_error::JsAddMemberError, agent::JsAgent, archive::JsArchive,
@@ -15,7 +17,9 @@ use derive_more::{From, Into};
 use dupe::{Dupe, IterDupedExt};
 use keyhive_core::{
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
-    principal::{agent::Agent, document::DecryptError, group::id::GroupId, individual::ReceivePrekeyOpError},
+    principal::{
+        agent::Agent, document::DecryptError, group::id::GroupId, individual::ReceivePrekeyOpError,
+    },
 };
 use nonempty::NonEmpty;
 use thiserror::Error;
@@ -185,7 +189,7 @@ impl JsKeyhive {
     ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
         let res = self
             .0
-            .revoke_member(to_revoke.id().clone().0, retain_all_other_members, membered)
+            .revoke_member(to_revoke.id().0, retain_all_other_members, membered)
             .await?;
 
         Ok(res
@@ -269,15 +273,20 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = docMemberCapabilities)]
     pub fn doc_member_capabilities(&self, doc_id: &JsDocumentId) -> Vec<SimpleCapability> {
         if let Some(doc_ref) = self.0.get_document(doc_id.0) {
-            doc_ref.borrow()
+            doc_ref
+                .borrow()
                 .transitive_members()
                 .into_iter()
                 // Skip the document itself
                 .filter(|(id, _)| *id != doc_id.0.into())
                 .filter_map(|(_, (agent, access))| {
                     // Currently we only return Individuals and the Agent
-                    matches!(agent, Agent::Individual(_) | Agent::Active(_))
-                        .then(|| SimpleCapability { who: agent, can: access })
+                    matches!(agent, Agent::Individual(_) | Agent::Active(_)).then(|| {
+                        SimpleCapability {
+                            who: agent,
+                            can: access,
+                        }
+                    })
                 })
                 .collect()
         } else {
@@ -287,7 +296,8 @@ impl JsKeyhive {
 
     #[wasm_bindgen(js_name = accessForDoc)]
     pub fn access_for_doc(&self, id: &JsIdentifier, doc_id: &JsDocumentId) -> Option<JsAccess> {
-        self.0.get_document(doc_id.0)?
+        self.0
+            .get_document(doc_id.0)?
             .borrow()
             .transitive_members()
             .get(&id.0)

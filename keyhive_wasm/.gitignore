@@ -5,3 +5,4 @@ node_modules/
 /playwright/.cache/
 pkg/
 pkg-node/
+pkg-slim/
