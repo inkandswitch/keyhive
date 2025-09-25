@@ -192,11 +192,17 @@ impl AsyncSigner for JsSignerOptions {
 
             #[cfg(feature = "web-sys")]
             JsSignerOptions::WebCrypto { signing_key, .. } => {
-                let signature_promise = web_sys::window()
-                    .expect("window to exist")
-                    .crypto()
-                    .expect("crypto to exist")
-                    .subtle()
+                use js_sys::Reflect;
+                use web_sys::Crypto;
+
+                let crypto_obj =
+                    Reflect::get(&js_sys::global(), &"crypto".into()).expect("crypto to exist");
+                let crypto = crypto_obj
+                    .dyn_into::<Crypto>()
+                    .expect("crypto to be a Crypto object");
+                let subtle = crypto.subtle();
+
+                let signature_promise = subtle
                     .sign_with_object_and_u8_array(
                         &js_sys::JsString::from("Ed25519").into(),
                         &signing_key.clone(),
