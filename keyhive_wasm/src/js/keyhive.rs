@@ -120,14 +120,14 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = tryEncrypt)]
     pub async fn try_encrypt(
         &mut self,
-        doc: JsDocument,
+        doc: &JsDocument,
         content_ref: JsChangeRef,
         pred_refs: Vec<JsChangeRef>,
         content: &[u8],
     ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
         Ok(self
             .0
-            .try_encrypt_content(doc.0, &content_ref, &pred_refs, content)
+            .try_encrypt_content(doc.clone().0, &content_ref, &pred_refs, content)
             .await?
             .into())
     }
@@ -136,14 +136,14 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = tryEncryptArchive)]
     pub async fn try_encrypt_archive(
         &mut self,
-        doc: JsDocument,
+        doc: &JsDocument,
         content_ref: JsChangeRef,
         pred_refs: Vec<JsChangeRef>,
         content: &[u8],
     ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
         Ok(self
             .0
-            .try_encrypt_content(doc.0, &content_ref, &pred_refs, content)
+            .try_encrypt_content(doc.clone().0, &content_ref, &pred_refs, content)
             .await?
             .into())
     }
@@ -151,10 +151,10 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = tryDecrypt)]
     pub fn try_decrypt(
         &mut self,
-        doc: JsDocument,
-        encrypted: JsEncrypted,
+        doc: &JsDocument,
+        encrypted: &JsEncrypted,
     ) -> Result<Vec<u8>, JsDecryptError> {
-        Ok(self.0.try_decrypt_content(doc.0, &encrypted.0)?)
+        Ok(self.0.try_decrypt_content(doc.clone().0, &encrypted.clone().0)?)
     }
 
     #[wasm_bindgen(js_name = addMember)]
