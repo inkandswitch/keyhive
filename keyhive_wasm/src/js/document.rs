@@ -1,4 +1,4 @@
-use crate::js::document_id::JsDocumentId;
+use crate::js::{document_id::JsDocumentId, membered::JsMembered};
 
 use super::{
     agent::JsAgent, change_ref::JsChangeRef, event_handler::JsEventHandler,
@@ -34,5 +34,10 @@ impl JsDocument {
     #[wasm_bindgen(js_name = toAgent)]
     pub fn to_agent(&self) -> JsAgent {
         JsAgent(self.0.dupe().into())
+    }
+
+    #[wasm_bindgen(js_name = toMembered)]
+    pub fn to_membered(&self) -> JsMembered {
+        JsMembered(self.0.dupe().into())
     }
 }

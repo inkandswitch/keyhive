@@ -18,7 +18,7 @@ use dupe::{Dupe, IterDupedExt};
 use keyhive_core::{
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
     principal::{
-        agent::Agent, document::DecryptError, group::id::GroupId, individual::ReceivePrekeyOpError,
+        agent::Agent, document::{id::DocumentId, DecryptError}, group::id::GroupId, individual::ReceivePrekeyOpError,
     },
 };
 use nonempty::NonEmpty;
@@ -268,6 +268,13 @@ impl JsKeyhive {
         self.0
             .get_group(GroupId::from(id.0))
             .map(|g| JsGroup(g.dupe()))
+    }
+
+    #[wasm_bindgen(js_name = getDocument)]
+    pub fn get_document(&self, id: &JsIdentifier) -> Option<JsDocument> {
+        self.0
+            .get_document(DocumentId::from(id.clone().0))
+            .map(|d| JsDocument(d.dupe()))
     }
 
     #[wasm_bindgen(js_name = docMemberCapabilities)]
