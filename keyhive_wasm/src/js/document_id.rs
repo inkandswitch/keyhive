@@ -21,7 +21,7 @@ impl JsDocumentId {
         Ok(JsDocumentId(DocumentId::from(Identifier::from(vk))))
     }
 
-    #[wasm_bindgen(js_name = fromString)]
+    #[wasm_bindgen(js_name = toString)]
     pub fn to_js_string(&self) -> String {
         self.to_string()
     }

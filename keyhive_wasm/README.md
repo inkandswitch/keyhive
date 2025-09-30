@@ -3,12 +3,7 @@
 ## Build package
 
 ```
-wasm-pack build --target web --out-dir pkg -- --features web-sys
-```
-
-To build with the `ingest_static` feature:
-```
-wasm-pack build --target web --out-dir pkg -- --features web-sys,ingest_static
+pnpm install && pnpm build
 ```
 
 ## Run tests
