@@ -1,3 +1,5 @@
+use std::{cell::RefCell, rc::Rc};
+
 use crate::js::{
     capability::SimpleCapability, document_id::JsDocumentId, individual::JsIndividual,
 };
@@ -65,6 +67,11 @@ impl JsKeyhive {
     #[wasm_bindgen(getter)]
     pub fn whoami(&self) -> JsIndividualId {
         self.0.id().into()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn individual(&self) -> JsIndividual {
+        JsIndividual(Rc::new(RefCell::new(self.0.individual())))
     }
 
     #[wasm_bindgen(getter, js_name = idString)]
