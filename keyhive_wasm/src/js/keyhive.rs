@@ -71,7 +71,7 @@ impl JsKeyhive {
 
     #[wasm_bindgen(getter)]
     pub fn individual(&self) -> JsIndividual {
-        JsIndividual(Rc::new(RefCell::new(self.0.individual())))
+        JsIndividual(Rc::new(RefCell::new(self.0.individual().clone())))
     }
 
     #[wasm_bindgen(getter, js_name = idString)]
