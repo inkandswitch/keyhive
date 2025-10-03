@@ -11,4 +11,5 @@ use wasm_bindgen::prelude::*;
 pub fn set_panic_hook() {
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
+    tracing_wasm::set_as_global_default();
 }
