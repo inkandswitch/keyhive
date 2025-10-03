@@ -20,7 +20,7 @@ use crate::{
 use derive_where::derive_where;
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, hash::Hash, rc::Rc};
+use std::{collections::BTreeMap, hash::Hash, sync::Arc};
 use thiserror::Error;
 
 #[derive_where(Debug, Clone, PartialEq; T)]
@@ -32,8 +32,8 @@ pub struct Delegation<
     pub(crate) delegate: Agent<S, T, L>,
     pub(crate) can: Access,
 
-    pub(crate) proof: Option<Rc<Signed<Delegation<S, T, L>>>>,
-    pub(crate) after_revocations: Vec<Rc<Signed<Revocation<S, T, L>>>>,
+    pub(crate) proof: Option<Arc<Signed<Delegation<S, T, L>>>>,
+    pub(crate) after_revocations: Vec<Arc<Signed<Revocation<S, T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
@@ -57,12 +57,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn proof(&self) -> Option<&Rc<Signed<Delegation<S, T, L>>>> {
+    pub fn proof(&self) -> Option<&Arc<Signed<Delegation<S, T, L>>>> {
         self.proof.as_ref()
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn after_revocations(&self) -> &[Rc<Signed<Revocation<S, T, L>>>] {
+    pub fn after_revocations(&self) -> &[Arc<Signed<Revocation<S, T, L>>>] {
         &self.after_revocations
     }
 
@@ -92,7 +92,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         self.proof.is_none()
     }
 
-    pub fn proof_lineage(&self) -> Vec<Rc<Signed<Delegation<S, T, L>>>> {
+    pub fn proof_lineage(&self) -> Vec<Arc<Signed<Delegation<S, T, L>>>> {
         let mut lineage = vec![];
         let mut head = self;
 
@@ -209,10 +209,10 @@ pub struct AfterAuth<
     L: MembershipListener<S, T> = NoListener,
 > {
     #[allow(clippy::type_complexity)]
-    pub(crate) optional_delegation: Option<Rc<Signed<Delegation<S, T, L>>>>,
+    pub(crate) optional_delegation: Option<Arc<Signed<Delegation<S, T, L>>>>,
 
     #[allow(clippy::type_complexity)]
-    pub(crate) revocations: &'a [Rc<Signed<Revocation<S, T, L>>>],
+    pub(crate) revocations: &'a [Arc<Signed<Revocation<S, T, L>>>],
 }
 
 /// Errors that can occur when using an active agent.

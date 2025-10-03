@@ -33,10 +33,9 @@ use nonempty::NonEmpty;
 use operation::{CgkaEpoch, CgkaOperation, CgkaOperationGraph};
 use serde::{Deserialize, Serialize};
 use std::{
-    borrow::Borrow,
     collections::{BTreeSet, HashMap, HashSet},
     hash::{Hash, Hasher},
-    rc::Rc,
+    sync::Arc,
 };
 use tracing::{info, instrument};
 
@@ -340,9 +339,9 @@ impl Cgka {
     #[instrument(skip_all, fields(doc_id, op))]
     pub fn merge_concurrent_operation(
         &mut self,
-        op: Rc<Signed<CgkaOperation>>,
+        op: Arc<Signed<CgkaOperation>>,
     ) -> Result<(), CgkaError> {
-        if self.ops_graph.contains_op_hash(&Digest::hash(op.borrow())) {
+        if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
             return Ok(());
         }
         let predecessors = op.payload.predecessors();
@@ -352,13 +351,13 @@ impl Cgka {
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
             if self.pending_ops_for_structural_change {
-                self.ops_graph.add_op(op.borrow(), &predecessors);
+                self.ops_graph.add_op(&op, &predecessors);
             } else if matches!(
                 op.payload,
                 CgkaOperation::Add { .. } | CgkaOperation::Remove { .. }
             ) {
                 self.pending_ops_for_structural_change = true;
-                self.ops_graph.add_op(op.borrow(), &predecessors);
+                self.ops_graph.add_op(&op, &predecessors);
             } else {
                 self.apply_operation(op)?;
             }
@@ -381,8 +380,8 @@ impl Cgka {
 
     /// Apply a [`CgkaOperation`].
     #[instrument(skip_all, fields(doc_id, op))]
-    fn apply_operation(&mut self, op: Rc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
-        if self.ops_graph.contains_op_hash(&Digest::hash(op.borrow())) {
+    fn apply_operation(&mut self, op: Arc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
+        if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
             return Ok(());
         }
         match op.payload {
@@ -396,8 +395,7 @@ impl Cgka {
                 self.tree.apply_path(new_path);
             }
         }
-        self.ops_graph
-            .add_op(op.borrow(), &op.payload.predecessors());
+        self.ops_graph.add_op(&op, &op.payload.predecessors());
         Ok(())
     }
 
@@ -676,9 +674,9 @@ impl Cgka {
 //         let (mut cgkas, _ops) = setup_member_cgkas(doc_id, 7, &sk)?;
 //         assert!(cgkas[0].cgka.has_pcs_key());
 //         let (_pcs_key, op1) = cgkas[1].update(&sk, csprng)?;
-//         cgkas[0].cgka.merge_concurrent_operation(Rc::new(op1))?;
+//         cgkas[0].cgka.merge_concurrent_operation(Arc::new(op1))?;
 //         let (_pcs_key, op6) = cgkas[6].update(&sk, csprng)?;
-//         cgkas[0].cgka.merge_concurrent_operation(Rc::new(op6))?;
+//         cgkas[0].cgka.merge_concurrent_operation(Arc::new(op6))?;
 //         assert!(!cgkas[0].cgka.has_pcs_key());
 //         Ok(())
 //     }
@@ -695,7 +693,7 @@ impl Cgka {
 //                 continue;
 //             }
 //             m.cgka
-//                 .merge_concurrent_operation(Rc::new(update_op.clone()))?;
+//                 .merge_concurrent_operation(Arc::new(update_op.clone()))?;
 //         }
 //         // Compare the result of secret() for all members
 //         for m in member_cgkas.iter_mut() {

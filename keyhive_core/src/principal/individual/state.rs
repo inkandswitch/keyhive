@@ -9,8 +9,9 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use futures::prelude::*;
+use futures::{lock::Mutex, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, collections::HashSet, num::NonZeroUsize, rc::Rc};
+use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
 
 /// Low-level prekey operation store.
 ///
@@ -33,7 +34,7 @@ impl PrekeyState {
     /// Create a new, empty [`PrekeyState`].
     pub fn new(initial_op: KeyOp) -> Self {
         let mut ops = CaMap::new();
-        ops.insert(Rc::new(initial_op));
+        ops.insert(Arc::new(initial_op));
         Self { ops }
     }
 
@@ -76,23 +77,22 @@ impl PrekeyState {
         size: NonZeroUsize,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
-        let cell = Rc::new(RefCell::new(csprng));
-        let ops = stream::iter((0..size.into()).map(Ok))
-            .try_fold(CaMap::new(), |mut ops, _| async {
-                let secret_key = ShareSecretKey::generate(*cell.borrow_mut());
+        let mut futs = FuturesUnordered::new();
+        for sk in (0..size.into()).map(|_| ShareSecretKey::generate(csprng)) {
+            futs.push(async move {
+                signer
+                    .try_sign_async(AddKeyOp {
+                        share_key: sk.share_key(),
+                    })
+                    .await
+            });
+        }
 
-                let add_op = KeyOp::Add(Rc::new(
-                    signer
-                        .try_sign_async(AddKeyOp {
-                            share_key: secret_key.share_key(),
-                        })
-                        .await?,
-                ));
-                ops.insert(add_op.into());
-
-                Ok::<CaMap<KeyOp>, SigningError>(ops)
-            })
-            .await?;
+        let mut ops = CaMap::new();
+        while let Some(res) = futs.next().await {
+            let op = Arc::new(res?);
+            ops.insert(Arc::new(KeyOp::from(op)));
+        }
 
         Ok(Self { ops })
     }
@@ -110,7 +110,7 @@ impl PrekeyState {
     /// Insert a new [`Signed<KeyOp>`] into the [`PrekeyState`].
     pub fn insert_op(&mut self, op: KeyOp) -> Result<(), VerificationError> {
         op.try_verify()?;
-        self.ops.insert(Rc::new(op));
+        self.ops.insert(Arc::new(op));
         Ok(())
     }
 
@@ -201,7 +201,7 @@ mod tests {
         let share_key_4 = ShareKey::generate(&mut rando);
         let share_key_5 = ShareKey::generate(&mut rando);
 
-        let op1: KeyOp = Rc::new(
+        let op1: KeyOp = Arc::new(
             signer
                 .try_sign_sync(AddKeyOp {
                     share_key: share_key_1,
@@ -212,7 +212,7 @@ mod tests {
 
         let mut state = PrekeyState::new(op1.dupe());
 
-        let op2 = Rc::new(
+        let op2 = Arc::new(
             signer
                 .try_sign_sync(AddKeyOp {
                     share_key: share_key_2,
@@ -221,7 +221,7 @@ mod tests {
         )
         .into();
 
-        let op3 = Rc::new(
+        let op3 = Arc::new(
             signer
                 .try_sign_sync(RotateKeyOp {
                     old: share_key_1,
@@ -231,7 +231,7 @@ mod tests {
         )
         .into();
 
-        let op4 = Rc::new(
+        let op4 = Arc::new(
             signer
                 .try_sign_sync(RotateKeyOp {
                     old: share_key_1,
@@ -241,7 +241,7 @@ mod tests {
         )
         .into();
 
-        let op5 = Rc::new(
+        let op5 = Arc::new(
             signer
                 .try_sign_sync(RotateKeyOp {
                     old: share_key_4,

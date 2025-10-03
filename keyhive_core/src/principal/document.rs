@@ -46,14 +46,14 @@ use derivative::Derivative;
 use derive_where::derive_where;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
+use futures::{future::join_all, lock::Mutex};
 use id::DocumentId;
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     hash::{Hash, Hasher},
-    rc::Rc,
+    sync::Arc,
 };
 use thiserror::Error;
 use tracing::instrument;
@@ -121,7 +121,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>> {
+    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<S, T, L>>>>> {
         self.group.members()
     }
 
@@ -141,7 +141,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     pub fn get_capability(
         &self,
         member_id: &Identifier,
-    ) -> Option<&Rc<Signed<Delegation<S, T, L>>>> {
+    ) -> Option<&Arc<Signed<Delegation<S, T, L>>>> {
         self.group.get_capability(member_id)
     }
 
@@ -200,7 +200,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
 
         ops.push(update_op);
         for op in ops {
-            group.listener.on_cgka_op(&Rc::new(op)).await;
+            group.listener.on_cgka_op(&Arc::new(op)).await;
         }
 
         Ok(Document {
@@ -222,16 +222,18 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         member_to_add: Agent<S, T, L>,
         can: Access,
         signer: &S,
-        other_relevant_docs: &[Rc<RefCell<Document<S, T, L>>>],
+        other_relevant_docs: &[Arc<Mutex<Document<S, T, L>>>],
     ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError> {
-        let mut after_content: BTreeMap<DocumentId, Vec<T>> = other_relevant_docs
-            .iter()
-            .map(|d| {
+        let mut after_content: BTreeMap<_, _> =
+            join_all(other_relevant_docs.iter().map(|doc| async {
+                let locked = doc.lock().await;
                 (
-                    d.borrow().doc_id(),
-                    d.borrow().content_heads.iter().cloned().collect(),
+                    locked.doc_id(),
+                    locked.content_heads.iter().cloned().collect::<Vec<T>>(),
                 )
-            })
+            }))
+            .await
+            .into_iter()
             .collect();
 
         after_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
@@ -334,7 +336,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     pub fn get_agent_revocations(
         &self,
         agent: &Agent<S, T, L>,
-    ) -> Vec<Rc<Signed<Revocation<S, T, L>>>> {
+    ) -> Vec<Arc<Signed<Revocation<S, T, L>>>> {
         self.group.get_agent_revocations(agent)
     }
 
@@ -346,19 +348,19 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     #[allow(clippy::type_complexity)]
     pub fn receive_delegation(
         &mut self,
-        delegation: Rc<Signed<Delegation<S, T, L>>>,
+        delegation: Arc<Signed<Delegation<S, T, L>>>,
     ) -> Result<Digest<Signed<Delegation<S, T, L>>>, AddError> {
         self.group.receive_delegation(delegation)
     }
 
     pub async fn receive_revocation(
         &mut self,
-        revocation: Rc<Signed<Revocation<S, T, L>>>,
+        revocation: Arc<Signed<Revocation<S, T, L>>>,
     ) -> Result<Digest<Signed<Revocation<S, T, L>>>, AddError> {
         self.group.receive_revocation(revocation).await
     }
 
-    pub fn merge_cgka_op(&mut self, op: Rc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
+    pub fn merge_cgka_op(&mut self, op: Arc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
         match &mut self.cgka {
             Some(cgka) => return cgka.merge_concurrent_operation(op),
             None => match op.payload.clone() {
@@ -387,7 +389,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     #[instrument(skip(self, sk), fields(doc_id = ?self.doc_id()))]
     pub fn merge_cgka_invite_op(
         &mut self,
-        op: Rc<Signed<CgkaOperation>>,
+        op: Arc<Signed<CgkaOperation>>,
         sk: &ShareSecretKey,
     ) -> Result<(), CgkaError> {
         let CgkaOperation::Add {
@@ -516,7 +518,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
                 )]),
             })?;
 
-        let mut to_decrypt: Vec<(Rc<EncryptedContent<P, T>>, SymmetricKey)> = vec![];
+        let mut to_decrypt: Vec<(Arc<EncryptedContent<P, T>>, SymmetricKey)> = vec![];
         for (digest, symm_key) in entrypoint_envelope.ancestors.iter() {
             if let Some(encrypted) = store
                 .get_ciphertext(digest)
@@ -584,7 +586,7 @@ pub struct AddMemberUpdate<
     T: ContentRef = [u8; 32],
     L: MembershipListener<S, T> = NoListener,
 > {
-    pub delegation: Rc<Signed<Delegation<S, T, L>>>,
+    pub delegation: Arc<Signed<Delegation<S, T, L>>>,
     pub cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
@@ -598,19 +600,19 @@ pub struct RevokeMemberUpdate<
     T: ContentRef = [u8; 32],
     L: MembershipListener<S, T> = NoListener,
 > {
-    pub(crate) revocations: Vec<Rc<Signed<Revocation<S, T, L>>>>,
-    pub(crate) redelegations: Vec<Rc<Signed<Delegation<S, T, L>>>>,
+    pub(crate) revocations: Vec<Arc<Signed<Revocation<S, T, L>>>>,
+    pub(crate) redelegations: Vec<Arc<Signed<Delegation<S, T, L>>>>,
     pub(crate) cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevokeMemberUpdate<S, T, L> {
     #[allow(clippy::type_complexity)]
-    pub fn revocations(&self) -> &[Rc<Signed<Revocation<S, T, L>>>] {
+    pub fn revocations(&self) -> &[Arc<Signed<Revocation<S, T, L>>>] {
         &self.revocations
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn redelegations(&self) -> &[Rc<Signed<Delegation<S, T, L>>>] {
+    pub fn redelegations(&self) -> &[Arc<Signed<Delegation<S, T, L>>>] {
         &self.redelegations
     }
 

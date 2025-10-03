@@ -7,13 +7,13 @@ use keyhive_core::{
     crypto::{signed::Signed, verifiable::Verifiable},
     principal::group::revocation::Revocation,
 };
-use std::rc::Rc;
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = SignedRevocation)]
 #[derive(Debug, Dupe, Clone)]
 pub struct JsSignedRevocation(
-    pub(crate) Rc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>,
+    pub(crate) Arc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>,
 );
 
 #[wasm_bindgen(js_class = SignedRevocation)]
@@ -38,13 +38,13 @@ impl JsSignedRevocation {
     }
 }
 
-impl From<Rc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>> for JsSignedRevocation {
-    fn from(signed: Rc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>) -> Self {
+impl From<Arc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>> for JsSignedRevocation {
+    fn from(signed: Arc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>) -> Self {
         Self(signed)
     }
 }
 
-impl From<JsSignedRevocation> for Rc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>> {
+impl From<JsSignedRevocation> for Arc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>> {
     fn from(js_signed: JsSignedRevocation) -> Self {
         js_signed.0
     }

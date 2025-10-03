@@ -13,11 +13,11 @@ use crate::{
 use derive_more::{From, TryInto};
 use derive_where::derive_where;
 use dupe::Dupe;
+use futures::lock::Mutex;
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     fmt::{Display, Formatter},
-    rc::Rc,
+    sync::Arc,
 };
 use thiserror::Error;
 
@@ -25,44 +25,48 @@ use thiserror::Error;
 #[derive(From, TryInto)]
 #[derive_where(PartialEq, Debug; T)]
 pub enum Peer<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
-    Individual(Rc<RefCell<Individual>>),
-    Group(Rc<RefCell<Group<S, T, L>>>),
-    Document(Rc<RefCell<Document<S, T, L>>>),
+    Individual(Arc<Mutex<Individual>>),
+    Group(Arc<Mutex<Group<S, T, L>>>),
+    Document(Arc<Mutex<Document<S, T, L>>>),
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Peer<S, T, L> {
-    pub fn id(&self) -> Identifier {
+    pub async fn id(&self) -> Identifier {
         match self {
-            Peer::Individual(i) => i.borrow().id().into(),
-            Peer::Group(g) => (*g).borrow().group_id().into(),
-            Peer::Document(d) => d.borrow().doc_id().into(),
+            Peer::Individual(i) => i.lock().await.id().into(),
+            Peer::Group(g) => g.lock().await.group_id().into(),
+            Peer::Document(d) => d.lock().await.doc_id().into(),
         }
     }
 
-    pub fn agent_id(&self) -> AgentId {
+    pub async fn agent_id(&self) -> AgentId {
         match self {
-            Peer::Individual(i) => i.borrow().agent_id(),
-            Peer::Group(g) => (*g).borrow().agent_id(),
-            Peer::Document(d) => d.borrow().agent_id(),
+            Peer::Individual(i) => i.lock().await.agent_id(),
+            Peer::Group(g) => g.lock().await.agent_id(),
+            Peer::Document(d) => d.lock().await.agent_id(),
         }
     }
 
-    pub fn individual_ids(&self) -> HashSet<IndividualId> {
+    pub async fn individual_ids(&self) -> HashSet<IndividualId> {
         match self {
-            Peer::Individual(i) => HashSet::from_iter([i.borrow().id()]),
-            Peer::Group(g) => g.borrow().individual_ids(),
-            Peer::Document(d) => d.borrow().group.individual_ids(),
+            Peer::Individual(i) => HashSet::from_iter([i.lock().await.id()]),
+            Peer::Group(g) => g.lock().await.individual_ids(),
+            Peer::Document(d) => d.lock().await.group.individual_ids(),
         }
     }
 
-    pub fn pick_individual_prekeys(&self, doc_id: DocumentId) -> HashMap<IndividualId, ShareKey> {
+    pub async fn pick_individual_prekeys(
+        &self,
+        doc_id: DocumentId,
+    ) -> HashMap<IndividualId, ShareKey> {
         match self {
             Peer::Individual(i) => {
-                let prekey = *i.borrow().pick_prekey(doc_id);
-                HashMap::from_iter([(i.borrow().id(), prekey)])
+                let locked = i.lock().await;
+                let prekey = locked.pick_prekey(doc_id);
+                HashMap::from_iter([(locked.id(), *prekey)])
             }
-            Peer::Group(g) => g.borrow().pick_individual_prekeys(doc_id),
-            Peer::Document(d) => d.borrow().group.pick_individual_prekeys(doc_id),
+            Peer::Group(g) => g.lock().await.pick_individual_prekeys(doc_id),
+            Peer::Document(d) => d.lock().await.group.pick_individual_prekeys(doc_id),
         }
     }
 }

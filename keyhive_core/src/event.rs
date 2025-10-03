@@ -25,7 +25,7 @@ use derive_more::{From, TryInto};
 use derive_where::derive_where;
 use dupe::Dupe;
 use serde::Serialize;
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, sync::Arc};
 use tracing::instrument;
 
 /// Top-level event variants.
@@ -33,19 +33,19 @@ use tracing::instrument;
 #[derive_where(Debug, Hash; T)]
 pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
     /// Prekeys were expanded.
-    PrekeysExpanded(Rc<Signed<AddKeyOp>>),
+    PrekeysExpanded(Arc<Signed<AddKeyOp>>),
 
     /// A prekey was rotated.
-    PrekeyRotated(Rc<Signed<RotateKeyOp>>),
+    PrekeyRotated(Arc<Signed<RotateKeyOp>>),
 
     /// A CGKA operation was performed.
-    CgkaOperation(Rc<Signed<CgkaOperation>>),
+    CgkaOperation(Arc<Signed<CgkaOperation>>),
 
     /// A delegation was created.
-    Delegated(Rc<Signed<Delegation<S, T, L>>>),
+    Delegated(Arc<Signed<Delegation<S, T, L>>>),
 
     /// A delegation was revoked.
-    Revoked(Rc<Signed<Revocation<S, T, L>>>),
+    Revoked(Arc<Signed<Revocation<S, T, L>>>),
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> {
@@ -54,8 +54,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> 
     pub async fn now_decryptable<P, C: CiphertextStore<T, P>>(
         new_events: &[Event<S, T, L>],
         ciphertext_store: &C,
-    ) -> Result<HashMap<DocumentId, Vec<Rc<EncryptedContent<P, T>>>>, C::GetCiphertextError> {
-        let mut acc: HashMap<DocumentId, Vec<Rc<EncryptedContent<P, T>>>> = HashMap::new();
+    ) -> Result<HashMap<DocumentId, Vec<Arc<EncryptedContent<P, T>>>>, C::GetCiphertextError> {
+        let mut acc: HashMap<DocumentId, Vec<Arc<EncryptedContent<P, T>>>> = HashMap::new();
 
         for event in new_events {
             if let Event::CgkaOperation(op) = event {
@@ -98,18 +98,18 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Event<S, T
 {
     fn from(op: Event<S, T, L>) -> Self {
         match op {
-            Event::Delegated(d) => StaticEvent::Delegated(Rc::unwrap_or_clone(d).map(Into::into)),
-            Event::Revoked(r) => StaticEvent::Revoked(Rc::unwrap_or_clone(r).map(Into::into)),
+            Event::Delegated(d) => StaticEvent::Delegated(Arc::unwrap_or_clone(d).map(Into::into)),
+            Event::Revoked(r) => StaticEvent::Revoked(Arc::unwrap_or_clone(r).map(Into::into)),
 
             Event::CgkaOperation(cgka) => {
-                StaticEvent::CgkaOperation(Box::new(Rc::unwrap_or_clone(cgka)))
+                StaticEvent::CgkaOperation(Box::new(Arc::unwrap_or_clone(cgka)))
             }
 
             Event::PrekeyRotated(pkr) => {
-                StaticEvent::PrekeyRotated(Box::new(Rc::unwrap_or_clone(pkr).map(Into::into)))
+                StaticEvent::PrekeyRotated(Box::new(Arc::unwrap_or_clone(pkr).map(Into::into)))
             }
             Event::PrekeysExpanded(pke) => {
-                StaticEvent::PrekeysExpanded(Box::new(Rc::unwrap_or_clone(pke).map(Into::into)))
+                StaticEvent::PrekeysExpanded(Box::new(Arc::unwrap_or_clone(pke).map(Into::into)))
             }
         }
     }
@@ -124,13 +124,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for E
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Event<S, T, L> {
     fn clone(&self) -> Self {
         match self {
-            Event::Delegated(d) => Event::Delegated(Rc::clone(d)),
-            Event::Revoked(r) => Event::Revoked(Rc::clone(r)),
+            Event::Delegated(d) => Event::Delegated(Arc::clone(d)),
+            Event::Revoked(r) => Event::Revoked(Arc::clone(r)),
 
-            Event::CgkaOperation(cgka) => Event::CgkaOperation(Rc::clone(cgka)),
+            Event::CgkaOperation(cgka) => Event::CgkaOperation(Arc::clone(cgka)),
 
-            Event::PrekeyRotated(pkr) => Event::PrekeyRotated(Rc::clone(pkr)),
-            Event::PrekeysExpanded(pke) => Event::PrekeysExpanded(Rc::clone(pke)),
+            Event::PrekeyRotated(pkr) => Event::PrekeyRotated(Arc::clone(pkr)),
+            Event::PrekeysExpanded(pke) => Event::PrekeysExpanded(Arc::clone(pke)),
         }
     }
 }
@@ -158,7 +158,8 @@ mod tests {
         },
         store::ciphertext::memory::MemoryCiphertextStore,
     };
-    use std::{cell::RefCell, collections::BTreeMap};
+    use futures::lock::Mutex;
+    use std::collections::BTreeMap;
     use test_utils::init_logging;
     use testresult::TestResult;
 
@@ -202,19 +203,19 @@ mod tests {
         let hash3 = Digest::hash(&cgka_op_3);
 
         let events: Vec<Event<MemorySigner, [u8; 32], NoListener>> = vec![
-            Event::CgkaOperation(Rc::new(cgka_op_1)),
-            Event::CgkaOperation(Rc::new(cgka_op_2)),
-            Event::PrekeysExpanded(Rc::new(
+            Event::CgkaOperation(Arc::new(cgka_op_1)),
+            Event::CgkaOperation(Arc::new(cgka_op_2)),
+            Event::PrekeysExpanded(Arc::new(
                 signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
             )),
-            Event::PrekeysExpanded(Rc::new(
+            Event::PrekeysExpanded(Arc::new(
                 signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
             )),
-            Event::PrekeysExpanded(Rc::new(
+            Event::PrekeysExpanded(Arc::new(
                 signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
             )),
-            Event::Delegated(Rc::new(signer.try_sign_sync(Delegation {
-                delegate: Agent::Individual(Rc::new(RefCell::new(
+            Event::Delegated(Arc::new(signer.try_sign_sync(Delegation {
+                delegate: Agent::Individual(Arc::new(Mutex::new(
                     Individual::generate(&signer, &mut csprng).await?,
                 ))),
                 can: Access::Read,
@@ -224,7 +225,7 @@ mod tests {
             })?)),
         ];
 
-        let ciphertext1 = Rc::new(EncryptedContent::new(
+        let ciphertext1 = Arc::new(EncryptedContent::new(
             Siv::new(&SymmetricKey::generate(&mut csprng), &[4, 5, 6], doc_id1)?,
             vec![4, 5, 6],
             [1u8; 32].into(),
@@ -233,7 +234,7 @@ mod tests {
             [1u8; 32].into(),
         ));
 
-        let ciphertext2 = Rc::new(EncryptedContent::new(
+        let ciphertext2 = Arc::new(EncryptedContent::new(
             Siv::new(&SymmetricKey::generate(&mut csprng), &[1, 2, 3], doc_id2)?,
             vec![1, 2, 3],
             [2u8; 32].into(),
@@ -247,7 +248,7 @@ mod tests {
         store.insert(ciphertext2.dupe());
 
         // Should not show up in updates
-        store.insert(Rc::new(EncryptedContent::new(
+        store.insert(Arc::new(EncryptedContent::new(
             Siv::new(&SymmetricKey::generate(&mut csprng), &[0], doc_id1)?,
             vec![0],
             [3u8; 32].into(),

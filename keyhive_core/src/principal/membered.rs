@@ -19,12 +19,12 @@ use crate::{
 };
 use derive_where::derive_where;
 use dupe::{Dupe, OptionDupedExt};
+use futures::lock::Mutex;
 use id::MemberedId;
 use nonempty::NonEmpty;
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, HashMap},
-    rc::Rc,
+    sync::Arc,
 };
 
 /// The union of Agents that have updatable membership
@@ -35,78 +35,99 @@ pub enum Membered<
     T: ContentRef = [u8; 32],
     L: MembershipListener<S, T> = NoListener,
 > {
-    Group(Rc<RefCell<Group<S, T, L>>>),
-    Document(Rc<RefCell<Document<S, T, L>>>),
+    Group(Arc<Mutex<Group<S, T, L>>>),
+    Document(Arc<Mutex<Document<S, T, L>>>),
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, L> {
-    pub fn get_capability(&self, agent_id: &Identifier) -> Option<Rc<Signed<Delegation<S, T, L>>>> {
+    pub async fn get_capability(
+        &self,
+        agent_id: &Identifier,
+    ) -> Option<Arc<Signed<Delegation<S, T, L>>>> {
         match self {
-            Membered::Group(group) => group.borrow().get_capability(agent_id).duped(),
-            Membered::Document(doc) => doc.borrow().get_capability(agent_id).duped(),
+            Membered::Group(group) => {
+                let locked = group.lock().await;
+                locked.get_capability(agent_id).duped()
+            }
+            Membered::Document(doc) => {
+                let locked = doc.lock().await;
+                locked.get_capability(agent_id).duped()
+            }
         }
     }
 
-    pub fn agent_id(&self) -> AgentId {
+    pub async fn agent_id(&self) -> AgentId {
         match self {
-            Membered::Group(group) => group.borrow().agent_id(),
-            Membered::Document(document) => document.borrow().agent_id(),
+            Membered::Group(group) => {
+                let locked = group.lock().await;
+                locked.agent_id()
+            }
+            Membered::Document(document) => {
+                let locked = document.lock().await;
+                locked.agent_id()
+            }
         }
     }
 
-    pub fn membered_id(&self) -> MemberedId {
+    pub async fn membered_id(&self) -> MemberedId {
         match self {
-            Membered::Group(group) => MemberedId::GroupId(group.borrow().group_id()),
-            Membered::Document(document) => MemberedId::DocumentId(document.borrow().doc_id()),
+            Membered::Group(group) => {
+                let locked = group.lock().await;
+                MemberedId::GroupId(locked.group_id())
+            }
+            Membered::Document(document) => {
+                let locked = document.lock().await;
+                MemberedId::DocumentId(locked.doc_id())
+            }
         }
     }
 
-    pub fn delegation_heads(&self) -> CaMap<Signed<Delegation<S, T, L>>> {
+    pub async fn delegation_heads(&self) -> CaMap<Signed<Delegation<S, T, L>>> {
         match self {
-            Membered::Group(group) => group.borrow().delegation_heads().clone(),
-            Membered::Document(document) => document.borrow().delegation_heads().clone(),
+            Membered::Group(group) => group.lock().await.delegation_heads().clone(),
+            Membered::Document(document) => document.lock().await.delegation_heads().clone(),
         }
     }
 
-    pub fn revocation_heads(&self) -> CaMap<Signed<Revocation<S, T, L>>> {
+    pub async fn revocation_heads(&self) -> CaMap<Signed<Revocation<S, T, L>>> {
         match self {
-            Membered::Group(group) => group.borrow().revocation_heads().clone(),
-            Membered::Document(document) => document.borrow().revocation_heads().clone(),
+            Membered::Group(group) => group.lock().await.revocation_heads().clone(),
+            Membered::Document(document) => document.lock().await.revocation_heads().clone(),
         }
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn members(&self) -> HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>> {
+    pub async fn members(&self) -> HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<S, T, L>>>>> {
         match self {
-            Membered::Group(group) => group.borrow().members().clone(),
-            Membered::Document(document) => document.borrow().members().clone(),
+            Membered::Group(group) => group.lock().await.members().clone(),
+            Membered::Document(document) => document.lock().await.members().clone(),
         }
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &mut self,
         member_to_add: Agent<S, T, L>,
         can: Access,
         signer: &S,
-        other_relevant_docs: &[Rc<RefCell<Document<S, T, L>>>],
+        other_relevant_docs: &[Arc<Mutex<Document<S, T, L>>>],
     ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError> {
         match self {
             Membered::Group(group) => Ok(group
-                .borrow_mut()
+                .lock()
+                .await
                 .add_member(member_to_add, can, signer, other_relevant_docs)
                 .await?),
             Membered::Document(document) => {
                 document
-                    .borrow_mut()
+                    .lock()
+                    .await
                     .add_member(member_to_add, can, signer, other_relevant_docs)
                     .await
             }
         }
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[allow(clippy::type_complexity)]
     pub async fn revoke_member(
         &mut self,
@@ -118,64 +139,67 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, 
         match self {
             Membered::Group(group) => {
                 group
-                    .borrow_mut()
+                    .lock()
+                    .await
                     .revoke_member(member_id, retain_all_other_members, signer, relevant_docs)
                     .await
             }
             Membered::Document(document) => {
                 document
-                    .borrow_mut()
+                    .lock()
+                    .await
                     .revoke_member(member_id, retain_all_other_members, signer, relevant_docs)
                     .await
             }
         }
     }
 
-    pub fn get_agent_revocations(
+    pub async fn get_agent_revocations(
         &self,
         agent: &Agent<S, T, L>,
-    ) -> Vec<Rc<Signed<Revocation<S, T, L>>>> {
+    ) -> Vec<Arc<Signed<Revocation<S, T, L>>>> {
         match self {
-            Membered::Group(group) => group.borrow().get_agent_revocations(agent),
-            Membered::Document(document) => document.borrow().get_agent_revocations(agent),
+            Membered::Group(group) => group.lock().await.get_agent_revocations(agent),
+            Membered::Document(document) => document.lock().await.get_agent_revocations(agent),
         }
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn receive_delegation(
+    pub async fn receive_delegation(
         &self,
-        delegation: Rc<Signed<Delegation<S, T, L>>>,
+        delegation: Arc<Signed<Delegation<S, T, L>>>,
     ) -> Result<Digest<Signed<Delegation<S, T, L>>>, AddError> {
         match self {
-            Membered::Group(group) => Ok(group.borrow_mut().receive_delegation(delegation)?),
+            Membered::Group(group) => Ok(group.lock().await.receive_delegation(delegation)?),
             Membered::Document(document) => {
-                Ok(document.borrow_mut().receive_delegation(delegation)?)
+                Ok(document.lock().await.receive_delegation(delegation)?)
             }
         }
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Rc<RefCell<Group<S, T, L>>>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Arc<Mutex<Group<S, T, L>>>>
     for Membered<S, T, L>
 {
-    fn from(group: Rc<RefCell<Group<S, T, L>>>) -> Self {
+    fn from(group: Arc<Mutex<Group<S, T, L>>>) -> Self {
         Membered::Group(group)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Rc<RefCell<Document<S, T, L>>>> for Membered<S, T, L>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Arc<Mutex<Document<S, T, L>>>>
+    for Membered<S, T, L>
 {
-    fn from(document: Rc<RefCell<Document<S, T, L>>>) -> Self {
+    fn from(document: Arc<Mutex<Document<S, T, L>>>) -> Self {
         Membered::Document(document)
     }
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Membered<S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        match self {
-            Membered::Group(group) => group.borrow().verifying_key(),
-            Membered::Document(document) => document.borrow().verifying_key(),
-        }
+        todo!("FIXME")
+        // match self {
+        //     Membered::Group(group) => group.lock().await.verifying_key(),
+        //     Membered::Document(document) => document.lock().await.verifying_key(),
+        // }
     }
 }

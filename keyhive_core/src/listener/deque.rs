@@ -11,50 +11,47 @@ use crate::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
+use futures::lock::Mutex;
 use std::{
-    cell::RefCell,
     collections::VecDeque,
     hash::{Hash, Hasher},
-    rc::Rc,
+    sync::Arc,
 };
 use tracing::instrument;
 
 #[derive(Debug, Default, PartialEq, Eq, From, Into)]
 pub struct Deque<S: AsyncSigner, T: ContentRef = [u8; 32]>(
-    #[allow(clippy::type_complexity)] pub Rc<RefCell<VecDeque<Event<S, T, Deque<S, T>>>>>,
+    #[allow(clippy::type_complexity)] pub Arc<Mutex<VecDeque<Event<S, T, Deque<S, T>>>>>,
 );
 
 impl<S: AsyncSigner, T: ContentRef> Deque<S, T> {
     pub fn new() -> Self {
-        Self(Rc::new(RefCell::new(VecDeque::new())))
+        Self(Arc::new(Mutex::new(VecDeque::new())))
     }
 
-    pub fn push(&self, event: Event<S, T, Self>) {
-        let rc = self.0.dupe();
-        let mut deq = (*rc).borrow_mut();
-        deq.push_back(event)
+    pub async fn push(&self, event: Event<S, T, Self>) {
+        let mut locked = self.0.lock().await;
+        locked.push_back(event)
     }
 
-    pub fn pop_latest(&self) -> Option<Event<S, T, Self>> {
-        let rc = self.0.dupe();
-        let mut deq = (*rc).borrow_mut();
-        deq.pop_front()
+    pub async fn pop_latest(&self) -> Option<Event<S, T, Self>> {
+        let mut locked = self.0.lock().await;
+        locked.pop_front()
     }
 
-    pub fn pop_earliest(&self) -> Option<Event<S, T, Self>> {
-        let rc = self.0.dupe();
-        let mut deq = (*rc).borrow_mut();
-        deq.pop_back()
+    pub async fn pop_earliest(&self) -> Option<Event<S, T, Self>> {
+        let mut locked = self.0.lock().await;
+        locked.pop_back()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.0.borrow().is_empty()
+    pub async fn is_empty(&self) -> bool {
+        let locked = self.0.lock().await;
+        locked.is_empty()
     }
 
-    pub fn clear(&self) {
-        let rc = self.0.dupe();
-        let mut deq = (*rc).borrow_mut();
-        deq.clear()
+    pub async fn clear(&self) {
+        let mut locked = self.0.lock().await;
+        locked.clear()
     }
 }
 
@@ -75,37 +72,38 @@ where
     Event<S, T, Deque<S, T>>: Hash,
 {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.borrow().hash(state)
+        todo!("FIXME")
+        // self.0.borrow().hash(state)
     }
 }
 
 impl<S: AsyncSigner, T: ContentRef> PrekeyListener for Deque<S, T> {
     #[instrument(skip(self))]
-    async fn on_prekeys_expanded(&self, new_prekey: &Rc<Signed<AddKeyOp>>) {
-        self.push(Event::PrekeysExpanded(new_prekey.dupe()))
+    async fn on_prekeys_expanded(&self, new_prekey: &Arc<Signed<AddKeyOp>>) {
+        self.push(Event::PrekeysExpanded(new_prekey.dupe())).await
     }
 
     #[instrument(skip(self))]
-    async fn on_prekey_rotated(&self, rotate_key: &Rc<Signed<RotateKeyOp>>) {
-        self.push(Event::PrekeyRotated(rotate_key.dupe()))
+    async fn on_prekey_rotated(&self, rotate_key: &Arc<Signed<RotateKeyOp>>) {
+        self.push(Event::PrekeyRotated(rotate_key.dupe())).await
     }
 }
 
 impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for Deque<S, T> {
     #[instrument(skip(self))]
-    async fn on_delegation(&self, data: &Rc<Signed<Delegation<S, T, Self>>>) {
-        self.push(Event::Delegated(data.dupe()))
+    async fn on_delegation(&self, data: &Arc<Signed<Delegation<S, T, Self>>>) {
+        self.push(Event::Delegated(data.dupe())).await
     }
 
     #[instrument(skip(self))]
-    async fn on_revocation(&self, data: &Rc<Signed<Revocation<S, T, Self>>>) {
-        self.push(Event::Revoked(data.dupe()))
+    async fn on_revocation(&self, data: &Arc<Signed<Revocation<S, T, Self>>>) {
+        self.push(Event::Revoked(data.dupe())).await
     }
 }
 
 impl<S: AsyncSigner, T: ContentRef> CgkaListener for Deque<S, T> {
     #[instrument(skip(self))]
-    async fn on_cgka_op(&self, op: &Rc<Signed<CgkaOperation>>) {
-        self.push(Event::CgkaOperation(op.dupe()))
+    async fn on_cgka_op(&self, op: &Arc<Signed<CgkaOperation>>) {
+        self.push(Event::CgkaOperation(op.dupe())).await
     }
 }

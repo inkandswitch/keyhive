@@ -57,14 +57,14 @@ use crate::{
 use derivative::Derivative;
 use derive_where::derive_where;
 use dupe::Dupe;
+use futures::lock::Mutex;
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     fmt::{Debug, Formatter},
     marker::PhantomData,
-    rc::Rc,
+    sync::Arc,
 };
 use thiserror::Error;
 use tracing::instrument;
@@ -81,18 +81,18 @@ pub struct Keyhive<
     R: rand::CryptoRng = rand::rngs::ThreadRng,
 > {
     /// The [`Active`] user agent.
-    active: Rc<RefCell<Active<S, T, L>>>,
+    active: Arc<Mutex<Active<S, T, L>>>,
 
     /// The [`Individual`]s that are known to this agent.
-    individuals: HashMap<IndividualId, Rc<RefCell<Individual>>>,
+    individuals: HashMap<IndividualId, Arc<Mutex<Individual>>>,
 
     /// The [`Group`]s that are known to this agent.
     #[allow(clippy::type_complexity)]
-    groups: HashMap<GroupId, Rc<RefCell<Group<S, T, L>>>>,
+    groups: HashMap<GroupId, Arc<Mutex<Group<S, T, L>>>>,
 
     /// The [`Document`]s that are known to this agent.
     #[allow(clippy::type_complexity)]
-    docs: HashMap<DocumentId, Rc<RefCell<Document<S, T, L>>>>,
+    docs: HashMap<DocumentId, Arc<Mutex<Document<S, T, L>>>>,
 
     /// All applied [`Delegation`]s
     delegations: DelegationStore<S, T, L>,
@@ -124,13 +124,13 @@ impl<
     > Keyhive<S, T, P, C, L, R>
 {
     #[instrument(skip_all)]
-    pub fn id(&self) -> IndividualId {
-        self.active.borrow().id()
+    pub async fn id(&self) -> IndividualId {
+        self.active.lock().await.id()
     }
 
     #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn agent_id(&self) -> AgentId {
-        self.active.borrow().agent_id()
+    pub async fn agent_id(&self) -> AgentId {
+        self.active.lock().await.agent_id()
     }
 
     #[instrument(skip_all)]
@@ -141,12 +141,12 @@ impl<
         mut csprng: R,
     ) -> Result<Self, SigningError> {
         Ok(Self {
-            active: Rc::new(RefCell::new(
+            active: Arc::new(Mutex::new(
                 Active::generate(signer, event_listener.clone(), &mut csprng).await?,
             )),
             individuals: HashMap::from_iter([(
                 Public.id().into(),
-                Rc::new(RefCell::new(Public.individual())),
+                Arc::new(Mutex::new(Public.individual())),
             )]),
             groups: HashMap::new(),
             docs: HashMap::new(),
@@ -160,8 +160,8 @@ impl<
     }
 
     /// The current [`Active`] Keyhive user.
-    #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn active(&self) -> &Rc<RefCell<Active<S, T, L>>> {
+    #[instrument(skip_all)]
+    pub fn active(&self) -> &Arc<Mutex<Active<S, T, L>>> {
         &self.active
     }
 
@@ -171,62 +171,64 @@ impl<
     /// register your identity on their system.
     ///
     /// Importantly this includes prekeys in addition to your public key.
-    #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn individual(&self) -> Individual {
-        self.active.borrow().individual().clone()
+    #[instrument(skip_all)]
+    pub async fn individual(&self) -> Individual {
+        self.active.lock().await.individual().clone()
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn groups(&self) -> &HashMap<GroupId, Rc<RefCell<Group<S, T, L>>>> {
+    #[instrument(skip_all)]
+    pub fn groups(&self) -> &HashMap<GroupId, Arc<Mutex<Group<S, T, L>>>> {
         &self.groups
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn documents(&self) -> &HashMap<DocumentId, Rc<RefCell<Document<S, T, L>>>> {
+    #[instrument(skip_all)]
+    pub fn documents(&self) -> &HashMap<DocumentId, Arc<Mutex<Document<S, T, L>>>> {
         &self.docs
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(skip_all, fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub async fn generate_group(
         &mut self,
         coparents: Vec<Peer<S, T, L>>,
-    ) -> Result<Rc<RefCell<Group<S, T, L>>>, SigningError> {
-        let g = Rc::new(RefCell::new(
-            Group::generate(
-                NonEmpty {
-                    head: self.active.dupe().into(),
-                    tail: coparents.into_iter().map(Into::into).collect(),
-                },
-                self.delegations.dupe(),
-                self.revocations.dupe(),
-                self.event_listener.clone(),
-                &mut self.csprng,
-            )
-            .await?,
-        ));
-
-        self.groups.insert(g.borrow().group_id(), g.dupe());
-
+    ) -> Result<Arc<Mutex<Group<S, T, L>>>, SigningError> {
+        let group = Group::generate(
+            NonEmpty {
+                head: self.active.dupe().into(),
+                tail: coparents.into_iter().map(Into::into).collect(),
+            },
+            self.delegations.dupe(),
+            self.revocations.dupe(),
+            self.event_listener.clone(),
+            &mut self.csprng,
+        )
+        .await?;
+        let group_id = group.group_id();
+        let g = Arc::new(Mutex::new(group));
+        self.groups.insert(group_id, g.dupe());
         Ok(g)
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(skip_all, fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub async fn generate_doc(
         &mut self,
         coparents: Vec<Peer<S, T, L>>,
         initial_content_heads: NonEmpty<T>,
-    ) -> Result<Rc<RefCell<Document<S, T, L>>>, GenerateDocError> {
+    ) -> Result<Arc<Mutex<Document<S, T, L>>>, GenerateDocError> {
         for peer in coparents.iter() {
             if self.get_agent(peer.id()).is_none() {
                 self.register_peer(peer.dupe());
             }
         }
 
-        let signer = self.active.borrow().signer.clone();
+        let signer = {
+            let locked = self.active.lock().await;
+            locked.signer.clone()
+        };
+
         let new_doc = Document::generate(
             NonEmpty {
                 head: self.active.dupe().into(),
@@ -250,29 +252,29 @@ impl<
         }
 
         let doc_id = new_doc.doc_id();
-        let doc = Rc::new(RefCell::new(new_doc));
+        let doc = Arc::new(Mutex::new(new_doc));
         self.docs.insert(doc_id, doc.dupe());
 
         Ok(doc)
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub async fn contact_card(&mut self) -> Result<ContactCard, SigningError> {
         let rot_key_op = self
             .active
-            .borrow_mut()
+            .lock()
+            .await
             .generate_private_prekey(&mut self.csprng)
             .await?;
 
         Ok(ContactCard(KeyOp::Rotate(rot_key_op)))
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub fn receive_contact_card(
         &mut self,
         contact_card: &ContactCard,
-    ) -> Result<Rc<RefCell<Individual>>, ReceivePrekeyOpError> {
+    ) -> Result<Arc<Mutex<Individual>>, ReceivePrekeyOpError> {
         if let Some(indie) = self.get_individual(contact_card.id()) {
             indie
                 .dupe()
@@ -280,40 +282,40 @@ impl<
                 .receive_prekey_op(contact_card.op().dupe())?;
             Ok(indie.dupe())
         } else {
-            let new_user = Rc::new(RefCell::new(Individual::from(contact_card)));
+            let new_user = Arc::new(Mutex::new(Individual::from(contact_card)));
             self.register_individual(new_user.dupe());
             Ok(new_user)
         }
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub async fn rotate_prekey(
         &mut self,
         prekey: ShareKey,
-    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
+    ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
         self.active
-            .borrow_mut()
+            .lock()
+            .await
             .rotate_prekey(prekey, &mut self.csprng)
             .await
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
-    #[instrument(skip(self), fields(khid = %self.id()))]
-    pub async fn expand_prekeys(&mut self) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
+    #[instrument(skip_all)]
+    pub async fn expand_prekeys(&mut self) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
         self.active
-            .borrow_mut()
+            .lock()
+            .await
             .expand_prekeys(&mut self.csprng)
             .await
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub async fn try_sign<U: Serialize + Debug>(&self, data: U) -> Result<Signed<U>, SigningError> {
-        let signer = self.active.borrow().signer.clone();
+        let signer = self.active.lock().await.signer.clone();
         signer.try_sign_async(data).await
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub fn register_peer(&mut self, peer: Peer<S, T, L>) -> bool {
         let id = peer.id();
 
@@ -336,9 +338,9 @@ impl<
         true
     }
 
-    #[instrument(skip_all, fields(khid = %self.id()))]
-    pub fn register_individual(&mut self, individual: Rc<RefCell<Individual>>) -> bool {
-        let id = individual.borrow().id();
+    #[instrument(skip_all)]
+    pub async fn register_individual(&mut self, individual: Arc<Mutex<Individual>>) -> bool {
+        let id = { individual.lock().await.id() };
 
         if self.individuals.contains_key(&id) {
             return false;
@@ -348,7 +350,7 @@ impl<
         true
     }
 
-    #[instrument(skip_all, fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub async fn register_group(&mut self, root_delegation: Signed<Delegation<S, T, L>>) -> bool {
         if self
             .groups
@@ -357,10 +359,10 @@ impl<
             return false;
         }
 
-        let group = Rc::new(RefCell::new(
+        let group = Arc::new(Mutex::new(
             Group::new(
                 GroupId(root_delegation.issuer.into()),
-                Rc::new(root_delegation),
+                Arc::new(root_delegation),
                 self.delegations.dupe(),
                 self.revocations.dupe(),
                 self.event_listener.clone(),
@@ -368,11 +370,14 @@ impl<
             .await,
         ));
 
-        self.groups.insert(group.borrow().group_id(), group.dupe());
+        {
+            let locked = group.lock().await;
+            self.groups.insert(locked.group_id(), group.dupe());
+        }
         true
     }
 
-    #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub fn get_membership_operation(
         &self,
         digest: &Digest<MembershipOperation<S, T, L>>,
@@ -387,23 +392,24 @@ impl<
             })
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &mut self,
         to_add: Agent<S, T, L>,
         resource: &mut Membered<S, T, L>,
         can: Access,
-        other_relevant_docs: &[Rc<RefCell<Document<S, T, L>>>], // TODO make this automatic
+        other_relevant_docs: &[Arc<Mutex<Document<S, T, L>>>], // TODO make this automatic
     ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError> {
-        let signer = self.active.borrow().signer.clone();
+        let signer = { self.active.lock().await.signer.clone() };
         match resource {
             Membered::Group(group) => Ok(group
-                .borrow_mut()
+                .lock()
+                .await
                 .add_member(to_add, can, &signer, other_relevant_docs)
                 .await?),
             Membered::Document(doc) => {
-                doc.borrow_mut()
+                doc.lock()
+                    .await
                     .add_member(to_add, can, &signer, other_relevant_docs)
                     .await
             }
@@ -411,7 +417,7 @@ impl<
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub async fn revoke_member(
         &mut self,
         to_revoke: Identifier,
@@ -420,10 +426,11 @@ impl<
     ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
         let mut relevant_docs = BTreeMap::new();
         for (doc_id, Ability { doc, .. }) in self.reachable_docs() {
-            relevant_docs.insert(doc_id, doc.borrow().content_heads.iter().cloned().collect());
+            let locked = doc.lock().await;
+            relevant_docs.insert(doc_id, locked.content_heads.iter().cloned().collect());
         }
 
-        let signer = self.active.borrow().signer.clone();
+        let signer = { self.active.lock().await.signer.clone() };
         resource
             .revoke_member(
                 to_revoke,
@@ -434,77 +441,78 @@ impl<
             .await
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
-    #[instrument(skip_all, fields(khid = %self.id(), doc_id = %doc.borrow().id(), content_ref))]
+    #[instrument(skip_all)]
     pub async fn try_encrypt_content(
         &mut self,
-        doc: Rc<RefCell<Document<S, T, L>>>,
+        doc: Arc<Mutex<Document<S, T, L>>>,
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError> {
-        let signer = self.active.borrow().signer.clone();
-        let result = doc
-            .borrow_mut()
-            .try_encrypt_content(content_ref, content, pred_refs, &signer, &mut self.csprng)
-            .await?;
+        let signer = { self.active.lock().await.signer.clone() };
+        let result = {
+            doc.lock()
+                .await
+                .try_encrypt_content(content_ref, content, pred_refs, &signer, &mut self.csprng)
+                .await?
+        };
         if let Some(op) = &result.update_op {
-            self.event_listener.on_cgka_op(&Rc::new(op.clone())).await;
+            self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
         }
         Ok(result)
     }
 
-    pub fn try_decrypt_content(
+    pub async fn try_decrypt_content(
         &mut self,
-        doc: Rc<RefCell<Document<S, T, L>>>,
+        doc: Arc<Mutex<Document<S, T, L>>>,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
-        doc.borrow_mut().try_decrypt_content(encrypted)
+        doc.lock().await.try_decrypt_content(encrypted)
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     pub async fn try_causal_decrypt_content(
         &mut self,
-        doc: Rc<RefCell<Document<S, T, L>>>,
+        doc: Arc<Mutex<Document<S, T, L>>>,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<T, P, C>>
     where
         T: for<'de> Deserialize<'de>,
         P: Serialize + Clone,
     {
-        doc.borrow_mut()
+        doc.lock()
+            .await
             .try_causal_decrypt_content(encrypted, &mut self.ciphertext_store)
             .await
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
-    #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub async fn force_pcs_update(
         &mut self,
-        doc: Rc<RefCell<Document<S, T, L>>>,
+        doc: Arc<Mutex<Document<S, T, L>>>,
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
-        let signer = self.active.borrow().signer.clone();
-        doc.borrow_mut().pcs_update(&signer, &mut self.csprng).await
+        let signer = { self.active.lock().await.signer.clone() };
+        doc.lock().await.pcs_update(&signer, &mut self.csprng).await
     }
 
-    #[instrument(level = "debug", skip(self), fields(khid = %self.id()))]
-    pub fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<'_, S, T, L>> {
+    #[instrument(skip_all)]
+    pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<'_, S, T, L>> {
         self.docs_reachable_by_agent(&self.active.dupe().into())
+            .await
     }
 
-    #[instrument(level = "debug", skip_all, fields(khid = %self.id(), membered_id = %membered.membered_id()))]
-    pub fn reachable_members(
+    #[instrument(skip_all)]
+    pub async fn reachable_members(
         &self,
         membered: Membered<S, T, L>,
     ) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
         match membered {
-            Membered::Group(group) => group.borrow().transitive_members(),
-            Membered::Document(doc) => doc.borrow().transitive_members(),
+            Membered::Group(group) => group.lock().await.transitive_members(),
+            Membered::Document(doc) => doc.lock().await.transitive_members(),
         }
     }
 
-    #[instrument(level = "debug", skip_all, fields(khid = %self.id(), agent_id = %agent.id()))]
-    pub fn docs_reachable_by_agent(
+    #[instrument(skip_all)]
+    pub async fn docs_reachable_by_agent(
         &self,
         agent: &Agent<S, T, L>,
     ) -> BTreeMap<DocumentId, Ability<'_, S, T, L>> {
@@ -512,33 +520,33 @@ impl<
 
         // TODO will be very slow on large hives. Old code here: https://github.com/inkandswitch/keyhive/pull/111/files:
         for doc in self.docs.values() {
-            if let Some((_, cap)) = doc.borrow().transitive_members().get(&agent.id()) {
-                caps.insert(doc.borrow().doc_id(), Ability { doc, can: *cap });
+            let locked = doc.lock().await;
+            if let Some((_, cap)) = locked.transitive_members().get(&agent.id()) {
+                caps.insert(locked.doc_id(), Ability { doc, can: *cap });
             }
         }
 
         caps
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn membered_reachable_by_agent(
+    #[instrument(skip_all)]
+    pub async fn membered_reachable_by_agent(
         &self,
         agent: &Agent<S, T, L>,
     ) -> HashMap<MemberedId, (Membered<S, T, L>, Access)> {
         let mut caps = HashMap::new();
 
         for group in self.groups.values() {
-            if let Some((_, can)) = group.borrow().transitive_members().get(&agent.id()) {
-                caps.insert(
-                    group.borrow().group_id().into(),
-                    (group.dupe().into(), *can),
-                );
+            let locked = group.lock().await;
+            if let Some((_, can)) = locked.transitive_members().get(&agent.id()) {
+                caps.insert(locked.group_id().into(), (group.dupe().into(), *can));
             }
         }
 
         for doc in self.docs.values() {
-            if let Some((_, can)) = doc.borrow().transitive_members().get(&agent.id()) {
-                caps.insert(doc.borrow().doc_id().into(), (doc.dupe().into(), *can));
+            let locked = doc.lock().await;
+            if let Some((_, can)) = locked.transitive_members().get(&agent.id()) {
+                caps.insert(locked.doc_id().into(), (doc.dupe().into(), *can));
             }
         }
 
@@ -546,7 +554,7 @@ impl<
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(skip_all, fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub fn events_for_agent(
         &self,
         agent: &Agent<S, T, L>,
@@ -572,7 +580,7 @@ impl<
         Ok(ops)
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub fn static_events_for_agent(
         &self,
         agent: &Agent<S, T, L>,
@@ -584,38 +592,41 @@ impl<
             .collect())
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn cgka_ops_reachable_by_agent(
+    #[instrument(skip_all)]
+    pub async fn cgka_ops_reachable_by_agent(
         &self,
         agent: &Agent<S, T, L>,
-    ) -> Result<Vec<Rc<Signed<CgkaOperation>>>, CgkaError> {
-        let mut ops = vec![];
-        for (_doc_id, ability) in self.docs_reachable_by_agent(agent) {
-            for epoch in ability.doc.borrow().cgka_ops()?.iter() {
+    ) -> Result<Vec<Arc<Signed<CgkaOperation>>>, CgkaError> {
+        let mut ops = Vec::new();
+        let reachable = { self.docs_reachable_by_agent(agent).await };
+        for (_doc_id, ability) in reachable {
+            let epochs = { ability.doc.lock().await.cgka_ops()? };
+            for epoch in &epochs {
                 ops.extend(epoch.iter().cloned());
             }
         }
         Ok(ops)
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn cgka_ops_for_doc(
+    #[instrument(skip_all)]
+    pub async fn cgka_ops_for_doc(
         &self,
         doc: &DocumentId,
-    ) -> Result<Option<Vec<Rc<Signed<CgkaOperation>>>>, CgkaError> {
+    ) -> Result<Option<Vec<Arc<Signed<CgkaOperation>>>>, CgkaError> {
         let Some(doc) = self.docs.get(doc) else {
             return Ok(None);
         };
         let mut ops = Vec::new();
-        for epoch in doc.borrow().cgka_ops()?.iter() {
+        let epochs = { doc.lock().await.cgka_ops()? };
+        for epoch in &epochs {
             ops.extend(epoch.iter().cloned());
         }
         Ok(Some(ops))
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(skip_all, fields(khid = %self.id()))]
-    pub fn membership_ops_for_agent(
+    #[instrument(skip_all)]
+    pub async fn membership_ops_for_agent(
         &self,
         agent: &Agent<S, T, L>,
     ) -> HashMap<Digest<MembershipOperation<S, T, L>>, MembershipOperation<S, T, L>> {
@@ -626,9 +637,9 @@ impl<
         let mut heads: Vec<(
             Digest<MembershipOperation<S, T, L>>,
             MembershipOperation<S, T, L>,
-        )> = vec![];
+        )> = Vec::new();
 
-        for (mem_rc, _max_acces) in self.membered_reachable_by_agent(agent).values() {
+        for (mem_rc, _max_acces) in self.membered_reachable_by_agent(agent).await.values() {
             for (hash, dlg_head) in mem_rc.delegation_heads().iter() {
                 heads.push((hash.into(), dlg_head.dupe().into()));
             }
@@ -670,20 +681,20 @@ impl<
         ops
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn reachable_prekey_ops_for_agent(
+    #[instrument(skip_all)]
+    pub async fn reachable_prekey_ops_for_agent(
         &self,
         agent: &Agent<S, T, L>,
-    ) -> HashMap<Identifier, Vec<Rc<KeyOp>>> {
+    ) -> HashMap<Identifier, Vec<Arc<KeyOp>>> {
         fn add_many_keys(
-            map: &mut HashMap<Identifier, Vec<Rc<KeyOp>>>,
+            map: &mut HashMap<Identifier, Vec<Arc<KeyOp>>>,
             agent_id: Identifier,
-            key_ops: HashSet<Rc<KeyOp>>,
+            key_ops: HashSet<Arc<KeyOp>>,
         ) {
-            let mut heads: Vec<Rc<KeyOp>> = vec![];
-            let mut rotate_key_ops: HashMap<ShareKey, HashSet<Rc<KeyOp>>> = HashMap::new();
+            let mut heads: Vec<Arc<KeyOp>> = vec![];
+            let mut rotate_key_ops: HashMap<ShareKey, HashSet<Arc<KeyOp>>> = HashMap::new();
 
-            for key_op in key_ops.iter() {
+            for key_op in &key_ops {
                 match key_op.as_ref() {
                     KeyOp::Add(_add) => {
                         heads.push(key_op.dupe());
@@ -716,43 +727,49 @@ impl<
 
         let mut map = HashMap::new();
 
-        add_many_keys(
-            &mut map,
-            self.active.borrow().id().into(),
-            self.active
-                .dupe()
-                .borrow()
-                .individual
-                .prekey_ops()
-                .values()
-                .cloned()
-                .collect(),
-        );
+        let (active_id, prekeys) = {
+            let locked = self.active.lock().await;
+            (
+                locked.id().into(),
+                locked.individual.prekey_ops().values().cloned().collect(),
+            )
+        };
+        add_many_keys(&mut map, active_id, prekeys);
 
         // Add the agents own keys
         add_many_keys(&mut map, agent.id(), agent.key_ops());
 
-        for (mem, _) in self.membered_reachable_by_agent(agent).values() {
+        for (mem, _) in self.membered_reachable_by_agent(agent).await.values() {
             match mem {
                 Membered::Group(group) => {
+                    let (group_id, group_transitive_members) = {
+                        let locked = group.lock().await;
+                        (locked.id(), locked.transitive_members())
+                    };
+
                     add_many_keys(
                         &mut map,
-                        group.borrow().id(),
+                        group_id,
                         Agent::from(group.dupe()).key_ops().into_iter().collect(),
                     );
 
-                    for (agent_id, (agent, _acess)) in group.borrow().transitive_members().iter() {
+                    for (agent_id, (agent, _acess)) in &group_transitive_members {
                         add_many_keys(&mut map, *agent_id, agent.key_ops().into_iter().collect());
                     }
                 }
                 Membered::Document(doc) => {
+                    let (doc_id, doc_transitive_members) = {
+                        let locked = doc.lock().await;
+                        (locked.id(), locked.transitive_members())
+                    };
+
                     add_many_keys(
                         &mut map,
-                        doc.borrow().id(),
+                        doc_id,
                         Agent::from(doc.dupe()).key_ops().into_iter().collect(),
                     );
 
-                    for (agent_id, (agent, _acess)) in doc.borrow().transitive_members().iter() {
+                    for (agent_id, (agent, _acess)) in &doc_transitive_members {
                         add_many_keys(&mut map, *agent_id, agent.key_ops().into_iter().collect());
                     }
                 }
@@ -763,19 +780,19 @@ impl<
     }
 
     #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn get_individual(&self, id: IndividualId) -> Option<&Rc<RefCell<Individual>>> {
+    pub fn get_individual(&self, id: IndividualId) -> Option<&Arc<Mutex<Individual>>> {
         self.individuals.get(&id)
     }
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn get_group(&self, id: GroupId) -> Option<&Rc<RefCell<Group<S, T, L>>>> {
+    pub fn get_group(&self, id: GroupId) -> Option<&Arc<Mutex<Group<S, T, L>>>> {
         self.groups.get(&id)
     }
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn get_document(&self, id: DocumentId) -> Option<&Rc<RefCell<Document<S, T, L>>>> {
+    pub fn get_document(&self, id: DocumentId) -> Option<&Arc<Mutex<Document<S, T, L>>>> {
         self.docs.get(&id)
     }
 
@@ -798,11 +815,12 @@ impl<
         None
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn get_agent(&self, id: Identifier) -> Option<Agent<S, T, L>> {
+    #[instrument(skip_all)]
+    pub async fn get_agent(&self, id: Identifier) -> Option<Agent<S, T, L>> {
         let indie_id = id.into();
 
-        if indie_id == self.active.borrow().id() {
+        let active_id = { self.active.lock().await.id() };
+        if indie_id == active_id {
             return Some(self.active.dupe().into());
         }
 
@@ -821,11 +839,11 @@ impl<
         None
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn receive_prekey_op(&mut self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
+    #[instrument(skip_all)]
+    pub async fn receive_prekey_op(&mut self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
         let id = Identifier(*key_op.issuer());
-        let agent = self.get_agent(id).unwrap_or_else(|| {
-            let indie = Rc::new(RefCell::new(Individual::new(key_op.clone())));
+        let agent = self.get_agent(id).await.unwrap_or_else(|| {
+            let indie = Arc::new(Mutex::new(Individual::new(key_op.clone())));
             self.register_individual(indie.dupe());
             indie.into()
         });
@@ -833,27 +851,30 @@ impl<
         match agent {
             Agent::Active(active) => {
                 active
-                    .borrow_mut()
+                    .lock()
+                    .await
                     .individual
                     .receive_prekey_op(key_op.clone())?;
             }
             Agent::Individual(indie) => {
-                indie.borrow_mut().receive_prekey_op(key_op.clone())?;
+                indie.lock().await.receive_prekey_op(key_op.clone())?;
             }
             Agent::Group(group) => {
-                if let IdOrIndividual::Individual(indie) = &mut group.borrow_mut().id_or_indie {
+                let mut locked = group.lock().await;
+                if let IdOrIndividual::Individual(indie) = &mut locked.id_or_indie {
                     indie.receive_prekey_op(key_op.clone())?;
                 } else {
                     let individual = Individual::new(key_op.dupe());
-                    group.borrow_mut().id_or_indie = IdOrIndividual::Individual(individual);
+                    locked.id_or_indie = IdOrIndividual::Individual(individual);
                 }
             }
             Agent::Document(doc) => {
-                if let IdOrIndividual::Individual(indie) = &mut doc.borrow_mut().group.id_or_indie {
+                let mut locked = doc.lock().await;
+                if let IdOrIndividual::Individual(indie) = &mut locked.group.id_or_indie {
                     indie.receive_prekey_op(key_op.clone())?;
                 } else {
                     let individual = Individual::new(key_op.dupe());
-                    doc.borrow_mut().group.id_or_indie = IdOrIndividual::Individual(individual);
+                    locked.group.id_or_indie = IdOrIndividual::Individual(individual);
                 }
             }
         }
@@ -861,7 +882,7 @@ impl<
         Ok(())
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub async fn receive_delegation(
         &mut self,
         static_dlg: &Signed<StaticDelegation<T>>,
@@ -869,6 +890,7 @@ impl<
         if self
             .delegations
             .contains_key(&Digest::hash(static_dlg).into())
+            .await
         {
             return Ok(());
         }
@@ -877,7 +899,7 @@ impl<
         // FIXME add a Verified<T> newtype wapper
         static_dlg.try_verify()?;
 
-        let proof: Option<Rc<Signed<Delegation<S, T, L>>>> = static_dlg
+        let proof: Option<Arc<Signed<Delegation<S, T, L>>>> = static_dlg
             .payload()
             .proof
             .map(|proof_hash| {
@@ -915,7 +937,7 @@ impl<
         };
 
         let subject_id = delegation.subject_id();
-        let delegation = Rc::new(delegation);
+        let delegation = Arc::new(delegation);
         if let Some(group) = self.groups.get(&GroupId(subject_id)) {
             group.borrow_mut().receive_delegation(delegation.clone())?;
         } else if let Some(doc) = self.docs.get(&DocumentId(subject_id)) {
@@ -940,10 +962,10 @@ impl<
                 .and_then(|content_heads| NonEmpty::collect(content_heads.iter().cloned()))
             {
                 let doc = Document::from_group(group, &self.active.borrow(), content_heads)?;
-                self.docs.insert(doc.doc_id(), Rc::new(RefCell::new(doc)));
+                self.docs.insert(doc.doc_id(), Arc::new(Mutex::new(doc)));
             } else {
                 self.groups
-                    .insert(group.group_id(), Rc::new(RefCell::new(group)));
+                    .insert(group.group_id(), Arc::new(Mutex::new(group)));
             }
         };
 
@@ -953,16 +975,15 @@ impl<
         Ok(())
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub async fn receive_revocation(
         &mut self,
         static_rev: &Signed<StaticRevocation<T>>,
     ) -> Result<(), ReceieveStaticDelegationError<S, T, L>> {
         if self
             .revocations
-            .borrow()
             .contains_key(&Digest::hash(static_rev).into())
+            .await
         {
             return Ok(());
         }
@@ -971,17 +992,21 @@ impl<
         static_rev.try_verify()?;
 
         let revoke_hash = static_rev.payload.revoke.into();
-        let revoke: Rc<Signed<Delegation<S, T, L>>> = self
+        let revoke: Arc<Signed<Delegation<S, T, L>>> = self
             .delegations
             .get(&revoke_hash)
+            .await
             .ok_or(MissingDependency(revoke_hash))?;
 
-        let proof: Option<Rc<Signed<Delegation<S, T, L>>>> = static_rev
+        let proof: Option<Arc<Signed<Delegation<S, T, L>>>> = static_rev
             .payload()
             .proof
             .map(|proof_hash| {
                 let hash = proof_hash.into();
-                self.delegations.get(&hash).ok_or(MissingDependency(hash))
+                self.delegations
+                    .get(&hash)
+                    .await
+                    .ok_or(MissingDependency(hash))
             })
             .transpose()?;
 
@@ -996,14 +1021,16 @@ impl<
         };
 
         let id = revocation.subject_id();
-        let revocation = Rc::new(revocation);
+        let revocation = Arc::new(revocation);
         if let Some(group) = self.groups.get(&GroupId(id)) {
             group
-                .borrow_mut()
+                .lock()
+                .await
                 .receive_revocation(revocation.clone())
                 .await?;
         } else if let Some(doc) = self.docs.get(&DocumentId(id)) {
-            doc.borrow_mut()
+            doc.lock()
+                .await
                 .receive_revocation(revocation.clone())
                 .await?;
         } else if let Some(indie) = self.individuals.remove(&IndividualId(id)) {
@@ -1011,11 +1038,12 @@ impl<
                 .promote_individual_to_group(indie, revocation.payload.revoke.dupe())
                 .await;
             group
-                .borrow_mut()
+                .lock()
+                .await
                 .receive_revocation(revocation.clone())
                 .await?;
         } else {
-            let group = Rc::new(RefCell::new(
+            let group = Arc::new(Mutex::new(
                 Group::new(
                     GroupId(static_rev.issuer.into()),
                     revocation.payload.revoke.dupe(),
@@ -1026,28 +1054,28 @@ impl<
                 .await,
             ));
 
-            self.groups.insert(group.borrow().group_id(), group.dupe());
-
-            group
-                .borrow_mut()
-                .receive_revocation(revocation.clone())
-                .await?;
+            {
+                let group2 = group.dupe();
+                let locked = group.lock().await;
+                self.groups.insert(locked.group_id(), group2);
+                locked.receive_revocation(revocation.clone()).await?;
+            }
         }
 
         Ok(())
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub async fn receive_static_event(
         &mut self,
         static_event: StaticEvent<T>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
         match static_event {
             StaticEvent::PrekeysExpanded(add_op) => {
-                self.receive_prekey_op(&Rc::new(*add_op).into())?
+                self.receive_prekey_op(&Arc::new(*add_op).into()).await?
             }
             StaticEvent::PrekeyRotated(rot_op) => {
-                self.receive_prekey_op(&Rc::new(*rot_op).into())?
+                self.receive_prekey_op(&Arc::new(*rot_op).into()).await?
             }
             StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(*cgka_op).await?,
             StaticEvent::Delegated(dlg) => self.receive_delegation(&dlg).await?,
@@ -1056,7 +1084,7 @@ impl<
         Ok(())
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub async fn receive_membership_op(
         &mut self,
         static_op: &StaticMembershipOperation<T>,
@@ -1068,7 +1096,7 @@ impl<
         Ok(())
     }
 
-    #[instrument(level = "trace",  skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub async fn receive_cgka_op(
         &mut self,
         signed_op: Signed<CgkaOperation>,
@@ -1081,7 +1109,7 @@ impl<
             .get(doc_id)
             .ok_or(ReceiveCgkaOpError::UnknownDocument(*doc_id))?;
 
-        let signed_op = Rc::new(signed_op);
+        let signed_op = Arc::new(signed_op);
         if let CgkaOperation::Add { added_id, pk, .. } = signed_op.payload {
             let active_id = self.active.borrow().id();
             if active_id == added_id {
@@ -1118,11 +1146,11 @@ impl<
         ))]
     pub async fn promote_individual_to_group(
         &mut self,
-        individual: Rc<RefCell<Individual>>,
-        head: Rc<Signed<Delegation<S, T, L>>>,
-    ) -> Rc<RefCell<Group<S, T, L>>> {
+        individual: Arc<Mutex<Individual>>,
+        head: Arc<Signed<Delegation<S, T, L>>>,
+    ) -> Arc<Mutex<Group<S, T, L>>> {
         let indie = individual.borrow().clone();
-        let group = Rc::new(RefCell::new(
+        let group = Arc::new(Mutex::new(
             Group::from_individual(
                 indie,
                 head,
@@ -1139,7 +1167,7 @@ impl<
             if dlg.payload.delegate == agent {
                 self.delegations.0.borrow_mut().0.insert(
                     *digest,
-                    Rc::new(Signed {
+                    Arc::new(Signed {
                         issuer: dlg.issuer,
                         signature: dlg.signature,
                         payload: Delegation {
@@ -1158,7 +1186,7 @@ impl<
             if rev.payload.subject_id() == group.borrow().id() {
                 self.revocations.borrow_mut().0.insert(
                     *digest,
-                    Rc::new(Signed {
+                    Arc::new(Signed {
                         issuer: rev.issuer,
                         signature: rev.signature,
                         payload: Revocation {
@@ -1183,43 +1211,51 @@ impl<
     }
 
     #[instrument(skip(self), fields(khid = %self.id()))]
-    pub fn into_archive(&self) -> Archive<T> {
+    pub async fn into_archive(&self) -> Archive<T> {
+        let active = { self.active.lock().await.into_archive() };
+
+        let topsorted_ops = {
+            let delegations = self.delegations.0.lock().await;
+            let revocations = self.revocations.0.lock().await;
+            MembershipOperation::<S, T, L>::topsort(&delegations, &revocations)
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect()
+        };
+
+        let mut individuals = HashMap::new();
+        for (k, arc) in &self.individuals {
+            individuals.insert(*k, arc.lock().await.clone());
+        }
+
+        let mut groups = HashMap::new();
+        for (k, arc) in &self.groups {
+            groups.insert(*k, arc.lock().await.into_archive());
+        }
+
+        let mut docs = HashMap::new();
+        for (k, arc) in &self.docs {
+            docs.insert(*k, arc.lock().await.into_archive());
+        }
+
         Archive {
-            active: self.active.borrow().into_archive(),
-            topsorted_ops: MembershipOperation::<S, T, L>::topsort(
-                &self.delegations.borrow(),
-                &self.revocations.borrow(),
-            )
-            .into_iter()
-            .map(|(k, v)| (k.into(), v.into()))
-            .collect(),
-            individuals: self
-                .individuals
-                .iter()
-                .map(|(k, rc_v)| (*k, rc_v.borrow().clone()))
-                .collect(),
-            groups: self
-                .groups
-                .iter()
-                .map(|(k, rc_v)| (*k, rc_v.borrow().into_archive()))
-                .collect(),
-            docs: self
-                .docs
-                .iter()
-                .map(|(k, rc_v)| (*k, rc_v.borrow().into_archive()))
-                .collect(),
+            active,
+            topsorted_ops,
+            individuals,
+            groups,
+            docs,
         }
     }
 
     #[instrument(skip_all, fields(archive_id = %archive.id()))]
-    pub fn try_from_archive(
+    pub async fn try_from_archive(
         archive: &Archive<T>,
         signer: S,
         ciphertext_store: C,
         listener: L,
         csprng: R,
     ) -> Result<Self, TryFromArchiveError<S, T, L>> {
-        let active = Rc::new(RefCell::new(Active::from_archive(
+        let active = Arc::new(Mutex::new(Active::from_archive(
             &archive.active,
             signer,
             listener.clone(),
@@ -1230,14 +1266,14 @@ impl<
 
         let mut individuals = HashMap::new();
         for (k, v) in archive.individuals.iter() {
-            individuals.insert(*k, Rc::new(RefCell::new(v.clone())));
+            individuals.insert(*k, Arc::new(Mutex::new(v.clone())));
         }
 
         let mut groups = HashMap::new();
         for (group_id, group_archive) in archive.groups.iter() {
             groups.insert(
                 *group_id,
-                Rc::new(RefCell::new(Group::<S, T, L>::dummy_from_archive(
+                Arc::new(Mutex::new(Group::<S, T, L>::dummy_from_archive(
                     group_archive.clone(),
                     delegations.dupe(),
                     revocations.dupe(),
@@ -1250,7 +1286,7 @@ impl<
         for (doc_id, doc_archive) in archive.docs.iter() {
             docs.insert(
                 *doc_id,
-                Rc::new(RefCell::new(Document::<S, T, L>::dummy_from_archive(
+                Arc::new(Mutex::new(Document::<S, T, L>::dummy_from_archive(
                     doc_archive.clone(),
                     delegations.dupe(),
                     revocations.dupe(),
@@ -1262,21 +1298,20 @@ impl<
         for (digest, static_op) in archive.topsorted_ops.iter() {
             match static_op {
                 StaticMembershipOperation::Delegation(sd) => {
-                    let proof: Option<Rc<Signed<Delegation<S, T, L>>>> = sd
-                        .payload
-                        .proof
-                        .map(|proof_digest| {
-                            delegations
-                                .get(&proof_digest.into())
-                                .ok_or(TryFromArchiveError::MissingDelegation(proof_digest.into()))
-                        })
-                        .transpose()?;
+                    let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
+                        if let Some(proof_digest) = sd.payload.proof {
+                            Some(delegations.get(&proof_digest.into()).await.ok_or(
+                                TryFromArchiveError::MissingDelegation(proof_digest.into()),
+                            )?)
+                        } else {
+                            None
+                        };
 
                     let mut after_revocations = vec![];
                     for rev_digest in sd.payload.after_revocations.iter() {
-                        let r: Rc<Signed<Revocation<S, T, L>>> = revocations
-                            .borrow()
+                        let r: Arc<Signed<Revocation<S, T, L>>> = revocations
                             .get(&rev_digest.into())
+                            .await
                             .ok_or(TryFromArchiveError::MissingRevocation(rev_digest.into()))?
                             .dupe();
 
@@ -1295,10 +1330,10 @@ impl<
                             .ok_or(TryFromArchiveError::MissingAgent(Box::new(id)))?
                     };
 
-                    // Manually pushing; skipping various steps intentionally
-                    delegations.0.borrow_mut().0.insert(
+                    // NOTE Manually pushing; skipping various steps intentionally
+                    delegations.0.lock().await.0.insert(
                         (*digest).into(),
-                        Rc::new(Signed {
+                        Arc::new(Signed {
                             signature: sd.signature,
                             issuer: sd.issuer,
                             payload: Delegation {
@@ -1312,28 +1347,27 @@ impl<
                     );
                 }
                 StaticMembershipOperation::Revocation(sr) => {
-                    revocations.borrow_mut().0.insert(
+                    let revoke = delegations.get(&sr.payload.revoke.into()).await.ok_or(
+                        TryFromArchiveError::MissingDelegation(sr.payload.revoke.into()),
+                    )?;
+
+                    let proof =
+                        if let Some(proof_digest) = sr.payload.proof {
+                            Some(delegations.get(&proof_digest.into()).await.ok_or(
+                                TryFromArchiveError::MissingDelegation(proof_digest.into()),
+                            )?)
+                        } else {
+                            None
+                        };
+
+                    revocations.0.lock().await.0.insert(
                         (*digest).into(),
-                        Rc::new(Signed {
+                        Arc::new(Signed {
                             issuer: sr.issuer,
                             signature: sr.signature,
                             payload: Revocation {
-                                revoke: delegations.get(&sr.payload.revoke.into()).ok_or(
-                                    TryFromArchiveError::MissingDelegation(
-                                        sr.payload.revoke.into(),
-                                    ),
-                                )?,
-                                proof: sr
-                                    .payload
-                                    .proof
-                                    .map(|proof_digest| {
-                                        delegations.get(&proof_digest.into()).ok_or(
-                                            TryFromArchiveError::MissingDelegation(
-                                                proof_digest.into(),
-                                            ),
-                                        )
-                                    })
-                                    .transpose()?,
+                                revoke,
+                                proof,
                                 after_content: sr.payload.after_content.clone(),
                             },
                         }),
@@ -1355,7 +1389,7 @@ impl<
             let read_revs = rev_store.borrow();
 
             for dlg_hash in dlg_head_hashes.iter() {
-                let actual_dlg: Rc<Signed<Delegation<Z, U, M>>> = read_dlgs
+                let actual_dlg: Arc<Signed<Delegation<Z, U, M>>> = read_dlgs
                     .get(&dlg_hash.into())
                     .ok_or(TryFromArchiveError::MissingDelegation(dlg_hash.into()))?
                     .dupe();
@@ -1461,7 +1495,7 @@ impl<
             if let Some(our_indie) = self.individuals.get_mut(&id) {
                 our_indie.merge(indie);
             } else {
-                self.individuals.insert(id, Rc::new(RefCell::new(indie)));
+                self.individuals.insert(id, Arc::new(Mutex::new(indie)));
             }
         }
         let events = archive
@@ -1555,7 +1589,7 @@ impl<
         S: AsyncSigner + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
-        C: CiphertextStore<T, P> + Clone, // FIXME make the default Rc<RefCell<...>>
+        C: CiphertextStore<T, P> + Clone, // FIXME make the default Arc<Mutex<...>>
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > Fork for Keyhive<S, T, P, C, L, R>
@@ -1582,14 +1616,13 @@ impl<
         C: CiphertextStore<T, P> + Clone,
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > MergeAsync for Rc<RefCell<Keyhive<S, T, P, C, L, R>>>
+    > MergeAsync for Arc<Mutex<Keyhive<S, T, P, C, L, R>>>
 {
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     async fn merge_async(&self, mut fork: Self::AsyncForked) {
         self.borrow()
             .active
             .borrow_mut()
-            .merge(Rc::unwrap_or_clone(fork.active).into_inner());
+            .merge(Arc::unwrap_or_clone(fork.active).into_inner());
 
         {
             let mut inner = self.borrow_mut();
@@ -1597,7 +1630,7 @@ impl<
                 if let Some(og_indie) = inner.individuals.get(&id) {
                     og_indie
                         .borrow_mut()
-                        .merge(Rc::unwrap_or_clone(forked_indie).into_inner());
+                        .merge(Arc::unwrap_or_clone(forked_indie).into_inner());
                 } else {
                     inner.individuals.insert(id, forked_indie);
                 }
@@ -1820,14 +1853,14 @@ mod tests {
         MemorySigner,
         [u8; 32],
         Vec<u8>,
-        Rc<RefCell<MemoryCiphertextStore<[u8; 32], Vec<u8>>>>,
+        Arc<Mutex<MemoryCiphertextStore<[u8; 32], Vec<u8>>>>,
         NoListener,
     > {
         let sk = MemorySigner::generate(&mut rand::thread_rng());
         let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
         Keyhive::generate(
             sk,
-            Rc::new(RefCell::new(store)),
+            Arc::new(Mutex::new(store)),
             NoListener,
             rand::thread_rng(),
         )
@@ -1842,14 +1875,12 @@ mod tests {
         let mut csprng = rand::thread_rng();
 
         let sk = MemorySigner::generate(&mut csprng);
-        let store = Rc::new(RefCell::new(
-            MemoryCiphertextStore::<[u8; 32], String>::new(),
-        ));
+        let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], String>::new()));
         let mut hive =
             Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::thread_rng()).await?;
 
         let indie_sk = MemorySigner::generate(&mut csprng);
-        let indie = Rc::new(RefCell::new(
+        let indie = Arc::new(Mutex::new(
             Individual::generate(&indie_sk, &mut csprng).await?,
         ));
 
@@ -1888,9 +1919,9 @@ mod tests {
         let mut hive1 = make_keyhive().await;
         let mut hive2 = make_keyhive().await;
 
-        let hive2_on_hive1 = Rc::new(RefCell::new(hive2.active.borrow().individual.clone()));
+        let hive2_on_hive1 = Arc::new(Mutex::new(hive2.active.borrow().individual.clone()));
         hive1.register_individual(hive2_on_hive1.dupe());
-        let hive1_on_hive2 = Rc::new(RefCell::new(hive1.active.borrow().individual.clone()));
+        let hive1_on_hive2 = Arc::new(Mutex::new(hive1.active.borrow().individual.clone()));
         hive2.register_individual(hive1_on_hive2.dupe());
         let group1_on_hive1 = hive1
             .generate_group(vec![hive2_on_hive1.into()])
@@ -1943,7 +1974,7 @@ mod tests {
         // 2 delegations (you & public)
         let left_doc = left
             .generate_doc(
-                vec![Rc::new(RefCell::new(Public.individual())).into()],
+                vec![Arc::new(Mutex::new(Public.individual())).into()],
                 nonempty![[0u8; 32]],
             )
             .await
@@ -2071,7 +2102,6 @@ mod tests {
         assert_eq!(middle.delegations.borrow().len(), 4);
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[tokio::test]
     async fn test_add_member() {
         test_utils::init_logging();
@@ -2079,7 +2109,7 @@ mod tests {
         let mut keyhive = make_keyhive().await;
         let doc = keyhive
             .generate_doc(
-                vec![Rc::new(RefCell::new(Public.individual())).into()],
+                vec![Arc::new(Mutex::new(Public.individual())).into()],
                 nonempty![[0u8; 32]],
             )
             .await
@@ -2093,7 +2123,6 @@ mod tests {
         assert_eq!(dlg.delegation.subject_id(), doc.borrow().doc_id().into());
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[tokio::test]
     async fn receiving_an_event_with_added_or_rotated_prekeys_works() {
         test_utils::init_logging();
@@ -2111,7 +2140,7 @@ mod tests {
 
         // Now add bob to alices document using the new op
         let add_op = KeyOp::Add(add_bob_op);
-        let bob_on_alice = Rc::new(RefCell::new(Individual::new(add_op.dupe())));
+        let bob_on_alice = Arc::new(Mutex::new(Individual::new(add_op.dupe())));
         assert!(alice.register_individual(bob_on_alice.clone()));
         alice
             .add_member(
@@ -2138,7 +2167,7 @@ mod tests {
             .generate_doc(vec![], nonempty![[1u8; 32]])
             .await
             .unwrap();
-        let bob_on_charlie = Rc::new(RefCell::new(Individual::new(KeyOp::Rotate(rotate_op))));
+        let bob_on_charlie = Arc::new(Mutex::new(Individual::new(KeyOp::Rotate(rotate_op))));
         assert!(charlie.register_individual(bob_on_charlie.clone()));
         charlie
             .add_member(
@@ -2156,7 +2185,6 @@ mod tests {
         bob.ingest_event_table(events).await.unwrap();
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[tokio::test]
     async fn test_async_transaction() -> TestResult {
         test_utils::init_logging();
@@ -2164,15 +2192,15 @@ mod tests {
         let sk = MemorySigner::generate(&mut rand::thread_rng());
         let hive = Keyhive::<_, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
             sk,
-            Rc::new(RefCell::new(MemoryCiphertextStore::new())),
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
             NoListener,
             rand::rngs::OsRng,
         )
         .await?;
 
-        let trunk = Rc::new(RefCell::new(hive));
+        let trunk = Arc::new(Mutex::new(hive));
 
-        let alice: Peer<MemorySigner, [u8; 32], NoListener> = Rc::new(RefCell::new(
+        let alice: Peer<MemorySigner, [u8; 32], NoListener> = Arc::new(Mutex::new(
             Individual::generate(
                 &MemorySigner::generate(&mut rand::rngs::OsRng),
                 &mut rand::rngs::OsRng,
@@ -2216,7 +2244,7 @@ mod tests {
                 fork.expand_prekeys().await.unwrap(); // 1 event (prekey)
                 assert_eq!(fork.active.borrow().prekey_pairs.len(), 8);
 
-                let bob: Peer<MemorySigner, [u8; 32], Log<MemorySigner>> = Rc::new(RefCell::new(
+                let bob: Peer<MemorySigner, [u8; 32], Log<MemorySigner>> = Arc::new(Mutex::new(
                     Individual::generate(
                         &MemorySigner::generate(&mut rand::rngs::OsRng),
                         &mut rand::rngs::OsRng,

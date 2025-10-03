@@ -13,14 +13,14 @@ use crate::{
 };
 use derive_where::derive_where;
 use dupe::Dupe;
+use futures::lock::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     convert::Infallible,
     fmt::{Debug, Display},
     future::Future,
-    rc::Rc,
+    sync::Arc,
 };
 use thiserror::Error;
 use tracing::instrument;
@@ -42,18 +42,20 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     type GetCiphertextError: Debug + Display;
     type MarkDecryptedError: Debug + Display;
 
+    // FIXME make this into Local vs Sendable with future
     // TODO make this into a macro, or maybe use their macro and switch at the call site?
     #[cfg(feature = "sendable")]
     fn get_ciphertext(
         &self,
         id: &Cr,
-    ) -> impl Future<Output = Result<Option<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> + Send;
+    ) -> impl Future<Output = Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>
+           + Send;
 
     #[cfg(not(feature = "sendable"))]
     fn get_ciphertext(
         &self,
         id: &Cr,
-    ) -> impl Future<Output = Result<Option<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
+    ) -> impl Future<Output = Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
 
     //////////
 
@@ -61,19 +63,19 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     fn get_ciphertexts_by_pcs_update(
         &self,
         pcs_udpate: &Digest<Signed<CgkaOperation>>,
-    ) -> impl Future<Output = Result<Vec<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> + Send;
 
     #[cfg(feature = "sendable")]
     fn get_ciphertexts_by_pcs_update(
         &self,
         pcs_udpate: &Digest<Signed<CgkaOperation>>,
-    ) -> impl Future<Output = Result<Vec<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> + Send;
+    ) -> impl Future<Output = Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> + Send;
 
     #[cfg(not(feature = "sendable"))]
     fn get_ciphertext_by_pcs_update(
         &self,
         pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> impl Future<Output = Result<Vec<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
+    ) -> impl Future<Output = Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
 
     //////////
 
@@ -165,7 +167,7 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     #[instrument(skip(self, to_decrypt), fields(ciphertext_heads_count = %to_decrypt.len()))]
     async fn try_causal_decrypt(
         &mut self,
-        to_decrypt: &mut Vec<(Rc<EncryptedContent<T, Cr>>, SymmetricKey)>,
+        to_decrypt: &mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
     ) -> Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<Cr, T, Self>>
     where
         Cr: for<'de> Deserialize<'de>,
@@ -261,32 +263,32 @@ impl<T, Cr: ContentRef> CausalDecryptionState<Cr, T> {
     }
 }
 
-impl<Cr: ContentRef, T, C: CiphertextStore<Cr, T>> CiphertextStore<Cr, T> for Rc<RefCell<C>> {
+impl<Cr: ContentRef, T, C: CiphertextStore<Cr, T>> CiphertextStore<Cr, T> for Arc<Mutex<C>> {
     type GetCiphertextError = C::GetCiphertextError;
     type MarkDecryptedError = C::MarkDecryptedError;
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(level = "debug", skip(self))]
     async fn get_ciphertext(
         &self,
         cr: &Cr,
-    ) -> Result<Option<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError> {
-        self.borrow().get_ciphertext(cr).await
+    ) -> Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError> {
+        let locked = self.lock().await;
+        locked.get_ciphertext(cr).await
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(level = "debug", skip(self))]
     async fn get_ciphertext_by_pcs_update(
         &self,
         pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<Vec<Rc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError> {
-        self.borrow().get_ciphertext_by_pcs_update(pcs_update).await
+    ) -> Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError> {
+        let locked = self.lock().await;
+        locked.get_ciphertext_by_pcs_update(pcs_update).await
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[instrument(level = "debug", skip(self))]
     async fn mark_decrypted(&mut self, content_ref: &Cr) -> Result<(), Self::MarkDecryptedError> {
-        self.borrow_mut().mark_decrypted(content_ref).await
+        let mut locked = self.lock().await;
+        locked.mark_decrypted(content_ref).await
     }
 }
 
@@ -298,7 +300,7 @@ impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for MemoryCiphertextStore<
     async fn get_ciphertext(
         &self,
         cr: &Cr,
-    ) -> Result<Option<Rc<EncryptedContent<T, Cr>>>, Infallible> {
+    ) -> Result<Option<Arc<EncryptedContent<T, Cr>>>, Infallible> {
         Ok(self.get_by_content_ref(cr))
     }
 
@@ -306,7 +308,7 @@ impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for MemoryCiphertextStore<
     async fn get_ciphertext_by_pcs_update(
         &self,
         pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<Vec<Rc<EncryptedContent<T, Cr>>>, Infallible> {
+    ) -> Result<Vec<Arc<EncryptedContent<T, Cr>>>, Infallible> {
         Ok(self.get_by_pcs_update(pcs_update))
     }
 
@@ -378,7 +380,7 @@ mod tests {
         ancestors: HashMap<[u8; 32], SymmetricKey>,
         doc_id: DocumentId,
         csprng: &mut ThreadRng,
-    ) -> (Rc<EncryptedContent<String, [u8; 32]>>, SymmetricKey) {
+    ) -> (Arc<EncryptedContent<String, [u8; 32]>>, SymmetricKey) {
         let pcs_key: PcsKey = ShareSecretKey::generate(csprng).into();
         let pcs_key_hash = Digest::hash(&pcs_key);
 
@@ -392,7 +394,7 @@ mod tests {
         key.try_encrypt(nonce, &mut bytes).unwrap();
 
         (
-            Rc::new(EncryptedContent::<String, [u8; 32]>::new(
+            Arc::new(EncryptedContent::<String, [u8; 32]>::new(
                 nonce,
                 bytes,
                 //

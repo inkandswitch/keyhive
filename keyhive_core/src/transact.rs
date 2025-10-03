@@ -48,7 +48,7 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 
 /// A async variant of [`transact_blocking`].
 ///
-/// This is meant for types that are wrapped in e.g. `Rc<RefCell<T>>` or `Arc<Mutex<T>>`.
+/// This is meant for types that are wrapped in e.g. `Arc<RefCell<T>>` or `Arc<Mutex<T>>`.
 ///
 /// Everything in the transaction happens on a clean, disconnected fork of the original,
 /// so there is no need to worry about interleaving between other transactions or trunk.
@@ -56,9 +56,9 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 /// ```rust
 /// # use std::{
 /// #     collections::HashSet,
-/// #     rc::Rc,
-/// #     cell::RefCell
+/// #     sync::Arc,
 /// # };
+/// # use futures::lock::Mutex;
 /// # use keyhive_core::transact::{
 /// #     fork::{Fork, ForkAsync},
 /// #     merge::{Merge, MergeAsync},
@@ -66,9 +66,9 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 /// # };
 /// #
 /// #[derive(Debug, Clone)]
-/// struct RcRefCell<T>(Rc<RefCell<T>>);
+/// struct ArcMutex<T>(Arc<Mutex<T>>);
 ///
-/// impl<T: Fork> Fork for RcRefCell<T> {
+/// impl<T: Fork> Fork for ArcMutex<T> {
 ///     type Forked = T::Forked;
 ///
 ///     fn fork(&self) -> Self::Forked {
@@ -76,14 +76,14 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 ///     }
 /// }
 ///
-/// impl<T: Merge + ForkAsync> MergeAsync for RcRefCell<T> {
+/// impl<T: Merge + ForkAsync> MergeAsync for ArcMutex<T> {
 ///     async fn merge_async(&self, fork: T::Forked) {
 ///         self.0.borrow_mut().merge(fork)
 ///     }
 /// }
 ///
 /// # tokio_test::block_on(async {
-/// let og = RcRefCell(Rc::new(RefCell::new(HashSet::from_iter([0u8, 1, 2, 3]))));
+/// let og = ArcMutex(Arc::new(Mutex::new(HashSet::from_iter([0u8, 1, 2, 3]))));
 ///
 /// let fut1 = transact_async(&og, |mut set: HashSet<u8>| async move {
 ///     set.insert(42);

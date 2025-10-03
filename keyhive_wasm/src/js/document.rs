@@ -4,19 +4,21 @@ use super::{
 };
 use derive_more::{Deref, From, Into};
 use dupe::Dupe;
+use futures::lock::Mutex;
 use keyhive_core::principal::document::Document;
-use std::{cell::RefCell, rc::Rc};
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Document)]
 #[derive(Debug, Clone, Dupe, From, Into, Deref)]
-pub struct JsDocument(pub(crate) Rc<RefCell<Document<JsSigner, JsChangeRef, JsEventHandler>>>);
+pub struct JsDocument(pub(crate) Arc<Mutex<Document<JsSigner, JsChangeRef, JsEventHandler>>>);
 
 #[wasm_bindgen(js_class = Document)]
 impl JsDocument {
     #[wasm_bindgen(getter)]
-    pub fn id(&self) -> JsIdentifier {
-        JsIdentifier(self.0.borrow().id())
+    pub async fn id(&self) -> JsIdentifier {
+        let locked = self.0.lock().await;
+        JsIdentifier(locked.id())
     }
 
     #[wasm_bindgen(js_name = toPeer)]

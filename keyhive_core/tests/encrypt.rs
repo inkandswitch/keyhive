@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 use keyhive_core::{
     access::Access,
@@ -77,10 +77,14 @@ async fn test_encrypt_to_added_member() -> TestResult {
         .await?;
 
     // Now attempt to decrypt on bob
-    let doc_on_bob = bob.get_document(doc.borrow().doc_id()).unwrap();
-    let decrypted = bob.try_decrypt_content(doc_on_bob.clone(), encrypted.encrypted_content())?;
+    {
+        let locked_doc = doc.lock().await;
+        let doc_on_bob = bob.get_document(locked_doc.doc_id()).unwrap();
+        let decrypted =
+            bob.try_decrypt_content(doc_on_bob.clone(), encrypted.encrypted_content())?;
+        assert_eq!(decrypted, init_content);
+    }
 
-    assert_eq!(decrypted, init_content);
     Ok(())
 }
 
@@ -122,7 +126,10 @@ async fn test_decrypt_after_to_from_archive() {
     }
     alice.ingest_unsorted_static_events(events).await.unwrap();
 
-    let doc = alice.get_document(doc.borrow().doc_id()).unwrap();
+    let doc = {
+        let locked_doc = doc.lock().await;
+        alice.get_document(locked_doc.doc_id()).unwrap();
+    };
 
     let decrypted = alice
         .try_decrypt_content(doc.clone(), encrypted.encrypted_content())
@@ -156,7 +163,7 @@ async fn test_decrypt_after_fork_and_merge() {
         .unwrap();
 
     let archive2 = alice.into_archive();
-    let mut events = Rc::unwrap_or_clone(log.0)
+    let mut events = Arc::unwrap_or_clone(log.0)
         .into_inner()
         .into_iter()
         .chain(
@@ -188,7 +195,10 @@ async fn test_decrypt_after_fork_and_merge() {
         keyhive
     };
 
-    let doc = reloaded.get_document(doc.borrow().doc_id()).unwrap();
+    let doc = {
+        let locked_doc = doc.lock().await;
+        reloaded.get_document(locked_doc.doc_id()).unwrap()
+    };
 
     let decrypted = reloaded
         .try_decrypt_content(doc.clone(), encrypted.encrypted_content())

@@ -7,14 +7,14 @@ use keyhive_core::{
     crypto::signed::Signed,
     principal::{agent::Agent, group::delegation::Delegation},
 };
-use std::rc::Rc;
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 #[derive(Debug, Clone, Dupe)]
 pub struct Capability {
     pub(crate) who: Agent<JsSigner, JsChangeRef, JsEventHandler>,
-    pub(crate) proof: Rc<Signed<Delegation<JsSigner, JsChangeRef, JsEventHandler>>>,
+    pub(crate) proof: Arc<Signed<Delegation<JsSigner, JsChangeRef, JsEventHandler>>>,
 }
 
 #[wasm_bindgen]

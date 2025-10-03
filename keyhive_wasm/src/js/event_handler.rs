@@ -11,7 +11,7 @@ use keyhive_core::{
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
 };
-use std::rc::Rc;
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, From, Into)]
@@ -30,27 +30,27 @@ impl Dupe for JsEventHandler {
 }
 
 impl PrekeyListener for JsEventHandler {
-    async fn on_prekeys_expanded(&self, e: &Rc<Signed<AddKeyOp>>) {
+    async fn on_prekeys_expanded(&self, e: &Arc<Signed<AddKeyOp>>) {
         self.call(Event::PrekeysExpanded(e.dupe()).into())
     }
 
-    async fn on_prekey_rotated(&self, e: &Rc<Signed<RotateKeyOp>>) {
+    async fn on_prekey_rotated(&self, e: &Arc<Signed<RotateKeyOp>>) {
         self.call(Event::PrekeyRotated(e.dupe()).into())
     }
 }
 
 impl MembershipListener<JsSigner, JsChangeRef> for JsEventHandler {
-    async fn on_delegation(&self, data: &Rc<Signed<Delegation<JsSigner, JsChangeRef, Self>>>) {
+    async fn on_delegation(&self, data: &Arc<Signed<Delegation<JsSigner, JsChangeRef, Self>>>) {
         self.call(Event::Delegated(data.dupe()).into())
     }
 
-    async fn on_revocation(&self, data: &Rc<Signed<Revocation<JsSigner, JsChangeRef, Self>>>) {
+    async fn on_revocation(&self, data: &Arc<Signed<Revocation<JsSigner, JsChangeRef, Self>>>) {
         self.call(Event::Revoked(data.dupe()).into())
     }
 }
 
 impl CgkaListener for JsEventHandler {
-    async fn on_cgka_op(&self, data: &Rc<Signed<CgkaOperation>>) {
+    async fn on_cgka_op(&self, data: &Arc<Signed<CgkaOperation>>) {
         self.call(Event::CgkaOperation(data.dupe()).into())
     }
 }

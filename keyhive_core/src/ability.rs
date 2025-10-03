@@ -8,7 +8,8 @@ use crate::{
     principal::document::Document,
 };
 use derive_where::derive_where;
-use std::{cell::RefCell, rc::Rc};
+use futures::lock::Mutex;
+use std::sync::Arc;
 
 /// [`Ability`] is a helper type for working with [`Document`] access capabilties.
 #[derive_where(Debug; T)]
@@ -18,13 +19,13 @@ pub struct Ability<
     T: ContentRef = [u8; 32],
     L: MembershipListener<S, T> = NoListener,
 > {
-    pub(crate) doc: &'a Rc<RefCell<Document<S, T, L>>>,
+    pub(crate) doc: &'a Arc<Mutex<Document<S, T, L>>>,
     pub(crate) can: Access,
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Ability<'_, S, T, L> {
     /// Getter for the referenced [`Document`].
-    pub fn doc(&self) -> &Rc<RefCell<Document<S, T, L>>> {
+    pub fn doc(&self) -> &Arc<Mutex<Document<S, T, L>>> {
         self.doc
     }
 

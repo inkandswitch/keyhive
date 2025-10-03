@@ -6,30 +6,33 @@ use super::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
+use futures::lock::Mutex;
 use keyhive_core::principal::group::Group;
-use std::{cell::RefCell, rc::Rc};
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Group)]
 #[derive(Debug, Clone, Dupe, Into, From)]
-pub struct JsGroup(pub(crate) Rc<RefCell<Group<JsSigner, JsChangeRef, JsEventHandler>>>);
+pub struct JsGroup(pub(crate) Arc<Mutex<Group<JsSigner, JsChangeRef, JsEventHandler>>>);
 
 #[wasm_bindgen(js_class = Group)]
 impl JsGroup {
     #[wasm_bindgen(getter)]
-    pub fn id(&self) -> JsIdentifier {
-        JsIdentifier(self.0.borrow().id())
+    pub async fn id(&self) -> JsIdentifier {
+        let locked = self.0.lock().await;
+        JsIdentifier(locked.id())
     }
 
     #[wasm_bindgen(getter, js_name = groupId)]
-    pub fn group_id(&self) -> JsGroupId {
-        JsGroupId(self.0.borrow().group_id())
+    pub async fn group_id(&self) -> JsGroupId {
+        JsGroupId(self.0.lock().await.group_id())
     }
 
     #[wasm_bindgen(getter)]
-    pub fn members(&self) -> Vec<Capability> {
+    pub async fn members(&self) -> Vec<Capability> {
         self.0
-            .borrow()
+            .lock()
+            .await
             .members()
             .values()
             .map(|dlgs| {

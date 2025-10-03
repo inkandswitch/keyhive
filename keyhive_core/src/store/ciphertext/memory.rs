@@ -6,7 +6,7 @@ use crate::{
 use dupe::Dupe;
 use std::{
     collections::{HashMap, HashSet},
-    rc::Rc,
+    sync::Arc,
 };
 use tracing::instrument;
 
@@ -17,7 +17,7 @@ pub struct MemoryCiphertextStore<Cr: ContentRef, P> {
 
     #[allow(clippy::type_complexity)]
     pub(crate) store:
-        HashMap<Digest<EncryptedContent<P, Cr>>, (ByteSize, Rc<EncryptedContent<P, Cr>>)>,
+        HashMap<Digest<EncryptedContent<P, Cr>>, (ByteSize, Arc<EncryptedContent<P, Cr>>)>,
 }
 
 impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
@@ -31,7 +31,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     }
 
     #[instrument(level = "debug", skip(self))]
-    pub fn get_by_content_ref(&self, content_ref: &Cr) -> Option<Rc<EncryptedContent<P, Cr>>> {
+    pub fn get_by_content_ref(&self, content_ref: &Cr) -> Option<Arc<EncryptedContent<P, Cr>>> {
         let digests = self.refs_to_digests.get(content_ref)?;
 
         let xs = digests
@@ -46,7 +46,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     pub fn get_by_pcs_update(
         &self,
         pcs_update_op: &Digest<Signed<CgkaOperation>>,
-    ) -> Vec<Rc<EncryptedContent<P, Cr>>> {
+    ) -> Vec<Arc<EncryptedContent<P, Cr>>> {
         self.ops_to_refs
             .get(pcs_update_op)
             .iter()
@@ -66,7 +66,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     }
 
     #[instrument(level = "debug", skip_all, fields(ecrypted.content_ref))]
-    pub fn insert(&mut self, encrypted: Rc<EncryptedContent<P, Cr>>) {
+    pub fn insert(&mut self, encrypted: Arc<EncryptedContent<P, Cr>>) {
         let digest = Digest::hash(encrypted.as_ref());
         let content_ref = encrypted.content_ref.clone();
         let pcs_update_op_hash = encrypted.pcs_update_op_hash;
@@ -94,8 +94,8 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     pub fn insert_raw(
         &mut self,
         encrypted: EncryptedContent<P, Cr>,
-    ) -> Rc<EncryptedContent<P, Cr>> {
-        let rc = Rc::new(encrypted);
+    ) -> Arc<EncryptedContent<P, Cr>> {
+        let rc = Arc::new(encrypted);
         self.insert(rc.dupe());
         rc
     }
@@ -104,7 +104,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     pub fn remove(
         &mut self,
         digest: &Digest<EncryptedContent<P, Cr>>,
-    ) -> Option<Rc<EncryptedContent<P, Cr>>> {
+    ) -> Option<Arc<EncryptedContent<P, Cr>>> {
         let (_, encrypted) = self.store.remove(digest)?;
 
         self.ops_to_refs

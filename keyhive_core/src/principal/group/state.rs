@@ -18,7 +18,7 @@ use crate::{
 };
 use derive_where::derive_where;
 use dupe::Dupe;
-use std::{cmp::Ordering, collections::BTreeMap, rc::Rc};
+use std::{cmp::Ordering, collections::BTreeMap, sync::Arc};
 
 #[derive(Clone, Eq)]
 #[derive_where(Debug, PartialEq, Hash; T)]
@@ -39,8 +39,8 @@ pub struct GroupState<
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T, L> {
-    pub fn new(
-        delegation_head: Rc<Signed<Delegation<S, T, L>>>,
+    pub async fn new(
+        delegation_head: Arc<Signed<Delegation<S, T, L>>>,
         delegations: DelegationStore<S, T, L>,
         revocations: RevocationStore<S, T, L>,
     ) -> Self {
@@ -48,7 +48,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
         let mut heads = vec![delegation_head.dupe()];
 
         while let Some(head) = heads.pop() {
-            if delegations.contains_value(head.as_ref()) {
+            if delegations.contains_value(head.as_ref()).await {
                 continue;
             }
 
@@ -58,7 +58,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
                 delegations.insert(dlg.dupe());
 
                 for rev in dlg.payload().after_revocations.as_slice() {
-                    revocations.borrow_mut().insert(rev.dupe());
+                    revocations.insert(rev.dupe()).await;
 
                     if let Some(proof) = &rev.payload().proof {
                         heads.push(proof.dupe());
@@ -112,7 +112,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
                 after_content: BTreeMap::new(),
             })?;
 
-            acc.delegation_heads.insert(Rc::new(dlg));
+            acc.delegation_heads.insert(Arc::new(dlg));
             Ok(acc)
         })
     }
@@ -134,9 +134,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn add_delegation(
+    pub async fn add_delegation(
         &mut self,
-        delegation: Rc<Signed<Delegation<S, T, L>>>,
+        delegation: Arc<Signed<Delegation<S, T, L>>>,
     ) -> Result<Digest<Signed<Delegation<S, T, L>>>, AddError> {
         if delegation.subject_id() != self.id.into() {
             return Err(AddError::InvalidSubject(Box::new(delegation.subject_id())));
@@ -180,14 +180,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
             }
         }
 
-        let hash = self.delegations.insert(delegation);
+        let hash = self.delegations.insert(delegation).await;
         Ok(hash)
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn add_revocation(
+    pub async fn add_revocation(
         &mut self,
-        revocation: Rc<Signed<Revocation<S, T, L>>>,
+        revocation: Arc<Signed<Revocation<S, T, L>>>,
     ) -> Result<Digest<Signed<Revocation<S, T, L>>>, AddError> {
         if revocation.subject_id() != self.id.into() {
             return Err(AddError::InvalidSubject(Box::new(revocation.subject_id())));
@@ -224,13 +224,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
 
         self.revocation_heads.insert(revocation.dupe());
 
-        let hash = self.revocations.borrow_mut().insert(revocation);
+        let hash = self.revocations.insert(revocation).await;
         Ok(hash)
     }
 
-    pub fn delegations_for(&self, agent: Agent<S, T, L>) -> Vec<Rc<Signed<Delegation<S, T, L>>>> {
+    pub fn delegations_for(&self, agent: Agent<S, T, L>) -> Vec<Arc<Signed<Delegation<S, T, L>>>> {
         self.delegations
-            .borrow()
             .values()
             .filter_map(|delegation| {
                 if delegation.payload().delegate == agent {

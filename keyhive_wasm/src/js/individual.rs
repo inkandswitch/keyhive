@@ -4,13 +4,14 @@ use super::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
+use futures::lock::Mutex;
 use keyhive_core::principal::individual::Individual;
-use std::{cell::RefCell, rc::Rc};
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, Dupe, PartialEq, Eq, From, Into)]
 #[wasm_bindgen(js_name = Individual)]
-pub struct JsIndividual(pub(crate) Rc<RefCell<Individual>>);
+pub struct JsIndividual(pub(crate) Arc<Mutex<Individual>>);
 
 #[wasm_bindgen(js_class = Individual)]
 impl JsIndividual {
@@ -25,17 +26,19 @@ impl JsIndividual {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn id(&self) -> JsIdentifier {
-        JsIdentifier(self.0.borrow().id().into())
+    pub async fn id(&self) -> JsIdentifier {
+        let locked = self.0.lock().await;
+        JsIdentifier(locked.id().into())
     }
 
     #[wasm_bindgen(getter, js_name = individualId)]
-    pub fn individual_id(&self) -> JsIndividualId {
-        JsIndividualId(self.0.borrow().id())
+    pub async fn individual_id(&self) -> JsIndividualId {
+        let locked = self.0.lock().await;
+        JsIndividualId(locked.id())
     }
 
     #[wasm_bindgen(js_name = pickPrekey)]
     pub fn pick_prekey(&self, doc_id: JsDocumentId) -> JsShareKey {
-        JsShareKey(*self.0.borrow().pick_prekey(doc_id.0))
+        JsShareKey(*self.0.pick_prekey(doc_id.0))
     }
 }

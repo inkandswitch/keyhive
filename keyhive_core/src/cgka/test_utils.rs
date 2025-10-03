@@ -15,7 +15,7 @@
 //     collections::{HashMap, HashSet, VecDeque},
 //     future::Future,
 //     mem,
-//     rc::Rc,
+//     sync::Arc
 // };
 //
 // pub type TestContentRef = u32;
@@ -236,7 +236,7 @@
 //         ops.push(op.clone());
 //         member_cgkas[0]
 //             .cgka
-//             .merge_concurrent_operation(Rc::new(op))?;
+//             .merge_concurrent_operation(Arc::new(op))?;
 //         member_cgkas.push(member_cgka);
 //     }
 //     let base_cgka = member_cgkas[0].cgka.clone();
@@ -269,7 +269,7 @@
 //             for m in member_cgkas.iter_mut().chain(added_members.iter_mut()) {
 //                 for (id, op) in &ordered_ops {
 //                     if *id != m.id() {
-//                         m.cgka.merge_concurrent_operation(Rc::new(op.clone()))?;
+//                         m.cgka.merge_concurrent_operation(Arc::new(op.clone()))?;
 //                     }
 //                 }
 //             }
@@ -280,7 +280,7 @@
 //                 if *id != m_id {
 //                     member_cgkas[0]
 //                         .cgka
-//                         .merge_concurrent_operation(Rc::new(op.clone()))?;
+//                         .merge_concurrent_operation(Arc::new(op.clone()))?;
 //                 }
 //             }
 //             let base_cgka = member_cgkas[0].cgka.clone();

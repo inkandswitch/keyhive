@@ -20,7 +20,7 @@ use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
     hash::Hash,
-    rc::Rc,
+    sync::Arc,
 };
 use topological_sort::TopologicalSort;
 use tracing::instrument;
@@ -31,8 +31,8 @@ pub enum MembershipOperation<
     T: ContentRef = [u8; 32],
     L: MembershipListener<S, T> = NoListener,
 > {
-    Delegation(Rc<Signed<Delegation<S, T, L>>>),
-    Revocation(Rc<Signed<Revocation<S, T, L>>>),
+    Delegation(Arc<Signed<Delegation<S, T, L>>>),
+    Revocation(Arc<Signed<Revocation<S, T, L>>>),
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
@@ -160,7 +160,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         ancestors.into_iter().fold(
             (CaMap::new(), 0),
             |(mut acc_set, acc_count), (op, count)| {
-                acc_set.insert(Rc::new(op.clone()));
+                acc_set.insert(Arc::new(op.clone()));
 
                 if count > acc_count {
                     (acc_set, count)
@@ -376,17 +376,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Rc<Signed<Delegation<S, T, L>>>> for MembershipOperation<S, T, L>
+    From<Arc<Signed<Delegation<S, T, L>>>> for MembershipOperation<S, T, L>
 {
-    fn from(delegation: Rc<Signed<Delegation<S, T, L>>>) -> Self {
+    fn from(delegation: Arc<Signed<Delegation<S, T, L>>>) -> Self {
         MembershipOperation::Delegation(delegation)
     }
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Rc<Signed<Revocation<S, T, L>>>> for MembershipOperation<S, T, L>
+    From<Arc<Signed<Revocation<S, T, L>>>> for MembershipOperation<S, T, L>
 {
-    fn from(revocation: Rc<Signed<Revocation<S, T, L>>>) -> Self {
+    fn from(revocation: Arc<Signed<Revocation<S, T, L>>>) -> Self {
         MembershipOperation::Revocation(revocation)
     }
 }
@@ -404,10 +404,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Membership
     fn from(op: MembershipOperation<S, T, L>) -> Self {
         match op {
             MembershipOperation::Delegation(d) => {
-                StaticMembershipOperation::Delegation(Rc::unwrap_or_clone(d).map(Into::into))
+                StaticMembershipOperation::Delegation(Arc::unwrap_or_clone(d).map(Into::into))
             }
             MembershipOperation::Revocation(r) => {
-                StaticMembershipOperation::Revocation(Rc::unwrap_or_clone(r).map(Into::into))
+                StaticMembershipOperation::Revocation(Arc::unwrap_or_clone(r).map(Into::into))
             }
         }
     }
@@ -423,11 +423,10 @@ mod tests {
         principal::individual::Individual,
     };
     use dupe::Dupe;
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use futures::lock::Mutex;
+    use std::sync::{Arc, LazyLock};
 
-    use std::sync::LazyLock;
-
+    // FIXME
     // FIXME these should probbaly use `lazy_static!`
     static GROUP_SIGNER: LazyLock<MemorySigner> =
         LazyLock::new(|| MemorySigner::generate(&mut rand::thread_rng()));
@@ -479,13 +478,13 @@ mod tests {
 
     async fn add_alice<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Rc<Signed<Delegation<MemorySigner, String>>> {
+    ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
         let alice = Individual::generate(fixture(&ALICE_SIGNER), csprng)
             .await
             .unwrap();
         let group_sk = LazyLock::force(&GROUP_SIGNER).clone();
 
-        Rc::new(
+        Arc::new(
             group_sk
                 .try_sign_sync(Delegation {
                     delegate: alice.into(),
@@ -501,15 +500,15 @@ mod tests {
 
     async fn add_bob<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Rc<Signed<Delegation<MemorySigner, String>>> {
+    ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
         let bob = Individual::generate(fixture(&BOB_SIGNER), csprng)
             .await
             .unwrap();
 
-        Rc::new(
+        Arc::new(
             fixture(&ALICE_SIGNER)
                 .try_sign_sync(Delegation {
-                    delegate: Agent::Individual(Rc::new(RefCell::new(bob))),
+                    delegate: Agent::Individual(Arc::new(Mutex::new(bob))),
                     can: Access::Write,
                     proof: Some(add_alice(csprng).await),
                     after_content: BTreeMap::new(),
@@ -521,12 +520,12 @@ mod tests {
 
     async fn add_carol<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Rc<Signed<Delegation<MemorySigner, String>>> {
+    ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
         let carol = Individual::generate(fixture(&CAROL_SIGNER), csprng)
             .await
             .unwrap();
 
-        Rc::new(
+        Arc::new(
             fixture(&ALICE_SIGNER)
                 .try_sign_sync(Delegation {
                     delegate: carol.into(),
@@ -541,12 +540,12 @@ mod tests {
 
     async fn add_dan<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Rc<Signed<Delegation<MemorySigner, String>>> {
+    ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
         let dan = Individual::generate(fixture(&DAN_SIGNER), csprng)
             .await
             .unwrap();
 
-        Rc::new(
+        Arc::new(
             fixture(&CAROL_SIGNER)
                 .try_sign_sync(Delegation {
                     delegate: dan.into(),
@@ -561,12 +560,12 @@ mod tests {
 
     async fn add_erin<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Rc<Signed<Delegation<MemorySigner, String>>> {
+    ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
         let erin = Individual::generate(fixture(&ERIN_SIGNER), csprng)
             .await
             .unwrap();
 
-        Rc::new(
+        Arc::new(
             fixture(&BOB_SIGNER)
                 .try_sign_sync(Delegation {
                     delegate: erin.into(),
@@ -581,8 +580,8 @@ mod tests {
 
     async fn remove_carol<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Rc<Signed<Revocation<MemorySigner, String>>> {
-        Rc::new(
+    ) -> Arc<Signed<Revocation<MemorySigner, String>>> {
+        Arc::new(
             fixture(&ALICE_SIGNER)
                 .try_sign_sync(Revocation {
                     revoke: add_carol(csprng).await,
@@ -595,8 +594,8 @@ mod tests {
 
     async fn remove_dan<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Rc<Signed<Revocation<MemorySigner, String>>> {
-        Rc::new(
+    ) -> Arc<Signed<Revocation<MemorySigner, String>>> {
+        Arc::new(
             fixture(&BOB_SIGNER)
                 .try_sign_sync(Revocation {
                     revoke: add_dan(csprng).await,
@@ -780,69 +779,73 @@ mod tests {
             let csprng = &mut rand::thread_rng();
 
             let alice_sk = fixture(&ALICE_SIGNER).clone();
-            let alice = Rc::new(RefCell::new(
+            let alice = Arc::new(Mutex::new(
                 Active::<_, [u8; 32], _>::generate(alice_sk, NoListener, csprng)
                     .await
                     .unwrap(),
             ));
 
             let bob_sk = fixture(&BOB_SIGNER).clone();
-            let bob = Rc::new(RefCell::new(
+            let bob = Arc::new(Mutex::new(
                 Active::generate(bob_sk, NoListener, csprng).await.unwrap(),
             ));
 
             let carol_sk = fixture(&CAROL_SIGNER).clone();
-            let carol = Rc::new(RefCell::new(
+            let carol = Arc::new(Mutex::new(
                 Active::generate(carol_sk, NoListener, csprng)
                     .await
                     .unwrap(),
             ));
 
             let dan_sk = fixture(&DAN_SIGNER).clone();
-            let dan = Rc::new(RefCell::new(
+            let dan = Arc::new(Mutex::new(
                 Active::generate(dan_sk, NoListener, csprng).await.unwrap(),
             ));
 
-            let alice_to_bob: Rc<Signed<Delegation<MemorySigner>>> = Rc::new(
-                alice
-                    .borrow()
-                    .signer
-                    .try_sign_sync(Delegation {
-                        delegate: bob.dupe().into(),
-                        can: Access::Write,
-                        proof: None,
-                        after_revocations: vec![],
-                        after_content: BTreeMap::new(),
-                    })
-                    .unwrap(),
-            );
+            {
+                let locked_alice = alice.lock().await;
 
-            let alice_to_dan = Rc::new(
-                alice
-                    .borrow()
-                    .signer
-                    .try_sign_sync(Delegation {
-                        delegate: dan.dupe().into(),
-                        can: Access::Read,
-                        proof: None,
-                        after_revocations: vec![],
-                        after_content: BTreeMap::new(),
-                    })
-                    .unwrap(),
-            );
+                let alice_to_bob: Arc<Signed<Delegation<MemorySigner>>> = Arc::new(
+                    locked_alice
+                        .signer
+                        .try_sign_sync(Delegation {
+                            delegate: bob.dupe().into(),
+                            can: Access::Write,
+                            proof: None,
+                            after_revocations: vec![],
+                            after_content: BTreeMap::new(),
+                        })
+                        .unwrap(),
+                );
 
-            let bob_to_carol = Rc::new(
-                bob.borrow()
-                    .signer
-                    .try_sign_sync(Delegation {
-                        delegate: carol.dupe().into(),
-                        can: Access::Pull,
-                        proof: Some(alice_to_bob.dupe()),
-                        after_revocations: vec![],
-                        after_content: BTreeMap::new(),
-                    })
-                    .unwrap(),
-            );
+                let alice_to_dan = Arc::new(
+                    locked_alice
+                        .signer
+                        .try_sign_sync(Delegation {
+                            delegate: dan.dupe().into(),
+                            can: Access::Read,
+                            proof: None,
+                            after_revocations: vec![],
+                            after_content: BTreeMap::new(),
+                        })
+                        .unwrap(),
+                );
+            }
+
+            {
+                let locked_bob = bob.lock().await;
+                let bob_to_carol = Arc::new(
+                    locked_bob
+                        .try_sign_sync(Delegation {
+                            delegate: carol.dupe().into(),
+                            can: Access::Pull,
+                            proof: Some(alice_to_bob.dupe()),
+                            after_revocations: vec![],
+                            after_content: BTreeMap::new(),
+                        })
+                        .unwrap(),
+                );
+            }
 
             let dlg_heads = CaMap::from_iter_direct([alice_to_dan.dupe(), bob_to_carol.dupe()]);
             let mut sorted = MembershipOperation::topsort(&dlg_heads, &CaMap::new());
@@ -878,7 +881,7 @@ mod tests {
             let alice_dlg = add_alice(csprng).await;
             let bob_dlg = add_bob(csprng).await;
 
-            let alice_revokes_bob = Rc::new(
+            let alice_revokes_bob = Arc::new(
                 alice_sk
                     .try_sign_sync(Revocation {
                         revoke: bob_dlg.dupe(),

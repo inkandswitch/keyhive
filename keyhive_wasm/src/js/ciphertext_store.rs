@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 use super::{base64::Base64, change_ref::JsChangeRef};
 use keyhive_core::{
@@ -43,7 +43,7 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
     async fn get_ciphertext(
         &self,
         id: &JsChangeRef,
-    ) -> Result<Option<Rc<EncryptedContent<Vec<u8>, JsChangeRef>>>, Self::GetCiphertextError> {
+    ) -> Result<Option<Arc<EncryptedContent<Vec<u8>, JsChangeRef>>>, Self::GetCiphertextError> {
         match self.inner {
             JsCiphertextStoreInner::Memory(ref mem_store) => Ok(mem_store.get_by_content_ref(id)),
 
@@ -70,7 +70,7 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
     async fn get_ciphertext_by_pcs_update(
         &self,
         pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<Vec<Rc<EncryptedContent<Vec<u8>, JsChangeRef>>>, Self::GetCiphertextError> {
+    ) -> Result<Vec<Arc<EncryptedContent<Vec<u8>, JsChangeRef>>>, Self::GetCiphertextError> {
         match self.inner {
             JsCiphertextStoreInner::Memory(ref mem_store) => {
                 Ok(mem_store.get_by_pcs_update(pcs_update))
@@ -81,6 +81,7 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
             JsCiphertextStoreInner::WebStorage(ref store) => {
                 let mut acc = vec![];
 
+                // FIXME
                 for i in 0..store.length().expect("FIXME") {
                     let key = store
                         .key(i)

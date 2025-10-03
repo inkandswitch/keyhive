@@ -44,18 +44,16 @@ use derivative::Derivative;
 use derive_more::Debug;
 use derive_where::derive_where;
 use dupe::{Dupe, IterDupedExt};
-use futures::TryStreamExt;
+use futures::{lock::Mutex, TryStreamExt};
 use id::GroupId;
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     hash::{Hash, Hasher},
-    rc::Rc,
+    sync::Arc,
 };
 use thiserror::Error;
-use tracing::{debug, info, instrument};
 
 /// A collection of agents with no associated content.
 ///
@@ -70,11 +68,11 @@ pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener
 
     /// The current view of members of a group.
     #[allow(clippy::type_complexity)]
-    pub(crate) members: HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>>,
+    pub(crate) members: HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<S, T, L>>>>>,
 
     /// Current view of revocations
     #[allow(clippy::type_complexity)]
-    pub(crate) active_revocations: HashMap<[u8; 64], Rc<Signed<Revocation<S, T, L>>>>,
+    pub(crate) active_revocations: HashMap<[u8; 64], Arc<Signed<Revocation<S, T, L>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
     pub(crate) state: GroupState<S, T, L>,
@@ -84,13 +82,10 @@ pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> {
-    #[instrument(
-        skip_all,
-        fields(group_id = %group_id, head_sig = ?head.signature.to_bytes())
-    )]
+    #[tracing::instrument(skip_all)]
     pub async fn new(
         group_id: GroupId,
-        head: Rc<Signed<Delegation<S, T, L>>>,
+        head: Arc<Signed<Delegation<S, T, L>>>,
         delegations: DelegationStore<S, T, L>,
         revocations: RevocationStore<S, T, L>,
         listener: L,
@@ -108,10 +103,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         group
     }
 
-    #[instrument(skip(delegations, revocations, listener))]
+    #[tracing::instrument(skip_all)]
     pub async fn from_individual(
         individual: Individual,
-        head: Rc<Signed<Delegation<S, T, L>>>,
+        head: Arc<Signed<Delegation<S, T, L>>>,
         delegations: DelegationStore<S, T, L>,
         revocations: RevocationStore<S, T, L>,
         listener: L,
@@ -151,13 +146,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         group_result.await
     }
 
-    #[instrument(
-        skip_all,
-        fields(
-            verifier = verifier.to_hex_string(),
-            parent_ids = ?parents.iter().map(|p| p.id()).collect::<Vec<_>>(),
-        )
-    )]
+    #[tracing::instrument(skip_all)]
     pub(crate) async fn generate_after_content(
         signer: Box<dyn SyncSignerBasic>,
         verifier: ed25519_dalek::VerifyingKey,
@@ -171,7 +160,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         let group_id = GroupId(id);
         let mut delegation_heads = CaMap::new();
 
-        let async_listener = Rc::new(&listener);
+        let async_listener = Arc::new(&listener);
         let results = parents.into_iter().map(|parent| {
             let dlg = try_sign_basic(
                 &*signer,
@@ -185,7 +174,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                 },
             )?;
 
-            let rc = Rc::new(dlg);
+            let rc = Arc::new(dlg);
             delegations.insert(rc.dupe());
             delegation_heads.insert(rc.dupe());
             Ok::<_, SigningError>((rc, async_listener.dupe()))
@@ -247,11 +236,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Rc<Signed<Delegation<S, T, L>>>>> {
+    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<S, T, L>>>>> {
         &self.members
     }
 
-    #[instrument(skip(self), fields(group_id = %self.group_id()))]
+    #[tracing::instrument(skip(self), fields(group_id = %self.group_id()))]
     pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
         struct GroupAccess<Z: AsyncSigner, U: ContentRef, M: MembershipListener<Z, U>> {
             agent: Agent<Z, U, M>,
@@ -336,11 +325,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(skip(self), fields(group_id = %self.group_id()))]
+    #[tracing::instrument(skip_all)]
     pub fn get_capability(
         &self,
         member_id: &Identifier,
-    ) -> Option<&Rc<Signed<Delegation<S, T, L>>>> {
+    ) -> Option<&Arc<Signed<Delegation<S, T, L>>>> {
         self.members.get(member_id).and_then(|delegations| {
             delegations
                 .iter()
@@ -348,14 +337,15 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         })
     }
 
-    #[instrument(skip(self), fields(group_id = %self.group_id()))]
-    pub fn get_agent_revocations(
+    #[tracing::instrument(skip_all)]
+    pub async fn get_agent_revocations(
         &self,
         agent: &Agent<S, T, L>,
-    ) -> Vec<Rc<Signed<Revocation<S, T, L>>>> {
+    ) -> Vec<Arc<Signed<Revocation<S, T, L>>>> {
         self.state
             .revocations
-            .borrow()
+            .lock()
+            .await
             .iter()
             .filter_map(|(_digest, rvk)| {
                 if rvk.payload().revoke.payload().delegate == *agent {
@@ -368,22 +358,22 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(skip_all, fields(group_id = %self.group_id()))]
-    pub fn receive_delegation(
+    #[tracing::instrument(skip_all)]
+    pub async fn receive_delegation(
         &mut self,
-        delegation: Rc<Signed<Delegation<S, T, L>>>,
+        delegation: Arc<Signed<Delegation<S, T, L>>>,
     ) -> Result<Digest<Signed<Delegation<S, T, L>>>, error::AddError> {
-        let digest = self.state.add_delegation(delegation)?;
-        info!("{:x?}", &digest);
+        let digest = self.state.add_delegation(delegation).await?;
+        tracing::info!("{:x?}", &digest);
         self.rebuild();
         Ok(digest)
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(skip(self), fields(group_id = %self.group_id()))]
+    #[tracing::instrument(skip(self), fields(group_id = %self.group_id()))]
     pub async fn receive_revocation(
         &mut self,
-        revocation: Rc<Signed<Revocation<S, T, L>>>,
+        revocation: Arc<Signed<Revocation<S, T, L>>>,
     ) -> Result<Digest<Signed<Revocation<S, T, L>>>, error::AddError> {
         self.listener.on_revocation(&revocation).await;
         let digest = self.state.add_revocation(revocation)?;
@@ -392,31 +382,22 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(
-        skip_all,
-        fields(
-            khid = %self.id(),
-            member_to_add = %member_to_add.id(),
-            can,
-            relevant_docs_count=%relevant_docs.len()
-        ))
-    ]
+    #[tracing::instrument(skip_all)]
     pub async fn add_member(
         &mut self,
         member_to_add: Agent<S, T, L>,
         can: Access,
         signer: &S,
-        relevant_docs: &[Rc<RefCell<Document<S, T, L>>>],
+        relevant_docs: &[Arc<Mutex<Document<S, T, L>>>],
     ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError> {
-        let after_content = relevant_docs
-            .iter()
-            .map(|d| {
-                (
-                    d.borrow().doc_id(),
-                    d.borrow().content_heads.iter().cloned().collect::<Vec<_>>(),
-                )
-            })
-            .collect();
+        let mut after_content = BTreeMap::new();
+        for d in relevant_docs {
+            let locked = d.lock().await;
+            after_content.insert(
+                locked.doc_id(),
+                locked.content_heads.iter().cloned().collect::<Vec<_>>(),
+            );
+        }
 
         self.add_member_with_manual_content(member_to_add, can, signer, after_content)
             .await
@@ -456,7 +437,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             })
             .await?;
 
-        let rc = Rc::new(delegation);
+        let rc = Arc::new(delegation);
         let _digest = self.receive_delegation(rc.dupe())?;
         self.listener.on_delegation(&rc).await;
 
@@ -472,18 +453,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         })
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
-    #[instrument(
-        skip_all,
-        fields(group_id = %self.group_id(), member_id = %delegation.payload.delegate.id())
-    )]
+    #[tracing::instrument(skip_all)]
     pub(crate) async fn add_cgka_member(
         &mut self,
-        delegation: Rc<Signed<Delegation<S, T, L>>>,
+        delegation: Arc<Signed<Delegation<S, T, L>>>,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut cgka_ops = Vec::new();
-        let docs: Vec<Rc<RefCell<Document<S, T, L>>>> = self
+        let docs: Vec<Arc<Mutex<Document<S, T, L>>>> = self
             .transitive_members()
             .values()
             .filter_map(|(agent, _)| {
@@ -495,14 +472,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             })
             .collect::<Vec<_>>();
         for doc in docs {
-            debug!(
-                "Adding {:0?} to Cgka for Doc {:1x?}",
-                delegation.payload.delegate.id(),
-                doc.borrow().doc_id()
-            );
-
             for op in doc
-                .borrow_mut()
+                .lock()
+                .await
                 .add_cgka_member(&delegation, signer)
                 .await?
             {
@@ -513,8 +485,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[allow(clippy::type_complexity)]
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
-    #[instrument(skip(self, signer), fields(group_id = %self.group_id()))]
+    #[tracing::instrument(skip_all)]
     pub async fn revoke_member(
         &mut self,
         member_to_remove: Identifier,
@@ -526,10 +497,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         let mut revocations = vec![];
         let og_dlgs: Vec<_> = self.members.values().flatten().cloned().collect();
 
-        let all_to_revoke: Vec<Rc<Signed<Delegation<S, T, L>>>> = self
+        let all_to_revoke: Vec<Arc<Signed<Delegation<S, T, L>>>> = self
             .members()
             .get(&member_to_remove)
-            .map(|ne| Vec::<_>::from(ne.clone())) // Semi-inexpensive because `Vec<Rc<_>>`
+            .map(|ne| Vec::<_>::from(ne.clone())) // Semi-inexpensive because `Vec<Arc<_>>`
             .unwrap_or_default();
 
         if all_to_revoke.is_empty() {
@@ -624,8 +595,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
 
         let mut cgka_ops = Vec::new();
         let (individuals, docs): (
-            Vec<Rc<RefCell<Individual>>>,
-            Vec<Rc<RefCell<Document<S, T, L>>>>,
+            Vec<Arc<Mutex<Individual>>>,
+            Vec<Arc<Mutex<Document<S, T, L>>>>,
         ) = self.transitive_members().values().fold(
             (vec![], vec![]),
             |(mut indies, mut docs), (agent, _)| {
@@ -644,9 +615,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         );
 
         for indie in individuals {
-            let id = indie.borrow().id();
+            let id = {
+                let locked_indie = indie.lock().await;
+                locked_indie.id()
+            };
             for doc in &docs {
-                if let Some(op) = doc.borrow_mut().remove_cgka_member(id, signer).await? {
+                let mut locked_doc = doc.lock().await;
+                if let Some(op) = locked_doc.remove_cgka_member(id, signer).await? {
                     cgka_ops.push(op);
                 }
             }
@@ -687,10 +662,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     async fn build_revocation(
         &mut self,
         signer: &S,
-        revoke: Rc<Signed<Delegation<S, T, L>>>,
-        proof: Option<Rc<Signed<Delegation<S, T, L>>>>,
+        revoke: Arc<Signed<Delegation<S, T, L>>>,
+        proof: Option<Arc<Signed<Delegation<S, T, L>>>>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Rc<Signed<Revocation<S, T, L>>>, SigningError> {
+    ) -> Result<Arc<Signed<Revocation<S, T, L>>>, SigningError> {
         let revocation = signer
             .try_sign_async(Revocation {
                 revoke,
@@ -699,16 +674,16 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             })
             .await?;
 
-        Ok(Rc::new(revocation))
+        Ok(Arc::new(revocation))
     }
 
-    #[instrument(skip(self), fields(group_id = %self.group_id()))]
+    #[tracing::instrument(skip_all)]
     pub fn rebuild(&mut self) {
         self.members.clear();
         self.active_revocations.clear();
 
         #[allow(clippy::type_complexity)]
-        let mut dlgs_in_play: HashMap<[u8; 64], Rc<Signed<Delegation<S, T, L>>>> = HashMap::new();
+        let mut dlgs_in_play: HashMap<[u8; 64], Arc<Signed<Delegation<S, T, L>>>> = HashMap::new();
         let mut revoked_dlgs: HashSet<[u8; 64]> = HashSet::new();
 
         // {dlg_dep => Set<dlgs that depend on it>}
@@ -848,7 +823,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         }
     }
 
-    #[instrument(skip(self), fields(group_id = %self.group_id()))]
+    #[tracing::instrument(skip_all)]
     pub fn into_archive(&self) -> GroupArchive<T> {
         GroupArchive {
             id_or_indie: self.id_or_indie.clone(),
@@ -939,7 +914,7 @@ mod tests {
     use crate::principal::active::Active;
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
-    use std::cell::RefCell;
+    use std::cell::Mutex;
 
     async fn setup_user<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
@@ -949,10 +924,10 @@ mod tests {
     }
 
     async fn setup_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        alice: Rc<RefCell<Active<MemorySigner, T>>>,
-        bob: Rc<RefCell<Active<MemorySigner, T>>>,
+        alice: Arc<Mutex<Active<MemorySigner, T>>>,
+        bob: Arc<Mutex<Active<MemorySigner, T>>>,
         csprng: &mut R,
-    ) -> [Rc<RefCell<Group<MemorySigner, T>>>; 4] {
+    ) -> [Arc<Mutex<Group<MemorySigner, T>>>; 4] {
         /*              ┌───────────┐        ┌───────────┐
                         │           │        │           │
         ╔══════════════▶│   Alice   │        │    Bob    │
@@ -982,7 +957,7 @@ mod tests {
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
 
-        let g0 = Rc::new(RefCell::new(
+        let g0 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![alice_agent.dupe()],
                 dlg_store.dupe(),
@@ -994,7 +969,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let g1 = Rc::new(RefCell::new(
+        let g1 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![alice_agent, g0.clone().into()],
                 dlg_store.dupe(),
@@ -1006,7 +981,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let g2 = Rc::new(RefCell::new(
+        let g2 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![bob_agent, g1.clone().into()],
                 dlg_store.dupe(),
@@ -1018,7 +993,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let g3 = Rc::new(RefCell::new(
+        let g3 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![g1.clone().into(), g2.clone().into()],
                 dlg_store.dupe(),
@@ -1033,16 +1008,15 @@ mod tests {
         [g0, g1, g2, g3]
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     async fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        alice: Rc<RefCell<Active<MemorySigner, T>>>,
-        bob: Rc<RefCell<Active<MemorySigner, T>>>,
+        alice: Arc<Mutex<Active<MemorySigner, T>>>,
+        bob: Arc<Mutex<Active<MemorySigner, T>>>,
         csprng: &mut R,
-    ) -> [Rc<RefCell<Group<MemorySigner, T>>>; 10] {
+    ) -> [Arc<Mutex<Group<MemorySigner, T>>>; 10] {
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
 
-        let group0 = Rc::new(RefCell::new(
+        let group0 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![alice.dupe().into()],
                 dlg_store.dupe(),
@@ -1054,7 +1028,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let group1 = Rc::new(RefCell::new(
+        let group1 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![bob.into()],
                 dlg_store.dupe(),
@@ -1066,7 +1040,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let group2 = Rc::new(RefCell::new(
+        let group2 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![group1.clone().into()],
                 dlg_store.dupe(),
@@ -1078,7 +1052,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let group3 = Rc::new(RefCell::new(
+        let group3 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![group2.clone().into()],
                 dlg_store.dupe(),
@@ -1090,7 +1064,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let group4 = Rc::new(RefCell::new(
+        let group4 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![group3.clone().into()],
                 dlg_store.dupe(),
@@ -1102,7 +1076,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let group5 = Rc::new(RefCell::new(
+        let group5 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![group4.clone().into()],
                 dlg_store.dupe(),
@@ -1114,7 +1088,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let group6 = Rc::new(RefCell::new(
+        let group6 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![group5.clone().into()],
                 dlg_store.dupe(),
@@ -1126,7 +1100,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let group7 = Rc::new(RefCell::new(
+        let group7 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![group6.clone().into()],
                 dlg_store.dupe(),
@@ -1138,7 +1112,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let group8 = Rc::new(RefCell::new(
+        let group8 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![group7.clone().into()],
                 dlg_store.dupe(),
@@ -1150,7 +1124,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let group9 = Rc::new(RefCell::new(
+        let group9 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![group8.clone().into()],
                 dlg_store.dupe(),
@@ -1162,33 +1136,37 @@ mod tests {
             .unwrap(),
         ));
 
-        let proof = group0
-            .borrow()
-            .get_capability(&alice.borrow().id().into())
-            .unwrap()
-            .dupe();
+        let (alice_id, alice_signer) = {
+            let locked_alice = alice.lock().await;
+            (locked_alice.id(), locked_alice.signer.clone())
+        };
 
-        let alice_signer = alice.borrow().signer.clone();
+        {
+            let mut locked_group0 = group0.lock().await;
+            let proof = locked_group0
+                .get_capability(&alice_id.into())
+                .unwrap()
+                .dupe();
 
-        group0
-            .borrow_mut()
-            .receive_delegation(Rc::new(
-                alice_signer
-                    .try_sign_async(Delegation {
-                        delegate: group9.clone().into(),
-                        can: Access::Admin,
-                        proof: Some(proof),
-                        after_revocations: vec![],
-                        after_content: BTreeMap::new(),
-                    })
-                    .await
-                    .unwrap(),
-            ))
-            .unwrap();
+            locked_group0
+                .receive_delegation(Arc::new(
+                    alice_signer
+                        .try_sign_async(Delegation {
+                            delegate: group9.clone().into(),
+                            can: Access::Admin,
+                            proof: Some(proof),
+                            after_revocations: vec![],
+                            after_content: BTreeMap::new(),
+                        })
+                        .await
+                        .unwrap(),
+                ))
+                .unwrap();
 
-        [
-            group0, group1, group2, group3, group4, group5, group6, group7, group8, group9,
-        ]
+            [
+                group0, group1, group2, group3, group4, group5, group6, group7, group8, group9,
+            ]
+        }
     }
 
     #[tokio::test]
@@ -1196,15 +1174,15 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
+        let alice = Arc::new(Mutex::new(setup_user(csprng).await));
         let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
+        let bob = Arc::new(Mutex::new(setup_user(csprng).await));
 
-        let [g0, ..]: [Rc<RefCell<Group<MemorySigner, String>>>; 4] =
+        let [g0, ..]: [Arc<Mutex<Group<MemorySigner, String>>>; 4] =
             setup_groups(alice.dupe(), bob, csprng).await;
-        let g0_mems = g0.borrow().transitive_members();
+        let g0_mems = g0.lock().await.transitive_members();
 
         let expected = HashMap::from_iter([(alice_id, (alice.dupe().into(), Access::Admin))]);
 
@@ -1216,14 +1194,14 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
+        let alice = Arc::new(Mutex::new(setup_user(csprng).await));
         let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
+        let bob = Arc::new(Mutex::new(setup_user(csprng).await));
 
         let [g0, g1, ..] = setup_groups(alice.dupe(), bob, csprng).await;
-        let g1_mems = g1.borrow().transitive_members();
+        let g1_mems = g1.lock().await.transitive_members();
 
         assert_eq!(
             g1_mems,
@@ -1236,7 +1214,7 @@ mod tests {
                     )
                 ),
                 (
-                    g0.borrow().id(),
+                    g0.lock().await.id(),
                     (
                         Agent::<MemorySigner, String>::from(g0.dupe()),
                         Access::Admin
@@ -1251,25 +1229,25 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
+        let alice = Arc::new(Mutex::new(setup_user(csprng).await));
         let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
+        let bob = Arc::new(Mutex::new(setup_user(csprng).await));
         let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, _g3]: [Rc<RefCell<Group<MemorySigner, String>>>; 4] =
+        let [g0, g1, g2, _g3]: [Arc<Mutex<Group<MemorySigner, String>>>; 4] =
             setup_groups(alice.dupe(), bob.dupe(), csprng).await;
-        let g1_mems = g2.borrow().transitive_members();
+        let g1_mems = g2.lock().await.transitive_members();
 
         assert_eq!(
             g1_mems,
             HashMap::from_iter([
                 (alice_id, (alice.into(), Access::Admin)),
                 (bob_id, (bob.into(), Access::Admin)),
-                (g0.borrow().id(), (g0.dupe().into(), Access::Admin)),
-                (g1.borrow().id(), (g1.dupe().into(), Access::Admin)),
+                (g0.lock().await.id(), (g0.dupe().into(), Access::Admin)),
+                (g1.lock().await.id(), (g1.dupe().into(), Access::Admin)),
             ])
         );
     }
@@ -1279,17 +1257,17 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
+        let alice = Arc::new(Mutex::new(setup_user(csprng).await));
         let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
+        let bob = Arc::new(Mutex::new(setup_user(csprng).await));
         let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, g3]: [Rc<RefCell<Group<MemorySigner, String>>>; 4] =
+        let [g0, g1, g2, g3]: [Arc<Mutex<Group<MemorySigner, String>>>; 4] =
             setup_groups(alice.dupe(), bob.dupe(), csprng).await;
-        let g3_mems = g3.borrow().transitive_members();
+        let g3_mems = g3.lock().await.transitive_members();
 
         assert_eq!(g3_mems.len(), 5);
 
@@ -1298,9 +1276,9 @@ mod tests {
             HashSet::from_iter([
                 &alice_id,
                 &bob_id,
-                &g0.borrow().id(),
-                &g1.borrow().id(),
-                &g2.borrow().id(),
+                &g0.lock().await.id(),
+                &g1.lock().await.id(),
+                &g2.lock().await.id(),
             ])
         );
     }
@@ -1310,17 +1288,17 @@ mod tests {
         test_utils::init_logging();
         let csprng = &mut rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(csprng).await));
+        let alice = Arc::new(Mutex::new(setup_user(csprng).await));
         let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
         let alice_id = alice_agent.id();
 
-        let bob = Rc::new(RefCell::new(setup_user(csprng).await));
+        let bob = Arc::new(Mutex::new(setup_user(csprng).await));
         let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]: [Rc<RefCell<Group<MemorySigner, String>>>;
+        let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]: [Arc<Mutex<Group<MemorySigner, String>>>;
             10] = setup_cyclic_groups(alice.dupe(), bob.dupe(), csprng).await;
-        let g0_mems = g0.borrow().transitive_members();
+        let g0_mems = g0.lock().await.transitive_members();
 
         assert_eq!(g0_mems.len(), 11);
 
@@ -1332,48 +1310,49 @@ mod tests {
                     (Agent::<_, String, _>::from(alice), Access::Admin)
                 ),
                 (bob_id, (bob.into(), Access::Admin)),
-                (g1.borrow().id(), (g1.dupe().into(), Access::Admin)),
-                (g2.borrow().id(), (g2.dupe().into(), Access::Admin)),
-                (g3.borrow().id(), (g3.dupe().into(), Access::Admin)),
-                (g4.borrow().id(), (g4.dupe().into(), Access::Admin)),
-                (g5.borrow().id(), (g5.dupe().into(), Access::Admin)),
-                (g6.borrow().id(), (g6.dupe().into(), Access::Admin)),
-                (g7.borrow().id(), (g7.dupe().into(), Access::Admin)),
-                (g8.borrow().id(), (g8.dupe().into(), Access::Admin)),
-                (g9.borrow().id(), (g9.dupe().into(), Access::Admin)),
+                (g1.lock().await.id(), (g1.dupe().into(), Access::Admin)),
+                (g2.lock().await.id(), (g2.dupe().into(), Access::Admin)),
+                (g3.lock().await.id(), (g3.dupe().into(), Access::Admin)),
+                (g4.lock().await.id(), (g4.dupe().into(), Access::Admin)),
+                (g5.lock().await.id(), (g5.dupe().into(), Access::Admin)),
+                (g6.lock().await.id(), (g6.dupe().into(), Access::Admin)),
+                (g7.lock().await.id(), (g7.dupe().into(), Access::Admin)),
+                (g8.lock().await.id(), (g8.dupe().into(), Access::Admin)),
+                (g9.lock().await.id(), (g9.dupe().into(), Access::Admin)),
             ])
         );
     }
 
-    #[allow(clippy::await_holding_refcell_ref)] // FIXME
     #[tokio::test]
     async fn test_add_member() {
         test_utils::init_logging();
         let mut csprng = rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let alice_agent: Agent<MemorySigner> = alice.dupe().into();
 
-        let bob = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let bob_agent: Agent<MemorySigner> = bob.dupe().into();
 
-        let carol = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let carol_agent: Agent<MemorySigner> = carol.dupe().into();
 
         let signer = MemorySigner::generate(&mut csprng);
-        let active = Rc::new(RefCell::new(
+        let active = Arc::new(Mutex::new(
             Active::generate(signer, NoListener, &mut csprng)
                 .await
                 .unwrap(),
         ));
 
-        let active_id = active.borrow().id();
-        let active_signer = active.borrow().signer.clone();
+        let (active_id, active_signer) = {
+            let locked_active = active.lock().await;
+            (locked_active.id(), locked_active.signer.clone())
+        };
 
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
 
-        let g0 = Rc::new(RefCell::new(
+        let g0 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![active.dupe().into()],
                 dlg_store.dupe(),
@@ -1385,7 +1364,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let g1 = Rc::new(RefCell::new(
+        let g1 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![alice_agent.dupe(), bob_agent.dupe(), g0.dupe().into()],
                 dlg_store.dupe(),
@@ -1397,7 +1376,7 @@ mod tests {
             .unwrap(),
         ));
 
-        let g2 = Rc::new(RefCell::new(
+        let g2 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![g1.dupe().into()],
                 dlg_store.dupe(),
@@ -1409,7 +1388,8 @@ mod tests {
             .unwrap(),
         ));
 
-        g0.borrow_mut()
+        g0.lock()
+            .await
             .add_member(carol_agent.dupe(), Access::Write, &active_signer, &[])
             .await
             .unwrap();
@@ -1424,7 +1404,7 @@ mod tests {
         //     )
         //     .unwrap();
 
-        let g0_mems = g0.borrow().transitive_members();
+        let g0_mems = g0.lock().await.transitive_members();
 
         assert_eq!(g0_mems.len(), 2);
 
@@ -1438,7 +1418,7 @@ mod tests {
             Some(&(carol.clone().into(), Access::Write)) // NOTE: non-admin!
         );
 
-        let g2_mems = g2.borrow().transitive_members();
+        let g2_mems = g2.lock().await.transitive_members();
 
         assert_eq!(
             g2_mems.get(&alice_agent.id()),
@@ -1456,12 +1436,12 @@ mod tests {
         );
 
         assert_eq!(
-            g2_mems.get(&g0.borrow().id()),
+            g2_mems.get(&g0.lock().await.id()),
             Some(&(g0.dupe().into(), Access::Admin))
         );
 
         assert_eq!(
-            g2_mems.get(&g1.borrow().id()),
+            g2_mems.get(&g1.lock().await.id()),
             Some(&(g1.dupe().into(), Access::Admin))
         );
 
@@ -1497,28 +1477,34 @@ mod tests {
         test_utils::init_logging();
         let mut csprng = rand::thread_rng();
 
-        let alice = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let alice_agent: Agent<MemorySigner> = alice.dupe().into();
 
-        let bob = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let bob_agent: Agent<MemorySigner> = bob.dupe().into();
 
-        let carol = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let carol_agent: Agent<MemorySigner> = carol.dupe().into();
 
-        let dan = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let dan = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let dan_agent: Agent<MemorySigner> = dan.dupe().into();
 
-        let alice_id = alice.borrow().id().into();
-        let alice_signer = alice.borrow().signer.dupe();
+        let (alice_id, alice_signer) = {
+            let locked_alice = alice.lock().await;
+            (locked_alice.id(), locked_alice.signer.clone())
+        };
 
-        let bob_id = bob.borrow().id().into();
-        let bob_signer = bob.borrow().signer.dupe();
+        let (bob_id, bob_signer) = {
+            let locked_bob = bob.lock().await;
+            (locked_bob.id(), locked_bob.signer.clone())
+        };
 
-        let carol_id = carol.borrow().id().into();
-        let carol_signer = carol.borrow().signer.clone();
+        let (carol_id, carol_signer) = {
+            let locked_carol = carol.lock().await;
+            (locked_carol.id(), locked_carol.signer.clone())
+        };
 
-        let dan_id = dan.borrow().id().into();
+        let dan_id = dan.lock().await.id().into();
 
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
@@ -1564,20 +1550,24 @@ mod tests {
             .await
             .unwrap();
 
+        let bob_id = bob.lock().await.id().into();
+        let carol_id = carol.lock().await.id().into();
+        let dan_id = dan.lock().await.id().into();
+
         // Bob kicked out
-        assert!(!g1.members.contains_key(&bob.borrow().id().into()));
+        assert!(!g1.members.contains_key(&bob_id.into()));
         // Retained Carol & Dan
-        assert!(g1.members.contains_key(&carol.borrow().id().into()));
-        assert!(g1.members.contains_key(&dan.borrow().id().into()));
+        assert!(g1.members.contains_key(&carol_id.into()));
+        assert!(g1.members.contains_key(&dan_id.into()));
 
         let _bob_to_carol = g1
             .add_member(bob_agent.dupe(), Access::Read, &carol_signer, &[])
             .await
             .unwrap();
 
-        assert!(g1.members.contains_key(&bob.borrow().id().into()));
-        assert!(g1.members.contains_key(&carol.borrow().id().into()));
-        assert!(g1.members.contains_key(&dan.borrow().id().into()));
+        assert!(g1.members.contains_key(&bob_id.into()));
+        assert!(g1.members.contains_key(&carol_id.into()));
+        assert!(g1.members.contains_key(&dan_id.into()));
 
         let _alice_revokes_carol = g1
             .revoke_member(carol_id, false, &alice_signer, &BTreeMap::new())
@@ -1585,15 +1575,15 @@ mod tests {
             .unwrap();
 
         // Dropped Carol, which also kicks out can becuase `retain_all: false`
-        assert!(!g1.members.contains_key(&carol.borrow().id().into()));
+        assert!(!g1.members.contains_key(&carol_id.into()));
         // FIXME assert!(!g1.members.contains_key(&dan.borrow().id().into()));
 
         g1.revoke_member(alice_id, false, &alice_signer, &BTreeMap::new())
             .await
             .unwrap();
 
-        assert!(!g1.members.contains_key(&alice.borrow().id().into()));
-        assert!(!g1.members.contains_key(&carol.borrow().id().into()));
-        assert!(!g1.members.contains_key(&dan.borrow().id().into()));
+        assert!(!g1.members.contains_key(&alice_id.into()));
+        assert!(!g1.members.contains_key(&carol_id.into()));
+        assert!(!g1.members.contains_key(&dan_id.into()));
     }
 }

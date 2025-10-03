@@ -59,9 +59,10 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
         .await?;
 
     let reachable = alice.docs_reachable_by_agent(&bob_on_alice.dupe().into());
+    let locked_doc = doc.lock().await;
     assert_eq!(reachable.len(), 1);
     assert_eq!(
-        reachable.get(&doc.borrow().doc_id()).unwrap().can(),
+        reachable.get(&locked_doc.doc_id()).unwrap().can(),
         Access::Read
     );
     Ok(())
@@ -136,9 +137,9 @@ async fn test_group_members_cycle() -> TestResult {
 
     let reachable = alice.docs_reachable_by_agent(&bob_on_alice.dupe().into());
     assert_eq!(reachable.len(), 1);
-    assert_eq!(
-        reachable.get(&doc.borrow().doc_id()).unwrap().can(),
-        Access::Read
-    );
+    {
+        let locked = doc.lock().await;
+        assert_eq!(reachable.get(&locked.doc_id()).unwrap().can(), Access::Read);
+    }
     Ok(())
 }

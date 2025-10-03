@@ -34,7 +34,7 @@ use derivative::Derivative;
 use dupe::Dupe;
 use futures::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, rc::Rc};
+use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
@@ -79,7 +79,7 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     ) -> Result<Self, SigningError> {
         let init_sk = ShareSecretKey::generate(csprng);
         let init_pk = init_sk.share_key();
-        let init_op = Rc::new(
+        let init_op = Arc::new(
             signer
                 .try_sign_async(AddKeyOp { share_key: init_pk })
                 .await?,
@@ -99,7 +99,7 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
         let ops = stream::iter(prekey_pairs.keys().map(Ok::<_, SigningError>))
             .try_fold(vec![], |mut acc, pk| async move {
                 acc.push(
-                    Rc::new(
+                    Arc::new(
                         borrowed_signer
                             .try_sign_async(AddKeyOp { share_key: *pk })
                             .await?,
@@ -146,7 +146,7 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     pub async fn generate_private_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: &mut R,
-    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
+    ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
         let share_key = self.individual.pick_prekey(DocumentId(self.id().into())); // Hack
         let contact_key = self.rotate_prekey(*share_key, csprng).await?;
         self.rotate_prekey(contact_key.payload.new, csprng).await?;
@@ -164,11 +164,11 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
         &mut self,
         old_prekey: ShareKey,
         csprng: &mut R,
-    ) -> Result<Rc<Signed<RotateKeyOp>>, SigningError> {
+    ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
         let new_public = new_secret.share_key();
 
-        let rot_op = Rc::new(
+        let rot_op = Arc::new(
             self.try_sign_async(RotateKeyOp {
                 old: old_prekey,
                 new: new_public,
@@ -194,11 +194,11 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     pub async fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: &mut R,
-    ) -> Result<Rc<Signed<AddKeyOp>>, SigningError> {
+    ) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
         let new_secret = ShareSecretKey::generate(csprng);
         let new_public = new_secret.share_key();
 
-        let op = Rc::new(
+        let op = Arc::new(
             self.signer
                 .try_sign_async(AddKeyOp {
                     share_key: new_public,
@@ -230,7 +230,7 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
         &self,
         subject: Membered<S, T>,
         min: Access,
-    ) -> Option<Rc<Signed<Delegation<S, T>>>> {
+    ) -> Option<Arc<Signed<Delegation<S, T>>>> {
         subject.get_capability(&self.id().into()).and_then(|cap| {
             if cap.payload().can >= min {
                 Some(cap)

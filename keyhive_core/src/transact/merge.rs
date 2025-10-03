@@ -1,12 +1,12 @@
 //! Merge [`Fork`]s back into their original data structures.
 
 use super::fork::{Fork, ForkAsync, ForkSend};
+use futures::lock::Mutex;
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     future::Future,
     hash::Hash,
-    rc::Rc,
+    sync::Arc,
 };
 
 /// Synchronously merge a fork back into its original data structure.
@@ -60,8 +60,9 @@ impl<K: Clone + Hash + Eq, V: Clone> Merge for HashMap<K, V> {
     }
 }
 
-impl<T: Merge> Merge for Rc<RefCell<T>> {
+impl<T: Merge> Merge for Arc<Mutex<T>> {
     fn merge(&mut self, fork: Self::Forked) {
-        self.borrow_mut().merge(fork)
+        todo!("FIXME")
+        // self.borrow_mut().merge(fork)
     }
 }

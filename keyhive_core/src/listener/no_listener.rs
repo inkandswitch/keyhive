@@ -13,7 +13,7 @@ use crate::{
 use derive_more::derive::Debug;
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Stub out listener functionality.
 ///
@@ -22,15 +22,15 @@ use std::rc::Rc;
 pub struct NoListener;
 
 impl PrekeyListener for NoListener {
-    async fn on_prekeys_expanded(&self, _e: &Rc<Signed<AddKeyOp>>) {}
-    async fn on_prekey_rotated(&self, _e: &Rc<Signed<RotateKeyOp>>) {}
+    async fn on_prekeys_expanded(&self, _e: &Arc<Signed<AddKeyOp>>) {}
+    async fn on_prekey_rotated(&self, _e: &Arc<Signed<RotateKeyOp>>) {}
 }
 
 impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for NoListener {
-    async fn on_delegation(&self, _data: &Rc<Signed<Delegation<S, T, NoListener>>>) {}
-    async fn on_revocation(&self, _data: &Rc<Signed<Revocation<S, T, NoListener>>>) {}
+    async fn on_delegation(&self, _data: &Arc<Signed<Delegation<S, T, NoListener>>>) {}
+    async fn on_revocation(&self, _data: &Arc<Signed<Revocation<S, T, NoListener>>>) {}
 }
 
 impl CgkaListener for NoListener {
-    async fn on_cgka_op(&self, _data: &Rc<Signed<CgkaOperation>>) {}
+    async fn on_cgka_op(&self, _data: &Arc<Signed<CgkaOperation>>) {}
 }

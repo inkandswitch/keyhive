@@ -11,14 +11,14 @@ use keyhive_core::{
         group::{delegation::Delegation, dependencies::Dependencies, revocation::Revocation},
     },
 };
-use std::{collections::BTreeMap, rc::Rc};
+use std::{collections::BTreeMap, sync::Arc};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = History)]
 #[derive(Debug, Clone)]
 pub struct JsHistory {
-    pub(crate) delegations: Vec<Rc<Signed<Delegation<JsSigner, JsChangeRef, JsEventHandler>>>>,
-    pub(crate) revocations: Vec<Rc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>>,
+    pub(crate) delegations: Vec<Arc<Signed<Delegation<JsSigner, JsChangeRef, JsEventHandler>>>>,
+    pub(crate) revocations: Vec<Arc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>>,
     pub(crate) content: BTreeMap<DocumentId, Vec<JsChangeRef>>,
 }
 
