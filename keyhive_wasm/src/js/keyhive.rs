@@ -279,6 +279,7 @@ impl JsKeyhive {
 
     #[wasm_bindgen(js_name = getDocument)]
     pub fn get_document(&self, id: &JsDocumentId) -> Option<JsDocument> {
+        tracing::debug!("[RUST] Calling get_document");
         self.0
             .get_document(id.0.clone())
             .map(|d| JsDocument(d.dupe()))
