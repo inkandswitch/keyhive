@@ -13,17 +13,19 @@ use wasm_bindgen::prelude::*;
 #[derive(Debug, Error)]
 pub enum JsError {
     #[error(transparent)]
-    GenerateDoc(#[from] GenerateDocError),
-    #[error(transparent)]
     AddMember(#[from] AddMemberError),
-    #[error(transparent)]
-    RevokeMember(#[from] RevokeMemberError),
-    #[error(transparent)]
-    EncryptContent(#[from] EncryptContentError),
+    #[error("Cannot parse identifier")]
+    CannotParseIdentifier,
     #[error(transparent)]
     Decrypt(#[from] DecryptError),
     #[error(transparent)]
+    EncryptContent(#[from] EncryptContentError),
+    #[error(transparent)]
+    GenerateDoc(#[from] GenerateDocError),
+    #[error(transparent)]
     ReceivePrekeyOp(#[from] ReceivePrekeyOpError),
+    #[error(transparent)]
+    RevokeMember(#[from] RevokeMemberError),
     #[error(transparent)]
     Signing(#[from] SigningError),
     #[error("{0}")]

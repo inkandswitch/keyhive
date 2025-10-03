@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::js::{
-    capability::SimpleCapability, document_id::JsDocumentId, individual::JsIndividual,
+    capability::SimpleCapability, document_id::JsDocumentId, group_id::JsGroupId, individual::JsIndividual
 };
 
 use super::{
@@ -20,7 +20,7 @@ use dupe::{Dupe, IterDupedExt};
 use keyhive_core::{
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
     principal::{
-        agent::Agent, document::{id::DocumentId, DecryptError}, group::id::GroupId, individual::ReceivePrekeyOpError,
+        agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError,
     },
 };
 use nonempty::NonEmpty;
@@ -271,16 +271,16 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = getGroup)]
-    pub fn get_group(&self, id: &JsIdentifier) -> Option<JsGroup> {
+    pub fn get_group(&self, id: &JsGroupId) -> Option<JsGroup> {
         self.0
-            .get_group(GroupId::from(id.0))
+            .get_group(id.0.clone())
             .map(|g| JsGroup(g.dupe()))
     }
 
     #[wasm_bindgen(js_name = getDocument)]
-    pub fn get_document(&self, id: &JsIdentifier) -> Option<JsDocument> {
+    pub fn get_document(&self, id: &JsDocumentId) -> Option<JsDocument> {
         self.0
-            .get_document(DocumentId::from(id.clone().0))
+            .get_document(id.0.clone())
             .map(|d| JsDocument(d.dupe()))
     }
 
