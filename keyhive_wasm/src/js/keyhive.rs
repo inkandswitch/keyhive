@@ -20,7 +20,10 @@ use dupe::{Dupe, IterDupedExt};
 use keyhive_core::{
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
     principal::{
-        agent::Agent, document::{id::DocumentId, DecryptError}, group::id::GroupId, individual::ReceivePrekeyOpError,
+        agent::Agent,
+        document::{id::DocumentId, DecryptError},
+        group::id::GroupId,
+        individual::ReceivePrekeyOpError,
     },
 };
 use nonempty::NonEmpty;
@@ -161,7 +164,9 @@ impl JsKeyhive {
         doc: &JsDocument,
         encrypted: &JsEncrypted,
     ) -> Result<Vec<u8>, JsDecryptError> {
-        Ok(self.0.try_decrypt_content(doc.clone().0, &encrypted.clone().0)?)
+        Ok(self
+            .0
+            .try_decrypt_content(doc.clone().0, &encrypted.clone().0)?)
     }
 
     #[wasm_bindgen(js_name = addMember)]

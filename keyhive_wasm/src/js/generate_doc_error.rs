@@ -1,15 +1,17 @@
-use derive_more::{Display, From, Into};
+use derive_more::{From, Into};
 use keyhive_core::principal::document::GenerateDocError;
-use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen(js_name = "GenerateDocError")]
-#[derive(Debug, Display, From, Into, Error)]
-pub struct JsGenerateDocError(pub(crate) GenerateDocError);
+pub struct JsGenerateDocError(String);
 
-#[wasm_bindgen(js_class = "GenerateDocError")]
-impl JsGenerateDocError {
-    pub fn message(&self) -> String {
-        self.0.to_string()
+impl From<GenerateDocError> for JsGenerateDocError {
+    fn from(err: GenerateDocError) -> Self {
+        JsGenerateDocError(err.to_string())
+    }
+}
+
+impl From<JsGenerateDocError> for JsValue {
+    fn from(err: JsGenerateDocError) -> Self {
+        JsError::new(&err.0).into()
     }
 }
