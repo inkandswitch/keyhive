@@ -5,13 +5,13 @@ use crate::js::{
 };
 
 use super::{
-    access::JsAccess, add_member_error::JsAddMemberError, agent::JsAgent, archive::JsArchive,
+    access::JsAccess, agent::JsAgent, archive::JsArchive,
     change_ref::JsChangeRef, ciphertext_store::JsCiphertextStore, contact_card::JsContactCard,
     document::JsDocument, encrypted::JsEncrypted,
     encrypted_content_with_update::JsEncryptedContentWithUpdate, event_handler::JsEventHandler,
-    generate_doc_error::JsGenerateDocError, group::JsGroup, identifier::JsIdentifier,
-    individual_id::JsIndividualId, membered::JsMembered, peer::JsPeer,
-    revoke_member_error::JsRevokeMemberError, share_key::JsShareKey, signed::JsSigned,
+    group::JsGroup, identifier::JsIdentifier,
+    individual_id::JsIndividualId, js_error::JsError, membered::JsMembered, peer::JsPeer,
+    share_key::JsShareKey, signed::JsSigned,
     signed_delegation::JsSignedDelegation, signed_revocation::JsSignedRevocation, signer::JsSigner,
     signing_error::JsSigningError, summary::Summary,
 };
@@ -47,7 +47,7 @@ impl JsKeyhive {
         signer: &JsSigner,
         ciphertext_store: JsCiphertextStore,
         event_handler: &js_sys::Function,
-    ) -> Result<JsKeyhive, JsSigningError> {
+    ) -> Result<JsKeyhive, JsError> {
         Ok(JsKeyhive(
             Keyhive::generate(
                 signer.clone(),
@@ -90,7 +90,7 @@ impl JsKeyhive {
     pub async fn generate_group(
         &mut self,
         coparents: Vec<JsPeer>,
-    ) -> Result<JsGroup, JsSigningError> {
+    ) -> Result<JsGroup, JsError> {
         let group = self
             .0
             .generate_group(coparents.into_iter().map(|p| p.0).collect::<Vec<_>>())
@@ -105,7 +105,7 @@ impl JsKeyhive {
         coparents: Vec<JsPeer>,
         initial_content_ref_head: JsChangeRef,
         more_initial_content_refs: Vec<JsChangeRef>,
-    ) -> Result<JsDocument, JsGenerateDocError> {
+    ) -> Result<JsDocument, JsError> {
         Ok(self
             .0
             .generate_doc(
@@ -131,7 +131,7 @@ impl JsKeyhive {
         content_ref: JsChangeRef,
         pred_refs: Vec<JsChangeRef>,
         content: &[u8],
-    ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
+    ) -> Result<JsEncryptedContentWithUpdate, JsError> {
         Ok(self
             .0
             .try_encrypt_content(doc.clone().0, &content_ref, &pred_refs, content)
@@ -147,7 +147,7 @@ impl JsKeyhive {
         content_ref: JsChangeRef,
         pred_refs: Vec<JsChangeRef>,
         content: &[u8],
-    ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
+    ) -> Result<JsEncryptedContentWithUpdate, JsError> {
         Ok(self
             .0
             .try_encrypt_content(doc.clone().0, &content_ref, &pred_refs, content)
@@ -160,7 +160,7 @@ impl JsKeyhive {
         &mut self,
         doc: &JsDocument,
         encrypted: &JsEncrypted,
-    ) -> Result<Vec<u8>, JsDecryptError> {
+    ) -> Result<Vec<u8>, JsError> {
         Ok(self.0.try_decrypt_content(doc.clone().0, &encrypted.clone().0)?)
     }
 
@@ -171,7 +171,7 @@ impl JsKeyhive {
         membered: &mut JsMembered,
         access: JsAccess,
         other_relevant_docs: Vec<JsDocument>,
-    ) -> Result<JsSignedDelegation, JsAddMemberError> {
+    ) -> Result<JsSignedDelegation, JsError> {
         let other_docs_refs: Vec<_> = other_relevant_docs
             .iter()
             .map(|js_doc| js_doc.0.dupe())
@@ -193,7 +193,7 @@ impl JsKeyhive {
         to_revoke: &JsAgent,
         retain_all_other_members: bool,
         membered: &mut JsMembered,
-    ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
+    ) -> Result<Vec<JsSignedRevocation>, JsError> {
         let res = self
             .0
             .revoke_member(to_revoke.id().0, retain_all_other_members, membered)
@@ -222,7 +222,7 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = forcePcsUpdate)]
-    pub async fn force_pcs_update(&mut self, doc: &JsDocument) -> Result<(), JsEncryptError> {
+    pub async fn force_pcs_update(&mut self, doc: &JsDocument) -> Result<(), JsError> {
         self.0
             .force_pcs_update(doc.0.dupe())
             .await
@@ -234,19 +234,19 @@ impl JsKeyhive {
     pub async fn rotate_prekey(
         &mut self,
         prekey: JsShareKey,
-    ) -> Result<JsShareKey, JsSigningError> {
+    ) -> Result<JsShareKey, JsError> {
         let op = self.0.rotate_prekey(prekey.0).await?;
         Ok(JsShareKey(op.payload().new))
     }
 
     #[wasm_bindgen(js_name = expandPrekeys)]
-    pub async fn expand_prekeys(&mut self) -> Result<JsShareKey, JsSigningError> {
+    pub async fn expand_prekeys(&mut self) -> Result<JsShareKey, JsError> {
         let op = self.0.expand_prekeys().await?;
         Ok(JsShareKey(op.payload().share_key))
     }
 
     #[wasm_bindgen(js_name = contactCard)]
-    pub async fn contact_card(&mut self) -> Result<JsContactCard, JsSigningError> {
+    pub async fn contact_card(&mut self) -> Result<JsContactCard, JsError> {
         self.0
             .contact_card()
             .await
@@ -258,10 +258,10 @@ impl JsKeyhive {
     pub fn receive_contact_card(
         &mut self,
         contact_card: &JsContactCard,
-    ) -> Result<JsIndividual, JsReceivePreKeyOpError> {
+    ) -> Result<JsIndividual, JsError> {
         match self.0.receive_contact_card(&contact_card.clone()) {
             Ok(individual) => Ok(JsIndividual(individual)),
-            Err(err) => Err(JsReceivePreKeyOpError(err)),
+            Err(err) => Err(JsError::ReceivePrekeyOp(err)),
         }
     }
 
