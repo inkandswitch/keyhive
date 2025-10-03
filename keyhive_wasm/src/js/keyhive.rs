@@ -13,7 +13,7 @@ use super::{
     individual_id::JsIndividualId, js_error::JsError, membered::JsMembered, peer::JsPeer,
     share_key::JsShareKey, signed::JsSigned,
     signed_delegation::JsSignedDelegation, signed_revocation::JsSignedRevocation, signer::JsSigner,
-    signing_error::JsSigningError, summary::Summary,
+    summary::Summary,
 };
 use derive_more::{From, Into};
 use dupe::{Dupe, IterDupedExt};
@@ -120,7 +120,7 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = trySign)]
-    pub async fn try_sign(&self, data: Vec<u8>) -> Result<JsSigned, JsSigningError> {
+    pub async fn try_sign(&self, data: Vec<u8>) -> Result<JsSigned, JsError> {
         Ok(self.0.try_sign(data).await.map(JsSigned)?)
     }
 
