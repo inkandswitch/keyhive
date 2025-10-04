@@ -73,7 +73,8 @@ impl<T: Fork> Fork for Arc<Mutex<T>> {
     type Forked = T::Forked;
 
     fn fork(&self) -> Self::Forked {
-        (*self.borrow()).fork()
+        todo!("FIXME");
+        // (*self.borrow()).fork()
     }
 }
 
