@@ -107,7 +107,6 @@ impl JsKeyhive {
         more_initial_content_refs: Vec<JsChangeRef>,
     ) -> Result<JsDocument, JsError> {
         tracing::debug!("JsKeyhive::generate_doc()");
-        panic!();
         Ok(self
             .0
             .generate_doc(
