@@ -261,6 +261,7 @@ impl JsKeyhive {
         &mut self,
         contact_card: &JsContactCard,
     ) -> Result<JsIndividual, JsError> {
+        tracing::debug!("JsKeyhive::receive_contact_card()");
         match self.0.receive_contact_card(&contact_card.clone()) {
             Ok(individual) => Ok(JsIndividual(individual)),
             Err(err) => Err(JsError::ReceivePrekeyOp(err)),
