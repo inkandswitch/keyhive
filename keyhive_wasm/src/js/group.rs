@@ -53,6 +53,7 @@ impl JsGroup {
 
     #[wasm_bindgen(js_name = toAgent)]
     pub fn to_agent(&self) -> JsAgent {
+        tracing::debug!("JsGroup::to_agent");
         JsAgent(self.0.dupe().into())
     }
 

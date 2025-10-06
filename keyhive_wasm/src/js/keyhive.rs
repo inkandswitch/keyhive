@@ -106,6 +106,7 @@ impl JsKeyhive {
         initial_content_ref_head: JsChangeRef,
         more_initial_content_refs: Vec<JsChangeRef>,
     ) -> Result<JsDocument, JsError> {
+        tracing::debug!("JsKeyhive::generate_doc()");
         Ok(self
             .0
             .generate_doc(
@@ -172,6 +173,7 @@ impl JsKeyhive {
         access: JsAccess,
         other_relevant_docs: Vec<JsDocument>,
     ) -> Result<JsSignedDelegation, JsError> {
+        tracing::debug!("JsKeyhive::add_member()");
         let other_docs_refs: Vec<_> = other_relevant_docs
             .iter()
             .map(|js_doc| js_doc.0.dupe())
