@@ -265,7 +265,7 @@ impl JsKeyhive {
     ) -> Result<JsIndividual, JsError> {
         tracing::debug!("JsKeyhive::receive_contact_card()");
         match self.0.receive_contact_card(&contact_card.clone()) {
-            Ok(individual) => Ok(JsIndividual(individual)),
+            Ok(individual) => Ok(JsIndividual(Rc::new(RefCell::new(individual.borrow().clone())))),
             Err(err) => Err(JsError::ReceivePrekeyOp(err)),
         }
     }
@@ -322,7 +322,7 @@ impl JsKeyhive {
             .borrow()
             .transitive_members()
             .get(&id.clone().0)
-            .map(|(_, access)| JsAccess(*access))
+            .map(|(_, access)| JsAccess((*access).clone()))
     }
 
     #[wasm_bindgen(js_name = intoArchive)]
