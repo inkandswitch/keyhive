@@ -50,8 +50,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Peer<S, T, L> {
     pub async fn individual_ids(&self) -> HashSet<IndividualId> {
         match self {
             Peer::Individual(i) => HashSet::from_iter([i.lock().await.id()]),
-            Peer::Group(g) => g.lock().await.individual_ids(),
-            Peer::Document(d) => d.lock().await.group.individual_ids(),
+            Peer::Group(g) => g.lock().await.individual_ids().await,
+            Peer::Document(d) => d.lock().await.group.individual_ids().await,
         }
     }
 
@@ -65,8 +65,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Peer<S, T, L> {
                 let prekey = locked.pick_prekey(doc_id);
                 HashMap::from_iter([(locked.id(), *prekey)])
             }
-            Peer::Group(g) => g.lock().await.pick_individual_prekeys(doc_id),
-            Peer::Document(d) => d.lock().await.group.pick_individual_prekeys(doc_id),
+            Peer::Group(g) => g.lock().await.pick_individual_prekeys(doc_id).await,
+            Peer::Document(d) => d.lock().await.group.pick_individual_prekeys(doc_id).await,
         }
     }
 }

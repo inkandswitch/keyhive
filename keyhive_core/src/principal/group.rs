@@ -94,7 +94,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         let mut group = Self {
             id_or_indie: IdOrIndividual::GroupId(group_id),
             members: HashMap::new(),
-            state: state::GroupState::new(head, delegations, revocations),
+            state: state::GroupState::new(head, delegations, revocations).await,
             active_revocations: HashMap::new(),
             listener,
         };
@@ -115,7 +115,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         let mut group = Self {
             id_or_indie: IdOrIndividual::Individual(individual),
             members: HashMap::new(),
-            state: GroupState::new(head, delegations, revocations),
+            state: GroupState::new(head, delegations, revocations).await,
             active_revocations: HashMap::new(),
             listener,
         };
@@ -219,20 +219,24 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         self.group_id().into()
     }
 
-    pub fn individual_ids(&self) -> HashSet<IndividualId> {
-        HashSet::from_iter(
-            self.members
-                .values()
-                .flat_map(|delegations| delegations[0].payload().delegate.individual_ids()),
-        )
+    pub async fn individual_ids(&self) -> HashSet<IndividualId> {
+        let mut ids = HashSet::new();
+        for delegations in self.members.values() {
+            let more_ids = delegations[0].payload().delegate.individual_ids().await;
+            ids.extend(more_ids);
+        }
+        ids
     }
 
-    pub fn pick_individual_prekeys(&self, doc_id: DocumentId) -> HashMap<IndividualId, ShareKey> {
-        HashMap::from_iter(
-            self.transitive_members()
-                .values()
-                .flat_map(|(agent, _access)| agent.pick_individual_prekeys(doc_id)),
-        )
+    pub async fn pick_individual_prekeys(
+        &self,
+        doc_id: DocumentId,
+    ) -> HashMap<IndividualId, ShareKey> {
+        let mut prekeys = HashMap::new();
+        for (agent, _access) in self.transitive_members().await.values() {
+            prekeys.extend(agent.pick_individual_prekeys(doc_id).await)
+        }
+        prekeys
     }
 
     #[allow(clippy::type_complexity)]
@@ -241,7 +245,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[tracing::instrument(skip(self), fields(group_id = %self.group_id()))]
-    pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
+    pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
         struct GroupAccess<Z: AsyncSigner, U: ContentRef, M: MembershipListener<Z, U>> {
             agent: Agent<Z, U, M>,
             agent_access: Access,
@@ -273,7 +277,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             parent_access,
         }) = explore.pop()
         {
-            let id = member.id();
+            let id = member.id().await;
             if id == self.id() {
                 continue;
             }
@@ -284,16 +288,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                 .unwrap_or(&access);
 
             let current_path_access = access.min(parent_access);
-            caps.insert(member.id(), (member.dupe(), current_path_access));
+            caps.insert(member.id().await, (member.dupe(), current_path_access));
 
             if let Some(membered) = match member {
                 Agent::Group(inner_group) => Some(Membered::<S, T, L>::from(inner_group)),
                 Agent::Document(doc) => Some(doc.into()),
                 _ => None,
             } {
-                for (mem_id, dlgs) in membered.members().iter() {
+                for (mem_id, dlgs) in membered.members().await.iter() {
                     let dlg = membered
                         .get_capability(mem_id)
+                        .await
                         .expect("members have capabilities by defintion");
 
                     caps.insert(*mem_id, (dlg.payload.delegate.dupe(), best_access));
@@ -344,6 +349,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     ) -> Vec<Arc<Signed<Revocation<S, T, L>>>> {
         self.state
             .revocations
+            .0
             .lock()
             .await
             .iter()
@@ -376,7 +382,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         revocation: Arc<Signed<Revocation<S, T, L>>>,
     ) -> Result<Digest<Signed<Revocation<S, T, L>>>, error::AddError> {
         self.listener.on_revocation(&revocation).await;
-        let digest = self.state.add_revocation(revocation)?;
+        let digest = self.state.add_revocation(revocation).await?;
         self.rebuild();
         Ok(digest)
     }
@@ -438,13 +444,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             .await?;
 
         let rc = Arc::new(delegation);
-        let _digest = self.receive_delegation(rc.dupe())?;
+        let _digest = self.receive_delegation(rc.dupe()).await?;
         self.listener.on_delegation(&rc).await;
 
         let cgka_ops = if rc.payload.can.is_reader() {
             self.add_cgka_member(rc.dupe(), signer).await?
         } else {
-            vec![]
+            Vec::new()
         };
 
         Ok(AddMemberUpdate {
@@ -462,6 +468,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         let mut cgka_ops = Vec::new();
         let docs: Vec<Arc<Mutex<Document<S, T, L>>>> = self
             .transitive_members()
+            .await
             .values()
             .filter_map(|(agent, _)| {
                 if let Agent::Document(doc) = agent {
@@ -526,7 +533,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                     // "Double up" if you're an admin in case you get concurrently demoted.
                     // We include the admin proofs as well since those could also get revoked.
                     for mem_dlg in member_dlgs.clone().iter() {
-                        if mem_dlg.payload.delegate.id() != member_to_remove {
+                        if mem_dlg.payload.delegate.id().await != member_to_remove {
                             continue;
                         }
 
@@ -597,7 +604,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         let (individuals, docs): (
             Vec<Arc<Mutex<Individual>>>,
             Vec<Arc<Mutex<Document<S, T, L>>>>,
-        ) = self.transitive_members().values().fold(
+        ) = self.transitive_members().await.values().fold(
             (vec![], vec![]),
             |(mut indies, mut docs), (agent, _)| {
                 match agent {
@@ -630,13 +637,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         let mut redelegations = vec![];
         if retain_all_other_members {
             for dlg in og_dlgs.iter() {
-                if dlg.payload.delegate.id() == member_to_remove {
+                if dlg.payload.delegate.id().await == member_to_remove {
                     // Don't retain if they've delegated to themself
                     continue;
                 }
 
                 if let Some(proof) = &dlg.payload.proof {
-                    if proof.payload.delegate.id() == member_to_remove {
+                    if proof.payload.delegate.id().await == member_to_remove {
                         let AddMemberUpdate { delegation, .. } = self
                             .add_member_with_manual_content(
                                 dlg.payload.delegate.dupe(),
@@ -678,7 +685,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[tracing::instrument(skip_all)]
-    pub fn rebuild(&mut self) {
+    pub async fn rebuild(&mut self) {
         self.members.clear();
         self.active_revocations.clear();
 
@@ -734,11 +741,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
 
                     dlgs_in_play.insert(d.signature.to_bytes(), d.dupe());
 
-                    if let Some(mut_dlgs) = self.members.get_mut(&d.payload.delegate.id()) {
+                    if let Some(mut_dlgs) = self.members.get_mut(&d.payload.delegate.id().await) {
                         mut_dlgs.push(d.dupe());
                     } else {
                         self.members
-                            .insert(d.payload.delegate.id(), nonempty![d.dupe()]);
+                            .insert(d.payload.delegate.id().await, nonempty![d.dupe()]);
                     }
                 }
                 MembershipOperation::Revocation(r) => {
@@ -771,7 +778,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                         revoked_dlgs.insert(sig_to_revoke);
 
                         if let Some(dlg) = dlgs_in_play.remove(&sig_to_revoke) {
-                            to_drop.push((dlg.payload.delegate.id(), sig_to_revoke));
+                            to_drop.push((dlg.payload.delegate.id().await, sig_to_revoke));
                         }
 
                         if let Some(dlg_sigs_to_revoke) = reverse_dlg_dep_map.get(&sig_to_revoke) {

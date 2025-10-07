@@ -159,8 +159,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, 
         agent: &Agent<S, T, L>,
     ) -> Vec<Arc<Signed<Revocation<S, T, L>>>> {
         match self {
-            Membered::Group(group) => group.lock().await.get_agent_revocations(agent),
-            Membered::Document(document) => document.lock().await.get_agent_revocations(agent),
+            Membered::Group(group) => group.lock().await.get_agent_revocations(agent).await,
+            Membered::Document(document) => {
+                document.lock().await.get_agent_revocations(agent).await
+            }
         }
     }
 
@@ -170,9 +172,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, 
         delegation: Arc<Signed<Delegation<S, T, L>>>,
     ) -> Result<Digest<Signed<Delegation<S, T, L>>>, AddError> {
         match self {
-            Membered::Group(group) => Ok(group.lock().await.receive_delegation(delegation)?),
+            Membered::Group(group) => Ok(group.lock().await.receive_delegation(delegation).await?),
             Membered::Document(document) => {
-                Ok(document.lock().await.receive_delegation(delegation)?)
+                Ok(document.lock().await.receive_delegation(delegation).await?)
             }
         }
     }

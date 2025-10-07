@@ -73,8 +73,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
         match self {
             Agent::Active(a) => HashSet::from_iter([a.lock().await.id()]),
             Agent::Individual(i) => HashSet::from_iter([i.lock().await.id()]),
-            Agent::Group(g) => g.lock().await.individual_ids(),
-            Agent::Document(d) => d.lock().await.group.individual_ids(),
+            Agent::Group(g) => g.lock().await.individual_ids().await,
+            Agent::Document(d) => d.lock().await.group.individual_ids().await,
         }
     }
 
@@ -91,8 +91,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
                 let prekey = *i.lock().await.pick_prekey(doc_id);
                 HashMap::from_iter([(i.lock().await.id(), prekey)])
             }
-            Agent::Group(g) => g.lock().await.pick_individual_prekeys(doc_id),
-            Agent::Document(d) => d.lock().await.group.pick_individual_prekeys(doc_id),
+            Agent::Group(g) => g.lock().await.pick_individual_prekeys(doc_id).await,
+            Agent::Document(d) => d.lock().await.group.pick_individual_prekeys(doc_id).await,
         }
     }
 

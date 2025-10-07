@@ -34,8 +34,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Revocation<S, T
         &self.revoke
     }
 
-    pub fn revoked_id(&self) -> AgentId {
-        self.revoke.payload().delegate.agent_id()
+    pub async fn revoked_id(&self) -> AgentId {
+        self.revoke.payload().delegate.agent_id().await
     }
 
     pub fn proof(&self) -> Option<Arc<Signed<Delegation<S, T, L>>>> {

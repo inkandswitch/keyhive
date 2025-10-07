@@ -77,7 +77,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     // FIXME: We need a signing key for initializing Cgka and we need to share
     // the init add op.
     // NOTE doesn't register into the top-level Keyhive context
-    #[instrument(skip(group, viewer), fields(group_id = %group.id(), viewer_id = %viewer.id()))]
+    #[instrument(skip_all)]
     pub fn from_group(
         group: Group<S, T, L>,
         viewer: &Active<S, T, L>,
@@ -125,8 +125,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.group.members()
     }
 
-    pub fn transitive_members(&self) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
-        self.group.transitive_members()
+    pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
+        self.group.transitive_members().await
     }
 
     pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<S, T, L>>> {
@@ -145,10 +145,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.group.get_capability(member_id)
     }
 
-    #[instrument(
-        skip_all,
-        fields(parent_ids = ?parents.iter().map(|p| p.id()).collect::<Vec<_>>())
-    )]
+    #[instrument(skip_all)]
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
         parents: NonEmpty<Agent<S, T, L>>,
         initial_content_heads: NonEmpty<T>,
@@ -178,7 +175,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         let doc_id = DocumentId(group.id());
         let owner_share_secret_key = ShareSecretKey::generate(csprng);
         let owner_share_key = owner_share_secret_key.share_key();
-        let group_members = group.pick_individual_prekeys(doc_id);
+        let group_members = group.pick_individual_prekeys(doc_id).await;
         let other_members: Vec<(IndividualId, ShareKey)> = group_members
             .iter()
             .filter(|(id, _sk)| **id != owner_id)
@@ -213,10 +210,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(
-        skip(self, member_to_add, can, signer),
-        fields(doc_id = ?self.doc_id(), member_id = %member_to_add.id())
-    )]
+    #[instrument(skip_all)]
     pub async fn add_member(
         &mut self,
         member_to_add: Agent<S, T, L>,
@@ -254,10 +248,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         Ok(update)
     }
 
-    #[instrument(
-        skip_all,
-        fields(doc_id = %self.doc_id(), member_id = %delegation.payload.delegate.id())
-    )]
+    #[instrument(skip_all)]
     pub(crate) async fn add_cgka_member(
         &mut self,
         delegation: &Signed<Delegation<S, T, L>>,
@@ -268,8 +259,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             .delegate
             .pick_individual_prekeys(self.doc_id());
 
-        let mut acc = vec![];
-        for (id, prekey) in prekeys.iter() {
+        let mut acc = Vec::new();
+        for (id, prekey) in prekeys.await.iter() {
             if let Some(op) = self.cgka_mut()?.add(*id, *prekey, signer).await? {
                 acc.push(op);
             }
@@ -277,7 +268,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         Ok(acc)
     }
 
-    #[instrument(skip(self, signer), fields(doc_id = ?self.doc_id()))]
+    #[instrument(skip_all)]
     pub async fn revoke_member(
         &mut self,
         member_id: Identifier,
@@ -304,11 +295,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         let mut ids_to_remove = Vec::new();
         let mut ops = cgka_ops;
         if let Some(delegations) = self.group.members.get(&member_id) {
-            for id in delegations
-                .iter()
-                .flat_map(|d| d.payload().delegate.individual_ids())
-            {
-                ids_to_remove.push(id);
+            for d in delegations {
+                ids_to_remove.extend(d.payload().delegate.individual_ids().await)
             }
         }
 
@@ -324,7 +312,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         })
     }
 
-    #[instrument(skip(self, signer), fields(doc_id = ?self.doc_id()))]
+    #[instrument(skip_all)]
     pub async fn remove_cgka_member(
         &mut self,
         id: IndividualId,
@@ -333,11 +321,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.cgka_mut()?.remove(id, signer).await
     }
 
-    pub fn get_agent_revocations(
+    pub async fn get_agent_revocations(
         &self,
         agent: &Agent<S, T, L>,
     ) -> Vec<Arc<Signed<Revocation<S, T, L>>>> {
-        self.group.get_agent_revocations(agent)
+        self.group.get_agent_revocations(agent).await
     }
 
     pub fn rebuild(&mut self) {
@@ -346,11 +334,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn receive_delegation(
+    pub async fn receive_delegation(
         &mut self,
         delegation: Arc<Signed<Delegation<S, T, L>>>,
     ) -> Result<Digest<Signed<Delegation<S, T, L>>>, AddError> {
-        self.group.receive_delegation(delegation)
+        self.group.receive_delegation(delegation).await
     }
 
     pub async fn receive_revocation(
@@ -386,7 +374,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         Ok(())
     }
 
-    #[instrument(skip(self, sk), fields(doc_id = ?self.doc_id()))]
+    #[instrument(skip_all)]
     pub fn merge_cgka_invite_op(
         &mut self,
         op: Arc<Signed<CgkaOperation>>,
@@ -417,7 +405,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.cgka()?.ops()
     }
 
-    #[instrument(skip_all, fields(doc_id = ?self.doc_id()))]
+    #[instrument(skip_all)]
     pub async fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         signer: &S,
@@ -434,7 +422,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         Ok(op)
     }
 
-    #[instrument(skip_all, fields(doc_id = ?self.doc_id(), content_ref))]
+    #[instrument(skip_all)]
     pub async fn try_encrypt_content<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         content_ref: &T,
@@ -461,7 +449,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         })
     }
 
-    #[instrument(skip_all, fields(doc_id = ?self.doc_id(), nonce = ?encrypted_content.nonce))]
+    #[instrument(skip_all)]
     pub fn try_decrypt_content<P: for<'de> Deserialize<'de>>(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
@@ -490,10 +478,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         Ok(plaintext)
     }
 
-    #[instrument(
-        skip_all,
-        fields(doc_id = %self.doc_id(), content_id = ?encrypted_content.content_ref)
-    )]
+    #[instrument(skip_all)]
     pub async fn try_causal_decrypt_content<
         C: CiphertextStore<T, P>,
         P: for<'de> Deserialize<'de> + Serialize + Clone,
@@ -534,7 +519,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         Ok(store.try_causal_decrypt(&mut to_decrypt).await?)
     }
 
-    #[instrument(skip(self), fields(doc_id = ?self.doc_id()))]
+    #[instrument(skip_all)]
     pub fn into_archive(&self) -> DocumentArchive<T> {
         DocumentArchive {
             group: self.group.into_archive(),

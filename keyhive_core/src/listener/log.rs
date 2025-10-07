@@ -36,7 +36,7 @@ impl<S: AsyncSigner, T: ContentRef> Log<S, T> {
     }
 
     pub async fn pop(&self) -> Option<Event<S, T, Self>> {
-        let mut locked = self.lock().await;
+        let mut locked = self.0.lock().await;
         locked.pop()
     }
 

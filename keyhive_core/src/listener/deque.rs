@@ -19,7 +19,7 @@ use std::{
 };
 use tracing::instrument;
 
-#[derive(Debug, Default, PartialEq, Eq, From, Into)]
+#[derive(Debug, Default, From, Into)]
 pub struct Deque<S: AsyncSigner, T: ContentRef = [u8; 32]>(
     #[allow(clippy::type_complexity)] pub Arc<Mutex<VecDeque<Event<S, T, Deque<S, T>>>>>,
 );

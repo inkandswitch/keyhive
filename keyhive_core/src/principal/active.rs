@@ -226,18 +226,21 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     }
 
     /// Encrypt a payload for a member of some [`Group`] or [`Document`].
-    pub fn get_capability(
+    pub async fn get_capability(
         &self,
         subject: Membered<S, T>,
         min: Access,
     ) -> Option<Arc<Signed<Delegation<S, T>>>> {
-        subject.get_capability(&self.id().into()).and_then(|cap| {
-            if cap.payload().can >= min {
-                Some(cap)
-            } else {
-                None
-            }
-        })
+        subject
+            .get_capability(&self.id().into())
+            .await
+            .and_then(|cap| {
+                if cap.payload().can >= min {
+                    Some(cap)
+                } else {
+                    None
+                }
+            })
     }
 
     /// Serialize for storage.

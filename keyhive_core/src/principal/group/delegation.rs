@@ -190,7 +190,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Delegation
         Self {
             can: delegation.can,
             proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).into()),
-            delegate: delegation.delegate.id(),
+            delegate: delegation.delegate.id().await,
             after_revocations: delegation
                 .after_revocations
                 .iter()

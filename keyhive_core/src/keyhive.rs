@@ -128,7 +128,7 @@ impl<
         self.active.lock().await.id()
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub async fn agent_id(&self) -> AgentId {
         self.active.lock().await.agent_id()
     }
@@ -219,7 +219,7 @@ impl<
         initial_content_heads: NonEmpty<T>,
     ) -> Result<Arc<Mutex<Document<S, T, L>>>, GenerateDocError> {
         for peer in coparents.iter() {
-            if self.get_agent(peer.id()).is_none() {
+            if self.get_agent(peer.id().await).await.is_none() {
                 self.register_peer(peer.dupe());
             }
         }
@@ -316,8 +316,8 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub fn register_peer(&mut self, peer: Peer<S, T, L>) -> bool {
-        let id = peer.id();
+    pub async fn register_peer(&mut self, peer: Peer<S, T, L>) -> bool {
+        let id = peer.id().await;
 
         if self.get_peer(id).is_some() {
             return false;
@@ -378,18 +378,18 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub fn get_membership_operation(
+    pub async fn get_membership_operation(
         &self,
         digest: &Digest<MembershipOperation<S, T, L>>,
     ) -> Option<MembershipOperation<S, T, L>> {
-        self.delegations
-            .get(&digest.into())
-            .map(|d| d.dupe().into())
-            .or_else(|| {
-                self.revocations
-                    .get(&digest.into())
-                    .map(|r| r.dupe().into())
-            })
+        if let Some(d) = self.delegations.get(&digest.into()).await {
+            Some(d.dupe().into())
+        } else {
+            self.revocations
+                .get(&digest.into())
+                .await
+                .map(|r| r.dupe().into())
+        }
     }
 
     #[allow(clippy::type_complexity)]
@@ -425,7 +425,7 @@ impl<
         resource: &mut Membered<S, T, L>,
     ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
         let mut relevant_docs = BTreeMap::new();
-        for (doc_id, Ability { doc, .. }) in self.reachable_docs() {
+        for (doc_id, Ability { doc, .. }) in self.reachable_docs().await {
             let locked = doc.lock().await;
             relevant_docs.insert(doc_id, locked.content_heads.iter().cloned().collect());
         }
@@ -506,8 +506,8 @@ impl<
         membered: Membered<S, T, L>,
     ) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
         match membered {
-            Membered::Group(group) => group.lock().await.transitive_members(),
-            Membered::Document(doc) => doc.lock().await.transitive_members(),
+            Membered::Group(group) => group.lock().await.transitive_members().await,
+            Membered::Document(doc) => doc.lock().await.transitive_members().await,
         }
     }
 
@@ -521,7 +521,7 @@ impl<
         // TODO will be very slow on large hives. Old code here: https://github.com/inkandswitch/keyhive/pull/111/files:
         for doc in self.docs.values() {
             let locked = doc.lock().await;
-            if let Some((_, cap)) = locked.transitive_members().get(&agent.id()) {
+            if let Some((_, cap)) = locked.transitive_members().await.get(&agent.id().await) {
                 caps.insert(locked.doc_id(), Ability { doc, can: *cap });
             }
         }
@@ -538,14 +538,14 @@ impl<
 
         for group in self.groups.values() {
             let locked = group.lock().await;
-            if let Some((_, can)) = locked.transitive_members().get(&agent.id()) {
+            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id().await) {
                 caps.insert(locked.group_id().into(), (group.dupe().into(), *can));
             }
         }
 
         for doc in self.docs.values() {
             let locked = doc.lock().await;
-            if let Some((_, can)) = locked.transitive_members().get(&agent.id()) {
+            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id().await) {
                 caps.insert(locked.doc_id().into(), (doc.dupe().into(), *can));
             }
         }
@@ -555,24 +555,25 @@ impl<
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub fn events_for_agent(
+    pub async fn events_for_agent(
         &self,
         agent: &Agent<S, T, L>,
     ) -> Result<HashMap<Digest<Event<S, T, L>>, Event<S, T, L>>, CgkaError> {
         let mut ops: HashMap<_, _> = self
             .membership_ops_for_agent(agent)
+            .await
             .into_iter()
             .map(|(op_digest, op)| (op_digest.into(), op.into()))
             .collect();
 
-        for key_ops in self.reachable_prekey_ops_for_agent(agent).values() {
+        for key_ops in self.reachable_prekey_ops_for_agent(agent).await.values() {
             for key_op in key_ops.iter() {
                 let op = Event::<S, T, L>::from(key_op.as_ref().dupe());
                 ops.insert(Digest::hash(&op), op);
             }
         }
 
-        for cgka_op in self.cgka_ops_reachable_by_agent(agent)?.into_iter() {
+        for cgka_op in self.cgka_ops_reachable_by_agent(agent).await?.into_iter() {
             let op = Event::<S, T, L>::from(cgka_op);
             ops.insert(Digest::hash(&op), op);
         }
@@ -581,12 +582,13 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub fn static_events_for_agent(
+    pub async fn static_events_for_agent(
         &self,
         agent: &Agent<S, T, L>,
     ) -> Result<HashMap<Digest<StaticEvent<T>>, StaticEvent<T>>, CgkaError> {
         Ok(self
-            .events_for_agent(agent)?
+            .events_for_agent(agent)
+            .await?
             .into_iter()
             .map(|(k, v)| (k.into(), v.into()))
             .collect())
@@ -640,11 +642,11 @@ impl<
         )> = Vec::new();
 
         for (mem_rc, _max_acces) in self.membered_reachable_by_agent(agent).await.values() {
-            for (hash, dlg_head) in mem_rc.delegation_heads().iter() {
+            for (hash, dlg_head) in mem_rc.delegation_heads().await.iter() {
                 heads.push((hash.into(), dlg_head.dupe().into()));
             }
 
-            for (hash, rev_head) in mem_rc.revocation_heads().iter() {
+            for (hash, rev_head) in mem_rc.revocation_heads().await.iter() {
                 heads.push((hash.into(), rev_head.dupe().into()));
             }
         }
@@ -737,40 +739,56 @@ impl<
         add_many_keys(&mut map, active_id, prekeys);
 
         // Add the agents own keys
-        add_many_keys(&mut map, agent.id(), agent.key_ops());
+        add_many_keys(&mut map, agent.id().await, agent.key_ops().await);
 
         for (mem, _) in self.membered_reachable_by_agent(agent).await.values() {
             match mem {
                 Membered::Group(group) => {
                     let (group_id, group_transitive_members) = {
                         let locked = group.lock().await;
-                        (locked.id(), locked.transitive_members())
+                        (locked.id(), locked.transitive_members().await)
                     };
 
                     add_many_keys(
                         &mut map,
                         group_id,
-                        Agent::from(group.dupe()).key_ops().into_iter().collect(),
+                        Agent::from(group.dupe())
+                            .key_ops()
+                            .await
+                            .into_iter()
+                            .collect(),
                     );
 
                     for (agent_id, (agent, _acess)) in &group_transitive_members {
-                        add_many_keys(&mut map, *agent_id, agent.key_ops().into_iter().collect());
+                        add_many_keys(
+                            &mut map,
+                            *agent_id,
+                            agent.key_ops().await.into_iter().collect(),
+                        );
                     }
                 }
                 Membered::Document(doc) => {
                     let (doc_id, doc_transitive_members) = {
                         let locked = doc.lock().await;
-                        (locked.id(), locked.transitive_members())
+                        (locked.id(), locked.transitive_members().await)
                     };
 
                     add_many_keys(
                         &mut map,
                         doc_id,
-                        Agent::from(doc.dupe()).key_ops().into_iter().collect(),
+                        Agent::from(doc.dupe())
+                            .key_ops()
+                            .await
+                            .into_iter()
+                            .collect(),
                     );
 
                     for (agent_id, (agent, _acess)) in &doc_transitive_members {
-                        add_many_keys(&mut map, *agent_id, agent.key_ops().into_iter().collect());
+                        add_many_keys(
+                            &mut map,
+                            *agent_id,
+                            agent.key_ops().await.into_iter().collect(),
+                        );
                     }
                 }
             }
@@ -779,24 +797,24 @@ impl<
         map
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub fn get_individual(&self, id: IndividualId) -> Option<&Arc<Mutex<Individual>>> {
         self.individuals.get(&id)
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub fn get_group(&self, id: GroupId) -> Option<&Arc<Mutex<Group<S, T, L>>>> {
         self.groups.get(&id)
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub fn get_document(&self, id: DocumentId) -> Option<&Arc<Mutex<Document<S, T, L>>>> {
         self.docs.get(&id)
     }
 
-    #[instrument(skip(self), fields(khid = %self.id()))]
+    #[instrument(skip_all)]
     pub fn get_peer(&self, id: Identifier) -> Option<Peer<S, T, L>> {
         let indie_id = IndividualId(id);
 
@@ -899,17 +917,18 @@ impl<
         // FIXME add a Verified<T> newtype wapper
         static_dlg.try_verify()?;
 
-        let proof: Option<Arc<Signed<Delegation<S, T, L>>>> = static_dlg
-            .payload()
-            .proof
-            .map(|proof_hash| {
+        let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
+            if let Some(proof_hash) = static_dlg.payload().proof {
                 let hash = proof_hash.into();
-                self.delegations
-                    .get(&hash)
-                    .await
-                    .ok_or(MissingDependency(hash))
-            })
-            .transpose()?;
+                Some(
+                    self.delegations
+                        .get(&hash)
+                        .await
+                        .ok_or(MissingDependency(hash))?,
+                )
+            } else {
+                None
+            };
 
         let delegate_id = static_dlg.payload().delegate;
         let delegate: Agent<S, T, L> = self
@@ -917,18 +936,15 @@ impl<
             .await
             .ok_or(ReceieveStaticDelegationError::UnknownAgent(delegate_id))?;
 
-        let after_revocations = static_dlg.payload().after_revocations.iter().try_fold(
-            vec![],
-            |mut acc, static_rev_hash| {
-                let rev_hash = static_rev_hash.into();
-                let locked_revs = self.revocations.0.lock().await;
-                let resolved_rev = locked_revs
-                    .get(&rev_hash)
-                    .ok_or(MissingDependency(rev_hash))?;
-                acc.push(resolved_rev.dupe());
-                Ok::<_, ReceieveStaticDelegationError<S, T, L>>(acc)
-            },
-        )?;
+        let mut after_revocations = Vec::new();
+        for static_rev_hash in static_dlg.payload().after_revocations.iter() {
+            let rev_hash = static_rev_hash.into();
+            let locked_revs = self.revocations.0.lock().await;
+            let resolved_rev = locked_revs
+                .get(&rev_hash)
+                .ok_or(MissingDependency(rev_hash))?;
+            after_revocations.push(resolved_rev.dupe());
+        }
 
         let delegation = Signed {
             issuer: static_dlg.issuer,
@@ -945,9 +961,16 @@ impl<
         let subject_id = delegation.subject_id();
         let delegation = Arc::new(delegation);
         if let Some(group) = self.groups.get(&GroupId(subject_id)) {
-            group.lock().await.receive_delegation(delegation.clone())?;
+            group
+                .lock()
+                .await
+                .receive_delegation(delegation.clone())
+                .await?;
         } else if let Some(doc) = self.docs.get(&DocumentId(subject_id)) {
-            doc.lock().await.receive_delegation(delegation.clone())?;
+            doc.lock()
+                .await
+                .receive_delegation(delegation.clone())
+                .await?;
         } else if let Some(indie) = self.individuals.remove(&IndividualId(subject_id)) {
             self.promote_individual_to_group(indie, delegation.clone())
                 .await;
@@ -1005,17 +1028,18 @@ impl<
             .await
             .ok_or(MissingDependency(revoke_hash))?;
 
-        let proof: Option<Arc<Signed<Delegation<S, T, L>>>> = static_rev
-            .payload()
-            .proof
-            .map(|proof_hash| {
+        let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
+            if let Some(proof_hash) = static_rev.payload().proof {
                 let hash = proof_hash.into();
-                self.delegations
-                    .get(&hash)
-                    .await
-                    .ok_or(MissingDependency(hash))
-            })
-            .transpose()?;
+                Some(
+                    self.delegations
+                        .get(&hash)
+                        .await
+                        .ok_or(MissingDependency(hash))?,
+                )
+            } else {
+                None
+            };
 
         let revocation = Signed {
             issuer: static_rev.issuer,
@@ -1063,7 +1087,7 @@ impl<
 
             {
                 let group2 = group.dupe();
-                let locked = group.lock().await;
+                let mut locked = group.lock().await;
                 self.groups.insert(locked.group_id(), group2);
                 locked.receive_revocation(revocation.clone()).await?;
             }
@@ -1168,8 +1192,8 @@ impl<
         let agent = Agent::from(group.dupe());
 
         {
-            let locked_delegations = self.delegations.0.lock().await;
-            for (digest, dlg) in locked_delegations.iter() {
+            let mut locked_delegations = self.delegations.0.lock().await;
+            for (digest, dlg) in locked_delegations.clone().iter() {
                 if dlg.payload.delegate == agent {
                     locked_delegations.0.insert(
                         *digest,
@@ -1192,7 +1216,7 @@ impl<
         {
             let group_id = group.lock().await.id();
             let mut locked_revocations = self.revocations.0.lock().await;
-            for (digest, rev) in locked_revocations.iter() {
+            for (digest, rev) in locked_revocations.clone().iter() {
                 if rev.payload.subject_id() == group_id {
                     locked_revocations.0.insert(
                         *digest,
@@ -1206,12 +1230,11 @@ impl<
                                     .await
                                     .expect("revoked delegation to be available")
                                     .dupe(),
-                                proof: rev.payload.proof.dupe().map(|proof| {
-                                    self.delegations
-                                        .get(&Digest::hash(&proof))
-                                        .await
-                                        .expect("revoked delegation to be available")
-                                }),
+                                proof: if let Some(proof) = rev.payload.proof.dupe() {
+                                    self.delegations.get(&Digest::hash(&proof)).await
+                                } else {
+                                    panic!("revoked delegation to be available");
+                                },
                                 after_content: rev.payload.after_content.clone(),
                             },
                         }),
@@ -1260,7 +1283,7 @@ impl<
         }
     }
 
-    #[instrument(skip_all, fields(archive_id = %archive.id()))]
+    #[instrument(skip_all)]
     pub async fn try_from_archive(
         archive: &Archive<T>,
         signer: S,
@@ -1441,7 +1464,7 @@ impl<
                 .get(group_id)
                 .ok_or(TryFromArchiveError::MissingGroup(Box::new(*group_id)))?;
 
-            let locked_group = group.lock().await;
+            let mut locked_group = group.lock().await;
             reify_ops(
                 &mut locked_group,
                 delegations.dupe(),
@@ -1564,7 +1587,7 @@ impl<
 
     #[allow(clippy::type_complexity)]
     #[cfg(any(test, feature = "test_utils"))]
-    #[instrument(level = "trace", skip_all, fields(khid = %self.id()))]
+    #[instrument(level = "trace", skip_all)]
     pub async fn ingest_event_table(
         &mut self,
         events: HashMap<Digest<Event<S, T, L>>, Event<S, T, L>>,

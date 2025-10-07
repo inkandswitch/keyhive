@@ -98,7 +98,7 @@ impl Cgka {
         Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op)
     }
 
-    #[instrument(skip_all, fields(doc_id))]
+    #[instrument(skip_all)]
     pub fn new_from_init_add(
         doc_id: DocumentId,
         owner_id: IndividualId,
@@ -122,7 +122,7 @@ impl Cgka {
         Ok(cgka)
     }
 
-    #[instrument(skip_all, fields(doc_id, my_id))]
+    #[instrument(skip_all)]
     pub fn with_new_owner(
         &self,
         my_id: IndividualId,
@@ -145,7 +145,7 @@ impl Cgka {
     ///
     /// If the tree does not currently contain a root key, then we must first
     /// perform a leaf key rotation.
-    #[instrument(skip_all, fields(content_ref))]
+    #[instrument(skip_all)]
     pub async fn new_app_secret_for<
         S: AsyncSigner,
         T: ContentRef,
@@ -191,7 +191,7 @@ impl Cgka {
     ///
     /// We must first derive a [`PcsKey`] for the encrypted data's associated
     /// hashes. Then we use that [`PcsKey`] to derive an [`ApplicationSecret`].
-    #[instrument(skip_all, fields(encrypted.content_ref))]
+    #[instrument(skip_all)]
     pub fn decryption_key_for<T, Cr: ContentRef>(
         &mut self,
         encrypted: &EncryptedContent<T, Cr>,
@@ -217,7 +217,7 @@ impl Cgka {
     }
 
     /// Add member to group.
-    #[instrument(skip_all, fields(id, pk))]
+    #[instrument(skip_all)]
     pub async fn add<S: AsyncSigner>(
         &mut self,
         id: IndividualId,
@@ -261,7 +261,7 @@ impl Cgka {
     }
 
     /// Remove member from group.
-    #[instrument(skip_all, fields(doc_id))]
+    #[instrument(skip_all)]
     pub async fn remove<S: AsyncSigner>(
         &mut self,
         id: IndividualId,
@@ -292,7 +292,7 @@ impl Cgka {
 
     /// Update leaf key pair for this Identifier.
     /// This also triggers a tree path update for that leaf.
-    #[instrument(skip_all, fields(doc_id, new_pk))]
+    #[instrument(skip_all)]
     pub async fn update<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         new_pk: ShareKey,
@@ -336,7 +336,7 @@ impl Cgka {
     /// we add it to our ops graph but don't apply it yet. If there are no outstanding
     /// membership changes and we receive a concurrent update, we can apply it
     /// immediately.
-    #[instrument(skip_all, fields(doc_id, op))]
+    #[instrument(skip_all)]
     pub fn merge_concurrent_operation(
         &mut self,
         op: Arc<Signed<CgkaOperation>>,
@@ -379,7 +379,7 @@ impl Cgka {
     }
 
     /// Apply a [`CgkaOperation`].
-    #[instrument(skip_all, fields(doc_id, op))]
+    #[instrument(skip_all)]
     fn apply_operation(&mut self, op: Arc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
         if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
             return Ok(());
@@ -401,7 +401,7 @@ impl Cgka {
 
     /// Apply operations grouped into "epochs", where each epoch contains an ordered
     /// set of concurrent operations.
-    #[instrument(skip_all, fields(doc_id, epochs))]
+    #[instrument(skip_all)]
     fn apply_epochs(&mut self, epochs: &NonEmpty<CgkaEpoch>) -> Result<(), CgkaError> {
         for epoch in epochs {
             if epoch.len() == 1 {
@@ -457,7 +457,7 @@ impl Cgka {
     ///
     /// If we have not seen this [`PcsKey`] before, we'll need to rebuild
     /// the tree state for its corresponding update operation.
-    #[instrument(skip_all, fields(doc_id, pcs_key_hash, update_op_hash))]
+    #[instrument(skip_all)]
     fn pcs_key_from_hashes(
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
@@ -477,7 +477,7 @@ impl Cgka {
     }
 
     /// Derive [`PcsKey`] for this operation hash.
-    #[instrument(skip_all, fields(doc_id, op_hash))]
+    #[instrument(skip_all)]
     fn derive_pcs_key_for_op(
         &mut self,
         op_hash: &Digest<Signed<CgkaOperation>>,
@@ -498,7 +498,7 @@ impl Cgka {
     }
 
     /// Replay all ops in our graph in a deterministic order.
-    #[instrument(skip_all, fields(doc_id))]
+    #[instrument(skip_all)]
     fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
         let ordered_ops = self.ops_graph.topsort_graph()?;
         let rebuilt_cgka = self.rebuild_cgka(ordered_ops)?;
@@ -508,7 +508,7 @@ impl Cgka {
     }
 
     /// Build a new [`Cgka`] for the provided non-empty list of [`CgkaEpoch`]s.
-    #[instrument(skip_all, fields(doc_id, epochs))]
+    #[instrument(skip_all)]
     fn rebuild_cgka(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<Cgka, CgkaError> {
         let mut rebuilt_cgka = Cgka::new_from_init_add(
             self.doc_id,
@@ -527,7 +527,7 @@ impl Cgka {
 
     /// Derive a [`PcsKey`] by rebuilding a [`Cgka`] from the provided non-empty
     /// list of [`CgkaEpoch`]s.
-    #[instrument(skip_all, fields(doc_id, epochs))]
+    #[instrument(skip_all)]
     fn rebuild_pcs_key(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<PcsKey, CgkaError> {
         debug_assert!(matches!(
             epochs.last()[0].payload,
@@ -546,7 +546,7 @@ impl Cgka {
         Ok(pcs_key)
     }
 
-    #[instrument(skip_all, fields(doc_id, op_hash))]
+    #[instrument(skip_all)]
     fn insert_pcs_key(&mut self, pcs_key: &PcsKey, op_hash: Digest<Signed<CgkaOperation>>) {
         let digest = Digest::hash(pcs_key);
         info!("{:?}", digest);
@@ -555,7 +555,7 @@ impl Cgka {
     }
 
     /// Extend our state with that of the provided [`Cgka`].
-    #[instrument(skip_all, fields(doc_id))]
+    #[instrument(skip_all)]
     fn update_cgka_from(&mut self, other: &Self) {
         self.tree = other.tree.clone();
         self.owner_sks.extend(&other.owner_sks);

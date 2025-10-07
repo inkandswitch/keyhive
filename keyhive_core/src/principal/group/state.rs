@@ -228,17 +228,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
         Ok(hash)
     }
 
-    pub fn delegations_for(&self, agent: Agent<S, T, L>) -> Vec<Arc<Signed<Delegation<S, T, L>>>> {
-        self.delegations
-            .values()
-            .filter_map(|delegation| {
-                if delegation.payload().delegate == agent {
-                    Some(delegation.dupe())
-                } else {
-                    None
-                }
-            })
-            .collect()
+    pub async fn delegations_for(
+        &self,
+        agent: Agent<S, T, L>,
+    ) -> Vec<Arc<Signed<Delegation<S, T, L>>>> {
+        let mut dlgs = Vec::new();
+        for delegation in self.delegations.0.lock().await.values() {
+            if agent == delegation.payload().delegate {
+                dlgs.push(delegation.dupe());
+            }
+        }
+        dlgs
     }
 
     pub(crate) fn dummy_from_archive(
