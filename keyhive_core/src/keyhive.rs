@@ -70,8 +70,7 @@ use thiserror::Error;
 use tracing::instrument;
 
 /// The main object for a user agent & top-level owned stores.
-#[derive(Derivative)]
-#[derivative(PartialEq, Eq, Clone)]
+#[derive(Clone)]
 pub struct Keyhive<
     S: AsyncSigner + Clone,
     T: ContentRef = [u8; 32],
@@ -104,11 +103,9 @@ pub struct Keyhive<
     event_listener: L,
 
     /// Storeage for ciphertexts that cannot yet be decrypted.
-    #[derivative(PartialEq = "ignore")]
     ciphertext_store: C,
 
     /// Cryptographically secure (pseudo)random number generator.
-    #[derivative(PartialEq = "ignore")]
     csprng: R,
 
     _plaintext_phantom: PhantomData<P>,
@@ -196,7 +193,7 @@ impl<
     ) -> Result<Arc<Mutex<Group<S, T, L>>>, SigningError> {
         let group = Group::generate(
             NonEmpty {
-                head: self.active.dupe().into(),
+                head: Agent::Active(self.active.lock().await.id(), self.active.dupe()),
                 tail: coparents.into_iter().map(Into::into).collect(),
             },
             self.delegations.dupe(),
@@ -219,7 +216,7 @@ impl<
         initial_content_heads: NonEmpty<T>,
     ) -> Result<Arc<Mutex<Document<S, T, L>>>, GenerateDocError> {
         for peer in coparents.iter() {
-            if self.get_agent(peer.id().await).await.is_none() {
+            if self.get_agent(peer.id()).await.is_none() {
                 self.register_peer(peer.dupe());
             }
         }
@@ -231,7 +228,7 @@ impl<
 
         let new_doc = Document::generate(
             NonEmpty {
-                head: self.active.dupe().into(),
+                head: Agent::Active(self.active.lock().await.id(), self.active.dupe()),
                 tail: coparents.into_iter().map(Into::into).collect(),
             },
             initial_content_heads,
@@ -317,21 +314,19 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn register_peer(&mut self, peer: Peer<S, T, L>) -> bool {
-        let id = peer.id().await;
-
-        if self.get_peer(id).is_some() {
+        if self.get_peer(peer.id()).is_some() {
             return false;
         }
 
         match peer {
-            Peer::Individual(indie) => {
-                self.individuals.insert(id.into(), indie.dupe());
+            Peer::Individual(id, indie) => {
+                self.individuals.insert(id, indie.dupe());
             }
-            Peer::Group(group) => {
-                self.groups.insert(GroupId(id), group.dupe());
+            Peer::Group(group_id, group) => {
+                self.groups.insert(group_id, group.dupe());
             }
-            Peer::Document(doc) => {
-                self.docs.insert(DocumentId(id), doc.dupe());
+            Peer::Document(doc_id, doc) => {
+                self.docs.insert(doc_id, doc.dupe());
             }
         }
 
@@ -402,12 +397,12 @@ impl<
     ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError> {
         let signer = { self.active.lock().await.signer.clone() };
         match resource {
-            Membered::Group(group) => Ok(group
+            Membered::Group(_, group) => Ok(group
                 .lock()
                 .await
                 .add_member(to_add, can, &signer, other_relevant_docs)
                 .await?),
-            Membered::Document(doc) => {
+            Membered::Document(_, doc) => {
                 doc.lock()
                     .await
                     .add_member(to_add, can, &signer, other_relevant_docs)
@@ -496,7 +491,9 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<'_, S, T, L>> {
-        self.docs_reachable_by_agent(&self.active.dupe().into())
+        let active = self.active.dupe();
+        let locked_active = self.active.lock().await;
+        self.docs_reachable_by_agent(&Agent::Active(locked_active.id(), active))
             .await
     }
 
@@ -506,8 +503,8 @@ impl<
         membered: Membered<S, T, L>,
     ) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
         match membered {
-            Membered::Group(group) => group.lock().await.transitive_members().await,
-            Membered::Document(doc) => doc.lock().await.transitive_members().await,
+            Membered::Group(_, group) => group.lock().await.transitive_members().await,
+            Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
         }
     }
 
@@ -521,7 +518,7 @@ impl<
         // TODO will be very slow on large hives. Old code here: https://github.com/inkandswitch/keyhive/pull/111/files:
         for doc in self.docs.values() {
             let locked = doc.lock().await;
-            if let Some((_, cap)) = locked.transitive_members().await.get(&agent.id().await) {
+            if let Some((_, cap)) = locked.transitive_members().await.get(&agent.id()) {
                 caps.insert(locked.doc_id(), Ability { doc, can: *cap });
             }
         }
@@ -538,15 +535,17 @@ impl<
 
         for group in self.groups.values() {
             let locked = group.lock().await;
-            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id().await) {
-                caps.insert(locked.group_id().into(), (group.dupe().into(), *can));
+            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
+                let membered = Membered::Group(locked.group_id().into(), group.dupe());
+                caps.insert(locked.group_id().into(), (membered, *can));
             }
         }
 
         for doc in self.docs.values() {
             let locked = doc.lock().await;
-            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id().await) {
-                caps.insert(locked.doc_id().into(), (doc.dupe().into(), *can));
+            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
+                let membered = Membered::Document(locked.doc_id().into(), doc.dupe());
+                caps.insert(locked.doc_id().into(), (membered, *can));
             }
         }
 
@@ -739,20 +738,18 @@ impl<
         add_many_keys(&mut map, active_id, prekeys);
 
         // Add the agents own keys
-        add_many_keys(&mut map, agent.id().await, agent.key_ops().await);
+        add_many_keys(&mut map, agent.id(), agent.key_ops().await);
 
         for (mem, _) in self.membered_reachable_by_agent(agent).await.values() {
             match mem {
-                Membered::Group(group) => {
-                    let (group_id, group_transitive_members) = {
-                        let locked = group.lock().await;
-                        (locked.id(), locked.transitive_members().await)
-                    };
+                Membered::Group(group_id, group) => {
+                    let group_transitive_members =
+                        { group.lock().await.transitive_members().await };
 
                     add_many_keys(
                         &mut map,
-                        group_id,
-                        Agent::from(group.dupe())
+                        (*group_id).into(),
+                        Agent::Group((*group_id).into(), group.dupe())
                             .key_ops()
                             .await
                             .into_iter()
@@ -767,16 +764,13 @@ impl<
                         );
                     }
                 }
-                Membered::Document(doc) => {
-                    let (doc_id, doc_transitive_members) = {
-                        let locked = doc.lock().await;
-                        (locked.id(), locked.transitive_members().await)
-                    };
+                Membered::Document(doc_id, doc) => {
+                    let doc_transitive_members = { doc.lock().await.transitive_members().await };
 
                     add_many_keys(
                         &mut map,
-                        doc_id,
-                        Agent::from(doc.dupe())
+                        (*doc_id).into(),
+                        Agent::Document((*doc_id).into(), doc.dupe())
                             .key_ops()
                             .await
                             .into_iter()
@@ -819,15 +813,15 @@ impl<
         let indie_id = IndividualId(id);
 
         if let Some(doc) = self.docs.get(&DocumentId(id)) {
-            return Some(doc.dupe().into());
+            return Some(Peer::Document(id.into(), doc.dupe()));
         }
 
         if let Some(group) = self.groups.get(&GroupId::new(id)) {
-            return Some(group.dupe().into());
+            return Some(Peer::Group(id.into(), group.dupe()));
         }
 
         if let Some(indie) = self.individuals.get(&indie_id) {
-            return Some(indie.dupe().into());
+            return Some(Peer::Individual(id.into(), indie.dupe()));
         }
 
         None
@@ -839,19 +833,19 @@ impl<
 
         let active_id = { self.active.lock().await.id() };
         if indie_id == active_id {
-            return Some(self.active.dupe().into());
+            return Some(Agent::Active(indie_id, self.active.dupe()));
         }
 
         if let Some(doc) = self.docs.get(&DocumentId(id)) {
-            return Some(doc.dupe().into());
+            return Some(Agent::Document(id.into(), doc.dupe()));
         }
 
         if let Some(group) = self.groups.get(&GroupId::new(id)) {
-            return Some(group.dupe().into());
+            return Some(Agent::Group(id.into(), group.dupe()));
         }
 
         if let Some(indie) = self.individuals.get(&indie_id) {
-            return Some(indie.dupe().into());
+            return Some(Agent::Individual(id.into(), indie.dupe()));
         }
 
         None
@@ -863,21 +857,21 @@ impl<
         let agent = self.get_agent(id).await.unwrap_or_else(|| {
             let indie = Arc::new(Mutex::new(Individual::new(key_op.clone())));
             self.register_individual(indie.dupe());
-            indie.into()
+            Agent::Individual(id.into(), indie)
         });
 
         match agent {
-            Agent::Active(active) => {
+            Agent::Active(_, active) => {
                 active
                     .lock()
                     .await
                     .individual
                     .receive_prekey_op(key_op.clone())?;
             }
-            Agent::Individual(indie) => {
+            Agent::Individual(_, indie) => {
                 indie.lock().await.receive_prekey_op(key_op.clone())?;
             }
-            Agent::Group(group) => {
+            Agent::Group(_, group) => {
                 let mut locked = group.lock().await;
                 if let IdOrIndividual::Individual(indie) = &mut locked.id_or_indie {
                     indie.receive_prekey_op(key_op.clone())?;
@@ -886,7 +880,7 @@ impl<
                     locked.id_or_indie = IdOrIndividual::Individual(individual);
                 }
             }
-            Agent::Document(doc) => {
+            Agent::Document(_, doc) => {
                 let mut locked = doc.lock().await;
                 if let IdOrIndividual::Individual(indie) = &mut locked.group.id_or_indie {
                     indie.receive_prekey_op(key_op.clone())?;
@@ -1189,7 +1183,7 @@ impl<
             .await,
         ));
 
-        let agent = Agent::from(group.dupe());
+        let agent = Agent::Group(group.lock().await.group_id(), group.dupe());
 
         {
             let mut locked_delegations = self.delegations.0.lock().await;
@@ -1356,13 +1350,20 @@ impl<
 
                     let id = sd.payload.delegate;
                     let delegate: Agent<S, T, L> = if id == archive.active.individual.id().into() {
-                        active.dupe().into()
+                        Agent::Active(id.into(), active.dupe())
                     } else {
                         individuals
                             .get(&IndividualId(id))
-                            .map(|i| i.dupe().into())
-                            .or_else(|| groups.get(&GroupId(id)).map(|g| g.dupe().into()))
-                            .or_else(|| docs.get(&DocumentId(id)).map(|d| d.dupe().into()))
+                            .map(|i| Agent::Individual(id.into(), i.dupe().into()))
+                            .or_else(|| {
+                                groups
+                                    .get(&GroupId(id))
+                                    .map(|g| Agent::Group(id.into(), g.dupe().into()))
+                            })
+                            .or_else(|| {
+                                docs.get(&DocumentId(id))
+                                    .map(|d| Agent::Document(id.into(), d.dupe().into()))
+                            })
                             .ok_or(TryFromArchiveError::MissingAgent(Box::new(id)))?
                     };
 
@@ -1696,19 +1697,20 @@ impl<
 //     }
 // }
 
-// impl<
-//         S: AsyncSigner + Clone,
-//         T: ContentRef,
-//         P: for<'de> Deserialize<'de>,
-//         C: CiphertextStore<T, P>,
-//         L: MembershipListener<S, T>,
-//         R: rand::CryptoRng + rand::RngCore,
-//     > Verifiable for Keyhive<S, T, P, C, L, R>
-// {
-//     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-//         self.active.lock().await.verifying_key()
-//     }
-// }
+impl<
+        S: AsyncSigner + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P>,
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > Verifiable for Keyhive<S, T, P, C, L, R>
+{
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        todo!("FIXME")
+        // self.active.lock().await.verifying_key()
+    }
+}
 
 impl<
         S: AsyncSigner + Clone,

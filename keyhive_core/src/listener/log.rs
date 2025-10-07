@@ -19,7 +19,7 @@ use std::{
 };
 use tracing::instrument;
 
-#[derive(From, Into, PartialEq, Eq)]
+#[derive(From, Into)]
 #[derive_where(Debug; T)]
 pub struct Log<S: AsyncSigner, T: ContentRef = [u8; 32]>(
     #[allow(clippy::type_complexity)] pub Arc<Mutex<Vec<Event<S, T, Log<S, T>>>>>,

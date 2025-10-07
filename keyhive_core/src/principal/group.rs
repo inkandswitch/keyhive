@@ -223,7 +223,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         let mut ids = HashSet::new();
         for delegations in self.members.values() {
             let more_ids = delegations[0].payload().delegate.individual_ids().await;
-            ids.extend(more_ids);
+            ids.extend(more_ids.iter());
         }
         ids
     }
@@ -234,7 +234,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     ) -> HashMap<IndividualId, ShareKey> {
         let mut prekeys = HashMap::new();
         for (agent, _access) in self.transitive_members().await.values() {
-            prekeys.extend(agent.pick_individual_prekeys(doc_id).await)
+            prekeys.extend(agent.pick_individual_prekeys(doc_id).await.iter())
         }
         prekeys
     }
@@ -277,7 +277,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             parent_access,
         }) = explore.pop()
         {
-            let id = member.id().await;
+            let id = member.id();
             if id == self.id() {
                 continue;
             }
@@ -288,11 +288,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                 .unwrap_or(&access);
 
             let current_path_access = access.min(parent_access);
-            caps.insert(member.id().await, (member.dupe(), current_path_access));
+            caps.insert(member.id(), (member.dupe(), current_path_access));
 
             if let Some(membered) = match member {
-                Agent::Group(inner_group) => Some(Membered::<S, T, L>::from(inner_group)),
-                Agent::Document(doc) => Some(doc.into()),
+                Agent::Group(id, inner_group) => Some(Membered::Group(id, inner_group.dupe())),
+                Agent::Document(id, doc) => Some(Membered::Document(id, doc.dupe())),
                 _ => None,
             } {
                 for (mem_id, dlgs) in membered.members().await.iter() {
@@ -471,7 +471,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             .await
             .values()
             .filter_map(|(agent, _)| {
-                if let Agent::Document(doc) = agent {
+                if let Agent::Document(_, doc) = agent {
                     Some(doc.dupe())
                 } else {
                     None
@@ -533,7 +533,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                     // "Double up" if you're an admin in case you get concurrently demoted.
                     // We include the admin proofs as well since those could also get revoked.
                     for mem_dlg in member_dlgs.clone().iter() {
-                        if mem_dlg.payload.delegate.id().await != member_to_remove {
+                        if mem_dlg.payload.delegate.id() != member_to_remove {
                             continue;
                         }
 
@@ -608,10 +608,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             (vec![], vec![]),
             |(mut indies, mut docs), (agent, _)| {
                 match agent {
-                    Agent::Individual(individual) => {
+                    Agent::Individual(_, individual) => {
                         indies.push(individual.dupe());
                     }
-                    Agent::Document(doc) => {
+                    Agent::Document(_, doc) => {
                         docs.push(doc.dupe());
                     }
                     _ => (),
@@ -637,13 +637,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         let mut redelegations = vec![];
         if retain_all_other_members {
             for dlg in og_dlgs.iter() {
-                if dlg.payload.delegate.id().await == member_to_remove {
+                if dlg.payload.delegate.id() == member_to_remove {
                     // Don't retain if they've delegated to themself
                     continue;
                 }
 
                 if let Some(proof) = &dlg.payload.proof {
-                    if proof.payload.delegate.id().await == member_to_remove {
+                    if proof.payload.delegate.id() == member_to_remove {
                         let AddMemberUpdate { delegation, .. } = self
                             .add_member_with_manual_content(
                                 dlg.payload.delegate.dupe(),
@@ -741,11 +741,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
 
                     dlgs_in_play.insert(d.signature.to_bytes(), d.dupe());
 
-                    if let Some(mut_dlgs) = self.members.get_mut(&d.payload.delegate.id().await) {
+                    if let Some(mut_dlgs) = self.members.get_mut(&d.payload.delegate.id()) {
                         mut_dlgs.push(d.dupe());
                     } else {
                         self.members
-                            .insert(d.payload.delegate.id().await, nonempty![d.dupe()]);
+                            .insert(d.payload.delegate.id(), nonempty![d.dupe()]);
                     }
                 }
                 MembershipOperation::Revocation(r) => {
@@ -778,7 +778,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                         revoked_dlgs.insert(sig_to_revoke);
 
                         if let Some(dlg) = dlgs_in_play.remove(&sig_to_revoke) {
-                            to_drop.push((dlg.payload.delegate.id().await, sig_to_revoke));
+                            to_drop.push((dlg.payload.delegate.id(), sig_to_revoke));
                         }
 
                         if let Some(dlg_sigs_to_revoke) = reverse_dlg_dep_map.get(&sig_to_revoke) {

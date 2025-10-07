@@ -296,7 +296,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         let mut ops = cgka_ops;
         if let Some(delegations) = self.group.members.get(&member_id) {
             for d in delegations {
-                ids_to_remove.extend(d.payload().delegate.individual_ids().await)
+                ids_to_remove.extend(d.payload().delegate.individual_ids().await.iter())
             }
         }
 
