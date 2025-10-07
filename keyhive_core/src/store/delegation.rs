@@ -59,26 +59,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> DelegationStore
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
-    for DelegationStore<S, T, L>
-{
-    fn eq(&self, other: &Self) -> bool {
-        todo!("FIXME")
-        // self.0 == other.0
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Eq for DelegationStore<S, T, L> {}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
-    for DelegationStore<S, T, L>
-{
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        todo!("FIXME")
-        // self.0.borrow().hash(state);
-    }
-}
-
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for DelegationStore<S, T, L> {
     fn dupe(&self) -> Self {
         Self(self.0.dupe())

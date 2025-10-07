@@ -59,7 +59,7 @@ use thiserror::Error;
 use tracing::instrument;
 
 #[derive(Clone, Derivative)]
-#[derive_where(Debug, PartialEq; T)]
+#[derive_where(Debug; T)]
 pub struct Document<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
@@ -78,7 +78,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     // the init add op.
     // NOTE doesn't register into the top-level Keyhive context
     #[instrument(skip_all)]
-    pub fn from_group(
+    pub async fn from_group(
         group: Group<S, T, L>,
         viewer: &Active<S, T, L>,
         content_heads: NonEmpty<T>,
@@ -90,7 +90,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             content_state: Default::default(),
             known_decryption_keys: HashMap::new(),
         };
-        doc.rebuild();
+        doc.rebuild().await;
         Ok(doc)
     }
 
@@ -328,8 +328,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.group.get_agent_revocations(agent).await
     }
 
-    pub fn rebuild(&mut self) {
-        self.group.rebuild();
+    pub async fn rebuild(&mut self) {
+        self.group.rebuild().await;
         // FIXME also rebuild CGKA?
     }
 

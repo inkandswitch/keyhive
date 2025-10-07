@@ -20,7 +20,7 @@ use std::{
 use thiserror::Error;
 
 /// An [`Agent`] minus the current user.
-#[derive(From, TryInto)]
+#[derive(Debug, From, TryInto)]
 pub enum Peer<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
     Individual(IndividualId, Arc<Mutex<Individual>>),
     Group(GroupId, Arc<Mutex<Group<S, T, L>>>),

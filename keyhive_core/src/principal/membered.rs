@@ -28,7 +28,7 @@ use std::{
 };
 
 /// The union of Agents that have updatable membership
-#[derive(Clone, Dupe)]
+#[derive(Debug, Clone, Dupe)]
 pub enum Membered<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
@@ -187,10 +187,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Document<S
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Membered<S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        todo!("FIXME")
-        // match self {
-        //     Membered::Group(group) => group.lock().await.verifying_key(),
-        //     Membered::Document(document) => document.lock().await.verifying_key(),
-        // }
+        self.agent_id().verifying_key()
     }
 }

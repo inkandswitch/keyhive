@@ -9,7 +9,7 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use futures::prelude::*;
-use futures::{lock::Mutex, stream::FuturesUnordered};
+use futures::stream::FuturesUnordered;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
 

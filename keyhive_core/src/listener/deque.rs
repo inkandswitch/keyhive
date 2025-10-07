@@ -12,11 +12,7 @@ use crate::{
 use derive_more::{From, Into};
 use dupe::Dupe;
 use futures::lock::Mutex;
-use std::{
-    collections::VecDeque,
-    hash::{Hash, Hasher},
-    sync::Arc,
-};
+use std::{collections::VecDeque, sync::Arc};
 use tracing::instrument;
 
 #[derive(Debug, Default, From, Into)]
@@ -64,16 +60,6 @@ impl<S: AsyncSigner, T: ContentRef> Clone for Deque<S, T> {
 impl<S: AsyncSigner, T: ContentRef> Dupe for Deque<S, T> {
     fn dupe(&self) -> Self {
         self.clone()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef> Hash for Deque<S, T>
-where
-    Event<S, T, Deque<S, T>>: Hash,
-{
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        todo!("FIXME")
-        // self.0.borrow().hash(state)
     }
 }
 

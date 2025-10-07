@@ -21,5 +21,3 @@ pub trait CgkaListener {
     #[cfg(feature = "sendable")]
     fn on_cgka_op(&self, data: &Arc<Signed<CgkaOperation>>) -> impl Future<Output = ()> + Send;
 }
-
-// FIXME use the futrues local trick

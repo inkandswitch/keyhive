@@ -13,10 +13,7 @@ use derive_more::{From, Into};
 use derive_where::derive_where;
 use dupe::Dupe;
 use futures::lock::Mutex;
-use std::{
-    hash::{Hash, Hasher},
-    sync::Arc,
-};
+use std::sync::Arc;
 use tracing::instrument;
 
 #[derive(From, Into)]
@@ -65,16 +62,6 @@ impl<S: AsyncSigner, T: ContentRef> Clone for Log<S, T> {
 impl<S: AsyncSigner, T: ContentRef> Dupe for Log<S, T> {
     fn dupe(&self) -> Self {
         self.clone()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef> Hash for Log<S, T>
-where
-    Event<S, T, Log<S, T>>: Hash,
-{
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        todo!("FIXME")
-        // self.0.borrow().hash(state)
     }
 }
 

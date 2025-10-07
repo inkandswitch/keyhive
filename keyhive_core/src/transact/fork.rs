@@ -5,9 +5,11 @@
 
 use futures::lock::Mutex;
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     future::Future,
     hash::Hash,
+    rc::Rc,
     sync::Arc,
 };
 
@@ -69,12 +71,11 @@ impl<K: Clone + Hash + Eq, V: Clone> Fork for HashMap<K, V> {
     }
 }
 
-impl<T: Fork> Fork for Arc<Mutex<T>> {
+impl<T: Fork> Fork for Rc<RefCell<T>> {
     type Forked = T::Forked;
 
     fn fork(&self) -> Self::Forked {
-        todo!("FIXME");
-        // (*self.borrow()).fork()
+        (*self.borrow()).fork()
     }
 }
 
@@ -86,10 +87,28 @@ impl<T: Fork> ForkAsync for T {
     }
 }
 
+impl<T: ForkAsync> ForkAsync for Arc<Mutex<T>> {
+    type AsyncForked = T::AsyncForked;
+
+    async fn fork_async(&self) -> Self::AsyncForked {
+        let locked = self.lock().await;
+        locked.fork_async().await
+    }
+}
+
 impl<T: Fork<Forked = U> + Send + Sync, U: Send + Sync> ForkSend for T {
     type SendableForked = T::Forked;
 
     async fn fork_sendable(&self) -> Self::SendableForked {
         self.fork()
+    }
+}
+
+impl<T: ForkSend + Send> ForkSend for Arc<Mutex<T>> {
+    type SendableForked = T::SendableForked;
+
+    async fn fork_sendable(&self) -> Self::SendableForked {
+        let locked = self.lock().await;
+        locked.fork_sendable().await
     }
 }

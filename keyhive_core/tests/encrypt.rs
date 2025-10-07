@@ -72,7 +72,9 @@ async fn test_encrypt_to_added_member() -> TestResult {
         .await?;
 
     // now sync everything to bob
-    let events = alice.static_events_for_agent(&bob.active().clone().into())?;
+    let events = alice
+        .static_events_for_agent(&bob.active().clone().into())
+        .await?;
     bob.ingest_unsorted_static_events(events.into_values().collect())
         .await?;
 
@@ -80,8 +82,9 @@ async fn test_encrypt_to_added_member() -> TestResult {
     {
         let locked_doc = doc.lock().await;
         let doc_on_bob = bob.get_document(locked_doc.doc_id()).unwrap();
-        let decrypted =
-            bob.try_decrypt_content(doc_on_bob.clone(), encrypted.encrypted_content())?;
+        let decrypted = bob
+            .try_decrypt_content(doc_on_bob.clone(), encrypted.encrypted_content())
+            .await?;
         assert_eq!(decrypted, init_content);
     }
 

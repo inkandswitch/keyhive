@@ -20,8 +20,8 @@ use derive_where::derive_where;
 use dupe::Dupe;
 use std::{cmp::Ordering, collections::BTreeMap, sync::Arc};
 
-#[derive(Clone, Eq)]
-#[derive_where(Debug, PartialEq, Hash; T)]
+#[derive(Clone)]
+#[derive_where(Debug, Hash; T)]
 pub struct GroupState<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
@@ -52,10 +52,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
                 continue;
             }
 
-            delegations.insert(head.dupe());
+            delegations.insert(head.dupe()).await;
 
             for dlg in head.payload().proof_lineage() {
-                delegations.insert(dlg.dupe());
+                delegations.insert(dlg.dupe()).await;
 
                 for rev in dlg.payload().after_revocations.as_slice() {
                     revocations.insert(rev.dupe()).await;

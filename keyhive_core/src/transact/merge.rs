@@ -3,9 +3,11 @@
 use super::fork::{Fork, ForkAsync, ForkSend};
 use futures::lock::Mutex;
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     future::Future,
     hash::Hash,
+    rc::Rc,
     sync::Arc,
 };
 
@@ -30,6 +32,12 @@ pub trait MergeAsync: ForkAsync {
     ///
     /// [`transact_async`]: keyhive_core::transact::transact_async
     fn merge_async(&self, fork: Self::AsyncForked) -> impl Future<Output = ()>;
+}
+
+impl<T: Merge> MergeAsync for Arc<Mutex<T>> {
+    async fn merge_async(&self, fork: Self::AsyncForked) {
+        self.lock().await.merge(fork)
+    }
 }
 
 /// A [`Send`]able version of [`Merge`].
@@ -60,9 +68,8 @@ impl<K: Clone + Hash + Eq, V: Clone> Merge for HashMap<K, V> {
     }
 }
 
-impl<T: Merge> Merge for Arc<Mutex<T>> {
+impl<T: Merge> Merge for Rc<RefCell<T>> {
     fn merge(&mut self, fork: Self::Forked) {
-        todo!("FIXME")
-        // self.borrow_mut().merge(fork)
+        self.borrow_mut().merge(fork)
     }
 }

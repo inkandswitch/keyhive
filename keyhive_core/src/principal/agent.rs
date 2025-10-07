@@ -221,13 +221,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Document<S
 }
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Agent<S, T, L> {
     fn verifying_key(&self) -> VerifyingKey {
-        todo!("FIXME");
-        // match self {
-        //     Agent::Active(a) => a.borrow().verifying_key(),
-        //     Agent::Individual(i) => i.borrow().verifying_key(),
-        //     Agent::Group(g) => (*g).borrow().verifying_key(),
-        //     Agent::Document(d) => d.borrow().group.verifying_key(),
-        // }
+        self.id().verifying_key()
     }
 }
 

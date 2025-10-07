@@ -1,5 +1,9 @@
 use dupe::Dupe;
-use keyhive_core::{access::Access, test_utils::make_simple_keyhive};
+use keyhive_core::{
+    access::Access,
+    principal::{agent::Agent, membered::Membered, peer::Peer},
+    test_utils::make_simple_keyhive,
+};
 use nonempty::nonempty;
 use testresult::TestResult;
 
@@ -42,23 +46,31 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
     let mut bob = make_simple_keyhive().await?;
 
     let bob_contact = bob.contact_card().await?;
-    let bob_on_alice = alice.receive_contact_card(&bob_contact)?;
+    let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
 
     let group = alice.generate_group(vec![]).await?;
     alice
         .add_member(
-            bob_on_alice.dupe().into(),
-            &mut group.dupe().into(),
+            Agent::Individual(bob_on_alice.lock().await.id(), bob_on_alice.dupe()),
+            &mut Membered::Group(group.lock().await.group_id(), group.dupe()),
             Access::Read,
             &[],
         )
         .await?;
 
     let doc = alice
-        .generate_doc(vec![group.dupe().into()], nonempty![[0u8; 32]])
+        .generate_doc(
+            vec![Peer::Group(group.lock().await.group_id(), group.dupe())],
+            nonempty![[0u8; 32]],
+        )
         .await?;
 
-    let reachable = alice.docs_reachable_by_agent(&bob_on_alice.dupe().into());
+    let reachable = alice
+        .docs_reachable_by_agent(&Agent::Individual(
+            bob_on_alice.lock().await.id(),
+            bob_on_alice.dupe().into(),
+        ))
+        .await;
     let locked_doc = doc.lock().await;
     assert_eq!(reachable.len(), 1);
     assert_eq!(
@@ -110,7 +122,7 @@ async fn test_group_members_cycle() -> TestResult {
     let mut bob = make_simple_keyhive().await?;
 
     let bob_contact = bob.contact_card().await?;
-    let bob_on_alice = alice.receive_contact_card(&bob_contact)?;
+    let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
 
     let group = alice.generate_group(vec![]).await?;
     alice
@@ -135,7 +147,9 @@ async fn test_group_members_cycle() -> TestResult {
         )
         .await?;
 
-    let reachable = alice.docs_reachable_by_agent(&bob_on_alice.dupe().into());
+    let reachable = alice
+        .docs_reachable_by_agent(&bob_on_alice.dupe().into())
+        .await;
     assert_eq!(reachable.len(), 1);
     {
         let locked = doc.lock().await;

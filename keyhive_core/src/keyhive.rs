@@ -50,11 +50,10 @@ use crate::{
         revocation::RevocationStore,
     },
     transact::{
-        fork::Fork,
+        fork::ForkAsync,
         merge::{Merge, MergeAsync},
     },
 };
-use derivative::Derivative;
 use derive_where::derive_where;
 use dupe::Dupe;
 use futures::lock::Mutex;
@@ -79,6 +78,9 @@ pub struct Keyhive<
     L: MembershipListener<S, T> = NoListener,
     R: rand::CryptoRng = rand::rngs::ThreadRng,
 > {
+    /// The public verifying key for the active user.
+    verifying_key: ed25519_dalek::VerifyingKey,
+
     /// The [`Active`] user agent.
     active: Arc<Mutex<Active<S, T, L>>>,
 
@@ -138,6 +140,7 @@ impl<
         mut csprng: R,
     ) -> Result<Self, SigningError> {
         Ok(Self {
+            verifying_key: signer.verifying_key().into(),
             active: Arc::new(Mutex::new(
                 Active::generate(signer, event_listener.clone(), &mut csprng).await?,
             )),
@@ -217,7 +220,7 @@ impl<
     ) -> Result<Arc<Mutex<Document<S, T, L>>>, GenerateDocError> {
         for peer in coparents.iter() {
             if self.get_agent(peer.id()).await.is_none() {
-                self.register_peer(peer.dupe());
+                self.register_peer(peer.dupe()).await;
             }
         }
 
@@ -241,10 +244,10 @@ impl<
         .await?;
 
         for head in new_doc.delegation_heads().values() {
-            self.delegations.insert(head.dupe());
+            self.delegations.insert(head.dupe()).await;
 
             for dep in head.payload().proof_lineage() {
-                self.delegations.insert(dep);
+                self.delegations.insert(dep).await;
             }
         }
 
@@ -280,7 +283,7 @@ impl<
             Ok(indie.dupe())
         } else {
             let new_user = Arc::new(Mutex::new(Individual::from(contact_card)));
-            self.register_individual(new_user.dupe());
+            self.register_individual(new_user.dupe()).await;
             Ok(new_user)
         }
     }
@@ -854,11 +857,13 @@ impl<
     #[instrument(skip_all)]
     pub async fn receive_prekey_op(&mut self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
         let id = Identifier(*key_op.issuer());
-        let agent = self.get_agent(id).await.unwrap_or_else(|| {
+        let agent = if let Some(agent) = self.get_agent(id).await {
+            agent
+        } else {
             let indie = Arc::new(Mutex::new(Individual::new(key_op.clone())));
-            self.register_individual(indie.dupe());
+            self.register_individual(indie.dupe()).await;
             Agent::Individual(id.into(), indie)
-        });
+        };
 
         match agent {
             Agent::Active(_, active) => {
@@ -908,7 +913,7 @@ impl<
         }
 
         // NOTE: this is the only place this gets parsed and this verification ONLY happens here
-        // FIXME add a Verified<T> newtype wapper
+        // TODO add a Verified<T> newtype wapper
         static_dlg.try_verify()?;
 
         let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
@@ -985,7 +990,7 @@ impl<
                 .and_then(|content_heads| NonEmpty::collect(content_heads.iter().cloned()))
             {
                 let locked_active = self.active.lock().await;
-                let doc = Document::from_group(group, &locked_active, content_heads)?;
+                let doc = Document::from_group(group, &locked_active, content_heads).await?;
                 self.docs.insert(doc.doc_id(), Arc::new(Mutex::new(doc)));
             } else {
                 self.groups
@@ -1505,6 +1510,7 @@ impl<
         }
 
         Ok(Self {
+            verifying_key: archive.active.individual.verifying_key(),
             active,
             individuals,
             groups,
@@ -1531,7 +1537,7 @@ impl<
         }
         for (id, indie) in archive.individuals {
             if let Some(our_indie) = self.individuals.get_mut(&id) {
-                our_indie.merge(indie);
+                our_indie.merge_async(indie).await;
             } else {
                 self.individuals.insert(id, Arc::new(Mutex::new(indie)));
             }
@@ -1623,79 +1629,79 @@ impl<
     }
 }
 
-// FIXME
-// impl<
-//         S: AsyncSigner + Clone,
-//         T: ContentRef + Clone,
-//         P: for<'de> Deserialize<'de> + Clone,
-//         C: CiphertextStore<T, P> + Clone, // FIXME make the default Arc<Mutex<...>>
-//         L: MembershipListener<S, T>,
-//         R: rand::CryptoRng + rand::RngCore + Clone,
-//     > Fork for Keyhive<S, T, P, C, L, R>
-// {
-//     type Forked = Keyhive<S, T, P, C, Log<S, T>, R>;
-//
-//     async fn fork(&self) -> Self::Forked {
-//         // TODO this is probably fairly slow, and due to the logger type changing
-//         let signer = { self.active.lock().await.signer.clone() };
-//         Keyhive::try_from_archive(
-//             &self.into_archive(),
-//             signer,
-//             self.ciphertext_store.clone(),
-//             Log::new(),
-//             self.csprng.clone(),
-//         )
-//         .expect("local round trip to work")
-//     }
-// }
+impl<
+        S: AsyncSigner + Clone,
+        T: ContentRef + Clone,
+        P: for<'de> Deserialize<'de> + Clone,
+        C: CiphertextStore<T, P> + Clone, // FIXME make the default Arc<Mutex<...>>
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore + Clone,
+    > ForkAsync for Keyhive<S, T, P, C, L, R>
+{
+    type AsyncForked = Keyhive<S, T, P, C, Log<S, T>, R>;
 
-// impl<
-//         S: AsyncSigner + Clone,
-//         T: ContentRef + Clone,
-//         P: for<'de> Deserialize<'de> + Clone,
-//         C: CiphertextStore<T, P> + Clone,
-//         L: MembershipListener<S, T>,
-//         R: rand::CryptoRng + rand::RngCore + Clone,
-//     > MergeAsync for Arc<Mutex<Keyhive<S, T, P, C, L, R>>>
-// {
-//     async fn merge_async(&self, mut fork: Self::AsyncForked) {
-//         self.borrow()
-//             .active
-//             .borrow_mut()
-//             .merge(Arc::unwrap_or_clone(fork.active).into_inner());
-//
-//         {
-//             let mut inner = self.borrow_mut();
-//             for (id, forked_indie) in fork.individuals.drain() {
-//                 if let Some(og_indie) = inner.individuals.get(&id) {
-//                     og_indie
-//                         .borrow_mut()
-//                         .merge(Arc::unwrap_or_clone(forked_indie).into_inner());
-//                 } else {
-//                     inner.individuals.insert(id, forked_indie);
-//                 }
-//             }
-//         }
-//
-//         let forked_listener = fork.event_listener.0.borrow().clone();
-//         for event in forked_listener.iter() {
-//             match event {
-//                 Event::PrekeysExpanded(_add_op) => {
-//                     continue; // NOTE: handled above
-//                 }
-//                 Event::PrekeyRotated(_rot_op) => {
-//                     continue; // NOTE: handled above
-//                 }
-//                 _ => {}
-//             }
-//
-//             self.borrow_mut()
-//                 .receive_static_event(event.clone().into())
-//                 .await
-//                 .expect("prechecked events to work");
-//         }
-//     }
-// }
+    async fn fork_async(&self) -> Self::AsyncForked {
+        // TODO this is probably fairly slow, and due to the logger type changing
+        let signer = { self.active.lock().await.signer.clone() };
+        Keyhive::try_from_archive(
+            &self.into_archive().await,
+            signer,
+            self.ciphertext_store.clone(),
+            Log::new(),
+            self.csprng.clone(),
+        )
+        .await
+        .expect("local round trip to work")
+    }
+}
+
+impl<
+        S: AsyncSigner + Clone,
+        T: ContentRef + Clone,
+        P: for<'de> Deserialize<'de> + Clone,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore + Clone,
+    > MergeAsync for Arc<Mutex<Keyhive<S, T, P, C, L, R>>>
+{
+    async fn merge_async(&self, mut fork: Self::AsyncForked) {
+        let mut locked = self.lock().await;
+        locked
+            .active
+            .lock()
+            .await
+            .merge(fork.active.lock().await.clone());
+
+        for (id, forked_indie) in fork.individuals.drain() {
+            if let Some(og_indie) = locked.individuals.get(&id) {
+                og_indie
+                    .lock()
+                    .await
+                    .merge(forked_indie.lock().await.clone())
+            } else {
+                locked.individuals.insert(id, forked_indie);
+            }
+        }
+
+        let forked_listener = { fork.event_listener.0.lock().await.clone() };
+        for event in forked_listener.iter() {
+            match event {
+                Event::PrekeysExpanded(_add_op) => {
+                    continue; // NOTE: handled above
+                }
+                Event::PrekeyRotated(_rot_op) => {
+                    continue; // NOTE: handled above
+                }
+                _ => {}
+            }
+
+            locked
+                .receive_static_event(event.clone().into())
+                .await
+                .expect("prechecked events to work");
+        }
+    }
+}
 
 impl<
         S: AsyncSigner + Clone,
@@ -1707,22 +1713,7 @@ impl<
     > Verifiable for Keyhive<S, T, P, C, L, R>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        todo!("FIXME")
-        // self.active.lock().await.verifying_key()
-    }
-}
-
-impl<
-        S: AsyncSigner + Clone,
-        T: ContentRef,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P>,
-        L: MembershipListener<S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > From<&Keyhive<S, T, P, C, L, R>> for Agent<S, T, L>
-{
-    fn from(context: &Keyhive<S, T, P, C, L, R>) -> Self {
-        context.active.dupe().into()
+        self.verifying_key
     }
 }
 
@@ -2152,7 +2143,7 @@ mod tests {
         assert_eq!(middle.individuals.len(), 3); // NOTE now includes Right
         assert_eq!(middle.groups.len(), 1);
         assert_eq!(middle.docs.len(), 1);
-        assert_eq!(middle.delegations.lock().await.len(), 4);
+        assert_eq!(middle.delegations.0.lock().await.len(), 4);
     }
 
     #[tokio::test]
@@ -2197,7 +2188,7 @@ mod tests {
         // Now add bob to alices document using the new op
         let add_op = KeyOp::Add(add_bob_op);
         let bob_on_alice = Arc::new(Mutex::new(Individual::new(add_op.dupe())));
-        assert!(alice.register_individual(bob_on_alice.clone()));
+        assert!(alice.register_individual(bob_on_alice.clone()).await);
         alice
             .add_member(
                 bob_on_alice.dupe().into(),
