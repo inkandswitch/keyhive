@@ -1185,6 +1185,16 @@ impl<
 
     #[instrument(skip(self), fields(khid = %self.id()))]
     pub fn into_archive(&self) -> Archive<T> {
+        let mut individuals: HashMap<IndividualId, Individual> = self
+            .individuals
+            .iter()
+            .map(|(k, rc_v)| (*k, rc_v.borrow().clone()))
+            .collect();
+
+        // Include the active individual
+        let active_id = self.active.borrow().id();
+        individuals.insert(active_id, self.active.borrow().individual.clone());
+
         Archive {
             active: self.active.borrow().into_archive(),
             topsorted_ops: MembershipOperation::<S, T, L>::topsort(
@@ -1194,11 +1204,7 @@ impl<
             .into_iter()
             .map(|(k, v)| (k.into(), v.into()))
             .collect(),
-            individuals: self
-                .individuals
-                .iter()
-                .map(|(k, rc_v)| (*k, rc_v.borrow().clone()))
-                .collect(),
+            individuals,
             groups: self
                 .groups
                 .iter()

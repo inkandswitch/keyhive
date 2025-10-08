@@ -1,14 +1,15 @@
 {
   "name": "@keyhive/keyhive",
-  "version": "0.0.0-alpha.26",
+  "version": "0.0.0-alpha.27",
   "description": "",
   "main": "pkg/keyhive_wasm.js",
   "scripts": {
-    "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
+    "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim && pnpm run copy-e2e",
     "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release -- --features ingest_static",
     "build-bundler": "wasm-pack build --out-dir pkg --target bundler --release -- --features ingest_static",
     "build-web": "wasm-pack build --out-dir pkg-web --target web --release -- --features ingest_static",
-    "build-slim": "node build_slim.js"
+    "build-slim": "node build_slim.js",
+    "copy-e2e": "cp -r pkg-slim/* e2e/server/pkg/"
   },
   "keywords": [],
   "author": "",

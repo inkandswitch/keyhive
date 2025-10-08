@@ -175,4 +175,54 @@ test.describe("Keyhive", async () => {
       expect(out.events[0]).toBe("PREKEYS_EXPANDED");
     });
   });
+
+  test.describe("archive ingestion across keyhives", async () => {
+    test("different keyhive can ingest archive with document", async ({ page }) => {
+      const out = await page.evaluate(async () => {
+        const { Keyhive, Signer, ChangeRef, CiphertextStore, Archive } = window.keyhive;
+
+        // Create first keyhive and a document
+        const signer1 = await Signer.generate();
+        const store1 = CiphertextStore.newInMemory();
+        const kh1 = await Keyhive.init(signer1, store1, () => {});
+
+        const changeRef = new ChangeRef(new Uint8Array([1, 2, 3]));
+        await kh1.generateDocument([], changeRef, []);
+
+        const kh1Id = kh1.idString;
+
+        // Export archive from first keyhive
+        const archive = kh1.toArchive();
+        const archiveBytes = archive.toBytes();
+
+        // Create second keyhive with different identity
+        const signer2 = await Signer.generate();
+        const store2 = CiphertextStore.newInMemory();
+        const kh2 = await Keyhive.init(signer2, store2, () => {});
+        const kh2Id = kh2.idString;
+
+        // Try to ingest the archive into the second keyhive
+        let ingestError = null;
+        let ingestSuccess = false;
+        try {
+          const archiveToIngest = new Archive(archiveBytes);
+          await kh2.ingestArchive(archiveToIngest);
+          ingestSuccess = true;
+        } catch (e) {
+          ingestError = JSON.stringify(e, Object.getOwnPropertyNames(e));
+        }
+
+        return {
+          kh1Id,
+          kh2Id,
+          ingestError,
+          ingestSuccess,
+        };
+      });
+
+      expect(out.kh1Id).not.toBe(out.kh2Id);
+      expect(out.ingestSuccess).toBe(true);
+      expect(out.ingestError).toBeNull();
+    });
+  });
 });
