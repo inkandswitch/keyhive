@@ -123,8 +123,8 @@ impl<
     > Keyhive<S, T, P, C, L, R>
 {
     #[instrument(skip_all)]
-    pub async fn id(&self) -> IndividualId {
-        self.active.lock().await.id()
+    pub fn id(&self) -> IndividualId {
+        self.verifying_key.into()
     }
 
     #[instrument(skip_all)]

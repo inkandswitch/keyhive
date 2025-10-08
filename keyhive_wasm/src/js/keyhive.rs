@@ -85,7 +85,11 @@ impl JsKeyhive {
             .generate_group(coparents.into_iter().map(|p| p.0).collect::<Vec<_>>())
             .await?;
 
-        Ok(JsGroup(group))
+        let group_id = { group.lock().await.group_id() };
+        Ok(JsGroup {
+            group_id,
+            inner: group.dupe(),
+        })
     }
 
     #[wasm_bindgen(js_name = generateDocument)]
@@ -95,17 +99,25 @@ impl JsKeyhive {
         initial_content_ref_head: JsChangeRef,
         more_initial_content_refs: Vec<JsChangeRef>,
     ) -> Result<JsDocument, JsGenerateDocError> {
-        Ok(self
+        let doc = self
             .0
             .generate_doc(
-                coparents.into_iter().map(Into::into).collect::<Vec<_>>(),
+                coparents
+                    .into_iter()
+                    .map(|js_peer| js_peer.0)
+                    .collect::<Vec<_>>(),
                 NonEmpty {
                     head: initial_content_ref_head,
                     tail: more_initial_content_refs.into_iter().collect(),
                 },
             )
-            .await?
-            .into())
+            .await?;
+
+        let doc_id = { doc.lock().await.doc_id() };
+        Ok(JsDocument {
+            doc_id,
+            inner: doc.dupe(),
+        })
     }
 
     #[wasm_bindgen(js_name = trySign)]
@@ -123,7 +135,7 @@ impl JsKeyhive {
     ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
         Ok(self
             .0
-            .try_encrypt_content(doc.0, &content_ref, &pred_refs, content)
+            .try_encrypt_content(doc.inner, &content_ref, &pred_refs, content)
             .await?
             .into())
     }
@@ -139,18 +151,18 @@ impl JsKeyhive {
     ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
         Ok(self
             .0
-            .try_encrypt_content(doc.0, &content_ref, &pred_refs, content)
+            .try_encrypt_content(doc.inner, &content_ref, &pred_refs, content)
             .await?
             .into())
     }
 
     #[wasm_bindgen(js_name = tryDecrypt)]
-    pub fn try_decrypt(
+    pub async fn try_decrypt(
         &mut self,
         doc: JsDocument,
         encrypted: JsEncrypted,
     ) -> Result<Vec<u8>, JsDecryptError> {
-        Ok(self.0.try_decrypt_content(doc.0, &encrypted.0)?)
+        Ok(self.0.try_decrypt_content(doc.inner, &encrypted.0).await?)
     }
 
     #[wasm_bindgen(js_name = addMember)]
@@ -163,7 +175,7 @@ impl JsKeyhive {
     ) -> Result<JsSignedDelegation, JsAddMemberError> {
         let other_docs_refs: Vec<_> = other_relevant_docs
             .iter()
-            .map(|js_doc| js_doc.0.dupe())
+            .map(|js_doc| js_doc.inner.dupe())
             .collect();
 
         let other_docs: Vec<_> = other_docs_refs.into_iter().collect();
@@ -197,23 +209,25 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = reachableDocs)]
-    pub fn reachable_docs(&self) -> Vec<Summary> {
-        self.0
-            .reachable_docs()
-            .into_values()
-            .fold(Vec::new(), |mut acc, ability| {
-                acc.push(Summary {
-                    doc: JsDocument(ability.doc().dupe()),
-                    access: JsAccess(ability.can()),
-                });
-                acc
-            })
+    pub async fn reachable_docs(&self) -> Vec<Summary> {
+        let mut acc = Vec::new();
+        for ability in self.0.reachable_docs().await.into_values() {
+            let doc_id = { ability.doc().lock().await.doc_id() };
+            acc.push(Summary {
+                doc: JsDocument {
+                    doc_id,
+                    inner: ability.doc().dupe(),
+                },
+                access: JsAccess(ability.can()),
+            });
+        }
+        acc
     }
 
     #[wasm_bindgen(js_name = forcePcsUpdate)]
     pub async fn force_pcs_update(&mut self, doc: &JsDocument) -> Result<(), JsEncryptError> {
         self.0
-            .force_pcs_update(doc.0.dupe())
+            .force_pcs_update(doc.inner.dupe())
             .await
             .map_err(EncryptContentError::from)?;
         Ok(())
@@ -244,24 +258,31 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = receiveContactCard)]
-    pub fn receive_contact_card(
+    pub async fn receive_contact_card(
         &mut self,
         contact_card: JsContactCard,
     ) -> Result<JsIndividual, JsReceivePreKeyOpError> {
-        match self.0.receive_contact_card(&contact_card) {
-            Ok(individual) => Ok(JsIndividual(individual)),
+        match self.0.receive_contact_card(&contact_card).await {
+            Ok(individual) => {
+                let id = { individual.lock().await.id().into() };
+                let js_indie = JsIndividual {
+                    id,
+                    inner: individual.dupe(),
+                };
+                Ok(js_indie)
+            }
             Err(err) => Err(JsReceivePreKeyOpError(err)),
         }
     }
 
     #[wasm_bindgen(js_name = getAgent)]
-    pub fn get_agent(&self, id: JsIdentifier) -> Option<JsAgent> {
-        self.0.get_agent(id.0).map(JsAgent)
+    pub async fn get_agent(&self, id: JsIdentifier) -> Option<JsAgent> {
+        self.0.get_agent(id.0).await.map(JsAgent)
     }
 
     #[wasm_bindgen(js_name = intoArchive)]
-    pub fn into_archive(self) -> JsArchive {
-        self.0.into_archive().into()
+    pub async fn into_archive(self) -> JsArchive {
+        self.0.into_archive().await.into()
     }
 }
 
@@ -338,7 +359,9 @@ mod tests {
             let encrypted = bh
                 .try_encrypt(doc.clone(), content_ref.clone(), pred_refs, &content)
                 .await?;
-            let decrypted = bh.try_decrypt(doc.clone(), encrypted.encrypted_content())?;
+            let decrypted = bh
+                .try_decrypt(doc.clone(), encrypted.encrypted_content())
+                .await?;
             assert_eq!(content, decrypted);
             bh.force_pcs_update(&doc).await?;
             let content_2 = vec![5, 6, 7, 8, 9];
@@ -347,7 +370,9 @@ mod tests {
             let encrypted_2 = bh
                 .try_encrypt(doc.clone(), content_ref_2, pred_refs_2, &content_2)
                 .await?;
-            let decrypted_2 = bh.try_decrypt(doc.clone(), encrypted_2.encrypted_content())?;
+            let decrypted_2 = bh
+                .try_decrypt(doc.clone(), encrypted_2.encrypted_content())
+                .await?;
             assert_eq!(content_2, decrypted_2);
             Ok(())
         }

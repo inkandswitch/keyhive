@@ -29,7 +29,7 @@ impl JsArchive {
     }
 
     #[wasm_bindgen(js_name = tryToKeyhive)]
-    pub fn try_to_keyhive(
+    pub async fn try_to_keyhive(
         &self,
         ciphertext_store: JsCiphertextStore,
         signer: JsSigner,
@@ -42,6 +42,7 @@ impl JsArchive {
             event_handler.clone().into(),
             rand::thread_rng(),
         )
+        .await
         .map_err(|e| JsTryFromArchiveError(Box::new(e)))?
         .into())
     }
