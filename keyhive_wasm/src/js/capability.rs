@@ -36,6 +36,7 @@ impl Capability {
     }
 }
 
+// FIXME rename or rework
 #[wasm_bindgen]
 #[derive(Debug, Clone, Dupe)]
 pub struct SimpleCapability {

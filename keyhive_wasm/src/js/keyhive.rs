@@ -1,27 +1,24 @@
-use std::{cell::RefCell, rc::Rc};
-
 use crate::js::{
-    capability::SimpleCapability, document_id::JsDocumentId, group_id::JsGroupId, individual::JsIndividual
+    capability::SimpleCapability, document_id::JsDocumentId, group_id::JsGroupId,
+    individual::JsIndividual,
 };
 
 use super::{
-    access::JsAccess, agent::JsAgent, archive::JsArchive,
-    change_ref::JsChangeRef, ciphertext_store::JsCiphertextStore, contact_card::JsContactCard,
-    document::JsDocument, encrypted::JsEncrypted,
-    encrypted_content_with_update::JsEncryptedContentWithUpdate, event_handler::JsEventHandler,
-    group::JsGroup, identifier::JsIdentifier,
-    individual_id::JsIndividualId, js_error::JsError, membered::JsMembered, peer::JsPeer,
-    share_key::JsShareKey, signed::JsSigned,
-    signed_delegation::JsSignedDelegation, signed_revocation::JsSignedRevocation, signer::JsSigner,
+    access::JsAccess, agent::JsAgent, archive::JsArchive, change_ref::JsChangeRef,
+    ciphertext_store::JsCiphertextStore, contact_card::JsContactCard, document::JsDocument,
+    encrypted::JsEncrypted, encrypted_content_with_update::JsEncryptedContentWithUpdate,
+    event_handler::JsEventHandler, generate_doc_error::JsGenerateDocError, group::JsGroup,
+    identifier::JsIdentifier, individual_id::JsIndividualId, js_error::JsError,
+    membered::JsMembered, peer::JsPeer, revoke_member_error::JsRevokeMemberError,
+    share_key::JsShareKey, signed::JsSigned, signed_delegation::JsSignedDelegation,
+    signed_revocation::JsSignedRevocation, signer::JsSigner, signing_error::JsSigningError,
     summary::Summary,
 };
 use derive_more::{From, Into};
 use dupe::{Dupe, IterDupedExt};
 use keyhive_core::{
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
-    principal::{
-        agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError,
-    },
+    principal::{agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError},
 };
 use nonempty::NonEmpty;
 use rand::rngs::OsRng;
@@ -64,8 +61,11 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn individual(&self) -> JsIndividual {
-        JsIndividual(Rc::new(RefCell::new(self.0.individual().clone())))
+    pub async fn individual(&self) -> JsIndividual {
+        JsIndividual {
+            id: self.0.id().clone(),
+            inner: self.0.individual().await.dupe(),
+        }
     }
 
     #[wasm_bindgen(getter, js_name = idString)]
@@ -81,10 +81,15 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = generateGroup)]
-    pub async fn generate_group(&self, coparents: &[JsPeer]) -> Result<JsGroup, JsSigningError> {
+    pub async fn generate_group(&self, coparents: Vec<JsPeer>) -> Result<JsGroup, JsSigningError> {
         let group = self
             .0
-            .generate_group(coparents.into_iter().map(|p| p.clone().0).collect::<Vec<_>>())
+            .generate_group(
+                coparents
+                    .into_iter()
+                    .map(|p| p.clone().0)
+                    .collect::<Vec<_>>(),
+            )
             .await?;
 
         let group_id = { group.lock().await.group_id() };
@@ -131,9 +136,9 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = tryEncrypt)]
     pub async fn try_encrypt(
         &self,
-        doc: &JsDocument,
-        content_ref: &JsChangeRef,
-        pred_refs: &[JsChangeRef],
+        doc: JsDocument,
+        content_ref: JsChangeRef,
+        pred_refs: Vec<JsChangeRef>,
         content: &[u8],
     ) -> Result<JsEncryptedContentWithUpdate, JsError> {
         Ok(self
@@ -147,14 +152,14 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = tryEncryptArchive)]
     pub async fn try_encrypt_archive(
         &self,
-        doc: &JsDocument, // FIXME make all incominh values borrows
-        content_ref: JsChangeRef,
-        pred_refs: Vec<JsChangeRef>,
+        doc: &JsDocument,
+        content_ref: &JsChangeRef,
+        pred_refs: Vec<JsChangeRef>, // FIXME
         content: &[u8],
     ) -> Result<JsEncryptedContentWithUpdate, JsError> {
         Ok(self
             .0
-            .try_encrypt_content(doc.inner, &content_ref, &pred_refs, content)
+            .try_encrypt_content(doc.inner.dupe(), &content_ref, &pred_refs, content)
             .await?
             .into())
     }
@@ -165,7 +170,10 @@ impl JsKeyhive {
         doc: &JsDocument,
         encrypted: &JsEncrypted,
     ) -> Result<Vec<u8>, JsDecryptError> {
-        Ok(self.0.try_decrypt_content(doc.inner, &encrypted.0).await?)
+        Ok(self
+            .0
+            .try_decrypt_content(doc.inner.dupe(), &encrypted.0)
+            .await?)
     }
 
     #[wasm_bindgen(js_name = addMember)]
@@ -202,7 +210,7 @@ impl JsKeyhive {
     ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
         let res = self
             .0
-            .revoke_member(to_revoke.id(), retain_all_other_members, &membered.0)
+            .revoke_member(to_revoke.id().0, retain_all_other_members, &membered.0)
             .await?;
 
         Ok(res
@@ -281,34 +289,38 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = getAgent)]
     pub async fn get_agent(&self, id: &JsIdentifier) -> Option<JsAgent> {
         self.0.get_agent(id.0).await.map(JsAgent)
+    }
 
     #[wasm_bindgen(js_name = getGroup)]
-    pub fn get_group(&self, id: &JsGroupId) -> Option<JsGroup> {
-        self.0
-            .get_group(id.0.clone())
-            .map(|g| JsGroup(g.dupe()))
+    pub async fn get_group(&self, group_id: &JsGroupId) -> Option<JsGroup> {
+        let id = group_id.dupe().0;
+        self.0.get_group(id).await.map(|g| JsGroup {
+            group_id: id,
+            inner: g.dupe(),
+        })
     }
 
     #[wasm_bindgen(js_name = getDocument)]
-    pub fn get_document(&self, id: &JsDocumentId) -> Option<JsDocument> {
+    pub async fn get_document(&self, doc_id: &JsDocumentId) -> Option<JsDocument> {
         tracing::info!("JsKeyhive::get_document");
-        self.0
-            .get_document(id.clone().0)
-            .map(|d| JsDocument(d.dupe()))
+        let id = doc_id.dupe().0;
+        self.0.get_document(id).await.map(|d| JsDocument {
+            doc_id: id,
+            inner: d.dupe(),
+        })
     }
 
     #[wasm_bindgen(js_name = docMemberCapabilities)]
-    pub fn doc_member_capabilities(&self, doc_id: &JsDocumentId) -> Vec<SimpleCapability> {
-        if let Some(doc_ref) = self.0.get_document(doc_id.clone().0) {
-            doc_ref
-                .borrow()
-                .transitive_members()
+    pub async fn doc_member_capabilities(&self, doc_id: &JsDocumentId) -> Vec<SimpleCapability> {
+        if let Some(doc) = self.0.get_document(doc_id.clone().0).await {
+            let transitive_members = { doc.lock().await.transitive_members().await };
+            transitive_members
                 .into_iter()
                 // Skip the document itself
                 .filter(|(id, _)| *id != doc_id.0.into())
                 .filter_map(|(_, (agent, access))| {
                     // Currently we only return Individuals and the Agent
-                    matches!(agent, Agent::Individual(_) | Agent::Active(_)).then(|| {
+                    matches!(agent, Agent::Individual(_, _) | Agent::Active(_, _)).then(|| {
                         SimpleCapability {
                             who: agent,
                             can: access,
@@ -322,12 +334,14 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = accessForDoc)]
-    pub fn access_for_doc(&self, id: &JsIdentifier, doc_id: &JsDocumentId) -> Option<JsAccess> {
-        self.0
-            .get_document(doc_id.clone().0)?
-            .borrow()
-            .transitive_members()
-            .get(&id.clone().0)
+    pub async fn access_for_doc(
+        &self,
+        id: &JsIdentifier,
+        doc_id: &JsDocumentId,
+    ) -> Option<JsAccess> {
+        let doc = self.0.get_document(doc_id.clone().0).await?;
+        let mems = { doc.lock().await.transitive_members().await };
+        mems.get(&id.clone().0)
             .map(|(_, access)| JsAccess((*access).clone()))
     }
 
@@ -337,8 +351,8 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = toArchive)]
-    pub fn to_archive(&self) -> JsArchive {
-        self.0.into_archive().into()
+    pub async fn to_archive(&self) -> JsArchive {
+        self.0.into_archive().await.into()
     }
 
     #[cfg(any(test, feature = "ingest_static"))]

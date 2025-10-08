@@ -28,36 +28,35 @@ use crate::{
         group::delegation::{Delegation, DelegationError},
         membered::Membered,
     },
-    transact::{fork::Fork, merge::Merge},
+    transact::{
+        fork::Fork,
+        merge::{Merge, MergeAsync},
+    },
 };
 use derivative::Derivative;
 use dupe::Dupe;
 use futures::{lock::Mutex, prelude::*};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
-#[derive(Clone, Derivative, Serialize, Deserialize)]
-#[derivative(Debug, Hash, PartialEq)]
+#[derive(Clone, Derivative)]
+#[derivative(Debug)]
 pub struct Active<S: AsyncSigner, T: ContentRef = [u8; 32], L: PrekeyListener = NoListener> {
     /// The signing key of the active agent.
     #[derivative(Debug = "ignore")]
     pub(crate) signer: S,
 
     // TODO generalize to use e.g. KMS for X25519 secret keys
-    #[derivative(
-        Debug(format_with = "crate::util::debug::prekey_fmt"),
-        Hash(hash_with = "crate::util::hasher::keys"),
-        PartialEq(compare_with = "crate::util::partial_eq::prekey_partial_eq")
-    )]
-    pub(crate) prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>,
+    pub(crate) prekey_pairs: Arc<Mutex<BTreeMap<ShareKey, ShareSecretKey>>>,
+
+    pub(crate) id: IndividualId,
 
     /// The [`Individual`] representation (how others see this agent).
-    pub(crate) individual: Individual,
+    pub(crate) individual: Arc<Mutex<Individual>>,
 
     ///The listener for prekey events.
-    #[serde(skip)]
     #[derivative(Debug = "ignore", PartialEq = "ignore")]
     pub(crate) listener: L,
 
@@ -114,13 +113,16 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
             .extend(ops)
             .expect("newly generated local op should be valid");
 
+        let id = signer.verifying_key().into();
+
         Ok(Self {
-            individual: Individual {
-                id: signer.verifying_key().into(),
+            id,
+            individual: Arc::new(Mutex::new(Individual {
+                id,
                 prekeys: prekey_state.build(),
                 prekey_state,
-            },
-            prekey_pairs,
+            })),
+            prekey_pairs: Arc::new(Mutex::new(prekey_pairs)),
             listener,
             signer,
             _phantom: PhantomData,
@@ -129,7 +131,7 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
 
     /// Getter for the agent's [`IndividualId`].
     pub fn id(&self) -> IndividualId {
-        self.individual.id()
+        self.id
     }
 
     /// Getter for the agent's [`AgentId`].
@@ -138,8 +140,8 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     }
 
     /// The agent's underlying [`Individual`].
-    pub fn individual(&self) -> &Individual {
-        &self.individual
+    pub fn individual(&self) -> Arc<Mutex<Individual>> {
+        self.individual.dupe()
     }
 
     /// Create a [`ShareKey`] that is not broadcast via the prekey state.
@@ -147,19 +149,20 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
         &mut self,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
-        let share_key = self.individual.pick_prekey(DocumentId(self.id().into())); // Hack
-        let contact_key = self.rotate_prekey(*share_key, csprng.dupe()).await?;
+        let share_key = {
+            // TODO total hack
+            let locked = self.individual.lock().await;
+            locked.pick_prekey(DocumentId(self.id().into())).dupe()
+        };
+        let contact_key = self.rotate_prekey(share_key, csprng.dupe()).await?;
         self.rotate_prekey(contact_key.payload.new, csprng).await?;
         Ok(contact_key)
     }
 
     /// Pseudorandomly select a prekey out of the current prekeys.
-    pub fn pick_prekey(&self, doc_id: DocumentId) -> &ShareKey {
-        tracing::trace!(
-            num_prekeys = self.individual.prekeys.len(),
-            "picking prekey for document {doc_id}",
-        );
-        self.individual.pick_prekey(doc_id)
+    pub async fn pick_prekey(&self, doc_id: DocumentId) -> ShareKey {
+        tracing::trace!("picking prekey for document {doc_id}",);
+        self.individual.lock().await.pick_prekey(doc_id).dupe()
     }
 
     /// Replace a particular prekey with a new one.
@@ -182,15 +185,23 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
             .await?,
         );
 
-        self.prekey_pairs.insert(new_public, new_secret);
+        {
+            self.prekey_pairs
+                .lock()
+                .await
+                .insert(new_public, new_secret);
+        }
 
-        self.individual
-            .prekey_state
-            .insert_op(KeyOp::Rotate(rot_op.dupe()))
-            .expect("the op we just signed to be valid");
+        {
+            let mut locked_individual = self.individual.lock().await;
+            locked_individual
+                .prekey_state
+                .insert_op(KeyOp::Rotate(rot_op.dupe()))
+                .expect("the op we just signed to be valid");
 
-        self.individual.prekeys.remove(&old_prekey);
-        self.individual.prekeys.insert(new_public);
+            locked_individual.prekeys.remove(&old_prekey);
+            locked_individual.prekeys.insert(new_public);
+        }
 
         self.listener.on_prekey_rotated(&rot_op).await;
         Ok(rot_op)
@@ -215,12 +226,23 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
                 .await?,
         );
 
-        self.individual
-            .prekey_state
-            .insert_op(KeyOp::Add(op.dupe()))
-            .expect("the op we just signed to be valid");
-        self.individual.prekeys.insert(new_public);
-        self.prekey_pairs.insert(new_public, new_secret);
+        {
+            let mut locked_individual = self.individual.lock().await;
+
+            locked_individual
+                .prekey_state
+                .insert_op(KeyOp::Add(op.dupe()))
+                .expect("the op we just signed to be valid");
+
+            locked_individual.prekeys.insert(new_public);
+        }
+
+        {
+            self.prekey_pairs
+                .lock()
+                .await
+                .insert(new_public, new_secret);
+        }
 
         self.listener.on_prekeys_expanded(&op).await;
         Ok(op)
@@ -253,10 +275,10 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     }
 
     /// Serialize for storage.
-    pub fn into_archive(&self) -> ActiveArchive {
+    pub async fn into_archive(&self) -> ActiveArchive {
         ActiveArchive {
-            prekey_pairs: self.prekey_pairs.clone(),
-            individual: self.individual.clone(),
+            prekey_pairs: self.prekey_pairs.lock().await.clone(),
+            individual: self.individual.lock().await.clone(),
         }
     }
 
@@ -267,8 +289,9 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
             "loaded from archive"
         );
         Self {
-            prekey_pairs: archive.prekey_pairs.clone(),
-            individual: archive.individual.clone(),
+            id: signer.verifying_key().into(),
+            prekey_pairs: Arc::new(Mutex::new(archive.prekey_pairs.clone())),
+            individual: Arc::new(Mutex::new(archive.individual.clone())),
             signer,
             listener,
             _phantom: PhantomData,
@@ -293,6 +316,7 @@ impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Fork for Active<S
 
     fn fork(&self) -> Self::Forked {
         Active {
+            id: self.id,
             signer: self.signer.clone(),
             prekey_pairs: self.prekey_pairs.clone(),
             individual: self.individual.clone(),
@@ -302,10 +326,15 @@ impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Fork for Active<S
     }
 }
 
-impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Merge for Active<S, T, L> {
-    fn merge(&mut self, fork: Self::Forked) {
-        self.prekey_pairs.extend(fork.prekey_pairs);
-        self.individual.merge(fork.individual);
+impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> MergeAsync for Active<S, T, L> {
+    async fn merge_async(&self, fork: Self::AsyncForked) {
+        let forked_individual = { fork.individual.lock().await.clone() };
+        let forked_prekey_pairs = { fork.prekey_pairs.lock().await.clone() };
+        {
+            self.prekey_pairs.lock().await.extend(forked_prekey_pairs);
+        }
+
+        self.individual.lock().await.merge(forked_individual);
     }
 }
 

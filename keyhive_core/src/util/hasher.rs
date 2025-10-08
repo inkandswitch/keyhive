@@ -1,13 +1,7 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeSet, HashSet},
     hash::{DefaultHasher, Hash, Hasher},
 };
-
-pub(crate) fn keys<H: Hasher, K: Hash, V>(tree: &BTreeMap<K, V>, state: &mut H) {
-    for k in tree.keys() {
-        std::hash::Hash::hash(k, state);
-    }
-}
 
 pub(crate) fn hash_set<H: Hasher, K: Hash>(tree: &HashSet<K>, state: &mut H) {
     tree.iter()

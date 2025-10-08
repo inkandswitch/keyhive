@@ -9,6 +9,7 @@ use futures::lock::Mutex;
 use keyhive_core::principal::{
     agent::Agent,
     document::{id::DocumentId, Document},
+    membered::Membered,
     peer::Peer,
 };
 use std::sync::Arc;
@@ -30,7 +31,7 @@ impl JsDocument {
 
     #[wasm_bindgen(getter)]
     pub fn doc_id(&self) -> JsDocumentId {
-        JsDocumentId(self.0.borrow().doc_id())
+        JsDocumentId(self.doc_id)
     }
 
     #[wasm_bindgen(js_name = toPeer)]
@@ -46,6 +47,6 @@ impl JsDocument {
 
     #[wasm_bindgen(js_name = toMembered)]
     pub fn to_membered(&self) -> JsMembered {
-        JsMembered(self.0.dupe().into())
+        JsMembered(Membered::Document(self.doc_id, self.inner.dupe()))
     }
 }

@@ -21,16 +21,6 @@ pub struct JsIndividual {
 
 #[wasm_bindgen(js_class = Individual)]
 impl JsIndividual {
-    #[wasm_bindgen(getter)]
-    pub fn id(&self) -> JsIdentifier {
-        JsIdentifier(self.id.into())
-    }
-
-    #[wasm_bindgen(getter, js_name = individualId)]
-    pub async fn individual_id(&self) -> JsIndividualId {
-        JsIndividualId(self.id)
-    }
-
     #[wasm_bindgen(js_name = toPeer)]
     pub fn to_peer(&self) -> JsPeer {
         JsPeer(Peer::Individual(self.id, self.inner.dupe()))
@@ -44,13 +34,12 @@ impl JsIndividual {
 
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> JsIdentifier {
-        JsIdentifier(self.0.borrow().id().into())
+        JsIdentifier(self.id.into())
     }
 
     #[wasm_bindgen(getter, js_name = individualId)]
     pub fn individual_id(&self) -> JsIndividualId {
-        JsIndividualId(self.0.borrow().id())
->>>>>>> 655b543 (Update JS WASM API to support end-to-end application)
+        JsIndividualId(self.id)
     }
 
     #[wasm_bindgen(js_name = pickPrekey)]

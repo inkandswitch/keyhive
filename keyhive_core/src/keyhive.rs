@@ -139,15 +139,20 @@ impl<
         event_listener: L,
         mut csprng: R,
     ) -> Result<Self, SigningError> {
+        let verifying_key = signer.verifying_key();
+        let inner_active = Active::generate(signer, event_listener.clone(), &mut csprng).await?;
+        let active_id = inner_active.id();
+
         Ok(Self {
-            verifying_key: signer.verifying_key(),
-            active: Arc::new(Mutex::new(
-                Active::generate(signer, event_listener.clone(), &mut csprng).await?,
-            )),
-            individuals: Arc::new(Mutex::new(HashMap::from_iter([(
-                Public.id().into(),
-                Arc::new(Mutex::new(Public.individual())),
-            )]))),
+            verifying_key,
+            individuals: Arc::new(Mutex::new(HashMap::from_iter([
+                (
+                    Public.id().into(),
+                    Arc::new(Mutex::new(Public.individual())),
+                ),
+                (active_id, inner_active.individual().dupe()),
+            ]))),
+            active: Arc::new(Mutex::new(inner_active)),
             groups: Arc::new(Mutex::new(HashMap::new())),
             docs: Arc::new(Mutex::new(HashMap::new())),
             delegations: DelegationStore::new(),
@@ -172,8 +177,8 @@ impl<
     ///
     /// Importantly this includes prekeys in addition to your public key.
     #[instrument(skip_all)]
-    pub async fn individual(&self) -> Individual {
-        self.active.lock().await.individual().clone()
+    pub async fn individual(&self) -> Arc<Mutex<Individual>> {
+        self.active.lock().await.individual().dupe()
     }
 
     #[allow(clippy::type_complexity)]
@@ -771,10 +776,17 @@ impl<
 
         let (active_id, prekeys) = {
             let locked = self.active.lock().await;
-            (
-                locked.id().into(),
-                locked.individual.prekey_ops().values().cloned().collect(),
-            )
+            let prekeys = {
+                locked
+                    .individual
+                    .lock()
+                    .await
+                    .prekey_ops()
+                    .values()
+                    .cloned()
+                    .collect()
+            };
+            (locked.id().into(), prekeys)
         };
         add_many_keys(&mut map, active_id, prekeys);
 
@@ -927,6 +939,8 @@ impl<
                     .lock()
                     .await
                     .individual
+                    .lock()
+                    .await
                     .receive_prekey_op(key_op.clone())?;
             }
             Agent::Individual(_, indie) => {
@@ -1219,14 +1233,15 @@ impl<
             let active_id = locked_active.id();
             if active_id == added_id {
                 let sk = {
-                    locked_active
-                        .prekey_pairs
+                    let locked_prekeys = locked_active.prekey_pairs.lock().await;
+                    locked_prekeys
                         .get(&pk)
                         .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?
+                        .clone()
                 };
                 doc.lock()
                     .await
-                    .merge_cgka_invite_op(signed_op.clone(), sk)?;
+                    .merge_cgka_invite_op(signed_op.clone(), &sk)?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
             } else if Public.individual().id() == added_id {
@@ -1320,8 +1335,6 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn into_archive(&self) -> Archive<T> {
-        let active = { self.active.lock().await.into_archive() };
-
         let topsorted_ops = {
             let delegations = self.delegations.0.lock().await;
             let revocations = self.revocations.0.lock().await;
@@ -1332,13 +1345,17 @@ impl<
         };
 
         let mut individuals = HashMap::new();
-        individuals.insert(active_id, self.active.borrow().individual.dupe());
         {
             let locked_individuals = self.individuals.lock().await;
             for (k, arc) in locked_individuals.iter() {
                 individuals.insert(*k, arc.lock().await.clone());
             }
         }
+
+        let active = {
+            let locked_active = self.active.lock().await;
+            locked_active.into_archive().await
+        };
 
         let mut groups = HashMap::new();
         {
@@ -1373,11 +1390,7 @@ impl<
         listener: L,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Self, TryFromArchiveError<S, T, L>> {
-        let active = Arc::new(Mutex::new(Active::from_archive(
-            &archive.active,
-            signer,
-            listener.clone(),
-        )));
+        let raw_active = Active::from_archive(&archive.active, signer, listener.clone());
 
         let delegations: DelegationStore<S, T, L> = DelegationStore::new();
         let revocations: RevocationStore<S, T, L> = RevocationStore::new();
@@ -1386,6 +1399,12 @@ impl<
         for (k, v) in archive.individuals.iter() {
             individuals.insert(*k, Arc::new(Mutex::new(v.clone())));
         }
+        individuals.insert(
+            archive.active.individual.id().into(),
+            raw_active.individual.dupe(),
+        );
+
+        let active = Arc::new(Mutex::new(raw_active));
 
         let mut groups = HashMap::new();
         for (group_id, group_archive) in archive.groups.iter() {
@@ -1615,11 +1634,21 @@ impl<
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
         tracing::debug!("Keyhive::ingest_archive()");
         {
-            let mut locked_active = self.active.lock().await;
-            locked_active
-                .prekey_pairs
-                .extend(archive.active.prekey_pairs);
-            locked_active.individual.merge(archive.active.individual);
+            let locked_active = self.active.lock().await;
+            {
+                locked_active
+                    .prekey_pairs
+                    .lock()
+                    .await
+                    .extend(archive.active.prekey_pairs);
+            }
+            {
+                locked_active
+                    .individual
+                    .lock()
+                    .await
+                    .merge(archive.active.individual);
+            }
         }
 
         for (id, indie) in archive.individuals {
@@ -1774,12 +1803,9 @@ impl<
     > MergeAsync for Arc<Mutex<Keyhive<S, T, P, C, L, R>>>
 {
     async fn merge_async(&self, fork: Self::AsyncForked) {
+        let forked_active = { fork.active.lock().await.clone() };
         let locked = self.lock().await;
-        locked
-            .active
-            .lock()
-            .await
-            .merge(fork.active.lock().await.clone());
+        locked.active.lock().await.merge_async(forked_active).await;
 
         {
             let mut locked_fork_indies = fork.individuals.lock().await;
@@ -2035,8 +2061,15 @@ mod tests {
         hive.generate_doc(vec![indie_peer.dupe()], nonempty![[1u8; 32], [2u8; 32]])
             .await?;
 
-        assert!(!hive.active.lock().await.prekey_pairs.is_empty());
-        assert_eq!(hive.individuals.lock().await.len(), 2);
+        assert!(!hive
+            .active
+            .lock()
+            .await
+            .prekey_pairs
+            .lock()
+            .await
+            .is_empty());
+        assert_eq!(hive.individuals.lock().await.len(), 3);
         assert_eq!(hive.groups.lock().await.len(), 1);
         assert_eq!(hive.docs.lock().await.len(), 1);
         assert_eq!(hive.delegations.0.lock().await.len(), 4);
@@ -2045,7 +2078,7 @@ mod tests {
         let archive = hive.into_archive().await;
 
         assert_eq!(hive.id(), archive.id());
-        assert_eq!(archive.individuals.len(), 2);
+        assert_eq!(archive.individuals.len(), 3);
         assert_eq!(archive.groups.len(), 1);
         assert_eq!(archive.docs.len(), 1);
         assert_eq!(archive.topsorted_ops.len(), 4);
@@ -2093,9 +2126,13 @@ mod tests {
         let hive1 = make_keyhive().await;
         let hive2 = make_keyhive().await;
 
-        let hive2_on_hive1 = Arc::new(Mutex::new(hive2.active.lock().await.individual.clone()));
+        let hive2_on_hive1 = Arc::new(Mutex::new(
+            hive2.active.lock().await.individual.lock().await.clone(),
+        ));
         hive1.register_individual(hive2_on_hive1.dupe()).await;
-        let hive1_on_hive2 = Arc::new(Mutex::new(hive1.active.lock().await.individual.clone()));
+        let hive1_on_hive2 = Arc::new(Mutex::new(
+            hive1.active.lock().await.individual.lock().await.clone(),
+        ));
         hive2.register_individual(hive1_on_hive2.dupe()).await;
         let group1_on_hive1 = hive1
             .generate_group(vec![Peer::Individual(
@@ -2107,7 +2144,7 @@ mod tests {
 
         assert_eq!(hive1.delegations.0.lock().await.len(), 2);
         assert_eq!(hive1.revocations.0.lock().await.len(), 0);
-        assert_eq!(hive1.individuals.lock().await.len(), 2); // NOTE: knows about Public and Hive2
+        assert_eq!(hive1.individuals.lock().await.len(), 3); // NOTE: knows about Public and Hive2
         assert_eq!(hive1.groups.lock().await.len(), 1);
         assert_eq!(hive1.docs.lock().await.len(), 0);
 
@@ -2127,7 +2164,7 @@ mod tests {
 
             assert_eq!(hive2.delegations.0.lock().await.len(), 0);
             assert_eq!(hive2.revocations.0.lock().await.len(), 0);
-            assert_eq!(hive2.individuals.lock().await.len(), 2);
+            assert_eq!(hive2.individuals.lock().await.len(), 3);
             assert_eq!(hive2.groups.lock().await.len(), 0);
             assert_eq!(hive2.docs.lock().await.len(), 0);
 
@@ -2140,7 +2177,7 @@ mod tests {
 
         assert_eq!(hive2.delegations.0.lock().await.len(), 2);
         assert_eq!(hive2.revocations.0.lock().await.len(), 0);
-        assert_eq!(hive2.individuals.lock().await.len(), 2); // NOTE: Public and Hive2
+        assert_eq!(hive2.individuals.lock().await.len(), 3); // NOTE: Yourself, Public, and Hive2
         assert_eq!(hive2.groups.lock().await.len(), 1);
         assert_eq!(hive2.docs.lock().await.len(), 0);
     }
@@ -2170,7 +2207,7 @@ mod tests {
         assert_eq!(left.delegations.0.lock().await.len(), 3);
         assert_eq!(left.revocations.0.lock().await.len(), 0);
 
-        assert_eq!(left.individuals.lock().await.len(), 1);
+        assert_eq!(left.individuals.lock().await.len(), 2);
         assert!(left
             .individuals
             .lock()
@@ -2226,7 +2263,7 @@ mod tests {
             .await
             .contains_key(&left_group.lock().await.group_id())); // NOTE: *None*
 
-        assert_eq!(middle.individuals.lock().await.len(), 2); // NOTE: includes Left
+        assert_eq!(middle.individuals.lock().await.len(), 3); // NOTE: includes Left
         assert_eq!(middle.groups.lock().await.len(), 0);
         assert_eq!(middle.docs.lock().await.len(), 1);
 
@@ -2262,7 +2299,7 @@ mod tests {
         assert_eq!(left.revocations.0.lock().await.0.len(), 0);
 
         // Middle unchanged
-        assert_eq!(middle.individuals.lock().await.len(), 2);
+        assert_eq!(middle.individuals.lock().await.len(), 3);
         assert_eq!(middle.groups.lock().await.len(), 0);
         assert_eq!(middle.docs.lock().await.len(), 1);
 
@@ -2285,7 +2322,7 @@ mod tests {
             .await
             .contains_key(&left_group.lock().await.group_id())); // NOTE: *None*
 
-        assert_eq!(right.individuals.lock().await.len(), 3);
+        assert_eq!(right.individuals.lock().await.len(), 4);
         assert_eq!(right.groups.lock().await.len(), 0);
         assert_eq!(right.docs.lock().await.len(), 1);
 
@@ -2326,7 +2363,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(middle.individuals.lock().await.len(), 3); // NOTE now includes Right
+        assert_eq!(middle.individuals.lock().await.len(), 4); // NOTE now includes Right
         assert_eq!(middle.groups.lock().await.len(), 1);
         assert_eq!(middle.docs.lock().await.len(), 1);
         assert_eq!(middle.delegations.0.lock().await.len(), 4);
@@ -2463,7 +2500,17 @@ mod tests {
 
             locked_trunk.generate_group(vec![alice.dupe()]).await?;
 
-            assert_eq!(locked_trunk.active.lock().await.prekey_pairs.len(), 7);
+            assert_eq!(
+                locked_trunk
+                    .active
+                    .lock()
+                    .await
+                    .prekey_pairs
+                    .lock()
+                    .await
+                    .len(),
+                7
+            );
             assert_eq!(locked_trunk.delegations.0.lock().await.len(), 4);
             assert_eq!(locked_trunk.groups.lock().await.len(), 1);
             assert_eq!(locked_trunk.docs.lock().await.len(), 1);
@@ -2485,9 +2532,9 @@ mod tests {
                 let init_group_count = fork.groups.lock().await.len();
                 assert_eq!(init_group_count, 1);
 
-                assert_eq!(fork.active.lock().await.prekey_pairs.len(), 7);
+                assert_eq!(fork.active.lock().await.prekey_pairs.lock().await.len(), 7);
                 fork.expand_prekeys().await.unwrap(); // 1 event (prekey)
-                assert_eq!(fork.active.lock().await.prekey_pairs.len(), 8);
+                assert_eq!(fork.active.lock().await.prekey_pairs.lock().await.len(), 8);
 
                 let bob_indie = Individual::generate(
                     &MemorySigner::generate(&mut rand::rngs::OsRng),
@@ -2554,7 +2601,17 @@ mod tests {
             let () = tx?;
 
             // tx is done, so should be all caught up. Counts are now certain.
-            assert_eq!(locked_trunk.active.lock().await.prekey_pairs.len(), 8);
+            assert_eq!(
+                locked_trunk
+                    .active
+                    .lock()
+                    .await
+                    .prekey_pairs
+                    .lock()
+                    .await
+                    .len(),
+                8
+            );
             assert_eq!(locked_trunk.docs.lock().await.len(), 3);
             assert_eq!(locked_trunk.groups.lock().await.len(), 4);
 
