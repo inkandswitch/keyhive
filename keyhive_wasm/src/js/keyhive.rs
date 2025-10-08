@@ -106,7 +106,6 @@ impl JsKeyhive {
         initial_content_ref_head: JsChangeRef,
         more_initial_content_refs: Vec<JsChangeRef>,
     ) -> Result<JsDocument, JsError> {
-        tracing::debug!("JsKeyhive::generate_doc()");
         Ok(self
             .0
             .generate_doc(
@@ -173,7 +172,6 @@ impl JsKeyhive {
         access: JsAccess,
         other_relevant_docs: Vec<JsDocument>,
     ) -> Result<JsSignedDelegation, JsError> {
-        tracing::debug!("JsKeyhive::add_member()");
         let other_docs_refs: Vec<_> = other_relevant_docs
             .clone()
             .iter()
@@ -263,7 +261,6 @@ impl JsKeyhive {
         &mut self,
         contact_card: &JsContactCard,
     ) -> Result<JsIndividual, JsError> {
-        tracing::debug!("JsKeyhive::receive_contact_card()");
         match self.0.receive_contact_card(&contact_card.clone()) {
             Ok(individual) => Ok(JsIndividual(Rc::new(RefCell::new(individual.borrow().clone())))),
             Err(err) => Err(JsError::ReceivePrekeyOp(err)),
@@ -284,8 +281,6 @@ impl JsKeyhive {
 
     #[wasm_bindgen(js_name = getDocument)]
     pub fn get_document(&self, id: &JsDocumentId) -> Option<JsDocument> {
-        tracing::info!("[RUST] Calling get_document");
-        tracing::debug!("[RUST] Calling get_document");
         self.0
             .get_document(id.clone().0)
             .map(|d| JsDocument(d.dupe()))
@@ -341,7 +336,6 @@ impl JsKeyhive {
         &mut self,
         archive: &JsArchive,
     ) -> Result<(), JsReceiveStaticEventError> {
-        tracing::debug!("executing JsKeyhive::ingest_archive()");
         self.0.ingest_archive(archive.clone().0).await?;
         Ok(())
     }
