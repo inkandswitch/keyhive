@@ -25,7 +25,6 @@ use crate::{
     error::missing_dependency::MissingDependency,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
-        active::Active,
         agent::{id::AgentId, Agent},
         group::{
             delegation::{Delegation, DelegationError},
@@ -80,7 +79,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     #[instrument(skip_all)]
     pub async fn from_group(
         group: Group<S, T, L>,
-        viewer: &Active<S, T, L>,
         content_heads: NonEmpty<T>,
     ) -> Result<Self, CgkaError> {
         let mut doc = Document {

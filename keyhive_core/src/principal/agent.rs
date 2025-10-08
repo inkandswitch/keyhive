@@ -83,17 +83,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
                 }
                 Agent::Group(_, g) => {
                     let locked_group = g.lock().await;
-                    for (_, ms) in locked_group.members() {
+                    for ms in locked_group.members().values() {
                         for m in ms {
-                            stack.push(Self::from(m.payload.delegate.dupe()));
+                            stack.push(m.payload.delegate.dupe());
                         }
                     }
                 }
                 Agent::Document(_, d) => {
                     let locked_doc = d.lock().await;
-                    for (_, ms) in locked_doc.members() {
+                    for ms in locked_doc.members().values() {
                         for m in ms {
-                            stack.push(Self::from(m.payload.delegate.dupe()));
+                            stack.push(m.payload.delegate.dupe());
                         }
                     }
                 }
@@ -130,17 +130,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
                 }
                 Agent::Group(_, g) => {
                     let locked_group = g.lock().await;
-                    for (_, ms) in locked_group.members() {
+                    for ms in locked_group.members().values() {
                         for m in ms {
-                            stack.push(Self::from(m.payload.delegate.dupe()));
+                            stack.push(m.payload.delegate.dupe());
                         }
                     }
                 }
                 Agent::Document(_, d) => {
                     let locked_doc = d.lock().await;
-                    for (_, ms) in locked_doc.members() {
+                    for ms in locked_doc.members().values() {
                         for m in ms {
-                            stack.push(Self::from(m.payload.delegate.dupe()));
+                            stack.push(m.payload.delegate.dupe());
                         }
                     }
                 }

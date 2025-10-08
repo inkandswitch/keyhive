@@ -140,7 +140,7 @@ impl<
         mut csprng: R,
     ) -> Result<Self, SigningError> {
         Ok(Self {
-            verifying_key: signer.verifying_key().into(),
+            verifying_key: signer.verifying_key(),
             active: Arc::new(Mutex::new(
                 Active::generate(signer, event_listener.clone(), &mut csprng).await?,
             )),
@@ -574,7 +574,7 @@ impl<
         for group in groups {
             let locked = group.lock().await;
             if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
-                let membered = Membered::Group(locked.group_id().into(), group.dupe());
+                let membered = Membered::Group(locked.group_id(), group.dupe());
                 caps.insert(locked.group_id().into(), (membered, *can));
             }
         }
@@ -583,7 +583,7 @@ impl<
         for doc in docs {
             let locked = doc.lock().await;
             if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
-                let membered = Membered::Document(locked.doc_id().into(), doc.dupe());
+                let membered = Membered::Document(locked.doc_id(), doc.dupe());
                 caps.insert(locked.doc_id().into(), (membered, *can));
             }
         }
@@ -790,7 +790,7 @@ impl<
                     add_many_keys(
                         &mut map,
                         (*group_id).into(),
-                        Agent::Group((*group_id).into(), group.dupe())
+                        Agent::Group(*group_id, group.dupe())
                             .key_ops()
                             .await
                             .into_iter()
@@ -811,7 +811,7 @@ impl<
                     add_many_keys(
                         &mut map,
                         (*doc_id).into(),
-                        Agent::Document((*doc_id).into(), doc.dupe())
+                        Agent::Document(*doc_id, doc.dupe())
                             .key_ops()
                             .await
                             .into_iter()
@@ -1050,8 +1050,7 @@ impl<
                 .get(&subject_id.into())
                 .and_then(|content_heads| NonEmpty::collect(content_heads.iter().cloned()))
             {
-                let locked_active = self.active.lock().await;
-                let doc = Document::from_group(group, &locked_active, content_heads).await?;
+                let doc = Document::from_group(group, content_heads).await?;
                 let mut locked_docs = self.docs.lock().await;
                 locked_docs.insert(doc.doc_id(), Arc::new(Mutex::new(doc)));
             } else {
@@ -1219,7 +1218,7 @@ impl<
                 };
                 doc.lock()
                     .await
-                    .merge_cgka_invite_op(signed_op.clone(), &sk)?;
+                    .merge_cgka_invite_op(signed_op.clone(), sk)?;
                 self.event_listener.on_cgka_op(&signed_op).await;
                 return Ok(());
             } else if Public.individual().id() == added_id {
@@ -1434,15 +1433,15 @@ impl<
                     } else {
                         individuals
                             .get(&IndividualId(id))
-                            .map(|i| Agent::Individual(id.into(), i.dupe().into()))
+                            .map(|i| Agent::Individual(id.into(), i.dupe()))
                             .or_else(|| {
                                 groups
                                     .get(&GroupId(id))
-                                    .map(|g| Agent::Group(id.into(), g.dupe().into()))
+                                    .map(|g| Agent::Group(id.into(), g.dupe()))
                             })
                             .or_else(|| {
                                 docs.get(&DocumentId(id))
-                                    .map(|d| Agent::Document(id.into(), d.dupe().into()))
+                                    .map(|d| Agent::Document(id.into(), d.dupe()))
                             })
                             .ok_or(TryFromArchiveError::MissingAgent(Box::new(id)))?
                     };
