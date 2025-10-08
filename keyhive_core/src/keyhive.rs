@@ -2391,7 +2391,7 @@ mod tests {
         charlie
             .add_member(
                 Agent::Individual(bob_on_charlie_id, bob_on_charlie.dupe()),
-                Membered::Document(doc2_id, doc2.dupe()),
+                &Membered::Document(doc2_id, doc2.dupe()),
                 Access::Read,
                 &[],
             )

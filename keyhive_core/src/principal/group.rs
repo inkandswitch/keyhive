@@ -1239,7 +1239,7 @@ mod tests {
             HashMap::from_iter([
                 (
                     alice_id.into(),
-                    (Agent::Active(alice_id, alice.dupe()), Access::Admin)
+                    (Agent::Active(alice_id.into(), alice.dupe()), Access::Admin)
                 ),
                 (
                     group0_id,
