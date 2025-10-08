@@ -8,7 +8,7 @@ use keyhive_core::{
     event::static_event::StaticEvent,
     keyhive::Keyhive,
     listener::{log::Log, no_listener::NoListener},
-    principal::agent::Agent,
+    principal::{agent::Agent, membered::Membered},
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 use nonempty::nonempty;
@@ -56,16 +56,17 @@ async fn test_encrypt_to_added_member() -> TestResult {
     let doc = alice
         .generate_doc(vec![], nonempty![init_hash.into()])
         .await?;
+    let doc_id = { doc.lock().await.doc_id() };
 
     let NewKeyhive {
         keyhive: mut bob, ..
     } = make_keyhive().await;
 
-    let indie_bob = bob.individual().await;
+    let indie_bob = { bob.active().lock().await.individual().clone() };
     alice
         .add_member(
             Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
-            &mut doc.lock().await.clone().into(),
+            &mut Membered::Document(doc_id, doc.dupe()),
             Access::Read,
             &[],
         )
@@ -79,10 +80,8 @@ async fn test_encrypt_to_added_member() -> TestResult {
     let alice_events = alice
         .static_events_for_agent(&bob.active().lock().await.clone().into())
         .await?;
-    tracing::error!("Alice had {} events for bob", alice_events.len());
     bob.ingest_unsorted_static_events(alice_events.into_values().collect())
         .await?;
-    tracing::error!("Bob has {} docs", bob.documents().len());
 
     // Attempt to decrypt on bob
     let doc_id = { doc.lock().await.doc_id() };

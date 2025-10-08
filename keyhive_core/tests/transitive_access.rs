@@ -49,10 +49,12 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
 
     let group = alice.generate_group(vec![]).await?;
+    let group_id = { group.lock().await.group_id() };
+    let bob_id = { bob_on_alice.lock().await.id() };
     alice
         .add_member(
-            Agent::Individual(bob_on_alice.lock().await.id(), bob_on_alice.dupe()),
-            &mut Membered::Group(group.lock().await.group_id(), group.dupe()),
+            Agent::Individual(bob_id, bob_on_alice.dupe()),
+            &mut Membered::Group(group_id, group.dupe()),
             Access::Read,
             &[],
         )
@@ -60,23 +62,17 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
 
     let doc = alice
         .generate_doc(
-            vec![Peer::Group(group.lock().await.group_id(), group.dupe())],
+            vec![Peer::Group(group_id, group.dupe())],
             nonempty![[0u8; 32]],
         )
         .await?;
+    let doc_id = { doc.lock().await.doc_id() };
 
     let reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(
-            bob_on_alice.lock().await.id(),
-            bob_on_alice.dupe().into(),
-        ))
+        .docs_reachable_by_agent(&Agent::Individual(bob_id, bob_on_alice.dupe().into()))
         .await;
-    let locked_doc = doc.lock().await;
     assert_eq!(reachable.len(), 1);
-    assert_eq!(
-        reachable.get(&locked_doc.doc_id()).unwrap().can(),
-        Access::Read
-    );
+    assert_eq!(reachable.get(&doc_id).unwrap().can(), Access::Read);
     Ok(())
 }
 
@@ -125,10 +121,12 @@ async fn test_group_members_cycle() -> TestResult {
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
 
     let group = alice.generate_group(vec![]).await?;
+    let group_id = { group.lock().await.group_id() };
+    let bob_id = { bob_on_alice.lock().await.id() };
     alice
         .add_member(
-            Agent::Individual(bob_on_alice.lock().await.id(), bob_on_alice.dupe()),
-            &mut Membered::Group(group.lock().await.group_id(), group.dupe()),
+            Agent::Individual(bob_id, bob_on_alice.dupe()),
+            &mut Membered::Group(group_id, group.dupe()),
             Access::Read,
             &[],
         )
@@ -136,32 +134,26 @@ async fn test_group_members_cycle() -> TestResult {
 
     let doc = alice
         .generate_doc(
-            vec![Peer::Group(group.lock().await.group_id(), group.dupe())],
+            vec![Peer::Group(group_id, group.dupe())],
             nonempty![[0u8; 32]],
         )
         .await?;
+    let doc_id = { doc.lock().await.doc_id() };
 
     alice
         .add_member(
-            Agent::Group(group.lock().await.group_id(), group.dupe()),
-            &mut Membered::Document(doc.lock().await.doc_id(), doc.dupe()),
+            Agent::Group(group_id, group.dupe()),
+            &mut Membered::Document(doc_id, doc.dupe()),
             Access::Read,
             &[],
         )
         .await?;
 
     let reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(
-            bob_on_alice.lock().await.id(),
-            bob_on_alice.dupe().into(),
-        ))
+        .docs_reachable_by_agent(&Agent::Individual(bob_id, bob_on_alice.dupe().into()))
         .await;
 
     assert_eq!(reachable.len(), 1);
-
-    {
-        let locked = doc.lock().await;
-        assert_eq!(reachable.get(&locked.doc_id()).unwrap().can(), Access::Read);
-    }
+    assert_eq!(reachable.get(&doc_id).unwrap().can(), Access::Read);
     Ok(())
 }

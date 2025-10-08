@@ -1101,7 +1101,6 @@ impl<
         &mut self,
         static_event: StaticEvent<T>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
-        tracing::error!("Receiving static event: {:?}", static_event);
         match static_event {
             StaticEvent::PrekeysExpanded(add_op) => {
                 self.receive_prekey_op(&Arc::new(*add_op).into()).await?
