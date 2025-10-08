@@ -1279,7 +1279,7 @@ mod tests {
     #[tokio::test]
     async fn test_transitive_three() {
         test_utils::init_logging();
-        let mut csprng = OsRng
+        let mut csprng = OsRng;
 
         let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let alice_id = { alice.lock().await.id() };
