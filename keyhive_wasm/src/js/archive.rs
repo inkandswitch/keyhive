@@ -62,13 +62,17 @@ impl JsTryFromArchiveError {
 }
 
 #[derive(Debug, Display, From, Into, Error)]
-#[wasm_bindgen(js_name = SerializationError)]
 pub struct JsSerializationError(pub(crate) bincode::Error);
 
-#[wasm_bindgen(js_class = SerializationError)]
-impl JsSerializationError {
-    #[wasm_bindgen(js_name = toError)]
-    pub fn to_error(self) -> JsError {
-        JsError::from(self)
+// impl JsSerializationError {
+//     #[wasm_bindgen(js_name = toError)]
+//     pub fn to_error(self) -> JsError {
+//         JsError::from(self)
+//     }
+// }
+
+impl From<JsSerializationError> for JsValue {
+    fn from(e: JsSerializationError) -> Self {
+        JsError::from(e).into()
     }
 }
