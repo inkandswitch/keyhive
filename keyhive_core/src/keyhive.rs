@@ -2404,8 +2404,7 @@ mod tests {
             .unwrap();
 
         bob.ingest_event_table(events).await.unwrap();
-
-        tracing::error!("I");
+    }
 
     #[tokio::test]
     async fn test_async_transaction() -> TestResult {
