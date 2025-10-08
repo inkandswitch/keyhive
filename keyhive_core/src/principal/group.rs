@@ -1033,7 +1033,7 @@ mod tests {
     async fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         alice: Arc<Mutex<Active<MemorySigner, T>>>,
         bob: Arc<Mutex<Active<MemorySigner, T>>>,
-        csprng: Arc<Mutex<R>>(
+        csprng: Arc<Mutex<R>>,
     ) -> [Arc<Mutex<Group<MemorySigner, T>>>; 10] {
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
