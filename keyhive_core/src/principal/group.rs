@@ -1238,7 +1238,7 @@ mod tests {
             g1_mems,
             HashMap::from_iter([
                 (
-                    alice_id.into(),
+                    alice_id,
                     (Agent::Active(alice_id.into(), alice.dupe()), Access::Admin)
                 ),
                 (
@@ -1312,14 +1312,14 @@ mod tests {
     #[tokio::test]
     async fn test_transitive_cycles() {
         test_utils::init_logging();
-        let csprng = &mut rand::thread_rng();
+        let mut csprng = OsRng;
 
-        let alice = Arc::new(Mutex::new(setup_user(csprng).await));
+        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let alice_agent: Agent<MemorySigner, String> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
 
-        let bob = Arc::new(Mutex::new(setup_user(csprng).await));
+        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let bob_agent: Agent<MemorySigner, String> =
             Agent::Active(bob.lock().await.id(), bob.dupe());
         let bob_id = bob_agent.id();
@@ -1502,7 +1502,7 @@ mod tests {
         // └─────────┘
 
         test_utils::init_logging();
-        let mut csprng = rand::thread_rng();
+        let mut csprng = OsRng;
 
         let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let alice_agent: Agent<MemorySigner> = Agent::Active(alice.lock().await.id(), alice.dupe());

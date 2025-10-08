@@ -2003,7 +2003,7 @@ mod tests {
         let indie = Arc::new(Mutex::new(
             Individual::generate(&indie_sk, &mut csprng).await?,
         ));
-        let indie_peer = Peer::Individual(indie.lock().await.id(), indie.dupe().into());
+        let indie_peer = Peer::Individual(indie.lock().await.id(), indie.dupe());
 
         hive.register_individual(indie.dupe()).await;
         hive.generate_group(vec![indie_peer.dupe()]).await?;
@@ -2075,7 +2075,7 @@ mod tests {
         let group1_on_hive1 = hive1
             .generate_group(vec![Peer::Individual(
                 hive2_on_hive1.lock().await.id(),
-                hive2_on_hive1.dupe().into(),
+                hive2_on_hive1.dupe(),
             )])
             .await
             .unwrap();
@@ -2323,7 +2323,7 @@ mod tests {
             .await
             .unwrap();
         let member = Public.individual().into();
-        let mut membered = Membered::Document(doc.lock().await.doc_id(), doc.dupe());
+        let membered = Membered::Document(doc.lock().await.doc_id(), doc.dupe());
         let dlg = keyhive
             .add_member(member, &membered, Access::Read, &[])
             .await
