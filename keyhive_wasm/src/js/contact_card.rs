@@ -2,7 +2,7 @@ use derive_more::{Deref, Display, From, Into};
 use keyhive_core::{contact_card::ContactCard, crypto::verifiable::Verifiable};
 use wasm_bindgen::prelude::*;
 
-use super::{individual_id::JsIndividualId, share_key::JsShareKey};
+use super::{agent::JsAgent, individual_id::JsIndividualId, share_key::JsShareKey};
 
 #[wasm_bindgen(js_name = ContactCard)]
 #[derive(Debug, Clone, From, Into, Deref, Display)]
@@ -22,6 +22,15 @@ impl JsContactCard {
 
     pub fn signature(&self) -> Vec<u8> {
         self.0.signature().to_bytes().to_vec()
+    }
+
+    #[wasm_bindgen(js_name = "toAgent")]
+    pub fn to_agent(&self) -> JsAgent {
+        use keyhive_core::principal::individual::Individual;
+        use std::{cell::RefCell, rc::Rc};
+
+        let individual: Individual = self.0.clone().into();
+        JsAgent(Rc::new(RefCell::new(individual)).into())
     }
 
     #[cfg(feature = "json")]
