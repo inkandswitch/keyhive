@@ -33,12 +33,12 @@ impl JsIndividual {
 
     #[wasm_bindgen(js_name = toPeer)]
     pub fn to_peer(&self) -> JsPeer {
-        JsPeer(Peer::Individual(self.id, self.inner.dupe().into()))
+        JsPeer(Peer::Individual(self.id, self.inner.dupe()))
     }
 
     #[wasm_bindgen(js_name = toAgent)]
     pub fn to_agent(&self) -> JsAgent {
-        JsAgent(Agent::Individual(self.id, self.inner.dupe().into()))
+        JsAgent(Agent::Individual(self.id, self.inner.dupe()))
     }
 
     #[wasm_bindgen(js_name = pickPrekey)]

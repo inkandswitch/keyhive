@@ -258,7 +258,7 @@ impl JsKeyhive {
     ) -> Result<JsIndividual, JsReceivePreKeyOpError> {
         match self.0.receive_contact_card(&contact_card).await {
             Ok(individual) => {
-                let id = { individual.lock().await.id().into() };
+                let id = { individual.lock().await.id() };
                 let js_indie = JsIndividual {
                     id,
                     inner: individual.dupe(),

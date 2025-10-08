@@ -42,8 +42,8 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
     //              └─────────────────────┘
     test_utils::init_logging();
 
-    let mut alice = make_simple_keyhive().await?;
-    let mut bob = make_simple_keyhive().await?;
+    let alice = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
 
     let bob_contact = bob.contact_card().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
@@ -54,7 +54,7 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
     alice
         .add_member(
             Agent::Individual(bob_id, bob_on_alice.dupe()),
-            &mut Membered::Group(group_id, group.dupe()),
+            &Membered::Group(group_id, group.dupe()),
             Access::Read,
             &[],
         )
@@ -69,7 +69,7 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
     let doc_id = { doc.lock().await.doc_id() };
 
     let reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(bob_id, bob_on_alice.dupe().into()))
+        .docs_reachable_by_agent(&Agent::Individual(bob_id, bob_on_alice.dupe()))
         .await;
     assert_eq!(reachable.len(), 1);
     assert_eq!(reachable.get(&doc_id).unwrap().can(), Access::Read);
@@ -114,8 +114,8 @@ async fn test_group_members_cycle() -> TestResult {
     //              └─────────────────────┘
     test_utils::init_logging();
 
-    let mut alice = make_simple_keyhive().await?;
-    let mut bob = make_simple_keyhive().await?;
+    let alice = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
 
     let bob_contact = bob.contact_card().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
@@ -126,7 +126,7 @@ async fn test_group_members_cycle() -> TestResult {
     alice
         .add_member(
             Agent::Individual(bob_id, bob_on_alice.dupe()),
-            &mut Membered::Group(group_id, group.dupe()),
+            &Membered::Group(group_id, group.dupe()),
             Access::Read,
             &[],
         )
@@ -143,14 +143,14 @@ async fn test_group_members_cycle() -> TestResult {
     alice
         .add_member(
             Agent::Group(group_id, group.dupe()),
-            &mut Membered::Document(doc_id, doc.dupe()),
+            &Membered::Document(doc_id, doc.dupe()),
             Access::Read,
             &[],
         )
         .await?;
 
     let reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(bob_id, bob_on_alice.dupe().into()))
+        .docs_reachable_by_agent(&Agent::Individual(bob_id, bob_on_alice.dupe()))
         .await;
 
     assert_eq!(reachable.len(), 1);

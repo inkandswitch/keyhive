@@ -85,7 +85,7 @@ async fn test_encrypt_to_added_member() -> TestResult {
 
     // Attempt to decrypt on bob
     let doc_id = { doc.lock().await.doc_id() };
-    let doc_on_bob = bob.get_document(doc_id).unwrap();
+    let doc_on_bob = bob.get_document(doc_id).await.unwrap();
     let decrypted = bob
         .try_decrypt_content(doc_on_bob.clone(), encrypted.encrypted_content())
         .await?;
@@ -123,7 +123,7 @@ async fn test_decrypt_after_to_from_archive() {
         sk,
         MemoryCiphertextStore::new(),
         NoListener,
-        rand::thread_rng(),
+        Arc::new(Mutex::new(rand::thread_rng())),
     )
     .await
     .unwrap();
@@ -135,7 +135,7 @@ async fn test_decrypt_after_to_from_archive() {
 
     let doc = {
         let locked_doc = doc.lock().await;
-        alice.get_document(locked_doc.doc_id()).unwrap()
+        alice.get_document(locked_doc.doc_id()).await.unwrap()
     };
 
     let decrypted = alice
@@ -191,13 +191,13 @@ async fn test_decrypt_after_fork_and_merge() {
         events.push(StaticEvent::from(Box::new(op.clone())));
     }
 
-    let mut reloaded = {
-        let mut keyhive = Keyhive::try_from_archive(
+    let reloaded = {
+        let keyhive = Keyhive::try_from_archive(
             &archive1,
             sk.clone(),
             MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
             Log::new(),
-            rand::thread_rng(),
+            Arc::new(Mutex::new(rand::thread_rng())),
         )
         .await
         .unwrap();
@@ -210,7 +210,7 @@ async fn test_decrypt_after_fork_and_merge() {
 
     let doc = {
         let locked_doc = doc.lock().await;
-        reloaded.get_document(locked_doc.doc_id()).unwrap()
+        reloaded.get_document(locked_doc.doc_id()).await.unwrap()
     };
 
     let decrypted = reloaded
