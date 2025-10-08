@@ -619,7 +619,7 @@ impl Cgka {
 //
 //     #[test]
 //     fn test_root_key_after_update_is_not_leaf_sk() -> Result<(), CgkaError> {
-//         let csprng = &mut rand::thread_rng();
+//         let csprng = &mut rand::OsRng;
 //         let signing_key = ed25519_dalek::SigningKey::generate(csprng);
 //         let doc_id = DocumentId::generate(csprng);
 //         let members = setup_members(2);
@@ -637,7 +637,7 @@ impl Cgka {
 //
 //     #[tokio::test]
 //     async fn test_simple_add() -> Result<(), CgkaError> {
-//         let csprng = &mut rand::thread_rng();
+//         let csprng = &mut rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(csprng);
 //         let doc_id = DocumentId::generate(csprng);
 //         let members = setup_members(2);
@@ -653,7 +653,7 @@ impl Cgka {
 //
 //     #[test]
 //     fn test_simple_remove() -> Result<(), CgkaError> {
-//         let csprng = &mut rand::thread_rng();
+//         let csprng = &mut rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(csprng);
 //         let doc_id = DocumentId::generate(csprng);
 //         let members = setup_members(2);
@@ -668,7 +668,7 @@ impl Cgka {
 //
 //     #[test]
 //     fn test_no_root_key_after_concurrent_updates() -> Result<(), CgkaError> {
-//         let csprng = &mut rand::thread_rng();
+//         let csprng = &mut rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(csprng);
 //         let doc_id = DocumentId::generate(csprng);
 //         let (mut cgkas, _ops) = setup_member_cgkas(doc_id, 7, &sk)?;
@@ -757,7 +757,7 @@ impl Cgka {
 //
 //     #[tokio::test]
 //     async fn test_update_all_concurrently() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![vec![update_all_members(sk.clone()).await]],
@@ -768,7 +768,7 @@ impl Cgka {
 //
 //     #[test]
 //     fn test_update_even_concurrently() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![vec![update_even_members(sk.clone())]],
@@ -779,7 +779,7 @@ impl Cgka {
 //
 //     #[test]
 //     fn test_remove_odd_concurrently() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![vec![remove_odd_members(sk.clone())]],
@@ -790,7 +790,7 @@ impl Cgka {
 //
 //     #[test]
 //     fn test_remove_from_right_concurrently() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![vec![remove_from_right(1, sk.clone())]],
@@ -801,7 +801,7 @@ impl Cgka {
 //
 //     #[test]
 //     fn test_remove_from_left_concurrently() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![vec![remove_from_left(1, sk.clone())]],
@@ -812,7 +812,7 @@ impl Cgka {
 //
 //     #[test]
 //     fn test_update_then_remove_then_update_even_concurrently() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![
@@ -827,7 +827,7 @@ impl Cgka {
 //
 //     #[test]
 //     fn test_update_and_remove_one_concurrently() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![vec![
@@ -841,7 +841,7 @@ impl Cgka {
 //
 //     #[tokio::test]
 //     async fn test_update_and_remove_odd_concurrently() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![vec![
@@ -856,7 +856,7 @@ impl Cgka {
 //
 //     #[tokio::test]
 //     async fn test_update_and_add_concurrently() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![vec![
@@ -870,7 +870,7 @@ impl Cgka {
 //
 //     #[test]
 //     fn test_add_one_concurrently() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![vec![add_from_first_member(sk.clone())]],
@@ -881,7 +881,7 @@ impl Cgka {
 //
 //     #[tokio::test]
 //     async fn test_all_add_one_concurrently() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![vec![add_from_all_members(sk.clone()).await]],
@@ -892,7 +892,7 @@ impl Cgka {
 //
 //     #[tokio::test]
 //     async fn test_remove_then_all_add_one_then_remove_odd_concurrently() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![
@@ -908,7 +908,7 @@ impl Cgka {
 //     #[tokio::test]
 //     async fn test_update_all_then_add_from_all_then_remove_odd_then_update_even_concurrently(
 //     ) -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![
@@ -924,7 +924,7 @@ impl Cgka {
 //
 //     #[tokio::test]
 //     async fn test_all_members_add_and_update_concurrently() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![vec![
@@ -938,7 +938,7 @@ impl Cgka {
 //
 //     #[tokio::test]
 //     async fn test_update_added_members_concurrently() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![vec![
@@ -952,7 +952,7 @@ impl Cgka {
 //
 //     #[tokio::test]
 //     async fn test_a_bunch_of_ops_in_rounds() -> Result<(), CgkaError> {
-//         let mut csprng = rand::thread_rng();
+//         let mut csprng = rand::rngs::OsRng;
 //         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
 //         run_tests_for_various_member_counts(
 //             vec![vec![
@@ -975,7 +975,7 @@ impl Cgka {
 //                 update_even_members(sk.clone()),
 //             ]],
 //             &sk,
-//             &mut rand::thread_rng(),
+//             &mut rand::rngs::OsRng,
 //         )
 //     }
 // }

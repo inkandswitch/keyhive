@@ -192,7 +192,7 @@ mod tests {
 
         test_utils::init_logging();
 
-        let mut rando = rand::thread_rng();
+        let mut rando = rand::rngs::OsRng;
         let signer = ed25519_dalek::SigningKey::generate(&mut rando);
 
         let share_key_1 = ShareKey::generate(&mut rando);

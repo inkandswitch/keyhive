@@ -1196,17 +1196,17 @@ mod tests {
     #[tokio::test]
     async fn test_transitive_self() {
         test_utils::init_logging();
-        let csprng = &mut rand::thread_rng();
+        let mut csprng = OsRng;
 
-        let alice = Arc::new(Mutex::new(setup_user(csprng).await));
+        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let alice_agent: Agent<MemorySigner, String> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
 
-        let bob = Arc::new(Mutex::new(setup_user(csprng).await));
+        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
 
         let [g0, ..]: [Arc<Mutex<Group<MemorySigner, String>>>; 4] =
-            setup_groups(alice.dupe(), bob, csprng).await;
+            setup_groups(alice.dupe(), bob, Arc::new(Mutex::new(csprng))).await;
         let g0_mems = g0.lock().await.transitive_members().await;
 
         let expected = HashMap::from_iter([(
@@ -1220,16 +1220,16 @@ mod tests {
     #[tokio::test]
     async fn test_transitive_one() {
         test_utils::init_logging();
-        let csprng = &mut rand::thread_rng();
+        let mut csprng = OsRng;
 
-        let alice = Arc::new(Mutex::new(setup_user(csprng).await));
+        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let alice_agent: Agent<MemorySigner, String> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
 
-        let bob = Arc::new(Mutex::new(setup_user(csprng).await));
+        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
 
-        let [g0, g1, ..] = setup_groups(alice.dupe(), bob, csprng).await;
+        let [g0, g1, ..] = setup_groups(alice.dupe(), bob, Arc::new(Mutex::new(csprng))).await;
         let g1_mems = g1.lock().await.transitive_members().await;
 
         let group0_id = { g0.lock().await.id() };
@@ -1265,7 +1265,7 @@ mod tests {
         let bob_id = bob_agent.id();
 
         let [g0, _g1, g2, _g3]: [Arc<Mutex<Group<MemorySigner, String>>>; 4] =
-            setup_groups(alice.dupe(), bob.dupe(), csprng).await;
+            setup_groups(alice.dupe(), bob.dupe(), Arc::new(Mutex::new(csprng))).await;
         let g2_mems = g2.lock().await.transitive_members().await;
 
         let g0_id = { g0.lock().await.id() };
@@ -1292,7 +1292,7 @@ mod tests {
         let bob_id = bob_agent.id();
 
         let [g0, g1, g2, g3]: [Arc<Mutex<Group<MemorySigner, String>>>; 4] =
-            setup_groups(alice.dupe(), bob.dupe(), csprng).await;
+            setup_groups(alice.dupe(), bob.dupe(), Arc::new(Mutex::new(csprng))).await;
         let g3_mems = g3.lock().await.transitive_members().await;
 
         assert_eq!(g3_mems.len(), 5);
@@ -1325,7 +1325,7 @@ mod tests {
         let bob_id = bob_agent.id();
 
         let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]: [Arc<Mutex<Group<MemorySigner, String>>>;
-            10] = setup_cyclic_groups(alice.dupe(), bob.dupe(), csprng).await;
+            10] = setup_cyclic_groups(alice.dupe(), bob.dupe(), Arc::new(Mutex::new(csprng))).await;
         let g0_mems = g0.lock().await.transitive_members().await;
 
         assert_eq!(g0_mems.len(), 11);
@@ -1371,13 +1371,15 @@ mod tests {
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
 
+        let arc_csprng = Arc::new(Mutex::new(csprng));
+
         let g0 = Arc::new(Mutex::new(
             Group::generate(
                 nonempty![Agent::Active(active_id, active.dupe())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                &mut csprng,
+                arc_csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -1391,7 +1393,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                &mut csprng,
+                arc_csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -1405,7 +1407,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                &mut csprng,
+                arc_csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -1539,7 +1541,7 @@ mod tests {
             dlg_store.dupe(),
             rev_store.dupe(),
             NoListener,
-            &mut csprng,
+            Arc::new(Mutex::new(csprng)),
         )
         .await
         .unwrap();

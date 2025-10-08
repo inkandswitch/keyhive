@@ -25,7 +25,7 @@ use x25519_dalek::SharedSecret;
 /// async fn main() {
 ///     let mut plaintext = b"hello world";
 ///
-///     let mut csprng = rand::thread_rng();
+///     let mut csprng = rand::rngs::OsRng;
 ///
 ///     let sk = MemorySigner::generate(&mut csprng);
 ///     let user = Individual::generate(&sk, &mut csprng).await.unwrap();

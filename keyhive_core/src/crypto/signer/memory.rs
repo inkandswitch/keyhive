@@ -40,7 +40,7 @@ impl MemorySigner {
     /// #    signer::memory::MemorySigner,
     /// #    verifiable::Verifiable
     /// # };
-    /// let signer = MemorySigner::generate(&mut rand::thread_rng());
+    /// let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
     /// assert_eq!(signer.0.to_bytes().len(), 32);
     /// assert_eq!(signer.verifying_key().to_bytes().len(), 32);
     /// ```

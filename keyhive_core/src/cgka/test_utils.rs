@@ -10,7 +10,7 @@
 //     principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
 // };
 // use nonempty::{nonempty, NonEmpty};
-// use rand::{thread_rng, Rng};
+// use rand::{rngs::OsRng, Rng};
 // use std::{
 //     collections::{HashMap, HashSet, VecDeque},
 //     future::Future,
@@ -123,7 +123,7 @@
 //         let mut ops = Vec::new();
 //         let mut removed_ids = HashSet::new();
 //         while !member_ops.is_empty() {
-//             let idx = thread_rng().gen_range(0..member_ops.len());
+//             let idx = OsRng.gen_range(0..member_ops.len());
 //             let (m_id, ref mut next_member_ops) = &mut member_ops[idx];
 //             if let Some(next_op) = next_member_ops.pop_front() {
 //                 if removed_ids.contains(m_id) {
@@ -154,7 +154,7 @@
 //
 // pub fn setup_members(member_count: u32) -> NonEmpty<TestMember> {
 //     assert!(member_count > 0);
-//     let mut csprng = rand::thread_rng();
+//     let mut csprng = rand::rngs::OsRng;
 //     let mut ms = nonempty![TestMember::generate(&mut csprng)];
 //     for _ in 1..member_count {
 //         ms.push(TestMember::generate(&mut csprng));
@@ -195,7 +195,7 @@
 //         .with_new_owner(owner.id, owner_sks)
 //         .expect("CGKA construction failed");
 //     let (_pcs_key, op) = cgka
-//         .update(owner.pk, owner.sk, signing_key, &mut rand::thread_rng())
+//         .update(owner.pk, owner.sk, signing_key, &mut rand::rngs::OsRng)
 //         .await
 //         .expect("CGKA update to succeed");
 //     ops.push(op);
@@ -231,7 +231,7 @@
 //     for m in members.iter_mut().skip(1) {
 //         let mut member_cgka = TestMemberCgka::new(m.clone(), &member_cgkas[0].cgka)?;
 //         let (_pcs_key, op) = member_cgka
-//             .update(signing_key, &mut rand::thread_rng())
+//             .update(signing_key, &mut rand::rngs::OsRng)
 //             .await?;
 //         ops.push(op.clone());
 //         member_cgkas[0]
@@ -387,7 +387,7 @@
 // ) -> Box<TestOperation<Fut>> {
 //     Box::new(move |cgkas, added_members, ops| async {
 //         for m in cgkas.iter_mut() {
-//             let new_m = TestMember::generate(&mut rand::thread_rng());
+//             let new_m = TestMember::generate(&mut rand::rngs::OsRng);
 //             let op = m.cgka.add(new_m.id, new_m.pk, &signing_key).await?.unwrap();
 //             ops.add(m.id(), op);
 //             let new_m_cgka = TestMemberCgka::new(new_m, &m.cgka)?;
@@ -405,7 +405,7 @@
 //         debug_assert!(n < cgkas.len());
 //         let skip_count = cgkas.len() - n;
 //         for m in cgkas.iter_mut().skip(skip_count) {
-//             let new_m = TestMember::generate(&mut rand::thread_rng());
+//             let new_m = TestMember::generate(&mut rand::rngs::OsRng);
 //             let op = m.cgka.add(new_m.id, new_m.pk, &signing_key).await?.unwrap();
 //             ops.add(m.id(), op);
 //             let new_m_cgka = TestMemberCgka::new(new_m, &m.cgka)?;
@@ -419,7 +419,7 @@
 //     signing_key: ed25519_dalek::SigningKey,
 // ) -> Box<TestOperation<Fut>> {
 //     Box::new(move |cgkas, added_members, ops| {
-//         let new_m = TestMember::generate(&mut rand::thread_rng());
+//         let new_m = TestMember::generate(&mut rand::rngs::OsRng);
 //         let adder = &mut cgkas[0];
 //         let op = adder.cgka.add(new_m.id, new_m.pk, &signing_key)?.unwrap();
 //         ops.add(adder.id(), op);
@@ -512,7 +512,7 @@
 // ) -> Box<TestOperation<Fut>> {
 //     Box::new(move |cgkas, _added_members, ops| {
 //         for m in cgkas.iter_mut() {
-//             let (_pcs_key, next_op) = m.update(&signing_key, &mut rand::thread_rng())?;
+//             let (_pcs_key, next_op) = m.update(&signing_key, &mut rand::rngs::OsRng)?;
 //             ops.add(m.id(), next_op);
 //         }
 //         Ok(())
@@ -524,7 +524,7 @@
 // ) -> Box<TestOperation<Fut>> {
 //     Box::new(move |cgkas, _added_members, ops| {
 //         let id = cgkas[0].id();
-//         let (_pcs_key, op) = cgkas[0].update(&signing_key, &mut rand::thread_rng())?;
+//         let (_pcs_key, op) = cgkas[0].update(&signing_key, &mut rand::rngs::OsRng)?;
 //         ops.add(id, op);
 //         Ok(())
 //     })
@@ -538,7 +538,7 @@
 //             if idx % 2 != 0 {
 //                 continue;
 //             }
-//             let (_pcs_key, next_op) = m.update(&signing_key, &mut rand::thread_rng())?;
+//             let (_pcs_key, next_op) = m.update(&signing_key, &mut rand::rngs::OsRng)?;
 //             ops.add(m.id(), next_op);
 //         }
 //         Ok(())
@@ -553,7 +553,7 @@
 //             if (idx + 1) % 2 != 0 {
 //                 continue;
 //             }
-//             let (_pcs_key, next_op) = m.update(&signing_key, &mut rand::thread_rng())?;
+//             let (_pcs_key, next_op) = m.update(&signing_key, &mut rand::rngs::OsRng)?;
 //             ops.add(m.id(), next_op);
 //         }
 //         Ok(())
@@ -565,7 +565,7 @@
 // ) -> Box<TestOperation<Fut>> {
 //     Box::new(move |_cgkas, added_members, ops| {
 //         for m in added_members {
-//             let (_pcs_key, next_op) = m.update(&signing_key, &mut rand::thread_rng())?;
+//             let (_pcs_key, next_op) = m.update(&signing_key, &mut rand::rngs::OsRng)?;
 //             ops.add_to_added_member_ops(m.id(), next_op);
 //         }
 //         Ok(())
@@ -589,8 +589,8 @@
 //
 // #[test]
 // fn test_setup_member_cgkas() -> Result<(), CgkaError> {
-//     let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-//     let doc_id = DocumentId::generate(&mut rand::thread_rng());
+//     let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+//     let doc_id = DocumentId::generate(&mut rand::rngs::OsRng);
 //     let member_count = 4;
 //     let (mut member_cgkas, ops) = setup_member_cgkas(doc_id, member_count, &signing_key)?;
 //     assert_eq!(member_cgkas.len(), member_count as usize);
@@ -599,8 +599,8 @@
 //
 // #[test]
 // fn test_setup_updated_and_synced_member_cgkas() -> Result<(), CgkaError> {
-//     let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-//     let doc_id = DocumentId::generate(&mut rand::thread_rng());
+//     let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+//     let doc_id = DocumentId::generate(&mut rand::rngs::OsRng);
 //     let member_count = 4;
 //     let (mut member_cgkas, ops) =
 //         setup_updated_and_synced_member_cgkas(doc_id, member_count, &signing_key)?;
@@ -610,8 +610,8 @@
 //
 // #[test]
 // fn test_setup_add() -> Result<(), CgkaError> {
-//     let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-//     let doc_id = DocumentId::generate(&mut rand::thread_rng());
+//     let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+//     let doc_id = DocumentId::generate(&mut rand::rngs::OsRng);
 //     let add_count = 2;
 //     let member_count = 4;
 //     let (mut member_cgkas, _ops) = setup_member_cgkas(doc_id, member_count, &signing_key)?;
@@ -629,8 +629,8 @@
 //
 // #[test]
 // fn test_setup_remove() -> Result<(), CgkaError> {
-//     let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-//     let doc_id = DocumentId::generate(&mut rand::thread_rng());
+//     let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+//     let doc_id = DocumentId::generate(&mut rand::rngs::OsRng);
 //     let remove_count = 2;
 //     let member_count = 4;
 //
@@ -651,8 +651,8 @@
 //
 // #[test]
 // fn test_setup_update() -> Result<(), CgkaError> {
-//     let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
-//     let doc_id = DocumentId::generate(&mut rand::thread_rng());
+//     let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+//     let doc_id = DocumentId::generate(&mut rand::rngs::OsRng);
 //     let member_count = 4;
 //     let (mut member_cgkas, _ops) = setup_member_cgkas(doc_id, member_count, &signing_key)?;
 //     assert_eq!(member_cgkas.len(), member_count as usize);

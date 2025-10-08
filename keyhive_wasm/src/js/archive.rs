@@ -7,6 +7,7 @@ use super::{
 use derive_more::{Display, From, Into};
 use futures::lock::Mutex;
 use keyhive_core::{archive::Archive, keyhive::Keyhive, keyhive::TryFromArchiveError};
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -43,7 +44,7 @@ impl JsArchive {
             signer,
             ciphertext_store,
             event_handler.clone().into(),
-            Arc::new(Mutex::new(rand::thread_rng())),
+            Arc::new(Mutex::new(OsRng)),
         )
         .await
         .map_err(|e| JsTryFromArchiveError(Box::new(e)))?

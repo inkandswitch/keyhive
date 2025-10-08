@@ -8,7 +8,7 @@ fn main() {
     args = [100, 1000]
 )]
 fn create_key_pairs(n: u32) {
-    let mut csprng = rand::thread_rng();
+    let mut csprng = rand::rngs::OsRng;
     for _ in 0..n {
         let s = ShareSecretKey::generate(&mut csprng);
         s.share_key();
@@ -24,7 +24,7 @@ fn create_key_pairs(n: u32) {
 // where
 //     F: Fn(u32) -> Result<Vec<TestMemberCgka>, CgkaError>,
 // {
-//     let mut csprng = rand::thread_rng();
+//     let mut csprng = rand::rngs::OsRng;
 //     let cgkas = setup(member_count).unwrap();
 //     let mut first_cgka = cgkas[0].clone();
 //     let mut paired_cgka = cgkas[paired_idx].clone();
@@ -47,7 +47,7 @@ fn create_key_pairs(n: u32) {
 //     max_time = Duration::from_secs(120),
 // )]
 // fn apply_100_updates_and_sibling_decrypt(bencher: Bencher, member_count: u32) {
-//     let mut csprng = rand::thread_rng();
+//     let mut csprng = rand::rngs::OsRng;
 //     let doc_id = DocumentId::generate(&mut csprng);
 //
 //     bencher
@@ -74,7 +74,7 @@ fn create_key_pairs(n: u32) {
 //     max_time = Duration::from_secs(120),
 // )]
 // fn apply_100_updates_and_distant_member_decrypt(bencher: Bencher, member_count: u32) {
-//     let mut csprng = rand::thread_rng();
+//     let mut csprng = rand::rngs::OsRng;
 //     let doc_id = DocumentId::generate(&mut csprng);
 //
 //     bencher
@@ -104,7 +104,7 @@ fn create_key_pairs(n: u32) {
 //     bencher: Bencher,
 //     member_count: u32,
 // ) {
-//     let mut csprng = rand::thread_rng();
+//     let mut csprng = rand::rngs::OsRng;
 //     let doc_id = DocumentId::generate(&mut csprng);
 //
 //     bencher
@@ -131,7 +131,7 @@ fn create_key_pairs(n: u32) {
 //     max_time = Duration::from_secs(120),
 // )]
 // fn apply_100_updates_and_distant_member_decrypt_after_adds(bencher: Bencher, member_count: u32) {
-//     let mut csprng = rand::thread_rng();
+//     let mut csprng = rand::rngs::OsRng;
 //     let doc_id = DocumentId::generate(&mut csprng);
 //
 //     bencher
@@ -161,7 +161,7 @@ fn create_key_pairs(n: u32) {
 //     bencher: Bencher,
 //     member_count: u32,
 // ) {
-//     let mut csprng = rand::thread_rng();
+//     let mut csprng = rand::rngs::OsRng;
 //     let doc_id = DocumentId::generate(&mut csprng);
 //
 //     bencher

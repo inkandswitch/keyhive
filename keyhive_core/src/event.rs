@@ -159,6 +159,7 @@ mod tests {
         store::ciphertext::memory::MemoryCiphertextStore,
     };
     use futures::lock::Mutex;
+    use rand::rngs::OsRng;
     use std::collections::BTreeMap;
     use test_utils::init_logging;
     use testresult::TestResult;
@@ -167,7 +168,7 @@ mod tests {
     async fn test_event_now_decryptable() -> TestResult {
         init_logging();
 
-        let mut csprng = rand::thread_rng();
+        let mut csprng = OsRng;
         let signer = MemorySigner::generate(&mut csprng);
         let doc_id1 = DocumentId::generate(&mut csprng);
         let doc_id2 = DocumentId::generate(&mut csprng);
@@ -243,18 +244,20 @@ mod tests {
         ));
 
         let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
-        store.insert(ciphertext1.dupe());
-        store.insert(ciphertext2.dupe());
+        store.insert(ciphertext1.dupe()).await;
+        store.insert(ciphertext2.dupe()).await;
 
         // Should not show up in updates
-        store.insert(Arc::new(EncryptedContent::new(
-            Siv::new(&SymmetricKey::generate(&mut csprng), &[0], doc_id1)?,
-            vec![0],
-            [3u8; 32].into(),
-            hash3,
-            [3u8; 32],
-            [3u8; 32].into(),
-        )));
+        store
+            .insert(Arc::new(EncryptedContent::new(
+                Siv::new(&SymmetricKey::generate(&mut csprng), &[0], doc_id1)?,
+                vec![0],
+                [3u8; 32].into(),
+                hash3,
+                [3u8; 32],
+                [3u8; 32].into(),
+            )))
+            .await;
 
         let decryptable = Event::now_decryptable(&events, &store).await?;
         tracing::info!("decryptable: {:?}", decryptable);

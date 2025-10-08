@@ -18,20 +18,14 @@ use keyhive_core::{
     principal::{document::DecryptError, individual::ReceivePrekeyOpError},
 };
 use nonempty::NonEmpty;
+use rand::rngs::OsRng;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Keyhive)]
 #[derive(Debug, From, Into)]
 pub struct JsKeyhive(
-    pub(crate)  Keyhive<
-        JsSigner,
-        JsChangeRef,
-        Vec<u8>,
-        JsCiphertextStore,
-        JsEventHandler,
-        rand::rngs::ThreadRng,
-    >,
+    pub(crate) Keyhive<JsSigner, JsChangeRef, Vec<u8>, JsCiphertextStore, JsEventHandler, OsRng>,
 );
 
 #[wasm_bindgen(js_class = Keyhive)]
@@ -47,7 +41,7 @@ impl JsKeyhive {
                 signer,
                 ciphertext_store,
                 JsEventHandler(event_handler.clone()),
-                rand::thread_rng(),
+                OsRng,
             )
             .await?,
         ))

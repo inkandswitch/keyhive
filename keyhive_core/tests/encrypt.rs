@@ -12,6 +12,7 @@ use keyhive_core::{
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 use nonempty::nonempty;
+use rand::rngs::OsRng;
 use testresult::TestResult;
 
 #[allow(clippy::type_complexity)]
@@ -119,7 +120,7 @@ async fn test_decrypt_after_to_from_archive() {
         sk,
         MemoryCiphertextStore::new(),
         NoListener,
-        Arc::new(Mutex::new(rand::thread_rng())),
+        Arc::new(Mutex::new(OsRng)),
     )
     .await
     .unwrap();
@@ -193,7 +194,7 @@ async fn test_decrypt_after_fork_and_merge() {
             sk.clone(),
             MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
             Log::new(),
-            Arc::new(Mutex::new(rand::thread_rng())),
+            Arc::new(Mutex::new(OsRng)),
         )
         .await
         .unwrap();

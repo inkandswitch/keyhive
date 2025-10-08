@@ -379,10 +379,10 @@ mod tests {
         doc_id: DocumentId,
         csprng: &mut OsRng,
     ) -> (Arc<EncryptedContent<String, [u8; 32]>>, SymmetricKey) {
-        let pcs_key: PcsKey = ShareSecretKey::generate(&mut csprng).into();
+        let pcs_key: PcsKey = ShareSecretKey::generate(csprng).into();
         let pcs_key_hash = Digest::hash(&pcs_key);
 
-        let key = SymmetricKey::generate(&mut csprng);
+        let key = SymmetricKey::generate(csprng);
         let envelope = Envelope {
             plaintext,
             ancestors,
@@ -439,8 +439,8 @@ mod tests {
         );
 
         let store = MemoryCiphertextStore::<[u8; 32], String>::new();
-        store.insert(one.dupe());
-        store.insert(two.dupe());
+        store.insert(one.dupe()).await;
+        store.insert(two.dupe()).await;
 
         assert_eq!(store.get_ciphertext(&one_ref).await, Ok(Some(one)));
         assert_eq!(store.get_ciphertext(&two_ref).await, Ok(Some(two)));
@@ -500,11 +500,11 @@ mod tests {
             &mut csprng,
         );
 
-        let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();
-        store.insert(genesis.clone());
-        store.insert(left.clone());
-        store.insert(right.clone());
-        store.insert(head.clone());
+        let store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        store.insert(genesis.clone()).await;
+        store.insert(left.clone()).await;
+        store.insert(right.clone()).await;
+        store.insert(head.clone()).await;
 
         let observed = store
             .try_causal_decrypt(&mut vec![(head.clone(), head_key)])
@@ -527,7 +527,7 @@ mod tests {
     async fn test_try_causal_decrypt_multiple_heads() -> TestResult {
         test_utils::init_logging();
 
-        let mut csprng = rand::thread_rng();
+        let mut csprng = OsRng;
         let doc_id = DocumentId::generate(&mut csprng);
         let pcs_update_op_hash: Digest<Signed<CgkaOperation>> = Digest {
             raw: blake3::hash(b"PcsOp"),
@@ -607,14 +607,14 @@ mod tests {
             &mut csprng,
         );
 
-        let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();
-        store.insert(genesis1.clone());
-        store.insert(genesis2.clone());
-        store.insert(left.clone());
-        store.insert(right.clone());
-        store.insert(head1.clone());
-        store.insert(head2.clone());
-        store.insert(head3.clone());
+        let store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        store.insert(genesis1.clone()).await;
+        store.insert(genesis2.clone()).await;
+        store.insert(left.clone()).await;
+        store.insert(right.clone()).await;
+        store.insert(head1.clone()).await;
+        store.insert(head2.clone()).await;
+        store.insert(head3.clone()).await;
 
         let observed = store
             .try_causal_decrypt(&mut vec![
@@ -748,11 +748,11 @@ mod tests {
         let store = MemoryCiphertextStore::<[u8; 32], String>::new();
         // NOTE: skipping: (genesis1_ref, genesis1.clone()),
         // NOTE: skipping (genesis2_ref, genesis2.clone()),
-        store.insert(left.clone());
-        store.insert(right.clone());
-        store.insert(head1.clone());
-        store.insert(head2.clone());
-        store.insert(head3.clone());
+        store.insert(left.clone()).await;
+        store.insert(right.clone()).await;
+        store.insert(head1.clone()).await;
+        store.insert(head2.clone()).await;
+        store.insert(head3.clone()).await;
 
         let observed = store
             .try_causal_decrypt(&mut vec![

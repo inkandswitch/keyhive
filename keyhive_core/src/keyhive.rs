@@ -76,7 +76,7 @@ pub struct Keyhive<
     P: for<'de> Deserialize<'de> = Vec<u8>,
     C: CiphertextStore<T, P> + Clone = MemoryCiphertextStore<T, P>,
     L: MembershipListener<S, T> = NoListener,
-    R: rand::CryptoRng = rand::rngs::ThreadRng,
+    R: rand::CryptoRng = rand::rngs::OsRng,
 > {
     /// The public verifying key for the active user.
     verifying_key: ed25519_dalek::VerifyingKey,
@@ -1969,13 +1969,13 @@ mod tests {
         Arc<Mutex<MemoryCiphertextStore<[u8; 32], Vec<u8>>>>,
         NoListener,
     > {
-        let sk = MemorySigner::generate(&mut rand::thread_rng());
+        let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
         let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
         Keyhive::generate(
             sk,
             Arc::new(Mutex::new(store)),
             NoListener,
-            rand::thread_rng(),
+            rand::rngs::OsRng,
         )
         .await
         .unwrap()
@@ -1985,12 +1985,12 @@ mod tests {
     async fn test_archival_round_trip() -> TestResult {
         test_utils::init_logging();
 
-        let mut csprng = rand::thread_rng();
+        let mut csprng = rand::rngs::OsRng;
 
         let sk = MemorySigner::generate(&mut csprng);
         let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], String>::new()));
-        let mut hive =
-            Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::thread_rng()).await?;
+        let hive =
+            Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::rngs::OsRng).await?;
 
         let indie_sk = MemorySigner::generate(&mut csprng);
         let indie = Arc::new(Mutex::new(
@@ -2004,24 +2004,29 @@ mod tests {
             .await?;
 
         assert!(!hive.active.lock().await.prekey_pairs.is_empty());
-        assert_eq!(hive.individuals.len(), 2);
-        assert_eq!(hive.groups.len(), 1);
-        assert_eq!(hive.docs.len(), 1);
+        assert_eq!(hive.individuals.lock().await.len(), 2);
+        assert_eq!(hive.groups.lock().await.len(), 1);
+        assert_eq!(hive.docs.lock().await.len(), 1);
         assert_eq!(hive.delegations.0.lock().await.len(), 4);
         assert_eq!(hive.revocations.0.lock().await.len(), 0);
 
         let archive = hive.into_archive().await;
 
-        assert_eq!(hive.id().await, archive.id());
+        assert_eq!(hive.id(), archive.id());
         assert_eq!(archive.individuals.len(), 2);
         assert_eq!(archive.groups.len(), 1);
         assert_eq!(archive.docs.len(), 1);
         assert_eq!(archive.topsorted_ops.len(), 4);
 
-        let hive_from_archive =
-            Keyhive::try_from_archive(&archive, sk, store, NoListener, rand::thread_rng())
-                .await
-                .unwrap();
+        let hive_from_archive = Keyhive::try_from_archive(
+            &archive,
+            sk,
+            store,
+            NoListener,
+            Arc::new(Mutex::new(rand::rngs::OsRng)),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             hive.delegations.0.lock().await.len(),
@@ -2033,9 +2038,18 @@ mod tests {
             hive_from_archive.revocations.0.lock().await.len()
         );
 
-        assert_eq!(hive.individuals.len(), hive_from_archive.individuals.len());
-        assert_eq!(hive.groups.len(), hive_from_archive.groups.len());
-        assert_eq!(hive.docs.len(), hive_from_archive.docs.len());
+        assert_eq!(
+            hive.individuals.lock().await.len(),
+            hive_from_archive.individuals.lock().await.len()
+        );
+        assert_eq!(
+            hive.groups.lock().await.len(),
+            hive_from_archive.groups.lock().await.len()
+        );
+        assert_eq!(
+            hive.docs.lock().await.len(),
+            hive_from_archive.docs.lock().await.len()
+        );
 
         Ok(())
     }
@@ -2044,8 +2058,8 @@ mod tests {
     async fn test_receive_delegations_associately() {
         test_utils::init_logging();
 
-        let mut hive1 = make_keyhive().await;
-        let mut hive2 = make_keyhive().await;
+        let hive1 = make_keyhive().await;
+        let hive2 = make_keyhive().await;
 
         let hive2_on_hive1 = Arc::new(Mutex::new(hive2.active.lock().await.individual.clone()));
         hive1.register_individual(hive2_on_hive1.dupe()).await;
@@ -2061,9 +2075,9 @@ mod tests {
 
         assert_eq!(hive1.delegations.0.lock().await.len(), 2);
         assert_eq!(hive1.revocations.0.lock().await.len(), 0);
-        assert_eq!(hive1.individuals.len(), 2); // NOTE: knows about Public and Hive2
-        assert_eq!(hive1.groups.len(), 1);
-        assert_eq!(hive1.docs.len(), 0);
+        assert_eq!(hive1.individuals.lock().await.len(), 2); // NOTE: knows about Public and Hive2
+        assert_eq!(hive1.groups.lock().await.len(), 1);
+        assert_eq!(hive1.docs.lock().await.len(), 0);
 
         {
             let locked_group1_on_hive1 = group1_on_hive1.lock().await;
@@ -2081,9 +2095,9 @@ mod tests {
 
             assert_eq!(hive2.delegations.0.lock().await.len(), 0);
             assert_eq!(hive2.revocations.0.lock().await.len(), 0);
-            assert_eq!(hive2.individuals.len(), 2);
-            assert_eq!(hive2.groups.len(), 0);
-            assert_eq!(hive2.docs.len(), 0);
+            assert_eq!(hive2.individuals.lock().await.len(), 2);
+            assert_eq!(hive2.groups.lock().await.len(), 0);
+            assert_eq!(hive2.docs.lock().await.len(), 0);
 
             let heads = locked_group1_on_hive1.delegation_heads().clone();
             for dlg in heads.values() {
@@ -2094,18 +2108,18 @@ mod tests {
 
         assert_eq!(hive2.delegations.0.lock().await.len(), 2);
         assert_eq!(hive2.revocations.0.lock().await.len(), 0);
-        assert_eq!(hive2.individuals.len(), 2); // NOTE: Public and Hive2
-        assert_eq!(hive2.groups.len(), 1);
-        assert_eq!(hive2.docs.len(), 0);
+        assert_eq!(hive2.individuals.lock().await.len(), 2); // NOTE: Public and Hive2
+        assert_eq!(hive2.groups.lock().await.len(), 1);
+        assert_eq!(hive2.docs.lock().await.len(), 0);
     }
 
     #[tokio::test]
     async fn test_transitive_ops_for_agent() {
         test_utils::init_logging();
 
-        let mut left = make_keyhive().await;
-        let mut middle = make_keyhive().await;
-        let mut right = make_keyhive().await;
+        let left = make_keyhive().await;
+        let middle = make_keyhive().await;
+        let right = make_keyhive().await;
 
         // 2 delegations (you & public)
         let left_doc = left
@@ -2124,15 +2138,25 @@ mod tests {
         assert_eq!(left.delegations.0.lock().await.len(), 3);
         assert_eq!(left.revocations.0.lock().await.len(), 0);
 
-        assert_eq!(left.individuals.len(), 1);
-        assert!(left.individuals.contains_key(&IndividualId(Public.id())));
+        assert_eq!(left.individuals.lock().await.len(), 1);
+        assert!(left
+            .individuals
+            .lock()
+            .await
+            .contains_key(&IndividualId(Public.id())));
 
-        assert_eq!(left.groups.len(), 1);
-        assert_eq!(left.docs.len(), 1);
+        assert_eq!(left.groups.lock().await.len(), 1);
+        assert_eq!(left.docs.lock().await.len(), 1);
 
-        assert!(left.docs.contains_key(&left_doc.lock().await.doc_id()));
+        assert!(left
+            .docs
+            .lock()
+            .await
+            .contains_key(&left_doc.lock().await.doc_id()));
         assert!(left
             .groups
+            .lock()
+            .await
             .contains_key(&left_group.lock().await.group_id()));
 
         // NOTE: *NOT* the group
@@ -2153,20 +2177,26 @@ mod tests {
         middle.ingest_event_table(left_to_mid_ops).await.unwrap();
 
         // Left unchanged
-        assert_eq!(left.groups.len(), 1);
-        assert_eq!(left.docs.len(), 1);
+        assert_eq!(left.groups.lock().await.len(), 1);
+        assert_eq!(left.docs.lock().await.len(), 1);
         assert_eq!(left.delegations.0.lock().await.len(), 3);
         assert_eq!(left.revocations.0.lock().await.len(), 0);
 
         // Middle should now look the same
-        assert!(middle.docs.contains_key(&left_doc.lock().await.doc_id()));
+        assert!(middle
+            .docs
+            .lock()
+            .await
+            .contains_key(&left_doc.lock().await.doc_id()));
         assert!(!middle
             .groups
+            .lock()
+            .await
             .contains_key(&left_group.lock().await.group_id())); // NOTE: *None*
 
-        assert_eq!(middle.individuals.len(), 2); // NOTE: includes Left
-        assert_eq!(middle.groups.len(), 0);
-        assert_eq!(middle.docs.len(), 1);
+        assert_eq!(middle.individuals.lock().await.len(), 2); // NOTE: includes Left
+        assert_eq!(middle.groups.lock().await.len(), 0);
+        assert_eq!(middle.docs.lock().await.len(), 1);
 
         assert_eq!(middle.revocations.0.lock().await.len(), 0);
         assert_eq!(middle.delegations.0.lock().await.len(), 2);
@@ -2174,6 +2204,8 @@ mod tests {
         assert_eq!(
             middle
                 .docs
+                .lock()
+                .await
                 .get(&left_doc_id)
                 .unwrap()
                 .lock()
@@ -2192,15 +2224,15 @@ mod tests {
         right.ingest_event_table(mid_to_right_ops).await.unwrap();
 
         // Left unchanged
-        assert_eq!(left.groups.len(), 1);
-        assert_eq!(left.docs.len(), 1);
-        assert_eq!(left.delegations.0.lock().await.len(), 3);
-        assert_eq!(left.revocations.0.lock().await.len(), 0);
+        assert_eq!(left.groups.lock().await.len(), 1);
+        assert_eq!(left.docs.lock().await.len(), 1);
+        assert_eq!(left.delegations.0.lock().await.0.len(), 3);
+        assert_eq!(left.revocations.0.lock().await.0.len(), 0);
 
         // Middle unchanged
-        assert_eq!(middle.individuals.len(), 2);
-        assert_eq!(middle.groups.len(), 0);
-        assert_eq!(middle.docs.len(), 1);
+        assert_eq!(middle.individuals.lock().await.len(), 2);
+        assert_eq!(middle.groups.lock().await.len(), 0);
+        assert_eq!(middle.docs.lock().await.len(), 1);
 
         assert_eq!(middle.delegations.0.lock().await.len(), 2);
         assert_eq!(middle.revocations.0.lock().await.len(), 0);
@@ -2209,17 +2241,21 @@ mod tests {
         assert_eq!(right.revocations.0.lock().await.len(), 0);
         assert_eq!(right.delegations.0.lock().await.len(), 2);
 
-        assert!(right.groups.len() == 1 || right.docs.len() == 1);
+        assert!(right.groups.lock().await.len() == 1 || right.docs.lock().await.len() == 1);
         assert!(right
             .docs
+            .lock()
+            .await
             .contains_key(&DocumentId(left_doc.lock().await.id())));
         assert!(!right
             .groups
+            .lock()
+            .await
             .contains_key(&left_group.lock().await.group_id())); // NOTE: *None*
 
-        assert_eq!(right.individuals.len(), 3);
-        assert_eq!(right.groups.len(), 0);
-        assert_eq!(right.docs.len(), 1);
+        assert_eq!(right.individuals.lock().await.len(), 3);
+        assert_eq!(right.groups.lock().await.len(), 0);
+        assert_eq!(right.docs.lock().await.len(), 1);
 
         assert_eq!(
             middle
@@ -2258,9 +2294,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(middle.individuals.len(), 3); // NOTE now includes Right
-        assert_eq!(middle.groups.len(), 1);
-        assert_eq!(middle.docs.len(), 1);
+        assert_eq!(middle.individuals.lock().await.len(), 3); // NOTE now includes Right
+        assert_eq!(middle.groups.lock().await.len(), 1);
+        assert_eq!(middle.docs.lock().await.len(), 1);
         assert_eq!(middle.delegations.0.lock().await.len(), 4);
     }
 
@@ -2366,7 +2402,7 @@ mod tests {
     async fn test_async_transaction() -> TestResult {
         test_utils::init_logging();
 
-        let sk = MemorySigner::generate(&mut rand::thread_rng());
+        let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
         let hive = Keyhive::<_, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
             sk,
             Arc::new(Mutex::new(MemoryCiphertextStore::new())),
@@ -2387,7 +2423,7 @@ mod tests {
             Peer::Individual(alice_indie.id(), Arc::new(Mutex::new(alice_indie)));
 
         {
-            let mut locked_trunk = trunk.lock().await;
+            let locked_trunk = trunk.lock().await;
             locked_trunk
                 .generate_doc(vec![alice.dupe()], nonempty![[0u8; 32]])
                 .await?;
@@ -2396,24 +2432,24 @@ mod tests {
 
             assert_eq!(locked_trunk.active.lock().await.prekey_pairs.len(), 7);
             assert_eq!(locked_trunk.delegations.0.lock().await.len(), 4);
-            assert_eq!(locked_trunk.groups.len(), 1);
-            assert_eq!(locked_trunk.docs.len(), 1);
+            assert_eq!(locked_trunk.groups.lock().await.len(), 1);
+            assert_eq!(locked_trunk.docs.lock().await.len(), 1);
         }
 
         let tx = transact_async(
             &trunk,
-            |mut fork: Keyhive<_, _, _, _, Log<_, [u8; 32]>, _>| async move {
+            |fork: Keyhive<_, _, _, _, Log<_, [u8; 32]>, _>| async move {
                 // Depending on when the async runs
                 let init_dlg_count = fork.delegations.0.lock().await.len();
                 assert!(init_dlg_count >= 4);
                 assert!(init_dlg_count <= 6);
 
                 // Depending on when the async runs
-                let init_doc_count = fork.docs.len();
+                let init_doc_count = fork.docs.lock().await.len();
                 assert!(init_doc_count == 1 || init_doc_count == 2);
 
                 // Only one before this gets awaited
-                let init_group_count = fork.groups.len();
+                let init_group_count = fork.groups.lock().await.len();
                 assert_eq!(init_group_count, 1);
 
                 assert_eq!(fork.active.lock().await.prekey_pairs.len(), 7);
@@ -2433,13 +2469,13 @@ mod tests {
                 fork.generate_group(vec![bob.dupe()]).await.unwrap(); // 2 events (dlgs)
                 fork.generate_group(vec![bob.dupe()]).await.unwrap(); // 2 events (dlgs)
                 fork.generate_group(vec![bob.dupe()]).await.unwrap(); // 2 events (dlgs)
-                assert_eq!(fork.groups.len(), 4);
+                assert_eq!(fork.groups.lock().await.len(), 4);
 
                 // 2 events (dlgs)
                 fork.generate_doc(vec![bob], nonempty![[1u8; 32]])
                     .await
                     .unwrap();
-                assert_eq!(fork.docs.len(), init_doc_count + 1);
+                assert_eq!(fork.docs.lock().await.len(), init_doc_count + 1);
 
                 let mut dlg_count = 0;
                 let mut cgka_count = 0;
@@ -2472,29 +2508,29 @@ mod tests {
         .await;
 
         {
-            let mut locked_trunk = trunk.lock().await;
+            let locked_trunk = trunk.lock().await;
             locked_trunk
                 .generate_doc(vec![alice.dupe()], nonempty![[2u8; 32]])
                 .await
                 .unwrap();
 
-            assert!(!locked_trunk.docs.is_empty());
-            assert!(locked_trunk.docs.len() <= 3);
+            assert!(!locked_trunk.docs.lock().await.is_empty());
+            assert!(locked_trunk.docs.lock().await.len() <= 3);
 
             // FIXME add transact right on Keyhive taht aslo dispatches new events
             let () = tx?;
 
             // tx is done, so should be all caught up. Counts are now certain.
             assert_eq!(locked_trunk.active.lock().await.prekey_pairs.len(), 8);
-            assert_eq!(locked_trunk.docs.len(), 3);
-            assert_eq!(locked_trunk.groups.len(), 4);
+            assert_eq!(locked_trunk.docs.lock().await.len(), 3);
+            assert_eq!(locked_trunk.groups.lock().await.len(), 4);
 
             locked_trunk
                 .generate_doc(vec![alice.dupe()], nonempty![[3u8; 32]])
                 .await
                 .unwrap();
 
-            assert_eq!(locked_trunk.docs.len(), 4);
+            assert_eq!(locked_trunk.docs.lock().await.len(), 4);
         }
 
         Ok(())
