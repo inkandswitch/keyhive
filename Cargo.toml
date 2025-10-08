@@ -1,18 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-    "beelay/beelay-core",
-    "beelay/beelay-wasm",
     "keyhive_core",
     "keyhive_wasm",
-    "sedimentree",
     "test-utils",
 ]
 
 [workspace.package]
 authors = [
     "Alex Good <alex@memoryandthought.me>",
-    "John Mumm",
+    "John Mumm <jtfmumm@gmail.com>",
     "Brooklyn Zelenka <hello@brooklynzelenka.com>",
 ]
 
@@ -20,7 +17,7 @@ edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/inkandswitch/keyhive"
 rust-version = "1.85.0"
-version = "0.1.0"
+version = "0.0.0-alpha.1"
 
 [workspace.dependencies]
 bincode = "1.3"

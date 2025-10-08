@@ -8,13 +8,13 @@ use keyhive_core::{
     crypto::{signed::Signed, verifiable::Verifiable},
     principal::group::delegation::Delegation,
 };
-use std::rc::Rc;
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, Dupe, From, Into)]
 #[wasm_bindgen(js_name = SignedDelegation)]
 pub struct JsSignedDelegation(
-    pub(crate) Rc<Signed<Delegation<JsSigner, JsChangeRef, JsEventHandler>>>,
+    pub(crate) Arc<Signed<Delegation<JsSigner, JsChangeRef, JsEventHandler>>>,
 );
 
 #[wasm_bindgen(js_class = SignedDelegation)]

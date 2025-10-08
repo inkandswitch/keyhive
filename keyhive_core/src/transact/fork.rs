@@ -3,12 +3,14 @@
 //! Despite living under the `transact` module,
 //! the traits in this module are helpful as a deep clone variant of [`Clone`].
 
+use futures::lock::Mutex;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     future::Future,
     hash::Hash,
     rc::Rc,
+    sync::Arc,
 };
 
 /// Synchronously fork a data structure.
@@ -16,14 +18,14 @@ pub trait Fork {
     /// The forked variant of the data structure.
     ///
     /// This is helpful for situations like wanting a different listener,
-    /// or to unwrap from containers like `Rc<RefCell<T>>`.
+    /// or to unwrap from containers like `Arc<Mutex<T>>`.
     type Forked;
 
     /// Fork the data structure.
     ///
     /// This may often be implemented with `Clone`,
     /// but it is often helpful to perform a deep clone (unwrap and clone
-    /// the inner value from an `Rc<RefCell<T>>`), or to change the listener on Keyhive.
+    /// the inner value from an `Arc<Mutex<T>>`), or to change the listener on Keyhive.
     fn fork(&self) -> Self::Forked;
 }
 
@@ -32,7 +34,7 @@ pub trait ForkAsync {
     /// The forked variant of the data structure.
     ///
     /// This is helpful for situations like wanting a different listener,
-    /// or to unwrap from containers like `Rc<RefCell<T>>`.
+    /// or to unwrap from containers like `Arc<Mutex<T>>`.
     type AsyncForked;
 
     /// Asynchonously fork the data structure.
@@ -85,10 +87,28 @@ impl<T: Fork> ForkAsync for T {
     }
 }
 
+impl<T: ForkAsync> ForkAsync for Arc<Mutex<T>> {
+    type AsyncForked = T::AsyncForked;
+
+    async fn fork_async(&self) -> Self::AsyncForked {
+        let locked = self.lock().await;
+        locked.fork_async().await
+    }
+}
+
 impl<T: Fork<Forked = U> + Send + Sync, U: Send + Sync> ForkSend for T {
     type SendableForked = T::Forked;
 
     async fn fork_sendable(&self) -> Self::SendableForked {
         self.fork()
+    }
+}
+
+impl<T: ForkSend + Send> ForkSend for Arc<Mutex<T>> {
+    type SendableForked = T::SendableForked;
+
+    async fn fork_sendable(&self) -> Self::SendableForked {
+        let locked = self.lock().await;
+        locked.fork_sendable().await
     }
 }

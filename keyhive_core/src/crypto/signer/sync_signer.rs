@@ -36,7 +36,7 @@ pub trait SyncSigner: Verifiable {
     ///     }
     /// };
     ///
-    /// let signer = MemorySigner::generate(&mut rand::thread_rng());
+    /// let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
     /// let sig = signer.try_sign_bytes_sync(b"hello world");
     /// assert!(sig.is_ok());
     /// ```
@@ -65,7 +65,7 @@ pub trait SyncSigner: Verifiable {
     ///      }
     ///  };
     ///
-    /// let signer = MemorySigner::generate(&mut rand::thread_rng());
+    /// let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
     ///
     /// let payload: Vec<u8> = vec![0, 1, 2];
     /// let sig = signer.try_sign_sync(payload.clone());
@@ -128,7 +128,7 @@ pub trait SyncSignerBasic {
     /// #   }
     /// # };
     /// #
-    /// let signer = MemorySigner::generate(&mut rand::thread_rng());
+    /// let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
     /// let sig = signer.try_sign_bytes_sync_basic(b"hello world");
     /// assert!(sig.is_ok());
     /// ```

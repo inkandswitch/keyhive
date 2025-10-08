@@ -18,7 +18,7 @@ use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
-use std::{collections::HashSet, rc::Rc};
+use std::{collections::HashSet, sync::Arc};
 use thiserror::Error;
 use tracing::instrument;
 
@@ -91,7 +91,7 @@ impl Individual {
 
     pub fn contact_card(&self) -> ContactCard {
         let op = self.prekey_state.ops().0.iter().next().unwrap().1;
-        ContactCard::from(Rc::unwrap_or_clone(op.clone()))
+        ContactCard::from(Arc::unwrap_or_clone(op.clone()))
     }
 
     pub fn id(&self) -> IndividualId {
@@ -241,7 +241,7 @@ mod tests {
         let mut csprng = rand::thread_rng();
         let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
         let op = sk.try_sign_sync(AddKeyOp::generate(&mut csprng)).unwrap();
-        let individual: Individual = Individual::new(Rc::new(op).into());
+        let individual: Individual = Individual::new(Arc::new(op).into());
         assert_eq!(individual.id.to_bytes(), sk.verifying_key().to_bytes());
     }
 

@@ -17,18 +17,19 @@ use x25519_dalek::SharedSecret;
 /// #     principal::{agent::Agent, document::Document, individual::Individual},
 /// #     store::{delegation::DelegationStore, revocation::RevocationStore}
 /// # };
-/// # use std::{cell::RefCell, rc::Rc};
+/// # use std::sync::Arc;
+/// # use futures::lock::Mutex;
 /// # use nonempty::nonempty;
 /// #
 /// #[tokio::main(flavor = "current_thread")]
 /// async fn main() {
 ///     let mut plaintext = b"hello world";
 ///
-///     let mut csprng = rand::thread_rng();
+///     let mut csprng = rand::rngs::OsRng;
 ///
 ///     let sk = MemorySigner::generate(&mut csprng);
 ///     let user = Individual::generate(&sk, &mut csprng).await.unwrap();
-///     let user_agent: Agent<MemorySigner, String> = Rc::new(RefCell::new(user)).into();
+///     let user_agent: Agent<MemorySigner, String> = Agent::Individual(user.id(), Arc::new(Mutex::new(user)));
 ///
 ///     let delegation_store = DelegationStore::new();
 ///     let revocation_store = RevocationStore::new();
@@ -39,7 +40,7 @@ use x25519_dalek::SharedSecret;
 ///         revocation_store,
 ///         NoListener,
 ///         &sk,
-///         &mut csprng
+///         Arc::new(Mutex::new(csprng)),
 ///     ).await.unwrap();
 ///
 ///     let key = SymmetricKey::generate(&mut csprng);

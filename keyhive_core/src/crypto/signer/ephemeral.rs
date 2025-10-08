@@ -37,7 +37,7 @@ impl EphemeralSigner {
     /// };
     ///
     /// let ((signature, returned_payload), _vk) =
-    ///     EphemeralSigner::with_signer(&mut rand::thread_rng(), |vk, sk| {
+    ///     EphemeralSigner::with_signer(&mut rand::rngs::OsRng, |vk, sk| {
     ///         let payload = vec![1, 2, 3];
     ///         let sig = sk.try_sign_bytes_sync_basic(payload.as_slice());
     ///         (sig, payload)
@@ -68,7 +68,7 @@ impl EphemeralSigner {
     ///
     /// #[tokio::main(flavor = "current_thread")]
     /// async fn main() {
-    ///     let mut csprng = rand::thread_rng();
+    ///     let mut csprng = rand::rngs::OsRng;
     ///     let (fut, _vk) = EphemeralSigner::with_signer_async(&mut csprng, |vk, sk| async move {
     ///         let payload = vec![1, 2, 3];
     ///         let sig = sk.try_sign(payload.as_slice());

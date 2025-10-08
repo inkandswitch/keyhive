@@ -6,30 +6,40 @@ use super::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
-use keyhive_core::principal::group::Group;
-use std::{cell::RefCell, rc::Rc};
+use futures::lock::Mutex;
+use keyhive_core::principal::{
+    agent::Agent,
+    group::{id::GroupId, Group},
+    membered::Membered,
+    peer::Peer,
+};
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Group)]
 #[derive(Debug, Clone, Dupe, Into, From)]
-pub struct JsGroup(pub(crate) Rc<RefCell<Group<JsSigner, JsChangeRef, JsEventHandler>>>);
+pub struct JsGroup {
+    pub(crate) group_id: GroupId,
+    pub(crate) inner: Arc<Mutex<Group<JsSigner, JsChangeRef, JsEventHandler>>>,
+}
 
 #[wasm_bindgen(js_class = Group)]
 impl JsGroup {
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> JsIdentifier {
-        JsIdentifier(self.0.borrow().id())
+        JsIdentifier(self.group_id.into())
     }
 
     #[wasm_bindgen(getter, js_name = groupId)]
     pub fn group_id(&self) -> JsGroupId {
-        JsGroupId(self.0.borrow().group_id())
+        JsGroupId(self.group_id)
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn members(&self) -> Vec<Capability> {
-        self.0
-            .borrow()
+    #[wasm_bindgen]
+    pub async fn members(&self) -> Vec<Capability> {
+        self.inner
+            .lock()
+            .await
             .members()
             .values()
             .map(|dlgs| {
@@ -48,16 +58,16 @@ impl JsGroup {
 
     #[wasm_bindgen(js_name = toPeer)]
     pub fn to_peer(&self) -> JsPeer {
-        JsPeer(self.0.dupe().into())
+        JsPeer(Peer::Group(self.group_id, self.inner.dupe()))
     }
 
     #[wasm_bindgen(js_name = toAgent)]
     pub fn to_agent(&self) -> JsAgent {
-        JsAgent(self.0.dupe().into())
+        JsAgent(Agent::Group(self.group_id, self.inner.dupe()))
     }
 
     #[wasm_bindgen(js_name = toMembered)]
     pub fn to_membered(&self) -> JsMembered {
-        JsMembered(self.0.dupe().into())
+        JsMembered(Membered::Group(self.group_id, self.inner.dupe()))
     }
 }

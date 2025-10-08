@@ -1,12 +1,14 @@
 //! Merge [`Fork`]s back into their original data structures.
 
 use super::fork::{Fork, ForkAsync, ForkSend};
+use futures::lock::Mutex;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     future::Future,
     hash::Hash,
     rc::Rc,
+    sync::Arc,
 };
 
 /// Synchronously merge a fork back into its original data structure.
@@ -30,6 +32,12 @@ pub trait MergeAsync: ForkAsync {
     ///
     /// [`transact_async`]: keyhive_core::transact::transact_async
     fn merge_async(&self, fork: Self::AsyncForked) -> impl Future<Output = ()>;
+}
+
+impl<T: Merge> MergeAsync for Arc<Mutex<T>> {
+    async fn merge_async(&self, fork: Self::AsyncForked) {
+        self.lock().await.merge(fork)
+    }
 }
 
 /// A [`Send`]able version of [`Merge`].

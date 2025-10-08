@@ -4,7 +4,7 @@ use crate::{
     crypto::signed::Signed,
     principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
 };
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Trait for listening to changes to [prekeys][crate::crypto::share_key::ShareKey].
 ///
@@ -20,8 +20,8 @@ use std::rc::Rc;
 #[allow(async_fn_in_trait)]
 pub trait PrekeyListener: Sized + Clone {
     /// React to new prekeys.
-    async fn on_prekeys_expanded(&self, new_prekey: &Rc<Signed<AddKeyOp>>);
+    async fn on_prekeys_expanded(&self, new_prekey: &Arc<Signed<AddKeyOp>>);
 
     /// React to rotated prekeys.
-    async fn on_prekey_rotated(&self, rotate_key: &Rc<Signed<RotateKeyOp>>);
+    async fn on_prekey_rotated(&self, rotate_key: &Arc<Signed<RotateKeyOp>>);
 }

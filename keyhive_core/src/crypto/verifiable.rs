@@ -26,7 +26,7 @@ pub trait Verifiable {
     ///
     /// #[tokio::main(flavor = "current_thread")]
     /// async fn main() {
-    ///     let mut csprng = rand::thread_rng();
+    ///     let mut csprng = rand::rngs::OsRng;
     ///
     ///     // Ed25519 signing key
     ///     let sk = ed25519_dalek::SigningKey::generate(&mut csprng);

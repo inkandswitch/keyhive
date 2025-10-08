@@ -1,7 +1,7 @@
 //! Trait for listening to [`Cgka`][crate::cgka::Cgka] changes.
 
 use crate::{cgka::operation::CgkaOperation, crypto::signed::Signed};
-use std::{future::Future, rc::Rc};
+use std::{future::Future, sync::Arc};
 
 /// Trait for listening to [`Cgka`][crate::cgka::Cgka] changes.
 ///
@@ -16,8 +16,8 @@ use std::{future::Future, rc::Rc};
 /// </div>
 pub trait CgkaListener {
     #[cfg(not(feature = "sendable"))]
-    fn on_cgka_op(&self, data: &Rc<Signed<CgkaOperation>>) -> impl Future<Output = ()>;
+    fn on_cgka_op(&self, data: &Arc<Signed<CgkaOperation>>) -> impl Future<Output = ()>;
 
     #[cfg(feature = "sendable")]
-    fn on_cgka_op(&self, data: &Rc<Signed<CgkaOperation>>) -> impl Future<Output = ()> + Send;
+    fn on_cgka_op(&self, data: &Arc<Signed<CgkaOperation>>) -> impl Future<Output = ()> + Send;
 }

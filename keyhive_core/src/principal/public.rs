@@ -13,7 +13,7 @@ use crate::{
     listener::prekey::PrekeyListener,
 };
 use dupe::Dupe;
-use std::{collections::BTreeMap, rc::Rc};
+use std::{collections::BTreeMap, sync::Arc};
 
 /// A well-known agent that can be used by anyone. ⚠ USE WITH CAUTION ⚠
 ///
@@ -46,7 +46,7 @@ impl Public {
     }
 
     pub fn individual(&self) -> Individual {
-        let op = Rc::new(
+        let op = Arc::new(
             self.signer()
                 .try_sign_sync(AddKeyOp {
                     share_key: self.share_key(),

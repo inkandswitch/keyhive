@@ -3,7 +3,7 @@ pub mod id;
 use super::{
     active::Active,
     document::{id::DocumentId, Document},
-    group::{Group, IdOrIndividual},
+    group::{id::GroupId, Group, IdOrIndividual},
     identifier::Identifier,
     individual::{id::IndividualId, op::KeyOp, Individual},
     membered::Membered,
@@ -18,11 +18,11 @@ use derive_more::{From, TryInto};
 use derive_where::derive_where;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
+use futures::lock::Mutex;
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     fmt::{Display, Formatter},
-    rc::Rc,
+    sync::Arc,
 };
 
 /// Immutable union over all agent types.
@@ -31,19 +31,19 @@ use std::{
 #[derive_where(Clone, Debug; T)]
 #[derive(From, TryInto, Derivative)]
 pub enum Agent<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
-    Active(Rc<RefCell<Active<S, T, L>>>),
-    Individual(Rc<RefCell<Individual>>),
-    Group(Rc<RefCell<Group<S, T, L>>>),
-    Document(Rc<RefCell<Document<S, T, L>>>),
+    Active(IndividualId, Arc<Mutex<Active<S, T, L>>>),
+    Individual(IndividualId, Arc<Mutex<Individual>>),
+    Group(GroupId, Arc<Mutex<Group<S, T, L>>>),
+    Document(DocumentId, Arc<Mutex<Document<S, T, L>>>),
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq for Agent<S, T, L> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Agent::Active(a), Agent::Active(b)) => a.borrow().id() == b.borrow().id(),
-            (Agent::Individual(a), Agent::Individual(b)) => a.borrow().id() == b.borrow().id(),
-            (Agent::Group(a), Agent::Group(b)) => a.borrow().group_id() == b.borrow().group_id(),
-            (Agent::Document(a), Agent::Document(b)) => a.borrow().doc_id() == b.borrow().doc_id(),
+            (Agent::Active(a, _), Agent::Active(b, _)) => a == b,
+            (Agent::Individual(a, _), Agent::Individual(b, _)) => a == b,
+            (Agent::Group(a, _), Agent::Group(b, _)) => a == b,
+            (Agent::Document(a, _), Agent::Document(b, _)) => a == b,
             _ => false,
         }
     }
@@ -52,65 +52,124 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq for A
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> {
     pub fn id(&self) -> Identifier {
         match self {
-            Agent::Active(a) => a.borrow().id().into(),
-            Agent::Individual(i) => i.borrow().id().into(),
-            Agent::Group(g) => (*g).borrow().group_id().into(),
-            Agent::Document(d) => d.borrow().doc_id().into(),
+            Agent::Active(id, _) => (*id).into(),
+            Agent::Individual(id, _) => (*id).into(),
+            Agent::Group(id, _) => (*id).into(),
+            Agent::Document(id, _) => (*id).into(),
         }
     }
 
     pub fn agent_id(&self) -> id::AgentId {
         match self {
-            Agent::Active(a) => a.borrow().agent_id(),
-            Agent::Individual(i) => i.borrow().agent_id(),
-            Agent::Group(g) => (*g).borrow().agent_id(),
-            Agent::Document(d) => d.borrow().agent_id(),
+            Agent::Active(id, _) => (*id).into(),
+            Agent::Individual(id, _) => (*id).into(),
+            Agent::Group(id, _) => (*id).into(),
+            Agent::Document(id, _) => (*id).into(),
         }
     }
 
-    pub fn individual_ids(&self) -> HashSet<IndividualId> {
-        match self {
-            Agent::Active(a) => HashSet::from_iter([a.borrow().id()]),
-            Agent::Individual(i) => HashSet::from_iter([i.borrow().id()]),
-            Agent::Group(g) => g.borrow().individual_ids(),
-            Agent::Document(d) => d.borrow().group.individual_ids(),
-        }
-    }
+    pub async fn individual_ids(&self) -> HashSet<IndividualId> {
+        let mut ids = HashSet::new();
 
-    pub fn pick_individual_prekeys(&self, doc_id: DocumentId) -> HashMap<IndividualId, ShareKey> {
-        match self {
-            Agent::Active(a) => {
-                let prekey = *a.borrow().pick_prekey(doc_id);
-                HashMap::from_iter([(a.borrow().id(), prekey)])
+        let mut stack: Vec<Self> = vec![self.dupe()];
+
+        while let Some(node) = stack.pop() {
+            match node {
+                Agent::Active(a_id, _) => {
+                    ids.insert(a_id);
+                }
+                Agent::Individual(i_id, _) => {
+                    ids.insert(i_id);
+                }
+                Agent::Group(_, g) => {
+                    let locked_group = g.lock().await;
+                    for ms in locked_group.members().values() {
+                        for m in ms {
+                            stack.push(m.payload.delegate.dupe());
+                        }
+                    }
+                }
+                Agent::Document(_, d) => {
+                    let locked_doc = d.lock().await;
+                    for ms in locked_doc.members().values() {
+                        for m in ms {
+                            stack.push(m.payload.delegate.dupe());
+                        }
+                    }
+                }
             }
-            Agent::Individual(i) => {
-                let prekey = *i.borrow().pick_prekey(doc_id);
-                HashMap::from_iter([(i.borrow().id(), prekey)])
-            }
-            Agent::Group(g) => g.borrow().pick_individual_prekeys(doc_id),
-            Agent::Document(d) => d.borrow().group.pick_individual_prekeys(doc_id),
         }
+
+        ids
     }
 
-    pub fn key_ops(&self) -> HashSet<Rc<KeyOp>> {
+    pub async fn pick_individual_prekeys(
+        &self,
+        doc_id: DocumentId,
+    ) -> HashMap<IndividualId, ShareKey> {
+        let mut result = HashMap::new();
+        let mut stack: Vec<Self> = vec![self.dupe()];
+
+        while let Some(agent) = stack.pop() {
+            match agent {
+                Agent::Active(_, a) => {
+                    let (id, prekey) = {
+                        let locked = a.lock().await;
+                        let id = locked.id();
+                        let prekey = *locked.pick_prekey(doc_id);
+                        (id, prekey)
+                    };
+                    result.insert(id, prekey);
+                }
+                Agent::Individual(_, i) => {
+                    let (id, prekey) = {
+                        let guard = i.lock().await;
+                        (guard.id(), *guard.pick_prekey(doc_id))
+                    };
+                    result.insert(id, prekey);
+                }
+                Agent::Group(_, g) => {
+                    let locked_group = g.lock().await;
+                    for ms in locked_group.members().values() {
+                        for m in ms {
+                            stack.push(m.payload.delegate.dupe());
+                        }
+                    }
+                }
+                Agent::Document(_, d) => {
+                    let locked_doc = d.lock().await;
+                    for ms in locked_doc.members().values() {
+                        for m in ms {
+                            stack.push(m.payload.delegate.dupe());
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    pub async fn key_ops(&self) -> HashSet<Arc<KeyOp>> {
         match self {
-            Agent::Active(a) => a
-                .borrow()
+            Agent::Active(_, a) => a
+                .lock()
+                .await
                 .individual
                 .prekey_ops()
                 .values()
                 .cloned()
                 .collect(),
-            Agent::Individual(i) => i.borrow().prekey_ops().values().cloned().collect(),
-            Agent::Group(g) => {
-                if let IdOrIndividual::Individual(indie) = &g.borrow().id_or_indie {
+            Agent::Individual(_, i) => i.lock().await.prekey_ops().values().cloned().collect(),
+            Agent::Group(_, g) => {
+                if let IdOrIndividual::Individual(indie) = &g.lock().await.id_or_indie {
                     indie.prekey_ops().values().cloned().collect()
                 } else {
                     Default::default()
                 }
             }
-            Agent::Document(d) => {
-                if let IdOrIndividual::Individual(indie) = &d.borrow().group.id_or_indie {
+            Agent::Document(_, d) => {
+                if let IdOrIndividual::Individual(indie) = &d.lock().await.group.id_or_indie {
                     indie.prekey_ops().values().cloned().collect()
                 } else {
                     Default::default()
@@ -124,7 +183,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Active<S, 
     for Agent<S, T, L>
 {
     fn from(a: Active<S, T, L>) -> Self {
-        Agent::Active(Rc::new(RefCell::new(a)))
+        Agent::Active(a.id(), Arc::new(Mutex::new(a)))
     }
 }
 
@@ -132,7 +191,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Individual
     for Agent<S, T, L>
 {
     fn from(i: Individual) -> Self {
-        Agent::Individual(Rc::new(RefCell::new(i)))
+        Agent::Individual(i.id(), Arc::new(Mutex::new(i)))
     }
 }
 
@@ -140,7 +199,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Group<S, T
     for Agent<S, T, L>
 {
     fn from(g: Group<S, T, L>) -> Self {
-        Agent::Group(Rc::new(RefCell::new(g)))
+        Agent::Group(g.group_id(), Arc::new(Mutex::new(g)))
     }
 }
 
@@ -149,8 +208,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Membered<S
 {
     fn from(m: Membered<S, T, L>) -> Self {
         match m {
-            Membered::Group(g) => g.into(),
-            Membered::Document(d) => d.into(),
+            Membered::Group(id, g) => Agent::Group(id, g),
+            Membered::Document(id, d) => Agent::Document(id, d),
         }
     }
 }
@@ -159,33 +218,28 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Document<S
     for Agent<S, T, L>
 {
     fn from(d: Document<S, T, L>) -> Self {
-        Agent::Document(Rc::new(RefCell::new(d)))
+        Agent::Document(d.doc_id(), Arc::new(Mutex::new(d)))
     }
 }
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Agent<S, T, L> {
     fn verifying_key(&self) -> VerifyingKey {
-        match self {
-            Agent::Active(a) => a.borrow().verifying_key(),
-            Agent::Individual(i) => i.borrow().verifying_key(),
-            Agent::Group(g) => (*g).borrow().verifying_key(),
-            Agent::Document(d) => d.borrow().group.verifying_key(),
-        }
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Display for Agent<S, T, L> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.id())
+        self.id().verifying_key()
     }
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for Agent<S, T, L> {
     fn dupe(&self) -> Self {
+        self.clone()
+    }
+}
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Display for Agent<S, T, L> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Agent::Active(a) => a.dupe().into(),
-            Agent::Individual(i) => i.dupe().into(),
-            Agent::Group(g) => g.dupe().into(),
-            Agent::Document(d) => d.dupe().into(),
+            Agent::Active(id, _) => write!(f, "Active({id})"),
+            Agent::Individual(id, _) => write!(f, "Individual({id})"),
+            Agent::Group(id, _) => write!(f, "Group({id})"),
+            Agent::Document(id, _) => write!(f, "Document({id})"),
         }
     }
 }

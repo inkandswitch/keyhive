@@ -48,7 +48,7 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 
 /// A async variant of [`transact_blocking`].
 ///
-/// This is meant for types that are wrapped in e.g. `Rc<RefCell<T>>` or `Arc<Mutex<T>>`.
+/// This is meant for types that are wrapped in e.g. `Arc<RefCell<T>>` or `Arc<Mutex<T>>`.
 ///
 /// Everything in the transaction happens on a clean, disconnected fork of the original,
 /// so there is no need to worry about interleaving between other transactions or trunk.
@@ -57,8 +57,9 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 /// # use std::{
 /// #     collections::HashSet,
 /// #     rc::Rc,
-/// #     cell::RefCell
+/// #     cell::RefCell,
 /// # };
+/// # use futures::lock::Mutex;
 /// # use keyhive_core::transact::{
 /// #     fork::{Fork, ForkAsync},
 /// #     merge::{Merge, MergeAsync},

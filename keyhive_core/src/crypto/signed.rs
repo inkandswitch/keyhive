@@ -77,7 +77,7 @@ impl<T: Serialize + Debug> Signed<T> {
     /// # use keyhive_core::crypto::signer::memory::MemorySigner;
     /// # use keyhive_core::crypto::signer::sync_signer::SyncSigner;
     /// #
-    /// let signer = MemorySigner::generate(&mut rand::thread_rng());
+    /// let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
     /// let signed = signer.try_sign_sync("Hello, world!").unwrap();
     /// assert!(signed.try_verify().is_ok());
     /// ```

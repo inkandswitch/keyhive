@@ -68,7 +68,8 @@ test.describe("Keyhive", async () => {
       );
 
       const group = await keyhive.generateGroup([]);
-      const { groupId, members } = group;
+      const { groupId } = group;
+      const members = await group.members();
       const canStr = members[0].can.toString();
       return { group, groupId, members, canStr };
     };
@@ -113,7 +114,7 @@ test.describe("Keyhive", async () => {
       await kh.generateGroup([d1.toPeer()]);
       await kh.generateGroup([g2.toPeer(), d1.toPeer()]);
 
-      const archive = kh.intoArchive();
+      const archive = await kh.intoArchive();
       const archiveBytes = archive.toBytes();
       const archiveBytesIsUint8Array = archiveBytes instanceof Uint8Array;
       const newStore = CiphertextStore.newInMemory();

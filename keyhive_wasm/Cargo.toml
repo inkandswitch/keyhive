@@ -20,6 +20,7 @@ bincode = { workspace = true }
 derive_more = { workspace = true }
 dupe = { workspace = true }
 ed25519-dalek = { workspace = true }
+futures = { workspace = true }
 nonempty = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

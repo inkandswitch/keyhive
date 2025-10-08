@@ -9,7 +9,8 @@ use crate::{
 };
 use derive_where::derive_where;
 use dupe::Dupe;
-use std::{cell::Ref, cell::RefCell, rc::Rc};
+use futures::lock::Mutex;
+use std::sync::Arc;
 
 /// [`Delegation`] storage.
 #[allow(clippy::type_complexity)]
@@ -19,66 +20,42 @@ pub struct DelegationStore<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
     L: MembershipListener<S, T> = NoListener,
->(pub(crate) Rc<RefCell<CaMap<Signed<Delegation<S, T, L>>>>>);
+>(pub(crate) Arc<Mutex<CaMap<Signed<Delegation<S, T, L>>>>>);
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> DelegationStore<S, T, L> {
     /// Create a new delegation store.
     pub fn new() -> Self {
-        Self(Rc::new(RefCell::new(CaMap::new())))
+        Self(Arc::new(Mutex::new(CaMap::new())))
     }
 
     /// Retrieve a [`Delegation`] by its [`Digest`].
-    pub fn get(
+    pub async fn get(
         &self,
         key: &Digest<Signed<Delegation<S, T, L>>>,
-    ) -> Option<Rc<Signed<Delegation<S, T, L>>>> {
-        let rc = self.0.dupe();
-        let borrowed = RefCell::borrow(&rc);
-        borrowed.get(key).cloned()
+    ) -> Option<Arc<Signed<Delegation<S, T, L>>>> {
+        let locked = self.0.lock().await;
+        locked.get(key).cloned()
     }
 
     /// Check if a [`Digest`] is present in the store.
-    pub fn contains_key(&self, key: &Digest<Signed<Delegation<S, T, L>>>) -> bool {
-        let rc = self.0.dupe();
-        let borrowed = RefCell::borrow(&rc);
-        borrowed.contains_key(key)
+    pub async fn contains_key(&self, key: &Digest<Signed<Delegation<S, T, L>>>) -> bool {
+        let locked = self.0.lock().await;
+        locked.contains_key(key)
     }
 
     /// Check if a [`Delegation`] is present in the store.
-    pub fn contains_value(&self, value: &Signed<Delegation<S, T, L>>) -> bool {
-        let rc = self.0.dupe();
-        let borrowed = RefCell::borrow(&rc);
-        borrowed.contains_value(value)
+    pub async fn contains_value(&self, value: &Signed<Delegation<S, T, L>>) -> bool {
+        let locked = self.0.lock().await;
+        locked.contains_value(value)
     }
 
     /// Insert a [`Delegation`] into the store.
-    pub fn insert(
+    pub async fn insert(
         &self,
-        delegation: Rc<Signed<Delegation<S, T, L>>>,
+        delegation: Arc<Signed<Delegation<S, T, L>>>,
     ) -> Digest<Signed<Delegation<S, T, L>>> {
-        self.0.borrow_mut().insert(delegation)
-    }
-
-    pub fn borrow(&self) -> Ref<'_, CaMap<Signed<Delegation<S, T, L>>>> {
-        self.0.borrow()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
-    for DelegationStore<S, T, L>
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Eq for DelegationStore<S, T, L> {}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
-    for DelegationStore<S, T, L>
-{
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.borrow().hash(state);
+        let mut locked = self.0.lock().await;
+        locked.insert(delegation)
     }
 }
 

@@ -11,7 +11,7 @@ use crate::{
 use derive_where::derive_where;
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, rc::Rc};
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(PartialEq, Eq)]
 #[derive_where(Debug, Clone; T)]
@@ -20,8 +20,8 @@ pub struct Revocation<
     T: ContentRef = [u8; 32],
     L: MembershipListener<S, T> = NoListener,
 > {
-    pub(crate) revoke: Rc<Signed<Delegation<S, T, L>>>,
-    pub(crate) proof: Option<Rc<Signed<Delegation<S, T, L>>>>,
+    pub(crate) revoke: Arc<Signed<Delegation<S, T, L>>>,
+    pub(crate) proof: Option<Arc<Signed<Delegation<S, T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
@@ -30,7 +30,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Revocation<S, T
         self.revoke.subject_id()
     }
 
-    pub fn revoked(&self) -> &Rc<Signed<Delegation<S, T, L>>> {
+    pub fn revoked(&self) -> &Arc<Signed<Delegation<S, T, L>>> {
         &self.revoke
     }
 
@@ -38,7 +38,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Revocation<S, T
         self.revoke.payload().delegate.agent_id()
     }
 
-    pub fn proof(&self) -> Option<Rc<Signed<Delegation<S, T, L>>>> {
+    pub fn proof(&self) -> Option<Arc<Signed<Delegation<S, T, L>>>> {
         self.proof.dupe()
     }
 

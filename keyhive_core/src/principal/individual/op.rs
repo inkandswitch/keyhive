@@ -14,7 +14,7 @@ use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    rc::Rc,
+    sync::Arc,
 };
 
 /// Operations for updating prekeys.
@@ -26,10 +26,10 @@ use std::{
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum KeyOp {
     /// Add a new key.
-    Add(Rc<Signed<AddKeyOp>>),
+    Add(Arc<Signed<AddKeyOp>>),
 
     /// Retire and replace an existing key.
-    Rotate(Rc<Signed<RotateKeyOp>>),
+    Rotate(Arc<Signed<RotateKeyOp>>),
 }
 
 impl KeyOp {

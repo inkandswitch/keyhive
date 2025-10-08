@@ -5,7 +5,7 @@ use crate::{
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::document::id::DocumentId,
 };
-use std::{collections::BTreeMap, hash::Hash, rc::Rc};
+use std::{collections::BTreeMap, hash::Hash, sync::Arc};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Dependencies<
@@ -14,7 +14,7 @@ pub struct Dependencies<
     T: ContentRef = [u8; 32],
     L: MembershipListener<S, T> = NoListener,
 > {
-    pub delegations: Vec<Rc<Signed<Delegation<S, T, L>>>>,
-    pub revocations: Vec<Rc<Signed<Revocation<S, T, L>>>>,
+    pub delegations: Vec<Arc<Signed<Delegation<S, T, L>>>>,
+    pub revocations: Vec<Arc<Signed<Revocation<S, T, L>>>>,
     pub content: &'a BTreeMap<DocumentId, Vec<T>>,
 }

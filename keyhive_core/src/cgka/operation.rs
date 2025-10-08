@@ -13,31 +13,31 @@ use std::{
     hash::{Hash, Hasher},
     mem,
     ops::Deref,
-    rc::Rc,
+    sync::Arc,
 };
 use topological_sort::TopologicalSort;
 
 /// An ordered [`NonEmpty`] of concurrent [`CgkaOperation`]s.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct CgkaEpoch(NonEmpty<Rc<Signed<CgkaOperation>>>);
+pub struct CgkaEpoch(NonEmpty<Arc<Signed<CgkaOperation>>>);
 
-impl From<NonEmpty<Rc<Signed<CgkaOperation>>>> for CgkaEpoch {
-    fn from(item: NonEmpty<Rc<Signed<CgkaOperation>>>) -> Self {
+impl From<NonEmpty<Arc<Signed<CgkaOperation>>>> for CgkaEpoch {
+    fn from(item: NonEmpty<Arc<Signed<CgkaOperation>>>) -> Self {
         CgkaEpoch(item)
     }
 }
 
 impl Deref for CgkaEpoch {
-    type Target = NonEmpty<Rc<Signed<CgkaOperation>>>;
+    type Target = NonEmpty<Arc<Signed<CgkaOperation>>>;
 
-    fn deref(&self) -> &NonEmpty<Rc<Signed<CgkaOperation>>> {
+    fn deref(&self) -> &NonEmpty<Arc<Signed<CgkaOperation>>> {
         &self.0
     }
 }
 
 impl IntoIterator for CgkaEpoch {
-    type Item = Rc<Signed<CgkaOperation>>;
-    type IntoIter = <NonEmpty<Rc<Signed<CgkaOperation>>> as IntoIterator>::IntoIter;
+    type Item = Arc<Signed<CgkaOperation>>;
+    type IntoIter = <NonEmpty<Arc<Signed<CgkaOperation>>> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -316,7 +316,7 @@ impl CgkaOperationGraph {
         // Partition heads into ordered epochs representing ordered sets of
         // concurrent operations.
         let mut epoch_heads = HashSet::new();
-        let mut next_epoch: Vec<Rc<Signed<CgkaOperation>>> = Vec::new();
+        let mut next_epoch: Vec<Arc<Signed<CgkaOperation>>> = Vec::new();
         while !dependencies.is_empty() {
             let mut next_set = dependencies.pop_all();
             next_set.sort();

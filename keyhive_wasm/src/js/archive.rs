@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
 use super::{
     change_ref::JsChangeRef, ciphertext_store::JsCiphertextStore, event_handler::JsEventHandler,
     keyhive::JsKeyhive, signer::JsSigner,
 };
 use derive_more::{Display, From, Into};
+use futures::lock::Mutex;
 use keyhive_core::{archive::Archive, keyhive::Keyhive, keyhive::TryFromArchiveError};
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -29,7 +33,7 @@ impl JsArchive {
     }
 
     #[wasm_bindgen(js_name = tryToKeyhive)]
-    pub fn try_to_keyhive(
+    pub async fn try_to_keyhive(
         &self,
         ciphertext_store: JsCiphertextStore,
         signer: JsSigner,
@@ -40,8 +44,9 @@ impl JsArchive {
             signer,
             ciphertext_store,
             event_handler.clone().into(),
-            rand::thread_rng(),
+            Arc::new(Mutex::new(OsRng)),
         )
+        .await
         .map_err(|e| JsTryFromArchiveError(Box::new(e)))?
         .into())
     }

@@ -6,7 +6,7 @@ use crate::{
 };
 use derive_where::derive_where;
 use serde::{Deserialize, Serialize};
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 #[derive_where(Clone; T)]
@@ -17,7 +17,7 @@ pub struct Invocation<
     T: Clone = C,
 > {
     pub(crate) invoke: T,
-    pub(crate) proof: Option<Rc<Signed<Delegation<S, C, L>>>>,
+    pub(crate) proof: Option<Arc<Signed<Delegation<S, C, L>>>>,
 }
 
 impl<S: AsyncSigner, C: ContentRef, L: MembershipListener<S, C>, T: Clone + Serialize> Serialize

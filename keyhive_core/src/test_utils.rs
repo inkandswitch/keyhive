@@ -4,7 +4,7 @@ use crate::{
     listener::no_listener::NoListener,
     store::ciphertext::memory::MemoryCiphertextStore,
 };
-use rand::rngs::ThreadRng;
+use rand::rngs::OsRng;
 
 pub async fn make_simple_keyhive() -> Result<
     Keyhive<
@@ -13,11 +13,11 @@ pub async fn make_simple_keyhive() -> Result<
         Vec<u8>,
         MemoryCiphertextStore<[u8; 32], Vec<u8>>,
         NoListener,
-        ThreadRng,
+        OsRng,
     >,
     SigningError,
 > {
-    let mut csprng = rand::thread_rng();
+    let mut csprng = OsRng;
     let sk = MemorySigner::generate(&mut csprng);
     Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng).await
 }
