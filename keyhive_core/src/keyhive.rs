@@ -2325,7 +2325,7 @@ mod tests {
         let member = Public.individual().into();
         let mut membered = Membered::Document(doc.lock().await.doc_id(), doc.dupe());
         let dlg = keyhive
-            .add_member(member, &mut membered, Access::Read, &[])
+            .add_member(member, membered, Access::Read, &[])
             .await
             .unwrap();
 
@@ -2391,7 +2391,7 @@ mod tests {
         charlie
             .add_member(
                 Agent::Individual(bob_on_charlie_id, bob_on_charlie.dupe()),
-                &mut Membered::Document(doc2_id, doc2.dupe()),
+                Membered::Document(doc2_id, doc2.dupe()),
                 Access::Read,
                 &[],
             )
@@ -2404,7 +2404,8 @@ mod tests {
             .unwrap();
 
         bob.ingest_event_table(events).await.unwrap();
-    }
+
+        tracing::error!("I");
 
     #[tokio::test]
     async fn test_async_transaction() -> TestResult {
