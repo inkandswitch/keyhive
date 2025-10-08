@@ -929,6 +929,7 @@ mod tests {
     use crate::principal::active::Active;
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
+    use rand::rngs::OsRng;
 
     async fn setup_user<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
@@ -1344,7 +1345,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_member() {
         test_utils::init_logging();
-        let mut csprng = rand::thread_rng();
+        let mut csprng = OsRng;
 
         let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let alice_agent: Agent<MemorySigner> = Agent::Active(alice.lock().await.id(), alice.dupe());

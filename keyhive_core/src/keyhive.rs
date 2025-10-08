@@ -2268,7 +2268,7 @@ mod tests {
     async fn test_add_member() {
         test_utils::init_logging();
 
-        let mut keyhive = make_keyhive().await;
+        let keyhive = make_keyhive().await;
         let doc = keyhive
             .generate_doc(
                 vec![Peer::Individual(
@@ -2296,8 +2296,8 @@ mod tests {
     async fn receiving_an_event_with_added_or_rotated_prekeys_works() {
         test_utils::init_logging();
 
-        let mut alice = make_keyhive().await;
-        let mut bob = make_keyhive().await;
+        let alice = make_keyhive().await;
+        let bob = make_keyhive().await;
 
         let doc = alice
             .generate_doc(vec![], nonempty![[0u8; 32]])
@@ -2336,7 +2336,7 @@ mod tests {
         let rotate_op = bob.rotate_prekey(*add_op.new_key()).await.unwrap();
 
         // Create a new document (on a new keyhive) and share it with bob using the rotated key
-        let mut charlie = make_keyhive().await;
+        let charlie = make_keyhive().await;
         let doc2 = charlie
             .generate_doc(vec![], nonempty![[1u8; 32]])
             .await

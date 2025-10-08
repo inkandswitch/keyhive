@@ -242,7 +242,7 @@ mod tests {
             [2u8; 32].into(),
         ));
 
-        let mut store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
+        let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
         store.insert(ciphertext1.dupe());
         store.insert(ciphertext2.dupe());
 

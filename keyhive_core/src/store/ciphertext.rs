@@ -367,7 +367,7 @@ mod tests {
         },
         principal::document::id::DocumentId,
     };
-    use rand::rngs::{OsRng, ThreadRng};
+    use rand::rngs::OsRng;
     use std::marker::PhantomData;
     use testresult::TestResult;
 
@@ -379,10 +379,10 @@ mod tests {
         doc_id: DocumentId,
         csprng: &mut OsRng,
     ) -> (Arc<EncryptedContent<String, [u8; 32]>>, SymmetricKey) {
-        let pcs_key: PcsKey = ShareSecretKey::generate(csprng).into();
+        let pcs_key: PcsKey = ShareSecretKey::generate(&mut csprng).into();
         let pcs_key_hash = Digest::hash(&pcs_key);
 
-        let key = SymmetricKey::generate(csprng);
+        let key = SymmetricKey::generate(&mut csprng);
         let envelope = Envelope {
             plaintext,
             ancestors,
@@ -452,7 +452,7 @@ mod tests {
     async fn test_try_causal_decrypt() -> TestResult {
         test_utils::init_logging();
 
-        let csprng = Arc::new(Mutex::new(OsRng));
+        let mut csprng = OsRng;
         let doc_id = DocumentId::generate(&mut csprng);
         let pcs_update_op_hash: Digest<Signed<CgkaOperation>> = Digest {
             raw: blake3::hash(b"PcsOp"),
@@ -470,7 +470,7 @@ mod tests {
             pcs_update_op_hash,
             HashMap::new(),
             doc_id,
-            csprng.dupe(),
+            &mut csprng,
         );
 
         let (left, left_key) = setup(
@@ -479,7 +479,7 @@ mod tests {
             pcs_update_op_hash,
             HashMap::from_iter([(genesis_ref, genesis_key)]),
             doc_id,
-            csprng.dupe(),
+            &mut csprng,
         );
 
         let (right, right_key) = setup(
@@ -488,7 +488,7 @@ mod tests {
             pcs_update_op_hash,
             HashMap::from_iter([(genesis_ref, genesis_key)]),
             doc_id,
-            csprng.dupe(),
+            &mut csprng,
         );
 
         let (head, head_key) = setup(
@@ -497,7 +497,7 @@ mod tests {
             pcs_update_op_hash,
             HashMap::from_iter([(left_ref, left_key), (right_ref, right_key)]),
             doc_id,
-            csprng.dupe(),
+            &mut csprng,
         );
 
         let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();
@@ -665,8 +665,8 @@ mod tests {
     async fn test_incomplete_store() -> TestResult {
         test_utils::init_logging();
 
-        let mut csprng = rand::thread_rng();
-        let doc_id = DocumentId::generate(&mut csprng);
+        let mut csprng = OsRng;
+        let doc_id = DocumentId::generate(&mut OsRng);
         let pcs_update_op_hash: Digest<Signed<CgkaOperation>> = Digest {
             raw: blake3::hash(b"PcsOp"),
             _phantom: PhantomData,
@@ -745,7 +745,7 @@ mod tests {
             &mut csprng,
         );
 
-        let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        let store = MemoryCiphertextStore::<[u8; 32], String>::new();
         // NOTE: skipping: (genesis1_ref, genesis1.clone()),
         // NOTE: skipping (genesis2_ref, genesis2.clone()),
         store.insert(left.clone());
