@@ -40,7 +40,7 @@ use x25519_dalek::SharedSecret;
 ///         revocation_store,
 ///         NoListener,
 ///         &sk,
-///         &mut csprng
+///         Arc::new(Mutex::new(csprng)),
 ///     ).await.unwrap();
 ///
 ///     let key = SymmetricKey::generate(&mut csprng);
