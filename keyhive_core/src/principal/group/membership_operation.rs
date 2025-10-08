@@ -508,7 +508,7 @@ mod tests {
         Arc::new(
             fixture(&ALICE_SIGNER)
                 .try_sign_sync(Delegation {
-                    delegate: Agent::Individual(Arc::new(Mutex::new(bob))),
+                    delegate: Agent::Individual(bob.id(), Arc::new(Mutex::new(bob))),
                     can: Access::Write,
                     proof: Some(add_alice(csprng).await),
                     after_content: BTreeMap::new(),
@@ -802,50 +802,49 @@ mod tests {
                 Active::generate(dan_sk, NoListener, csprng).await.unwrap(),
             ));
 
-            {
-                let locked_alice = alice.lock().await;
+            let locked_alice = alice.lock().await;
 
-                let alice_to_bob: Arc<Signed<Delegation<MemorySigner>>> = Arc::new(
-                    locked_alice
-                        .signer
-                        .try_sign_sync(Delegation {
-                            delegate: bob.dupe().into(),
-                            can: Access::Write,
-                            proof: None,
-                            after_revocations: vec![],
-                            after_content: BTreeMap::new(),
-                        })
-                        .unwrap(),
-                );
+            let alice_to_bob: Arc<Signed<Delegation<MemorySigner>>> = Arc::new(
+                locked_alice
+                    .signer
+                    .try_sign_sync(Delegation {
+                        delegate: Agent::Active(bob.lock().await.id(), bob.dupe()),
+                        can: Access::Write,
+                        proof: None,
+                        after_revocations: vec![],
+                        after_content: BTreeMap::new(),
+                    })
+                    .unwrap(),
+            );
 
-                let alice_to_dan = Arc::new(
-                    locked_alice
-                        .signer
-                        .try_sign_sync(Delegation {
-                            delegate: dan.dupe().into(),
-                            can: Access::Read,
-                            proof: None,
-                            after_revocations: vec![],
-                            after_content: BTreeMap::new(),
-                        })
-                        .unwrap(),
-                );
-            }
+            let alice_to_dan = Arc::new(
+                locked_alice
+                    .signer
+                    .try_sign_sync(Delegation {
+                        delegate: Agent::Active(dan.lock().await.id(), dan.dupe()),
+                        can: Access::Read,
+                        proof: None,
+                        after_revocations: vec![],
+                        after_content: BTreeMap::new(),
+                    })
+                    .unwrap(),
+            );
 
-            {
-                let locked_bob = bob.lock().await;
-                let bob_to_carol = Arc::new(
-                    locked_bob
-                        .try_sign_sync(Delegation {
-                            delegate: carol.dupe().into(),
-                            can: Access::Pull,
-                            proof: Some(alice_to_bob.dupe()),
-                            after_revocations: vec![],
-                            after_content: BTreeMap::new(),
-                        })
-                        .unwrap(),
-                );
-            }
+            drop(locked_alice);
+
+            let locked_bob = bob.lock().await;
+            let bob_to_carol = Arc::new(
+                locked_bob
+                    .signer
+                    .try_sign_sync(Delegation {
+                        delegate: Agent::Active(carol.lock().await.id(), carol.dupe()),
+                        can: Access::Pull,
+                        proof: Some(alice_to_bob.dupe()),
+                        after_revocations: vec![],
+                        after_content: BTreeMap::new(),
+                    })
+                    .unwrap(),
+            );
 
             let dlg_heads = CaMap::from_iter_direct([alice_to_dan.dupe(), bob_to_carol.dupe()]);
             let mut sorted = MembershipOperation::topsort(&dlg_heads, &CaMap::new());

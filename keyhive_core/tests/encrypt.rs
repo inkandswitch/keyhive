@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
+use dupe::Dupe;
+use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
     crypto::signer::memory::MemorySigner,
     event::static_event::StaticEvent,
     keyhive::Keyhive,
     listener::{log::Log, no_listener::NoListener},
+    principal::agent::Agent,
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 use nonempty::nonempty;
@@ -58,10 +61,11 @@ async fn test_encrypt_to_added_member() -> TestResult {
         keyhive: mut bob, ..
     } = make_keyhive().await;
 
+    let indie_bob = bob.individual().await;
     alice
         .add_member(
-            bob.active().clone().into(),
-            &mut doc.clone().into(),
+            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
+            &mut doc.lock().await.clone().into(),
             Access::Read,
             &[],
         )
@@ -71,22 +75,22 @@ async fn test_encrypt_to_added_member() -> TestResult {
         .try_encrypt_content(doc.clone(), &init_hash.into(), &vec![], &init_content)
         .await?;
 
-    // now sync everything to bob
-    let events = alice
-        .static_events_for_agent(&bob.active().clone().into())
+    // Sync everything to bob
+    let alice_events = alice
+        .static_events_for_agent(&bob.active().lock().await.clone().into())
         .await?;
-    bob.ingest_unsorted_static_events(events.into_values().collect())
+    tracing::error!("Alice had {} events for bob", alice_events.len());
+    bob.ingest_unsorted_static_events(alice_events.into_values().collect())
         .await?;
+    tracing::error!("Bob has {} docs", bob.documents().len());
 
-    // Now attempt to decrypt on bob
-    {
-        let locked_doc = doc.lock().await;
-        let doc_on_bob = bob.get_document(locked_doc.doc_id()).unwrap();
-        let decrypted = bob
-            .try_decrypt_content(doc_on_bob.clone(), encrypted.encrypted_content())
-            .await?;
-        assert_eq!(decrypted, init_content);
-    }
+    // Attempt to decrypt on bob
+    let doc_id = { doc.lock().await.doc_id() };
+    let doc_on_bob = bob.get_document(doc_id).unwrap();
+    let decrypted = bob
+        .try_decrypt_content(doc_on_bob.clone(), encrypted.encrypted_content())
+        .await?;
+    assert_eq!(decrypted, init_content);
 
     Ok(())
 }
@@ -100,7 +104,7 @@ async fn test_decrypt_after_to_from_archive() {
         log,
     } = make_keyhive().await;
 
-    let archive = alice.into_archive();
+    let archive = alice.into_archive().await;
 
     let init_content = "hello world".as_bytes().to_vec();
     let init_hash = blake3::hash(&init_content);
@@ -122,20 +126,22 @@ async fn test_decrypt_after_to_from_archive() {
         NoListener,
         rand::thread_rng(),
     )
+    .await
     .unwrap();
     let mut events = Vec::new();
-    while let Some(evt) = log.pop() {
+    while let Some(evt) = log.pop().await {
         events.push(StaticEvent::from(evt));
     }
     alice.ingest_unsorted_static_events(events).await.unwrap();
 
     let doc = {
         let locked_doc = doc.lock().await;
-        alice.get_document(locked_doc.doc_id()).unwrap();
+        alice.get_document(locked_doc.doc_id()).unwrap()
     };
 
     let decrypted = alice
-        .try_decrypt_content(doc.clone(), encrypted.encrypted_content())
+        .try_decrypt_content(doc.dupe(), encrypted.encrypted_content())
+        .await
         .unwrap();
 
     assert_eq!(decrypted, init_content);
@@ -150,7 +156,7 @@ async fn test_decrypt_after_fork_and_merge() {
         log,
     } = make_keyhive().await;
 
-    let archive1 = alice.into_archive();
+    let archive1 = alice.into_archive().await;
 
     let init_content = "hello world".as_bytes().to_vec();
     let init_hash = blake3::hash(&init_content);
@@ -165,13 +171,17 @@ async fn test_decrypt_after_fork_and_merge() {
         .await
         .unwrap();
 
-    let archive2 = alice.into_archive();
-    let mut events = Arc::unwrap_or_clone(log.0)
-        .into_inner()
+    let archive2 = alice.into_archive().await;
+    let mut events = log
+        .0
+        .lock()
+        .await
+        .clone()
         .into_iter()
         .chain(
             alice
-                .events_for_agent(&alice.individual().into())
+                .events_for_agent(&alice.individual().await.into())
+                .await
                 .unwrap()
                 .into_values(),
         )
@@ -190,6 +200,7 @@ async fn test_decrypt_after_fork_and_merge() {
             Log::new(),
             rand::thread_rng(),
         )
+        .await
         .unwrap();
 
         keyhive.ingest_archive(archive2).await.unwrap();
@@ -205,6 +216,7 @@ async fn test_decrypt_after_fork_and_merge() {
 
     let decrypted = reloaded
         .try_decrypt_content(doc.clone(), encrypted.encrypted_content())
+        .await
         .unwrap();
 
     assert_eq!(decrypted, init_content);

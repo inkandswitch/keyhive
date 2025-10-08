@@ -156,6 +156,10 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
 
     /// Pseudorandomly select a prekey out of the current prekeys.
     pub fn pick_prekey(&self, doc_id: DocumentId) -> &ShareKey {
+        tracing::trace!(
+            num_prekeys = self.individual.prekeys.len(),
+            "picking prekey for document {doc_id}",
+        );
         self.individual.pick_prekey(doc_id)
     }
 

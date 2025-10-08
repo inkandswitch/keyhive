@@ -114,8 +114,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
             match agent {
                 Agent::Active(_, a) => {
                     let (id, prekey) = {
-                        let guard = a.lock().await;
-                        (guard.id(), *guard.pick_prekey(doc_id))
+                        let locked = a.lock().await;
+                        let id = locked.id();
+                        let prekey = *locked.pick_prekey(doc_id);
+                        (id, prekey)
                     };
                     result.insert(id, prekey);
                 }

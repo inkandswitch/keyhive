@@ -257,10 +257,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         let prekeys = delegation
             .payload
             .delegate
-            .pick_individual_prekeys(self.doc_id());
+            .pick_individual_prekeys(self.doc_id())
+            .await;
 
         let mut acc = Vec::new();
-        for (id, prekey) in prekeys.await.iter() {
+        for (id, prekey) in prekeys.iter() {
             if let Some(op) = self.cgka_mut()?.add(*id, *prekey, signer).await? {
                 acc.push(op);
             }

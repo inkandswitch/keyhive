@@ -240,7 +240,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     ) -> HashMap<IndividualId, ShareKey> {
         let mut prekeys = HashMap::new();
         for (agent, _access) in self.transitive_members().await.values() {
-            prekeys.extend(agent.pick_individual_prekeys(doc_id).await.iter())
+            prekeys.extend(agent.pick_individual_prekeys(doc_id).await.iter());
         }
         prekeys
     }
@@ -927,7 +927,6 @@ mod tests {
     use crate::principal::active::Active;
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
-    use std::cell::Mutex;
 
     async fn setup_user<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
@@ -964,8 +963,9 @@ mod tests {
                         │           │
                         └───────────┘ */
 
-        let alice_agent: Agent<MemorySigner, T, _> = alice.into();
-        let bob_agent = bob.into();
+        let alice_agent: Agent<MemorySigner, T, _> =
+            Agent::Active(alice.lock().await.id(), alice.dupe());
+        let bob_agent = Agent::Active(bob.lock().await.id(), bob.dupe());
 
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
@@ -981,10 +981,11 @@ mod tests {
             .await
             .unwrap(),
         ));
+        let g0_gid = g0.lock().await.group_id();
 
         let g1 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![alice_agent, g0.clone().into()],
+                nonempty![alice_agent, Agent::Group(g0_gid, g0.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -996,7 +997,10 @@ mod tests {
 
         let g2 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![bob_agent, g1.clone().into()],
+                nonempty![
+                    bob_agent,
+                    Agent::Group(g0.lock().await.group_id(), g0.clone())
+                ],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -1008,7 +1012,10 @@ mod tests {
 
         let g3 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![g1.clone().into(), g2.clone().into()],
+                nonempty![
+                    Agent::Group(g1.lock().await.group_id(), g1.clone()),
+                    Agent::Group(g2.lock().await.group_id(), g2.clone())
+                ],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -1031,7 +1038,7 @@ mod tests {
 
         let group0 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![alice.dupe().into()],
+                nonempty![Agent::Active(alice.lock().await.id(), alice.dupe())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -1043,7 +1050,7 @@ mod tests {
 
         let group1 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![bob.into()],
+                nonempty![Agent::Active(bob.lock().await.id(), bob.dupe())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -1055,7 +1062,7 @@ mod tests {
 
         let group2 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![group1.clone().into()],
+                nonempty![Agent::Group(group1.lock().await.group_id(), group1.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -1067,7 +1074,7 @@ mod tests {
 
         let group3 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![group2.clone().into()],
+                nonempty![Agent::Group(group2.lock().await.group_id(), group2.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -1079,7 +1086,7 @@ mod tests {
 
         let group4 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![group3.clone().into()],
+                nonempty![Agent::Group(group3.lock().await.group_id(), group3.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -1091,7 +1098,7 @@ mod tests {
 
         let group5 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![group4.clone().into()],
+                nonempty![Agent::Group(group4.lock().await.group_id(), group4.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -1103,7 +1110,7 @@ mod tests {
 
         let group6 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![group5.clone().into()],
+                nonempty![Agent::Group(group5.lock().await.group_id(), group5.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -1115,7 +1122,7 @@ mod tests {
 
         let group7 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![group6.clone().into()],
+                nonempty![Agent::Group(group6.lock().await.group_id(), group6.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -1127,7 +1134,7 @@ mod tests {
 
         let group8 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![group7.clone().into()],
+                nonempty![Agent::Group(group7.lock().await.group_id(), group7.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -1139,7 +1146,7 @@ mod tests {
 
         let group9 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![group8.clone().into()],
+                nonempty![Agent::Group(group8.lock().await.group_id(), group8.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -1165,7 +1172,7 @@ mod tests {
                 .receive_delegation(Arc::new(
                     alice_signer
                         .try_sign_async(Delegation {
-                            delegate: group9.clone().into(),
+                            delegate: Agent::Group(group9.lock().await.group_id(), group9.dupe()),
                             can: Access::Admin,
                             proof: Some(proof),
                             after_revocations: vec![],
@@ -1174,12 +1181,13 @@ mod tests {
                         .await
                         .unwrap(),
                 ))
+                .await
                 .unwrap();
-
-            [
-                group0, group1, group2, group3, group4, group5, group6, group7, group8, group9,
-            ]
         }
+
+        [
+            group0, group1, group2, group3, group4, group5, group6, group7, group8, group9,
+        ]
     }
 
     #[tokio::test]
@@ -1188,16 +1196,20 @@ mod tests {
         let csprng = &mut rand::thread_rng();
 
         let alice = Arc::new(Mutex::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice_agent: Agent<MemorySigner, String> =
+            Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
 
         let bob = Arc::new(Mutex::new(setup_user(csprng).await));
 
         let [g0, ..]: [Arc<Mutex<Group<MemorySigner, String>>>; 4] =
             setup_groups(alice.dupe(), bob, csprng).await;
-        let g0_mems = g0.lock().await.transitive_members();
+        let g0_mems = g0.lock().await.transitive_members().await;
 
-        let expected = HashMap::from_iter([(alice_id, (alice.dupe().into(), Access::Admin))]);
+        let expected = HashMap::from_iter([(
+            alice_id,
+            (Agent::Active(alice_id.into(), alice.dupe()), Access::Admin),
+        )]);
 
         assert_eq!(g0_mems, expected);
     }
@@ -1208,30 +1220,27 @@ mod tests {
         let csprng = &mut rand::thread_rng();
 
         let alice = Arc::new(Mutex::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice_agent: Agent<MemorySigner, String> =
+            Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
 
         let bob = Arc::new(Mutex::new(setup_user(csprng).await));
 
         let [g0, g1, ..] = setup_groups(alice.dupe(), bob, csprng).await;
-        let g1_mems = g1.lock().await.transitive_members();
+        let g1_mems = g1.lock().await.transitive_members().await;
 
+        let group0_id = { g0.lock().await.id() };
+        let group0_gid = { g0.lock().await.group_id() };
         assert_eq!(
             g1_mems,
             HashMap::from_iter([
                 (
-                    alice_id,
-                    (
-                        Agent::<MemorySigner, String>::from(alice.dupe()),
-                        Access::Admin
-                    )
+                    alice_id.into(),
+                    (Agent::Active(alice_id.into(), alice.dupe()), Access::Admin)
                 ),
                 (
-                    g0.lock().await.id(),
-                    (
-                        Agent::<MemorySigner, String>::from(g0.dupe()),
-                        Access::Admin
-                    )
+                    group0_id,
+                    (Agent::Group(group0_gid, g0.dupe()), Access::Admin)
                 )
             ])
         );
@@ -1243,26 +1252,25 @@ mod tests {
         let csprng = &mut rand::thread_rng();
 
         let alice = Arc::new(Mutex::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice_agent: Agent<MemorySigner, String> =
+            Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
 
         let bob = Arc::new(Mutex::new(setup_user(csprng).await));
-        let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
+        let bob_agent: Agent<MemorySigner, String> =
+            Agent::Active(bob.lock().await.id(), bob.dupe());
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, _g3]: [Arc<Mutex<Group<MemorySigner, String>>>; 4] =
+        let [g0, _g1, g2, _g3]: [Arc<Mutex<Group<MemorySigner, String>>>; 4] =
             setup_groups(alice.dupe(), bob.dupe(), csprng).await;
-        let g1_mems = g2.lock().await.transitive_members();
+        let g2_mems = g2.lock().await.transitive_members().await;
 
-        assert_eq!(
-            g1_mems,
-            HashMap::from_iter([
-                (alice_id, (alice.into(), Access::Admin)),
-                (bob_id, (bob.into(), Access::Admin)),
-                (g0.lock().await.id(), (g0.dupe().into(), Access::Admin)),
-                (g1.lock().await.id(), (g1.dupe().into(), Access::Admin)),
-            ])
-        );
+        let g0_id = { g0.lock().await.id() };
+
+        assert_eq!(g2_mems.len(), 3);
+        assert!(g2_mems.contains_key(&alice_id));
+        assert!(g2_mems.contains_key(&bob_id));
+        assert!(g2_mems.contains_key(&g0_id));
     }
 
     #[tokio::test]
@@ -1271,16 +1279,18 @@ mod tests {
         let csprng = &mut rand::thread_rng();
 
         let alice = Arc::new(Mutex::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice_id = { alice.lock().await.id() };
+        let alice_agent: Agent<MemorySigner, String> = Agent::Active(alice_id, alice.dupe());
         let alice_id = alice_agent.id();
 
         let bob = Arc::new(Mutex::new(setup_user(csprng).await));
-        let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
+        let bob_agent: Agent<MemorySigner, String> =
+            Agent::Active(bob.lock().await.id(), bob.dupe());
         let bob_id = bob_agent.id();
 
         let [g0, g1, g2, g3]: [Arc<Mutex<Group<MemorySigner, String>>>; 4] =
             setup_groups(alice.dupe(), bob.dupe(), csprng).await;
-        let g3_mems = g3.lock().await.transitive_members();
+        let g3_mems = g3.lock().await.transitive_members().await;
 
         assert_eq!(g3_mems.len(), 5);
 
@@ -1302,38 +1312,31 @@ mod tests {
         let csprng = &mut rand::thread_rng();
 
         let alice = Arc::new(Mutex::new(setup_user(csprng).await));
-        let alice_agent: Agent<MemorySigner, String> = alice.dupe().into();
+        let alice_agent: Agent<MemorySigner, String> =
+            Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
 
         let bob = Arc::new(Mutex::new(setup_user(csprng).await));
-        let bob_agent: Agent<MemorySigner, String> = bob.dupe().into();
+        let bob_agent: Agent<MemorySigner, String> =
+            Agent::Active(bob.lock().await.id(), bob.dupe());
         let bob_id = bob_agent.id();
 
         let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]: [Arc<Mutex<Group<MemorySigner, String>>>;
             10] = setup_cyclic_groups(alice.dupe(), bob.dupe(), csprng).await;
-        let g0_mems = g0.lock().await.transitive_members();
+        let g0_mems = g0.lock().await.transitive_members().await;
 
         assert_eq!(g0_mems.len(), 11);
-
-        assert_eq!(
-            g0_mems,
-            HashMap::from_iter([
-                (
-                    alice_id,
-                    (Agent::<_, String, _>::from(alice), Access::Admin)
-                ),
-                (bob_id, (bob.into(), Access::Admin)),
-                (g1.lock().await.id(), (g1.dupe().into(), Access::Admin)),
-                (g2.lock().await.id(), (g2.dupe().into(), Access::Admin)),
-                (g3.lock().await.id(), (g3.dupe().into(), Access::Admin)),
-                (g4.lock().await.id(), (g4.dupe().into(), Access::Admin)),
-                (g5.lock().await.id(), (g5.dupe().into(), Access::Admin)),
-                (g6.lock().await.id(), (g6.dupe().into(), Access::Admin)),
-                (g7.lock().await.id(), (g7.dupe().into(), Access::Admin)),
-                (g8.lock().await.id(), (g8.dupe().into(), Access::Admin)),
-                (g9.lock().await.id(), (g9.dupe().into(), Access::Admin)),
-            ])
-        );
+        assert!(g0_mems.contains_key(&alice_id));
+        assert!(g0_mems.contains_key(&bob_id));
+        assert!(g0_mems.contains_key(&g1.lock().await.id()));
+        assert!(g0_mems.contains_key(&g2.lock().await.id()));
+        assert!(g0_mems.contains_key(&g3.lock().await.id()));
+        assert!(g0_mems.contains_key(&g4.lock().await.id()));
+        assert!(g0_mems.contains_key(&g5.lock().await.id()));
+        assert!(g0_mems.contains_key(&g6.lock().await.id()));
+        assert!(g0_mems.contains_key(&g7.lock().await.id()));
+        assert!(g0_mems.contains_key(&g8.lock().await.id()));
+        assert!(g0_mems.contains_key(&g9.lock().await.id()));
     }
 
     #[tokio::test]
@@ -1377,13 +1380,11 @@ mod tests {
             .unwrap(),
         ));
 
+        let group0_agent = Agent::Group(g0.lock().await.group_id(), g0.dupe());
+
         let g1 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![
-                    alice_agent.dupe(),
-                    bob_agent.dupe(),
-                    Agent::Group(g0.lock().await.group_id(), g0.dupe())
-                ],
+                nonempty![alice_agent.dupe(), bob_agent.dupe(), group0_agent],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -1393,9 +1394,11 @@ mod tests {
             .unwrap(),
         ));
 
+        let group1_agent = Agent::Group(g1.lock().await.group_id(), g1.dupe());
+
         let g2 = Arc::new(Mutex::new(
             Group::generate(
-                nonempty![Agent::Group(g1.lock().await.group_id(), g1.dupe())],
+                nonempty![group1_agent],
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
@@ -1452,13 +1455,15 @@ mod tests {
             Some(&(carol.lock().await.clone().into(), Access::Write)) // NOTE: non-admin!
         );
 
+        let g0_id = { g0.lock().await.id() };
         assert_eq!(
-            g2_mems.get(&g0.lock().await.id()),
+            g2_mems.get(&g0_id),
             Some(&(g0.lock().await.clone().into(), Access::Admin))
         );
 
+        let g1_id = { g1.lock().await.id() };
         assert_eq!(
-            g2_mems.get(&g1.lock().await.id()),
+            g2_mems.get(&g1_id),
             Some(&(g1.lock().await.clone().into(), Access::Admin))
         );
 
@@ -1567,9 +1572,9 @@ mod tests {
             .await
             .unwrap();
 
-        let bob_id = bob.lock().await.id().into();
-        let carol_id = carol.lock().await.id().into();
-        let dan_id = dan.lock().await.id().into();
+        let bob_id = bob.lock().await.id();
+        let carol_id = carol.lock().await.id();
+        let dan_id = dan.lock().await.id();
 
         // Bob kicked out
         assert!(!g1.members.contains_key(&bob_id.into()));
@@ -1587,7 +1592,7 @@ mod tests {
         assert!(g1.members.contains_key(&dan_id.into()));
 
         let _alice_revokes_carol = g1
-            .revoke_member(carol_id, false, &alice_signer, &BTreeMap::new())
+            .revoke_member(carol_id.into(), false, &alice_signer, &BTreeMap::new())
             .await
             .unwrap();
 

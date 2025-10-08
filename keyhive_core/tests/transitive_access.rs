@@ -127,30 +127,38 @@ async fn test_group_members_cycle() -> TestResult {
     let group = alice.generate_group(vec![]).await?;
     alice
         .add_member(
-            bob_on_alice.dupe().into(),
-            &mut group.dupe().into(),
+            Agent::Individual(bob_on_alice.lock().await.id(), bob_on_alice.dupe()),
+            &mut Membered::Group(group.lock().await.group_id(), group.dupe()),
             Access::Read,
             &[],
         )
         .await?;
 
     let doc = alice
-        .generate_doc(vec![group.dupe().into()], nonempty![[0u8; 32]])
+        .generate_doc(
+            vec![Peer::Group(group.lock().await.group_id(), group.dupe())],
+            nonempty![[0u8; 32]],
+        )
         .await?;
 
     alice
         .add_member(
-            group.dupe().into(),
-            &mut doc.dupe().into(),
+            Agent::Group(group.lock().await.group_id(), group.dupe()),
+            &mut Membered::Document(doc.lock().await.doc_id(), doc.dupe()),
             Access::Read,
             &[],
         )
         .await?;
 
     let reachable = alice
-        .docs_reachable_by_agent(&bob_on_alice.dupe().into())
+        .docs_reachable_by_agent(&Agent::Individual(
+            bob_on_alice.lock().await.id(),
+            bob_on_alice.dupe().into(),
+        ))
         .await;
+
     assert_eq!(reachable.len(), 1);
+
     {
         let locked = doc.lock().await;
         assert_eq!(reachable.get(&locked.doc_id()).unwrap().can(), Access::Read);

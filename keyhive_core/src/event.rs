@@ -202,6 +202,7 @@ mod tests {
         let hash2 = Digest::hash(&cgka_op_2);
         let hash3 = Digest::hash(&cgka_op_3);
 
+        let indie = Individual::generate(&signer, &mut csprng).await?;
         let events: Vec<Event<MemorySigner, [u8; 32], NoListener>> = vec![
             Event::CgkaOperation(Arc::new(cgka_op_1)),
             Event::CgkaOperation(Arc::new(cgka_op_2)),
@@ -215,9 +216,7 @@ mod tests {
                 signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
             )),
             Event::Delegated(Arc::new(signer.try_sign_sync(Delegation {
-                delegate: Agent::Individual(Arc::new(Mutex::new(
-                    Individual::generate(&signer, &mut csprng).await?,
-                ))),
+                delegate: Agent::Individual(indie.id(), Arc::new(Mutex::new(indie))),
                 can: Access::Read,
                 proof: None,
                 after_revocations: vec![],
