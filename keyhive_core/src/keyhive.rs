@@ -2325,7 +2325,7 @@ mod tests {
         let member = Public.individual().into();
         let mut membered = Membered::Document(doc.lock().await.doc_id(), doc.dupe());
         let dlg = keyhive
-            .add_member(member, membered, Access::Read, &[])
+            .add_member(member, &membered, Access::Read, &[])
             .await
             .unwrap();
 
