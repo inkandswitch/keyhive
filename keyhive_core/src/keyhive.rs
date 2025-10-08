@@ -1180,7 +1180,7 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn receive_membership_op(
-        &mut self,
+        &self,
         static_op: &StaticMembershipOperation<T>,
     ) -> Result<(), ReceieveStaticDelegationError<S, T, L>> {
         match static_op {
@@ -1674,7 +1674,7 @@ impl<
     #[cfg(any(test, feature = "test_utils"))]
     #[instrument(level = "trace", skip_all)]
     pub async fn ingest_event_table(
-        &mut self,
+        &self,
         events: HashMap<Digest<Event<S, T, L>>, Event<S, T, L>>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
         self.ingest_unsorted_static_events(
