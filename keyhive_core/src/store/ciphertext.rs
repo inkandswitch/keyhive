@@ -367,7 +367,7 @@ mod tests {
         },
         principal::document::id::DocumentId,
     };
-    use rand::rngs::ThreadRng;
+    use rand::rngs::{OsRng, ThreadRng};
     use std::marker::PhantomData;
     use testresult::TestResult;
 
@@ -377,7 +377,7 @@ mod tests {
         pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
         ancestors: HashMap<[u8; 32], SymmetricKey>,
         doc_id: DocumentId,
-        csprng: &mut ThreadRng,
+        csprng: &mut OsRng,
     ) -> (Arc<EncryptedContent<String, [u8; 32]>>, SymmetricKey) {
         let pcs_key: PcsKey = ShareSecretKey::generate(csprng).into();
         let pcs_key_hash = Digest::hash(&pcs_key);
@@ -410,7 +410,7 @@ mod tests {
     async fn test_hash_map_get_ciphertext() -> TestResult {
         test_utils::init_logging();
 
-        let mut csprng = rand::thread_rng();
+        let mut csprng = OsRng;
         let doc_id = DocumentId::generate(&mut csprng);
         let pcs_update_op_hash: Digest<Signed<CgkaOperation>> = Digest {
             raw: blake3::hash(b"PcsOp"),
@@ -438,7 +438,7 @@ mod tests {
             &mut csprng,
         );
 
-        let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        let store = MemoryCiphertextStore::<[u8; 32], String>::new();
         store.insert(one.dupe());
         store.insert(two.dupe());
 
@@ -452,7 +452,7 @@ mod tests {
     async fn test_try_causal_decrypt() -> TestResult {
         test_utils::init_logging();
 
-        let mut csprng = rand::thread_rng();
+        let csprng = Arc::new(Mutex::new(OsRng));
         let doc_id = DocumentId::generate(&mut csprng);
         let pcs_update_op_hash: Digest<Signed<CgkaOperation>> = Digest {
             raw: blake3::hash(b"PcsOp"),
@@ -470,7 +470,7 @@ mod tests {
             pcs_update_op_hash,
             HashMap::new(),
             doc_id,
-            &mut csprng,
+            csprng.dupe(),
         );
 
         let (left, left_key) = setup(
@@ -479,7 +479,7 @@ mod tests {
             pcs_update_op_hash,
             HashMap::from_iter([(genesis_ref, genesis_key)]),
             doc_id,
-            &mut csprng,
+            csprng.dupe(),
         );
 
         let (right, right_key) = setup(
@@ -488,7 +488,7 @@ mod tests {
             pcs_update_op_hash,
             HashMap::from_iter([(genesis_ref, genesis_key)]),
             doc_id,
-            &mut csprng,
+            csprng.dupe(),
         );
 
         let (head, head_key) = setup(
@@ -497,7 +497,7 @@ mod tests {
             pcs_update_op_hash,
             HashMap::from_iter([(left_ref, left_key), (right_ref, right_key)]),
             doc_id,
-            &mut csprng,
+            csprng.dupe(),
         );
 
         let mut store = MemoryCiphertextStore::<[u8; 32], String>::new();

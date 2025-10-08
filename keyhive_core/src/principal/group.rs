@@ -940,7 +940,7 @@ mod tests {
     async fn setup_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         alice: Arc<Mutex<Active<MemorySigner, T>>>,
         bob: Arc<Mutex<Active<MemorySigner, T>>>,
-        csprng: &mut R,
+        csprng: Arc<Mutex<R>>,
     ) -> [Arc<Mutex<Group<MemorySigner, T>>>; 4] {
         /*              ┌───────────┐        ┌───────────┐
                         │           │        │           │
@@ -978,7 +978,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                csprng,
+                csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -991,7 +991,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                csprng,
+                csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -1006,7 +1006,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                csprng,
+                csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -1033,7 +1033,7 @@ mod tests {
     async fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         alice: Arc<Mutex<Active<MemorySigner, T>>>,
         bob: Arc<Mutex<Active<MemorySigner, T>>>,
-        csprng: &mut R,
+        csprng: Arc<Mutex<R>>(
     ) -> [Arc<Mutex<Group<MemorySigner, T>>>; 10] {
         let dlg_store = DelegationStore::new();
         let rev_store = RevocationStore::new();
@@ -1044,7 +1044,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                csprng,
+                csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -1056,7 +1056,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                csprng,
+                csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -1068,7 +1068,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                csprng,
+                csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -1080,7 +1080,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                csprng,
+                csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -1092,7 +1092,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                csprng,
+                csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -1104,7 +1104,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                csprng,
+                csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -1116,7 +1116,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                csprng,
+                csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -1128,7 +1128,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                csprng,
+                csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -1140,7 +1140,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                csprng,
+                csprng.dupe(),
             )
             .await
             .unwrap(),
@@ -1152,7 +1152,7 @@ mod tests {
                 dlg_store.dupe(),
                 rev_store.dupe(),
                 NoListener,
-                csprng,
+                csprng.dupe(),
             )
             .await
             .unwrap(),

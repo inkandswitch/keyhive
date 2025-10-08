@@ -46,9 +46,7 @@ async fn make_keyhive() -> NewKeyhive {
 async fn test_encrypt_to_added_member() -> TestResult {
     test_utils::init_logging();
 
-    let NewKeyhive {
-        keyhive: mut alice, ..
-    } = make_keyhive().await;
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
 
     let init_content = "hello world".as_bytes().to_vec();
     let init_hash = blake3::hash(&init_content);
@@ -58,15 +56,13 @@ async fn test_encrypt_to_added_member() -> TestResult {
         .await?;
     let doc_id = { doc.lock().await.doc_id() };
 
-    let NewKeyhive {
-        keyhive: mut bob, ..
-    } = make_keyhive().await;
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
 
     let indie_bob = { bob.active().lock().await.individual().clone() };
     alice
         .add_member(
             Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
-            &mut Membered::Document(doc_id, doc.dupe()),
+            &Membered::Document(doc_id, doc.dupe()),
             Access::Read,
             &[],
         )
@@ -98,7 +94,7 @@ async fn test_encrypt_to_added_member() -> TestResult {
 async fn test_decrypt_after_to_from_archive() {
     test_utils::init_logging();
     let NewKeyhive {
-        keyhive: mut alice,
+        keyhive: alice,
         signer: sk,
         log,
     } = make_keyhive().await;
@@ -118,7 +114,7 @@ async fn test_decrypt_after_to_from_archive() {
         .await
         .unwrap();
 
-    let mut alice = Keyhive::try_from_archive(
+    let alice = Keyhive::try_from_archive(
         &archive,
         sk,
         MemoryCiphertextStore::new(),
@@ -150,7 +146,7 @@ async fn test_decrypt_after_to_from_archive() {
 async fn test_decrypt_after_fork_and_merge() {
     test_utils::init_logging();
     let NewKeyhive {
-        keyhive: mut alice,
+        keyhive: alice,
         signer: sk,
         log,
     } = make_keyhive().await;
