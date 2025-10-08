@@ -1015,26 +1015,33 @@ impl<
 
         let subject_id = delegation.subject_id();
         let delegation = Arc::new(delegation);
-        if let Some(group) = self.groups.lock().await.get(&GroupId(subject_id)) {
-            group
+        let mut found = false;
+        {
+            if let Some(group) = self.groups.lock().await.get(&GroupId(subject_id)) {
+                found = true;
+                group
+                    .lock()
+                    .await
+                    .receive_delegation(delegation.clone())
+                    .await?;
+            } else if let Some(doc) = self.docs.lock().await.get(&DocumentId(subject_id)) {
+                found = true;
+                doc.lock()
+                    .await
+                    .receive_delegation(delegation.clone())
+                    .await?;
+            } else if let Some(indie) = self
+                .individuals
                 .lock()
                 .await
-                .receive_delegation(delegation.clone())
-                .await?;
-        } else if let Some(doc) = self.docs.lock().await.get(&DocumentId(subject_id)) {
-            doc.lock()
-                .await
-                .receive_delegation(delegation.clone())
-                .await?;
-        } else if let Some(indie) = self
-            .individuals
-            .lock()
-            .await
-            .remove(&IndividualId(subject_id))
-        {
-            self.promote_individual_to_group(indie, delegation.clone())
-                .await;
-        } else {
+                .remove(&IndividualId(subject_id))
+            {
+                found = true;
+                self.promote_individual_to_group(indie, delegation.clone())
+                    .await;
+            }
+        }
+        if !found {
             let group = Group::new(
                 GroupId(subject_id),
                 delegation.dupe(),
@@ -2352,7 +2359,7 @@ mod tests {
         alice
             .add_member(
                 Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()),
-                &mut Membered::Document(doc_id, doc.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
                 Access::Read,
                 &[],
             )
@@ -2395,6 +2402,7 @@ mod tests {
             .events_for_agent(&Agent::Individual(bob_on_charlie_id, bob_on_charlie.dupe()))
             .await
             .unwrap();
+
         bob.ingest_event_table(events).await.unwrap();
     }
 
