@@ -1042,6 +1042,7 @@ impl<
         &mut self,
         static_event: StaticEvent<T>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+        tracing::debug!("executing Keyhive::receive_static_event()");
         match static_event {
             StaticEvent::PrekeysExpanded(add_op) => {
                 self.receive_prekey_op(&Rc::new(*add_op).into())?
@@ -1449,6 +1450,7 @@ impl<
         &mut self,
         archive: Archive<T>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+        tracing::debug!("executing Keyhive::ingest_archive()");
         self.active
             .borrow_mut()
             .prekey_pairs
@@ -1487,6 +1489,7 @@ impl<
         &mut self,
         events: Vec<StaticEvent<T>>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+        tracing::debug!("executing Keyhive::ingest_unsorted_static_events()");
         let mut epoch = events;
 
         loop {
@@ -1506,6 +1509,7 @@ impl<
             }
 
             if next_epoch.len() == epoch_len {
+                tracing::debug!("ingest_unsorted_static_events: Stuck on a fixed point: {:?}. Error: {:?}", epoch_len, err);
                 // Stuck on a fixed point
                 return Err(err.unwrap());
             }
@@ -1521,6 +1525,7 @@ impl<
         &mut self,
         events: HashMap<Digest<Event<S, T, L>>, Event<S, T, L>>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+        tracing::debug!("executing Keyhive::ingest_event_table()");
         self.ingest_unsorted_static_events(
             events.values().cloned().map(Into::into).collect::<Vec<_>>(),
         )

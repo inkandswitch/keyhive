@@ -341,6 +341,7 @@ impl JsKeyhive {
         &mut self,
         archive: &JsArchive,
     ) -> Result<(), JsReceiveStaticEventError> {
+        tracing::debug!("executing JsKeyhive::ingest_archive()");
         self.0.ingest_archive(archive.clone().0).await?;
         Ok(())
     }
