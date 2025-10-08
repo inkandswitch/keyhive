@@ -129,19 +129,21 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         delegations: DelegationStore<S, T, L>,
         revocations: RevocationStore<S, T, L>,
         listener: L,
-        csprng: &mut R,
+        csprng: Arc<Mutex<R>>,
     ) -> Result<Group<S, T, L>, SigningError> {
-        let (group_result, _vk) = EphemeralSigner::with_signer(csprng, |verifier, signer| {
-            Self::generate_after_content(
-                signer,
-                verifier,
-                parents,
-                delegations,
-                revocations,
-                Default::default(),
-                listener,
-            )
-        });
+        let mut locked_csprng = csprng.lock().await;
+        let (group_result, _vk) =
+            EphemeralSigner::with_signer(&mut *locked_csprng, |verifier, signer| {
+                Self::generate_after_content(
+                    signer,
+                    verifier,
+                    parents,
+                    delegations,
+                    revocations,
+                    Default::default(),
+                    listener,
+                )
+            });
 
         group_result.await
     }

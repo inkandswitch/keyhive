@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use super::{
     change_ref::JsChangeRef, ciphertext_store::JsCiphertextStore, event_handler::JsEventHandler,
     keyhive::JsKeyhive, signer::JsSigner,
 };
 use derive_more::{Display, From, Into};
+use futures::lock::Mutex;
 use keyhive_core::{archive::Archive, keyhive::Keyhive, keyhive::TryFromArchiveError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -40,7 +43,7 @@ impl JsArchive {
             signer,
             ciphertext_store,
             event_handler.clone().into(),
-            rand::thread_rng(),
+            Arc::new(Mutex::new(rand::thread_rng())),
         )
         .await
         .map_err(|e| JsTryFromArchiveError(Box::new(e)))?

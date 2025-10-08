@@ -86,10 +86,8 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     ) -> impl Future<Output = Result<(), Self::MarkDecryptedError>> + Send;
 
     #[cfg(not(feature = "sendable"))]
-    fn mark_decrypted(
-        &mut self,
-        id: &Cr,
-    ) -> impl Future<Output = Result<(), Self::MarkDecryptedError>>;
+    fn mark_decrypted(&self, id: &Cr)
+        -> impl Future<Output = Result<(), Self::MarkDecryptedError>>;
 
     #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
     /// Recursively decryptsa set of causally-related ciphertexts.
@@ -166,7 +164,7 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     #[allow(async_fn_in_trait)]
     #[instrument(skip(self, to_decrypt), fields(ciphertext_heads_count = %to_decrypt.len()))]
     async fn try_causal_decrypt(
-        &mut self,
+        &self,
         to_decrypt: &mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
     ) -> Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<Cr, T, Self>>
     where
@@ -286,8 +284,8 @@ impl<Cr: ContentRef, T, C: CiphertextStore<Cr, T>> CiphertextStore<Cr, T> for Ar
     }
 
     #[instrument(level = "debug", skip(self))]
-    async fn mark_decrypted(&mut self, content_ref: &Cr) -> Result<(), Self::MarkDecryptedError> {
-        let mut locked = self.lock().await;
+    async fn mark_decrypted(&self, content_ref: &Cr) -> Result<(), Self::MarkDecryptedError> {
+        let locked = self.lock().await;
         locked.mark_decrypted(content_ref).await
     }
 }
@@ -301,7 +299,7 @@ impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for MemoryCiphertextStore<
         &self,
         cr: &Cr,
     ) -> Result<Option<Arc<EncryptedContent<T, Cr>>>, Infallible> {
-        Ok(self.get_by_content_ref(cr))
+        Ok(self.get_by_content_ref(cr).await)
     }
 
     #[instrument(level = "debug", skip(self))]
@@ -309,12 +307,12 @@ impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for MemoryCiphertextStore<
         &self,
         pcs_update: &Digest<Signed<CgkaOperation>>,
     ) -> Result<Vec<Arc<EncryptedContent<T, Cr>>>, Infallible> {
-        Ok(self.get_by_pcs_update(pcs_update))
+        Ok(self.get_by_pcs_update(pcs_update).await)
     }
 
     #[instrument(level = "debug", skip(self))]
-    async fn mark_decrypted(&mut self, content_ref: &Cr) -> Result<(), Infallible> {
-        self.remove_all(content_ref);
+    async fn mark_decrypted(&self, content_ref: &Cr) -> Result<(), Infallible> {
+        self.remove_all(content_ref).await;
         Ok(())
     }
 }

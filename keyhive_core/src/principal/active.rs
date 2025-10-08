@@ -32,7 +32,7 @@ use crate::{
 };
 use derivative::Derivative;
 use dupe::Dupe;
-use futures::prelude::*;
+use futures::{lock::Mutex, prelude::*};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
 use thiserror::Error;
@@ -145,12 +145,11 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     /// Create a [`ShareKey`] that is not broadcast via the prekey state.
     pub async fn generate_private_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
-        csprng: &mut R,
+        csprng: Arc<Mutex<R>>,
     ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
         let share_key = self.individual.pick_prekey(DocumentId(self.id().into())); // Hack
-        let contact_key = self.rotate_prekey(*share_key, csprng).await?;
+        let contact_key = self.rotate_prekey(*share_key, csprng.dupe()).await?;
         self.rotate_prekey(contact_key.payload.new, csprng).await?;
-
         Ok(contact_key)
     }
 
@@ -167,9 +166,12 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     pub async fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old_prekey: ShareKey,
-        csprng: &mut R,
+        csprng: Arc<Mutex<R>>,
     ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
-        let new_secret = ShareSecretKey::generate(csprng);
+        let new_secret = {
+            let mut locked_csprng = csprng.lock().await;
+            ShareSecretKey::generate(&mut *locked_csprng)
+        };
         let new_public = new_secret.share_key();
 
         let rot_op = Arc::new(
@@ -197,9 +199,12 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     /// Add a new prekey, expanding the number of currently available prekeys.
     pub async fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
-        csprng: &mut R,
+        csprng: Arc<Mutex<R>>,
     ) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
-        let new_secret = ShareSecretKey::generate(csprng);
+        let new_secret = {
+            let mut locked_csprng = csprng.lock().await;
+            ShareSecretKey::generate(&mut *locked_csprng)
+        };
         let new_public = new_secret.share_key();
 
         let op = Arc::new(

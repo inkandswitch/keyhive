@@ -55,7 +55,7 @@ use crate::{
     },
 };
 use derive_where::derive_where;
-use dupe::Dupe;
+use dupe::{Dupe, OptionDupedExt};
 use futures::lock::Mutex;
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
@@ -85,15 +85,15 @@ pub struct Keyhive<
     active: Arc<Mutex<Active<S, T, L>>>,
 
     /// The [`Individual`]s that are known to this agent.
-    individuals: HashMap<IndividualId, Arc<Mutex<Individual>>>,
+    individuals: Arc<Mutex<HashMap<IndividualId, Arc<Mutex<Individual>>>>>,
 
     /// The [`Group`]s that are known to this agent.
     #[allow(clippy::type_complexity)]
-    groups: HashMap<GroupId, Arc<Mutex<Group<S, T, L>>>>,
+    groups: Arc<Mutex<HashMap<GroupId, Arc<Mutex<Group<S, T, L>>>>>>,
 
     /// The [`Document`]s that are known to this agent.
     #[allow(clippy::type_complexity)]
-    docs: HashMap<DocumentId, Arc<Mutex<Document<S, T, L>>>>,
+    docs: Arc<Mutex<HashMap<DocumentId, Arc<Mutex<Document<S, T, L>>>>>>,
 
     /// All applied [`Delegation`]s
     delegations: DelegationStore<S, T, L>,
@@ -105,10 +105,10 @@ pub struct Keyhive<
     event_listener: L,
 
     /// Storeage for ciphertexts that cannot yet be decrypted.
-    ciphertext_store: C,
+    ciphertext_store: Arc<Mutex<C>>,
 
     /// Cryptographically secure (pseudo)random number generator.
-    csprng: R,
+    csprng: Arc<Mutex<R>>,
 
     _plaintext_phantom: PhantomData<P>,
 }
@@ -144,17 +144,17 @@ impl<
             active: Arc::new(Mutex::new(
                 Active::generate(signer, event_listener.clone(), &mut csprng).await?,
             )),
-            individuals: HashMap::from_iter([(
+            individuals: Arc::new(Mutex::new(HashMap::from_iter([(
                 Public.id().into(),
                 Arc::new(Mutex::new(Public.individual())),
-            )]),
-            groups: HashMap::new(),
-            docs: HashMap::new(),
+            )]))),
+            groups: Arc::new(Mutex::new(HashMap::new())),
+            docs: Arc::new(Mutex::new(HashMap::new())),
             delegations: DelegationStore::new(),
             revocations: RevocationStore::new(),
-            ciphertext_store,
+            ciphertext_store: Arc::new(Mutex::new(ciphertext_store)),
             event_listener,
-            csprng,
+            csprng: Arc::new(Mutex::new(csprng)),
             _plaintext_phantom: PhantomData,
         })
     }
@@ -178,20 +178,20 @@ impl<
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub fn groups(&self) -> &HashMap<GroupId, Arc<Mutex<Group<S, T, L>>>> {
+    pub fn groups(&self) -> &Arc<Mutex<HashMap<GroupId, Arc<Mutex<Group<S, T, L>>>>>> {
         &self.groups
     }
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub fn documents(&self) -> &HashMap<DocumentId, Arc<Mutex<Document<S, T, L>>>> {
+    pub fn documents(&self) -> &Arc<Mutex<HashMap<DocumentId, Arc<Mutex<Document<S, T, L>>>>>> {
         &self.docs
     }
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn generate_group(
-        &mut self,
+        &self,
         coparents: Vec<Peer<S, T, L>>,
     ) -> Result<Arc<Mutex<Group<S, T, L>>>, SigningError> {
         let group = Group::generate(
@@ -202,19 +202,19 @@ impl<
             self.delegations.dupe(),
             self.revocations.dupe(),
             self.event_listener.clone(),
-            &mut self.csprng,
+            self.csprng.dupe(),
         )
         .await?;
         let group_id = group.group_id();
         let g = Arc::new(Mutex::new(group));
-        self.groups.insert(group_id, g.dupe());
+        self.groups.lock().await.insert(group_id, g.dupe());
         Ok(g)
     }
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn generate_doc(
-        &mut self,
+        &self,
         coparents: Vec<Peer<S, T, L>>,
         initial_content_heads: NonEmpty<T>,
     ) -> Result<Arc<Mutex<Document<S, T, L>>>, GenerateDocError> {
@@ -240,7 +240,7 @@ impl<
             self.revocations.dupe(),
             self.event_listener.clone(),
             &signer,
-            &mut self.csprng,
+            self.csprng.dupe(),
         )
         .await?;
 
@@ -254,18 +254,18 @@ impl<
 
         let doc_id = new_doc.doc_id();
         let doc = Arc::new(Mutex::new(new_doc));
-        self.docs.insert(doc_id, doc.dupe());
+        self.docs.lock().await.insert(doc_id, doc.dupe());
 
         Ok(doc)
     }
 
     #[instrument(skip_all)]
-    pub async fn contact_card(&mut self) -> Result<ContactCard, SigningError> {
+    pub async fn contact_card(&self) -> Result<ContactCard, SigningError> {
         let rot_key_op = self
             .active
             .lock()
             .await
-            .generate_private_prekey(&mut self.csprng)
+            .generate_private_prekey(self.csprng.dupe())
             .await?;
 
         Ok(ContactCard(KeyOp::Rotate(rot_key_op)))
@@ -273,10 +273,10 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn receive_contact_card(
-        &mut self,
+        &self,
         contact_card: &ContactCard,
     ) -> Result<Arc<Mutex<Individual>>, ReceivePrekeyOpError> {
-        if let Some(indie) = self.get_individual(contact_card.id()) {
+        if let Some(indie) = self.get_individual(contact_card.id()).await {
             indie
                 .lock()
                 .await
@@ -291,22 +291,22 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn rotate_prekey(
-        &mut self,
+        &self,
         prekey: ShareKey,
     ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
         self.active
             .lock()
             .await
-            .rotate_prekey(prekey, &mut self.csprng)
+            .rotate_prekey(prekey, self.csprng.dupe())
             .await
     }
 
     #[instrument(skip_all)]
-    pub async fn expand_prekeys(&mut self) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
+    pub async fn expand_prekeys(&self) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
         self.active
             .lock()
             .await
-            .expand_prekeys(&mut self.csprng)
+            .expand_prekeys(self.csprng.dupe())
             .await
     }
 
@@ -317,20 +317,20 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn register_peer(&mut self, peer: Peer<S, T, L>) -> bool {
-        if self.get_peer(peer.id()).is_some() {
+    pub async fn register_peer(&self, peer: Peer<S, T, L>) -> bool {
+        if self.get_peer(peer.id()).await.is_some() {
             return false;
         }
 
         match peer {
             Peer::Individual(id, indie) => {
-                self.individuals.insert(id, indie.dupe());
+                self.individuals.lock().await.insert(id, indie.dupe());
             }
             Peer::Group(group_id, group) => {
-                self.groups.insert(group_id, group.dupe());
+                self.groups.lock().await.insert(group_id, group.dupe());
             }
             Peer::Document(doc_id, doc) => {
-                self.docs.insert(doc_id, doc.dupe());
+                self.docs.lock().await.insert(doc_id, doc.dupe());
             }
         }
 
@@ -338,21 +338,26 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn register_individual(&mut self, individual: Arc<Mutex<Individual>>) -> bool {
+    pub async fn register_individual(&self, individual: Arc<Mutex<Individual>>) -> bool {
         let id = { individual.lock().await.id() };
 
-        if self.individuals.contains_key(&id) {
-            return false;
-        }
+        {
+            let mut locked_individuals = self.individuals.lock().await;
+            if locked_individuals.contains_key(&id) {
+                return false;
+            }
 
-        self.individuals.insert(id, individual.dupe());
+            locked_individuals.insert(id, individual.dupe());
+        }
         true
     }
 
     #[instrument(skip_all)]
-    pub async fn register_group(&mut self, root_delegation: Signed<Delegation<S, T, L>>) -> bool {
+    pub async fn register_group(&self, root_delegation: Signed<Delegation<S, T, L>>) -> bool {
         if self
             .groups
+            .lock()
+            .await
             .contains_key(&GroupId(root_delegation.subject_id()))
         {
             return false;
@@ -371,7 +376,10 @@ impl<
 
         {
             let locked = group.lock().await;
-            self.groups.insert(locked.group_id(), group.dupe());
+            self.groups
+                .lock()
+                .await
+                .insert(locked.group_id(), group.dupe());
         }
         true
     }
@@ -393,7 +401,7 @@ impl<
 
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
-        &mut self,
+        &self,
         to_add: Agent<S, T, L>,
         resource: &mut Membered<S, T, L>,
         can: Access,
@@ -418,7 +426,7 @@ impl<
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn revoke_member(
-        &mut self,
+        &self,
         to_revoke: Identifier,
         retain_all_other_members: bool,
         resource: &mut Membered<S, T, L>,
@@ -442,7 +450,7 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn try_encrypt_content(
-        &mut self,
+        &self,
         doc: Arc<Mutex<Document<S, T, L>>>,
         content_ref: &T,
         pred_refs: &Vec<T>,
@@ -450,9 +458,16 @@ impl<
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError> {
         let signer = { self.active.lock().await.signer.clone() };
         let result = {
+            let mut locked_csprng = self.csprng.lock().await;
             doc.lock()
                 .await
-                .try_encrypt_content(content_ref, content, pred_refs, &signer, &mut self.csprng)
+                .try_encrypt_content(
+                    content_ref,
+                    content,
+                    pred_refs,
+                    &signer,
+                    &mut *locked_csprng,
+                )
                 .await?
         };
         if let Some(op) = &result.update_op {
@@ -462,7 +477,7 @@ impl<
     }
 
     pub async fn try_decrypt_content(
-        &mut self,
+        &self,
         doc: Arc<Mutex<Document<S, T, L>>>,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
@@ -470,7 +485,7 @@ impl<
     }
 
     pub async fn try_causal_decrypt_content(
-        &mut self,
+        &self,
         doc: Arc<Mutex<Document<S, T, L>>>,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<T, P, C>>
@@ -480,21 +495,25 @@ impl<
     {
         doc.lock()
             .await
-            .try_causal_decrypt_content(encrypted, &mut self.ciphertext_store)
+            .try_causal_decrypt_content(encrypted, self.ciphertext_store.dupe())
             .await
     }
 
     #[instrument(skip_all)]
     pub async fn force_pcs_update(
-        &mut self,
+        &self,
         doc: Arc<Mutex<Document<S, T, L>>>,
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
         let signer = { self.active.lock().await.signer.clone() };
-        doc.lock().await.pcs_update(&signer, &mut self.csprng).await
+        let mut locked_csprng = self.csprng.lock().await;
+        doc.lock()
+            .await
+            .pcs_update(&signer, &mut *locked_csprng)
+            .await
     }
 
     #[instrument(skip_all)]
-    pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<'_, S, T, L>> {
+    pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<S, T, L>> {
         let active = self.active.dupe();
         let locked_active = self.active.lock().await;
         self.docs_reachable_by_agent(&Agent::Active(locked_active.id(), active))
@@ -516,14 +535,21 @@ impl<
     pub async fn docs_reachable_by_agent(
         &self,
         agent: &Agent<S, T, L>,
-    ) -> BTreeMap<DocumentId, Ability<'_, S, T, L>> {
+    ) -> BTreeMap<DocumentId, Ability<S, T, L>> {
         let mut caps: BTreeMap<DocumentId, Ability<S, T, L>> = BTreeMap::new();
 
         // TODO will be very slow on large hives. Old code here: https://github.com/inkandswitch/keyhive/pull/111/files:
-        for doc in self.docs.values() {
+        let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
+        for doc in docs {
             let locked = doc.lock().await;
             if let Some((_, cap)) = locked.transitive_members().await.get(&agent.id()) {
-                caps.insert(locked.doc_id(), Ability { doc, can: *cap });
+                caps.insert(
+                    locked.doc_id(),
+                    Ability {
+                        doc: doc.dupe(),
+                        can: *cap,
+                    },
+                );
             }
         }
 
@@ -537,7 +563,15 @@ impl<
     ) -> HashMap<MemberedId, (Membered<S, T, L>, Access)> {
         let mut caps = HashMap::new();
 
-        for group in self.groups.values() {
+        let groups = {
+            self.groups
+                .lock()
+                .await
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        for group in groups {
             let locked = group.lock().await;
             if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
                 let membered = Membered::Group(locked.group_id().into(), group.dupe());
@@ -545,7 +579,8 @@ impl<
             }
         }
 
-        for doc in self.docs.values() {
+        let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
+        for doc in docs {
             let locked = doc.lock().await;
             if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
                 let membered = Membered::Document(locked.doc_id().into(), doc.dupe());
@@ -618,11 +653,13 @@ impl<
         &self,
         doc: &DocumentId,
     ) -> Result<Option<Vec<Arc<Signed<CgkaOperation>>>>, CgkaError> {
-        let Some(doc) = self.docs.get(doc) else {
+        let locked_docs = self.docs.lock().await;
+        let Some(doc) = locked_docs.get(doc) else {
             return Ok(None);
         };
         let mut ops = Vec::new();
         let epochs = { doc.lock().await.cgka_ops()? };
+        drop(locked_docs);
         for epoch in &epochs {
             ops.extend(epoch.iter().cloned());
         }
@@ -796,36 +833,45 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub fn get_individual(&self, id: IndividualId) -> Option<&Arc<Mutex<Individual>>> {
-        self.individuals.get(&id)
+    pub async fn get_individual(&self, id: IndividualId) -> Option<Arc<Mutex<Individual>>> {
+        self.individuals.lock().await.get(&id).duped()
     }
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub fn get_group(&self, id: GroupId) -> Option<&Arc<Mutex<Group<S, T, L>>>> {
-        self.groups.get(&id)
+    pub async fn get_group(&self, id: GroupId) -> Option<Arc<Mutex<Group<S, T, L>>>> {
+        self.groups.lock().await.get(&id).duped()
     }
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub fn get_document(&self, id: DocumentId) -> Option<&Arc<Mutex<Document<S, T, L>>>> {
-        self.docs.get(&id)
+    pub async fn get_document(&self, id: DocumentId) -> Option<Arc<Mutex<Document<S, T, L>>>> {
+        self.docs.lock().await.get(&id).duped()
     }
 
     #[instrument(skip_all)]
-    pub fn get_peer(&self, id: Identifier) -> Option<Peer<S, T, L>> {
+    pub async fn get_peer(&self, id: Identifier) -> Option<Peer<S, T, L>> {
         let indie_id = IndividualId(id);
 
-        if let Some(doc) = self.docs.get(&DocumentId(id)) {
-            return Some(Peer::Document(id.into(), doc.dupe()));
+        {
+            let locked_docs = self.docs.lock().await;
+            if let Some(doc) = locked_docs.get(&DocumentId(id)) {
+                return Some(Peer::Document(id.into(), doc.dupe()));
+            }
         }
 
-        if let Some(group) = self.groups.get(&GroupId::new(id)) {
-            return Some(Peer::Group(id.into(), group.dupe()));
+        {
+            let locked_groups = self.groups.lock().await;
+            if let Some(group) = locked_groups.get(&GroupId::new(id)) {
+                return Some(Peer::Group(id.into(), group.dupe()));
+            }
         }
 
-        if let Some(indie) = self.individuals.get(&indie_id) {
-            return Some(Peer::Individual(id.into(), indie.dupe()));
+        {
+            let locked_individuals = self.individuals.lock().await;
+            if let Some(indie) = locked_individuals.get(&indie_id) {
+                return Some(Peer::Individual(id.into(), indie.dupe()));
+            }
         }
 
         None
@@ -840,23 +886,32 @@ impl<
             return Some(Agent::Active(indie_id, self.active.dupe()));
         }
 
-        if let Some(doc) = self.docs.get(&DocumentId(id)) {
-            return Some(Agent::Document(id.into(), doc.dupe()));
+        {
+            let locked_docs = self.docs.lock().await;
+            if let Some(doc) = locked_docs.get(&DocumentId(id)) {
+                return Some(Agent::Document(id.into(), doc.dupe()));
+            }
         }
 
-        if let Some(group) = self.groups.get(&GroupId::new(id)) {
-            return Some(Agent::Group(id.into(), group.dupe()));
+        {
+            let locked_groups = self.groups.lock().await;
+            if let Some(group) = locked_groups.get(&GroupId::new(id)) {
+                return Some(Agent::Group(id.into(), group.dupe()));
+            }
         }
 
-        if let Some(indie) = self.individuals.get(&indie_id) {
-            return Some(Agent::Individual(id.into(), indie.dupe()));
+        {
+            let locked_individuals = self.individuals.lock().await;
+            if let Some(indie) = locked_individuals.get(&indie_id) {
+                return Some(Agent::Individual(id.into(), indie.dupe()));
+            }
         }
 
         None
     }
 
     #[instrument(skip_all)]
-    pub async fn receive_prekey_op(&mut self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
+    pub async fn receive_prekey_op(&self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
         let id = Identifier(*key_op.issuer());
         let agent = if let Some(agent) = self.get_agent(id).await {
             agent
@@ -902,7 +957,7 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn receive_delegation(
-        &mut self,
+        &self,
         static_dlg: &Signed<StaticDelegation<T>>,
     ) -> Result<(), ReceieveStaticDelegationError<S, T, L>> {
         if self
@@ -960,18 +1015,23 @@ impl<
 
         let subject_id = delegation.subject_id();
         let delegation = Arc::new(delegation);
-        if let Some(group) = self.groups.get(&GroupId(subject_id)) {
+        if let Some(group) = self.groups.lock().await.get(&GroupId(subject_id)) {
             group
                 .lock()
                 .await
                 .receive_delegation(delegation.clone())
                 .await?;
-        } else if let Some(doc) = self.docs.get(&DocumentId(subject_id)) {
+        } else if let Some(doc) = self.docs.lock().await.get(&DocumentId(subject_id)) {
             doc.lock()
                 .await
                 .receive_delegation(delegation.clone())
                 .await?;
-        } else if let Some(indie) = self.individuals.remove(&IndividualId(subject_id)) {
+        } else if let Some(indie) = self
+            .individuals
+            .lock()
+            .await
+            .remove(&IndividualId(subject_id))
+        {
             self.promote_individual_to_group(indie, delegation.clone())
                 .await;
         } else {
@@ -992,9 +1052,12 @@ impl<
             {
                 let locked_active = self.active.lock().await;
                 let doc = Document::from_group(group, &locked_active, content_heads).await?;
-                self.docs.insert(doc.doc_id(), Arc::new(Mutex::new(doc)));
+                let mut locked_docs = self.docs.lock().await;
+                locked_docs.insert(doc.doc_id(), Arc::new(Mutex::new(doc)));
             } else {
                 self.groups
+                    .lock()
+                    .await
                     .insert(group.group_id(), Arc::new(Mutex::new(group)));
             }
         };
@@ -1007,7 +1070,7 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn receive_revocation(
-        &mut self,
+        &self,
         static_rev: &Signed<StaticRevocation<T>>,
     ) -> Result<(), ReceieveStaticDelegationError<S, T, L>> {
         if self
@@ -1053,18 +1116,18 @@ impl<
 
         let id = revocation.subject_id();
         let revocation = Arc::new(revocation);
-        if let Some(group) = self.groups.get(&GroupId(id)) {
+        if let Some(group) = self.groups.lock().await.get(&GroupId(id)) {
             group
                 .lock()
                 .await
                 .receive_revocation(revocation.clone())
                 .await?;
-        } else if let Some(doc) = self.docs.get(&DocumentId(id)) {
+        } else if let Some(doc) = self.docs.lock().await.get(&DocumentId(id)) {
             doc.lock()
                 .await
                 .receive_revocation(revocation.clone())
                 .await?;
-        } else if let Some(indie) = self.individuals.remove(&IndividualId(id)) {
+        } else if let Some(indie) = self.individuals.lock().await.remove(&IndividualId(id)) {
             let group = self
                 .promote_individual_to_group(indie, revocation.payload.revoke.dupe())
                 .await;
@@ -1088,7 +1151,7 @@ impl<
             {
                 let group2 = group.dupe();
                 let mut locked = group.lock().await;
-                self.groups.insert(locked.group_id(), group2);
+                self.groups.lock().await.insert(locked.group_id(), group2);
                 locked.receive_revocation(revocation.clone()).await?;
             }
         }
@@ -1098,7 +1161,7 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn receive_static_event(
-        &mut self,
+        &self,
         static_event: StaticEvent<T>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
         match static_event {
@@ -1129,16 +1192,19 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn receive_cgka_op(
-        &mut self,
+        &self,
         signed_op: Signed<CgkaOperation>,
     ) -> Result<(), ReceiveCgkaOpError> {
         signed_op.try_verify()?;
 
         let doc_id = signed_op.payload.doc_id();
-        let doc = self
-            .docs
-            .get(doc_id)
-            .ok_or(ReceiveCgkaOpError::UnknownDocument(*doc_id))?;
+        let doc = {
+            let locked_docs = self.docs.lock().await;
+            locked_docs
+                .get(doc_id)
+                .ok_or(ReceiveCgkaOpError::UnknownDocument(*doc_id))?
+                .dupe()
+        };
 
         let signed_op = Arc::new(signed_op);
         if let CgkaOperation::Add { added_id, pk, .. } = signed_op.payload {
@@ -1172,7 +1238,7 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn promote_individual_to_group(
-        &mut self,
+        &self,
         individual: Arc<Mutex<Individual>>,
         head: Arc<Signed<Delegation<S, T, L>>>,
     ) -> Arc<Mutex<Group<S, T, L>>> {
@@ -1259,18 +1325,27 @@ impl<
         };
 
         let mut individuals = HashMap::new();
-        for (k, arc) in &self.individuals {
-            individuals.insert(*k, arc.lock().await.clone());
+        {
+            let locked_individuals = self.individuals.lock().await;
+            for (k, arc) in locked_individuals.iter() {
+                individuals.insert(*k, arc.lock().await.clone());
+            }
         }
 
         let mut groups = HashMap::new();
-        for (k, arc) in &self.groups {
-            groups.insert(*k, arc.lock().await.into_archive());
+        {
+            let locked_groups = self.groups.lock().await;
+            for (k, arc) in locked_groups.iter() {
+                groups.insert(*k, arc.lock().await.into_archive());
+            }
         }
 
         let mut docs = HashMap::new();
-        for (k, arc) in &self.docs {
-            docs.insert(*k, arc.lock().await.into_archive());
+        {
+            let locked_docs = self.docs.lock().await;
+            for (k, arc) in locked_docs.iter() {
+                docs.insert(*k, arc.lock().await.into_archive());
+            }
         }
 
         Archive {
@@ -1288,7 +1363,7 @@ impl<
         signer: S,
         ciphertext_store: C,
         listener: L,
-        csprng: R,
+        csprng: Arc<Mutex<R>>,
     ) -> Result<Self, TryFromArchiveError<S, T, L>> {
         let active = Arc::new(Mutex::new(Active::from_archive(
             &archive.active,
@@ -1512,13 +1587,13 @@ impl<
         Ok(Self {
             verifying_key: archive.active.individual.verifying_key(),
             active,
-            individuals,
-            groups,
-            docs,
+            individuals: Arc::new(Mutex::new(individuals)),
+            groups: Arc::new(Mutex::new(groups)),
+            docs: Arc::new(Mutex::new(docs)),
             delegations,
             revocations,
             csprng,
-            ciphertext_store,
+            ciphertext_store: Arc::new(Mutex::new(ciphertext_store)),
             event_listener: listener,
             _plaintext_phantom: PhantomData,
         })
@@ -1527,7 +1602,7 @@ impl<
     #[cfg(any(test, feature = "ingest_static"))]
     #[instrument(level = "trace", skip_all)]
     pub async fn ingest_archive(
-        &mut self,
+        &self,
         archive: Archive<T>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
         {
@@ -1536,10 +1611,11 @@ impl<
             locked.individual.merge(archive.active.individual);
         }
         for (id, indie) in archive.individuals {
-            if let Some(our_indie) = self.individuals.get_mut(&id) {
+            let mut locked_indies = self.individuals.lock().await;
+            if let Some(our_indie) = locked_indies.get_mut(&id) {
                 our_indie.merge_async(indie).await;
             } else {
-                self.individuals.insert(id, Arc::new(Mutex::new(indie)));
+                locked_indies.insert(id, Arc::new(Mutex::new(indie)));
             }
         }
         let events = archive
@@ -1562,7 +1638,7 @@ impl<
     #[cfg(any(test, feature = "ingest_static"))]
     #[instrument(level = "trace", skip_all)]
     pub async fn ingest_unsorted_static_events(
-        &mut self,
+        &self,
         events: Vec<StaticEvent<T>>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
         let mut epoch = events;
@@ -1640,7 +1716,7 @@ impl<
         R: rand::CryptoRng + rand::RngCore + Clone,
     > ForkAsync for Keyhive<S, T, P, C, L, R>
 {
-    type AsyncForked = Keyhive<S, T, P, C, Log<S, T>, R>;
+    type AsyncForked = Keyhive<S, T, P, Arc<Mutex<C>>, Log<S, T>, R>;
 
     async fn fork_async(&self) -> Self::AsyncForked {
         // TODO this is probably fairly slow, and due to the logger type changing
@@ -1666,22 +1742,26 @@ impl<
         R: rand::CryptoRng + rand::RngCore + Clone,
     > MergeAsync for Arc<Mutex<Keyhive<S, T, P, C, L, R>>>
 {
-    async fn merge_async(&self, mut fork: Self::AsyncForked) {
-        let mut locked = self.lock().await;
+    async fn merge_async(&self, fork: Self::AsyncForked) {
+        let locked = self.lock().await;
         locked
             .active
             .lock()
             .await
             .merge(fork.active.lock().await.clone());
 
-        for (id, forked_indie) in fork.individuals.drain() {
-            if let Some(og_indie) = locked.individuals.get(&id) {
-                og_indie
-                    .lock()
-                    .await
-                    .merge(forked_indie.lock().await.clone())
-            } else {
-                locked.individuals.insert(id, forked_indie);
+        {
+            let mut locked_fork_indies = fork.individuals.lock().await;
+            let mut locked_indies = locked.individuals.lock().await;
+            for (id, forked_indie) in locked_fork_indies.drain() {
+                if let Some(og_indie) = locked_indies.get(&id) {
+                    og_indie
+                        .lock()
+                        .await
+                        .merge(forked_indie.lock().await.clone())
+                } else {
+                    locked_indies.insert(id, forked_indie);
+                }
             }
         }
 

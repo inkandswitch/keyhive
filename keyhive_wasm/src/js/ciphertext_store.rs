@@ -45,7 +45,9 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
         id: &JsChangeRef,
     ) -> Result<Option<Arc<EncryptedContent<Vec<u8>, JsChangeRef>>>, Self::GetCiphertextError> {
         match self.inner {
-            JsCiphertextStoreInner::Memory(ref mem_store) => Ok(mem_store.get_by_content_ref(id)),
+            JsCiphertextStoreInner::Memory(ref mem_store) => {
+                Ok(mem_store.get_by_content_ref(id).await)
+            }
 
             #[cfg(feature = "web-sys")]
             JsCiphertextStoreInner::WebStorage(ref store) => {
@@ -73,7 +75,7 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
     ) -> Result<Vec<Arc<EncryptedContent<Vec<u8>, JsChangeRef>>>, Self::GetCiphertextError> {
         match self.inner {
             JsCiphertextStoreInner::Memory(ref mem_store) => {
-                Ok(mem_store.get_by_pcs_update(pcs_update))
+                Ok(mem_store.get_by_pcs_update(pcs_update).await)
             }
 
             // TODO add index
@@ -108,10 +110,10 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
         }
     }
 
-    async fn mark_decrypted(&mut self, id: &JsChangeRef) -> Result<(), Self::MarkDecryptedError> {
+    async fn mark_decrypted(&self, id: &JsChangeRef) -> Result<(), Self::MarkDecryptedError> {
         match self.inner {
-            JsCiphertextStoreInner::Memory(ref mut store) => {
-                store.remove_all(id);
+            JsCiphertextStoreInner::Memory(ref store) => {
+                store.remove_all(id).await;
             }
             #[cfg(feature = "web-sys")]
             JsCiphertextStoreInner::WebStorage(ref store) => {

@@ -76,10 +76,7 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = generateGroup)]
-    pub async fn generate_group(
-        &mut self,
-        coparents: Vec<JsPeer>,
-    ) -> Result<JsGroup, JsSigningError> {
+    pub async fn generate_group(&self, coparents: Vec<JsPeer>) -> Result<JsGroup, JsSigningError> {
         let group = self
             .0
             .generate_group(coparents.into_iter().map(|p| p.0).collect::<Vec<_>>())
@@ -94,7 +91,7 @@ impl JsKeyhive {
 
     #[wasm_bindgen(js_name = generateDocument)]
     pub async fn generate_doc(
-        &mut self,
+        &self,
         coparents: Vec<JsPeer>,
         initial_content_ref_head: JsChangeRef,
         more_initial_content_refs: Vec<JsChangeRef>,
@@ -127,7 +124,7 @@ impl JsKeyhive {
 
     #[wasm_bindgen(js_name = tryEncrypt)]
     pub async fn try_encrypt(
-        &mut self,
+        &self,
         doc: JsDocument,
         content_ref: JsChangeRef,
         pred_refs: Vec<JsChangeRef>,
@@ -143,7 +140,7 @@ impl JsKeyhive {
     // NOTE: this is with a fresh doc secret
     #[wasm_bindgen(js_name = tryEncryptArchive)]
     pub async fn try_encrypt_archive(
-        &mut self,
+        &self,
         doc: JsDocument,
         content_ref: JsChangeRef,
         pred_refs: Vec<JsChangeRef>,
@@ -158,7 +155,7 @@ impl JsKeyhive {
 
     #[wasm_bindgen(js_name = tryDecrypt)]
     pub async fn try_decrypt(
-        &mut self,
+        &self,
         doc: JsDocument,
         encrypted: JsEncrypted,
     ) -> Result<Vec<u8>, JsDecryptError> {
@@ -167,7 +164,7 @@ impl JsKeyhive {
 
     #[wasm_bindgen(js_name = addMember)]
     pub async fn add_member(
-        &mut self,
+        &self,
         to_add: &JsAgent,
         membered: &mut JsMembered,
         access: JsAccess,
@@ -190,7 +187,7 @@ impl JsKeyhive {
 
     #[wasm_bindgen(js_name = revokeMember)]
     pub async fn revoke_member(
-        &mut self,
+        &self,
         to_revoke: &JsAgent,
         retain_all_other_members: bool,
         membered: &mut JsMembered,
@@ -225,7 +222,7 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = forcePcsUpdate)]
-    pub async fn force_pcs_update(&mut self, doc: &JsDocument) -> Result<(), JsEncryptError> {
+    pub async fn force_pcs_update(&self, doc: &JsDocument) -> Result<(), JsEncryptError> {
         self.0
             .force_pcs_update(doc.inner.dupe())
             .await
@@ -234,22 +231,19 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = rotatePrekey)]
-    pub async fn rotate_prekey(
-        &mut self,
-        prekey: JsShareKey,
-    ) -> Result<JsShareKey, JsSigningError> {
+    pub async fn rotate_prekey(&self, prekey: JsShareKey) -> Result<JsShareKey, JsSigningError> {
         let op = self.0.rotate_prekey(prekey.0).await?;
         Ok(JsShareKey(op.payload().new))
     }
 
     #[wasm_bindgen(js_name = expandPrekeys)]
-    pub async fn expand_prekeys(&mut self) -> Result<JsShareKey, JsSigningError> {
+    pub async fn expand_prekeys(&self) -> Result<JsShareKey, JsSigningError> {
         let op = self.0.expand_prekeys().await?;
         Ok(JsShareKey(op.payload().share_key))
     }
 
     #[wasm_bindgen(js_name = contactCard)]
-    pub async fn contact_card(&mut self) -> Result<JsContactCard, JsSigningError> {
+    pub async fn contact_card(&self) -> Result<JsContactCard, JsSigningError> {
         self.0
             .contact_card()
             .await
@@ -259,7 +253,7 @@ impl JsKeyhive {
 
     #[wasm_bindgen(js_name = receiveContactCard)]
     pub async fn receive_contact_card(
-        &mut self,
+        &self,
         contact_card: JsContactCard,
     ) -> Result<JsIndividual, JsReceivePreKeyOpError> {
         match self.0.receive_contact_card(&contact_card).await {

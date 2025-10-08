@@ -153,27 +153,29 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         revocations: RevocationStore<S, T, L>,
         listener: L,
         signer: &S,
-        csprng: &mut R,
+        csprng: Arc<Mutex<R>>,
     ) -> Result<Self, GenerateDocError> {
-        let (group_result, group_vk) = EphemeralSigner::with_signer(csprng, |verifier, signer| {
-            Group::generate_after_content(
-                signer,
-                verifier,
-                parents,
-                delegations,
-                revocations,
-                BTreeMap::from_iter([(
-                    DocumentId(verifier.into()),
-                    initial_content_heads.clone().into_iter().collect(),
-                )]),
-                listener,
-            )
-        });
+        let mut locked_csprng = csprng.lock().await;
+        let (group_result, group_vk) =
+            EphemeralSigner::with_signer(&mut *locked_csprng, |verifier, signer| {
+                Group::generate_after_content(
+                    signer,
+                    verifier,
+                    parents,
+                    delegations,
+                    revocations,
+                    BTreeMap::from_iter([(
+                        DocumentId(verifier.into()),
+                        initial_content_heads.clone().into_iter().collect(),
+                    )]),
+                    listener,
+                )
+            });
 
         let group = group_result.await?;
         let owner_id = IndividualId(group_vk.into());
         let doc_id = DocumentId(group.id());
-        let owner_share_secret_key = ShareSecretKey::generate(csprng);
+        let owner_share_secret_key = ShareSecretKey::generate(&mut *locked_csprng);
         let owner_share_key = owner_share_secret_key.share_key();
         let group_members = group.pick_individual_prekeys(doc_id).await;
         let other_members: Vec<(IndividualId, ShareKey)> = group_members
@@ -192,7 +194,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             ops.extend(cgka.add_multiple(others, signer).await?.iter().cloned());
         }
         let (_pcs_key, update_op) = cgka
-            .update(owner_share_key, owner_share_secret_key, signer, csprng)
+            .update(
+                owner_share_key,
+                owner_share_secret_key,
+                signer,
+                &mut *locked_csprng,
+            )
             .await?;
 
         ops.push(update_op);
@@ -486,7 +493,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     >(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
-        store: &mut C,
+        store: Arc<Mutex<C>>,
     ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<T, P, C>>
     where
         T: for<'de> Deserialize<'de>,
@@ -517,7 +524,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             }
         }
 
-        Ok(store.try_causal_decrypt(&mut to_decrypt).await?)
+        Ok(store
+            .lock()
+            .await
+            .try_causal_decrypt(&mut to_decrypt)
+            .await?)
     }
 
     #[instrument(skip_all)]
