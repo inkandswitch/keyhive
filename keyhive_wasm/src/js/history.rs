@@ -4,6 +4,7 @@ use super::{
     signed_revocation::JsSignedRevocation, signer::JsSigner,
 };
 use dupe::Dupe;
+use futures::lock::Mutex;
 use keyhive_core::{
     crypto::signed::Signed,
     principal::{
@@ -44,7 +45,7 @@ impl JsHistory {
             .iter()
             .map(|(doc_id, refs)| DocContentRefs {
                 doc_id: JsDocumentId(*doc_id),
-                change_hashes: refs.clone(),
+                change_hashes: Arc::new(Mutex::new(refs.clone())),
             })
             .collect()
     }

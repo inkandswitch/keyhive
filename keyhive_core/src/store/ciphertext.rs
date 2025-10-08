@@ -81,7 +81,7 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
 
     #[cfg(feature = "sendable")]
     fn mark_decrypted(
-        &mut self,
+        &self,
         id: &Cr,
     ) -> impl Future<Output = Result<(), Self::MarkDecryptedError>> + Send;
 

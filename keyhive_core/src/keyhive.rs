@@ -403,7 +403,7 @@ impl<
     pub async fn add_member(
         &self,
         to_add: Agent<S, T, L>,
-        resource: &mut Membered<S, T, L>,
+        resource: &Membered<S, T, L>,
         can: Access,
         other_relevant_docs: &[Arc<Mutex<Document<S, T, L>>>], // TODO make this automatic
     ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError> {
@@ -429,7 +429,7 @@ impl<
         &self,
         to_revoke: Identifier,
         retain_all_other_members: bool,
-        resource: &mut Membered<S, T, L>,
+        resource: &Membered<S, T, L>,
     ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
         let mut relevant_docs = BTreeMap::new();
         for (doc_id, Ability { doc, .. }) in self.reachable_docs().await {

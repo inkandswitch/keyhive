@@ -166,7 +166,7 @@ impl JsKeyhive {
     pub async fn add_member(
         &self,
         to_add: &JsAgent,
-        membered: &mut JsMembered,
+        membered: &JsMembered,
         access: JsAccess,
         other_relevant_docs: Vec<JsDocument>,
     ) -> Result<JsSignedDelegation, JsAddMemberError> {
@@ -179,7 +179,7 @@ impl JsKeyhive {
 
         let res = self
             .0
-            .add_member(to_add.0.dupe(), membered, *access, other_docs.as_slice())
+            .add_member(to_add.0.dupe(), &membered.0, *access, other_docs.as_slice())
             .await?;
 
         Ok(res.delegation.into())
@@ -190,11 +190,11 @@ impl JsKeyhive {
         &self,
         to_revoke: &JsAgent,
         retain_all_other_members: bool,
-        membered: &mut JsMembered,
+        membered: &JsMembered,
     ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
         let res = self
             .0
-            .revoke_member(to_revoke.id(), retain_all_other_members, membered)
+            .revoke_member(to_revoke.id(), retain_all_other_members, &membered.0)
             .await?;
 
         Ok(res
