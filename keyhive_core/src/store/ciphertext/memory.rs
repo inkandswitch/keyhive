@@ -80,7 +80,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     }
 
     #[instrument(level = "debug", skip_all, fields(ecrypted.content_ref))]
-    pub async fn insert(&mut self, encrypted: Arc<EncryptedContent<P, Cr>>) {
+    pub async fn insert(&self, encrypted: Arc<EncryptedContent<P, Cr>>) {
         let digest = Digest::hash(encrypted.as_ref());
         let content_ref = encrypted.content_ref.clone();
         let pcs_update_op_hash = encrypted.pcs_update_op_hash;
@@ -110,7 +110,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
 
     #[instrument(level = "debug", skip_all, fields(ecrypted.content_ref))]
     pub async fn insert_raw(
-        &mut self,
+        &self,
         encrypted: EncryptedContent<P, Cr>,
     ) -> Arc<EncryptedContent<P, Cr>> {
         let rc = Arc::new(encrypted);
@@ -120,7 +120,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
 
     #[instrument(level = "debug", skip_all, fields(digest))]
     pub async fn remove(
-        &mut self,
+        &self,
         digest: &Digest<EncryptedContent<P, Cr>>,
     ) -> Option<Arc<EncryptedContent<P, Cr>>> {
         let mut locked = self.0.lock().await;

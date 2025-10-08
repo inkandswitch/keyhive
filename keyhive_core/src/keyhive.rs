@@ -74,7 +74,7 @@ pub struct Keyhive<
     S: AsyncSigner + Clone,
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
-    C: CiphertextStore<T, P> = MemoryCiphertextStore<T, P>,
+    C: CiphertextStore<T, P> + Clone = MemoryCiphertextStore<T, P>,
     L: MembershipListener<S, T> = NoListener,
     R: rand::CryptoRng = rand::rngs::ThreadRng,
 > {
@@ -105,7 +105,7 @@ pub struct Keyhive<
     event_listener: L,
 
     /// Storeage for ciphertexts that cannot yet be decrypted.
-    ciphertext_store: Arc<Mutex<C>>,
+    ciphertext_store: C,
 
     /// Cryptographically secure (pseudo)random number generator.
     csprng: Arc<Mutex<R>>,
@@ -117,7 +117,7 @@ impl<
         S: AsyncSigner + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P>,
+        C: CiphertextStore<T, P> + Clone,
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Keyhive<S, T, P, C, L, R>
@@ -152,7 +152,7 @@ impl<
             docs: Arc::new(Mutex::new(HashMap::new())),
             delegations: DelegationStore::new(),
             revocations: RevocationStore::new(),
-            ciphertext_store: Arc::new(Mutex::new(ciphertext_store)),
+            ciphertext_store,
             event_listener,
             csprng: Arc::new(Mutex::new(csprng)),
             _plaintext_phantom: PhantomData,
@@ -495,7 +495,7 @@ impl<
     {
         doc.lock()
             .await
-            .try_causal_decrypt_content(encrypted, self.ciphertext_store.dupe())
+            .try_causal_decrypt_content(encrypted, self.ciphertext_store.clone())
             .await
     }
 
@@ -1593,7 +1593,7 @@ impl<
             delegations,
             revocations,
             csprng,
-            ciphertext_store: Arc::new(Mutex::new(ciphertext_store)),
+            ciphertext_store,
             event_listener: listener,
             _plaintext_phantom: PhantomData,
         })
@@ -1688,7 +1688,7 @@ impl<
         S: AsyncSigner + Clone,
         T: ContentRef + Debug,
         P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P>,
+        C: CiphertextStore<T, P> + Clone,
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Debug for Keyhive<S, T, P, C, L, R>
@@ -1716,7 +1716,7 @@ impl<
         R: rand::CryptoRng + rand::RngCore + Clone,
     > ForkAsync for Keyhive<S, T, P, C, L, R>
 {
-    type AsyncForked = Keyhive<S, T, P, Arc<Mutex<C>>, Log<S, T>, R>;
+    type AsyncForked = Keyhive<S, T, P, C, Log<S, T>, R>;
 
     async fn fork_async(&self) -> Self::AsyncForked {
         // TODO this is probably fairly slow, and due to the logger type changing
@@ -1789,7 +1789,7 @@ impl<
         S: AsyncSigner + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P>,
+        C: CiphertextStore<T, P> + Clone,
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Verifiable for Keyhive<S, T, P, C, L, R>

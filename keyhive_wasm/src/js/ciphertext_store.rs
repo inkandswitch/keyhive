@@ -10,6 +10,7 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = CiphertextStore)]
+#[derive(Debug, Clone)]
 pub struct JsCiphertextStore {
     inner: JsCiphertextStoreInner,
 }
@@ -157,6 +158,7 @@ impl JsGetCiphertextError {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum JsCiphertextStoreInner {
     Memory(MemoryCiphertextStore<JsChangeRef, Vec<u8>>),
 

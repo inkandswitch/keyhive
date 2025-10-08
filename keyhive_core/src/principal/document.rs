@@ -493,7 +493,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     >(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
-        store: Arc<Mutex<C>>,
+        store: C,
     ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<T, P, C>>
     where
         T: for<'de> Deserialize<'de>,
@@ -524,11 +524,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             }
         }
 
-        Ok(store
-            .lock()
-            .await
-            .try_causal_decrypt(&mut to_decrypt)
-            .await?)
+        Ok(store.try_causal_decrypt(&mut to_decrypt).await?)
     }
 
     #[instrument(skip_all)]
