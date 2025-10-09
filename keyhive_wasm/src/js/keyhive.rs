@@ -1,7 +1,7 @@
 use crate::{
     js::{
         document_id::JsDocumentId, group_id::JsGroupId, individual::JsIndividual,
-        membership::Membership,
+        membership::Membership, peer::PeerLike,
     },
     macros::init_span,
 };
@@ -89,29 +89,16 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = generateGroup)]
-    // pub async fn generate_group(&self, coparents: Vec<&JsPeer>) -> Result<JsGroup, JsSigningError> {
-    pub async fn generate_group(&self, js_coparents: &JsValue) -> Result<JsGroup, JsSigningError> {
+    pub async fn generate_group(
+        &self,
+        js_coparents: &js_sys::Array,
+    ) -> Result<JsGroup, JsSigningError> {
         init_span!("JsKeyhive::generate_group");
 
-        if !js_sys::Array::is_array(js_coparents) {
-            todo!("FIXME")
-            // return Err(js_sys::Error::new("Expected an array").into());
-        }
-        let arr = js_sys::Array::from(js_coparents);
-
-        let mut coparents: Vec<JsPeer> = Vec::new();
-        for v in arr.iter() {
-            if v.is_undefined() || v.is_null() {
-                return Err(js_sys::Error::new("Array contains null/undefined").into());
-            }
-
-            // Borrow each element as &Foo without taking ownership.
-            let peer: &JsPeer = v
-                .dyn_ref::<JsPeer>()
-                .ok_or_else(|| js_sys::Error::new("Element is not a JsPeer"))?;
-
-            coparents.push(peer.clone());
-        }
+        let coparents = js_coparents.iter().map(|v| {
+            let peer: &PeerLike = v.unchecked_ref();
+            peer.to_peer().to_peer()
+        });
 
         let group = self
             .0

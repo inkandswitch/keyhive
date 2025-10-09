@@ -2,11 +2,12 @@ use super::{
     change_ref::JsChangeRef, event_handler::JsEventHandler, identifier::JsIdentifier,
     signer::JsSigner,
 };
+use dupe::Dupe;
 use keyhive_core::principal::peer::Peer;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Peer)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Dupe)]
 pub struct JsPeer(pub(crate) Peer<JsSigner, JsChangeRef, JsEventHandler>);
 
 #[wasm_bindgen(js_class = Peer)]
@@ -42,4 +43,18 @@ impl JsPeer {
     pub fn is_document(&self) -> bool {
         matches!(self.0, Peer::Document(_, _))
     }
+
+    #[wasm_bindgen(js_name = toPeer)]
+    pub fn to_peer(&self) -> Self {
+        self.dupe()
+    }
+}
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(typescript_type = "Peer")]
+    pub type PeerLike;
+
+    #[wasm_bindgen(method, js_name = toPeer)]
+    pub fn to_peer(this: &PeerLike) -> JsPeer;
 }
