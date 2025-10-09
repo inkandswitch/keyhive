@@ -299,10 +299,10 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = receiveContactCard)]
     pub async fn receive_contact_card(
         &self,
-        contact_card: JsContactCard,
+        contact_card: &JsContactCard,
     ) -> Result<JsIndividual, JsReceivePreKeyOpError> {
         init_span!("JsKeyhive::receive_contact_card");
-        match self.0.receive_contact_card(&contact_card).await {
+        match self.0.receive_contact_card(&contact_card.clone()).await {
             Ok(individual) => {
                 let id = { individual.lock().await.id() };
                 let js_indie = JsIndividual {

@@ -41,7 +41,6 @@ impl JsDocument {
 
     #[wasm_bindgen(js_name = toAgent)]
     pub fn to_agent(&self) -> JsAgent {
-        tracing::debug!("JsDocument::to_agent");
         JsAgent(Agent::Document(self.doc_id, self.inner.dupe()))
     }
 
