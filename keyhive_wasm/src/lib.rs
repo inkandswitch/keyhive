@@ -1,3 +1,5 @@
+pub(crate) mod macros;
+
 pub mod js;
 pub use js::keyhive::JsKeyhive;
 
@@ -12,7 +14,11 @@ use wasm_bindgen::prelude::*;
 pub fn set_panic_hook() {
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
-    tracing_wasm::set_as_global_default_with_config(WASMLayerConfigBuilder::new().set_max_level(tracing::Level::TRACE).build());
+    tracing_wasm::set_as_global_default_with_config(
+        WASMLayerConfigBuilder::new()
+            .set_max_level(tracing::Level::TRACE)
+            .build(),
+    );
     tracing::info!("We've just set panic hook");
     tracing::debug!("We've just set panic hook panic hook");
 }

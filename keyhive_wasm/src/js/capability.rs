@@ -35,24 +35,3 @@ impl Capability {
         self.proof.dupe().into()
     }
 }
-
-// FIXME rename or rework
-#[wasm_bindgen]
-#[derive(Debug, Clone, Dupe)]
-pub struct SimpleCapability {
-    pub(crate) who: Agent<JsSigner, JsChangeRef, JsEventHandler>,
-    pub(crate) can: Access,
-}
-
-#[wasm_bindgen]
-impl SimpleCapability {
-    #[wasm_bindgen(getter)]
-    pub fn who(&self) -> JsAgent {
-        JsAgent(self.who.dupe())
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn can(&self) -> JsAccess {
-        JsAccess(self.can.dupe())
-    }
-}
