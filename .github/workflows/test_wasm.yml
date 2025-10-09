@@ -29,6 +29,6 @@ jobs:
         run: cd ./keyhive_wasm && pnpm i && pnpm exec playwright install --with-deps
 
       - name: Test on Wasm
-        run: wasm-pack test --node keyhive_wasm --features ingest_static
+        run: wasm-pack test --node keyhive_wasm
       - name: Test in browsers
-        run: wasm-pack build ./keyhive_wasm --release --target=web --features ingest_static && cd ./keyhive_wasm && pnpm i && npm install --global http-server && pnpm exec playwright test
+        run: wasm-pack build ./keyhive_wasm --release --target=web && cd ./keyhive_wasm && pnpm i && npm install --global http-server && pnpm exec playwright test

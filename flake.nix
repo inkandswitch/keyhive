@@ -3,6 +3,7 @@
 
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-25.05";
+    nixpkgs-unstable.url = "nixpkgs/nixpkgs-unstable";
 
     command-utils.url = "github:expede/nix-command-utils";
     flake-utils.url = "github:numtide/flake-utils";
@@ -18,6 +19,7 @@
     self,
     flake-utils,
     nixpkgs,
+    nixpkgs-unstable,
     rust-overlay,
     command-utils
   } @ inputs:
@@ -32,7 +34,12 @@
           config.allowUnfree = true;
         };
 
-        rustVersion = "1.86.0";
+        unstable = import nixpkgs-unstable {
+          inherit system overlays;
+          config.allowUnfree = true;
+        };
+
+        rustVersion = "1.90.0";
 
         rust-toolchain = pkgs.rust-bin.stable.${rustVersion}.default.override {
           extensions = [
@@ -55,26 +62,25 @@
           ];
         };
 
-        format-pkgs = with pkgs; [
-          nixpkgs-fmt
-          alejandra
-          taplo
+        format-pkgs = [
+          pkgs.nixpkgs-fmt
+          pkgs.alejandra
+          pkgs.taplo
         ];
 
-        cargo-installs = with pkgs; [
-          cargo-criterion
-          cargo-deny
-          cargo-expand
-          cargo-nextest
-          cargo-outdated
-          cargo-sort
-          cargo-udeps
-          cargo-watch
-          # llvmPackages.bintools
-          twiggy
+        cargo-installs =  [
+          pkgs.cargo-criterion
+          pkgs.cargo-deny
+          pkgs.cargo-expand
+          pkgs.cargo-nextest
+          pkgs.cargo-outdated
+          pkgs.cargo-sort
+          pkgs.cargo-udeps
+          pkgs.cargo-watch
+          pkgs.twiggy
           pkgs.cargo-component
-          wasm-bindgen-cli
-          wasm-tools
+	  unstable.wasm-bindgen-cli
+          pkgs.wasm-tools
         ];
 
         cargo = "${pkgs.cargo}/bin/cargo";
@@ -82,7 +88,7 @@
         node = "${pkgs.nodejs_20}/bin/node";
         pnpm = "${pkgs.pnpm}/bin/pnpm";
         playwright = "${pnpm} --dir=./keyhive_wasm exec playwright";
-        wasm-pack = "${pkgs.wasm-pack}/bin/wasm-pack";
+        wasm-pack = "${unstable.wasm-pack}/bin/wasm-pack";
         wasm-opt = "${pkgs.binaryen}/bin/wasm-opt";
 
         cmd = command-utils.cmd.${system};
@@ -244,11 +250,11 @@
               pkgs.chromedriver
               pkgs.nodePackages.pnpm
               pkgs.nodePackages_latest.webpack-cli
-              pkgs.nodejs_20
+              pkgs.nodejs_22
               pkgs.playwright-driver
               pkgs.playwright-driver.browsers
               pkgs.rust-analyzer
-              pkgs.wasm-pack
+              unstable.wasm-pack
             ]
             ++ format-pkgs
             ++ cargo-installs;

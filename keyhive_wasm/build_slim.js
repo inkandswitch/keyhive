@@ -31,7 +31,7 @@ console.log("=========================================");
 console.log("  building wasm package for web target");
 console.log("=========================================");
 execSync(
-  "wasm-pack build --out-dir pkg-slim --target web --release -- --features ingest_static",
+  "wasm-pack build --out-dir pkg-slim --target web --release",
   { stdio: "inherit" },
 );
 
