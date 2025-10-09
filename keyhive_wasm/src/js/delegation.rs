@@ -35,7 +35,14 @@ impl JsDelegation {
     }
 }
 
-#[wasm_bindgen(js_name = DelegationError)]
-#[derive(Debug, Error, From, Into)]
+#[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsDelegationError(DelegationError);
+pub struct JsDelegationError(#[from] DelegationError);
+
+impl From<JsDelegationError> for JsValue {
+    fn from(err: JsDelegationError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("DelegationError");
+        err.into()
+    }
+}

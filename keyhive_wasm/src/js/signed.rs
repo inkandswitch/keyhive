@@ -10,7 +10,7 @@ pub struct JsSigned(pub(crate) Signed<Vec<u8>>);
 impl JsSigned {
     #[wasm_bindgen(js_name = fromBytes)]
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        bincode::deserialize(bytes).expect("FIXME")
+        bincode::deserialize(bytes).expect("FIXME") // FIXME
     }
 
     #[wasm_bindgen(js_name = toBytes)]

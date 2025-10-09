@@ -47,33 +47,35 @@ impl JsArchive {
             Arc::new(Mutex::new(OsRng)),
         )
         .await
-        .map_err(|e| JsTryFromArchiveError(Box::new(e)))?
+        .map_err(|e| JsTryFromArchiveError(e))?
         .into())
     }
 }
 
-#[derive(Debug, Display, From, Into, Error)]
-#[wasm_bindgen(js_name = TryFromArchiveError)]
-pub struct JsTryFromArchiveError(
-    pub(crate) Box<TryFromArchiveError<JsSigner, JsChangeRef, JsEventHandler>>,
-);
+#[derive(Debug, Display, Error)]
+pub struct JsTryFromArchiveError(TryFromArchiveError<JsSigner, JsChangeRef, JsEventHandler>);
 
-#[wasm_bindgen(js_class = TryFromArchiveError)]
-impl JsTryFromArchiveError {
-    #[wasm_bindgen(js_name = toError)]
-    pub fn to_error(self) -> JsError {
-        JsError::from(self)
+impl From<TryFromArchiveError<JsSigner, JsChangeRef, JsEventHandler>> for JsTryFromArchiveError {
+    fn from(err: TryFromArchiveError<JsSigner, JsChangeRef, JsEventHandler>) -> Self {
+        JsTryFromArchiveError(err)
     }
 }
 
-#[derive(Debug, Display, From, Into, Error)]
-#[wasm_bindgen(js_name = SerializationError)]
-pub struct JsSerializationError(pub(crate) bincode::Error);
+impl From<JsTryFromArchiveError> for JsValue {
+    fn from(err: JsTryFromArchiveError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("TryFromArchiveError");
+        err.into()
+    }
+}
 
-#[wasm_bindgen(js_class = SerializationError)]
-impl JsSerializationError {
-    #[wasm_bindgen(js_name = toError)]
-    pub fn to_error(self) -> JsError {
-        JsError::from(self)
+#[derive(Debug, Display, Error)]
+pub struct JsSerializationError(#[from] bincode::Error);
+
+impl From<JsSerializationError> for JsValue {
+    fn from(err: JsSerializationError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("SerializationError");
+        err.into()
     }
 }

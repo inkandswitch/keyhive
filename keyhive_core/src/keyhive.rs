@@ -1626,7 +1626,6 @@ impl<
         })
     }
 
-    #[cfg(any(test, feature = "ingest_static"))]
     #[instrument(level = "trace", skip_all)]
     pub async fn ingest_archive(
         &self,
@@ -1676,7 +1675,6 @@ impl<
         &self.event_listener
     }
 
-    #[cfg(any(test, feature = "ingest_static"))]
     #[instrument(level = "trace", skip_all)]
     pub async fn ingest_unsorted_static_events(
         &self,
