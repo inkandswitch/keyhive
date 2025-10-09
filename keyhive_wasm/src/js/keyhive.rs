@@ -464,7 +464,7 @@ mod tests {
     async fn setup() -> JsKeyhive {
         JsKeyhive::init(
             &JsSigner::generate().await,
-            JsCiphertextStore::new_in_memory(),
+            &JsCiphertextStore::new_in_memory(),
             &js_sys::Function::new_with_args("event", "console.log(event)"),
         )
         .await
