@@ -79,7 +79,7 @@
           pkgs.cargo-watch
           pkgs.twiggy
           pkgs.cargo-component
-	  unstable.wasm-bindgen-cli
+          pkgs.wasm-bindgen-cli
           pkgs.wasm-tools
         ];
 
@@ -88,7 +88,7 @@
         node = "${pkgs.nodejs_20}/bin/node";
         pnpm = "${pkgs.pnpm}/bin/pnpm";
         playwright = "${pnpm} --dir=./keyhive_wasm exec playwright";
-        wasm-pack = "${unstable.wasm-pack}/bin/wasm-pack";
+        wasm-pack = "${pkgs.wasm-pack}/bin/wasm-pack";
         wasm-opt = "${pkgs.binaryen}/bin/wasm-opt";
 
         cmd = command-utils.cmd.${system};
@@ -251,10 +251,11 @@
               pkgs.nodePackages.pnpm
               pkgs.nodePackages_latest.webpack-cli
               pkgs.nodejs_22
+              pkgs.playwright
               pkgs.playwright-driver
               pkgs.playwright-driver.browsers
               pkgs.rust-analyzer
-              unstable.wasm-pack
+              pkgs.wasm-pack
             ]
             ++ format-pkgs
             ++ cargo-installs;

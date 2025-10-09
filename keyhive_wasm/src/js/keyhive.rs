@@ -33,7 +33,6 @@ pub struct JsKeyhive(
 
 #[wasm_bindgen(js_class = Keyhive)]
 impl JsKeyhive {
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen]
     pub async fn init(
         signer: &JsSigner,
@@ -63,7 +62,6 @@ impl JsKeyhive {
         self.0.id().clone().into()
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(getter)]
     pub async fn individual(&self) -> JsIndividual {
         tracing::debug!("JsKeyhive::individual");
@@ -73,7 +71,6 @@ impl JsKeyhive {
         }
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(getter, js_name = idString)]
     pub fn id_string(&self) -> String {
         tracing::debug!("JsKeyhive::id_string");
@@ -87,7 +84,6 @@ impl JsKeyhive {
             })
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = generateGroup)]
     pub async fn generate_group(&self, coparents: Vec<JsPeer>) -> Result<JsGroup, JsSigningError> {
         tracing::debug!("JsKeyhive::generate_group");
@@ -108,7 +104,6 @@ impl JsKeyhive {
         })
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = generateDocument)]
     pub async fn generate_doc(
         &self,
@@ -138,14 +133,12 @@ impl JsKeyhive {
         })
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = trySign)]
     pub async fn try_sign(&self, data: &[u8]) -> Result<JsSigned, JsSigningError> {
         tracing::debug!("JsKeyhive::try_sign");
         Ok(self.0.try_sign(data.to_vec()).await.map(JsSigned)?)
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = tryEncrypt)]
     pub async fn try_encrypt(
         &self,
@@ -163,7 +156,6 @@ impl JsKeyhive {
     }
 
     // NOTE: this is with a fresh doc secret
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = tryEncryptArchive)]
     pub async fn try_encrypt_archive(
         &self,
@@ -180,7 +172,6 @@ impl JsKeyhive {
             .into())
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = tryDecrypt)]
     pub async fn try_decrypt(
         &self,
@@ -194,7 +185,6 @@ impl JsKeyhive {
             .await?)
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = addMember)]
     pub async fn add_member(
         &self,
@@ -220,7 +210,6 @@ impl JsKeyhive {
         Ok(res.delegation.into())
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = revokeMember)]
     pub async fn revoke_member(
         &self,
@@ -242,7 +231,6 @@ impl JsKeyhive {
             .collect())
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = reachableDocs)]
     pub async fn reachable_docs(&self) -> Vec<Summary> {
         tracing::debug!("JsKeyhive::reachable_docs");
@@ -260,7 +248,6 @@ impl JsKeyhive {
         acc
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = forcePcsUpdate)]
     pub async fn force_pcs_update(&self, doc: &JsDocument) -> Result<(), JsEncryptError> {
         tracing::debug!("JsKeyhive::force_pcs_update");
@@ -271,7 +258,6 @@ impl JsKeyhive {
         Ok(())
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = rotatePrekey)]
     pub async fn rotate_prekey(&self, prekey: JsShareKey) -> Result<JsShareKey, JsSigningError> {
         tracing::debug!("JsKeyhive::rotate_prekey");
@@ -279,7 +265,6 @@ impl JsKeyhive {
         Ok(JsShareKey(op.payload().new))
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = expandPrekeys)]
     pub async fn expand_prekeys(&self) -> Result<JsShareKey, JsSigningError> {
         tracing::debug!("JsKeyhive::expand_prekeys");
@@ -287,7 +272,6 @@ impl JsKeyhive {
         Ok(JsShareKey(op.payload().share_key))
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = contactCard)]
     pub async fn contact_card(&self) -> Result<JsContactCard, JsSigningError> {
         tracing::debug!("JsKeyhive::contact_card");
@@ -299,7 +283,6 @@ impl JsKeyhive {
             .map_err(Into::into)
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = receiveContactCard)]
     pub async fn receive_contact_card(
         &self,
@@ -319,14 +302,12 @@ impl JsKeyhive {
         }
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = getAgent)]
     pub async fn get_agent(&self, id: &JsIdentifier) -> Option<JsAgent> {
         tracing::debug!("JsKeyhive::get_agent");
         self.0.get_agent(id.0).await.map(JsAgent)
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = getGroup)]
     pub async fn get_group(&self, group_id: &JsGroupId) -> Option<JsGroup> {
         tracing::debug!("JsKeyhive::get_group");
@@ -337,7 +318,6 @@ impl JsKeyhive {
         })
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = getDocument)]
     pub async fn get_document(&self, doc_id: &JsDocumentId) -> Option<JsDocument> {
         tracing::debug!("JsKeyhive::get_document");
@@ -348,7 +328,6 @@ impl JsKeyhive {
         })
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = docMemberCapabilities)]
     pub async fn doc_member_capabilities(&self, doc_id: &JsDocumentId) -> Vec<SimpleCapability> {
         tracing::debug!("JsKeyhive::doc_member_capabilities");
@@ -373,7 +352,6 @@ impl JsKeyhive {
         }
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = accessForDoc)]
     pub async fn access_for_doc(
         &self,
@@ -387,21 +365,18 @@ impl JsKeyhive {
             .map(|(_, access)| JsAccess((*access).clone()))
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = intoArchive)]
     pub async fn into_archive(self) -> JsArchive {
         tracing::debug!("JsKeyhive::into_archive");
         self.0.into_archive().await.into()
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = toArchive)]
     pub async fn to_archive(&self) -> JsArchive {
         tracing::debug!("JsKeyhive::to_archive");
         self.0.into_archive().await.into()
     }
 
-    #[tracing::instrument(skip_all)]
     #[wasm_bindgen(js_name = ingestArchive)]
     pub async fn ingest_archive(
         &mut self,
