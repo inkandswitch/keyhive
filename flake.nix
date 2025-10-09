@@ -98,7 +98,7 @@
             "${cargo} build --release";
 
          "release:wasm:web" = cmd "Build release for wasm32-unknown-unknown with web bindings"
-           "${wasm-pack} build ./keyhive_wasm --release --target=web && ${gzip} -f ./keyhive_wasm/pkg/keyhive_wasm_bg.wasm";
+           "${wasm-pack} build ./keyhive_wasm --release --target=web"; # && ${gzip} -f ./keyhive_wasm/pkg/keyhive_wasm_bg.wasm";
 
          "release:wasm:bundler" = cmd "Build release for wasm32-unknown-unknown with bundler bindings"
             "${wasm-pack} build ./keyhive_wasm --release --target=bundler && ${gzip} -f ./keyhive_wasm/pkg/keyhive_wasm_bg.wasm";

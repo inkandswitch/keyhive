@@ -114,7 +114,6 @@ test.describe("Keyhive", async () => {
         }`);
 
       const signer = await Signer.generate();
-      const secondSigner = signer.clone();
       const ciphertextStore = CiphertextStore.newInMemory();
       const kh = await Keyhive.init(signer, ciphertextStore, () => {});
       const changeRef = new ChangeRef(new Uint8Array([1, 2, 3]));
@@ -133,9 +132,10 @@ test.describe("Keyhive", async () => {
       const archiveBytes = archive.toBytes();
       const archiveBytesIsUint8Array = archiveBytes instanceof Uint8Array;
       const newStore = CiphertextStore.newInMemory();
-      const roundTrip = new Archive(archiveBytes).tryToKeyhive(
+      const archive2 = new Archive(archiveBytes);
+      const roundTrip = await archive2.tryToKeyhive(
         newStore,
-        secondSigner
+        signer
       );
       return {
         archive,

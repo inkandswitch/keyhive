@@ -3,7 +3,6 @@ use super::{
     signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use dupe::Dupe;
-use keyhive_core::access::Access;
 use keyhive_core::{
     crypto::signed::Signed,
     principal::{agent::Agent, group::delegation::Delegation},
