@@ -101,7 +101,17 @@ test.describe("Keyhive", async () => {
     const scenario = async () => {
       const { Keyhive, Signer, Access, Archive, ChangeRef, CiphertextStore, ContactCard, Individual } =
         window.keyhive
-      const testContactCard = ContactCard.fromJson(`{"Rotate":{"payload":{"old":[162,145,165,196,36,224,73,112,145,188,239,44,86,166,20,30,132,108,154,237,83,69,195,21,41,18,247,146,217,79,21,65],"new":[65,22,115,210,58,181,17,14,148,30,90,73,154,200,20,81,107,120,237,144,159,70,19,25,122,11,238,169,191,239,222,18]},"issuer":[89,148,210,47,52,105,242,130,40,253,172,205,17,39,98,47,171,251,25,33,19,205,115,101,160,144,209,139,13,6,168,3],"signature":[26,42,5,188,200,86,129,50,162,87,200,64,152,180,93,59,70,150,87,12,222,93,165,249,110,150,52,123,169,222,138,253,72,64,83,74,88,60,147,178,135,64,14,77,40,61,89,164,119,235,73,71,34,184,248,172,125,3,144,248,177,72,65,13]}}`)
+      const testContactCard = ContactCard.fromJson(`
+        {
+          "Rotate": {
+            "payload": {
+              "old": [162,145,165,196,36,224,73,112,145,188,239,44,86,166,20,30,132,108,154,237,83,69,195,21,41,18,247,146,217,79,21,65],
+              "new": [65,22,115,210,58,181,17,14,148,30,90,73,154,200,20,81,107,120,237,144,159,70,19,25,122,11,238,169,191,239,222,18]
+            },
+            "issuer": [89,148,210,47,52,105,242,130,40,253,172,205,17,39,98,47,171,251,25,33,19,205,115,101,160,144,209,139,13,6,168,3],
+            "signature": [26,42,5,188,200,86,129,50,162,87,200,64,152,180,93,59,70,150,87,12,222,93,165,249,110,150,52,123,169,222,138,253,72,64,83,74,88,60,147,178,135,64,14,77,40,61,89,164,119,235,73,71,34,184,248,172,125,3,144,248,177,72,65,13]
+          }
+        }`);
 
       const signer = await Signer.generate();
       const secondSigner = signer.clone();
@@ -115,9 +125,9 @@ test.describe("Keyhive", async () => {
       await kh.generateGroup([d1.toPeer()]);
       await kh.generateGroup([g2.toPeer(), d1.toPeer()]);
 
-      const individual = kh.receiveContactCard(testContactCard)
+      const individual = await kh.receiveContactCard(testContactCard)
       const access = Access.tryFromString("write");
-      kh.addMember(individual.toAgent(), g2.toMembered(), access, []);
+      await kh.addMember(individual.toAgent(), g2.toMembered(), access, []);
 
       const archive = await kh.intoArchive();
       const archiveBytes = archive.toBytes();
@@ -193,7 +203,7 @@ test.describe("Keyhive", async () => {
         const kh1Id = kh1.idString;
 
         // Export archive from first keyhive
-        const archive = kh1.toArchive();
+        const archive = await kh1.toArchive();
         const archiveBytes = archive.toBytes();
 
         // Create second keyhive with different identity
