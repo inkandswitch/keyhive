@@ -99,7 +99,7 @@ test.describe("Keyhive", async () => {
 
   test.describe("archive", async () => {
     const scenario = async () => {
-      const { Keyhive, Signer, Access, Archive, ChangeRef, CiphertextStore, ContactCard, Individual } =
+      const { Keyhive, Signer, Access, Archive, ChangeId, CiphertextStore, ContactCard, Individual } =
         window.keyhive
       const testContactCard = ContactCard.fromJson(`
         {
@@ -116,13 +116,13 @@ test.describe("Keyhive", async () => {
       const signer = await Signer.generate();
       const ciphertextStore = CiphertextStore.newInMemory();
       const kh = await Keyhive.init(signer, ciphertextStore, () => {});
-      const changeRef = new ChangeRef(new Uint8Array([1, 2, 3]));
+      const changeId = new ChangeId(new Uint8Array([1, 2, 3]));
 
       const g1 = await kh.generateGroup([]);
       const arr = [g1.toPeer()];
       const g2 = await kh.generateGroup(arr);
       const _ = await kh.generateGroup(arr);
-      const d1 = await kh.generateDocument([g2.toPeer()], changeRef, []);
+      const d1 = await kh.generateDocument([g2.toPeer()], changeId, []);
       await kh.generateGroup([d1.toPeer()]);
       await kh.generateGroup([g2.toPeer(), d1.toPeer()]);
 
@@ -192,15 +192,15 @@ test.describe("Keyhive", async () => {
   test.describe("archive ingestion across keyhives", async () => {
     test("different keyhive can ingest archive with document", async ({ page }) => {
       const out = await page.evaluate(async () => {
-        const { Keyhive, Signer, ChangeRef, CiphertextStore, Archive } = window.keyhive;
+        const { Keyhive, Signer, ChangeId, CiphertextStore, Archive } = window.keyhive;
 
         // Create first keyhive and a document
         const signer1 = await Signer.generate();
         const store1 = CiphertextStore.newInMemory();
         const kh1 = await Keyhive.init(signer1, store1, () => {});
 
-        const changeRef = new ChangeRef(new Uint8Array([1, 2, 3]));
-        await kh1.generateDocument([], changeRef, []);
+        const changeId = new ChangeId(new Uint8Array([1, 2, 3]));
+        await kh1.generateDocument([], changeId, []);
 
         const kh1Id = kh1.idString;
 

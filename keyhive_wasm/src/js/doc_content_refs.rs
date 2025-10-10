@@ -20,8 +20,8 @@ impl DocContentRefs {
         })
     }
 
-    #[wasm_bindgen(js_name = addChangeRef)]
-    pub async fn add_change_hash(&self, hash: JsChangeId) {
+    #[wasm_bindgen(js_name = addChangeId)]
+    pub async fn add_change_id(&self, hash: JsChangeId) {
         self.change_hashes.lock().await.push(hash)
     }
 

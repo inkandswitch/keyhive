@@ -9,7 +9,7 @@ test.beforeEach(async ({ page }) => {
 test.describe("Document", async () => {
   test("constructor", async ({ page }) => {
     const out = await page.evaluate(async () => {
-      const { Keyhive, Signer, ChangeRef, CiphertextStore } = window.keyhive;
+      const { Keyhive, Signer, ChangeId, CiphertextStore } = window.keyhive;
 
       const store = CiphertextStore.newInMemory();
       const kh = await Keyhive.init(
@@ -17,10 +17,10 @@ test.describe("Document", async () => {
         store,
         console.log
       );
-      const changeRef = new ChangeRef(new Uint8Array([1, 2, 3]));
+      const changeId = new ChangeId(new Uint8Array([1, 2, 3]));
 
       const g = await kh.generateGroup([])
-      const doc = await kh.generateDocument([g.toPeer()], changeRef, [])
+      const doc = await kh.generateDocument([g.toPeer()], changeId, [])
       const docId = doc.id
 
       return { doc, docId };
