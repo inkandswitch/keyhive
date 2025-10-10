@@ -17,7 +17,7 @@ from_js_ref = { path = "../from_js_ref" }
 keyhive_core = { path = "../keyhive_core" }
 wasm_refgen = { path = "../wasm_refgen" }
 
-base64-simd = "0.8.0" # FIXME need?
+base64-simd = "0.8.0"
 bincode = { workspace = true }
 derive_more = { workspace = true }
 dupe = { workspace = true }

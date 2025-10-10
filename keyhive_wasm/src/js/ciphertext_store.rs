@@ -82,14 +82,14 @@ impl CiphertextStore<JsChangeId, Vec<u8>> for JsCiphertextStore {
             // TODO add index
             #[cfg(feature = "web-sys")]
             JsCiphertextStoreInner::WebStorage(ref store) => {
-                let mut acc = vec![];
+                let mut acc = Vec::new();
 
-                // FIXME
-                for i in 0..store.length().expect("FIXME") {
+                let size = store.length().map_err(JsWebStorageError::CannotStoreSize)?;
+                for i in 0..size {
                     let key = store
                         .key(i)
                         .map_err(JsWebStorageError::RetrievalError)?
-                        .expect("FIXME");
+                        .ok_or_else(|| JsWebStorageError::ValueNotFoundForKey(i))?;
 
                     let b64 = store
                         .get_item(&key)
@@ -128,15 +128,29 @@ impl CiphertextStore<JsChangeId, Vec<u8>> for JsCiphertextStore {
     }
 }
 
-#[wasm_bindgen(js_name = RemoveCiphertextError)]
 #[derive(Debug, Error)]
 #[error("RemoveCiphertextError: {0:?}")]
 pub struct JsRemoveCiphertextError(JsValue);
 
-#[wasm_bindgen(js_name = GetCiphertextError)]
+impl From<JsRemoveCiphertextError> for JsValue {
+    fn from(err: JsRemoveCiphertextError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("RemoveCiphertextError");
+        err.into()
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("GetCiphertextError: {0:?}")]
 pub struct JsGetCiphertextError(#[from] JsWebStorageError);
+
+impl From<JsGetCiphertextError> for JsValue {
+    fn from(err: JsGetCiphertextError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("GetCiphertextError");
+        err.into()
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum JsWebStorageError {
@@ -148,13 +162,19 @@ pub enum JsWebStorageError {
 
     #[error("Error while removing item from web storage: {0:?}")]
     ConvertFromBase64Error(base64_simd::Error),
+
+    #[error("Value not found in web storage for key {0}")]
+    ValueNotFoundForKey(u32),
+
+    #[error("Error while getting store size: {0:?}")]
+    CannotStoreSize(JsValue),
 }
 
-#[wasm_bindgen(js_class = GetCiphertextError)]
-impl JsGetCiphertextError {
-    #[wasm_bindgen(getter)]
-    pub fn message(&self) -> String {
-        self.0.to_string()
+impl From<JsWebStorageError> for JsValue {
+    fn from(err: JsWebStorageError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("WebStorageError");
+        err.into()
     }
 }
 

@@ -1,7 +1,7 @@
 [package]
 name = "from_js_ref"
 version = "0.1.0"
-description = "FIXME"
+description = "Trait for converting from JS interface reference wrappers"
 
 authors.workspace = true
 license.workspace = true
