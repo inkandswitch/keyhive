@@ -1,40 +1,25 @@
 use crate::{
     js::{
         document_id::JsDocumentId, group_id::JsGroupId, individual::JsIndividual,
-        membership::Membership, peer::JsPeerLike,
+        membership::Membership,
     },
     macros::init_span,
 };
 
 use super::{
-    access::JsAccess,
-    add_member_error::JsAddMemberError,
-    agent::JsAgent,
-    archive::JsArchive,
-    change_ref::JsChangeRef,
-    ciphertext_store::JsCiphertextStore,
-    contact_card::JsContactCard,
-    document::JsDocument,
-    encrypted::JsEncrypted,
-    encrypted_content_with_update::JsEncryptedContentWithUpdate,
-    event_handler::JsEventHandler,
-    generate_doc_error::JsGenerateDocError,
-    group::JsGroup,
-    identifier::JsIdentifier,
-    individual_id::JsIndividualId,
-    membered::JsMembered,
-    peer::{ConvertMe, JsPeer},
-    revoke_member_error::JsRevokeMemberError,
-    share_key::JsShareKey,
-    signed::JsSigned,
-    signed_delegation::JsSignedDelegation,
-    signed_revocation::JsSignedRevocation,
-    signer::JsSigner,
-    signing_error::JsSigningError,
-    summary::Summary,
+    access::JsAccess, add_member_error::JsAddMemberError, agent::JsAgent, archive::JsArchive,
+    change_ref::JsChangeRef, ciphertext_store::JsCiphertextStore, contact_card::JsContactCard,
+    document::JsDocument, encrypted::JsEncrypted,
+    encrypted_content_with_update::JsEncryptedContentWithUpdate, event_handler::JsEventHandler,
+    generate_doc_error::JsGenerateDocError, group::JsGroup, identifier::JsIdentifier,
+    individual_id::JsIndividualId, membered::JsMembered, peer::JsPeer,
+    revoke_member_error::JsRevokeMemberError, share_key::JsShareKey, signed::JsSigned,
+    signed_delegation::JsSignedDelegation, signed_revocation::JsSignedRevocation, signer::JsSigner,
+    signing_error::JsSigningError, summary::Summary,
 };
 use derive_more::{From, Into};
 use dupe::{Dupe, IterDupedExt};
+use keyhive_convert_core::FromJsInterface;
 use keyhive_core::{
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
     principal::{agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError},
@@ -107,12 +92,12 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = generateGroup)]
     pub async fn generate_group(
         &self,
-        js_coparents: &js_sys::Array,
+        js_coparents: Vec<crate::js::peer::JsPeerLike>,
     ) -> Result<JsGroup, JsSigningError> {
         let coparents = {
             let mut acc = Vec::new();
             for js_value in js_coparents.iter() {
-                let js_peer = JsPeer::from_js_value(&js_value).expect("FIXME");
+                let js_peer = JsPeer::from_js_interface(&js_value);
                 acc.push(js_peer.0)
             }
             acc

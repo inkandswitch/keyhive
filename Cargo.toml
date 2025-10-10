@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "keyhive_core",
     "keyhive_wasm",
+    "keyhive_convert_core",
+    "keyhive_convert_derive",
     "test-utils",
 ]
 

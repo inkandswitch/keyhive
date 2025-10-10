@@ -3,14 +3,15 @@ use super::{
     signer::JsSigner,
 };
 use dupe::Dupe;
+use keyhive_convert_derive::keyhive_convert;
 use keyhive_core::principal::peer::Peer;
-use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Peer)]
 #[derive(Debug, Clone, Dupe)]
 pub struct JsPeer(pub(crate) Peer<JsSigner, JsChangeRef, JsEventHandler>);
 
+#[keyhive_convert]
 #[wasm_bindgen(js_class = Peer)]
 impl JsPeer {
     #[wasm_bindgen(getter)]
@@ -43,56 +44,5 @@ impl JsPeer {
     #[wasm_bindgen(js_name = isDocument)]
     pub fn is_document(&self) -> bool {
         matches!(self.0, Peer::Document(_, _))
-    }
-
-    #[wasm_bindgen(js_name = "__keyhive_toPeer")]
-    pub fn __kh_to_peer(&self) -> Self {
-        self.dupe()
-    }
-}
-
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(typescript_type = "Peer")]
-    pub type JsPeerLike;
-
-    #[wasm_bindgen(method, js_name = "__keyhive_toPeer")]
-    pub fn kh_to_peer(this: &JsPeerLike) -> JsPeer;
-}
-
-pub trait ConvertMe: Sized {
-    type JsInterface: JsCast;
-    const UPCAST_TAG: &'static str;
-
-    fn from_js_interface(castable: &Self::JsInterface) -> Self;
-
-    fn from_js_value(js_value: &JsValue) -> Result<Self, NotExpectedJsInterface> {
-        if js_sys::Reflect::has(&js_value, &JsValue::from(&Self::UPCAST_TAG.to_string())).is_ok() {
-            let js_interface: &Self::JsInterface = js_value.unchecked_ref();
-            Ok(Self::from_js_interface(js_interface))
-        } else {
-            Err(NotExpectedJsInterface)
-        }
-    }
-}
-
-#[derive(Debug, Clone, Dupe, Copy, Error)]
-#[error("Not the expected JS interface")]
-pub struct NotExpectedJsInterface;
-
-impl From<NotExpectedJsInterface> for JsValue {
-    fn from(err: NotExpectedJsInterface) -> Self {
-        let err = js_sys::Error::new(&err.to_string());
-        err.set_name("NotExpectedJsInterface");
-        err.into()
-    }
-}
-
-impl ConvertMe for JsPeer {
-    type JsInterface = JsPeerLike;
-    const UPCAST_TAG: &'static str = "__keyhive_toPeer";
-
-    fn from_js_interface(castable: &Self::JsInterface) -> Self {
-        castable.kh_to_peer()
     }
 }
