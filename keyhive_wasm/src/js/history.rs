@@ -1,5 +1,5 @@
 use super::{
-    change_ref::JsChangeRef, doc_content_refs::DocContentRefs, document_id::JsDocumentId,
+    change_id::JsChangeId, doc_content_refs::DocContentRefs, document_id::JsDocumentId,
     event_handler::JsEventHandler, signed_delegation::JsSignedDelegation,
     signed_revocation::JsSignedRevocation, signer::JsSigner,
 };
@@ -18,9 +18,9 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(js_name = History)]
 #[derive(Debug, Clone)]
 pub struct JsHistory {
-    pub(crate) delegations: Vec<Arc<Signed<Delegation<JsSigner, JsChangeRef, JsEventHandler>>>>,
-    pub(crate) revocations: Vec<Arc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>>,
-    pub(crate) content: BTreeMap<DocumentId, Vec<JsChangeRef>>,
+    pub(crate) delegations: Vec<Arc<Signed<Delegation<JsSigner, JsChangeId, JsEventHandler>>>>,
+    pub(crate) revocations: Vec<Arc<Signed<Revocation<JsSigner, JsChangeId, JsEventHandler>>>>,
+    pub(crate) content: BTreeMap<DocumentId, Vec<JsChangeId>>,
 }
 
 #[wasm_bindgen(js_class = History)]
@@ -51,8 +51,8 @@ impl JsHistory {
     }
 }
 
-impl From<Dependencies<'_, JsSigner, JsChangeRef, JsEventHandler>> for JsHistory {
-    fn from(deps: Dependencies<JsSigner, JsChangeRef, JsEventHandler>) -> Self {
+impl From<Dependencies<'_, JsSigner, JsChangeId, JsEventHandler>> for JsHistory {
+    fn from(deps: Dependencies<JsSigner, JsChangeId, JsEventHandler>) -> Self {
         Self {
             delegations: deps.delegations,
             revocations: deps.revocations,

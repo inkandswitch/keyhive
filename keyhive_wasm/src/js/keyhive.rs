@@ -7,19 +7,35 @@ use crate::{
 };
 
 use super::{
-    access::JsAccess, add_member_error::JsAddMemberError, agent::JsAgent, archive::JsArchive,
-    change_ref::JsChangeRef, ciphertext_store::JsCiphertextStore, contact_card::JsContactCard,
-    document::JsDocument, encrypted::JsEncrypted,
-    encrypted_content_with_update::JsEncryptedContentWithUpdate, event_handler::JsEventHandler,
-    generate_doc_error::JsGenerateDocError, group::JsGroup, identifier::JsIdentifier,
-    individual_id::JsIndividualId, membered::JsMembered, peer::JsPeer,
-    revoke_member_error::JsRevokeMemberError, share_key::JsShareKey, signed::JsSigned,
-    signed_delegation::JsSignedDelegation, signed_revocation::JsSignedRevocation, signer::JsSigner,
-    signing_error::JsSigningError, summary::Summary,
+    access::JsAccess,
+    add_member_error::JsAddMemberError,
+    agent::JsAgent,
+    archive::JsArchive,
+    change_id::{JsChangeId, JsChangeIdRef},
+    ciphertext_store::JsCiphertextStore,
+    contact_card::JsContactCard,
+    document::{JsDocument, JsDocumentRef},
+    encrypted::JsEncrypted,
+    encrypted_content_with_update::JsEncryptedContentWithUpdate,
+    event_handler::JsEventHandler,
+    generate_doc_error::JsGenerateDocError,
+    group::JsGroup,
+    identifier::JsIdentifier,
+    individual_id::JsIndividualId,
+    membered::JsMembered,
+    peer::{JsPeer, JsPeerRef},
+    revoke_member_error::JsRevokeMemberError,
+    share_key::JsShareKey,
+    signed::JsSigned,
+    signed_delegation::JsSignedDelegation,
+    signed_revocation::JsSignedRevocation,
+    signer::JsSigner,
+    signing_error::JsSigningError,
+    summary::Summary,
 };
 use derive_more::{From, Into};
 use dupe::{Dupe, IterDupedExt};
-use keyhive_convert_core::FromJsInterface;
+use keyhive_convert_core::FromJsRef;
 use keyhive_core::{
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
     principal::{agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError},
@@ -32,7 +48,7 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(js_name = Keyhive)]
 #[derive(Debug, From, Into)]
 pub struct JsKeyhive(
-    pub(crate) Keyhive<JsSigner, JsChangeRef, Vec<u8>, JsCiphertextStore, JsEventHandler, OsRng>,
+    pub(crate) Keyhive<JsSigner, JsChangeId, Vec<u8>, JsCiphertextStore, JsEventHandler, OsRng>,
 );
 
 #[wasm_bindgen(js_class = Keyhive)]
@@ -92,16 +108,12 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = generateGroup)]
     pub async fn generate_group(
         &self,
-        js_coparents: Vec<crate::js::peer::JsPeerLike>,
+        js_coparents: Vec<JsPeerRef>,
     ) -> Result<JsGroup, JsSigningError> {
-        let coparents = {
-            let mut acc = Vec::new();
-            for js_value in js_coparents.iter() {
-                let js_peer = JsPeer::from_js_interface(&js_value);
-                acc.push(js_peer.0)
-            }
-            acc
-        };
+        let coparents = js_coparents
+            .into_iter()
+            .map(|js_peer| JsPeer::from_js_ref(&js_peer).0)
+            .collect::<Vec<_>>();
 
         let group = self.0.generate_group(coparents).await?;
 
@@ -115,9 +127,9 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = generateDocument)]
     pub async fn generate_doc(
         &self,
-        coparents: Vec<JsPeer>,
-        initial_content_ref_head: JsChangeRef,
-        more_initial_content_refs: Vec<JsChangeRef>,
+        coparents: Vec<JsPeerRef>,
+        initial_content_ref_head: JsChangeId,
+        more_initial_content_refs: Vec<JsChangeIdRef>,
     ) -> Result<JsDocument, JsGenerateDocError> {
         init_span!("JsKeyhive::generate_doc");
         let doc = self
@@ -125,11 +137,14 @@ impl JsKeyhive {
             .generate_doc(
                 coparents
                     .into_iter()
-                    .map(|js_peer| js_peer.0)
+                    .map(|js_peer| JsPeer::from_js_ref(&js_peer).0)
                     .collect::<Vec<_>>(),
                 NonEmpty {
                     head: initial_content_ref_head.clone(),
-                    tail: more_initial_content_refs.clone().into_iter().collect(),
+                    tail: more_initial_content_refs
+                        .into_iter()
+                        .map(|r| JsChangeId::from_js_ref(&r))
+                        .collect(),
                 },
             )
             .await?;
@@ -151,11 +166,16 @@ impl JsKeyhive {
     pub async fn try_encrypt(
         &self,
         doc: JsDocument,
-        content_ref: JsChangeRef,
-        pred_refs: Vec<JsChangeRef>,
+        content_ref: JsChangeId,
+        js_pred_refs: Vec<JsChangeIdRef>,
         content: &[u8],
     ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
         init_span!("JsKeyhive::try_encrypt");
+        let pred_refs: Vec<JsChangeId> = js_pred_refs
+            .into_iter()
+            .map(|js_ref| JsChangeId::from_js_ref(&js_ref))
+            .collect();
+
         Ok(self
             .0
             .try_encrypt_content(doc.inner, &content_ref, &pred_refs, content)
@@ -168,11 +188,16 @@ impl JsKeyhive {
     pub async fn try_encrypt_archive(
         &self,
         doc: &JsDocument,
-        content_ref: &JsChangeRef,
-        pred_refs: Vec<JsChangeRef>, // FIXME
+        content_ref: &JsChangeId,
+        pred_refs: Vec<JsChangeIdRef>,
         content: &[u8],
     ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
         init_span!("JsKeyhive::try_encrypt_archive");
+        let pred_refs: Vec<JsChangeId> = pred_refs
+            .into_iter()
+            .map(|js_ref| JsChangeId::from_js_ref(&js_ref))
+            .collect();
+
         Ok(self
             .0
             .try_encrypt_content(doc.inner.dupe(), &content_ref, &pred_refs, content)
@@ -199,13 +224,12 @@ impl JsKeyhive {
         to_add: &JsAgent,
         membered: &JsMembered,
         access: JsAccess,
-        other_relevant_docs: Vec<JsDocument>,
+        other_relevant_docs: Vec<JsDocumentRef>,
     ) -> Result<JsSignedDelegation, JsAddMemberError> {
         init_span!("JsKeyhive::add_member");
         let other_docs_refs: Vec<_> = other_relevant_docs
-            .clone()
             .iter()
-            .map(|js_doc| js_doc.inner.dupe())
+            .map(|js_doc| JsDocument::from_js_ref(js_doc).inner)
             .collect();
 
         let other_docs: Vec<_> = other_docs_refs.into_iter().collect();
@@ -436,7 +460,7 @@ impl From<JsDecryptError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct JsReceiveStaticEventError(
-    #[from] ReceiveStaticEventError<JsSigner, JsChangeRef, JsEventHandler>,
+    #[from] ReceiveStaticEventError<JsSigner, JsChangeId, JsEventHandler>,
 );
 
 impl From<JsReceiveStaticEventError> for JsValue {
@@ -500,8 +524,8 @@ mod tests {
             bh.expand_prekeys().await.unwrap();
             let doc = bh.generate_doc(vec![], vec![0].into(), vec![]).await?;
             let content = vec![1, 2, 3, 4];
-            let pred_refs = vec![JsChangeRef::new(vec![10, 11, 12])];
-            let content_ref = JsChangeRef::new(vec![13, 14, 15]);
+            let pred_refs = vec![JsChangeId::new(vec![10, 11, 12])];
+            let content_ref = JsChangeId::new(vec![13, 14, 15]);
             let encrypted = bh
                 .try_encrypt(doc.clone(), content_ref.clone(), pred_refs, &content)
                 .await?;
@@ -509,7 +533,7 @@ mod tests {
             assert_eq!(content, decrypted);
             bh.force_pcs_update(&doc).await?;
             let content_2 = vec![5, 6, 7, 8, 9];
-            let content_ref_2 = JsChangeRef::new(vec![16, 17, 18]);
+            let content_ref_2 = JsChangeId::new(vec![16, 17, 18]);
             let pred_refs_2 = vec![content_ref];
             let encrypted_2 = bh
                 .try_encrypt(doc.clone(), content_ref_2, pred_refs_2, &content_2)

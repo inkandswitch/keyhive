@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::{
-    change_ref::JsChangeRef, ciphertext_store::JsCiphertextStore, event_handler::JsEventHandler,
+    change_id::JsChangeId, ciphertext_store::JsCiphertextStore, event_handler::JsEventHandler,
     keyhive::JsKeyhive, signer::JsSigner,
 };
 use derive_more::{Display, From, Into};
@@ -14,7 +14,7 @@ use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, From, Into)]
 #[wasm_bindgen(js_name = Archive)]
-pub struct JsArchive(pub(crate) Archive<JsChangeRef>);
+pub struct JsArchive(pub(crate) Archive<JsChangeId>);
 
 #[wasm_bindgen(js_class = Archive)]
 impl JsArchive {
@@ -53,10 +53,10 @@ impl JsArchive {
 }
 
 #[derive(Debug, Display, Error)]
-pub struct JsTryFromArchiveError(TryFromArchiveError<JsSigner, JsChangeRef, JsEventHandler>);
+pub struct JsTryFromArchiveError(TryFromArchiveError<JsSigner, JsChangeId, JsEventHandler>);
 
-impl From<TryFromArchiveError<JsSigner, JsChangeRef, JsEventHandler>> for JsTryFromArchiveError {
-    fn from(err: TryFromArchiveError<JsSigner, JsChangeRef, JsEventHandler>) -> Self {
+impl From<TryFromArchiveError<JsSigner, JsChangeId, JsEventHandler>> for JsTryFromArchiveError {
+    fn from(err: TryFromArchiveError<JsSigner, JsChangeId, JsEventHandler>) -> Self {
         JsTryFromArchiveError(err)
     }
 }

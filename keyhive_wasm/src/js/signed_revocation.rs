@@ -1,5 +1,5 @@
 use super::{
-    change_ref::JsChangeRef, event_handler::JsEventHandler, revocation::JsRevocation,
+    change_id::JsChangeId, event_handler::JsEventHandler, revocation::JsRevocation,
     signer::JsSigner,
 };
 use dupe::Dupe;
@@ -13,7 +13,7 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(js_name = SignedRevocation)]
 #[derive(Debug, Dupe, Clone)]
 pub struct JsSignedRevocation(
-    pub(crate) Arc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>,
+    pub(crate) Arc<Signed<Revocation<JsSigner, JsChangeId, JsEventHandler>>>,
 );
 
 #[wasm_bindgen(js_class = SignedRevocation)]
@@ -38,13 +38,13 @@ impl JsSignedRevocation {
     }
 }
 
-impl From<Arc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>> for JsSignedRevocation {
-    fn from(signed: Arc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>>) -> Self {
+impl From<Arc<Signed<Revocation<JsSigner, JsChangeId, JsEventHandler>>>> for JsSignedRevocation {
+    fn from(signed: Arc<Signed<Revocation<JsSigner, JsChangeId, JsEventHandler>>>) -> Self {
         Self(signed)
     }
 }
 
-impl From<JsSignedRevocation> for Arc<Signed<Revocation<JsSigner, JsChangeRef, JsEventHandler>>> {
+impl From<JsSignedRevocation> for Arc<Signed<Revocation<JsSigner, JsChangeId, JsEventHandler>>> {
     fn from(js_signed: JsSignedRevocation) -> Self {
         js_signed.0
     }

@@ -1,11 +1,11 @@
-use super::change_ref::JsChangeRef;
+use super::change_id::JsChangeId;
 use keyhive_core::crypto::encrypted::EncryptedContent;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Encrypted)]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct JsEncrypted(pub(crate) EncryptedContent<Vec<u8>, JsChangeRef>);
+pub struct JsEncrypted(pub(crate) EncryptedContent<Vec<u8>, JsChangeId>);
 
 #[wasm_bindgen(js_class = Encrypted)]
 impl JsEncrypted {
@@ -40,8 +40,8 @@ impl JsEncrypted {
     }
 }
 
-impl From<EncryptedContent<Vec<u8>, JsChangeRef>> for JsEncrypted {
-    fn from(encrypted: EncryptedContent<Vec<u8>, JsChangeRef>) -> Self {
+impl From<EncryptedContent<Vec<u8>, JsChangeId>> for JsEncrypted {
+    fn from(encrypted: EncryptedContent<Vec<u8>, JsChangeId>) -> Self {
         JsEncrypted(encrypted)
     }
 }

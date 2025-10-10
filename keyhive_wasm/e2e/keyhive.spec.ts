@@ -119,7 +119,9 @@ test.describe("Keyhive", async () => {
       const changeRef = new ChangeRef(new Uint8Array([1, 2, 3]));
 
       const g1 = await kh.generateGroup([]);
-      const g2 = await kh.generateGroup([g1.toPeer()]);
+      const arr = [g1.toPeer()];
+      const g2 = await kh.generateGroup(arr);
+      const _ = await kh.generateGroup(arr);
       const d1 = await kh.generateDocument([g2.toPeer()], changeRef, []);
       await kh.generateGroup([d1.toPeer()]);
       await kh.generateGroup([g2.toPeer(), d1.toPeer()]);

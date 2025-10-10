@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::{base64::Base64, change_ref::JsChangeRef};
+use super::{base64::Base64, change_id::JsChangeId};
 use keyhive_core::{
     cgka::operation::CgkaOperation,
     crypto::{digest::Digest, encrypted::EncryptedContent, signed::Signed},
@@ -33,7 +33,7 @@ impl JsCiphertextStore {
     }
 }
 
-impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
+impl CiphertextStore<JsChangeId, Vec<u8>> for JsCiphertextStore {
     #[cfg(feature = "web-sys")]
     type GetCiphertextError = JsGetCiphertextError;
     type MarkDecryptedError = JsRemoveCiphertextError;
@@ -43,8 +43,8 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
 
     async fn get_ciphertext(
         &self,
-        id: &JsChangeRef,
-    ) -> Result<Option<Arc<EncryptedContent<Vec<u8>, JsChangeRef>>>, Self::GetCiphertextError> {
+        id: &JsChangeId,
+    ) -> Result<Option<Arc<EncryptedContent<Vec<u8>, JsChangeId>>>, Self::GetCiphertextError> {
         match self.inner {
             JsCiphertextStoreInner::Memory(ref mem_store) => {
                 Ok(mem_store.get_by_content_ref(id).await)
@@ -73,7 +73,7 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
     async fn get_ciphertext_by_pcs_update(
         &self,
         pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<Vec<Arc<EncryptedContent<Vec<u8>, JsChangeRef>>>, Self::GetCiphertextError> {
+    ) -> Result<Vec<Arc<EncryptedContent<Vec<u8>, JsChangeId>>>, Self::GetCiphertextError> {
         match self.inner {
             JsCiphertextStoreInner::Memory(ref mem_store) => {
                 Ok(mem_store.get_by_pcs_update(pcs_update).await)
@@ -111,7 +111,7 @@ impl CiphertextStore<JsChangeRef, Vec<u8>> for JsCiphertextStore {
         }
     }
 
-    async fn mark_decrypted(&self, id: &JsChangeRef) -> Result<(), Self::MarkDecryptedError> {
+    async fn mark_decrypted(&self, id: &JsChangeId) -> Result<(), Self::MarkDecryptedError> {
         match self.inner {
             JsCiphertextStoreInner::Memory(ref store) => {
                 store.remove_all(id).await;
@@ -160,7 +160,7 @@ impl JsGetCiphertextError {
 
 #[derive(Debug, Clone)]
 pub enum JsCiphertextStoreInner {
-    Memory(MemoryCiphertextStore<JsChangeRef, Vec<u8>>),
+    Memory(MemoryCiphertextStore<JsChangeId, Vec<u8>>),
 
     #[cfg(feature = "web-sys")]
     WebStorage(web_sys::Storage),

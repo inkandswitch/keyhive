@@ -1,12 +1,13 @@
 use crate::js::membered::JsMembered;
 
 use super::{
-    agent::JsAgent, capability::Capability, change_ref::JsChangeRef, event_handler::JsEventHandler,
+    agent::JsAgent, capability::Capability, change_id::JsChangeId, event_handler::JsEventHandler,
     group_id::JsGroupId, identifier::JsIdentifier, peer::JsPeer, signer::JsSigner,
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
 use futures::lock::Mutex;
+use keyhive_convert_derive::keyhive_convert;
 use keyhive_core::principal::{
     agent::Agent,
     group::{id::GroupId, Group},
@@ -20,9 +21,10 @@ use wasm_bindgen::prelude::*;
 #[derive(Debug, Clone, Dupe, Into, From)]
 pub struct JsGroup {
     pub(crate) group_id: GroupId,
-    pub(crate) inner: Arc<Mutex<Group<JsSigner, JsChangeRef, JsEventHandler>>>,
+    pub(crate) inner: Arc<Mutex<Group<JsSigner, JsChangeId, JsEventHandler>>>,
 }
 
+#[keyhive_convert] // FIXME better name
 #[wasm_bindgen(js_class = Group)]
 impl JsGroup {
     #[wasm_bindgen(getter)]

@@ -1,5 +1,5 @@
 use super::{
-    change_ref::JsChangeRef, event_handler::JsEventHandler, identifier::JsIdentifier,
+    change_id::JsChangeId, event_handler::JsEventHandler, identifier::JsIdentifier,
     signer::JsSigner,
 };
 use derive_more::{Deref, Display, From, Into};
@@ -8,7 +8,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Agent)]
 #[derive(Debug, Clone, From, Into, Deref, Display)]
-pub struct JsAgent(pub(crate) Agent<JsSigner, JsChangeRef, JsEventHandler>);
+pub struct JsAgent(pub(crate) Agent<JsSigner, JsChangeId, JsEventHandler>);
 
 #[wasm_bindgen(js_class = Agent)]
 impl JsAgent {

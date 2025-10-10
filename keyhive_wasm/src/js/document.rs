@@ -1,11 +1,12 @@
 use crate::js::{document_id::JsDocumentId, membered::JsMembered};
 
 use super::{
-    agent::JsAgent, change_ref::JsChangeRef, event_handler::JsEventHandler,
-    identifier::JsIdentifier, peer::JsPeer, signer::JsSigner,
+    agent::JsAgent, change_id::JsChangeId, event_handler::JsEventHandler, identifier::JsIdentifier,
+    peer::JsPeer, signer::JsSigner,
 };
 use dupe::Dupe;
 use futures::lock::Mutex;
+use keyhive_convert_derive::keyhive_convert;
 use keyhive_core::principal::{
     agent::Agent,
     document::{id::DocumentId, Document},
@@ -19,9 +20,10 @@ use wasm_bindgen::prelude::*;
 #[derive(Debug, Clone, Dupe)]
 pub struct JsDocument {
     pub(crate) doc_id: DocumentId,
-    pub(crate) inner: Arc<Mutex<Document<JsSigner, JsChangeRef, JsEventHandler>>>,
+    pub(crate) inner: Arc<Mutex<Document<JsSigner, JsChangeId, JsEventHandler>>>,
 }
 
+#[keyhive_convert] // FIXME better name
 #[wasm_bindgen(js_class = Document)]
 impl JsDocument {
     #[wasm_bindgen(getter)]

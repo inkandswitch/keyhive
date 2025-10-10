@@ -4,7 +4,7 @@ pub mod agent;
 pub mod archive;
 pub mod capability;
 pub mod cgka_operation;
-pub mod change_ref;
+pub mod change_id;
 pub mod ciphertext_store;
 pub mod contact_card;
 pub mod delegation;

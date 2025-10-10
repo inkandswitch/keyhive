@@ -1,5 +1,6 @@
 use super::base64::Base64;
 use derive_more::{From, Into};
+use keyhive_convert_derive::keyhive_convert;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -7,10 +8,11 @@ use wasm_bindgen::prelude::*;
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Into, From,
 )]
-pub struct JsChangeRef(pub(crate) Vec<u8>);
+pub struct JsChangeId(pub(crate) Vec<u8>);
 
+#[keyhive_convert] // FIXME better name
 #[wasm_bindgen(js_class = ChangeRef)]
-impl JsChangeRef {
+impl JsChangeId {
     #[wasm_bindgen(constructor)]
     pub fn new(bytes: Vec<u8>) -> Self {
         Self(bytes)

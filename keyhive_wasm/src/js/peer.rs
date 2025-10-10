@@ -1,5 +1,5 @@
 use super::{
-    change_ref::JsChangeRef, event_handler::JsEventHandler, identifier::JsIdentifier,
+    change_id::JsChangeId, event_handler::JsEventHandler, identifier::JsIdentifier,
     signer::JsSigner,
 };
 use dupe::Dupe;
@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Peer)]
 #[derive(Debug, Clone, Dupe)]
-pub struct JsPeer(pub(crate) Peer<JsSigner, JsChangeRef, JsEventHandler>);
+pub struct JsPeer(pub(crate) Peer<JsSigner, JsChangeId, JsEventHandler>);
 
 #[keyhive_convert]
 #[wasm_bindgen(js_class = Peer)]

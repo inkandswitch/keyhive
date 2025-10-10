@@ -1,5 +1,5 @@
 use super::{
-    change_ref::JsChangeRef, event_handler::JsEventHandler, history::JsHistory,
+    change_id::JsChangeId, event_handler::JsEventHandler, history::JsHistory,
     identifier::JsIdentifier, signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use derive_more::{From, Into};
@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Revocation)]
 #[derive(Debug, Clone, From, Into)]
-pub struct JsRevocation(pub(crate) Revocation<JsSigner, JsChangeRef, JsEventHandler>);
+pub struct JsRevocation(pub(crate) Revocation<JsSigner, JsChangeId, JsEventHandler>);
 
 #[wasm_bindgen(js_class = Revocation)]
 impl JsRevocation {

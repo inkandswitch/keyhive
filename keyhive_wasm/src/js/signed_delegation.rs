@@ -1,5 +1,5 @@
 use super::{
-    change_ref::JsChangeRef, delegation::JsDelegation, event_handler::JsEventHandler,
+    change_id::JsChangeId, delegation::JsDelegation, event_handler::JsEventHandler,
     signer::JsSigner,
 };
 use derive_more::{From, Into};
@@ -14,7 +14,7 @@ use wasm_bindgen::prelude::*;
 #[derive(Debug, Clone, Dupe, From, Into)]
 #[wasm_bindgen(js_name = SignedDelegation)]
 pub struct JsSignedDelegation(
-    pub(crate) Arc<Signed<Delegation<JsSigner, JsChangeRef, JsEventHandler>>>,
+    pub(crate) Arc<Signed<Delegation<JsSigner, JsChangeId, JsEventHandler>>>,
 );
 
 #[wasm_bindgen(js_class = SignedDelegation)]
