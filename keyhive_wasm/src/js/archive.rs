@@ -47,7 +47,7 @@ impl JsArchive {
             Arc::new(Mutex::new(OsRng)),
         )
         .await
-        .map_err(|e| JsTryFromArchiveError(e))?
+        .map_err(JsTryFromArchiveError)?
         .into())
     }
 }

@@ -1234,10 +1234,9 @@ impl<
             if active_id == added_id {
                 let sk = {
                     let locked_prekeys = locked_active.prekey_pairs.lock().await;
-                    locked_prekeys
+                    *locked_prekeys
                         .get(&pk)
                         .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?
-                        .clone()
                 };
                 doc.lock()
                     .await
@@ -1399,10 +1398,7 @@ impl<
         for (k, v) in archive.individuals.iter() {
             individuals.insert(*k, Arc::new(Mutex::new(v.clone())));
         }
-        individuals.insert(
-            archive.active.individual.id().into(),
-            raw_active.individual.dupe(),
-        );
+        individuals.insert(archive.active.individual.id(), raw_active.individual.dupe());
 
         let active = Arc::new(Mutex::new(raw_active));
 
@@ -1682,18 +1678,6 @@ impl<
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
         tracing::debug!("executing Keyhive::ingest_unsorted_static_events()");
         let mut epoch = events;
-
-        // FIXME: Remove
-        tracing::debug!("--Events (len: {:?}):", epoch.len());
-        for event in &epoch {
-            tracing::debug!("-- --event: {:?}", &event);
-            match event {
-                StaticEvent::Delegated(d) => {
-                    tracing::debug!("-- -- --delegate id: {:?}", &d.payload.delegate.to_bytes());
-                }
-                _ => {}
-            }
-        }
 
         loop {
             let mut next_epoch = vec![];

@@ -87,7 +87,7 @@ impl JsKeyhive {
     pub async fn individual(&self) -> JsIndividual {
         init_span!("JsKeyhive::individual");
         JsIndividual {
-            id: self.0.id().clone(),
+            id: self.0.id(),
             inner: self.0.individual().await.dupe(),
         }
     }
@@ -200,7 +200,7 @@ impl JsKeyhive {
 
         Ok(self
             .0
-            .try_encrypt_content(doc.inner.dupe(), &content_ref, &pred_refs, content)
+            .try_encrypt_content(doc.inner.dupe(), content_ref, &pred_refs, content)
             .await?
             .into())
     }
@@ -310,7 +310,6 @@ impl JsKeyhive {
         self.0
             .contact_card()
             .await
-            .map(|c| c.clone())
             .map(Into::into)
             .map_err(Into::into)
     }
@@ -363,7 +362,7 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = docMemberCapabilities)]
     pub async fn doc_member_capabilities(&self, doc_id: &JsDocumentId) -> Vec<Membership> {
         init_span!("JsKeyhive::doc_member_capabilities");
-        if let Some(doc) = self.0.get_document(doc_id.clone().0).await {
+        if let Some(doc) = self.0.get_document(doc_id.0).await {
             let transitive_members = { doc.lock().await.transitive_members().await };
             transitive_members
                 .into_iter()
@@ -391,10 +390,9 @@ impl JsKeyhive {
         doc_id: &JsDocumentId,
     ) -> Option<JsAccess> {
         init_span!("JsKeyhive::access_for_doc");
-        let doc = self.0.get_document(doc_id.clone().0).await?;
+        let doc = self.0.get_document(doc_id.0).await?;
         let mems = { doc.lock().await.transitive_members().await };
-        mems.get(&id.clone().0)
-            .map(|(_, access)| JsAccess((*access).clone()))
+        mems.get(&id.0).map(|(_, access)| JsAccess(*access))
     }
 
     #[wasm_bindgen(js_name = intoArchive)]
