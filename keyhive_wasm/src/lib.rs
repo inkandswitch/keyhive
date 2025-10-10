@@ -3,8 +3,9 @@ pub(crate) mod macros;
 pub mod js;
 pub use js::keyhive::JsKeyhive;
 
-use tracing_wasm::WASMLayerConfigBuilder;
+// use wasm_tracing::WASMLayerConfigBuilder;
 use wasm_bindgen::prelude::*;
+use wasm_tracing::WasmLayerConfig;
 
 /// Panic hook lets us get better error messages if our Rust code ever panics.
 ///
@@ -14,11 +15,9 @@ use wasm_bindgen::prelude::*;
 pub fn set_panic_hook() {
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
-    tracing_wasm::set_as_global_default_with_config(
-        WASMLayerConfigBuilder::new()
-            .set_max_level(tracing::Level::TRACE)
-            .build(),
-    );
+    let mut config = WasmLayerConfig::new();
+    config.set_max_level(tracing::Level::TRACE);
+    wasm_tracing::set_as_global_default_with_config(config).expect("FIXME");
     tracing::info!("We've just set panic hook");
     tracing::debug!("We've just set panic hook panic hook");
 }
