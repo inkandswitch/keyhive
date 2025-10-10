@@ -3,15 +3,15 @@ use super::{
     signer::JsSigner,
 };
 use dupe::Dupe;
-use keyhive_convert_derive::keyhive_convert;
 use keyhive_core::principal::peer::Peer;
 use wasm_bindgen::prelude::*;
+use wasm_refgen::wasm_refgen;
 
 #[wasm_bindgen(js_name = Peer)]
 #[derive(Debug, Clone, Dupe)]
 pub struct JsPeer(pub(crate) Peer<JsSigner, JsChangeId, JsEventHandler>);
 
-#[keyhive_convert]
+#[wasm_refgen]
 #[wasm_bindgen(js_class = Peer)]
 impl JsPeer {
     #[wasm_bindgen(getter)]

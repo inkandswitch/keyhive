@@ -35,7 +35,7 @@ use super::{
 };
 use derive_more::{From, Into};
 use dupe::{Dupe, IterDupedExt};
-use keyhive_convert_core::FromJsRef;
+use from_js_ref::FromJsRef;
 use keyhive_core::{
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
     principal::{agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError},

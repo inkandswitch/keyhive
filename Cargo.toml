@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
+    "from_js_ref",
     "keyhive_core",
     "keyhive_wasm",
-    "keyhive_convert_core",
-    "keyhive_convert_derive",
     "test-utils",
+    "wasm_refgen",
 ]
 
 [workspace.package]
@@ -52,3 +52,4 @@ bolero = { version = "0.11.1", features = ["arbitrary"] }
 arbitrary = { version = "1.4.1", features = ["derive"] }
 num = { version = "0.4.3", features = ["num-bigint"] }
 hex = "0.4.3"
+wasm-bindgen = "0.2.104"

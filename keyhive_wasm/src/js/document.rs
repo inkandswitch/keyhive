@@ -6,7 +6,6 @@ use super::{
 };
 use dupe::Dupe;
 use futures::lock::Mutex;
-use keyhive_convert_derive::keyhive_convert;
 use keyhive_core::principal::{
     agent::Agent,
     document::{id::DocumentId, Document},
@@ -15,6 +14,7 @@ use keyhive_core::principal::{
 };
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
+use wasm_refgen::wasm_refgen;
 
 #[wasm_bindgen(js_name = Document)]
 #[derive(Debug, Clone, Dupe)]
@@ -23,7 +23,7 @@ pub struct JsDocument {
     pub(crate) inner: Arc<Mutex<Document<JsSigner, JsChangeId, JsEventHandler>>>,
 }
 
-#[keyhive_convert] // FIXME better name
+#[wasm_refgen]
 #[wasm_bindgen(js_class = Document)]
 impl JsDocument {
     #[wasm_bindgen(getter)]

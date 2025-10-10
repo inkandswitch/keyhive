@@ -7,7 +7,6 @@ use super::{
 use derive_more::{From, Into};
 use dupe::Dupe;
 use futures::lock::Mutex;
-use keyhive_convert_derive::keyhive_convert;
 use keyhive_core::principal::{
     agent::Agent,
     group::{id::GroupId, Group},
@@ -16,6 +15,7 @@ use keyhive_core::principal::{
 };
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
+use wasm_refgen::wasm_refgen;
 
 #[wasm_bindgen(js_name = Group)]
 #[derive(Debug, Clone, Dupe, Into, From)]
@@ -24,7 +24,7 @@ pub struct JsGroup {
     pub(crate) inner: Arc<Mutex<Group<JsSigner, JsChangeId, JsEventHandler>>>,
 }
 
-#[keyhive_convert] // FIXME better name
+#[wasm_refgen]
 #[wasm_bindgen(js_class = Group)]
 impl JsGroup {
     #[wasm_bindgen(getter)]

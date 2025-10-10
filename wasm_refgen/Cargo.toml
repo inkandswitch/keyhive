@@ -1,5 +1,5 @@
 [package]
-name = "keyhive_convert_derive"
+name = "wasm_refgen"
 version = "0.1.0"
 description = "FIXME"
 
@@ -13,7 +13,7 @@ rust-version.workspace = true
 proc-macro = true
 
 [dependencies]
-keyhive_convert_core = { path = "../keyhive_convert_core" }
+from_js_ref = { path = "../from_js_ref" }
 
 base64-simd = "0.8.0"
 bincode = { workspace = true }

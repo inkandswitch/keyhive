@@ -4,14 +4,14 @@ use quote::{format_ident, quote};
 use syn::{parse_macro_input, spanned::Spanned, ImplItem, ImplItemFn, ItemImpl};
 
 #[proc_macro_attribute]
-pub fn keyhive_convert(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn wasm_refgen(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut impl_block = parse_macro_input!(item as ItemImpl);
 
     // Ensure this is an inherent impl (no trait)
     if impl_block.trait_.is_some() {
         return syn::Error::new(
             impl_block.trait_.as_ref().unwrap().1.span(),
-            "#[keyhive_convert] must be used on an inherent impl, not a trait impl",
+            "#[wasm_refgen] must be used on an inherent impl, not a trait impl",
         )
         .to_compile_error()
         .into();
@@ -57,7 +57,7 @@ pub fn keyhive_convert(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let extras = quote! {
-        impl ::keyhive_convert_core::FromJsRef for #ty_ident {
+        impl ::from_js_ref::FromJsRef for #ty_ident {
             type JsRef = #js_ref_ident;
 
             #[inline]
