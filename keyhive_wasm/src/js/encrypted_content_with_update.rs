@@ -1,5 +1,5 @@
 use super::{
-    change_ref::JsChangeRef, encrypted::JsEncrypted, signed_cgka_operation::JsSignedCgkaOperation,
+    change_id::JsChangeId, encrypted::JsEncrypted, signed_cgka_operation::JsSignedCgkaOperation,
 };
 use derive_more::{From, Into};
 use keyhive_core::principal::document::EncryptedContentWithUpdate;
@@ -7,7 +7,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = EncryptedContentWithUpdate)]
 #[derive(Debug, Clone, Into, From)]
-pub struct JsEncryptedContentWithUpdate(pub(crate) EncryptedContentWithUpdate<JsChangeRef>);
+pub struct JsEncryptedContentWithUpdate(pub(crate) EncryptedContentWithUpdate<JsChangeId>);
 
 #[wasm_bindgen(js_class = EncryptedContentWithUpdate)]
 impl JsEncryptedContentWithUpdate {

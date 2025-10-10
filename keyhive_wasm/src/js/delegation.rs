@@ -1,5 +1,5 @@
 use super::{
-    access::JsAccess, agent::JsAgent, change_ref::JsChangeRef, event_handler::JsEventHandler,
+    access::JsAccess, agent::JsAgent, change_id::JsChangeId, event_handler::JsEventHandler,
     history::JsHistory, signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use derive_more::{From, Into};
@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Delegation)]
 #[derive(Debug, Clone, From, Into)]
-pub struct JsDelegation(pub(crate) Delegation<JsSigner, JsChangeRef, JsEventHandler>);
+pub struct JsDelegation(pub(crate) Delegation<JsSigner, JsChangeId, JsEventHandler>);
 
 #[wasm_bindgen(js_class = Delegation)]
 impl JsDelegation {
@@ -35,7 +35,14 @@ impl JsDelegation {
     }
 }
 
-#[wasm_bindgen(js_name = DelegationError)]
-#[derive(Debug, Error, From, Into)]
+#[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsDelegationError(DelegationError);
+pub struct JsDelegationError(#[from] DelegationError);
+
+impl From<JsDelegationError> for JsValue {
+    fn from(err: JsDelegationError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("DelegationError");
+        err.into()
+    }
+}

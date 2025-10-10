@@ -59,7 +59,7 @@ async fn test_encrypt_to_added_member() -> TestResult {
 
     let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
 
-    let indie_bob = { bob.active().lock().await.individual().clone() };
+    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
     alice
         .add_member(
             Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
@@ -168,19 +168,25 @@ async fn test_decrypt_after_fork_and_merge() {
         .unwrap();
 
     let archive2 = alice.into_archive().await;
+    let indie = {
+        alice
+            .active()
+            .lock()
+            .await
+            .individual()
+            .lock()
+            .await
+            .clone()
+            .into()
+    };
+
     let mut events = log
         .0
         .lock()
         .await
         .clone()
         .into_iter()
-        .chain(
-            alice
-                .events_for_agent(&alice.individual().await.into())
-                .await
-                .unwrap()
-                .into_values(),
-        )
+        .chain(alice.events_for_agent(&indie).await.unwrap().into_values())
         .map(StaticEvent::from)
         .collect::<Vec<_>>();
 

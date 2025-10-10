@@ -20,7 +20,7 @@ use std::{
 /// Operations for updating prekeys.
 ///
 /// Note that the number of keys only ever increases.
-/// This prevents the case where all keys are remved and the user is unable to be
+/// This prevents the case where all keys are removed and the user is unable to be
 /// added to a [`Cgka`][crate::cgka::Cgka].
 #[derive(Debug, Clone, Dupe, PartialEq, Eq, Hash, Serialize, Deserialize, From, TryInto)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]

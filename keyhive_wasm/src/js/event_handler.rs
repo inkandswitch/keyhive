@@ -1,4 +1,4 @@
-use super::{change_ref::JsChangeRef, event::JsEvent, signer::JsSigner};
+use super::{change_id::JsChangeId, event::JsEvent, signer::JsSigner};
 use derive_more::{From, Into};
 use dupe::Dupe;
 use keyhive_core::{
@@ -39,12 +39,12 @@ impl PrekeyListener for JsEventHandler {
     }
 }
 
-impl MembershipListener<JsSigner, JsChangeRef> for JsEventHandler {
-    async fn on_delegation(&self, data: &Arc<Signed<Delegation<JsSigner, JsChangeRef, Self>>>) {
+impl MembershipListener<JsSigner, JsChangeId> for JsEventHandler {
+    async fn on_delegation(&self, data: &Arc<Signed<Delegation<JsSigner, JsChangeId, Self>>>) {
         self.call(Event::Delegated(data.dupe()).into())
     }
 
-    async fn on_revocation(&self, data: &Arc<Signed<Revocation<JsSigner, JsChangeRef, Self>>>) {
+    async fn on_revocation(&self, data: &Arc<Signed<Revocation<JsSigner, JsChangeId, Self>>>) {
         self.call(Event::Revoked(data.dupe()).into())
     }
 }

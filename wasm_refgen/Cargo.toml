@@ -1,0 +1,22 @@
+[package]
+name = "wasm_refgen"
+version = "0.1.0"
+description = "Macro for generating JS interface reference hack for wasm-bindgen"
+
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+from_js_ref = { path = "../from_js_ref" }
+wasm-bindgen = "0.2.104"
+
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = "2.0"
+heck = "0.5"

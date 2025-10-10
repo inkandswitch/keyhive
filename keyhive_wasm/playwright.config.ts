@@ -74,7 +74,7 @@ export default defineConfig({
 
   /* Run your local dev server before starting the tests */
   webServer: {
-    command: "http-server -p 6891 ./e2e/server/",
+    command: "npx http-server -p 6891 ./e2e/server/",
     port: 6891,
     timeout: 10 * 60 * 1000, // 10 minutes
     reuseExistingServer: !process.env.CI,

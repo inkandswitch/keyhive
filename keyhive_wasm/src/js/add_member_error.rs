@@ -1,15 +1,15 @@
 use keyhive_core::principal::document::AddMemberError;
 use thiserror::Error;
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsValue;
 
 #[derive(Debug, Error)]
-#[wasm_bindgen(js_name = AddMemberError)]
 #[error(transparent)]
 pub struct JsAddMemberError(#[from] pub(crate) AddMemberError);
 
-#[wasm_bindgen(js_class = "AddMemberError")]
-impl JsAddMemberError {
-    pub fn message(&self) -> String {
-        self.0.to_string()
+impl From<JsAddMemberError> for JsValue {
+    fn from(err: JsAddMemberError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("AddMemberError");
+        err.into()
     }
 }

@@ -2,20 +2,14 @@ use keyhive_core::crypto::signed::SigningError;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen(js_name = "SigningError")]
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsSigningError(Box<SigningError>);
+pub struct JsSigningError(#[from] SigningError);
 
-#[wasm_bindgen(js_class = "SigningError")]
-impl JsSigningError {
-    pub fn message(&self) -> String {
-        self.0.to_string()
-    }
-}
-
-impl From<SigningError> for JsSigningError {
-    fn from(e: SigningError) -> Self {
-        JsSigningError(Box::new(e))
+impl From<JsSigningError> for JsValue {
+    fn from(err: JsSigningError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("SigningError");
+        err.into()
     }
 }

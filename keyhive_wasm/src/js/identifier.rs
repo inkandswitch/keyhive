@@ -1,9 +1,10 @@
 use keyhive_core::principal::identifier::Identifier;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Identifier)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct JsIdentifier(pub(crate) Identifier);
 
 #[wasm_bindgen(js_class = Identifier)]

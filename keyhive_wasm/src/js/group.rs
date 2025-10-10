@@ -1,7 +1,7 @@
 use crate::js::membered::JsMembered;
 
 use super::{
-    agent::JsAgent, capability::Capability, change_ref::JsChangeRef, event_handler::JsEventHandler,
+    agent::JsAgent, capability::Capability, change_id::JsChangeId, event_handler::JsEventHandler,
     group_id::JsGroupId, identifier::JsIdentifier, peer::JsPeer, signer::JsSigner,
 };
 use derive_more::{From, Into};
@@ -15,14 +15,16 @@ use keyhive_core::principal::{
 };
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
+use wasm_refgen::wasm_refgen;
 
 #[wasm_bindgen(js_name = Group)]
 #[derive(Debug, Clone, Dupe, Into, From)]
 pub struct JsGroup {
     pub(crate) group_id: GroupId,
-    pub(crate) inner: Arc<Mutex<Group<JsSigner, JsChangeRef, JsEventHandler>>>,
+    pub(crate) inner: Arc<Mutex<Group<JsSigner, JsChangeId, JsEventHandler>>>,
 }
 
+#[wasm_refgen(js_ref = JsGroupRef)]
 #[wasm_bindgen(js_class = Group)]
 impl JsGroup {
     #[wasm_bindgen(getter)]
@@ -63,6 +65,7 @@ impl JsGroup {
 
     #[wasm_bindgen(js_name = toAgent)]
     pub fn to_agent(&self) -> JsAgent {
+        tracing::debug!("JsGroup::to_agent");
         JsAgent(Agent::Group(self.group_id, self.inner.dupe()))
     }
 

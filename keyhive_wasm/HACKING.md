@@ -14,6 +14,14 @@ each build package in the built package. Then we use the `"exports"` field in
 `package.json` to choose which package is used at load time. This does lead
 to a larger package size.
 
+### The `slim` package
+
+In some environments it's not possible to import WebAssembly modules directly.
+For these environments we provide a `slim` subpath export, which doesn't
+perform initialization and instead provides a function to initialize the
+module manually. This requires some additional build steps, which are
+in the `build_slim.js` file.
+
 ## Release Process
 
 Releases are automatically pushed to NPM by GitHub Actions when a release is

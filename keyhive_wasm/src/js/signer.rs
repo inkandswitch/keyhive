@@ -36,10 +36,14 @@ impl JsSigner {
     #[cfg(feature = "web-sys")]
     #[wasm_bindgen(js_name = generateWebCrypto)]
     pub async fn generate_web_crypto() -> Result<Self, JsGenerateWebCryptoError> {
-        let window = web_sys::window().ok_or(GenerateWebCryptoError::NoWindow)?;
-        let crypto = window
-            .crypto()
-            .map_err(|_| GenerateWebCryptoError::NoWebCrypto)?;
+        use js_sys::Reflect;
+        use web_sys::Crypto;
+
+        let crypto_obj = Reflect::get(&js_sys::global(), &"crypto".into())
+            .map_err(|_| GenerateWebCryptoError::NoCrypto)?;
+        let crypto = crypto_obj
+            .dyn_into::<Crypto>()
+            .map_err(|_| GenerateWebCryptoError::CryptoNotCrypto)?;
         let subtle = crypto.subtle();
 
         let usages: Vec<js_sys::JsString> =
@@ -87,10 +91,14 @@ impl JsSigner {
     pub async fn webcrypto_signer(
         keypair: web_sys::CryptoKeyPair,
     ) -> Result<Self, JsGenerateWebCryptoError> {
-        let window = web_sys::window().ok_or(GenerateWebCryptoError::NoWindow)?;
-        let crypto = window
-            .crypto()
-            .map_err(|_| GenerateWebCryptoError::NoWebCrypto)?;
+        use js_sys::Reflect;
+        use web_sys::Crypto;
+
+        let crypto_obj = Reflect::get(&js_sys::global(), &"crypto".into())
+            .map_err(|_| GenerateWebCryptoError::NoCrypto)?;
+        let crypto = crypto_obj
+            .dyn_into::<Crypto>()
+            .map_err(|_| GenerateWebCryptoError::CryptoNotCrypto)?;
         let subtle = crypto.subtle();
 
         let pk_buf_fut: JsFuture = subtle
@@ -184,11 +192,17 @@ impl AsyncSigner for JsSignerOptions {
 
             #[cfg(feature = "web-sys")]
             JsSignerOptions::WebCrypto { signing_key, .. } => {
-                let signature_promise = web_sys::window()
-                    .expect("window to exist")
-                    .crypto()
-                    .expect("crypto to exist")
-                    .subtle()
+                use js_sys::Reflect;
+                use web_sys::Crypto;
+
+                let crypto_obj =
+                    Reflect::get(&js_sys::global(), &"crypto".into()).expect("crypto to exist");
+                let crypto = crypto_obj
+                    .dyn_into::<Crypto>()
+                    .expect("crypto to be a Crypto object");
+                let subtle = crypto.subtle();
+
+                let signature_promise = subtle
                     .sign_with_object_and_u8_array(
                         &js_sys::JsString::from("Ed25519").into(),
                         &signing_key.clone(),
@@ -235,8 +249,11 @@ impl JsGenerateWebCryptoError {
 #[cfg(feature = "web-sys")]
 #[derive(Debug, Clone, Error)]
 pub enum GenerateWebCryptoError {
-    #[error("No window object found")]
-    NoWindow,
+    #[error("No crypto object found")]
+    NoCrypto,
+
+    #[error("globalthis.crypto object wasn't an instance of Crypto")]
+    CryptoNotCrypto,
 
     #[error("No web crypto object found")]
     NoWebCrypto,

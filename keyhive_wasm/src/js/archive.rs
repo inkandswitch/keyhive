@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::{
-    change_ref::JsChangeRef, ciphertext_store::JsCiphertextStore, event_handler::JsEventHandler,
+    change_id::JsChangeId, ciphertext_store::JsCiphertextStore, event_handler::JsEventHandler,
     keyhive::JsKeyhive, signer::JsSigner,
 };
 use derive_more::{Display, From, Into};
@@ -14,7 +14,7 @@ use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, From, Into)]
 #[wasm_bindgen(js_name = Archive)]
-pub struct JsArchive(pub(crate) Archive<JsChangeRef>);
+pub struct JsArchive(pub(crate) Archive<JsChangeId>);
 
 #[wasm_bindgen(js_class = Archive)]
 impl JsArchive {
@@ -36,44 +36,46 @@ impl JsArchive {
     pub async fn try_to_keyhive(
         &self,
         ciphertext_store: JsCiphertextStore,
-        signer: JsSigner,
+        signer: &JsSigner,
         event_handler: &js_sys::Function,
     ) -> Result<JsKeyhive, JsTryFromArchiveError> {
         Ok(Keyhive::try_from_archive(
             &self.0,
-            signer,
+            signer.clone(),
             ciphertext_store,
             event_handler.clone().into(),
             Arc::new(Mutex::new(OsRng)),
         )
         .await
-        .map_err(|e| JsTryFromArchiveError(Box::new(e)))?
+        .map_err(JsTryFromArchiveError)?
         .into())
     }
 }
 
-#[derive(Debug, Display, From, Into, Error)]
-#[wasm_bindgen(js_name = TryFromArchiveError)]
-pub struct JsTryFromArchiveError(
-    pub(crate) Box<TryFromArchiveError<JsSigner, JsChangeRef, JsEventHandler>>,
-);
+#[derive(Debug, Display, Error)]
+pub struct JsTryFromArchiveError(TryFromArchiveError<JsSigner, JsChangeId, JsEventHandler>);
 
-#[wasm_bindgen(js_class = TryFromArchiveError)]
-impl JsTryFromArchiveError {
-    #[wasm_bindgen(js_name = toError)]
-    pub fn to_error(self) -> JsError {
-        JsError::from(self)
+impl From<TryFromArchiveError<JsSigner, JsChangeId, JsEventHandler>> for JsTryFromArchiveError {
+    fn from(err: TryFromArchiveError<JsSigner, JsChangeId, JsEventHandler>) -> Self {
+        JsTryFromArchiveError(err)
     }
 }
 
-#[derive(Debug, Display, From, Into, Error)]
-#[wasm_bindgen(js_name = SerializationError)]
-pub struct JsSerializationError(pub(crate) bincode::Error);
+impl From<JsTryFromArchiveError> for JsValue {
+    fn from(err: JsTryFromArchiveError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("TryFromArchiveError");
+        err.into()
+    }
+}
 
-#[wasm_bindgen(js_class = SerializationError)]
-impl JsSerializationError {
-    #[wasm_bindgen(js_name = toError)]
-    pub fn to_error(self) -> JsError {
-        JsError::from(self)
+#[derive(Debug, Display, Error)]
+pub struct JsSerializationError(#[from] bincode::Error);
+
+impl From<JsSerializationError> for JsValue {
+    fn from(err: JsSerializationError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("SerializationError");
+        err.into()
     }
 }

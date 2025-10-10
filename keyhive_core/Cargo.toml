@@ -75,8 +75,7 @@ default = []
 debug_events = ["prettytable-rs"]
 mermaid_docs = ["aquamarine"]
 sendable = []
-test_utils = ["proptest", "proptest-derive", "ingest_static"]
-ingest_static = []
+test_utils = ["proptest", "proptest-derive"]
 
 [[bench]]
 name = "bench_cgka"

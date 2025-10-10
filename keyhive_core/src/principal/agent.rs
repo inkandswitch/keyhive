@@ -116,7 +116,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
                     let (id, prekey) = {
                         let locked = a.lock().await;
                         let id = locked.id();
-                        let prekey = *locked.pick_prekey(doc_id);
+                        let prekey = locked.pick_prekey(doc_id).await;
                         (id, prekey)
                     };
                     result.insert(id, prekey);
@@ -156,6 +156,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
                 .lock()
                 .await
                 .individual
+                .lock()
+                .await
                 .prekey_ops()
                 .values()
                 .cloned()

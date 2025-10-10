@@ -13,6 +13,7 @@ use crate::{
     listener::prekey::PrekeyListener,
 };
 use dupe::Dupe;
+use futures::lock::Mutex;
 use std::{collections::BTreeMap, sync::Arc};
 
 /// A well-known agent that can be used by anyone. ⚠ USE WITH CAUTION ⚠
@@ -69,9 +70,13 @@ impl Public {
         listener: L,
     ) -> Active<MemorySigner, T, L> {
         Active {
+            id: self.signer().verifying_key().into(),
             signer: self.signer(),
-            prekey_pairs: BTreeMap::from_iter([(self.share_key(), self.share_secret_key())]),
-            individual: self.individual(),
+            prekey_pairs: Arc::new(Mutex::new(BTreeMap::from_iter([(
+                self.share_key(),
+                self.share_secret_key(),
+            )]))),
+            individual: Arc::new(Mutex::new(self.individual())),
             listener,
             _phantom: std::marker::PhantomData,
         }

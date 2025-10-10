@@ -1,5 +1,5 @@
 use super::{
-    access::JsAccess, agent::JsAgent, change_ref::JsChangeRef, event_handler::JsEventHandler,
+    access::JsAccess, agent::JsAgent, change_id::JsChangeId, event_handler::JsEventHandler,
     signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use dupe::Dupe;
@@ -13,8 +13,8 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 #[derive(Debug, Clone, Dupe)]
 pub struct Capability {
-    pub(crate) who: Agent<JsSigner, JsChangeRef, JsEventHandler>,
-    pub(crate) proof: Arc<Signed<Delegation<JsSigner, JsChangeRef, JsEventHandler>>>,
+    pub(crate) who: Agent<JsSigner, JsChangeId, JsEventHandler>,
+    pub(crate) proof: Arc<Signed<Delegation<JsSigner, JsChangeId, JsEventHandler>>>,
 }
 
 #[wasm_bindgen]
