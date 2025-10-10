@@ -4,14 +4,14 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
-#[wasm_bindgen(js_name = ChangeRef)]
+#[wasm_bindgen(js_name = ChangeId)]
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Into, From,
 )]
 pub struct JsChangeId(pub(crate) Vec<u8>);
 
-#[wasm_refgen]
-#[wasm_bindgen(js_class = ChangeRef)]
+#[wasm_refgen(js_ref = JsChangeIdRef)]
+#[wasm_bindgen(js_class = ChangeId)]
 impl JsChangeId {
     #[wasm_bindgen(constructor)]
     pub fn new(bytes: Vec<u8>) -> Self {

@@ -11,7 +11,7 @@ use wasm_refgen::wasm_refgen;
 #[derive(Debug, Clone, Dupe)]
 pub struct JsPeer(pub(crate) Peer<JsSigner, JsChangeId, JsEventHandler>);
 
-#[wasm_refgen]
+#[wasm_refgen(js_ref = JsPeerRef)]
 #[wasm_bindgen(js_class = Peer)]
 impl JsPeer {
     #[wasm_bindgen(getter)]

@@ -23,7 +23,7 @@ pub struct JsDocument {
     pub(crate) inner: Arc<Mutex<Document<JsSigner, JsChangeId, JsEventHandler>>>,
 }
 
-#[wasm_refgen]
+#[wasm_refgen(js_ref = JsDocumentRef)]
 #[wasm_bindgen(js_class = Document)]
 impl JsDocument {
     #[wasm_bindgen(getter)]

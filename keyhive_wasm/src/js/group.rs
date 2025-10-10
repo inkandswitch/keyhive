@@ -24,7 +24,7 @@ pub struct JsGroup {
     pub(crate) inner: Arc<Mutex<Group<JsSigner, JsChangeId, JsEventHandler>>>,
 }
 
-#[wasm_refgen]
+#[wasm_refgen(js_ref = JsGroupRef)]
 #[wasm_bindgen(js_class = Group)]
 impl JsGroup {
     #[wasm_bindgen(getter)]

@@ -524,7 +524,7 @@ mod tests {
             bh.expand_prekeys().await.unwrap();
             let doc = bh.generate_doc(vec![], vec![0].into(), vec![]).await?;
             let content = vec![1, 2, 3, 4];
-            let pred_refs = vec![JsChangeId::new(vec![10, 11, 12])];
+            let pred_refs = vec![JsChangeId::new(vec![10, 11, 12]).into()];
             let content_ref = JsChangeId::new(vec![13, 14, 15]);
             let encrypted = bh
                 .try_encrypt(doc.clone(), content_ref.clone(), pred_refs, &content)
@@ -534,7 +534,7 @@ mod tests {
             bh.force_pcs_update(&doc).await?;
             let content_2 = vec![5, 6, 7, 8, 9];
             let content_ref_2 = JsChangeId::new(vec![16, 17, 18]);
-            let pred_refs_2 = vec![content_ref];
+            let pred_refs_2 = vec![content_ref.into()];
             let encrypted_2 = bh
                 .try_encrypt(doc.clone(), content_ref_2, pred_refs_2, &content_2)
                 .await?;

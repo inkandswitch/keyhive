@@ -1,13 +1,21 @@
 use heck::ToSnakeCase;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, spanned::Spanned, ImplItem, ImplItemFn, ItemImpl};
+use syn::{
+    parse::{Parse, ParseStream},
+    parse_macro_input,
+    spanned::Spanned,
+    token::Comma,
+    ImplItem, ImplItemFn, ItemImpl, Result, Token,
+};
 
 #[proc_macro_attribute]
-pub fn wasm_refgen(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn wasm_refgen(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as Args);
+    let js_ref_ident = args.js_ref;
+
     let mut impl_block = parse_macro_input!(item as ItemImpl);
 
-    // Ensure this is an inherent impl (no trait)
     if impl_block.trait_.is_some() {
         return syn::Error::new(
             impl_block.trait_.as_ref().unwrap().1.span(),
@@ -34,9 +42,8 @@ pub fn wasm_refgen(_attr: TokenStream, item: TokenStream) -> TokenStream {
         .to_string();
     let core_snake = core_name.to_snake_case();
 
-    let js_ref_ident = format_ident!("{}Ref", struct_name);
-    let upcast_tag = format!("__keyhive_to{}", core_name);
-    let method_ident = format_ident!("__keyhive_to_{}", core_snake);
+    let upcast_tag = format!("__wasm_refgen_to{}", core_name);
+    let method_ident = format_ident!("__wasm_refgen_to_{}", core_snake);
 
     let already_present = impl_block.items.iter().any(|it| {
         if let ImplItem::Fn(ImplItemFn { sig, .. }) = it {
@@ -66,6 +73,18 @@ pub fn wasm_refgen(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
 
+        impl From<#ty_ident> for #js_ref_ident {
+            fn from(v: #ty_ident) -> Self {
+                ::wasm_bindgen::JsValue::from(v).unchecked_into()
+            }
+        }
+
+        impl From<&#js_ref_ident> for #ty_ident {
+            fn from(js_ref: &#js_ref_ident) -> Self {
+                js_ref.#method_ident()
+            }
+        }
+
         #[::wasm_bindgen::prelude::wasm_bindgen]
         extern "C" {
             #[::wasm_bindgen::prelude::wasm_bindgen(typescript_type = #core_name)]
@@ -77,4 +96,38 @@ pub fn wasm_refgen(_attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     quote!(#impl_block #extras).into()
+}
+
+struct Args {
+    js_ref: syn::Ident,
+}
+
+impl Parse for Args {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let mut js_ref: Option<syn::Ident> = None;
+
+        while !input.is_empty() {
+            let key: syn::Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+
+            if key == "js_ref" {
+                js_ref = Some(input.parse()?);
+            } else {
+                return Err(syn::Error::new(
+                    key.span(),
+                    "unknown arg; expected `js_ref` or `ts`",
+                ));
+            }
+
+            if input.peek(Comma) {
+                let _ = input.parse::<Comma>();
+            }
+        }
+
+        let js_ref = js_ref.ok_or_else(|| {
+            syn::Error::new(input.span(), "missing required arg: js_ref = <Ident>")
+        })?;
+
+        Ok(Self { js_ref })
+    }
 }
