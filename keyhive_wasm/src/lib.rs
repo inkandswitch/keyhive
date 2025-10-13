@@ -3,7 +3,6 @@ pub(crate) mod macros;
 pub mod js;
 pub use js::keyhive::JsKeyhive;
 
-// use wasm_tracing::WASMLayerConfigBuilder;
 use wasm_bindgen::prelude::*;
 use wasm_tracing::WasmLayerConfig;
 
