@@ -42,10 +42,9 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 signature = "2.2"
 thiserror = "1.0"
 tracing = "0.1.40"
-# Temporarily using fork with support for `console` logging levels until the
-# PR is merged.
-# wasm-tracing = "2.1.0"
-wasm-tracing = { git = "https://github.com/jtfmumm/wasm-tracing", branch = "log-levels" }
+# Temporarily using commit with support for `console` logging levels until the
+# next release.
+wasm-tracing = { git = "https://github.com/dsgallups/wasm-tracing", rev = "8c9ed933539664119681b896badb2be933338765" }
 x25519-dalek = { version = "2.0", features = [
     "serde",
     "reusable_secrets",
