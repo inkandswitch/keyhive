@@ -205,8 +205,11 @@ async fn test_decrypt_after_fork_and_merge() {
         .await
         .unwrap();
 
-        keyhive.ingest_archive(archive2).await.unwrap();
-        keyhive.ingest_unsorted_static_events(events).await.unwrap();
+        keyhive.ingest_archive(archive2, &[]).await.unwrap();
+        keyhive
+            .ingest_unsorted_static_events(events, &[])
+            .await
+            .unwrap();
 
         keyhive
     };
