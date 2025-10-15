@@ -419,8 +419,7 @@ mod tests {
     use crate::{
         access::Access,
         crypto::signer::{memory::MemorySigner, sync_signer::SyncSigner},
-        principal::agent::Agent,
-        principal::individual::Individual,
+        principal::{agent::Agent, individual::Individual},
     };
     use dupe::Dupe;
     use futures::lock::Mutex;

@@ -6,7 +6,10 @@ use super::{
 };
 use derive_more::{Display, From, Into};
 use futures::lock::Mutex;
-use keyhive_core::{archive::Archive, keyhive::Keyhive, keyhive::TryFromArchiveError};
+use keyhive_core::{
+    archive::Archive,
+    keyhive::{Keyhive, TryFromArchiveError},
+};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

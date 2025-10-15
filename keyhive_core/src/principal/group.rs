@@ -923,10 +923,8 @@ pub enum RevokeMemberError {
 
 #[cfg(test)]
 mod tests {
-    use super::delegation::Delegation;
-    use super::*;
-    use crate::crypto::signer::memory::MemorySigner;
-    use crate::principal::active::Active;
+    use super::{delegation::Delegation, *};
+    use crate::{crypto::signer::memory::MemorySigner, principal::active::Active};
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
     use rand::rngs::OsRng;

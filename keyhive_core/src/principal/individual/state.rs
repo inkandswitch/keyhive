@@ -8,8 +8,7 @@ use crate::{
     transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
-use futures::prelude::*;
-use futures::stream::FuturesUnordered;
+use futures::{prelude::*, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
 
