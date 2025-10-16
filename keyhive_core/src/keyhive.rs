@@ -1696,6 +1696,11 @@ impl<
             }
 
             if next_epoch.len() == epoch_len {
+                tracing::debug!(
+                    "ingest_unsorted_static_events: Stuck on a fixed point: {:?}. Error: {:?}",
+                    epoch_len,
+                    err
+                );
                 // Stuck on a fixed point
                 tracing::warn!("Fixed point while ingesting static events");
                 return Err(err.unwrap());
