@@ -1496,7 +1496,7 @@ impl<
             );
         }
 
-        for (digest, static_op) in archive.topsorted_ops.iter() {
+        for (digest, static_op) in archive.topsorted_ops.iter().rev() {
             match static_op {
                 StaticMembershipOperation::Delegation(sd) => {
                     let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
