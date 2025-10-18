@@ -6,6 +6,18 @@ test.beforeEach(async ({ page }) => {
   await page.waitForFunction(() => !!window.keyhive);
 });
 
+const getTestContactCard = () => `
+  {
+    "Rotate": {
+      "payload": {
+        "old": [162,145,165,196,36,224,73,112,145,188,239,44,86,166,20,30,132,108,154,237,83,69,195,21,41,18,247,146,217,79,21,65],
+        "new": [65,22,115,210,58,181,17,14,148,30,90,73,154,200,20,81,107,120,237,144,159,70,19,25,122,11,238,169,191,239,222,18]
+      },
+      "issuer": [89,148,210,47,52,105,242,130,40,253,172,205,17,39,98,47,171,251,25,33,19,205,115,101,160,144,209,139,13,6,168,3],
+      "signature": [26,42,5,188,200,86,129,50,162,87,200,64,152,180,93,59,70,150,87,12,222,93,165,249,110,150,52,123,169,222,138,253,72,64,83,74,88,60,147,178,135,64,14,77,40,61,89,164,119,235,73,71,34,184,248,172,125,3,144,248,177,72,65,13]
+    }
+  }`;
+
 test.describe("Keyhive", async () => {
   test("constructor", async ({ page }) => {
     const out = await page.evaluate(async () => {
@@ -98,20 +110,11 @@ test.describe("Keyhive", async () => {
   });
 
   test.describe("archive", async () => {
-    const scenario = async () => {
+    const testContactCardJson = getTestContactCard();
+    const scenario = async (contactCardJson) => {
       const { Keyhive, Signer, Access, Archive, ChangeId, CiphertextStore, ContactCard, Individual } =
         window.keyhive
-      const testContactCard = ContactCard.fromJson(`
-        {
-          "Rotate": {
-            "payload": {
-              "old": [162,145,165,196,36,224,73,112,145,188,239,44,86,166,20,30,132,108,154,237,83,69,195,21,41,18,247,146,217,79,21,65],
-              "new": [65,22,115,210,58,181,17,14,148,30,90,73,154,200,20,81,107,120,237,144,159,70,19,25,122,11,238,169,191,239,222,18]
-            },
-            "issuer": [89,148,210,47,52,105,242,130,40,253,172,205,17,39,98,47,171,251,25,33,19,205,115,101,160,144,209,139,13,6,168,3],
-            "signature": [26,42,5,188,200,86,129,50,162,87,200,64,152,180,93,59,70,150,87,12,222,93,165,249,110,150,52,123,169,222,138,253,72,64,83,74,88,60,147,178,135,64,14,77,40,61,89,164,119,235,73,71,34,184,248,172,125,3,144,248,177,72,65,13]
-          }
-        }`);
+      const testContactCard = ContactCard.fromJson(contactCardJson);
 
       const signer = await Signer.generate();
       const ciphertextStore = CiphertextStore.newInMemory();
@@ -149,17 +152,17 @@ test.describe("Keyhive", async () => {
     }
 
     test("makes a new group", async ({ page }) => {
-      const out = await page.evaluate(scenario);
+      const out = await page.evaluate(scenario, testContactCardJson);
       expect(out.keyhive).toBeDefined();
     });
 
     test("serializes to bytes", async ({ page }) => {
-      const out = await page.evaluate(scenario);
+      const out = await page.evaluate(scenario, testContactCardJson);
       expect(out.archiveBytesIsUint8Array).toBe(true);
     });
 
     test("round trip", async ({ page }) => {
-      const out = await page.evaluate(scenario);
+      const out = await page.evaluate(scenario, testContactCardJson);
       expect(out.keyhive.id).toBe(out.roundTrip.id);
     });
   });
@@ -236,6 +239,64 @@ test.describe("Keyhive", async () => {
       expect(out.kh1Id).not.toBe(out.kh2Id);
       expect(out.ingestSuccess).toBe(true);
       expect(out.ingestError).toBeNull();
+    });
+
+    test("can load archive after revoking a delegation", async ({ page }) => {
+      const testContactCardJson = getTestContactCard();
+      const out = await page.evaluate(async (contactCardJson) => {
+        const { Keyhive, Signer, ChangeId, CiphertextStore, Archive, ContactCard, Access } = window.keyhive;
+
+        const testContactCard = ContactCard.fromJson(contactCardJson);
+
+        const signer = await Signer.generate();
+        const store = CiphertextStore.newInMemory();
+        const kh = await Keyhive.init(signer, store, () => {});
+        const changeId = new ChangeId(new Uint8Array([1, 2, 3]));
+        const doc = await kh.generateDocument([], changeId, []);
+
+        // Delegate to an individual
+        const individual = await kh.receiveContactCard(testContactCard);
+        const access = Access.tryFromString("write");
+        await kh.addMember(individual.toAgent(), doc.toMembered(), access, []);
+
+        // Revoke that individual
+        await kh.revokeMember(individual.toAgent(), true, doc.toMembered());
+
+        // Create an archive
+        const archive = await kh.toArchive();
+        const archiveBytes = archive.toBytes();
+
+        // Try to load the archive in a fresh keyhive
+        let loadError = null;
+        let loadSuccess = false;
+        try {
+          const freshStore = CiphertextStore.newInMemory();
+          const archiveToLoad = new Archive(archiveBytes);
+          const freshKh = await archiveToLoad.tryToKeyhive(
+            freshStore,
+            signer,
+          );
+          loadSuccess = true;
+        } catch (e) {
+          loadError = {
+            message: e.message,
+            name: e.name,
+            toString: e.toString(),
+          };
+        }
+
+        return {
+          loadSuccess,
+          loadError,
+        };
+      }, testContactCardJson);
+
+      if (!out.loadSuccess) {
+        console.log("Load failed with error:", JSON.stringify(out.loadError, null, 2));
+      }
+
+      expect(out.loadSuccess).toBe(true);
+      expect(out.loadError).toBeNull();
     });
   });
 });
