@@ -2108,10 +2108,13 @@ mod tests {
         let mut csprng = rand::rngs::OsRng;
         let sk = MemorySigner::generate(&mut csprng);
         let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], String>::new()));
-        let kh = Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::rngs::OsRng).await?;
+        let kh =
+            Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::rngs::OsRng).await?;
 
         let indie_sk = MemorySigner::generate(&mut csprng);
-        let indie = Arc::new(Mutex::new(Individual::generate(&indie_sk, &mut csprng).await?));
+        let indie = Arc::new(Mutex::new(
+            Individual::generate(&indie_sk, &mut csprng).await?,
+        ));
         kh.register_individual(indie.dupe()).await;
         let doc = kh.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         let doc_id = DocumentId(doc.lock().await.id());
@@ -2119,9 +2122,11 @@ mod tests {
 
         // Delegate to an individual and then revoke
         let indie_id = indie.lock().await.id();
-        let indie_agent = Agent::Individual(indie_id.into(), indie.dupe());
-        kh.add_member(indie_agent, &membered_doc, Access::Write, &[]).await?;
-        kh.revoke_member(indie_id.into(), true, &membered_doc).await?;
+        let indie_agent = Agent::Individual(indie_id, indie.dupe());
+        kh.add_member(indie_agent, &membered_doc, Access::Write, &[])
+            .await?;
+        kh.revoke_member(indie_id.into(), true, &membered_doc)
+            .await?;
 
         // Create an archive and try to load it into a fresh Keyhive
         let archive = kh.into_archive().await;
@@ -2131,7 +2136,8 @@ mod tests {
             Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], String>::new())),
             NoListener,
             Arc::new(Mutex::new(rand::rngs::OsRng)),
-        ).await?;
+        )
+        .await?;
 
         assert_eq!(kh2.verifying_key, archive.active.individual.verifying_key());
 

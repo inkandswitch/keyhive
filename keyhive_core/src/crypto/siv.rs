@@ -50,7 +50,7 @@ impl Siv {
 
     /// Convert to a [`chacha20poly1305::XNonce`].
     pub fn as_xnonce(&self) -> &chacha20poly1305::XNonce {
-        chacha20poly1305::XNonce::from_slice(&self.0)
+        (&self.0).into()
     }
 
     pub fn as_bytes(&self) -> &[u8; 24] {
@@ -72,7 +72,7 @@ impl From<[u8; 24]> for Siv {
 
 impl From<Siv> for chacha20poly1305::XNonce {
     fn from(siv: Siv) -> Self {
-        *Self::from_slice(&siv.0)
+        Self::from(siv.0)
     }
 }
 
