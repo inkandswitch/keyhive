@@ -44,6 +44,7 @@ use crate::{
         peer::Peer,
         public::Public,
     },
+    stats::Stats,
     store::{
         ciphertext::{memory::MemoryCiphertextStore, CausalDecryptionState, CiphertextStore},
         delegation::DelegationStore,
@@ -1725,6 +1726,16 @@ impl<
             events.values().cloned().map(Into::into).collect::<Vec<_>>(),
         )
         .await
+    }
+
+    pub async fn stats(&self) -> Stats {
+        Stats {
+            individuals: self.individuals.as_ref().lock().await.len() as u64,
+            groups: self.groups.as_ref().lock().await.len() as u64,
+            docs: self.docs.as_ref().lock().await.len() as u64,
+            delegations: self.delegations.0.lock().await.len() as u64,
+            revocations: self.revocations.0.lock().await.len() as u64,
+        }
     }
 }
 
