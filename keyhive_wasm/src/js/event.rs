@@ -1,13 +1,15 @@
+use crate::js::archive::JsSerializationError;
+
 use super::{
     change_id::JsChangeId, event_handler::JsEventHandler, signed_delegation::JsSignedDelegation,
     signed_revocation::JsSignedRevocation, signer::JsSigner,
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
-use keyhive_core::event::Event;
+use keyhive_core::event::{static_event::StaticEvent, Event};
 use wasm_bindgen::prelude::*;
 
-#[derive(Debug, Clone, From, Into)]
+#[derive(Debug, Clone, Hash, From, Into)]
 #[wasm_bindgen(js_name = Event)]
 pub struct JsEvent(pub(crate) Event<JsSigner, JsChangeId, JsEventHandler>);
 
@@ -42,6 +44,15 @@ impl JsEvent {
             Event::Revoked(r) => Some(r.dupe().into()),
             _ => None,
         }
+    }
+
+    /// Converts the underlying [`Event`] to a [`StaticEvent`] and then
+    /// serializes it.
+    #[wasm_bindgen(js_name = toBytes)]
+    pub fn to_bytes(&self) -> Result<Box<[u8]>, JsSerializationError> {
+        Ok(bincode::serialize(&StaticEvent::from(self.0.clone()))
+            .map_err(JsSerializationError::from)?
+            .into_boxed_slice())
     }
 }
 

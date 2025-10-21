@@ -64,6 +64,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::{Debug, Formatter},
     marker::PhantomData,
+    mem,
     sync::Arc,
 };
 use thiserror::Error;
@@ -102,10 +103,13 @@ pub struct Keyhive<
     /// All applied [`Revocation`]s
     revocations: RevocationStore<S, T, L>,
 
-    /// Obsever for [`Event`]s. Intended for running live updates.
+    /// [`StaticEvent`]s that are still awaiting dependencies.
+    pending_events: Arc<Mutex<Vec<Arc<StaticEvent<T>>>>>,
+
+    /// Observer for [`Event`]s. Intended for running live updates.
     event_listener: L,
 
-    /// Storeage for ciphertexts that cannot yet be decrypted.
+    /// Storage for ciphertexts that cannot yet be decrypted.
     ciphertext_store: C,
 
     /// Cryptographically secure (pseudo)random number generator.
@@ -158,6 +162,7 @@ impl<
             docs: Arc::new(Mutex::new(HashMap::new())),
             delegations: DelegationStore::new(),
             revocations: RevocationStore::new(),
+            pending_events: Arc::new(Mutex::new(Vec::new())),
             ciphertext_store,
             event_listener,
             csprng: Arc::new(Mutex::new(csprng)),
@@ -924,6 +929,110 @@ impl<
     }
 
     #[instrument(skip_all)]
+    pub async fn static_event_to_event(
+        &self,
+        static_event: StaticEvent<T>,
+    ) -> Result<Event<S, T, L>, StaticEventConversionError<S, T, L>> {
+        match static_event {
+            StaticEvent::PrekeysExpanded(op) => Ok(Event::PrekeysExpanded(Arc::new(*op))),
+            StaticEvent::PrekeyRotated(op) => Ok(Event::PrekeyRotated(Arc::new(*op))),
+            StaticEvent::CgkaOperation(op) => Ok(Event::CgkaOperation(Arc::new(*op))),
+            StaticEvent::Delegated(static_dlg) => {
+                let delegation = self.static_delegation_to_delegation(&static_dlg).await?;
+                Ok(Event::Delegated(Arc::new(Signed {
+                    issuer: static_dlg.issuer,
+                    signature: static_dlg.signature,
+                    payload: delegation,
+                })))
+            }
+            StaticEvent::Revoked(static_rev) => {
+                let revocation = self.static_revocation_to_revocation(&static_rev).await?;
+                Ok(Event::Revoked(Arc::new(Signed {
+                    issuer: static_rev.issuer,
+                    signature: static_rev.signature,
+                    payload: revocation,
+                })))
+            }
+        }
+    }
+
+    #[instrument(skip_all)]
+    async fn static_delegation_to_delegation(
+        &self,
+        static_dlg: &Signed<StaticDelegation<T>>,
+    ) -> Result<Delegation<S, T, L>, StaticEventConversionError<S, T, L>> {
+        let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
+            if let Some(proof_hash) = static_dlg.payload().proof {
+                let hash = proof_hash.into();
+                Some(
+                    self.delegations
+                        .get(&hash)
+                        .await
+                        .ok_or(StaticEventConversionError::MissingDelegation(hash))?,
+                )
+            } else {
+                None
+            };
+
+        let delegate_id = static_dlg.payload().delegate;
+        let delegate: Agent<S, T, L> = self
+            .get_agent(delegate_id)
+            .await
+            .ok_or(StaticEventConversionError::UnknownAgent(delegate_id))?;
+
+        let mut after_revocations = Vec::new();
+        for static_rev_hash in static_dlg.payload().after_revocations.iter() {
+            let rev_hash = static_rev_hash.into();
+            let resolved_rev = self
+                .revocations
+                .get(&rev_hash)
+                .await
+                .ok_or(StaticEventConversionError::MissingRevocation(rev_hash))?;
+            after_revocations.push(resolved_rev);
+        }
+
+        Ok(Delegation {
+            delegate,
+            proof,
+            can: static_dlg.payload().can,
+            after_revocations,
+            after_content: static_dlg.payload.after_content.clone(),
+        })
+    }
+
+    #[instrument(skip_all)]
+    async fn static_revocation_to_revocation(
+        &self,
+        static_rev: &Signed<StaticRevocation<T>>,
+    ) -> Result<Revocation<S, T, L>, StaticEventConversionError<S, T, L>> {
+        let revoke_hash = static_rev.payload.revoke.into();
+        let revoke: Arc<Signed<Delegation<S, T, L>>> = self
+            .delegations
+            .get(&revoke_hash)
+            .await
+            .ok_or(StaticEventConversionError::MissingDelegation(revoke_hash))?;
+
+        let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
+            if let Some(proof_hash) = static_rev.payload().proof {
+                let hash = proof_hash.into();
+                Some(
+                    self.delegations
+                        .get(&hash)
+                        .await
+                        .ok_or(StaticEventConversionError::MissingDelegation(hash))?,
+                )
+            } else {
+                None
+            };
+
+        Ok(Revocation {
+            revoke,
+            proof,
+            after_content: static_rev.payload.after_content.clone(),
+        })
+    }
+
+    #[instrument(skip_all)]
     pub async fn receive_prekey_op(&self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
         let id = Identifier(*key_op.issuer());
         let agent = if let Some(agent) = self.get_agent(id).await {
@@ -974,7 +1083,7 @@ impl<
     pub async fn receive_delegation(
         &self,
         static_dlg: &Signed<StaticDelegation<T>>,
-    ) -> Result<(), ReceieveStaticDelegationError<S, T, L>> {
+    ) -> Result<(), ReceiveStaticDelegationError<S, T, L>> {
         if self
             .delegations
             .contains_key(&Digest::hash(static_dlg).into())
@@ -987,45 +1096,12 @@ impl<
         // TODO add a Verified<T> newtype wapper
         static_dlg.try_verify()?;
 
-        let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
-            if let Some(proof_hash) = static_dlg.payload().proof {
-                let hash = proof_hash.into();
-                Some(
-                    self.delegations
-                        .get(&hash)
-                        .await
-                        .ok_or(MissingDependency(hash))?,
-                )
-            } else {
-                None
-            };
-
-        let delegate_id = static_dlg.payload().delegate;
-        let delegate: Agent<S, T, L> = self
-            .get_agent(delegate_id)
-            .await
-            .ok_or(ReceieveStaticDelegationError::UnknownAgent(delegate_id))?;
-
-        let mut after_revocations = Vec::new();
-        for static_rev_hash in static_dlg.payload().after_revocations.iter() {
-            let rev_hash = static_rev_hash.into();
-            let locked_revs = self.revocations.0.lock().await;
-            let resolved_rev = locked_revs
-                .get(&rev_hash)
-                .ok_or(MissingDependency(rev_hash))?;
-            after_revocations.push(resolved_rev.dupe());
-        }
+        let payload = self.static_delegation_to_delegation(static_dlg).await?;
 
         let delegation = Signed {
             issuer: static_dlg.issuer,
             signature: static_dlg.signature,
-            payload: Delegation {
-                delegate,
-                proof: proof.clone(),
-                can: static_dlg.payload().can,
-                after_revocations,
-                after_content: static_dlg.payload.after_content.clone(),
-            },
+            payload,
         };
 
         let subject_id = delegation.subject_id();
@@ -1093,7 +1169,7 @@ impl<
     pub async fn receive_revocation(
         &self,
         static_rev: &Signed<StaticRevocation<T>>,
-    ) -> Result<(), ReceieveStaticDelegationError<S, T, L>> {
+    ) -> Result<(), ReceiveStaticDelegationError<S, T, L>> {
         if self
             .revocations
             .contains_key(&Digest::hash(static_rev).into())
@@ -1105,34 +1181,12 @@ impl<
         // NOTE: this is the only place this gets parsed and this verification ONLY happens here
         static_rev.try_verify()?;
 
-        let revoke_hash = static_rev.payload.revoke.into();
-        let revoke: Arc<Signed<Delegation<S, T, L>>> = self
-            .delegations
-            .get(&revoke_hash)
-            .await
-            .ok_or(MissingDependency(revoke_hash))?;
-
-        let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
-            if let Some(proof_hash) = static_rev.payload().proof {
-                let hash = proof_hash.into();
-                Some(
-                    self.delegations
-                        .get(&hash)
-                        .await
-                        .ok_or(MissingDependency(hash))?,
-                )
-            } else {
-                None
-            };
+        let payload = self.static_revocation_to_revocation(static_rev).await?;
 
         let revocation = Signed {
             issuer: static_rev.issuer,
             signature: static_rev.signature,
-            payload: Revocation {
-                revoke,
-                proof,
-                after_content: static_rev.payload.after_content.clone(),
-            },
+            payload,
         };
 
         let id = revocation.subject_id();
@@ -1203,7 +1257,7 @@ impl<
     pub async fn receive_membership_op(
         &self,
         static_op: &StaticMembershipOperation<T>,
-    ) -> Result<(), ReceieveStaticDelegationError<S, T, L>> {
+    ) -> Result<(), ReceiveStaticDelegationError<S, T, L>> {
         match static_op {
             StaticMembershipOperation::Delegation(d) => self.receive_delegation(d).await?,
             StaticMembershipOperation::Revocation(r) => self.receive_revocation(r).await?,
@@ -1373,12 +1427,18 @@ impl<
             }
         }
 
+        let pending_events: Vec<_> = self.pending_events.lock().await
+            .iter()
+            .map(|event| event.as_ref().clone())
+            .collect();
+
         Archive {
             active,
             topsorted_ops,
             individuals,
             groups,
             docs,
+            pending_events,
         }
     }
 
@@ -1608,6 +1668,11 @@ impl<
             .await?;
         }
 
+        let mut pending_events = Vec::new();
+        for event in &archive.pending_events {
+            pending_events.push(Arc::new(event.clone()));
+        }
+
         Ok(Self {
             verifying_key: archive.active.individual.verifying_key(),
             active,
@@ -1616,6 +1681,7 @@ impl<
             docs: Arc::new(Mutex::new(docs)),
             delegations,
             revocations,
+            pending_events: Arc::new(Mutex::new(pending_events)),
             csprng,
             ciphertext_store,
             event_listener: listener,
@@ -1627,7 +1693,8 @@ impl<
     pub async fn ingest_archive(
         &self,
         archive: Archive<T>,
-    ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+    ) -> Result<Vec<Arc<StaticEvent<T>>>, ReceiveStaticEventError<S, T, L>> {
+        tracing::debug!("Keyhive::ingest_archive()");
         {
             let locked_active = self.active.lock().await;
             {
@@ -1662,8 +1729,7 @@ impl<
                 StaticMembershipOperation::Revocation(signed) => StaticEvent::Revoked(signed),
             })
             .collect::<Vec<_>>();
-        self.ingest_unsorted_static_events(events).await?;
-        Ok(())
+        Ok(self.ingest_unsorted_static_events(events).await)
     }
 
     #[instrument(skip_all)]
@@ -1674,8 +1740,14 @@ impl<
     #[instrument(level = "trace", skip_all)]
     pub async fn ingest_unsorted_static_events(
         &self,
-        events: Vec<StaticEvent<T>>,
-    ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+        mut events: Vec<StaticEvent<T>>,
+    ) -> Vec<Arc<StaticEvent<T>>> {
+        // FIXME: Some errors might not be recoverable on future attempts
+        // ) -> Result<Vec<Arc<StaticEvent<T>>>, ReceiveStaticEventError<S, T, L>> {
+        tracing::debug!("executing Keyhive::ingest_unsorted_static_events()");
+        for event in self.pending_events.as_ref().lock().await.iter() {
+            events.push(event.as_ref().clone());
+        }
         let mut epoch = events;
 
         loop {
@@ -1692,7 +1764,7 @@ impl<
 
             if next_epoch.is_empty() {
                 tracing::debug!("Finished ingesting static events");
-                return Ok(());
+                return Vec::new();
             }
 
             if next_epoch.len() == epoch_len {
@@ -1702,8 +1774,22 @@ impl<
                     err
                 );
                 // Stuck on a fixed point
-                tracing::warn!("Fixed point while ingesting static events");
-                return Err(err.unwrap());
+                tracing::warn!(
+                    "Fixed point while ingesting static events: {}",
+                    err.unwrap()
+                );
+                let new_pending: Vec<Arc<StaticEvent<T>>> = next_epoch
+                    .clone()
+                    .into_iter()
+                    .map(|e| Arc::new(e))
+                    .collect();
+                drop(mem::replace(
+                    &mut *self.pending_events.lock().await,
+                    new_pending.clone(),
+                ));
+                // FIXME: Some errors might not be recoverable on future attempts
+                return new_pending;
+                // return Err(err.unwrap());
             }
 
             epoch = next_epoch
@@ -1720,7 +1806,8 @@ impl<
         self.ingest_unsorted_static_events(
             events.values().cloned().map(Into::into).collect::<Vec<_>>(),
         )
-        .await
+        .await;
+        Ok(())
     }
 
     pub async fn stats(&self) -> Stats {
@@ -1856,7 +1943,7 @@ pub enum ReceiveStaticEventError<S: AsyncSigner, T: ContentRef, L: MembershipLis
     ReceiveCgkaOpError(#[from] ReceiveCgkaOpError),
 
     #[error(transparent)]
-    ReceieveStaticMembershipError(#[from] ReceieveStaticDelegationError<S, T, L>),
+    ReceiveStaticMembershipError(#[from] ReceiveStaticDelegationError<S, T, L>),
 }
 
 impl<S, T, L> ReceiveStaticEventError<S, T, L>
@@ -1869,14 +1956,14 @@ where
         match self {
             Self::ReceivePrekeyOpError(_) => false,
             Self::ReceiveCgkaOpError(e) => e.is_missing_dependency(),
-            Self::ReceieveStaticMembershipError(e) => e.is_missing_dependency(),
+            Self::ReceiveStaticMembershipError(e) => e.is_missing_dependency(),
         }
     }
 }
 
 #[derive(Error)]
 #[derive_where(Debug; T)]
-pub enum ReceieveStaticDelegationError<
+pub enum ReceiveStaticDelegationError<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
     L: MembershipListener<S, T> = NoListener,
@@ -1900,7 +1987,7 @@ pub enum ReceieveStaticDelegationError<
     UnknownAgent(Identifier),
 }
 
-impl<S, T, L> ReceieveStaticDelegationError<S, T, L>
+impl<S, T, L> ReceiveStaticDelegationError<S, T, L>
 where
     S: AsyncSigner,
     T: ContentRef,
@@ -1914,6 +2001,37 @@ where
             Self::GroupReceiveError(_) => false,
             Self::UnknownAgent(_) => true,
             Self::VerificationError(_) => false,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Error)]
+#[derive_where(Debug)]
+pub enum StaticEventConversionError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
+    #[error("Missing delegation: {0}")]
+    MissingDelegation(Digest<Signed<Delegation<S, T, L>>>),
+
+    #[error("Missing revocation: {0}")]
+    MissingRevocation(Digest<Signed<Revocation<S, T, L>>>),
+
+    #[error("Unknown agent: {0}")]
+    UnknownAgent(Identifier),
+}
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+    From<StaticEventConversionError<S, T, L>> for ReceiveStaticDelegationError<S, T, L>
+{
+    fn from(error: StaticEventConversionError<S, T, L>) -> Self {
+        match error {
+            StaticEventConversionError::MissingDelegation(hash) => {
+                ReceiveStaticDelegationError::MissingProof(MissingDependency(hash))
+            }
+            StaticEventConversionError::MissingRevocation(hash) => {
+                ReceiveStaticDelegationError::MissingRevocationDependency(MissingDependency(hash))
+            }
+            StaticEventConversionError::UnknownAgent(id) => {
+                ReceiveStaticDelegationError::UnknownAgent(id)
+            }
         }
     }
 }
@@ -1990,7 +2108,7 @@ pub enum ReceiveEventError<
     L: MembershipListener<S, T> = NoListener,
 > {
     #[error(transparent)]
-    ReceieveStaticDelegationError(#[from] ReceieveStaticDelegationError<S, T, L>),
+    ReceiveStaticDelegationError(#[from] ReceiveStaticDelegationError<S, T, L>),
 
     #[error(transparent)]
     ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
