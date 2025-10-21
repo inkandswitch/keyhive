@@ -3,8 +3,7 @@
 use super::{read_capability::ReadCap, symmetric_key::SymmetricKey};
 use crate::content::reference::ContentRef;
 use derivative::Derivative;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{de::DeserializeOwned, Deserialize, Serialize, Serializer};
 use std::{
     collections::{BTreeMap, HashMap},
     hash::{DefaultHasher, Hasher},

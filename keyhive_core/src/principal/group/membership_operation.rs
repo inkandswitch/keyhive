@@ -10,6 +10,7 @@ use crate::{
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{document::id::DocumentId, identifier::Identifier},
+    reversed::Reversed,
     util::content_addressed_map::CaMap,
 };
 use derive_more::{From, Into};
@@ -171,12 +172,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         )
     }
 
+    /// Returns operations in reverse topological order (i.e., dependencies come
+    /// later).
     #[allow(clippy::type_complexity)] // Clippy doens't like the returned pair
     #[instrument(skip_all)]
-    pub fn topsort(
+    pub fn reverse_topsort(
         delegation_heads: &CaMap<Signed<Delegation<S, T, L>>>,
         revocation_heads: &CaMap<Signed<Revocation<S, T, L>>>,
-    ) -> Vec<(
+    ) -> Reversed<(
         Digest<MembershipOperation<S, T, L>>,
         MembershipOperation<S, T, L>,
     )> {
@@ -351,8 +354,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
             }
         }
 
-        history.extend(dependencies);
-        history
+        dependencies.extend(history);
+        Reversed(dependencies)
     }
 }
 
@@ -419,8 +422,7 @@ mod tests {
     use crate::{
         access::Access,
         crypto::signer::{memory::MemorySigner, sync_signer::SyncSigner},
-        principal::agent::Agent,
-        principal::individual::Individual,
+        principal::{agent::Agent, individual::Individual},
     };
     use dupe::Dupe;
     use futures::lock::Mutex;
@@ -680,8 +682,9 @@ mod tests {
             let dlgs = CaMap::new();
             let revs = CaMap::new();
 
-            let observed = MembershipOperation::<MemorySigner, String>::topsort(&dlgs, &revs);
-            assert_eq!(observed, vec![]);
+            let observed =
+                MembershipOperation::<MemorySigner, String>::reverse_topsort(&dlgs, &revs);
+            assert_eq!(observed, Reversed(vec![]));
         }
 
         #[tokio::test]
@@ -694,10 +697,13 @@ mod tests {
             let dlgs = CaMap::from_iter_direct([dlg.dupe()]);
             let revs = CaMap::new();
 
-            let observed = MembershipOperation::topsort(&dlgs, &revs);
+            let observed = MembershipOperation::reverse_topsort(&dlgs, &revs);
             let expected = dlg.into();
 
-            assert_eq!(observed, vec![(Digest::hash(&expected), expected)]);
+            assert_eq!(
+                observed,
+                Reversed(vec![(Digest::hash(&expected), expected)])
+            );
         }
 
         #[tokio::test]
@@ -711,7 +717,7 @@ mod tests {
             let dlg_heads = CaMap::from_iter_direct([bob_dlg.dupe()]);
             let rev_heads = CaMap::new();
 
-            let observed = MembershipOperation::topsort(&dlg_heads, &rev_heads);
+            let observed = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
 
             let alice_op = alice_dlg.into();
             let bob_op = bob_dlg.into();
@@ -722,7 +728,7 @@ mod tests {
             ];
 
             assert_eq!(observed.len(), 2);
-            assert_eq!(observed, expected);
+            assert_eq!(observed, Reversed(expected));
         }
 
         #[tokio::test]
@@ -737,7 +743,7 @@ mod tests {
             let dlg_heads = CaMap::from_iter_direct([dan_dlg.dupe()]);
             let rev_heads = CaMap::new();
 
-            let observed = MembershipOperation::topsort(&dlg_heads, &rev_heads);
+            let observed = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
 
             let alice_op: MembershipOperation<MemorySigner, String> = alice_dlg.into();
             let alice_hash = Digest::hash(&alice_op);
@@ -752,7 +758,7 @@ mod tests {
             let c = (carol_hash, carol_op.clone());
             let d = (dan_hash, dan_op.clone());
 
-            assert_eq!(observed, vec![d, c, a]);
+            assert_eq!(observed, Reversed(vec![d, c, a]));
         }
 
         #[tokio::test]
@@ -847,7 +853,7 @@ mod tests {
             );
 
             let dlg_heads = CaMap::from_iter_direct([alice_to_dan.dupe(), bob_to_carol.dupe()]);
-            let mut sorted = MembershipOperation::topsort(&dlg_heads, &CaMap::new());
+            let mut sorted = MembershipOperation::reverse_topsort(&dlg_heads, &CaMap::new());
             sorted.reverse();
 
             assert!(sorted.len() == 3);
@@ -868,7 +874,7 @@ mod tests {
                 .unwrap();
 
             assert!(ab_idx < bc_idx);
-            assert!(ab_idx < ad_idx);
+            assert!(ad_idx < ab_idx);
         }
 
         #[tokio::test]
@@ -895,7 +901,7 @@ mod tests {
             let dlgs = CaMap::new();
             let revs = CaMap::from_iter_direct([alice_revokes_bob.dupe()]);
 
-            let mut observed = MembershipOperation::topsort(&dlgs, &revs);
+            let mut observed = MembershipOperation::reverse_topsort(&dlgs, &revs);
 
             let alice_op: MembershipOperation<MemorySigner, String> = alice_dlg.into();
             let alice_hash = Digest::hash(&alice_op);
@@ -942,7 +948,7 @@ mod tests {
             let rev_heads =
                 CaMap::from_iter_direct([alice_revokes_carol.dupe(), bob_revokes_dan.dupe()]);
 
-            let observed = MembershipOperation::topsort(&dlg_heads, &rev_heads);
+            let observed = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
 
             let alice_op: MembershipOperation<MemorySigner, String> = alice_dlg.clone().into();
             let alice_hash = Digest::hash(&alice_op);
@@ -975,6 +981,7 @@ mod tests {
 
             let len = observed.len();
 
+            // In reverse topological order, alice (with no dependencies) should be at the end
             assert_eq!(observed[len - 1], (alice_hash, alice_op));
 
             let pos_alice = observed

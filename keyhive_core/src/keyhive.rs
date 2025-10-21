@@ -1337,8 +1337,9 @@ impl<
         let topsorted_ops = {
             let delegations = self.delegations.0.lock().await;
             let revocations = self.revocations.0.lock().await;
-            MembershipOperation::<S, T, L>::topsort(&delegations, &revocations)
+            MembershipOperation::<S, T, L>::reverse_topsort(&delegations, &revocations)
                 .into_iter()
+                .rev()
                 .map(|(k, v)| (k.into(), v.into()))
                 .collect()
         };
@@ -1428,7 +1429,7 @@ impl<
             );
         }
 
-        for (digest, static_op) in archive.topsorted_ops.iter().rev() {
+        for (digest, static_op) in archive.topsorted_ops.iter() {
             match static_op {
                 StaticMembershipOperation::Delegation(sd) => {
                     let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
@@ -2145,7 +2146,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_receive_delegations_associately() {
+    async fn test_receive_delegations_associatively() {
         test_utils::init_logging();
 
         let hive1 = make_keyhive().await;
