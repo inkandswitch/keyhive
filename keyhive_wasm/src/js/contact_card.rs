@@ -1,5 +1,7 @@
 use derive_more::{Deref, Display, From, Into};
-use keyhive_core::{contact_card::ContactCard, crypto::verifiable::Verifiable, principal::individual::Individual};
+use keyhive_core::{
+    contact_card::ContactCard, crypto::verifiable::Verifiable, principal::individual::Individual,
+};
 use wasm_bindgen::prelude::*;
 
 use crate::js::agent::JsAgent;

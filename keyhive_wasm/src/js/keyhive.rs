@@ -1,7 +1,7 @@
 use crate::{
     js::{
         document_id::JsDocumentId, group_id::JsGroupId, individual::JsIndividual,
-        membership::Membership,
+        membership::Membership, stats::JsStats,
     },
     macros::init_span,
 };
@@ -416,6 +416,11 @@ impl JsKeyhive {
         tracing::debug!("JsKeyhive::ingest_archive");
         self.0.ingest_archive(archive.clone().0).await?;
         Ok(())
+    }
+
+    #[wasm_bindgen(js_name = stats)]
+    pub async fn stats(&self) -> JsStats {
+        JsStats(self.0.stats().await)
     }
 }
 
