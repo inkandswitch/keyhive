@@ -704,7 +704,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         // {dlg_dep => Set<dlgs that depend on it>}
         let mut reverse_dlg_dep_map: HashMap<[u8; 64], HashSet<[u8; 64]>> = HashMap::new();
 
-        let mut ops = MembershipOperation::topsort(
+        let mut ops = MembershipOperation::reverse_topsort(
             &self.state.delegation_heads,
             &self.state.revocation_heads,
         );
@@ -923,10 +923,8 @@ pub enum RevokeMemberError {
 
 #[cfg(test)]
 mod tests {
-    use super::delegation::Delegation;
-    use super::*;
-    use crate::crypto::signer::memory::MemorySigner;
-    use crate::principal::active::Active;
+    use super::{delegation::Delegation, *};
+    use crate::{crypto::signer::memory::MemorySigner, principal::active::Active};
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
     use rand::rngs::OsRng;

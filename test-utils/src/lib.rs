@@ -4,15 +4,14 @@ use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
 };
-use tracing::field::Field;
-use tracing::{span, Subscriber};
-use tracing_subscriber::field::VisitOutput;
-use tracing_subscriber::fmt::format::PrettyVisitor;
-use tracing_subscriber::fmt::FormatEvent;
-use tracing_subscriber::registry::LookupSpan;
+use tracing::{field::Field, span, Subscriber};
 use tracing_subscriber::{
-    field::RecordFields,
-    fmt::{format::Writer, FormatFields},
+    field::{RecordFields, VisitOutput},
+    fmt::{
+        format::{PrettyVisitor, Writer},
+        FormatEvent, FormatFields,
+    },
+    registry::LookupSpan,
 };
 
 lazy_static::lazy_static! {
