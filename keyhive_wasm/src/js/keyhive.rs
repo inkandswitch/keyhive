@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
 use crate::{
     js::{
-        document_id::JsDocumentId, group_id::JsGroupId, individual::JsIndividual,
-        membership::Membership, stats::JsStats,
+        archive::JsSerializationError, document_id::JsDocumentId, group_id::JsGroupId,
+        individual::JsIndividual, membership::Membership, stats::JsStats,
     },
     macros::init_span,
 };
@@ -37,6 +39,8 @@ use derive_more::{From, Into};
 use dupe::{Dupe, IterDupedExt};
 use from_js_ref::FromJsRef;
 use keyhive_core::{
+    crypto::digest::Digest,
+    event::static_event::StaticEvent,
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
     principal::{agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError},
 };
@@ -416,6 +420,44 @@ impl JsKeyhive {
         tracing::debug!("JsKeyhive::ingest_archive");
         self.0.ingest_archive(archive.clone().0).await?;
         Ok(())
+    }
+
+    #[wasm_bindgen(js_name = ingestEventsBytes)]
+    pub async fn ingest_events_bytes(
+        &mut self,
+        events_bytes_array: js_sys::Array,
+    ) -> Result<js_sys::Array, JsError> {
+        init_span!("JsKeyhive::ingest_events_bytes");
+        tracing::debug!("JsKeyhive::ingest_events_bytes");
+        let mut static_event_hash_to_bytes: HashMap<Digest<StaticEvent<JsChangeId>>, Vec<u8>> =
+            HashMap::new();
+        let mut static_events = Vec::new();
+
+        for i in 0..events_bytes_array.length() {
+            let js_value = events_bytes_array.get(i);
+            let event_bytes = js_sys::Uint8Array::from(js_value).to_vec();
+            let static_event: StaticEvent<JsChangeId> =
+                bincode::deserialize(&event_bytes).map_err(JsSerializationError::from)?;
+            static_event_hash_to_bytes.insert(Digest::hash(&static_event), event_bytes);
+            static_events.push(static_event);
+        }
+
+        let pending_events = self.0.ingest_unsorted_static_events(static_events).await;
+        let pending_events_bytes: Vec<Vec<u8>> = pending_events
+            .iter()
+            .filter_map(|event| {
+                let hash: Digest<StaticEvent<JsChangeId>> = Digest::hash(event.as_ref());
+                static_event_hash_to_bytes.get(&hash).cloned()
+            })
+            .collect();
+
+        let result = js_sys::Array::new();
+        for event_bytes in pending_events_bytes {
+            let uint8_array = js_sys::Uint8Array::from(event_bytes.as_slice());
+            result.push(&uint8_array);
+        }
+
+        Ok(result)
     }
 
     #[wasm_bindgen(js_name = stats)]
