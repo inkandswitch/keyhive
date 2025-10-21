@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 /// This is useful for sending over a network or storing to disk.
 /// However the references contained in `StaticEvent`s may be missing
 /// dependencies, unlike [`Event`][super::Event]s.
-#[derive(Debug, Clone, PartialEq, Eq, From, TryInto, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, From, Hash, TryInto, Serialize, Deserialize)]
 pub enum StaticEvent<T: ContentRef = [u8; 32]> {
     /// Prekeys were expanded.
     PrekeysExpanded(Box<Signed<AddKeyOp>>),
