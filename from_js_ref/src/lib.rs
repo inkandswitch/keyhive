@@ -7,7 +7,7 @@ pub trait FromJsRef: Sized {
     fn try_from_js_value(js_value: &JsValue) -> Option<Self> {
         js_value
             .dyn_ref::<Self::JsRef>()
-            .map(|js_ref| Self::from_js_ref(&js_ref))
+            .map(|js_ref| Self::from_js_ref(js_ref))
     }
 }
 
