@@ -35,11 +35,7 @@ pub fn wasm_refgen(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
-    let struct_name = ty_ident.to_string();
-    let core_name = struct_name
-        .strip_prefix("Js")
-        .unwrap_or(&struct_name)
-        .to_string();
+    let core_name = ty_ident.to_string();
     let core_snake = core_name.to_snake_case();
 
     let upcast_tag = format!("__wasm_refgen_to{}", core_name);
@@ -55,6 +51,7 @@ pub fn wasm_refgen(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     if !already_present {
         let injected: ImplItem = syn::parse_quote! {
+            /// Upcasts to the JS-import type for [`#ty_ident`].
             #[::wasm_bindgen::prelude::wasm_bindgen(js_name = #upcast_tag)]
             pub fn #method_ident(&self) -> Self {
                 self.clone()
@@ -85,6 +82,9 @@ pub fn wasm_refgen(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
 
+        /// The JS-import type for [`#ty_ident`].
+        ///
+        /// This lets you use the duck typed interface to convert from JS values.
         #[::wasm_bindgen::prelude::wasm_bindgen]
         extern "C" {
             #[::wasm_bindgen::prelude::wasm_bindgen(typescript_type = #core_name)]
