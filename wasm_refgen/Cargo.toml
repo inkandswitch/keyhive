@@ -13,7 +13,7 @@ rust-version.workspace = true
 proc-macro = true
 
 [dependencies]
-from_js_ref = { path = "../from_js_ref" }
+from_js_ref = "0.1.0"
 wasm-bindgen = "0.2.104"
 
 proc-macro2 = "1.0"
