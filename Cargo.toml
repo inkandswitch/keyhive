@@ -44,7 +44,7 @@ thiserror = "1.0"
 tracing = "0.1.40"
 # Temporarily using commit with support for `console` logging levels until the
 # next release.
-wasm-tracing = { git = "https://github.com/dsgallups/wasm-tracing", rev = "8c9ed933539664119681b896badb2be933338765" }
+wasm-tracing = { git = "https://github.com/dsgallups/wasm-tracing", rev = "8c9ed933539664119681b896badb2be933338765", version = "2.1.0" }
 x25519-dalek = { version = "2.0", features = [
     "serde",
     "reusable_secrets",
