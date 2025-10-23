@@ -1,6 +1,6 @@
 [package]
 name = "wasm_refgen"
-version = "0.1.0"
+version = "0.1.2"
 description = "Macro for generating JS interface reference hack for wasm-bindgen"
 
 authors.workspace = true

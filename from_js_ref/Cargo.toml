@@ -1,6 +1,6 @@
 [package]
 name = "from_js_ref"
-version = "0.1.0"
+version = "0.1.2"
 description = "Trait for converting from JS interface reference wrappers"
 
 authors.workspace = true
