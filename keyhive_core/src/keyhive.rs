@@ -44,6 +44,7 @@ use crate::{
         peer::Peer,
         public::Public,
     },
+    stats::Stats,
     store::{
         ciphertext::{memory::MemoryCiphertextStore, CausalDecryptionState, CiphertextStore},
         delegation::DelegationStore,
@@ -1184,7 +1185,6 @@ impl<
         &self,
         static_event: StaticEvent<T>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
-        tracing::debug!("executing Keyhive::receive_static_event()");
         match static_event {
             StaticEvent::PrekeysExpanded(add_op) => {
                 self.receive_prekey_op(&Arc::new(*add_op).into()).await?
@@ -1628,7 +1628,6 @@ impl<
         &self,
         archive: Archive<T>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
-        tracing::debug!("Keyhive::ingest_archive()");
         {
             let locked_active = self.active.lock().await;
             {
@@ -1677,7 +1676,6 @@ impl<
         &self,
         events: Vec<StaticEvent<T>>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
-        tracing::debug!("executing Keyhive::ingest_unsorted_static_events()");
         let mut epoch = events;
 
         loop {
@@ -1719,11 +1717,20 @@ impl<
         &self,
         events: HashMap<Digest<Event<S, T, L>>, Event<S, T, L>>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
-        tracing::debug!("executing Keyhive::ingest_event_table()");
         self.ingest_unsorted_static_events(
             events.values().cloned().map(Into::into).collect::<Vec<_>>(),
         )
         .await
+    }
+
+    pub async fn stats(&self) -> Stats {
+        Stats {
+            individuals: self.individuals.as_ref().lock().await.len() as u64,
+            groups: self.groups.as_ref().lock().await.len() as u64,
+            docs: self.docs.as_ref().lock().await.len() as u64,
+            delegations: self.delegations.0.lock().await.len() as u64,
+            revocations: self.revocations.0.lock().await.len() as u64,
+        }
     }
 }
 
