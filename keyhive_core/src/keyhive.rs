@@ -1427,7 +1427,10 @@ impl<
             }
         }
 
-        let pending_events: Vec<_> = self.pending_events.lock().await
+        let pending_events: Vec<_> = self
+            .pending_events
+            .lock()
+            .await
             .iter()
             .map(|event| event.as_ref().clone())
             .collect();
@@ -1689,6 +1692,7 @@ impl<
         })
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(level = "trace", skip_all)]
     pub async fn ingest_archive(
         &self,
@@ -1778,11 +1782,8 @@ impl<
                     "Fixed point while ingesting static events: {}",
                     err.unwrap()
                 );
-                let new_pending: Vec<Arc<StaticEvent<T>>> = next_epoch
-                    .clone()
-                    .into_iter()
-                    .map(|e| Arc::new(e))
-                    .collect();
+                let new_pending: Vec<Arc<StaticEvent<T>>> =
+                    next_epoch.clone().into_iter().map(Arc::new).collect();
                 drop(mem::replace(
                     &mut *self.pending_events.lock().await,
                     new_pending.clone(),
