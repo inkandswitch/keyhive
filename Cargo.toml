@@ -19,7 +19,7 @@ edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/inkandswitch/keyhive"
 rust-version = "1.90.0"
-version = "0.0.0-alpha.1"
+version = "0.0.0-alpha.3"
 
 [workspace.dependencies]
 bincode = "1.3"
