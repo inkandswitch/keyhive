@@ -1,6 +1,6 @@
 [package]
 name = "keyhive_wasm"
-version = "0.2.0-alpha.2"
+version = "0.2.0-alpha.3"
 description = "WebAssembly wrappers for beehive_core"
 
 authors.workspace = true
