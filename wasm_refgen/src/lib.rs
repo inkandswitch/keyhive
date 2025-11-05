@@ -35,7 +35,11 @@ pub fn wasm_refgen(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
-    let core_name = ty_ident.to_string();
+    let struct_name = ty_ident.to_string();
+    let core_name = struct_name
+        .strip_prefix("Js")
+        .unwrap_or(&struct_name)
+        .to_string();
     let core_snake = core_name.to_snake_case();
 
     let upcast_tag = format!("__wasm_refgen_to{}", core_name);
