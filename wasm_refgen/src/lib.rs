@@ -1,14 +1,26 @@
+#![doc = include_str!("../README.md")]
+
 use heck::ToSnakeCase;
 use proc_macro::TokenStream;
+use proc_macro2::{Ident, Span};
 use quote::{format_ident, quote};
 use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input,
+    punctuated::Punctuated,
     spanned::Spanned,
     token::Comma,
-    ImplItem, ImplItemFn, ItemImpl, Result, Token,
+    Attribute, ImplItem, ImplItemFn, ItemImpl, Meta, Result, Token,
 };
 
+/// Generates boilerplate to upcast from a duck-typed JS reference to a concrete
+/// Rust type implementing that interface.
+///
+/// This is a light hack that provides a clean, `JsCast`-compatible way to use
+/// Rust-exported structs with `wasm-bindgen`. The main caveat is that it assumes
+/// that cloning is relatively cheap on the struct in question.
+///
+/// For more detail, see the module documentation.
 #[proc_macro_attribute]
 pub fn wasm_refgen(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(attr as Args);
@@ -25,7 +37,7 @@ pub fn wasm_refgen(attr: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
 
-    // Get the type name (e.g., JsDocument)
+    // Get the type name (e.g., JsFoo)
     let ty_ident = match &*impl_block.self_ty {
         syn::Type::Path(tp) => tp.path.segments.last().unwrap().ident.clone(),
         _ => {
@@ -38,8 +50,28 @@ pub fn wasm_refgen(attr: TokenStream, item: TokenStream) -> TokenStream {
     let core_name = ty_ident.to_string();
     let core_snake = core_name.to_snake_case();
 
+    let js_class_ident: Ident = if let Some(js_class) = find_js_class(&impl_block.attrs) {
+        match to_ident_or_err(&js_class, ty_ident.span()) {
+            Ok(id) => id,
+            Err(e) => return e.to_compile_error().into(),
+        }
+    } else {
+        return syn::Error::new(
+            ty_ident.span(),
+            "wasm_refgen: missing js_ref argument and no `js_class = ...` found on #[wasm_bindgen]",
+        )
+        .to_compile_error()
+        .into();
+    };
+
     let upcast_tag = format!("__wasm_refgen_to{}", core_name);
     let method_ident = format_ident!("__wasm_refgen_to_{}", core_snake);
+
+    let injected_doc = format!("Upcasts; to the JS-import type for [`{ty_ident}`].");
+    let js_ty_doc = format!(
+        "The JS-import type for [`{ty_ident}`].\n\nThis lets you use the duck typed interface to convert from JS values."
+    );
+    let method_doc = format!("Use the JS duck type interface to upcast to [`{ty_ident}`].");
 
     let already_present = impl_block.items.iter().any(|it| {
         if let ImplItem::Fn(ImplItemFn { sig, .. }) = it {
@@ -51,7 +83,7 @@ pub fn wasm_refgen(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     if !already_present {
         let injected: ImplItem = syn::parse_quote! {
-            /// Upcasts to the JS-import type for [`#ty_ident`].
+            #[doc = #injected_doc]
             #[::wasm_bindgen::prelude::wasm_bindgen(js_name = #upcast_tag)]
             pub fn #method_ident(&self) -> Self {
                 self.clone()
@@ -84,13 +116,11 @@ pub fn wasm_refgen(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         #[::wasm_bindgen::prelude::wasm_bindgen]
         extern "C" {
-            /// The JS-import type for [`#ty_ident`].
-            ///
-            /// This lets you use the duck typed interface to convert from JS values.
-            #[::wasm_bindgen::prelude::wasm_bindgen(typescript_type = #core_name)]
+            #[doc = #js_ty_doc]
+            #[::wasm_bindgen::prelude::wasm_bindgen(typescript_type = #js_class_ident)]
             pub type #js_ref_ident;
 
-            /// Use the JS duck type interface to upcast to [`#ty_ident`].
+            #[doc = #method_doc]
             #[::wasm_bindgen::prelude::wasm_bindgen(method, js_name = #upcast_tag)]
             pub fn #method_ident(this: &#js_ref_ident) -> #ty_ident;
         }
@@ -130,5 +160,66 @@ impl Parse for Args {
         })?;
 
         Ok(Self { js_ref })
+    }
+}
+
+fn wasm_bindgen_args(attr: &Attribute) -> Option<Punctuated<Meta, Token![,]>> {
+    if !attr.path().is_ident("wasm_bindgen") {
+        return None;
+    }
+    attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+        .ok()
+}
+
+fn meta_value_as_string(meta: &Meta) -> Option<String> {
+    use syn::{Expr, ExprLit, ExprPath};
+    let Meta::NameValue(nv) = meta else {
+        return None;
+    };
+
+    // Try string literal first: js_class = "Foo"
+    if let Expr::Lit(ExprLit {
+        lit: syn::Lit::Str(s),
+        ..
+    }) = &nv.value
+    {
+        return Some(s.value());
+    }
+
+    // Then bare ident: js_class = Foo
+    if let Expr::Path(ExprPath { path, .. }) = &nv.value {
+        if let Some(seg) = path.segments.last() {
+            return Some(seg.ident.to_string());
+        }
+    }
+
+    None
+}
+
+fn find_js_class(attrs: &[Attribute]) -> Option<String> {
+    for a in attrs {
+        let Some(metas) = wasm_bindgen_args(a) else {
+            continue;
+        };
+        for m in metas {
+            if let Some(val) = match &m {
+                Meta::NameValue(nv) if nv.path.is_ident("js_class") => meta_value_as_string(&m),
+                _ => None,
+            } {
+                return Some(val);
+            }
+        }
+    }
+    None
+}
+
+fn to_ident_or_err(s: &str, span: Span) -> Result<Ident> {
+    if syn::parse_str::<Ident>(s).is_ok() {
+        Ok(Ident::new(s, span))
+    } else {
+        Err(syn::Error::new(
+            span,
+            format!("`{s}` is not a valid Rust identifier"),
+        ))
     }
 }
