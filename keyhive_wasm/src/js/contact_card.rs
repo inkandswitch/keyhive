@@ -1,10 +1,10 @@
 use derive_more::{Deref, Display, From, Into};
 use keyhive_core::{
-    contact_card::ContactCard, crypto::verifiable::Verifiable, principal::individual::Individual,
+    contact_card::ContactCard, crypto::verifiable::Verifiable, principal::{identifier::{self, Identifier}, individual::Individual},
 };
 use wasm_bindgen::prelude::*;
 
-use crate::js::agent::JsAgent;
+use crate::js::{agent::JsAgent, identifier::JsIdentifier};
 
 use super::{individual_id::JsIndividualId, share_key::JsShareKey};
 
@@ -15,7 +15,13 @@ pub struct JsContactCard(ContactCard);
 #[wasm_bindgen(js_class = ContactCard)]
 impl JsContactCard {
     #[wasm_bindgen(getter)]
-    pub fn id(&self) -> JsIndividualId {
+    pub fn id(&self) -> JsIdentifier {
+        let identifier = Identifier::from(self.0.id());
+        JsIdentifier(identifier)
+    }
+
+    #[wasm_bindgen(getter, js_name = "individualId")]
+    pub fn individual_id(&self) -> JsIndividualId {
         self.0.id().into()
     }
 
