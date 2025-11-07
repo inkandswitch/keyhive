@@ -16,7 +16,9 @@ sharp edges. Some of these include:
 
 The most common workaround for these is to pass around `JsValue`s or `js_sys::Array`s plus
 custom TypeScript strings (which are not checked against the actual types used),
-and parse these general types manually rather than bindgen doing the glue for you.
+and parse these general types manually rather than bindgen doing the glue for you,
+rather than fiddling with `unchecked_into` or `dyn_into` yourself.
+
 It would be convenient to have some way to use Rust types on the Rust side, and
 have `wasm-bindgen` automatically generate reasonable types on the TS side.
 
@@ -73,11 +75,9 @@ or by value, the cost is the same due to how `wasm-bindgen` handles
 ## Collections
 
 ```rust
-pub fn do_many_things(foo: Vec<JsFoo>) {
-  let rust_foo: WasmFoo = foo.into();
-  // Note that this has gone from a borrowed JsFoo to an owned WasmFoo
-  // This is important so that we never consume the Wasm.
-  // Now use `foo` as a WasmFoo
+pub fn do_many_things(js_foos: Vec<JsFoo>) {
+  let rust_foos: Vec<WasmFoo> = js_foos.iter().map(Into::into).collect()
+  // ...
 }
 ```
 
