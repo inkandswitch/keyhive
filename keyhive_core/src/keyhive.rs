@@ -713,6 +713,16 @@ impl<
                     for rev in dlg.payload.after_revocations.iter() {
                         heads.push((Digest::hash(rev.as_ref()).into(), rev.dupe().into()));
                     }
+
+                    // If this delegation is to a group, include the group's delegation heads
+                    if let Agent::Group(_group_id, group) = &dlg.payload.delegate {
+                        for dlg in group.lock().await.delegation_heads().values() {
+                            let dlg_hash = Digest::hash(dlg.as_ref()).into();
+                            if !visited_hashes.contains(&dlg_hash) {
+                                heads.push((dlg_hash, dlg.dupe().into()));
+                            }
+                        }
+                    }
                 }
                 MembershipOperation::Revocation(rev) => {
                     if let Some(proof) = &rev.payload.proof {
@@ -2492,7 +2502,10 @@ mod tests {
             .events_for_agent(&Agent::Individual(hive2_on_hive1_id, hive2_on_hive1.dupe()))
             .await
             .unwrap();
-        hive2.ingest_event_table(events_for_hive2_from_hive1).await.unwrap();
+        hive2
+            .ingest_event_table(events_for_hive2_from_hive1)
+            .await
+            .unwrap();
 
         // Now verify hive2 can see hive3's access to the doc
         let doc_on_hive2 = hive2.get_document(doc_id).await.unwrap();
