@@ -713,6 +713,16 @@ impl<
                     for rev in dlg.payload.after_revocations.iter() {
                         heads.push((Digest::hash(rev.as_ref()).into(), rev.dupe().into()));
                     }
+
+                    // If this delegation is to a group, include the group's delegation heads
+                    if let Agent::Group(_group_id, group) = &dlg.payload.delegate {
+                        for dlg in group.lock().await.delegation_heads().values() {
+                            let dlg_hash = Digest::hash(dlg.as_ref()).into();
+                            if !visited_hashes.contains(&dlg_hash) {
+                                heads.push((dlg_hash, dlg.dupe().into()));
+                            }
+                        }
+                    }
                 }
                 MembershipOperation::Revocation(rev) => {
                     if let Some(proof) = &rev.payload.proof {
@@ -2420,6 +2430,90 @@ mod tests {
         assert_eq!(
             dlg.delegation.subject_id(),
             doc.lock().await.doc_id().into()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_peer_sees_other_peer_access_via_group() {
+        test_utils::init_logging();
+
+        // Create a keyhive and a doc
+        let hive1 = make_keyhive().await;
+        let group = hive1.generate_group(vec![]).await.unwrap();
+        let group_id = group.lock().await.group_id();
+        let doc = hive1
+            .generate_doc(vec![Peer::Group(group_id, group.dupe())], nonempty![[0u8; 32]])
+            .await
+            .unwrap();
+        let doc_id = doc.lock().await.doc_id();
+
+        // Create two more keyhives
+        let hive2 = make_keyhive().await;
+        let hive2_op = hive2.expand_prekeys().await.unwrap();
+        let hive2_on_hive1 = Arc::new(Mutex::new(Individual::new(KeyOp::Add(hive2_op))));
+        assert!(hive1.register_individual(hive2_on_hive1.clone()).await);
+        let hive2_on_hive1_id = { hive2_on_hive1.lock().await.id() };
+
+        let hive3 = make_keyhive().await;
+        let hive3_op = hive3.expand_prekeys().await.unwrap();
+        let hive3_on_hive1 = Arc::new(Mutex::new(Individual::new(KeyOp::Add(hive3_op))));
+        assert!(hive1.register_individual(hive3_on_hive1.clone()).await);
+        let hive3_on_hive1_id = { hive3_on_hive1.lock().await.id() };
+
+        // Add hive2 as a member of the doc
+        hive1
+            .add_member(
+                Agent::Individual(hive2_on_hive1_id, hive2_on_hive1.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Write,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Add hive3 as a member of the group that was parent of the doc
+        hive1
+            .add_member(
+                Agent::Individual(hive3_on_hive1_id, hive3_on_hive1.dupe()),
+                &Membered::Group(group_id, group.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Verify hive1 can see hive3's access to the doc
+        let doc_on_hive1 = hive1.get_document(doc_id).await.unwrap();
+        let hive1_members = doc_on_hive1.lock().await.transitive_members().await;
+        let hive3_on_hive1_access = hive1_members.get(&hive3_on_hive1_id.into());
+        assert!(
+            hive3_on_hive1_access.is_some(),
+            "hive1 should see hive3's access to the doc"
+        );
+
+        // Register hive3 with hive2
+        let hive3_card_op = hive3.expand_prekeys().await.unwrap();
+        let hive3_on_hive2 = Arc::new(Mutex::new(Individual::new(KeyOp::Add(hive3_card_op))));
+        hive2.register_individual(hive3_on_hive2.clone()).await;
+        let hive3_on_hive2_id = { hive3_on_hive2.lock().await.id() };
+
+        // Send keyhive events from hive1 to hive2
+        let events_for_hive2_from_hive1 = hive1
+            .events_for_agent(&Agent::Individual(hive2_on_hive1_id, hive2_on_hive1.dupe()))
+            .await
+            .unwrap();
+        hive2
+            .ingest_event_table(events_for_hive2_from_hive1)
+            .await
+            .unwrap();
+
+        // Now verify hive2 can see hive3's access to the doc
+        let doc_on_hive2 = hive2.get_document(doc_id).await.unwrap();
+        let members = doc_on_hive2.lock().await.transitive_members().await;
+        let hive3_access = members.get(&hive3_on_hive2_id.into());
+        assert!(
+            hive3_access.is_some(),
+            "hive2 should see hive3's access to the doc",
         );
     }
 
