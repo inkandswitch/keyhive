@@ -1256,7 +1256,9 @@ impl<
             StaticEvent::PrekeyRotated(rot_op) => {
                 self.receive_prekey_op(&Arc::new(*rot_op).into()).await?
             }
-            StaticEvent::CgkaOperation(cgka_op) => self.receive_cgka_op(*cgka_op).await?,
+            StaticEvent::CgkaOperation(cgka_op) => {
+                self.receive_cgka_op(*cgka_op).await?;
+            }
             StaticEvent::Delegated(dlg) => self.receive_delegation(&dlg).await?,
             StaticEvent::Revoked(rev) => self.receive_revocation(&rev).await?,
         }
@@ -1302,22 +1304,28 @@ impl<
                         .get(&pk)
                         .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?
                 };
-                doc.lock()
+                let is_new = doc.lock()
                     .await
                     .merge_cgka_invite_op(signed_op.clone(), &sk)?;
-                self.event_listener.on_cgka_op(&signed_op).await;
+                if is_new {
+                    self.event_listener.on_cgka_op(&signed_op).await;
+                }
                 return Ok(());
             } else if Public.individual().id() == added_id {
                 let sk = Public.share_secret_key();
-                doc.lock()
+                let is_new = doc.lock()
                     .await
                     .merge_cgka_invite_op(signed_op.clone(), &sk)?;
-                self.event_listener.on_cgka_op(&signed_op).await;
+                if is_new {
+                    self.event_listener.on_cgka_op(&signed_op).await;
+                }
                 return Ok(());
             }
         }
-        doc.lock().await.merge_cgka_op(signed_op.clone())?;
-        self.event_listener.on_cgka_op(&signed_op).await;
+        let is_new = doc.lock().await.merge_cgka_op(signed_op.clone())?;
+        if is_new {
+            self.event_listener.on_cgka_op(&signed_op).await;
+        }
         Ok(())
     }
 

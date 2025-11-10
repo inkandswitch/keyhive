@@ -340,9 +340,9 @@ impl Cgka {
     pub fn merge_concurrent_operation(
         &mut self,
         op: Arc<Signed<CgkaOperation>>,
-    ) -> Result<(), CgkaError> {
+    ) -> Result<bool, CgkaError> {
         if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
-            return Ok(());
+            return Ok(false);
         }
         let predecessors = op.payload.predecessors();
         if !self.ops_graph.contains_predecessors(&predecessors) {
@@ -367,7 +367,7 @@ impl Cgka {
             }
             self.apply_operation(op)?;
         }
-        Ok(())
+        Ok(true)
     }
 
     pub fn ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {

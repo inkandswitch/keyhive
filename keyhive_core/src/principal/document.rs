@@ -354,7 +354,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.group.receive_revocation(revocation).await
     }
 
-    pub fn merge_cgka_op(&mut self, op: Arc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
+    pub fn merge_cgka_op(&mut self, op: Arc<Signed<CgkaOperation>>) -> Result<bool, CgkaError> {
         match &mut self.cgka {
             Some(cgka) => return cgka.merge_concurrent_operation(op),
             None => match op.payload.clone() {
@@ -377,7 +377,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
                 _ => return Err(CgkaError::UnexpectedInitialOperation),
             },
         }
-        Ok(())
+        Ok(true)
     }
 
     #[instrument(skip_all)]
@@ -385,7 +385,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         &mut self,
         op: Arc<Signed<CgkaOperation>>,
         sk: &ShareSecretKey,
-    ) -> Result<(), CgkaError> {
+    ) -> Result<bool, CgkaError> {
         let CgkaOperation::Add {
             added_id,
             pk,
