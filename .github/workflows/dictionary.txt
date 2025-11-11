@@ -26,6 +26,9 @@ FIXME
 GroupId
 HChaCha
 Invariants
+JS
+JS-imported
+JS-representation
 Keyhive
 Keyoxide
 MLS
@@ -69,6 +72,7 @@ authn
 authz
 backoff
 bchacha-note
+bindgen
 blake
 ciphertext
 cleartext
@@ -126,6 +130,8 @@ sneakernets
 socio-economic
 stateful
 statefulness
+struct
+struct's
 subgraph
 subpath
 subsumptions
@@ -134,4 +140,5 @@ subtyping
 tombstoned
 tradeoffs
 unwieldly
+upcasts
 www
