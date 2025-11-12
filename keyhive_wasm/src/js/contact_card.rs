@@ -1,7 +1,9 @@
 use derive_more::{Deref, Display, From, Into};
 use keyhive_core::{
-    contact_card::ContactCard, crypto::verifiable::Verifiable, event::Event,
-    principal::identifier::Identifier, principal::individual::Individual,
+    contact_card::ContactCard,
+    crypto::verifiable::Verifiable,
+    event::Event,
+    principal::{identifier::Identifier, individual::Individual},
 };
 use wasm_bindgen::prelude::*;
 
