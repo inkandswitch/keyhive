@@ -7,4 +7,5 @@ pub struct Stats {
     pub docs: u64,
     pub delegations: u64,
     pub revocations: u64,
+    pub active_prekey_count: u64,
 }

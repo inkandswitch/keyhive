@@ -11,8 +11,8 @@ impl fmt::Display for JsStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Stats {{ individuals: {}, groups: {}, docs: {}, delegations: {}, revocations: {} }}",
-            self.0.individuals, self.0.groups, self.0.docs, self.0.delegations, self.0.revocations
+            "Stats {{ individuals: {}, groups: {}, docs: {}, delegations: {}, revocations: {}, active_prekey_count: {} }}",
+            self.0.individuals, self.0.groups, self.0.docs, self.0.delegations, self.0.revocations, self.0.active_prekey_count
         )
     }
 }
@@ -42,5 +42,10 @@ impl JsStats {
     #[wasm_bindgen(getter)]
     pub fn revocations(&self) -> u64 {
         self.0.revocations
+    }
+
+    #[wasm_bindgen(getter, js_name = activePrekeyCount)]
+    pub fn active_prekey_count(&self) -> u64 {
+        self.0.active_prekey_count
     }
 }
