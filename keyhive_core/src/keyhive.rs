@@ -1734,12 +1734,22 @@ impl<
     }
 
     pub async fn stats(&self) -> Stats {
+        let active_prekey_count = self
+            .active
+            .lock()
+            .await
+            .individual
+            .lock()
+            .await
+            .prekey_ops()
+            .len() as u64;
         Stats {
             individuals: self.individuals.as_ref().lock().await.len() as u64,
             groups: self.groups.as_ref().lock().await.len() as u64,
             docs: self.docs.as_ref().lock().await.len() as u64,
             delegations: self.delegations.0.lock().await.len() as u64,
             revocations: self.revocations.0.lock().await.len() as u64,
+            active_prekey_count,
         }
     }
 }
