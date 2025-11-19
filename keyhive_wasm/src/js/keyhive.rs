@@ -460,7 +460,8 @@ impl JsKeyhive {
             HashMap::new();
         let mut static_events = Vec::new();
 
-        for i in 0..events_bytes_array.length() {
+        let input_length = events_bytes_array.length();
+        for i in 0..input_length {
             let js_value = events_bytes_array.get(i);
             let event_bytes = js_sys::Uint8Array::from(js_value).to_vec();
             let static_event: StaticEvent<JsChangeId> =
@@ -469,7 +470,20 @@ impl JsKeyhive {
             static_events.push(static_event);
         }
 
+        let unique_count = static_event_hash_to_bytes.len();
+        tracing::warn!(
+            "ingestEventsBytes: input_length={}, unique_events={}, duplicates={}",
+            input_length,
+            unique_count,
+            input_length as usize - unique_count
+        );
+
         let pending_events = self.0.ingest_unsorted_static_events(static_events).await;
+        tracing::warn!(
+            "ingestEventsBytes: pending_events.len()={}",
+            pending_events.len()
+        );
+
         let pending_events_bytes: Vec<Vec<u8>> = pending_events
             .iter()
             .filter_map(|event| {
@@ -477,6 +491,11 @@ impl JsKeyhive {
                 static_event_hash_to_bytes.get(&hash).cloned()
             })
             .collect();
+
+        tracing::warn!(
+            "ingestEventsBytes: pending_events_bytes.len()={}",
+            pending_events_bytes.len()
+        );
 
         let result = js_sys::Array::new();
         for event_bytes in pending_events_bytes {
