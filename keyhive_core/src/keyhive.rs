@@ -1839,6 +1839,56 @@ impl<
             .await
             .prekey_ops()
             .len() as u64;
+
+        let active_id = self.id();
+        let pending_events = self.pending_events.lock().await;
+
+        let mut pending_prekeys_expanded = 0u64;
+        let mut pending_prekeys_expanded_by_active = 0u64;
+        let mut pending_prekey_rotated = 0u64;
+        let mut pending_prekey_rotated_by_active = 0u64;
+        let mut pending_cgka_operation = 0u64;
+        let mut pending_cgka_operation_by_active = 0u64;
+        let mut pending_delegated = 0u64;
+        let mut pending_delegated_by_active = 0u64;
+        let mut pending_revoked = 0u64;
+        let mut pending_revoked_by_active = 0u64;
+
+        for event in pending_events.iter() {
+            match event.as_ref() {
+                StaticEvent::PrekeysExpanded(signed) => {
+                    pending_prekeys_expanded += 1;
+                    if signed.id() == active_id.into() {
+                        pending_prekeys_expanded_by_active += 1;
+                    }
+                }
+                StaticEvent::PrekeyRotated(signed) => {
+                    pending_prekey_rotated += 1;
+                    if signed.id() == active_id.into() {
+                        pending_prekey_rotated_by_active += 1;
+                    }
+                }
+                StaticEvent::CgkaOperation(signed) => {
+                    pending_cgka_operation += 1;
+                    if signed.id() == active_id.into() {
+                        pending_cgka_operation_by_active += 1;
+                    }
+                }
+                StaticEvent::Delegated(signed) => {
+                    pending_delegated += 1;
+                    if signed.id() == active_id.into() {
+                        pending_delegated_by_active += 1;
+                    }
+                }
+                StaticEvent::Revoked(signed) => {
+                    pending_revoked += 1;
+                    if signed.id() == active_id.into() {
+                        pending_revoked_by_active += 1;
+                    }
+                }
+            }
+        }
+
         Stats {
             individuals: self.individuals.as_ref().lock().await.len() as u64,
             groups: self.groups.as_ref().lock().await.len() as u64,
@@ -1846,6 +1896,16 @@ impl<
             delegations: self.delegations.0.lock().await.len() as u64,
             revocations: self.revocations.0.lock().await.len() as u64,
             active_prekey_count,
+            pending_prekeys_expanded,
+            pending_prekeys_expanded_by_active,
+            pending_prekey_rotated,
+            pending_prekey_rotated_by_active,
+            pending_cgka_operation,
+            pending_cgka_operation_by_active,
+            pending_delegated,
+            pending_delegated_by_active,
+            pending_revoked,
+            pending_revoked_by_active,
         }
     }
 }
