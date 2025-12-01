@@ -602,6 +602,16 @@ impl<
         caps
     }
 
+    #[instrument(skip_all)]
+    pub async fn pending_event_hashes(&self) -> HashSet<Digest<StaticEvent<T>>> {
+        self.pending_events
+            .lock()
+            .await
+            .iter()
+            .map(|event| Digest::hash(event.as_ref()))
+            .collect()
+    }
+
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn events_for_agent(
