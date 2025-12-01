@@ -343,6 +343,17 @@ impl JsKeyhive {
         self.0.get_agent(id.0).await.map(JsAgent)
     }
 
+    #[wasm_bindgen(js_name = pendingEventHashes)]
+    pub async fn pending_event_hashes(&self) -> js_sys::Set {
+        init_span!("JsKeyhive::pending_event_hashes");
+        let hashes = self.0.pending_event_hashes().await;
+        let set = js_sys::Set::new(&JsValue::UNDEFINED);
+        for hash in hashes {
+            set.add(&js_sys::Uint8Array::from(hash.as_slice()).into());
+        }
+        set
+    }
+
     #[wasm_bindgen(js_name = eventsForAgent)]
     pub async fn events_for_agent(&self, agent: &JsAgent) -> js_sys::Map {
         init_span!("JsKeyhive::events_for_agent");
