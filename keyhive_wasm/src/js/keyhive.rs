@@ -360,6 +360,9 @@ impl JsKeyhive {
         let events = self.0.events_for_agent(&agent.0).await.unwrap_or_default();
         let map = js_sys::Map::new();
         for (digest, event) in events {
+            if let Event::CgkaOperation(_) = event {
+                continue;
+            };
             let hash = js_sys::Uint8Array::from(digest.as_slice());
             let js_event = JsEvent::from(event);
             map.set(&hash.into(), &JsValue::from(js_event));
@@ -484,13 +487,15 @@ impl JsKeyhive {
         let pending_events = self.0.ingest_unsorted_static_events(static_events).await;
         let pending_events_bytes: Vec<Vec<u8>> = pending_events
             .iter()
-            .filter_map(|event| {
+            .map(|event| {
                 let hash: Digest<StaticEvent<JsChangeId>> = Digest::hash(event.as_ref());
                 static_event_hash_to_bytes
                     .get(&hash)
                     .cloned()
-                    .unwrap_or_else(||
-                    bincode::serialize(event.as_ref()).expect("Failed to serialize pending event"))
+                    .unwrap_or_else(|| {
+                        bincode::serialize(event.as_ref())
+                            .expect("Failed to serialize pending event")
+                    })
             })
             .collect();
 
