@@ -484,13 +484,15 @@ impl JsKeyhive {
         let pending_events = self.0.ingest_unsorted_static_events(static_events).await;
         let pending_events_bytes: Vec<Vec<u8>> = pending_events
             .iter()
-            .filter_map(|event| {
+            .map(|event| {
                 let hash: Digest<StaticEvent<JsChangeId>> = Digest::hash(event.as_ref());
                 static_event_hash_to_bytes
                     .get(&hash)
                     .cloned()
-                    .unwrap_or_else(||
-                    bincode::serialize(event.as_ref()).expect("Failed to serialize pending event"))
+                    .unwrap_or_else(|| {
+                        bincode::serialize(event.as_ref())
+                            .expect("Failed to serialize pending event")
+                    })
             })
             .collect();
 
@@ -506,6 +508,39 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = stats)]
     pub async fn stats(&self) -> JsStats {
         JsStats(self.0.stats().await)
+    }
+
+    // FIXME: This is not secure
+    /// Export prekey secrets as serialized bytes (bincode format).
+    /// This serializes the prekey_pairs map.
+    #[wasm_bindgen(js_name = exportPrekeySecretsBytes)]
+    pub async fn export_prekey_secrets_bytes(&self) -> Result<Box<[u8]>, JsError> {
+        init_span!("JsKeyhive::export_prekey_secrets_bytes");
+        let active_archive = self.0.active().lock().await.into_archive().await;
+        let bytes = bincode::serialize(active_archive.prekey_pairs())
+            .map_err(|e| JsError::new(&format!("Failed to serialize prekey secrets: {}", e)))?;
+        Ok(bytes.into_boxed_slice())
+    }
+
+    // FIXME: This is not secure
+    /// Import prekey secrets from serialized bytes (bincode format).
+    /// This merges with existing prekey secrets (does not replace).
+    #[wasm_bindgen(js_name = importPrekeySecretsBytes)]
+    pub async fn import_prekey_secrets_bytes(&self, bytes: &[u8]) -> Result<(), JsError> {
+        init_span!("JsKeyhive::import_prekey_secrets_bytes");
+        use keyhive_core::crypto::share_key::{ShareKey, ShareSecretKey};
+        use std::collections::BTreeMap;
+
+        let imported: BTreeMap<ShareKey, ShareSecretKey> = bincode::deserialize(bytes)
+            .map_err(|e| JsError::new(&format!("Failed to deserialize prekey secrets: {}", e)))?;
+
+        self.0
+            .active()
+            .lock()
+            .await
+            .import_prekey_pairs(imported)
+            .await;
+        Ok(())
     }
 }
 

@@ -19,6 +19,13 @@ pub struct ActiveArchive {
     pub(crate) individual: Individual,
 }
 
+impl ActiveArchive {
+    // FIXME: This is not secure
+    pub fn prekey_pairs(&self) -> &BTreeMap<ShareKey, ShareSecretKey> {
+        &self.prekey_pairs
+    }
+}
+
 impl Debug for ActiveArchive {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         // NOTE this pattern ensures that all fields are used

@@ -1,6 +1,6 @@
 {
   "name": "@keyhive/keyhive",
-  "version": "0.0.0-alpha.50",
+  "version": "0.0.0-alpha.50b",
   "description": "",
   "main": "pkg/keyhive_wasm.js",
   "scripts": {

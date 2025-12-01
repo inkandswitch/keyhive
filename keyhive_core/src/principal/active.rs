@@ -297,6 +297,22 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
             _phantom: PhantomData,
         }
     }
+
+    // FIXME: This is not secure
+    /// Import prekey pairs from a map, merging with existing pairs.
+    pub async fn import_prekey_pairs(
+        &self,
+        pairs: std::collections::BTreeMap<ShareKey, ShareSecretKey>,
+    ) {
+        let mut locked_prekeys = self.prekey_pairs.lock().await;
+        let before = locked_prekeys.len();
+        locked_prekeys.extend(pairs);
+        tracing::debug!(
+            "Imported prekey pairs: had {}, now have {}",
+            before,
+            locked_prekeys.len()
+        );
+    }
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> std::fmt::Display for Active<S, T, L> {
