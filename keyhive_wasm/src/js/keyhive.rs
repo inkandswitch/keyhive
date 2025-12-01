@@ -481,32 +481,18 @@ impl JsKeyhive {
             static_events.push(static_event);
         }
 
-        let unique_count = static_event_hash_to_bytes.len();
-        tracing::warn!(
-            "ingestEventsBytes: input_length={}, unique_events={}, duplicates={}",
-            input_length,
-            unique_count,
-            input_length as usize - unique_count
-        );
-
         let pending_events = self.0.ingest_unsorted_static_events(static_events).await;
-        tracing::warn!(
-            "ingestEventsBytes: pending_events.len()={}",
-            pending_events.len()
-        );
-
         let pending_events_bytes: Vec<Vec<u8>> = pending_events
             .iter()
             .filter_map(|event| {
                 let hash: Digest<StaticEvent<JsChangeId>> = Digest::hash(event.as_ref());
-                static_event_hash_to_bytes.get(&hash).cloned()
+                static_event_hash_to_bytes
+                    .get(&hash)
+                    .cloned()
+                    .unwrap_or_else(||
+                    bincode::serialize(event.as_ref()).expect("Failed to serialize pending event"))
             })
             .collect();
-
-        tracing::warn!(
-            "ingestEventsBytes: pending_events_bytes.len()={}",
-            pending_events_bytes.len()
-        );
 
         let result = js_sys::Array::new();
         for event_bytes in pending_events_bytes {
