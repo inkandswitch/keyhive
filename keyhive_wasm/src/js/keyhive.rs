@@ -480,6 +480,7 @@ impl JsKeyhive {
             let event_bytes = js_sys::Uint8Array::from(js_value).to_vec();
             let static_event: StaticEvent<JsChangeId> =
                 bincode::deserialize(&event_bytes).map_err(JsSerializationError::from)?;
+            tracing::trace!("Next event ingested: {:?}", static_event);
             static_event_hash_to_bytes.insert(Digest::hash(&static_event), event_bytes);
             static_events.push(static_event);
         }

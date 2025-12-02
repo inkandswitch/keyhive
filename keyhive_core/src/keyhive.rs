@@ -1778,11 +1778,9 @@ impl<
         // FIXME: Some errors might not be recoverable on future attempts
         // ) -> Result<Vec<Arc<StaticEvent<T>>>, ReceiveStaticEventError<S, T, L>> {
         tracing::debug!("executing Keyhive::ingest_unsorted_static_events()");
-        let input_len = events.len();
         for event in self.pending_events.as_ref().lock().await.iter() {
             events.push(event.as_ref().clone());
         }
-        let total_len = events.len();
 
         // Deduplicate events by hash to avoid accumulating duplicates across multiple calls
         use std::collections::HashMap;
@@ -1792,13 +1790,6 @@ impl<
             unique_events.entry(hash).or_insert(event);
         }
         let mut epoch: Vec<StaticEvent<T>> = unique_events.into_values().collect();
-
-        tracing::warn!(
-            "ingest_unsorted_static_events: input_len={}, total_len={}, deduped_len={}",
-            input_len,
-            total_len,
-            epoch.len()
-        );
 
         loop {
             let mut next_epoch = vec![];
