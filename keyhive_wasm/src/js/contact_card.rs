@@ -2,11 +2,12 @@ use derive_more::{Deref, Display, From, Into};
 use keyhive_core::{
     contact_card::ContactCard,
     crypto::verifiable::Verifiable,
+    event::Event,
     principal::{identifier::Identifier, individual::Individual},
 };
 use wasm_bindgen::prelude::*;
 
-use crate::js::{agent::JsAgent, identifier::JsIdentifier};
+use crate::js::{agent::JsAgent, event::JsEvent, identifier::JsIdentifier};
 
 use super::{individual_id::JsIndividualId, share_key::JsShareKey};
 
@@ -30,6 +31,12 @@ impl JsContactCard {
     #[wasm_bindgen(getter, js_name = "shareKey")]
     pub fn share_key(&self) -> JsShareKey {
         (*self.0.share_key()).into()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn op(&self) -> JsEvent {
+        let event = Event::from(self.0.op().clone());
+        event.into()
     }
 
     pub fn signature(&self) -> Vec<u8> {

@@ -343,6 +343,15 @@ impl JsKeyhive {
         self.0.get_agent(id.0).await.map(JsAgent)
     }
 
+    #[wasm_bindgen(js_name = getIndividual)]
+    pub async fn get_individual(&self, id: &JsIndividualId) -> Option<JsIndividual> {
+        init_span!("JsKeyhive::get_individual");
+        self.0
+            .get_individual(id.0)
+            .await
+            .map(|inner| JsIndividual { id: id.0, inner })
+    }
+
     #[wasm_bindgen(js_name = pendingEventHashes)]
     pub async fn pending_event_hashes(&self) -> js_sys::Set {
         init_span!("JsKeyhive::pending_event_hashes");
