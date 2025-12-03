@@ -697,6 +697,18 @@ impl<
             }
         }
 
+        // Include any revocations for this agent that were missed
+        if let Some(agent_revocations) = self
+            .revocations
+            .get_revocations_for_agent(&agent.agent_id())
+            .await
+        {
+            for rev in agent_revocations {
+                let hash: Digest<MembershipOperation<S, T, L>> = Digest::hash(rev.as_ref()).into();
+                heads.push((hash, rev.into()));
+            }
+        }
+
         while let Some((hash, op)) = heads.pop() {
             if visited_hashes.contains(&hash) {
                 continue;
@@ -1009,7 +1021,7 @@ impl<
         let mut after_revocations = Vec::new();
         for static_rev_hash in static_dlg.payload().after_revocations.iter() {
             let rev_hash = static_rev_hash.into();
-            let locked_revs = self.revocations.0.lock().await;
+            let locked_revs = self.revocations.revocations.lock().await;
             let resolved_rev = locked_revs
                 .get(&rev_hash)
                 .ok_or(MissingDependency(rev_hash))?;
@@ -1301,7 +1313,7 @@ impl<
 
         {
             let group_id = group.lock().await.id();
-            let mut locked_revocations = self.revocations.0.lock().await;
+            let mut locked_revocations = self.revocations.revocations.lock().await;
             for (digest, rev) in locked_revocations.clone().iter() {
                 if rev.payload.subject_id() == group_id {
                     locked_revocations.0.insert(
@@ -1336,7 +1348,7 @@ impl<
     pub async fn into_archive(&self) -> Archive<T> {
         let topsorted_ops = {
             let delegations = self.delegations.0.lock().await;
-            let revocations = self.revocations.0.lock().await;
+            let revocations = self.revocations.revocations.lock().await;
             MembershipOperation::<S, T, L>::reverse_topsort(&delegations, &revocations)
                 .into_iter()
                 .rev()
@@ -1501,7 +1513,7 @@ impl<
                             None
                         };
 
-                    revocations.0.lock().await.0.insert(
+                    revocations.revocations.lock().await.0.insert(
                         (*digest).into(),
                         Arc::new(Signed {
                             issuer: sr.issuer,
@@ -1527,7 +1539,7 @@ impl<
             members: HashMap<Identifier, NonEmpty<Digest<Signed<Delegation<Z, U, M>>>>>,
         ) -> Result<(), TryFromArchiveError<Z, U, M>> {
             let read_dlgs = dlg_store.0.lock().await;
-            let read_revs = rev_store.0.lock().await;
+            let read_revs = rev_store.revocations.lock().await;
 
             for dlg_hash in dlg_head_hashes.iter() {
                 let actual_dlg: Arc<Signed<Delegation<Z, U, M>>> = read_dlgs
@@ -1738,7 +1750,7 @@ impl<
             groups: self.groups.as_ref().lock().await.len() as u64,
             docs: self.docs.as_ref().lock().await.len() as u64,
             delegations: self.delegations.0.lock().await.len() as u64,
-            revocations: self.revocations.0.lock().await.len() as u64,
+            revocations: self.revocations.revocations.lock().await.len() as u64,
             active_prekey_count,
         }
     }
@@ -2073,7 +2085,7 @@ mod tests {
         assert_eq!(hive.groups.lock().await.len(), 1);
         assert_eq!(hive.docs.lock().await.len(), 1);
         assert_eq!(hive.delegations.0.lock().await.len(), 4);
-        assert_eq!(hive.revocations.0.lock().await.len(), 0);
+        assert_eq!(hive.revocations.revocations.lock().await.len(), 0);
 
         let archive = hive.into_archive().await;
 
@@ -2099,8 +2111,8 @@ mod tests {
         );
 
         assert_eq!(
-            hive.revocations.0.lock().await.len(),
-            hive_from_archive.revocations.0.lock().await.len()
+            hive.revocations.revocations.lock().await.len(),
+            hive_from_archive.revocations.revocations.lock().await.len()
         );
 
         assert_eq!(
@@ -2186,7 +2198,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(hive1.delegations.0.lock().await.len(), 2);
-        assert_eq!(hive1.revocations.0.lock().await.len(), 0);
+        assert_eq!(hive1.revocations.revocations.lock().await.len(), 0);
         assert_eq!(hive1.individuals.lock().await.len(), 3); // NOTE: knows about Public and Hive2
         assert_eq!(hive1.groups.lock().await.len(), 1);
         assert_eq!(hive1.docs.lock().await.len(), 0);
@@ -2206,7 +2218,7 @@ mod tests {
             }
 
             assert_eq!(hive2.delegations.0.lock().await.len(), 0);
-            assert_eq!(hive2.revocations.0.lock().await.len(), 0);
+            assert_eq!(hive2.revocations.revocations.lock().await.len(), 0);
             assert_eq!(hive2.individuals.lock().await.len(), 3);
             assert_eq!(hive2.groups.lock().await.len(), 0);
             assert_eq!(hive2.docs.lock().await.len(), 0);
@@ -2219,7 +2231,7 @@ mod tests {
         }
 
         assert_eq!(hive2.delegations.0.lock().await.len(), 2);
-        assert_eq!(hive2.revocations.0.lock().await.len(), 0);
+        assert_eq!(hive2.revocations.revocations.lock().await.len(), 0);
         assert_eq!(hive2.individuals.lock().await.len(), 3); // NOTE: Yourself, Public, and Hive2
         assert_eq!(hive2.groups.lock().await.len(), 1);
         assert_eq!(hive2.docs.lock().await.len(), 0);
@@ -2248,7 +2260,7 @@ mod tests {
         let left_group = left.generate_group(vec![]).await.unwrap();
 
         assert_eq!(left.delegations.0.lock().await.len(), 3);
-        assert_eq!(left.revocations.0.lock().await.len(), 0);
+        assert_eq!(left.revocations.revocations.lock().await.len(), 0);
 
         assert_eq!(left.individuals.lock().await.len(), 2);
         assert!(left
@@ -2292,7 +2304,7 @@ mod tests {
         assert_eq!(left.groups.lock().await.len(), 1);
         assert_eq!(left.docs.lock().await.len(), 1);
         assert_eq!(left.delegations.0.lock().await.len(), 3);
-        assert_eq!(left.revocations.0.lock().await.len(), 0);
+        assert_eq!(left.revocations.revocations.lock().await.len(), 0);
 
         // Middle should now look the same
         assert!(middle
@@ -2310,7 +2322,7 @@ mod tests {
         assert_eq!(middle.groups.lock().await.len(), 0);
         assert_eq!(middle.docs.lock().await.len(), 1);
 
-        assert_eq!(middle.revocations.0.lock().await.len(), 0);
+        assert_eq!(middle.revocations.revocations.lock().await.len(), 0);
         assert_eq!(middle.delegations.0.lock().await.len(), 2);
         let left_doc_id = left_doc.lock().await.doc_id();
         assert_eq!(
@@ -2339,7 +2351,7 @@ mod tests {
         assert_eq!(left.groups.lock().await.len(), 1);
         assert_eq!(left.docs.lock().await.len(), 1);
         assert_eq!(left.delegations.0.lock().await.0.len(), 3);
-        assert_eq!(left.revocations.0.lock().await.0.len(), 0);
+        assert_eq!(left.revocations.revocations.lock().await.0.len(), 0);
 
         // Middle unchanged
         assert_eq!(middle.individuals.lock().await.len(), 3);
@@ -2347,10 +2359,10 @@ mod tests {
         assert_eq!(middle.docs.lock().await.len(), 1);
 
         assert_eq!(middle.delegations.0.lock().await.len(), 2);
-        assert_eq!(middle.revocations.0.lock().await.len(), 0);
+        assert_eq!(middle.revocations.revocations.lock().await.len(), 0);
 
         // Right should now look the same
-        assert_eq!(right.revocations.0.lock().await.len(), 0);
+        assert_eq!(right.revocations.revocations.lock().await.len(), 0);
         assert_eq!(right.delegations.0.lock().await.len(), 2);
 
         assert!(right.groups.lock().await.len() == 1 || right.docs.lock().await.len() == 1);

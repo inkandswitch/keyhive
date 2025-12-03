@@ -357,18 +357,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     ) -> Vec<Arc<Signed<Revocation<S, T, L>>>> {
         self.state
             .revocations
-            .0
-            .lock()
+            .get_revocations_for_agent(&agent.agent_id())
             .await
-            .iter()
-            .filter_map(|(_digest, rvk)| {
-                if rvk.payload().revoke.payload().delegate == *agent {
-                    Some(rvk.dupe())
-                } else {
-                    None
-                }
-            })
-            .collect()
+            .map(|set| set.into_iter().collect())
+            .unwrap_or_default()
     }
 
     #[allow(clippy::type_complexity)]
