@@ -35,8 +35,7 @@ impl JsContactCard {
 
     #[wasm_bindgen(getter)]
     pub fn op(&self) -> JsEvent {
-        let event = Event::from(self.0.op().clone());
-        event.into()
+        JsEvent(Event::from(self.0.op().clone()))
     }
 
     pub fn signature(&self) -> Vec<u8> {
