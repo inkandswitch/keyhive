@@ -582,23 +582,57 @@ impl<
                 .cloned()
                 .collect::<Vec<_>>()
         };
+        tracing::info!(
+            "membered_reachable_by_agent: Checking {} groups for agent {:?}",
+            groups.len(),
+            agent.id()
+        );
         for group in groups {
             let locked = group.lock().await;
-            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
-                let membered = Membered::Group(locked.group_id(), group.dupe());
-                caps.insert(locked.group_id().into(), (membered, *can));
+            let group_id = locked.group_id();
+            let transitive_members = locked.transitive_members().await;
+            tracing::debug!(
+                "  Group {:?} has {} transitive members",
+                group_id,
+                transitive_members.len()
+            );
+            if let Some((_, can)) = transitive_members.get(&agent.id()) {
+                tracing::info!(
+                    "  Found agent in group {:?} with access {:?}",
+                    group_id,
+                    can
+                );
+                let membered = Membered::Group(group_id, group.dupe());
+                caps.insert(group_id.into(), (membered, *can));
             }
         }
 
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
+        tracing::info!(
+            "membered_reachable_by_agent: Checking {} docs for agent {:?}",
+            docs.len(),
+            agent.id()
+        );
         for doc in docs {
             let locked = doc.lock().await;
-            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
-                let membered = Membered::Document(locked.doc_id(), doc.dupe());
-                caps.insert(locked.doc_id().into(), (membered, *can));
+            let doc_id = locked.doc_id();
+            let transitive_members = locked.transitive_members().await;
+            tracing::debug!(
+                "  Doc {:?} has {} transitive members",
+                doc_id,
+                transitive_members.len()
+            );
+            if let Some((_, can)) = transitive_members.get(&agent.id()) {
+                tracing::info!("  Found agent in doc {:?} with access {:?}", doc_id, can);
+                let membered = Membered::Document(doc_id, doc.dupe());
+                caps.insert(doc_id.into(), (membered, *can));
             }
         }
 
+        tracing::info!(
+            "membered_reachable_by_agent: Returning {} membered resources",
+            caps.len()
+        );
         caps
     }
 
@@ -702,15 +736,34 @@ impl<
             MembershipOperation<S, T, L>,
         )> = Vec::new();
 
-        for (mem_rc, _max_acces) in self.membered_reachable_by_agent(agent).await.values() {
-            for (hash, dlg_head) in mem_rc.delegation_heads().await.iter() {
+        let membered_resources = self.membered_reachable_by_agent(agent).await;
+        tracing::info!(
+            "membership_ops_for_agent: Processing {} membered resources",
+            membered_resources.len()
+        );
+
+        for (mem_rc, _max_acces) in membered_resources.values() {
+            let delegation_heads = mem_rc.delegation_heads().await;
+            let revocation_heads = mem_rc.revocation_heads().await;
+            tracing::debug!(
+                "  Resource has {} delegation heads, {} revocation heads",
+                delegation_heads.len(),
+                revocation_heads.len()
+            );
+
+            for (hash, dlg_head) in delegation_heads.iter() {
                 heads.push((hash.into(), dlg_head.dupe().into()));
             }
 
-            for (hash, rev_head) in mem_rc.revocation_heads().await.iter() {
+            for (hash, rev_head) in revocation_heads.iter() {
                 heads.push((hash.into(), rev_head.dupe().into()));
             }
         }
+
+        tracing::info!(
+            "membership_ops_for_agent: Starting with {} head operations to process",
+            heads.len()
+        );
 
         while let Some((hash, op)) = heads.pop() {
             if visited_hashes.contains(&hash) {
@@ -751,6 +804,10 @@ impl<
             }
         }
 
+        tracing::info!(
+            "membership_ops_for_agent: Returning {} total operations",
+            ops.len()
+        );
         ops
     }
 
@@ -884,7 +941,19 @@ impl<
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn get_document(&self, id: DocumentId) -> Option<Arc<Mutex<Document<S, T, L>>>> {
-        self.docs.lock().await.get(&id).duped()
+        let doc = self.docs.lock().await.get(&id).duped();
+        if let Some(ref d) = doc {
+            let locked = d.lock().await;
+            let members = locked.transitive_members().await;
+            tracing::info!(
+                "get_document: Doc {:?} has {} transitive members",
+                id,
+                members.len()
+            );
+        } else {
+            tracing::warn!("get_document: Doc {:?} not found", id);
+        }
+        doc
     }
 
     #[instrument(skip_all)]
@@ -1860,8 +1929,8 @@ impl<
             .len() as u64;
 
         // Count prekeys_expanded and prekey_rotations across all individuals
-        let mut prekeys_expanded = 0 as u64;
-        let mut prekey_rotations = 0 as u64;
+        let mut prekeys_expanded = 0_u64;
+        let mut prekey_rotations = 0_u64;
         for individual in self.individuals.lock().await.values() {
             for key_op in individual.lock().await.prekey_ops().values() {
                 match key_op.as_ref() {
@@ -1872,7 +1941,7 @@ impl<
         }
 
         // Count CGKA operations across all documents
-        let mut cgka_operations = 0 as u64;
+        let mut cgka_operations = 0_u64;
         for doc in self.docs.lock().await.values() {
             if let Ok(cgka) = doc.lock().await.cgka() {
                 cgka_operations += cgka.ops_count() as u64;
@@ -1882,16 +1951,16 @@ impl<
         let active_id = self.id();
         let pending_events = self.pending_events.lock().await;
 
-        let mut pending_prekeys_expanded = 0 as u64;
-        let mut pending_prekeys_expanded_by_active = 0 as u64;
-        let mut pending_prekey_rotated = 0 as u64;
-        let mut pending_prekey_rotated_by_active = 0 as u64;
-        let mut pending_cgka_operation = 0 as u64;
-        let mut pending_cgka_operation_by_active = 0 as u64;
-        let mut pending_delegated = 0 as u64;
-        let mut pending_delegated_by_active = 0 as u64;
-        let mut pending_revoked = 0 as u64;
-        let mut pending_revoked_by_active = 0 as u64;
+        let mut pending_prekeys_expanded = 0_u64;
+        let mut pending_prekeys_expanded_by_active = 0_u64;
+        let mut pending_prekey_rotated = 0_u64;
+        let mut pending_prekey_rotated_by_active = 0_u64;
+        let mut pending_cgka_operation = 0_u64;
+        let mut pending_cgka_operation_by_active = 0_u64;
+        let mut pending_delegated = 0_u64;
+        let mut pending_delegated_by_active = 0_u64;
+        let mut pending_revoked = 0_u64;
+        let mut pending_revoked_by_active = 0_u64;
 
         for event in pending_events.iter() {
             match event.as_ref() {
