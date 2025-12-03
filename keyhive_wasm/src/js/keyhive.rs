@@ -366,16 +366,41 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = eventsForAgent)]
     pub async fn events_for_agent(&self, agent: &JsAgent) -> js_sys::Map {
         init_span!("JsKeyhive::events_for_agent");
-        let events = self.0.events_for_agent(&agent.0).await.unwrap_or_default();
+        tracing::debug!("JsKeyhive::events_for_agent - Start");
+        let events = match self.0.events_for_agent(&agent.0).await {
+            Ok(events) => {
+                tracing::info!(
+                    "JsKeyhive::events_for_agent - Got {} events from Rust",
+                    events.len()
+                );
+                events
+            }
+            Err(e) => {
+                tracing::error!(
+                    "JsKeyhive::events_for_agent - Error getting events: {:?}",
+                    e
+                );
+                HashMap::new()
+            }
+        };
         let map = js_sys::Map::new();
+        let mut included_count = 0;
+        let mut excluded_cgka_count = 0;
         for (digest, event) in events {
             if let Event::CgkaOperation(_) = event {
+                excluded_cgka_count += 1;
                 continue;
             };
             let hash = js_sys::Uint8Array::from(digest.as_slice());
             let js_event = JsEvent::from(event);
             map.set(&hash.into(), &JsValue::from(js_event));
+            included_count += 1;
         }
+        tracing::info!(
+            "JsKeyhive::events_for_agent - Returning Map with {} events ({} CGKA ops excluded)",
+            included_count,
+            excluded_cgka_count
+        );
         map
     }
 
