@@ -1859,21 +1859,39 @@ impl<
             .prekey_ops()
             .len() as u64;
 
+        // Count prekeys_expanded and prekey_rotations across all individuals
+        let mut prekeys_expanded = 0 as u64;
+        let mut prekey_rotations = 0 as u64;
+        for individual in self.individuals.lock().await.values() {
+            for key_op in individual.lock().await.prekey_ops().values() {
+                match key_op.as_ref() {
+                    KeyOp::Add(_) => prekeys_expanded += 1,
+                    KeyOp::Rotate(_) => prekey_rotations += 1,
+                }
+            }
+        }
+
+        // Count CGKA operations across all documents
+        let mut cgka_operations = 0 as u64;
+        for doc in self.docs.lock().await.values() {
+            if let Ok(cgka) = doc.lock().await.cgka() {
+                cgka_operations += cgka.ops_count() as u64;
+            }
+        }
+
         let active_id = self.id();
         let pending_events = self.pending_events.lock().await;
 
-        tracing::warn!("stats(): pending_events.len()={}", pending_events.len());
-
-        let mut pending_prekeys_expanded = 0u64;
-        let mut pending_prekeys_expanded_by_active = 0u64;
-        let mut pending_prekey_rotated = 0u64;
-        let mut pending_prekey_rotated_by_active = 0u64;
-        let mut pending_cgka_operation = 0u64;
-        let mut pending_cgka_operation_by_active = 0u64;
-        let mut pending_delegated = 0u64;
-        let mut pending_delegated_by_active = 0u64;
-        let mut pending_revoked = 0u64;
-        let mut pending_revoked_by_active = 0u64;
+        let mut pending_prekeys_expanded = 0 as u64;
+        let mut pending_prekeys_expanded_by_active = 0 as u64;
+        let mut pending_prekey_rotated = 0 as u64;
+        let mut pending_prekey_rotated_by_active = 0 as u64;
+        let mut pending_cgka_operation = 0 as u64;
+        let mut pending_cgka_operation_by_active = 0 as u64;
+        let mut pending_delegated = 0 as u64;
+        let mut pending_delegated_by_active = 0 as u64;
+        let mut pending_revoked = 0 as u64;
+        let mut pending_revoked_by_active = 0 as u64;
 
         for event in pending_events.iter() {
             match event.as_ref() {
@@ -1916,6 +1934,9 @@ impl<
             docs: self.docs.as_ref().lock().await.len() as u64,
             delegations: self.delegations.0.lock().await.len() as u64,
             revocations: self.revocations.0.lock().await.len() as u64,
+            prekeys_expanded,
+            prekey_rotations,
+            cgka_operations,
             active_prekey_count,
             pending_prekeys_expanded,
             pending_prekeys_expanded_by_active,
