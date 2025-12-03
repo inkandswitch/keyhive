@@ -140,6 +140,11 @@ impl Cgka {
         self.init_add_op.clone()
     }
 
+    /// Get the count of CGKA operations in the graph.
+    pub fn ops_count(&self) -> usize {
+        self.ops_graph.cgka_ops.len()
+    }
+
     /// Derive an [`ApplicationSecret`] from our current [`PcsKey`] for new content
     /// to encrypt.
     ///
