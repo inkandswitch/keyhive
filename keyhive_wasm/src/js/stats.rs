@@ -11,12 +11,15 @@ impl fmt::Display for JsStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Stats {{ individuals: {}, groups: {}, docs: {}, delegations: {}, revocations: {}, active_prekey_count: {}, pending_prekeys_expanded: {}, pending_prekeys_expanded_by_active: {}, pending_prekey_rotated: {}, pending_prekey_rotated_by_active: {}, pending_cgka_operation: {}, pending_cgka_operation_by_active: {}, pending_delegated: {}, pending_delegated_by_active: {}, pending_revoked: {}, pending_revoked_by_active: {} }}",
+            "Stats {{ individuals: {}, groups: {}, docs: {}, delegations: {}, revocations: {}, prekeys_expanded: {}, prekey_rotations: {}, cgka_operations: {}, active_prekey_count: {}, pending_prekeys_expanded: {}, pending_prekeys_expanded_by_active: {}, pending_prekey_rotated: {}, pending_prekey_rotated_by_active: {}, pending_cgka_operation: {}, pending_cgka_operation_by_active: {}, pending_delegated: {}, pending_delegated_by_active: {}, pending_revoked: {}, pending_revoked_by_active: {} }}",
             self.0.individuals,
             self.0.groups,
             self.0.docs,
             self.0.delegations,
             self.0.revocations,
+            self.0.prekeys_expanded,
+            self.0.prekey_rotations,
+            self.0.cgka_operations,
             self.0.active_prekey_count,
             self.0.pending_prekeys_expanded,
             self.0.pending_prekeys_expanded_by_active,
@@ -57,6 +60,21 @@ impl JsStats {
     #[wasm_bindgen(getter)]
     pub fn revocations(&self) -> u64 {
         self.0.revocations
+    }
+
+    #[wasm_bindgen(getter, js_name = prekeysExpanded)]
+    pub fn prekeys_expanded(&self) -> u64 {
+        self.0.prekeys_expanded
+    }
+
+    #[wasm_bindgen(getter, js_name = prekeyRotations)]
+    pub fn prekey_rotations(&self) -> u64 {
+        self.0.prekey_rotations
+    }
+
+    #[wasm_bindgen(getter, js_name = cgkaOperations)]
+    pub fn cgka_operations(&self) -> u64 {
+        self.0.cgka_operations
     }
 
     #[wasm_bindgen(getter, js_name = activePrekeyCount)]

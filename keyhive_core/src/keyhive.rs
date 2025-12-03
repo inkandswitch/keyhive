@@ -1859,6 +1859,26 @@ impl<
             .prekey_ops()
             .len() as u64;
 
+        // Count prekeys_expanded and prekey_rotations across all individuals
+        let mut prekeys_expanded = 0u64;
+        let mut prekey_rotations = 0u64;
+        for individual in self.individuals.lock().await.values() {
+            for key_op in individual.lock().await.prekey_ops().values() {
+                match key_op.as_ref() {
+                    KeyOp::Add(_) => prekeys_expanded += 1,
+                    KeyOp::Rotate(_) => prekey_rotations += 1,
+                }
+            }
+        }
+
+        // Count CGKA operations across all documents
+        let mut cgka_operations = 0u64;
+        for doc in self.docs.lock().await.values() {
+            if let Ok(cgka) = doc.lock().await.cgka() {
+                cgka_operations += cgka.ops_count() as u64;
+            }
+        }
+
         let active_id = self.id();
         let pending_events = self.pending_events.lock().await;
 
@@ -1916,6 +1936,9 @@ impl<
             docs: self.docs.as_ref().lock().await.len() as u64,
             delegations: self.delegations.0.lock().await.len() as u64,
             revocations: self.revocations.0.lock().await.len() as u64,
+            prekeys_expanded,
+            prekey_rotations,
+            cgka_operations,
             active_prekey_count,
             pending_prekeys_expanded,
             pending_prekeys_expanded_by_active,
