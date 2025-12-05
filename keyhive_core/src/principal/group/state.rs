@@ -233,7 +233,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
         agent: Agent<S, T, L>,
     ) -> Vec<Arc<Signed<Delegation<S, T, L>>>> {
         let mut dlgs = Vec::new();
-        for delegation in self.delegations.0.lock().await.values() {
+        for delegation in self.delegations.delegations().lock().await.values() {
             if agent == delegation.payload().delegate {
                 dlgs.push(delegation.dupe());
             }
