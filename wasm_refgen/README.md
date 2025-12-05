@@ -76,7 +76,7 @@ or by value, the cost is the same due to how `wasm-bindgen` handles
 
 ```rust
 pub fn do_many_things(js_foos: Vec<JsFoo>) {
-  let rust_foos: Vec<WasmFoo> = js_foos.iter().map(Into::into).collect()
+  let rust_foos: Vec<WasmFoo> = js_foos.iter().map(Into::into).collect();
   // ...
 }
 ```
