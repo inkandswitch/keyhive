@@ -24,9 +24,8 @@ pub struct RevocationStore<
     T: ContentRef = [u8; 32],
     L: MembershipListener<S, T> = NoListener,
 > {
-    pub revocations: Arc<Mutex<CaMap<Signed<Revocation<S, T, L>>>>>,
-    pub agent_to_revocations:
-        Arc<Mutex<HashMap<AgentId, HashSet<Arc<Signed<Revocation<S, T, L>>>>>>>,
+    revocations: Arc<Mutex<CaMap<Signed<Revocation<S, T, L>>>>>,
+    agent_to_revocations: Arc<Mutex<HashMap<AgentId, HashSet<Arc<Signed<Revocation<S, T, L>>>>>>>,
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore<S, T, L> {
@@ -36,6 +35,19 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore
             revocations: Arc::new(Mutex::new(CaMap::new())),
             agent_to_revocations: Arc::new(Mutex::new(HashMap::default())),
         }
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn revocations(&self) -> &Arc<Mutex<CaMap<Signed<Revocation<S, T, L>>>>> {
+        &self.revocations
+    }
+
+    pub async fn len(&self) -> usize {
+        self.revocations.lock().await.len()
+    }
+
+    pub async fn is_empty(&self) -> bool {
+        self.len().await == 0
     }
 
     /// Retrieve a [`Revocation`] by its [`Digest`].
