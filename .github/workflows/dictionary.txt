@@ -17,8 +17,8 @@ Crypto
 Cryptree
 DCGKA
 DCGKA's
-Dev
 DNS
+Dev
 ECDH
 EE
 EdDSA
@@ -26,6 +26,9 @@ FIXME
 GroupId
 HChaCha
 Invariants
+JS
+JS-imported
+JS-representation
 Keyhive
 Keyoxide
 MLS
@@ -35,19 +38,19 @@ Nonces
 OCAP's
 OCap
 OpenPGP
-PeerId
 PKI
 PN
 PQC
+PeerId
 PoLA
 README
 RLE
 RPC
 SChaCha
-Sedimentree
-Sedimentrees
 SDK
 SPKI
+Sedimentree
+Sedimentrees
 ShareSecretKeys
 Stateful
 TLS
@@ -69,6 +72,7 @@ authn
 authz
 backoff
 bchacha-note
+bindgen
 blake
 ciphertext
 cleartext
@@ -126,6 +130,8 @@ sneakernets
 socio-economic
 stateful
 statefulness
+struct
+struct's
 subgraph
 subpath
 subsumptions
@@ -134,4 +140,5 @@ subtyping
 tombstoned
 tradeoffs
 unwieldly
+upcasts
 www
