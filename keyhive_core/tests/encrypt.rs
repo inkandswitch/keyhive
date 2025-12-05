@@ -78,7 +78,7 @@ async fn test_encrypt_to_added_member() -> TestResult {
         .static_events_for_agent(&bob.active().lock().await.clone().into())
         .await?;
     bob.ingest_unsorted_static_events(alice_events.into_values().collect())
-        .await?;
+        .await;
 
     // Attempt to decrypt on bob
     let doc_id = { doc.lock().await.doc_id() };
@@ -128,7 +128,7 @@ async fn test_decrypt_after_to_from_archive() {
     while let Some(evt) = log.pop().await {
         events.push(StaticEvent::from(evt));
     }
-    alice.ingest_unsorted_static_events(events).await.unwrap();
+    alice.ingest_unsorted_static_events(events).await;
 
     let doc = {
         let locked_doc = doc.lock().await;
@@ -206,7 +206,7 @@ async fn test_decrypt_after_fork_and_merge() {
         .unwrap();
 
         keyhive.ingest_archive(archive2).await.unwrap();
-        keyhive.ingest_unsorted_static_events(events).await.unwrap();
+        keyhive.ingest_unsorted_static_events(events).await;
 
         keyhive
     };
