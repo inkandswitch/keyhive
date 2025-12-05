@@ -37,6 +37,7 @@ pub mod signed_invocation;
 pub mod signed_revocation;
 pub mod signer;
 pub mod signing_error;
+pub mod stats;
 pub mod summary;
 
 pub(crate) mod base64;
