@@ -92,7 +92,7 @@ to be stored.
 ## Decoding Performance
 
 While streaming decoders are possible to build for Protobuf data, decoding Protobufs
-can be costly in both memory and cycles some cases. FlatBuffers have advantages over
+can be costly in both memory and cycles in some cases. FlatBuffers have advantages over
 Protobuf with better support for features like zero-copy deserialization.
 
 ## Default vs Unset Fields
