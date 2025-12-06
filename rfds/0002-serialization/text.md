@@ -33,7 +33,7 @@ of implementation and security concerns.
 
 # Choice: Protocol Buffers v3
 
-We believe that [Protocol Buffers] version 3 ("Protobuf" or "proto3")
+We believe that [Protocol Buffers][Protobuf] version 3 ("Protobuf" or "proto3")
 is a good fit for the Keyhive use case.
 
 Protobuf is attractive from a pure engineering perspective:
