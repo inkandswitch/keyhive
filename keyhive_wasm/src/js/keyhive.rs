@@ -1,6 +1,6 @@
 use crate::{
     js::{
-        document_id::JsDocumentId, group_id::JsGroupId, individual::JsIndividual,
+        document_id::JsDocumentId, event::JsEvent, group_id::JsGroupId, individual::JsIndividual,
         membership::Membership,
     },
     macros::init_span,
@@ -37,6 +37,7 @@ use derive_more::{From, Into};
 use dupe::{Dupe, IterDupedExt};
 use from_js_ref::FromJsRef;
 use keyhive_core::{
+    event::Event,
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
     principal::{agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError},
 };
@@ -337,6 +338,33 @@ impl JsKeyhive {
     pub async fn get_agent(&self, id: &JsIdentifier) -> Option<JsAgent> {
         init_span!("JsKeyhive::get_agent");
         self.0.get_agent(id.0).await.map(JsAgent)
+    }
+
+    #[wasm_bindgen(js_name = eventsForAgent)]
+    pub async fn events_for_agent(&self, agent: &JsAgent) -> js_sys::Map {
+        init_span!("JsKeyhive::events_for_agent");
+        let events = self.0.events_for_agent(&agent.0).await.unwrap_or_default();
+        let map = js_sys::Map::new();
+        for (digest, event) in events {
+            let hash = js_sys::Uint8Array::from(digest.as_slice());
+            let js_event = JsEvent::from(event);
+            map.set(&hash.into(), &JsValue::from(js_event));
+        }
+        map
+    }
+
+    #[wasm_bindgen(js_name = membershipOpsForAgent)]
+    pub async fn membership_ops_for_agent(&self, agent: &JsAgent) -> js_sys::Map {
+        init_span!("JsKeyhive::membership_ops_for_agent");
+        let membership_ops = self.0.membership_ops_for_agent(&agent.0).await;
+        let map = js_sys::Map::new();
+        for (digest, op) in membership_ops {
+            let hash = js_sys::Uint8Array::from(digest.as_slice());
+            let event: Event<JsSigner, JsChangeId, JsEventHandler> = op.into();
+            let js_event = JsEvent::from(event);
+            map.set(&hash.into(), &JsValue::from(js_event));
+        }
+        map
     }
 
     #[wasm_bindgen(js_name = getGroup)]
