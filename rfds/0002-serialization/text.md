@@ -234,7 +234,7 @@ compaction more than flexibility).
 
 [contraindictions]: #contraindications
 
-<!-- Extenral Links -->
+<!-- External Links -->
 
 [Benchmark of JSON paper]: https://arxiv.org/pdf/2201.03051
 [ASN.1]: https://www.itu.int/rec/T-REC-X.680/
