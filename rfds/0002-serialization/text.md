@@ -86,8 +86,7 @@ to check hashes or signatures.
 
 Given that Keyhive uses end-to-end encryption, and any node in local-first 
 may act as a provider, we expect that most implementations will store 
-the ciphertexts directly, thus we assume that the exact bytes are assumed
-to be stored.
+the ciphertexts directly, thus we assume that the exact bytes will be stored.
 
 ## Decoding Performance
 
