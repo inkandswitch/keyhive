@@ -412,17 +412,26 @@ impl<
         can: Access,
         other_relevant_docs: &[Arc<Mutex<Document<S, T, L>>>], // TODO make this automatic
     ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError> {
+        let registered_to_add = if let Some(registered) = self.get_agent(to_add.id()).await {
+            registered
+        } else {
+            if let Agent::Individual(_, indie) = &to_add {
+                self.register_individual(indie.dupe()).await;
+            }
+            to_add
+        };
+
         let signer = { self.active.lock().await.signer.clone() };
         match resource {
             Membered::Group(_, group) => Ok(group
                 .lock()
                 .await
-                .add_member(to_add, can, &signer, other_relevant_docs)
+                .add_member(registered_to_add, can, &signer, other_relevant_docs)
                 .await?),
             Membered::Document(_, doc) => {
                 let mut locked = doc.lock().await;
                 locked
-                    .add_member(to_add, can, &signer, other_relevant_docs)
+                    .add_member(registered_to_add, can, &signer, other_relevant_docs)
                     .await
             }
         }
@@ -744,14 +753,18 @@ impl<
         agent: &Agent<S, T, L>,
     ) -> HashMap<Identifier, Vec<Arc<KeyOp>>> {
         fn add_many_keys(
-            map: &mut HashMap<Identifier, Vec<Arc<KeyOp>>>,
+            map: &mut HashMap<Identifier, HashSet<Arc<KeyOp>>>,
             agent_id: Identifier,
             key_ops: HashSet<Arc<KeyOp>>,
         ) {
+            map.entry(agent_id).or_default().extend(key_ops);
+        }
+
+        fn topsort_keys(key_ops: &HashSet<Arc<KeyOp>>) -> Vec<Arc<KeyOp>> {
             let mut heads: Vec<Arc<KeyOp>> = vec![];
             let mut rotate_key_ops: HashMap<ShareKey, HashSet<Arc<KeyOp>>> = HashMap::new();
 
-            for key_op in &key_ops {
+            for key_op in key_ops {
                 match key_op.as_ref() {
                     KeyOp::Add(_add) => {
                         heads.push(key_op.dupe());
@@ -779,7 +792,7 @@ impl<
                 topsorted.push(head.dupe());
             }
 
-            map.insert(agent_id, topsorted);
+            topsorted
         }
 
         let mut map = HashMap::new();
@@ -851,7 +864,9 @@ impl<
             }
         }
 
-        map
+        map.into_iter()
+            .map(|(id, keys)| (id, topsort_keys(&keys)))
+            .collect()
     }
 
     #[instrument(skip_all)]
@@ -2442,7 +2457,10 @@ mod tests {
         let group = hive1.generate_group(vec![]).await.unwrap();
         let group_id = group.lock().await.group_id();
         let doc = hive1
-            .generate_doc(vec![Peer::Group(group_id, group.dupe())], nonempty![[0u8; 32]])
+            .generate_doc(
+                vec![Peer::Group(group_id, group.dupe())],
+                nonempty![[0u8; 32]],
+            )
             .await
             .unwrap();
         let doc_id = doc.lock().await.doc_id();
@@ -2586,6 +2604,89 @@ mod tests {
             .unwrap();
 
         bob.ingest_event_table(events).await.unwrap();
+    }
+
+    /// Test that reachable_prekey_ops_for_agent merges prekeys from multiple sources
+    /// rather than overwriting them.
+    #[tokio::test]
+    async fn test_reachable_prekey_ops_merges_not_overwrites() {
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let bob = make_keyhive().await;
+
+        let bob_add_op = bob.expand_prekeys().await.unwrap();
+        let bob_rotate_op1 = bob
+            .rotate_prekey(bob_add_op.payload.share_key)
+            .await
+            .unwrap();
+        let bob_rotate_op2 = bob.rotate_prekey(bob_rotate_op1.payload.new).await.unwrap();
+
+        let bob_on_alice_for_delegation =
+            Arc::new(Mutex::new(Individual::new(KeyOp::Add(bob_add_op.clone()))));
+        assert!(
+            alice
+                .register_individual(bob_on_alice_for_delegation.clone())
+                .await
+        );
+        let bob_id = bob_on_alice_for_delegation.lock().await.id();
+
+        let doc = alice
+            .generate_doc(vec![], nonempty![[0u8; 32]])
+            .await
+            .unwrap();
+        let doc_id = doc.lock().await.doc_id();
+        alice
+            .add_member(
+                Agent::Individual(bob_id, bob_on_alice_for_delegation.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let mut bob_individual_with_rotations = Individual::new(KeyOp::Add(bob_add_op.clone()));
+        bob_individual_with_rotations
+            .receive_prekey_op(KeyOp::Rotate(bob_rotate_op1))
+            .unwrap();
+        bob_individual_with_rotations
+            .receive_prekey_op(KeyOp::Rotate(bob_rotate_op2))
+            .unwrap();
+        let bob_on_alice_with_rotations = Arc::new(Mutex::new(bob_individual_with_rotations));
+
+        assert_eq!(
+            bob_on_alice_with_rotations.lock().await.prekey_ops().len(),
+            3,
+            "bob_on_alice_with_rotations should have 3 prekey ops"
+        );
+
+        assert_eq!(
+            bob_on_alice_for_delegation.lock().await.prekey_ops().len(),
+            1,
+            "bob_on_alice_for_delegation should have 1 prekey op"
+        );
+
+        let prekey_ops = alice
+            .reachable_prekey_ops_for_agent(&Agent::Individual(
+                bob_id,
+                bob_on_alice_with_rotations.dupe(),
+            ))
+            .await;
+
+        let bob_prekeys_in_result = prekey_ops.get(&bob_id.into());
+        assert!(
+            bob_prekeys_in_result.is_some(),
+            "Bob's prekeys should be in the result"
+        );
+
+        let bob_prekey_vec = bob_prekeys_in_result.unwrap();
+        assert_eq!(
+            bob_prekey_vec.len(),
+            3,
+            "all 3 of Bob's prekey ops should be present, but got {}",
+            bob_prekey_vec.len()
+        );
     }
 
     #[tokio::test]
@@ -2744,5 +2845,84 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    /// Test that [`Keyhive::add_member`] uses the registered [`Individual`] when a different [`Arc`]
+    /// with the same id is passed in.
+    #[tokio::test]
+    async fn test_add_member_uses_registered_individual() {
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let bob = make_keyhive().await;
+
+        // Get Bob's initial prekey op
+        let bob_initial_op = bob.expand_prekeys().await.unwrap();
+        let bob_initial_key_op = KeyOp::Add(bob_initial_op);
+
+        // Alice registers Bob with just the initial op
+        let bob_on_alice = Arc::new(Mutex::new(Individual::new(bob_initial_key_op.clone())));
+        assert!(alice.register_individual(bob_on_alice.clone()).await);
+        let bob_id = bob_on_alice.lock().await.id();
+
+        // Bob generates more prekeys
+        let bob_extra_op1 = bob.expand_prekeys().await.unwrap();
+        let bob_extra_op2 = bob.expand_prekeys().await.unwrap();
+
+        // Alice receives Bob's additional prekeys
+        alice
+            .receive_prekey_op(&KeyOp::Add(bob_extra_op1))
+            .await
+            .unwrap();
+        alice
+            .receive_prekey_op(&KeyOp::Add(bob_extra_op2))
+            .await
+            .unwrap();
+
+        // Verify the registered Individual now has 3 prekeys
+        let registered_bob = alice.get_individual(bob_id).await.unwrap();
+        let registered_prekey_count = registered_bob.lock().await.prekey_ops().len();
+        assert_eq!(
+            registered_prekey_count, 3,
+            "Registered Individual should have 3 prekeys"
+        );
+
+        // Alice creates a document
+        let doc = alice
+            .generate_doc(vec![], nonempty![[0u8; 32]])
+            .await
+            .unwrap();
+        let doc_id = doc.lock().await.doc_id();
+
+        // Create a new Individual from Bob's original prekey op
+        let new_bob_from_initial_op = Arc::new(Mutex::new(Individual::new(bob_initial_key_op)));
+        assert_eq!(
+            1,
+            new_bob_from_initial_op.lock().await.prekey_ops().len(),
+            "New Individual from contact card should have only 1 prekey"
+        );
+
+        // Call add_member with the new Individual `Arc` (not the registered one)
+        alice
+            .add_member(
+                Agent::Individual(bob_id, new_bob_from_initial_op),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // transitive_members should return Bob with 3 prekeys, not just the 1 from
+        // the initial op
+        let doc_members = doc.lock().await.transitive_members().await;
+        let (bob_agent, _access) = doc_members
+            .get(&bob_id.into())
+            .expect("agent should be in transitive_members");
+        assert_eq!(
+            bob_agent.key_ops().await.len(),
+            3,
+            "key_ops should return all prekeys for agent"
+        );
     }
 }
