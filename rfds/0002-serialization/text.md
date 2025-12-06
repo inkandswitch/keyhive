@@ -232,7 +232,7 @@ compaction more than flexibility).
 
 <!-- Internal links -->
 
-[contraindictions]: #contraindications
+[contraindications]: #contraindications
 
 <!-- External Links -->
 
