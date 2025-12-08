@@ -1,7 +1,7 @@
 use crate::{
     js::{
         document_id::JsDocumentId, group_id::JsGroupId, individual::JsIndividual,
-        membership::Membership,
+        membership::Membership, stats::JsStats,
     },
     macros::init_span,
 };
@@ -317,10 +317,10 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = receiveContactCard)]
     pub async fn receive_contact_card(
         &self,
-        contact_card: JsContactCard,
+        contact_card: &JsContactCard,
     ) -> Result<JsIndividual, JsReceivePreKeyOpError> {
         init_span!("JsKeyhive::receive_contact_card");
-        match self.0.receive_contact_card(&contact_card).await {
+        match self.0.receive_contact_card(&contact_card.clone()).await {
             Ok(individual) => {
                 let id = { individual.lock().await.id() };
                 let js_indie = JsIndividual {
@@ -416,6 +416,11 @@ impl JsKeyhive {
         tracing::debug!("JsKeyhive::ingest_archive");
         self.0.ingest_archive(archive.clone().0).await?;
         Ok(())
+    }
+
+    #[wasm_bindgen(js_name = stats)]
+    pub async fn stats(&self) -> JsStats {
+        JsStats(self.0.stats().await)
     }
 }
 

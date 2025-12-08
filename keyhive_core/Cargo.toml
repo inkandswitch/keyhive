@@ -2,7 +2,7 @@
 
 name = "keyhive_core"
 version = "0.2.0-alpha.1"
-description = "Core Beehive types and functions"
+description = "Core Keyhive types and functions"
 
 authors.workspace = true
 license.workspace = true
