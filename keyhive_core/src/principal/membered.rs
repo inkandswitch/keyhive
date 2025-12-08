@@ -16,7 +16,7 @@ use crate::{
         digest::Digest, signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable,
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
-    util::content_addressed_map::CaMap,
+    store::{delegation::DelegationStore, revocation::RevocationStore},
 };
 use dupe::{Dupe, OptionDupedExt};
 use futures::lock::Mutex;
@@ -69,14 +69,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, 
         }
     }
 
-    pub async fn delegation_heads(&self) -> CaMap<Signed<Delegation<S, T, L>>> {
+    pub async fn delegation_heads(&self) -> DelegationStore<S, T, L> {
         match self {
             Membered::Group(_, group) => group.lock().await.delegation_heads().clone(),
             Membered::Document(_, document) => document.lock().await.delegation_heads().clone(),
         }
     }
 
-    pub async fn revocation_heads(&self) -> CaMap<Signed<Revocation<S, T, L>>> {
+    pub async fn revocation_heads(&self) -> RevocationStore<S, T, L> {
         match self {
             Membered::Group(_, group) => group.lock().await.revocation_heads().clone(),
             Membered::Document(_, document) => document.lock().await.revocation_heads().clone(),

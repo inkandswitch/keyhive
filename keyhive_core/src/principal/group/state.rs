@@ -14,10 +14,10 @@ use crate::{
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::Agent, group::delegation::DelegationError, identifier::Identifier},
     store::{delegation::DelegationStore, revocation::RevocationStore},
-    util::content_addressed_map::CaMap,
 };
 use derive_where::derive_where;
 use dupe::Dupe;
+use futures::lock::Mutex;
 use std::{cmp::Ordering, collections::BTreeMap, sync::Arc};
 
 #[derive(Clone)]
@@ -30,35 +30,35 @@ pub struct GroupState<
     pub(crate) id: GroupId,
 
     #[derive_where(skip)]
-    pub(crate) delegations: DelegationStore<S, T, L>,
-    pub(crate) delegation_heads: CaMap<Signed<Delegation<S, T, L>>>,
+    pub(crate) delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+    pub(crate) delegation_heads: DelegationStore<S, T, L>,
 
     #[derive_where(skip)]
-    pub(crate) revocations: RevocationStore<S, T, L>,
-    pub(crate) revocation_heads: CaMap<Signed<Revocation<S, T, L>>>,
+    pub(crate) revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
+    pub(crate) revocation_heads: RevocationStore<S, T, L>,
 }
 
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T, L> {
     pub async fn new(
         delegation_head: Arc<Signed<Delegation<S, T, L>>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
     ) -> Self {
         let id = GroupId(delegation_head.verifying_key().into());
         let mut heads = vec![delegation_head.dupe()];
 
         while let Some(head) = heads.pop() {
-            if delegations.contains_value(head.as_ref()).await {
+            if delegations.lock().await.contains_value(head.as_ref()) {
                 continue;
             }
 
-            delegations.insert(head.dupe()).await;
+            delegations.lock().await.insert(head.dupe());
 
             for dlg in head.payload().proof_lineage() {
-                delegations.insert(dlg.dupe()).await;
+                delegations.lock().await.insert(dlg.dupe());
 
                 for rev in dlg.payload().after_revocations.as_slice() {
-                    revocations.insert(rev.dupe()).await;
+                    revocations.lock().await.insert(rev.dupe());
 
                     if let Some(proof) = &rev.payload().proof {
                         heads.push(proof.dupe());
@@ -67,7 +67,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
             }
         }
 
-        let mut delegation_heads = CaMap::new();
+        let mut delegation_heads = DelegationStore::new();
         delegation_heads.insert(delegation_head);
 
         Self {
@@ -78,15 +78,15 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
 
             // NOTE revocation_heads are guaranteed to be blank at this stage
             // because they can only come before the delegation passed in.
-            revocation_heads: CaMap::new(),
+            revocation_heads: RevocationStore::new(),
             revocations,
         }
     }
 
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
         parents: Vec<Agent<S, T, L>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let signer = MemorySigner::generate(csprng);
@@ -95,10 +95,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
         let group = GroupState {
             id: GroupId(group_id),
 
-            delegation_heads: CaMap::new(),
+            delegation_heads: DelegationStore::new(),
             delegations,
 
-            revocation_heads: CaMap::new(),
+            revocation_heads: RevocationStore::new(),
             revocations,
         };
 
@@ -125,11 +125,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
         self.id
     }
 
-    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<S, T, L>>> {
+    pub fn delegation_heads(&self) -> &DelegationStore<S, T, L> {
         &self.delegation_heads
     }
 
-    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<S, T, L>>> {
+    pub fn revocation_heads(&self) -> &RevocationStore<S, T, L> {
         &self.revocation_heads
     }
 
@@ -180,7 +180,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
             }
         }
 
-        let hash = self.delegations.insert(delegation).await;
+        let hash = self.delegations.lock().await.insert(delegation);
         Ok(hash)
     }
 
@@ -224,7 +224,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
 
         self.revocation_heads.insert(revocation.dupe());
 
-        let hash = self.revocations.insert(revocation).await;
+        let hash = self.revocations.lock().await.insert(revocation);
         Ok(hash)
     }
 
@@ -233,7 +233,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
         agent: Agent<S, T, L>,
     ) -> Vec<Arc<Signed<Delegation<S, T, L>>>> {
         let mut dlgs = Vec::new();
-        for delegation in self.delegations.delegations().lock().await.values() {
+        for delegation in self.delegations.lock().await.values() {
             if agent == delegation.payload().delegate {
                 dlgs.push(delegation.dupe());
             }
@@ -243,16 +243,16 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
 
     pub(crate) fn dummy_from_archive(
         archive: GroupStateArchive<T>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
     ) -> Self {
         Self {
             id: archive.id,
 
-            delegation_heads: CaMap::new(),
+            delegation_heads: DelegationStore::new(),
             delegations,
 
-            revocation_heads: CaMap::new(),
+            revocation_heads: RevocationStore::new(),
             revocations,
         }
     }

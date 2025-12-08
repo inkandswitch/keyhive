@@ -31,8 +31,8 @@ use x25519_dalek::SharedSecret;
 ///     let user = Individual::generate(&sk, &mut csprng).await.unwrap();
 ///     let user_agent: Agent<MemorySigner, String> = Agent::Individual(user.id(), Arc::new(Mutex::new(user)));
 ///
-///     let delegation_store = DelegationStore::new();
-///     let revocation_store = RevocationStore::new();
+///     let delegation_store = Arc::new(Mutex::new(DelegationStore::new()));
+///     let revocation_store = Arc::new(Mutex::new(RevocationStore::new()));
 ///     let doc = Document::generate(
 ///         nonempty![user_agent],
 ///         nonempty!["commit-1".to_string()],

@@ -38,7 +38,6 @@ use crate::{
     },
     listener::{membership::MembershipListener, no_listener::NoListener},
     store::{delegation::DelegationStore, revocation::RevocationStore},
-    util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
 use derive_more::Debug;
@@ -86,8 +85,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     pub async fn new(
         group_id: GroupId,
         head: Arc<Signed<Delegation<S, T, L>>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
         listener: L,
     ) -> Self {
         listener.on_delegation(&head).await;
@@ -107,8 +106,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     pub async fn from_individual(
         individual: Individual,
         head: Arc<Signed<Delegation<S, T, L>>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
         listener: L,
     ) -> Self {
         listener.on_delegation(&head).await;
@@ -126,8 +125,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
         parents: NonEmpty<Agent<S, T, L>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
         listener: L,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Group<S, T, L>, SigningError> {
@@ -153,14 +152,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         signer: Box<dyn SyncSignerBasic>,
         verifier: ed25519_dalek::VerifyingKey,
         parents: NonEmpty<Agent<S, T, L>>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
         listener: L,
     ) -> Result<Self, SigningError> {
         let id = verifier.into();
         let group_id = GroupId(id);
-        let mut delegation_heads = CaMap::new();
+        let mut delegation_heads = DelegationStore::new();
 
         {
             let async_listener = Arc::new(&listener);
@@ -180,7 +179,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                 )?;
 
                 let rc = Arc::new(dlg);
-                delegations.insert(rc.dupe()).await;
+                delegations.lock().await.insert(rc.dupe());
                 delegation_heads.insert(rc.dupe());
 
                 let listen = async_listener.dupe();
@@ -205,7 +204,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                 delegation_heads,
                 delegations,
 
-                revocation_heads: CaMap::new(),
+                revocation_heads: RevocationStore::new(),
                 revocations,
             },
             listener,
@@ -329,11 +328,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         caps
     }
 
-    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<S, T, L>>> {
+    pub fn delegation_heads(&self) -> &DelegationStore<S, T, L> {
         &self.state.delegation_heads
     }
 
-    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<S, T, L>>> {
+    pub fn revocation_heads(&self) -> &RevocationStore<S, T, L> {
         &self.state.revocation_heads
     }
 
@@ -357,8 +356,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     ) -> Vec<Arc<Signed<Revocation<S, T, L>>>> {
         self.state
             .revocations
-            .get_revocations_for_agent(&agent.agent_id())
+            .lock()
             .await
+            .get_revocations_for_agent(&agent.agent_id())
             .map(|set| set.into_iter().collect())
             .unwrap_or_default()
     }
@@ -817,8 +817,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
 
     pub(crate) fn dummy_from_archive(
         archive: GroupArchive<T>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
         listener: L,
     ) -> Self {
         Self {
@@ -960,8 +960,8 @@ mod tests {
             Agent::Active(alice.lock().await.id(), alice.dupe());
         let bob_agent = Agent::Active(bob.lock().await.id(), bob.dupe());
 
-        let dlg_store = DelegationStore::new();
-        let rev_store = RevocationStore::new();
+        let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+        let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
 
         let g0 = Arc::new(Mutex::new(
             Group::generate(
@@ -1026,8 +1026,8 @@ mod tests {
         bob: Arc<Mutex<Active<MemorySigner, T>>>,
         csprng: Arc<Mutex<R>>,
     ) -> [Arc<Mutex<Group<MemorySigner, T>>>; 10] {
-        let dlg_store = DelegationStore::new();
-        let rev_store = RevocationStore::new();
+        let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+        let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
 
         let group0 = Arc::new(Mutex::new(
             Group::generate(
@@ -1358,8 +1358,8 @@ mod tests {
             (locked_active.id(), locked_active.signer.clone())
         };
 
-        let dlg_store = DelegationStore::new();
-        let rev_store = RevocationStore::new();
+        let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+        let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
 
         let arc_csprng = Arc::new(Mutex::new(csprng));
 
@@ -1523,8 +1523,8 @@ mod tests {
 
         let dan_id = dan.lock().await.id().into();
 
-        let dlg_store = DelegationStore::new();
-        let rev_store = RevocationStore::new();
+        let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+        let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
 
         let mut g1 = Group::generate(
             nonempty![alice_agent.dupe()],
