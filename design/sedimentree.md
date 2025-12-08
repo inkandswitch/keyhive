@@ -16,7 +16,7 @@ A --> C
 
 The letters represent commit hashes and the arrows point from parents to children.
 
-In Git, commits are a snapshot of the file system and are made relatively infrequently. In Automerge, commits are sets of operations which should be applied to the document and are much more granular. We create an operation for every keystroke when editing text and we frequently create a commit for each operation. 
+In Git, commits are a snapshot of the file system and are made relatively infrequently. In Automerge, commits are sets of operations which should be applied to the document and are much more granular. We create an operation for every keystroke when editing text and we frequently create a commit for each operation.
 
 An Automerge document containing the string "hello" might well end up with a commit graph like this:
 
@@ -31,7 +31,7 @@ E[insert 'o']
 
 The operations themselves are not as simple as this graph suggests. Instead of 'insert {x}' the operation is more like 'insert {x} following operation {y}', where `y` is the ID of a previous insert operation. For this to work every operation has to have an ID associated with it.
 
-A straightforward encoding of this structure adds a lot of metadata overhead to the underlying data. Fortunately we are able to compress most of this away. The details are quite fiddly but the important point is that we take advantage of the structure of chains of commits which are created one after another. 
+A straightforward encoding of this structure adds a lot of metadata overhead to the underlying data. Fortunately we are able to compress most of this away. The details are quite fiddly but the important point is that we take advantage of the structure of chains of commits which are created one after another.
 
 The need to compress metadata has led to two different transport formats for Automerge documents. We either send individual commits (referred to in the Automerge API as "changes") or we encode the entire document. Which format we use depends on how we are synchronizing and storing changes.
 
@@ -49,7 +49,7 @@ There are lots of details to this protocol, but the important points are:
 
 ### The problem
 
-The largest problem we currently have with the sync protocol is the memory intensive nature of running a sync server. The ongoing work on runtime memory compression will ameliorate this issue, but another related problem looms. The Beehive project is working on implementing end to end encryption (bee-to-bee encryption) for Automerge which will require that sync servers do not have access to the plaintext of the commits in the commit graph - but this seems like it will make metadata compression much more complicated.
+The largest problem we currently have with the sync protocol is the memory intensive nature of running a sync server. The ongoing work on runtime memory compression will ameliorate this issue, but another related problem looms. The Keyhive project is working on implementing end to end encryption (bee-to-bee encryption) for Automerge which will require that sync servers do not have access to the plaintext of the commits in the commit graph - but this seems like it will make metadata compression much more complicated.
 
 Recall that in the current sync protocol if a peer is performing initial synchronization then we send them the entire compressed document in one go. This is crucial to avoid the bandwidth costs of the metadata overhead. Currently the sync server is able to produce this compressed document on the fly because it has the plaintext of the document available. In an end to end encrypted world all the sync server has is the commit graph, the actual contents of the commits are encrypted:
 

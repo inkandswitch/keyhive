@@ -1,7 +1,7 @@
 [package]
 name = "keyhive_wasm"
-version = "0.2.0-alpha.2"
-description = "WebAssembly wrappers for beehive_core"
+version = "0.2.0-alpha.1"
+description = "WebAssembly wrappers for keyhive_core"
 
 authors.workspace = true
 license.workspace = true
@@ -13,9 +13,9 @@ rust-version.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-from_js_ref = { path = "../from_js_ref" }
+from_js_ref = "0.1.2"
 keyhive_core = { path = "../keyhive_core" }
-wasm_refgen = { path = "../wasm_refgen" }
+wasm_refgen = "0.1.4"
 
 base64-simd = "0.8.0"
 bincode = { workspace = true }

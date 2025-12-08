@@ -1,8 +1,8 @@
 [package]
 
 name = "keyhive_core"
-version = "0.2.0-alpha.2"
-description = "Core Beehive types and functions"
+version = "0.2.0-alpha.1"
+description = "Core Keyhive types and functions"
 
 authors.workspace = true
 license.workspace = true

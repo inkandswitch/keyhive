@@ -2461,7 +2461,10 @@ mod tests {
         let group = hive1.generate_group(vec![]).await.unwrap();
         let group_id = group.lock().await.group_id();
         let doc = hive1
-            .generate_doc(vec![Peer::Group(group_id, group.dupe())], nonempty![[0u8; 32]])
+            .generate_doc(
+                vec![Peer::Group(group_id, group.dupe())],
+                nonempty![[0u8; 32]],
+            )
             .await
             .unwrap();
         let doc_id = doc.lock().await.doc_id();
