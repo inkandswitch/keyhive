@@ -1686,6 +1686,7 @@ impl<
         &self,
         events: Vec<StaticEvent<T>>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+        tracing::debug!("Keyhive::ingest_unsorted_static_events");
         let mut epoch = events;
 
         loop {
@@ -1727,6 +1728,7 @@ impl<
         &self,
         events: HashMap<Digest<Event<S, T, L>>, Event<S, T, L>>,
     ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+        tracing::debug!("Keyhive::ingest_event_table");
         self.ingest_unsorted_static_events(
             events.values().cloned().map(Into::into).collect::<Vec<_>>(),
         )
