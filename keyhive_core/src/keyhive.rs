@@ -1766,10 +1766,20 @@ impl<
         &self,
         mut events: Vec<StaticEvent<T>>,
     ) -> Vec<Arc<StaticEvent<T>>> {
+        // FIXME: Some errors might not be recoverable on future attempts
+        tracing::debug!("Keyhive::ingest_unsorted_static_events()");
         for event in self.pending_events.as_ref().lock().await.iter() {
             events.push(event.as_ref().clone());
         }
-        let mut epoch = events;
+
+        // Deduplicate events by hash
+        use std::collections::HashMap;
+        let mut unique_events: HashMap<Digest<StaticEvent<T>>, StaticEvent<T>> = HashMap::new();
+        for event in events {
+            let hash = Digest::hash(&event);
+            unique_events.entry(hash).or_insert(event);
+        }
+        let mut epoch: Vec<StaticEvent<T>> = unique_events.into_values().collect();
 
         loop {
             let mut next_epoch = vec![];
@@ -1794,11 +1804,6 @@ impl<
                     epoch_len,
                     err
                 );
-                // Stuck on a fixed point
-                tracing::warn!(
-                    "Fixed point while ingesting static events: {}",
-                    err.unwrap()
-                );
                 let new_pending: Vec<Arc<StaticEvent<T>>> =
                     next_epoch.clone().into_iter().map(Arc::new).collect();
                 drop(mem::replace(
@@ -1807,7 +1812,6 @@ impl<
                 ));
                 // FIXME: Some errors might not be recoverable on future attempts
                 return new_pending;
-                // return Err(err.unwrap());
             }
 
             epoch = next_epoch
