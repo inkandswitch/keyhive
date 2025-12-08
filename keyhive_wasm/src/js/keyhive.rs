@@ -492,9 +492,15 @@ impl JsKeyhive {
         let pending_events = self.0.ingest_unsorted_static_events(static_events).await;
         let pending_events_bytes: Vec<Vec<u8>> = pending_events
             .iter()
-            .filter_map(|event| {
+            .map(|event| {
                 let hash: Digest<StaticEvent<JsChangeId>> = Digest::hash(event.as_ref());
-                static_event_hash_to_bytes.get(&hash).cloned()
+                static_event_hash_to_bytes
+                    .get(&hash)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        bincode::serialize(event.as_ref())
+                            .expect("Failed to serialize pending event")
+                    })
             })
             .collect();
 
