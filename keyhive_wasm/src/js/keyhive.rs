@@ -369,6 +369,9 @@ impl JsKeyhive {
         let events = self.0.events_for_agent(&agent.0).await.unwrap_or_default();
         let map = js_sys::Map::new();
         for (digest, event) in events {
+            if let Event::CgkaOperation(_) = event {
+                continue;
+            };
             let hash = js_sys::Uint8Array::from(digest.as_slice());
             let js_event = JsEvent::from(event);
             map.set(&hash.into(), &JsValue::from(js_event));
