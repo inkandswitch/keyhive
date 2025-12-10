@@ -39,7 +39,6 @@ use crate::{
         delegation::DelegationStore,
         revocation::RevocationStore,
     },
-    util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
 use derive_where::derive_where;
@@ -127,11 +126,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.group.transitive_members().await
     }
 
-    pub fn delegation_heads(&self) -> &CaMap<Signed<Delegation<S, T, L>>> {
+    pub fn delegation_heads(&self) -> &DelegationStore<S, T, L> {
         self.group.delegation_heads()
     }
 
-    pub fn revocation_heads(&self) -> &CaMap<Signed<Revocation<S, T, L>>> {
+    pub fn revocation_heads(&self) -> &RevocationStore<S, T, L> {
         self.group.revocation_heads()
     }
 
@@ -147,8 +146,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
         parents: NonEmpty<Agent<S, T, L>>,
         initial_content_heads: NonEmpty<T>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
         listener: L,
         signer: &S,
         csprng: Arc<Mutex<R>>,
@@ -540,8 +539,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
 
     pub(crate) fn dummy_from_archive(
         archive: DocumentArchive<T>,
-        delegations: DelegationStore<S, T, L>,
-        revocations: RevocationStore<S, T, L>,
+        delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
         listener: L,
     ) -> Result<Self, MissingIndividualError> {
         Ok(Document {

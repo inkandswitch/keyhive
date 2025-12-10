@@ -98,10 +98,10 @@ pub struct Keyhive<
     docs: Arc<Mutex<HashMap<DocumentId, Arc<Mutex<Document<S, T, L>>>>>>,
 
     /// All applied [`Delegation`]s
-    delegations: DelegationStore<S, T, L>,
+    delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
 
     /// All applied [`Revocation`]s
-    revocations: RevocationStore<S, T, L>,
+    revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
 
     /// [`StaticEvent`]s that are still awaiting dependencies.
     pending_events: Arc<Mutex<Vec<Arc<StaticEvent<T>>>>>,
@@ -160,8 +160,8 @@ impl<
             active: Arc::new(Mutex::new(inner_active)),
             groups: Arc::new(Mutex::new(HashMap::new())),
             docs: Arc::new(Mutex::new(HashMap::new())),
-            delegations: DelegationStore::new(),
-            revocations: RevocationStore::new(),
+            delegations: Arc::new(Mutex::new(DelegationStore::new())),
+            revocations: Arc::new(Mutex::new(RevocationStore::new())),
             pending_events: Arc::new(Mutex::new(Vec::new())),
             ciphertext_store,
             event_listener,
@@ -256,10 +256,10 @@ impl<
         .await?;
 
         for head in new_doc.delegation_heads().values() {
-            self.delegations.insert(head.dupe()).await;
+            self.delegations.lock().await.insert(head.dupe());
 
             for dep in head.payload().proof_lineage() {
-                self.delegations.insert(dep).await;
+                self.delegations.lock().await.insert(dep);
             }
         }
 
@@ -400,12 +400,13 @@ impl<
         &self,
         digest: &Digest<MembershipOperation<S, T, L>>,
     ) -> Option<MembershipOperation<S, T, L>> {
-        if let Some(d) = self.delegations.get(&digest.into()).await {
+        if let Some(d) = self.delegations.lock().await.get(&digest.into()) {
             Some(d.dupe().into())
         } else {
             self.revocations
-                .get(&digest.into())
+                .lock()
                 .await
+                .get(&digest.into())
                 .map(|r| r.dupe().into())
         }
     }
@@ -712,6 +713,19 @@ impl<
             }
         }
 
+        // Include any revocations for this agent that were missed
+        if let Some(agent_revocations) = self
+            .revocations
+            .lock()
+            .await
+            .get_revocations_for_agent(&agent.agent_id())
+        {
+            for rev in agent_revocations {
+                let hash: Digest<MembershipOperation<S, T, L>> = Digest::hash(rev.as_ref()).into();
+                heads.push((hash, rev.into()));
+            }
+        }
+
         while let Some((hash, op)) = heads.pop() {
             if visited_hashes.contains(&hash) {
                 continue;
@@ -986,8 +1000,9 @@ impl<
                 let hash = proof_hash.into();
                 Some(
                     self.delegations
-                        .get(&hash)
+                        .lock()
                         .await
+                        .get(&hash)
                         .ok_or(StaticEventConversionError::MissingDelegation(hash))?,
                 )
             } else {
@@ -1005,8 +1020,9 @@ impl<
             let rev_hash = static_rev_hash.into();
             let resolved_rev = self
                 .revocations
-                .get(&rev_hash)
+                .lock()
                 .await
+                .get(&rev_hash)
                 .ok_or(StaticEventConversionError::MissingRevocation(rev_hash))?;
             after_revocations.push(resolved_rev);
         }
@@ -1028,8 +1044,9 @@ impl<
         let revoke_hash = static_rev.payload.revoke.into();
         let revoke: Arc<Signed<Delegation<S, T, L>>> = self
             .delegations
-            .get(&revoke_hash)
+            .lock()
             .await
+            .get(&revoke_hash)
             .ok_or(StaticEventConversionError::MissingDelegation(revoke_hash))?;
 
         let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
@@ -1037,8 +1054,9 @@ impl<
                 let hash = proof_hash.into();
                 Some(
                     self.delegations
-                        .get(&hash)
+                        .lock()
                         .await
+                        .get(&hash)
                         .ok_or(StaticEventConversionError::MissingDelegation(hash))?,
                 )
             } else {
@@ -1106,8 +1124,9 @@ impl<
     ) -> Result<(), ReceiveStaticDelegationError<S, T, L>> {
         if self
             .delegations
-            .contains_key(&Digest::hash(static_dlg).into())
+            .lock()
             .await
+            .contains_key(&Digest::hash(static_dlg).into())
         {
             return Ok(());
         }
@@ -1117,6 +1136,16 @@ impl<
         static_dlg.try_verify()?;
 
         let payload = self.static_delegation_to_delegation(static_dlg).await?;
+
+        let mut after_revocations = Vec::new();
+        for static_rev_hash in static_dlg.payload().after_revocations.iter() {
+            let rev_hash = static_rev_hash.into();
+            let locked_revs = self.revocations.lock().await;
+            let resolved_rev = locked_revs
+                .get(&rev_hash)
+                .ok_or(MissingDependency(rev_hash))?;
+            after_revocations.push(resolved_rev.dupe());
+        }
 
         let delegation = Signed {
             issuer: static_dlg.issuer,
@@ -1192,8 +1221,9 @@ impl<
     ) -> Result<(), ReceiveStaticDelegationError<S, T, L>> {
         if self
             .revocations
-            .contains_key(&Digest::hash(static_rev).into())
+            .lock()
             .await
+            .contains_key(&Digest::hash(static_rev).into())
         {
             return Ok(());
         }
@@ -1361,53 +1391,48 @@ impl<
         let agent = Agent::Group(group.lock().await.group_id(), group.dupe());
 
         {
-            let mut locked_delegations = self.delegations.0.lock().await;
-            for (digest, dlg) in locked_delegations.clone().iter() {
+            let mut locked_delegations = self.delegations.lock().await;
+            for (_digest, dlg) in locked_delegations.clone().iter() {
                 if dlg.payload.delegate == agent {
-                    locked_delegations.0.insert(
-                        *digest,
-                        Arc::new(Signed {
-                            issuer: dlg.issuer,
-                            signature: dlg.signature,
-                            payload: Delegation {
-                                delegate: agent.dupe(),
-                                can: dlg.payload.can,
-                                proof: dlg.payload.proof.clone(),
-                                after_revocations: dlg.payload.after_revocations.clone(),
-                                after_content: dlg.payload.after_content.clone(),
-                            },
-                        }),
-                    );
+                    locked_delegations.insert(Arc::new(Signed {
+                        issuer: dlg.issuer,
+                        signature: dlg.signature,
+                        payload: Delegation {
+                            delegate: agent.dupe(),
+                            can: dlg.payload.can,
+                            proof: dlg.payload.proof.clone(),
+                            after_revocations: dlg.payload.after_revocations.clone(),
+                            after_content: dlg.payload.after_content.clone(),
+                        },
+                    }));
                 }
             }
         }
 
         {
             let group_id = group.lock().await.id();
-            let mut locked_revocations = self.revocations.0.lock().await;
-            for (digest, rev) in locked_revocations.clone().iter() {
+            let mut locked_revocations = self.revocations.lock().await;
+            for (_digest, rev) in locked_revocations.clone().iter() {
                 if rev.payload.subject_id() == group_id {
-                    locked_revocations.0.insert(
-                        *digest,
-                        Arc::new(Signed {
-                            issuer: rev.issuer,
-                            signature: rev.signature,
-                            payload: Revocation {
-                                revoke: self
-                                    .delegations
-                                    .get(&Digest::hash(&rev.payload.revoke))
-                                    .await
-                                    .expect("revoked delegation to be available")
-                                    .dupe(),
-                                proof: if let Some(proof) = rev.payload.proof.dupe() {
-                                    self.delegations.get(&Digest::hash(&proof)).await
-                                } else {
-                                    panic!("revoked delegation to be available");
-                                },
-                                after_content: rev.payload.after_content.clone(),
+                    locked_revocations.insert(Arc::new(Signed {
+                        issuer: rev.issuer,
+                        signature: rev.signature,
+                        payload: Revocation {
+                            revoke: self
+                                .delegations
+                                .lock()
+                                .await
+                                .get(&Digest::hash(&rev.payload.revoke))
+                                .expect("revoked delegation to be available")
+                                .dupe(),
+                            proof: if let Some(proof) = rev.payload.proof.dupe() {
+                                self.delegations.lock().await.get(&Digest::hash(&proof))
+                            } else {
+                                panic!("revoked delegation to be available");
                             },
-                        }),
-                    );
+                            after_content: rev.payload.after_content.clone(),
+                        },
+                    }));
                 }
             }
         }
@@ -1418,8 +1443,8 @@ impl<
     #[instrument(skip_all)]
     pub async fn into_archive(&self) -> Archive<T> {
         let topsorted_ops = {
-            let delegations = self.delegations.0.lock().await;
-            let revocations = self.revocations.0.lock().await;
+            let delegations = self.delegations.lock().await;
+            let revocations = self.revocations.lock().await;
             MembershipOperation::<S, T, L>::reverse_topsort(&delegations, &revocations)
                 .into_iter()
                 .rev()
@@ -1484,8 +1509,8 @@ impl<
     ) -> Result<Self, TryFromArchiveError<S, T, L>> {
         let raw_active = Active::from_archive(&archive.active, signer, listener.clone());
 
-        let delegations: DelegationStore<S, T, L> = DelegationStore::new();
-        let revocations: RevocationStore<S, T, L> = RevocationStore::new();
+        let delegations = Arc::new(Mutex::new(DelegationStore::new()));
+        let revocations = Arc::new(Mutex::new(RevocationStore::new()));
 
         let mut individuals = HashMap::new();
         for (k, v) in archive.individuals.iter() {
@@ -1521,12 +1546,12 @@ impl<
             );
         }
 
-        for (digest, static_op) in archive.topsorted_ops.iter() {
+        for (_digest, static_op) in archive.topsorted_ops.iter() {
             match static_op {
                 StaticMembershipOperation::Delegation(sd) => {
                     let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
                         if let Some(proof_digest) = sd.payload.proof {
-                            Some(delegations.get(&proof_digest.into()).await.ok_or(
+                            Some(delegations.lock().await.get(&proof_digest.into()).ok_or(
                                 TryFromArchiveError::MissingDelegation(proof_digest.into()),
                             )?)
                         } else {
@@ -1536,8 +1561,9 @@ impl<
                     let mut after_revocations = vec![];
                     for rev_digest in sd.payload.after_revocations.iter() {
                         let r: Arc<Signed<Revocation<S, T, L>>> = revocations
-                            .get(&rev_digest.into())
+                            .lock()
                             .await
+                            .get(&rev_digest.into())
                             .ok_or(TryFromArchiveError::MissingRevocation(rev_digest.into()))?
                             .dupe();
 
@@ -1564,47 +1590,45 @@ impl<
                     };
 
                     // NOTE Manually pushing; skipping various steps intentionally
-                    delegations.0.lock().await.0.insert(
-                        (*digest).into(),
-                        Arc::new(Signed {
-                            signature: sd.signature,
-                            issuer: sd.issuer,
-                            payload: Delegation {
-                                delegate,
-                                proof,
-                                can: sd.payload.can,
-                                after_revocations,
-                                after_content: sd.payload.after_content.clone(),
-                            },
-                        }),
-                    );
+                    delegations.lock().await.insert(Arc::new(Signed {
+                        signature: sd.signature,
+                        issuer: sd.issuer,
+                        payload: Delegation {
+                            delegate,
+                            proof,
+                            can: sd.payload.can,
+                            after_revocations,
+                            after_content: sd.payload.after_content.clone(),
+                        },
+                    }));
                 }
                 StaticMembershipOperation::Revocation(sr) => {
-                    let revoke = delegations.get(&sr.payload.revoke.into()).await.ok_or(
-                        TryFromArchiveError::MissingDelegation(sr.payload.revoke.into()),
-                    )?;
+                    let revoke = delegations
+                        .lock()
+                        .await
+                        .get(&sr.payload.revoke.into())
+                        .ok_or(TryFromArchiveError::MissingDelegation(
+                            sr.payload.revoke.into(),
+                        ))?;
 
                     let proof =
                         if let Some(proof_digest) = sr.payload.proof {
-                            Some(delegations.get(&proof_digest.into()).await.ok_or(
+                            Some(delegations.lock().await.get(&proof_digest.into()).ok_or(
                                 TryFromArchiveError::MissingDelegation(proof_digest.into()),
                             )?)
                         } else {
                             None
                         };
 
-                    revocations.0.lock().await.0.insert(
-                        (*digest).into(),
-                        Arc::new(Signed {
-                            issuer: sr.issuer,
-                            signature: sr.signature,
-                            payload: Revocation {
-                                revoke,
-                                proof,
-                                after_content: sr.payload.after_content.clone(),
-                            },
-                        }),
-                    );
+                    revocations.lock().await.insert(Arc::new(Signed {
+                        issuer: sr.issuer,
+                        signature: sr.signature,
+                        payload: Revocation {
+                            revoke,
+                            proof,
+                            after_content: sr.payload.after_content.clone(),
+                        },
+                    }));
                 }
             };
         }
@@ -1612,14 +1636,14 @@ impl<
         #[allow(clippy::type_complexity)]
         async fn reify_ops<Z: AsyncSigner, U: ContentRef, M: MembershipListener<Z, U>>(
             group: &mut Group<Z, U, M>,
-            dlg_store: DelegationStore<Z, U, M>,
-            rev_store: RevocationStore<Z, U, M>,
+            dlg_store: Arc<Mutex<DelegationStore<Z, U, M>>>,
+            rev_store: Arc<Mutex<RevocationStore<Z, U, M>>>,
             dlg_head_hashes: &HashSet<Digest<Signed<StaticDelegation<U>>>>,
             rev_head_hashes: &HashSet<Digest<Signed<StaticRevocation<U>>>>,
             members: HashMap<Identifier, NonEmpty<Digest<Signed<Delegation<Z, U, M>>>>>,
         ) -> Result<(), TryFromArchiveError<Z, U, M>> {
-            let read_dlgs = dlg_store.0.lock().await;
-            let read_revs = rev_store.0.lock().await;
+            let read_dlgs = dlg_store.lock().await;
+            let read_revs = rev_store.lock().await;
 
             for dlg_hash in dlg_head_hashes.iter() {
                 let actual_dlg: Arc<Signed<Delegation<Z, U, M>>> = read_dlgs
@@ -1926,8 +1950,8 @@ impl<
             individuals: self.individuals.as_ref().lock().await.len() as u64,
             groups: self.groups.as_ref().lock().await.len() as u64,
             docs: self.docs.as_ref().lock().await.len() as u64,
-            delegations: self.delegations.0.lock().await.len() as u64,
-            revocations: self.revocations.0.lock().await.len() as u64,
+            delegations: self.delegations.lock().await.len() as u64,
+            revocations: self.revocations.lock().await.len() as u64,
             prekeys_expanded,
             prekey_rotations,
             cgka_operations,
@@ -2305,8 +2329,8 @@ mod tests {
         assert_eq!(hive.individuals.lock().await.len(), 3);
         assert_eq!(hive.groups.lock().await.len(), 1);
         assert_eq!(hive.docs.lock().await.len(), 1);
-        assert_eq!(hive.delegations.0.lock().await.len(), 4);
-        assert_eq!(hive.revocations.0.lock().await.len(), 0);
+        assert_eq!(hive.delegations.lock().await.len(), 4);
+        assert_eq!(hive.revocations.lock().await.len(), 0);
 
         let archive = hive.into_archive().await;
 
@@ -2327,13 +2351,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            hive.delegations.0.lock().await.len(),
-            hive_from_archive.delegations.0.lock().await.len()
+            hive.delegations.lock().await.len(),
+            hive_from_archive.delegations.lock().await.len()
         );
 
         assert_eq!(
-            hive.revocations.0.lock().await.len(),
-            hive_from_archive.revocations.0.lock().await.len()
+            hive.revocations.lock().await.len(),
+            hive_from_archive.revocations.lock().await.len()
         );
 
         assert_eq!(
@@ -2418,8 +2442,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(hive1.delegations.0.lock().await.len(), 2);
-        assert_eq!(hive1.revocations.0.lock().await.len(), 0);
+        assert_eq!(hive1.delegations.lock().await.len(), 2);
+        assert_eq!(hive1.revocations.lock().await.len(), 0);
         assert_eq!(hive1.individuals.lock().await.len(), 3); // NOTE: knows about Public and Hive2
         assert_eq!(hive1.groups.lock().await.len(), 1);
         assert_eq!(hive1.docs.lock().await.len(), 0);
@@ -2438,8 +2462,8 @@ mod tests {
                 );
             }
 
-            assert_eq!(hive2.delegations.0.lock().await.len(), 0);
-            assert_eq!(hive2.revocations.0.lock().await.len(), 0);
+            assert_eq!(hive2.delegations.lock().await.len(), 0);
+            assert_eq!(hive2.revocations.lock().await.len(), 0);
             assert_eq!(hive2.individuals.lock().await.len(), 3);
             assert_eq!(hive2.groups.lock().await.len(), 0);
             assert_eq!(hive2.docs.lock().await.len(), 0);
@@ -2451,8 +2475,8 @@ mod tests {
             }
         }
 
-        assert_eq!(hive2.delegations.0.lock().await.len(), 2);
-        assert_eq!(hive2.revocations.0.lock().await.len(), 0);
+        assert_eq!(hive2.delegations.lock().await.len(), 2);
+        assert_eq!(hive2.revocations.lock().await.len(), 0);
         assert_eq!(hive2.individuals.lock().await.len(), 3); // NOTE: Yourself, Public, and Hive2
         assert_eq!(hive2.groups.lock().await.len(), 1);
         assert_eq!(hive2.docs.lock().await.len(), 0);
@@ -2480,8 +2504,8 @@ mod tests {
         // 1 delegation (you)
         let left_group = left.generate_group(vec![]).await.unwrap();
 
-        assert_eq!(left.delegations.0.lock().await.len(), 3);
-        assert_eq!(left.revocations.0.lock().await.len(), 0);
+        assert_eq!(left.delegations.lock().await.len(), 3);
+        assert_eq!(left.revocations.lock().await.len(), 0);
 
         assert_eq!(left.individuals.lock().await.len(), 2);
         assert!(left
@@ -2524,8 +2548,8 @@ mod tests {
         // Left unchanged
         assert_eq!(left.groups.lock().await.len(), 1);
         assert_eq!(left.docs.lock().await.len(), 1);
-        assert_eq!(left.delegations.0.lock().await.len(), 3);
-        assert_eq!(left.revocations.0.lock().await.len(), 0);
+        assert_eq!(left.delegations.lock().await.len(), 3);
+        assert_eq!(left.revocations.lock().await.len(), 0);
 
         // Middle should now look the same
         assert!(middle
@@ -2543,8 +2567,8 @@ mod tests {
         assert_eq!(middle.groups.lock().await.len(), 0);
         assert_eq!(middle.docs.lock().await.len(), 1);
 
-        assert_eq!(middle.revocations.0.lock().await.len(), 0);
-        assert_eq!(middle.delegations.0.lock().await.len(), 2);
+        assert_eq!(middle.revocations.lock().await.len(), 0);
+        assert_eq!(middle.delegations.lock().await.len(), 2);
         let left_doc_id = left_doc.lock().await.doc_id();
         assert_eq!(
             middle
@@ -2571,20 +2595,20 @@ mod tests {
         // Left unchanged
         assert_eq!(left.groups.lock().await.len(), 1);
         assert_eq!(left.docs.lock().await.len(), 1);
-        assert_eq!(left.delegations.0.lock().await.0.len(), 3);
-        assert_eq!(left.revocations.0.lock().await.0.len(), 0);
+        assert_eq!(left.delegations.lock().await.len(), 3);
+        assert_eq!(left.revocations.lock().await.len(), 0);
 
         // Middle unchanged
         assert_eq!(middle.individuals.lock().await.len(), 3);
         assert_eq!(middle.groups.lock().await.len(), 0);
         assert_eq!(middle.docs.lock().await.len(), 1);
 
-        assert_eq!(middle.delegations.0.lock().await.len(), 2);
-        assert_eq!(middle.revocations.0.lock().await.len(), 0);
+        assert_eq!(middle.delegations.lock().await.len(), 2);
+        assert_eq!(middle.revocations.lock().await.len(), 0);
 
         // Right should now look the same
-        assert_eq!(right.revocations.0.lock().await.len(), 0);
-        assert_eq!(right.delegations.0.lock().await.len(), 2);
+        assert_eq!(right.revocations.lock().await.len(), 0);
+        assert_eq!(right.delegations.lock().await.len(), 2);
 
         assert!(right.groups.lock().await.len() == 1 || right.docs.lock().await.len() == 1);
         assert!(right
@@ -2642,7 +2666,7 @@ mod tests {
         assert_eq!(middle.individuals.lock().await.len(), 4); // NOTE now includes Right
         assert_eq!(middle.groups.lock().await.len(), 1);
         assert_eq!(middle.docs.lock().await.len(), 1);
-        assert_eq!(middle.delegations.0.lock().await.len(), 4);
+        assert_eq!(middle.delegations.lock().await.len(), 4);
     }
 
     #[tokio::test]
@@ -2874,7 +2898,7 @@ mod tests {
                     .len(),
                 7
             );
-            assert_eq!(locked_trunk.delegations.0.lock().await.len(), 4);
+            assert_eq!(locked_trunk.delegations.lock().await.len(), 4);
             assert_eq!(locked_trunk.groups.lock().await.len(), 1);
             assert_eq!(locked_trunk.docs.lock().await.len(), 1);
         }
@@ -2883,7 +2907,7 @@ mod tests {
             &trunk,
             |fork: Keyhive<_, _, _, _, Log<_, [u8; 32]>, _>| async move {
                 // Depending on when the async runs
-                let init_dlg_count = fork.delegations.0.lock().await.len();
+                let init_dlg_count = fork.delegations.lock().await.len();
                 assert!(init_dlg_count >= 4);
                 assert!(init_dlg_count <= 6);
 

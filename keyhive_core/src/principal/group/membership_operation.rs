@@ -11,6 +11,7 @@ use crate::{
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{document::id::DocumentId, identifier::Identifier},
     reversed::Reversed,
+    store::{delegation::DelegationStore, revocation::RevocationStore},
     util::content_addressed_map::CaMap,
 };
 use derive_more::{From, Into};
@@ -177,8 +178,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
     #[allow(clippy::type_complexity)] // Clippy doens't like the returned pair
     #[instrument(skip_all)]
     pub fn reverse_topsort(
-        delegation_heads: &CaMap<Signed<Delegation<S, T, L>>>,
-        revocation_heads: &CaMap<Signed<Revocation<S, T, L>>>,
+        delegation_heads: &DelegationStore<S, T, L>,
+        revocation_heads: &RevocationStore<S, T, L>,
     ) -> Reversed<(
         Digest<MembershipOperation<S, T, L>>,
         MembershipOperation<S, T, L>,
@@ -423,6 +424,7 @@ mod tests {
         access::Access,
         crypto::signer::{memory::MemorySigner, sync_signer::SyncSigner},
         principal::{agent::Agent, individual::Individual},
+        store::{delegation::DelegationStore, revocation::RevocationStore},
     };
     use dupe::Dupe;
     use futures::lock::Mutex;
@@ -679,8 +681,8 @@ mod tests {
         fn test_empty() {
             test_utils::init_logging();
 
-            let dlgs = CaMap::new();
-            let revs = CaMap::new();
+            let dlgs = DelegationStore::new();
+            let revs = RevocationStore::new();
 
             let observed =
                 MembershipOperation::<MemorySigner, String>::reverse_topsort(&dlgs, &revs);
@@ -694,8 +696,8 @@ mod tests {
 
             let dlg = add_alice(csprng).await;
 
-            let dlgs = CaMap::from_iter_direct([dlg.dupe()]);
-            let revs = CaMap::new();
+            let dlgs = DelegationStore::from_iter_direct([dlg.dupe()]);
+            let revs = RevocationStore::new();
 
             let observed = MembershipOperation::reverse_topsort(&dlgs, &revs);
             let expected = dlg.into();
@@ -714,8 +716,8 @@ mod tests {
             let alice_dlg = add_alice(csprng).await;
             let bob_dlg = add_bob(csprng).await;
 
-            let dlg_heads = CaMap::from_iter_direct([bob_dlg.dupe()]);
-            let rev_heads = CaMap::new();
+            let dlg_heads = DelegationStore::from_iter_direct([bob_dlg.dupe()]);
+            let rev_heads = RevocationStore::new();
 
             let observed = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
 
@@ -740,8 +742,8 @@ mod tests {
             let carol_dlg = add_carol(csprng).await;
             let dan_dlg = add_dan(csprng).await;
 
-            let dlg_heads = CaMap::from_iter_direct([dan_dlg.dupe()]);
-            let rev_heads = CaMap::new();
+            let dlg_heads = DelegationStore::from_iter_direct([dan_dlg.dupe()]);
+            let rev_heads = RevocationStore::new();
 
             let observed = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
 
@@ -852,8 +854,10 @@ mod tests {
                     .unwrap(),
             );
 
-            let dlg_heads = CaMap::from_iter_direct([alice_to_dan.dupe(), bob_to_carol.dupe()]);
-            let mut sorted = MembershipOperation::reverse_topsort(&dlg_heads, &CaMap::new());
+            let dlg_heads =
+                DelegationStore::from_iter_direct([alice_to_dan.dupe(), bob_to_carol.dupe()]);
+            let mut sorted =
+                MembershipOperation::reverse_topsort(&dlg_heads, &RevocationStore::new());
             sorted.reverse();
 
             assert!(sorted.len() == 3);
@@ -898,8 +902,8 @@ mod tests {
             let rev_op: MembershipOperation<MemorySigner, String> = alice_revokes_bob.dupe().into();
             let rev_hash = Digest::hash(&rev_op);
 
-            let dlgs = CaMap::new();
-            let revs = CaMap::from_iter_direct([alice_revokes_bob.dupe()]);
+            let dlgs = DelegationStore::new();
+            let revs = RevocationStore::from_iter_direct([alice_revokes_bob.dupe()]);
 
             let mut observed = MembershipOperation::reverse_topsort(&dlgs, &revs);
 
@@ -944,9 +948,11 @@ mod tests {
                 bob_revokes_dan.dupe().into();
             let rev_dan_hash = Digest::hash(&rev_dan_op);
 
-            let dlg_heads = CaMap::from_iter_direct([erin_dlg.dupe()]);
-            let rev_heads =
-                CaMap::from_iter_direct([alice_revokes_carol.dupe(), bob_revokes_dan.dupe()]);
+            let dlg_heads = DelegationStore::from_iter_direct([erin_dlg.dupe()]);
+            let rev_heads = RevocationStore::from_iter_direct([
+                alice_revokes_carol.dupe(),
+                bob_revokes_dan.dupe(),
+            ]);
 
             let observed = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
 
