@@ -366,16 +366,32 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = eventsForAgent)]
     pub async fn events_for_agent(&self, agent: &JsAgent) -> js_sys::Map {
         init_span!("JsKeyhive::events_for_agent");
-        let events = self.0.events_for_agent(&agent.0).await.unwrap_or_default();
+
+        // Get membership and prekey events only (CGKA ops are temporarily not shared)
+        let membership_ops = self.0.membership_ops_for_agent(&agent.0).await;
+        let reachable_prekey_ops = self.0.reachable_prekey_ops_for_agent(&agent.0).await;
+
         let map = js_sys::Map::new();
-        for (digest, event) in events {
-            if let Event::CgkaOperation(_) = event {
-                continue;
-            };
+
+        // Add membership operations
+        for (digest, op) in membership_ops {
             let hash = js_sys::Uint8Array::from(digest.as_slice());
+            let event = Event::from(op);
             let js_event = JsEvent::from(event);
             map.set(&hash.into(), &JsValue::from(js_event));
         }
+
+        // Add prekey operations
+        for key_ops in reachable_prekey_ops.values() {
+            for key_op in key_ops.iter() {
+                let event = Event::from(key_op.as_ref().dupe());
+                let digest = Digest::hash(&event);
+                let hash = js_sys::Uint8Array::from(digest.as_slice());
+                let js_event = JsEvent::from(event);
+                map.set(&hash.into(), &JsValue::from(js_event));
+            }
+        }
+
         map
     }
 
