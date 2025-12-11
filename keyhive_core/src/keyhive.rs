@@ -774,14 +774,18 @@ impl<
         agent: &Agent<S, T, L>,
     ) -> HashMap<Identifier, Vec<Arc<KeyOp>>> {
         fn add_many_keys(
-            map: &mut HashMap<Identifier, Vec<Arc<KeyOp>>>,
+            map: &mut HashMap<Identifier, HashSet<Arc<KeyOp>>>,
             agent_id: Identifier,
             key_ops: HashSet<Arc<KeyOp>>,
         ) {
+            map.entry(agent_id).or_default().extend(key_ops);
+        }
+
+        fn topsort_keys(key_ops: &HashSet<Arc<KeyOp>>) -> Vec<Arc<KeyOp>> {
             let mut heads: Vec<Arc<KeyOp>> = vec![];
             let mut rotate_key_ops: HashMap<ShareKey, HashSet<Arc<KeyOp>>> = HashMap::new();
 
-            for key_op in &key_ops {
+            for key_op in key_ops {
                 match key_op.as_ref() {
                     KeyOp::Add(_add) => {
                         heads.push(key_op.dupe());
@@ -809,7 +813,7 @@ impl<
                 topsorted.push(head.dupe());
             }
 
-            map.insert(agent_id, topsorted);
+            topsorted
         }
 
         let mut map = HashMap::new();
@@ -881,7 +885,9 @@ impl<
             }
         }
 
-        map
+        map.into_iter()
+            .map(|(id, keys)| (id, topsort_keys(&keys)))
+            .collect()
     }
 
     #[instrument(skip_all)]
@@ -2853,6 +2859,89 @@ mod tests {
             .unwrap();
 
         bob.ingest_event_table(events).await.unwrap();
+    }
+
+    /// Test that reachable_prekey_ops_for_agent merges prekeys from multiple sources
+    /// rather than overwriting them.
+    #[tokio::test]
+    async fn test_reachable_prekey_ops_merges_not_overwrites() {
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let bob = make_keyhive().await;
+
+        let bob_add_op = bob.expand_prekeys().await.unwrap();
+        let bob_rotate_op1 = bob
+            .rotate_prekey(bob_add_op.payload.share_key)
+            .await
+            .unwrap();
+        let bob_rotate_op2 = bob.rotate_prekey(bob_rotate_op1.payload.new).await.unwrap();
+
+        let bob_on_alice_for_delegation =
+            Arc::new(Mutex::new(Individual::new(KeyOp::Add(bob_add_op.clone()))));
+        assert!(
+            alice
+                .register_individual(bob_on_alice_for_delegation.clone())
+                .await
+        );
+        let bob_id = bob_on_alice_for_delegation.lock().await.id();
+
+        let doc = alice
+            .generate_doc(vec![], nonempty![[0u8; 32]])
+            .await
+            .unwrap();
+        let doc_id = doc.lock().await.doc_id();
+        alice
+            .add_member(
+                Agent::Individual(bob_id, bob_on_alice_for_delegation.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let mut bob_individual_with_rotations = Individual::new(KeyOp::Add(bob_add_op.clone()));
+        bob_individual_with_rotations
+            .receive_prekey_op(KeyOp::Rotate(bob_rotate_op1))
+            .unwrap();
+        bob_individual_with_rotations
+            .receive_prekey_op(KeyOp::Rotate(bob_rotate_op2))
+            .unwrap();
+        let bob_on_alice_with_rotations = Arc::new(Mutex::new(bob_individual_with_rotations));
+
+        assert_eq!(
+            bob_on_alice_with_rotations.lock().await.prekey_ops().len(),
+            3,
+            "bob_on_alice_with_rotations should have 3 prekey ops"
+        );
+
+        assert_eq!(
+            bob_on_alice_for_delegation.lock().await.prekey_ops().len(),
+            1,
+            "bob_on_alice_for_delegation should have 1 prekey op"
+        );
+
+        let prekey_ops = alice
+            .reachable_prekey_ops_for_agent(&Agent::Individual(
+                bob_id,
+                bob_on_alice_with_rotations.dupe(),
+            ))
+            .await;
+
+        let bob_prekeys_in_result = prekey_ops.get(&bob_id.into());
+        assert!(
+            bob_prekeys_in_result.is_some(),
+            "Bob's prekeys should be in the result"
+        );
+
+        let bob_prekey_vec = bob_prekeys_in_result.unwrap();
+        assert_eq!(
+            bob_prekey_vec.len(),
+            3,
+            "all 3 of Bob's prekey ops should be present, but got {}",
+            bob_prekey_vec.len()
+        );
     }
 
     #[tokio::test]
