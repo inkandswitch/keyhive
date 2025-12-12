@@ -367,7 +367,7 @@ impl JsKeyhive {
     pub async fn events_for_agent(&self, agent: &JsAgent) -> js_sys::Map {
         init_span!("JsKeyhive::events_for_agent");
 
-        // Get membership and prekey events only (CGKA ops are temporarily not shared)
+        // TODO: Get membership and prekey events only (CGKA ops are temporarily not shared)
         let membership_ops = self.0.membership_ops_for_agent(&agent.0).await;
         let reachable_prekey_ops = self.0.reachable_prekey_ops_for_agent(&agent.0).await;
 
