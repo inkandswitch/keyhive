@@ -318,6 +318,12 @@ impl JsKeyhive {
             .map_err(Into::into)
     }
 
+    #[wasm_bindgen(js_name = getExistingContactCard)]
+    pub async fn get_existing_contact_card(&self) -> JsContactCard {
+        init_span!("JsKeyhive::get_existing_contact_card");
+        self.0.get_existing_contact_card().await.into()
+    }
+
     #[wasm_bindgen(js_name = receiveContactCard)]
     pub async fn receive_contact_card(
         &self,
