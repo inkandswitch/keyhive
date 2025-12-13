@@ -1,4 +1,4 @@
-use keyhive_core::principal::identifier::Identifier;
+use keyhive_core::principal::{identifier::Identifier, public::Public};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -18,6 +18,12 @@ impl JsIdentifier {
             ed25519_dalek::VerifyingKey::from_bytes(&vec).map_err(|_| CannotParseIdentifier)?;
 
         Ok(JsIdentifier(Identifier::from(vk)))
+    }
+
+    /// Returns the public [`Identifier`].
+    #[wasm_bindgen(js_name = publicId)]
+    pub fn public_id() -> Self {
+        JsIdentifier(Public.id())
     }
 
     #[wasm_bindgen(js_name = toBytes)]
