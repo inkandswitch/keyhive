@@ -1,10 +1,14 @@
 use super::{
-    change_id::JsChangeId, event::JsEvent, event_handler::JsEventHandler, identifier::JsIdentifier,
-    signer::JsSigner,
+    archive::JsSerializationError, change_id::JsChangeId, event_handler::JsEventHandler,
+    identifier::JsIdentifier, signer::JsSigner,
 };
 use derive_more::{Deref, Display, From, Into};
 use dupe::Dupe;
-use keyhive_core::{crypto::digest::Digest, event::Event, principal::agent::Agent};
+use keyhive_core::{
+    crypto::digest::Digest,
+    event::{static_event::StaticEvent, Event},
+    principal::agent::Agent,
+};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Agent)]
@@ -45,18 +49,21 @@ impl JsAgent {
         JsIdentifier(self.0.id())
     }
 
-    /// Returns prekey operations for this agent as a Map of hash -> Event
+    /// Returns prekey operations for this agent as a Map of hash -> serialized bytes for [`StaticEvent`]
     #[wasm_bindgen(js_name = keyOps)]
-    pub async fn key_ops(&self) -> js_sys::Map {
+    pub async fn key_ops(&self) -> Result<js_sys::Map, JsSerializationError> {
         let key_ops = self.0.key_ops().await;
         let map = js_sys::Map::new();
         for key_op in key_ops {
-            let event = Event::from(key_op.as_ref().dupe());
+            let event: Event<JsSigner, JsChangeId, JsEventHandler> =
+                Event::from(key_op.as_ref().dupe());
             let digest = Digest::hash(&event);
             let hash = js_sys::Uint8Array::from(digest.as_slice());
-            let js_event = JsEvent::from(event);
-            map.set(&hash.into(), &JsValue::from(js_event));
+            let static_event = StaticEvent::from(event);
+            let bytes = bincode::serialize(&static_event).map_err(JsSerializationError::from)?;
+            let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
+            map.set(&hash.into(), &js_bytes.into());
         }
-        map
+        Ok(map)
     }
 }
