@@ -283,6 +283,17 @@ impl<
     }
 
     #[instrument(skip_all)]
+    pub async fn get_existing_contact_card(&self) -> ContactCard {
+        self.active
+            .lock()
+            .await
+            .individual()
+            .lock()
+            .await
+            .contact_card()
+    }
+
+    #[instrument(skip_all)]
     pub async fn receive_contact_card(
         &self,
         contact_card: &ContactCard,
