@@ -369,8 +369,13 @@ impl JsKeyhive {
         set
     }
 
+    /// Returns events for an agent as serialized bytes.
+    /// Returns a Map<Uint8Array, Uint8Array> where keys are event hashes and values are serialized event bytes.
     #[wasm_bindgen(js_name = eventsForAgent)]
-    pub async fn events_for_agent(&self, agent: &JsAgent) -> js_sys::Map {
+    pub async fn events_for_agent(
+        &self,
+        agent: &JsAgent,
+    ) -> Result<js_sys::Map, JsSerializationError> {
         init_span!("JsKeyhive::events_for_agent");
 
         // Get membership and prekey events only (CGKA ops are temporarily not shared)
@@ -379,26 +384,32 @@ impl JsKeyhive {
 
         let map = js_sys::Map::new();
 
-        // Add membership operations
+        // Add membership operations as serialized bytes
         for (digest, op) in membership_ops {
             let hash = js_sys::Uint8Array::from(digest.as_slice());
-            let event = Event::from(op);
-            let js_event = JsEvent::from(event);
-            map.set(&hash.into(), &JsValue::from(js_event));
+            let event: Event<JsSigner, JsChangeId, JsEventHandler> = op.into();
+            let static_event = StaticEvent::from(event);
+            let bytes = bincode::serialize(&static_event).map_err(JsSerializationError::from)?;
+            let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
+            map.set(&hash.into(), &js_bytes.into());
         }
 
-        // Add prekey operations
+        // Add prekey operations as serialized bytes
         for key_ops in reachable_prekey_ops.values() {
             for key_op in key_ops.iter() {
-                let event = Event::from(key_op.as_ref().dupe());
+                let event: Event<JsSigner, JsChangeId, JsEventHandler> =
+                    Event::from(key_op.as_ref().dupe());
                 let digest = Digest::hash(&event);
                 let hash = js_sys::Uint8Array::from(digest.as_slice());
-                let js_event = JsEvent::from(event);
-                map.set(&hash.into(), &JsValue::from(js_event));
+                let static_event = StaticEvent::from(event);
+                let bytes =
+                    bincode::serialize(&static_event).map_err(JsSerializationError::from)?;
+                let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
+                map.set(&hash.into(), &js_bytes.into());
             }
         }
 
-        map
+        Ok(map)
     }
 
     #[wasm_bindgen(js_name = membershipOpsForAgent)]
