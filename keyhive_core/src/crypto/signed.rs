@@ -81,7 +81,7 @@ impl<T: Serialize + Debug> Signed<T> {
     /// let signed = signer.try_sign_sync("Hello, world!").unwrap();
     /// assert!(signed.try_verify().is_ok());
     /// ```
-    #[instrument]
+    #[instrument(skip(self))]
     pub fn try_verify(&self) -> Result<(), VerificationError> {
         let buf: Vec<u8> = bincode::serialize(&self.payload)?;
         Ok(self
