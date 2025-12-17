@@ -425,6 +425,40 @@ impl JsKeyhive {
         map
     }
 
+    /// Returns events for provided [`Agent`] as a map from hash to [`JsEvent`] wrapper objects.
+    /// This is the old API that returns unserialized JsEvent wrappers (kept for testing memory behavior).
+    #[wasm_bindgen(js_name = unserializedEventsForAgent)]
+    pub async fn unserialized_events_for_agent(&self, agent: &JsAgent) -> js_sys::Map {
+        init_span!("JsKeyhive::unserialized_events_for_agent");
+
+        let membership_ops = self.0.membership_ops_for_agent(&agent.0).await;
+        let reachable_prekey_ops = self.0.reachable_prekey_ops_for_agent(&agent.0).await;
+
+        let map = js_sys::Map::new();
+
+        // Add membership operations as JsEvent wrappers
+        for (digest, op) in membership_ops {
+            let hash = js_sys::Uint8Array::from(digest.as_slice());
+            let event: Event<JsSigner, JsChangeId, JsEventHandler> = op.into();
+            let js_event = JsEvent::from(event);
+            map.set(&hash.into(), &JsValue::from(js_event));
+        }
+
+        // Add prekey operations as JsEvent wrappers
+        for key_ops in reachable_prekey_ops.values() {
+            for key_op in key_ops.iter() {
+                let event: Event<JsSigner, JsChangeId, JsEventHandler> =
+                    Event::from(key_op.as_ref().dupe());
+                let digest = Digest::hash(&event);
+                let hash = js_sys::Uint8Array::from(digest.as_slice());
+                let js_event = JsEvent::from(event);
+                map.set(&hash.into(), &JsValue::from(js_event));
+            }
+        }
+
+        map
+    }
+
     #[wasm_bindgen(js_name = getGroup)]
     pub async fn get_group(&self, group_id: &JsGroupId) -> Option<JsGroup> {
         init_span!("JsKeyhive::get_group");
