@@ -1,11 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "from_js_ref",
     "keyhive_core",
     "keyhive_wasm",
-    "test-utils",
-    "wasm_refgen",
+    "test-utils"
 ]
 
 [workspace.package]
