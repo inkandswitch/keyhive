@@ -411,6 +411,36 @@ impl JsKeyhive {
         Ok(map)
     }
 
+    /// Returns event hashes for provided [`JsAgent`] as an array of hash bytes.
+    #[wasm_bindgen(js_name = eventHashesForAgent)]
+    pub async fn event_hashes_for_agent(&self, agent: &JsAgent) -> js_sys::Array {
+        init_span!("JsKeyhive::event_hashes_for_agent");
+
+        let membership_ops = self.0.membership_ops_for_agent(&agent.0).await;
+        let reachable_prekey_ops = self.0.reachable_prekey_ops_for_agent(&agent.0).await;
+
+        let arr = js_sys::Array::new();
+
+        // Add membership operation hashes
+        for (digest, _op) in membership_ops {
+            let hash = js_sys::Uint8Array::from(digest.as_slice());
+            arr.push(&hash.into());
+        }
+
+        // Add prekey operation hashes
+        for key_ops in reachable_prekey_ops.values() {
+            for key_op in key_ops.iter() {
+                let event: Event<JsSigner, JsChangeId, JsEventHandler> =
+                    Event::from(key_op.as_ref().dupe());
+                let digest = Digest::hash(&event);
+                let hash = js_sys::Uint8Array::from(digest.as_slice());
+                arr.push(&hash.into());
+            }
+        }
+
+        arr
+    }
+
     #[wasm_bindgen(js_name = membershipOpsForAgent)]
     pub async fn membership_ops_for_agent(&self, agent: &JsAgent) -> js_sys::Map {
         init_span!("JsKeyhive::membership_ops_for_agent");
