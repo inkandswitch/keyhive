@@ -3112,4 +3112,35 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn cgka_ops_for_doc() {
+        // Create two keyhives, run membership sync (i.e. membersip operatiosn and prekey operations)
+        // then attempt to lookup cgka operations on the other_keyhive for the doc we just synced
+
+        // First create the two keyhives
+        let mut alice = make_keyhive().await;
+        let mut bob = make_keyhive().await;
+
+        // Now make a document on alice which bob can read
+        let bob_indi = Rc::new(RefCell::new(bob.active().borrow().individual().clone()));
+        let doc = alice
+            .generate_doc(vec![bob_indi.dupe().into()], nonempty![[0u8; 32]])
+            .await
+            .unwrap();
+
+        // Now pull out all the membership operations and prekey operations from alice
+        let events = alice.events_for_agent(&bob_indi.into()).unwrap();
+
+        // Now ingest all these events on bob
+        bob.ingest_event_table(events).unwrap(); // Test helper
+
+        // Check the doc exists
+        bob.get_document(doc.borrow().doc_id()).unwrap();
+
+        // FIXME: Alex plz confirm no longer the case. Original comment as follows:
+        // This will throw an error because the heads of the cgka operation graph are empty
+        let result = bob.cgka_ops_reachable_by_agent(&alice.active().clone().into());
+        assert!(result.is_ok());
+    }
 }
