@@ -533,9 +533,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                     // "Double up" if you're an admin in case you get concurrently demoted.
                     // We include the admin proofs as well since those could also get revoked.
                     for mem_dlg in member_dlgs.clone().iter() {
-                        if mem_dlg.payload.delegate.id() != member_to_remove {
-                            continue;
-                        }
 
                         if mem_dlg.payload().can == Access::Admin {
                             // Use your awesome & terrible admin powers!
@@ -1602,5 +1599,127 @@ mod tests {
         assert!(!g1.members.contains_key(&alice_id.into()));
         assert!(!g1.members.contains_key(&carol_id.into()));
         assert!(!g1.members.contains_key(&dan_id.into()));
+    }
+
+    #[tokio::test]
+    async fn test_admin_revoke_member() {
+        /*
+        G1 -->|can administer| Alice
+        
+        Alice --- write --> Bob -->|can read| Carol
+        G1 -->|can administer| Dan -->|can administer| Erin -->|can administer| Fred
+        Erin -->|can read| Hank
+
+        style write fill:#666,stroke:none,border:3px
+
+        Fred -.->|REVOKE| write
+
+        linkStyle 8 stroke:red,color:red;
+
+        */
+
+        test_utils::init_logging();
+        let mut csprng = rand::thread_rng();
+
+        let alice = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let alice_agent: Agent<MemorySigner> = alice.dupe().into();
+
+        let bob = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let bob_agent: Agent<MemorySigner> = bob.dupe().into();
+
+        let carol = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let carol_agent: Agent<MemorySigner> = carol.dupe().into();
+
+        let dan = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let dan_agent: Agent<MemorySigner> = dan.dupe().into();
+
+        let erin = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let erin_agent: Agent<MemorySigner> = erin.dupe().into();
+
+        let fred = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let fred_agent: Agent<MemorySigner> = fred.dupe().into();
+
+        let hank = Rc::new(RefCell::new(setup_user(&mut csprng).await));
+        let hank_agent: Agent<MemorySigner> = hank.dupe().into();
+
+        let alice_id = alice.borrow().id().into();
+        let alice_signer = alice.borrow().signer.dupe();
+
+        let bob_id = bob.borrow().id().into();
+        let bob_signer = bob.borrow().signer.dupe();
+
+        let carol_id = carol.borrow().id().into();
+
+        let dan_id = dan.borrow().id().into();
+        let dan_signer = dan.borrow().signer.clone();
+
+        let erin_id = erin.borrow().id().into();
+        let erin_signer = erin.borrow().signer.clone();
+
+        let fred_id = fred.borrow().id().into();
+        let fred_signer = fred.borrow().signer.clone();
+
+        let hank_id = hank.borrow().id().into();
+
+        let dlg_store = DelegationStore::new();
+        let rev_store = RevocationStore::new();
+
+        let mut g1 = Group::generate(
+            nonempty![alice_agent.dupe(), dan_agent.dupe()],
+            dlg_store.dupe(),
+            rev_store.dupe(),
+            NoListener,
+            &mut csprng,
+        )
+        .await
+        .unwrap();
+
+        let _alice_adds_bob = g1
+            .add_member(bob_agent.dupe(), Access::Write, &alice_signer, &[])
+            .await
+            .unwrap();
+
+        let _bob_adds_carol = g1
+            .add_member(carol_agent.dupe(), Access::Read, &bob_signer, &[])
+            .await
+            .unwrap();
+
+        let _dan_adds_erin = g1
+            .add_member(erin_agent.dupe(), Access::Admin, &dan_signer, &[])
+            .await
+            .unwrap();
+
+        let _erin_adds_fred = g1
+            .add_member(fred_agent.dupe(), Access::Admin, &erin_signer, &[])
+            .await
+            .unwrap();
+
+        let _erin_adds_hank = g1
+            .add_member(hank_agent.dupe(), Access::Read, &erin_signer, &[])
+            .await
+            .unwrap();
+
+        assert!(g1.members.contains_key(&alice_id));
+        assert!(g1.members.contains_key(&bob_id));
+        assert!(g1.members.contains_key(&carol_id));
+        assert!(g1.members.contains_key(&dan_id));
+        assert!(g1.members.contains_key(&erin_id));
+        assert!(g1.members.contains_key(&fred_id));
+        assert!(g1.members.contains_key(&hank_id));
+        assert_eq!(g1.members.len(), 7);
+
+        let _fred_revokes_bob = g1
+            .revoke_member(bob_id, true, &fred_signer, &BTreeMap::new())
+            .await
+            .unwrap();
+
+        assert!(!g1.members.contains_key(&bob_id));
+        assert!(g1.members.contains_key(&carol_id));
+        assert!(g1.members.contains_key(&dan_id));
+        assert!(g1.members.contains_key(&erin_id));
+        assert!(g1.members.contains_key(&fred_id));
+        assert!(g1.members.contains_key(&hank_id));
+        assert_eq!(g1.members.len(), 6);
+
     }
 }
