@@ -13,9 +13,9 @@ rust-version.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-from_js_ref = "0.1.2"
+from_js_ref = "0.1.3"
 keyhive_core = { path = "../keyhive_core" }
-wasm_refgen = "0.1.4"
+wasm_refgen = "0.1.5"
 
 base64-simd = "0.8.0"
 bincode = { workspace = true }
