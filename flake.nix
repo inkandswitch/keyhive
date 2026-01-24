@@ -2,16 +2,18 @@
   description = "keyhive";
 
   inputs = {
-    nixpkgs.url = "nixpkgs/nixos-25.05";
+    flake-utils.url = "github:numtide/flake-utils";
+    nixpkgs.url = "nixpkgs/nixos-25.11";
     nixpkgs-unstable.url = "nixpkgs/nixpkgs-unstable";
 
-    command-utils.url = "github:expede/nix-command-utils";
-    flake-utils.url = "github:numtide/flake-utils";
+    command-utils = {
+      url = "git+https://codeberg.org/expede/nix-command-utils";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.flake-utils.follows = "flake-utils";
     };
   };
 
@@ -83,114 +85,36 @@
           pkgs.wasm-tools
         ];
 
-        cargo = "${pkgs.cargo}/bin/cargo";
-        gzip = "${pkgs.gzip}/bin/gzip";
-        node = "${pkgs.nodejs_20}/bin/node";
-        pnpm = "${pkgs.pnpm}/bin/pnpm";
-        playwright = "${pnpm} --dir=./keyhive_wasm exec playwright";
-        wasm-pack = "${pkgs.wasm-pack}/bin/wasm-pack";
-        wasm-opt = "${pkgs.binaryen}/bin/wasm-opt";
+        cargoPath = "${rust-toolchain}/bin/cargo";
+        pnpm' = "${pkgs.pnpm}/bin/pnpm";
+        playwright = "${pnpm'} --dir=./keyhive_wasm exec playwright";
 
+        # Built-in command modules from nix-command-utils
+        rust = command-utils.rust.${system};
+        pnpm = command-utils.pnpm.${system};
+        wasm = command-utils.wasm.${system};
         cmd = command-utils.cmd.${system};
 
-        release = {
+        # Project-specific commands
+        projectCommands = {
           "release:host" = cmd "Build release for ${system}"
-            "${cargo} build --release";
-
-         "release:wasm:web" = cmd "Build release for wasm32-unknown-unknown with web bindings"
-           "${wasm-pack} build ./keyhive_wasm --release --target=web && ${gzip} -f ./keyhive_wasm/pkg/keyhive_wasm_bg.wasm";
-
-         "release:wasm:bundler" = cmd "Build release for wasm32-unknown-unknown with bundler bindings"
-            "${wasm-pack} build ./keyhive_wasm --release --target=bundler && ${gzip} -f ./keyhive_wasm/pkg/keyhive_wasm_bg.wasm";
-
-          "release:wasm:nodejs" = cmd "Build release for wasm32-unknown-unknown with Node.js bindgings"
-            "${wasm-pack} build ./keyhive_wasm --release --target=nodejs && ${gzip} -f ./keyhive_wasm/pkg/keyhive_wasm_bg.wasm";
-        };
-
-        build = {
-          "build:host" = cmd "Build for ${system}"
-            "${cargo} build";
-
-          "build:wasm:web" = cmd "Build for wasm32-unknown-unknown with web bindings"
-            "${wasm-pack} build ./keyhive_wasm --dev --target=web";
- 
-          "build:wasm:nodejs" = cmd "Build for wasm32-unknown-unknown with Node.js bindgings"
-            "${wasm-pack} build ./keyhive_wasm --dev --target=nodejs";
-
-          "build:node" = cmd "Build JS-wrapped Wasm library"
-            "${pnpm}/bin/pnpm install && ${node} run build";
+            "${cargoPath} build --release";
 
           "build:wasi" = cmd "Build for Wasm32-WASI"
-            "${cargo} build ./keyhive_wasm --target wasm32-wasi";
-        };
+            "${cargoPath} build ./keyhive_wasm --target wasm32-wasi";
 
-        bench = {
-          "bench:host" = cmd "Run benchmarks, including test utils"
-            "${cargo} bench --features=test_utils";
-
-          "bench:host:open" = cmd "Open host Criterion benchmarks in browser"
-            "${pkgs.xdg-utils}/bin/xdg-open ./target/criterion/report/index.html";
-        };
-
-        lint = {
-          "lint" = cmd "Run Clippy"
-            "${cargo} clippy";
-
-          "lint:pedantic" = cmd "Run Clippy pedantically"
-            "${cargo} clippy -- -W clippy::pedantic";
-
-          "lint:fix" = cmd "Apply non-pendantic Clippy suggestions"
-            "${cargo} clippy --fix";
-        };
-
-        watch = {
-          "watch:build:host" = cmd "Rebuild host target on save"
-            "${cargo} watch --clear";
-
-          "watch:build:wasm" = cmd "Rebuild Wasm target on save"
-            "${cargo} watch --clear --features=serde -- cargo build --target=wasm32-unknown-unknown";
-
-          "watch:lint" = cmd "Lint on save"
-            "${cargo} watch --clear --exec clippy";
-
-          "watch:lint:pedantic" = cmd "Pedantic lint on save"
-            "${cargo} watch --clear --exec 'clippy -- -W clippy::pedantic'";
-
-          "watch:test:host" = cmd "Run all host tests on save"
-            "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'test && test --doc'";
-
-          "watch:doctest:host" = cmd "Run all host doctests on save"
-            "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'test --doc'";
-
-          "watch:docs:build:host" = cmd "Refresh the docs for the host target on save"
-            "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'doc --features=mermaid_docs'";
-
-          "watch:docs:build:wasm" = cmd "Refresh the docs with the wasm32-unknown-unknown target on save"
-            "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'doc --features=mermaid_docs --target=wasm32-unknown-unknown'";
-        };
-
-        test = {
-          "test:all" = cmd "Run Cargo tests"
-            "test:host && test:docs && test:wasm";
-
-          "test:host" = cmd "Run Cargo tests for host target"
-            "${cargo} test --features='test_utils' && ${cargo} test --features='mermaid_docs,test_utils' --doc";
-
-          "test:wasm" = cmd "Run wasm-pack tests on all targets"
-            "test:wasm:node && test:ts:web";
-
-          "test:wasm:node" = cmd "Run wasm-pack tests in Node.js"
-            "${wasm-pack} test --node keyhive_wasm";
+          "test:all" = cmd "Run all tests"
+            "test && wasm:test:node && test:ts:web";
 
           "test:ts:web" = cmd "Run keyhive_wasm Typescript tests in Playwright" ''
             cd ./keyhive_wasm
-            ${pnpm} exec playwright install --with-deps
+            ${pnpm'} exec playwright install --with-deps
             cd ..
 
             ${pkgs.http-server}/bin/http-server --silent &
             bg_pid=$!
 
-            build:wasm:web
+            wasm:build:web
             ${playwright} test ./keyhive_wasm
 
             cleanup() {
@@ -200,39 +124,94 @@
             trap cleanup EXIT
           '';
 
-
           "test:ts:web:report:latest" = cmd "Open the latest Playwright report"
             "${playwright} show-report";
 
-          "test:wasm:chrome" = cmd "Run wasm-pack tests in headless Chrome"
-            "${wasm-pack} test --chrome keyhive_wasm --features='browser_test'";
+          "ci" = cmd "Run full CI suite (build, lint, test, docs)" ''
+            set -e
 
-          "test:wasm:firefox" = cmd "Run wasm-pack tests in headless Chrome"
-            "${wasm-pack} test --firefox keyhive_wasm --features='browser_test'";
+            echo "========================================"
+            echo "  Keyhive CI"
+            echo "========================================"
+            echo ""
 
-          "test:wasm:safari" = cmd "Run wasm-pack tests in headless Chrome"
-            "${wasm-pack} test --safari keyhive_wasm --features='browser_test'";
+            echo "===> [1/6] Checking formatting..."
+            ${cargoPath} fmt --check
+            echo "✓ Formatting OK"
+            echo ""
 
-          "test:docs" = cmd "Run Cargo doctests"
-            "${cargo} test --doc --features='mermaid_docs,test_utils'";
+            echo "===> [2/6] Running Clippy..."
+            ${cargoPath} clippy --workspace --all-targets -- -D warnings
+            echo "✓ Clippy OK"
+            echo ""
+
+            echo "===> [3/6] Building host target..."
+            ${cargoPath} build --workspace
+            echo "✓ Host build OK"
+            echo ""
+
+            echo "===> [4/6] Running host tests..."
+            ${cargoPath} test --workspace --features test_utils
+            echo "✓ Host tests OK"
+            echo ""
+
+            echo "===> [5/6] Running doc tests..."
+            ${cargoPath} test --doc --workspace --features 'mermaid_docs,test_utils'
+            echo "✓ Doc tests OK"
+            echo ""
+
+            echo "===> [6/6] Building and testing wasm..."
+            ${pkgs.wasm-pack}/bin/wasm-pack build --target web ./keyhive_wasm
+            ${pkgs.wasm-pack}/bin/wasm-pack test --node ./keyhive_wasm
+            echo "✓ Wasm OK"
+            echo ""
+
+            echo "========================================"
+            echo "  ✓ All CI checks passed!"
+            echo "========================================"
+          '';
+
+          "ci:quick" = cmd "Run quick CI checks (lint, test)" ''
+            set -e
+
+            echo "===> Checking formatting..."
+            ${cargoPath} fmt --check
+
+            echo "===> Running Clippy..."
+            ${cargoPath} clippy --workspace -- -D warnings
+
+            echo "===> Running tests..."
+            ${cargoPath} test --workspace --features test_utils
+
+            echo ""
+            echo "✓ Quick CI passed"
+          '';
         };
 
-        docs = {
-          "docs:build:host" = cmd "Refresh the docs"
-            "${cargo} doc --features=mermaid_docs";
+        command_menu = command-utils.commands.${system} [
+          # Rust commands
+          (rust.build { cargo = rust-toolchain; })
+          (rust.test { cargo = rust-toolchain; cargo-watch = pkgs.cargo-watch; })
+          (rust.lint { cargo = rust-toolchain; })
+          (rust.fmt { cargo = rust-toolchain; })
+          (rust.doc { cargo = rust-toolchain; })
+          (rust.bench { cargo = rust-toolchain; cargo-criterion = pkgs.cargo-criterion; xdg-open = pkgs.xdg-utils; })
+          (rust.watch { cargo-watch = pkgs.cargo-watch; })
 
-          "docs:build:wasm" = cmd "Refresh the docs with the wasm32-unknown-unknown target"
-            "${cargo} doc --features=mermaid_docs --target=wasm32-unknown-unknown";
+          # Wasm commands
+          (wasm.build { wasm-pack = pkgs.wasm-pack; path = "./keyhive_wasm"; })
+          (wasm.release { wasm-pack = pkgs.wasm-pack; path = "./keyhive_wasm"; gzip = pkgs.gzip; })
+          (wasm.test { wasm-pack = pkgs.wasm-pack; path = "./keyhive_wasm"; features = "browser_test"; })
+          (wasm.doc { cargo = rust-toolchain; xdg-open = pkgs.xdg-utils; })
 
-          "docs:open:host" = cmd "Open refreshed docs"
-            "${cargo} doc --features=mermaid_docs --open";
+          # pnpm commands
+          (pnpm.build { pnpm = "${pkgs.pnpm}/bin/pnpm"; })
+          (pnpm.install { pnpm = "${pkgs.pnpm}/bin/pnpm"; })
+          (pnpm.test { pnpm = "${pkgs.pnpm}/bin/pnpm"; })
 
-          "docs:open:wasm" = cmd "Open refreshed docs"
-            "${cargo} doc --features=mermaid_docs --open --target=wasm32-unknown-unknown";
-        };
-
-        command_menu = command-utils.commands.${system}
-          (release // build // bench // lint // watch // test // docs);
+          # Project-specific commands
+          { commands = projectCommands; packages = []; }
+        ];
 
       in rec {
         devShells.default = pkgs.mkShell {
@@ -266,7 +245,6 @@
           + pkgs.lib.strings.optionalString pkgs.stdenv.isDarwin ''
             # See https://github.com/nextest-rs/nextest/issues/267
             export DYLD_FALLBACK_LIBRARY_PATH="$(rustc --print sysroot)/lib"
-            export NIX_LDFLAGS="-F${pkgs.darwin.apple_sdk.frameworks.CoreFoundation}/Library/Frameworks -framework CoreFoundation $NIX_LDFLAGS";
           ''
           + ''
             menu
