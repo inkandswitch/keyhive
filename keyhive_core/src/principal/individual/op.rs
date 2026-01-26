@@ -33,6 +33,7 @@ pub enum KeyOp {
 }
 
 impl KeyOp {
+    #[allow(clippy::mutable_key_type)]
     pub fn topsort(key_ops: HashSet<KeyOp>) -> Vec<KeyOp> {
         let mut heads: Vec<KeyOp> = vec![];
         let mut rotate_key_ops: HashMap<ShareKey, HashSet<KeyOp>> = HashMap::new();

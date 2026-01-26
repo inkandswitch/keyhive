@@ -1,6 +1,6 @@
 //! Wrap data in signatures.
 
-use super::verifiable::Verifiable;
+use super::{digest::Digest, verifiable::Verifiable};
 #[cfg(feature = "std")]
 use alloc::vec::Vec;
 use core::{
@@ -14,12 +14,14 @@ use dupe::Dupe;
 use ed25519_dalek::Verifier;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "std")]
+use std::sync::OnceLock;
+#[cfg(feature = "std")]
 use thiserror::Error;
 #[cfg(feature = "std")]
 use tracing::instrument;
 
 /// A wrapper to add a signature and signer information to an arbitrary payload.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Signed<T: Serialize + Debug> {
     /// The data that was signed.
     pub payload: T,
@@ -29,6 +31,11 @@ pub struct Signed<T: Serialize + Debug> {
 
     /// The signature of the payload, which can be verified by the `verifying_key`.
     pub signature: ed25519_dalek::Signature,
+
+    /// Digest hash (computed lazily on first access).
+    #[cfg(feature = "std")]
+    #[serde(skip)]
+    digest_hash: OnceLock<[u8; 32]>,
 }
 
 impl<T: Serialize + Debug> Debug for Signed<T> {
@@ -74,10 +81,56 @@ impl<T: Serialize + Debug> Hash for Signed<T> {
     }
 }
 
+impl<T: Clone + Serialize + Debug> Clone for Signed<T> {
+    fn clone(&self) -> Self {
+        #[cfg(feature = "std")]
+        let digest_hash = {
+            let lock = OnceLock::new();
+            if let Some(digest) = self.digest_hash.get() {
+                let _ = lock.set(*digest);
+            }
+            lock
+        };
+        Self {
+            payload: self.payload.clone(),
+            issuer: self.issuer,
+            signature: self.signature,
+            #[cfg(feature = "std")]
+            digest_hash,
+        }
+    }
+}
+
 impl<T: Serialize + Debug> Signed<T> {
+    /// Create a new [`Signed`]. The digest hash will be computed lazily.
+    pub fn new(
+        payload: T,
+        issuer: ed25519_dalek::VerifyingKey,
+        signature: ed25519_dalek::Signature,
+    ) -> Self {
+        Self {
+            payload,
+            issuer,
+            signature,
+            #[cfg(feature = "std")]
+            digest_hash: OnceLock::new(),
+        }
+    }
+
     /// Getter for the payload.
     pub fn payload(&self) -> &T {
         &self.payload
+    }
+
+    /// Get the digest, computing it if necessary.
+    #[cfg(feature = "std")]
+    pub fn digest(&self) -> Digest<Self> {
+        let bytes = self.digest_hash.get_or_init(|| {
+            let serialized = bincode::serialize(&self).expect("unable to serialize to bytes");
+            let hash = blake3::hash(&serialized);
+            hash.into()
+        });
+        Digest::from(*bytes)
     }
 
     /// Getter for the verifying key of the signer.
@@ -116,11 +169,15 @@ impl<T: Serialize + Debug> Signed<T> {
     }
 
     /// Map over the payload of the signed data.
+    ///
+    /// The digest hash is not preserved since the payload type changes.
     pub fn map<U: Serialize + Debug, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
         Signed {
             payload: f(self.payload),
             issuer: self.issuer,
             signature: self.signature,
+            #[cfg(feature = "std")]
+            digest_hash: OnceLock::new(),
         }
     }
 }
@@ -150,6 +207,7 @@ mod arb {
                 payload,
                 issuer: key.verifying_key(),
                 signature,
+                digest_hash: std::sync::OnceLock::new(),
             })
         }
     }
@@ -194,10 +252,15 @@ impl<T: Serialize + Ord + Debug> Ord for Signed<T> {
 #[cfg(feature = "std")]
 impl<T: Dupe + Serialize + Debug> Dupe for Signed<T> {
     fn dupe(&self) -> Self {
+        let digest_hash = OnceLock::new();
+        if let Some(digest) = self.digest_hash.get() {
+            let _ = digest_hash.set(*digest);
+        }
         Signed {
             payload: self.payload.dupe(),
             issuer: self.issuer,
             signature: self.signature,
+            digest_hash,
         }
     }
 }
@@ -271,5 +334,30 @@ impl fmt::Display for SigningError {
 impl From<ed25519_dalek::SignatureError> for SigningError {
     fn from(e: ed25519_dalek::SignatureError) -> Self {
         Self::SigningFailed(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        digest::Digest,
+        signer::{memory::MemorySigner, sync_signer::SyncSigner},
+    };
+    use alloc::string::ToString;
+    use rand::rngs::OsRng;
+
+    #[test]
+    fn test_memoized_digest_equals_computed_digest() {
+        let mut csprng = OsRng;
+        let signer = MemorySigner::generate(&mut csprng);
+        let payload = "test payload".to_string();
+        let signed = signer.try_sign_sync(payload).unwrap();
+        let memoized = signed.digest();
+        let computed = Digest::hash(&signed);
+        assert_eq!(
+            memoized.raw.as_bytes(),
+            computed.raw.as_bytes(),
+            "memoized_digest() should have the same output as Digest::hash()"
+        );
     }
 }

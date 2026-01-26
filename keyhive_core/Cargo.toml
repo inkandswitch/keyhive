@@ -93,5 +93,10 @@ name = "bench_reachable_prekey_ops"
 harness = false
 required-features = ["test_utils"]
 
+[[bench]]
+name = "bench_toggling_delegate_revoke"
+harness = false
+required-features = ["test_utils"]
+
 [lints.clippy]
 doc_overindented_list_items = "allow"
