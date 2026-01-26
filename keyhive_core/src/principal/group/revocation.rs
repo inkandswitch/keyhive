@@ -99,8 +99,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Revocation
 {
     fn from(revocation: Revocation<S, T, L>) -> Self {
         Self {
-            revoke: Digest::hash(revocation.revoke.as_ref()).into(),
-            proof: revocation.proof.map(|p| Digest::hash(p.as_ref()).into()),
+            revoke: revocation.revoke.memoized_digest().into(),
+            proof: revocation.proof.map(|p| p.memoized_digest().into()),
             after_content: revocation.after_content,
         }
     }

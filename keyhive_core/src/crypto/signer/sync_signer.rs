@@ -78,12 +78,12 @@ pub trait SyncSigner: Verifiable {
         payload: T,
     ) -> Result<Signed<T>, SigningError> {
         let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
+        let signature = self.try_sign_bytes_sync(payload_bytes.as_slice())?;
+        let signed = Signed::new(payload, self.verifying_key(), signature);
+        // Pre-compute the digest
+        let _ = signed.memoized_digest();
 
-        Ok(Signed {
-            payload,
-            issuer: self.verifying_key(),
-            signature: self.try_sign_bytes_sync(payload_bytes.as_slice())?,
-        })
+        Ok(signed)
     }
 }
 
@@ -158,9 +158,9 @@ pub fn try_sign_basic<S: SyncSignerBasic + ?Sized, T: Serialize + std::fmt::Debu
     let bytes = bincode::serialize(&payload)?;
     let signature = signer.try_sign_bytes_sync_basic(bytes.as_slice())?;
     info!("signature: {:0x?}", signature.to_bytes());
-    Ok(Signed {
-        signature,
-        payload,
-        issuer,
-    })
+    let signed = Signed::new(payload, issuer, signature);
+    // Pre-compute the digest
+    let _ = signed.memoized_digest();
+
+    Ok(signed)
 }
