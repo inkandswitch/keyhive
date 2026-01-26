@@ -189,12 +189,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Delegation
     fn from(delegation: Delegation<S, T, L>) -> Self {
         Self {
             can: delegation.can,
-            proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).into()),
+            proof: delegation.proof.map(|p| p.digest().into()),
             delegate: delegation.delegate.id(),
             after_revocations: delegation
                 .after_revocations
                 .iter()
-                .map(|revocation| Digest::hash(revocation.as_ref()).into())
+                .map(|revocation| revocation.digest().into())
                 .collect(),
             after_content: delegation.after_content,
         }
