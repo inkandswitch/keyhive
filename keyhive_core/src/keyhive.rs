@@ -780,6 +780,7 @@ impl<
     }
 
     #[instrument(skip_all)]
+    #[allow(clippy::mutable_key_type)]
     pub async fn reachable_prekey_ops_for_agent(
         &self,
         agent: &Agent<S, T, L>,
@@ -990,19 +991,19 @@ impl<
             StaticEvent::CgkaOperation(op) => Ok(Event::CgkaOperation(Arc::new(*op))),
             StaticEvent::Delegated(static_dlg) => {
                 let delegation = self.static_delegation_to_delegation(&static_dlg).await?;
-                Ok(Event::Delegated(Arc::new(Signed {
-                    issuer: static_dlg.issuer,
-                    signature: static_dlg.signature,
-                    payload: delegation,
-                })))
+                Ok(Event::Delegated(Arc::new(Signed::new(
+                    delegation,
+                    static_dlg.issuer,
+                    static_dlg.signature,
+                ))))
             }
             StaticEvent::Revoked(static_rev) => {
                 let revocation = self.static_revocation_to_revocation(&static_rev).await?;
-                Ok(Event::Revoked(Arc::new(Signed {
-                    issuer: static_rev.issuer,
-                    signature: static_rev.signature,
-                    payload: revocation,
-                })))
+                Ok(Event::Revoked(Arc::new(Signed::new(
+                    revocation,
+                    static_rev.issuer,
+                    static_rev.signature,
+                ))))
             }
         }
     }
@@ -1164,11 +1165,7 @@ impl<
             after_revocations.push(resolved_rev.dupe());
         }
 
-        let delegation = Signed {
-            issuer: static_dlg.issuer,
-            signature: static_dlg.signature,
-            payload,
-        };
+        let delegation = Signed::new(payload, static_dlg.issuer, static_dlg.signature);
 
         let subject_id = delegation.subject_id();
         let delegation = Arc::new(delegation);
@@ -1250,11 +1247,7 @@ impl<
 
         let payload = self.static_revocation_to_revocation(static_rev).await?;
 
-        let revocation = Signed {
-            issuer: static_rev.issuer,
-            signature: static_rev.signature,
-            payload,
-        };
+        let revocation = Signed::new(payload, static_rev.issuer, static_rev.signature);
 
         let id = revocation.subject_id();
         let revocation = Arc::new(revocation);
@@ -1411,17 +1404,17 @@ impl<
             let mut locked_delegations = self.delegations.lock().await;
             for (_digest, dlg) in locked_delegations.clone().iter() {
                 if dlg.payload.delegate == agent {
-                    locked_delegations.insert(Arc::new(Signed {
-                        issuer: dlg.issuer,
-                        signature: dlg.signature,
-                        payload: Delegation {
+                    locked_delegations.insert(Arc::new(Signed::new(
+                        Delegation {
                             delegate: agent.dupe(),
                             can: dlg.payload.can,
                             proof: dlg.payload.proof.clone(),
                             after_revocations: dlg.payload.after_revocations.clone(),
                             after_content: dlg.payload.after_content.clone(),
                         },
-                    }));
+                        dlg.issuer,
+                        dlg.signature,
+                    )));
                 }
             }
         }
@@ -1431,10 +1424,8 @@ impl<
             let mut locked_revocations = self.revocations.lock().await;
             for (_digest, rev) in locked_revocations.clone().iter() {
                 if rev.payload.subject_id() == group_id {
-                    locked_revocations.insert(Arc::new(Signed {
-                        issuer: rev.issuer,
-                        signature: rev.signature,
-                        payload: Revocation {
+                    locked_revocations.insert(Arc::new(Signed::new(
+                        Revocation {
                             revoke: self
                                 .delegations
                                 .lock()
@@ -1449,7 +1440,9 @@ impl<
                             },
                             after_content: rev.payload.after_content.clone(),
                         },
-                    }));
+                        rev.issuer,
+                        rev.signature,
+                    )));
                 }
             }
         }
@@ -1607,17 +1600,17 @@ impl<
                     };
 
                     // NOTE Manually pushing; skipping various steps intentionally
-                    delegations.lock().await.insert(Arc::new(Signed {
-                        signature: sd.signature,
-                        issuer: sd.issuer,
-                        payload: Delegation {
+                    delegations.lock().await.insert(Arc::new(Signed::new(
+                        Delegation {
                             delegate,
                             proof,
                             can: sd.payload.can,
                             after_revocations,
                             after_content: sd.payload.after_content.clone(),
                         },
-                    }));
+                        sd.issuer,
+                        sd.signature,
+                    )));
                 }
                 StaticMembershipOperation::Revocation(sr) => {
                     let revoke = delegations
@@ -1637,15 +1630,15 @@ impl<
                             None
                         };
 
-                    revocations.lock().await.insert(Arc::new(Signed {
-                        issuer: sr.issuer,
-                        signature: sr.signature,
-                        payload: Revocation {
+                    revocations.lock().await.insert(Arc::new(Signed::new(
+                        Revocation {
                             revoke,
                             proof,
                             after_content: sr.payload.after_content.clone(),
                         },
-                    }));
+                        sr.issuer,
+                        sr.signature,
+                    )));
                 }
             };
         }
