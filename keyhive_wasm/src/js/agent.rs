@@ -66,4 +66,20 @@ impl JsAgent {
         }
         Ok(map)
     }
+
+    /// Returns prekey operation hashes for this [`Agent`] as an array of hash bytes.
+    #[wasm_bindgen(js_name = keyOpHashes)]
+    #[allow(clippy::mutable_key_type)]
+    pub async fn key_op_hashes(&self) -> js_sys::Array {
+        let key_ops = self.0.key_ops().await;
+        let arr = js_sys::Array::new();
+        for key_op in key_ops {
+            let event: Event<JsSigner, JsChangeId, JsEventHandler> =
+                Event::from(key_op.as_ref().dupe());
+            let digest = Digest::hash(&event);
+            let hash = js_sys::Uint8Array::from(digest.as_slice());
+            arr.push(&hash.into());
+        }
+        arr
+    }
 }
