@@ -149,7 +149,7 @@ impl<
         mut csprng: R,
     ) -> Result<Self, SigningError>
     where
-        S: AsyncSigner<K> + 'static,
+        S: AsyncSigner<K, AddKeyOp> + AsyncSigner<K, RotateKeyOp> + 'static,
         L: PrekeyListener<K> + 'static,
     {
         let verifying_key = signer.verifying_key();
@@ -1660,7 +1660,7 @@ impl<
         }
 
         #[allow(clippy::type_complexity)]
-        async fn reify_ops<Z: AsyncSigner, U: ContentRef, M: MembershipListener<Z, U>>(
+        async fn reify_ops<Z: Verifiable, U: ContentRef, M>(
             group: &mut Group<Z, U, M>,
             dlg_store: Arc<Mutex<DelegationStore<Z, U, M>>>,
             rev_store: Arc<Mutex<RevocationStore<Z, U, M>>>,

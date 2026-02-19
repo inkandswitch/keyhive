@@ -2,7 +2,7 @@ use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyLi
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::{signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable},
+    crypto::{signed::Signed, verifiable::Verifiable},
     event::Event,
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
@@ -94,7 +94,7 @@ impl<K: FutureForm, S: Verifiable, T: ContentRef> PrekeyListener<K> for Log<S, T
 }
 
 #[future_form(Sendable where S: Send + Sync + 'static, T: Send + Sync + 'static, Local)]
-impl<K: FutureForm, S: AsyncSigner<K> + Clone, T: ContentRef> MembershipListener<K, S, T>
+impl<K: FutureForm, S: Verifiable + Clone, T: ContentRef> MembershipListener<K, S, T>
     for Log<S, T>
 {
     #[instrument(skip(self))]

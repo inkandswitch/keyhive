@@ -118,7 +118,7 @@ impl<S: Verifiable, T: ContentRef, L> Verifiable for Active<S, T, L> {
 /// [`Local`]: future_form::Local
 pub trait ActiveOps<K: FutureForm>: Verifiable {
     /// The signer type.
-    type Signer: AsyncSigner<K>;
+    type Signer: AsyncSigner<K, AddKeyOp> + AsyncSigner<K, RotateKeyOp>;
     /// The content reference type.
     type ContentRef: ContentRef;
     /// The prekey listener type.
@@ -157,12 +157,6 @@ pub trait ActiveOps<K: FutureForm>: Verifiable {
         csprng: Arc<Mutex<R>>,
     ) -> K::Future<'a, Result<Arc<Signed<AddKeyOp>>, SigningError>>;
 
-    /// Asynchronously sign a payload.
-    fn try_sign_async<'a, U: Serialize + std::fmt::Debug + Send + 'a>(
-        &'a self,
-        payload: U,
-    ) -> K::Future<'a, Result<Signed<U>, SigningError>>;
-
     /// Get capability for the active agent on a membered entity.
     fn get_capability<'a>(
         &'a self,
@@ -177,7 +171,7 @@ pub trait ActiveOps<K: FutureForm>: Verifiable {
 #[future_form(Sendable where S: Send + Sync + 'static, T: Send + Sync + 'static, L: Send + Sync + 'static, Local)]
 impl<
         K: FutureForm,
-        S: AsyncSigner<K> + Clone + 'static,
+        S: AsyncSigner<K, AddKeyOp> + AsyncSigner<K, RotateKeyOp> + Clone + 'static,
         T: ContentRef + 'static,
         L: PrekeyListener<K> + 'static,
     > ActiveOps<K> for Active<S, T, L>
@@ -211,7 +205,8 @@ impl<
 
         K::from_future(async move {
             let init_op = Arc::new(
-                AsyncSigner::<K>::try_sign_async(&signer, AddKeyOp { share_key: init_pk }).await?,
+                AsyncSigner::<K, _>::try_sign_async(&signer, AddKeyOp { share_key: init_pk })
+                    .await?,
             )
             .into();
 
@@ -220,7 +215,8 @@ impl<
             // Sign all the additional keys
             for pk in additional_keys {
                 let op = Arc::new(
-                    AsyncSigner::<K>::try_sign_async(&signer, AddKeyOp { share_key: pk }).await?,
+                    AsyncSigner::<K, _>::try_sign_async(&signer, AddKeyOp { share_key: pk })
+                        .await?,
                 )
                 .into();
                 prekey_state
@@ -281,7 +277,7 @@ impl<
             let new_public = new_secret.share_key();
 
             let rot_op = Arc::new(
-                AsyncSigner::<K>::try_sign_async(
+                AsyncSigner::<K, _>::try_sign_async(
                     &self.signer,
                     RotateKeyOp {
                         old: old_prekey,
@@ -326,7 +322,7 @@ impl<
             let new_public = new_secret.share_key();
 
             let op = Arc::new(
-                AsyncSigner::<K>::try_sign_async(
+                AsyncSigner::<K, _>::try_sign_async(
                     &self.signer,
                     AddKeyOp {
                         share_key: new_public,
@@ -356,13 +352,6 @@ impl<
             PrekeyListener::<K>::on_prekeys_expanded(&self.listener, &op).await;
             Ok(op)
         })
-    }
-
-    fn try_sign_async<'a, U: Serialize + std::fmt::Debug + Send + 'a>(
-        &'a self,
-        payload: U,
-    ) -> K::Future<'a, Result<Signed<U>, SigningError>> {
-        K::from_future(async move { AsyncSigner::<K>::try_sign_async(&self.signer, payload).await })
     }
 
     fn get_capability<'a>(
@@ -433,7 +422,7 @@ pub enum ActiveDelegationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::signer::memory::MemorySigner;
+    use crate::crypto::signer::{memory::MemorySigner, sync_signer::SyncSigner};
 
     #[tokio::test]
     async fn test_seal() {
@@ -442,13 +431,11 @@ mod tests {
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let active: Active<_, [u8; 32], _> =
-            ActiveOps::<Sendable>::generate(signer, NoListener, csprng)
+            ActiveOps::<Sendable>::generate(signer.clone(), NoListener, csprng)
                 .await
                 .unwrap();
         let message = "hello world".as_bytes();
-        let signed = ActiveOps::<Sendable>::try_sign_async(&active, message)
-            .await
-            .unwrap();
+        let signed = signer.try_sign(message).unwrap();
 
         assert!(signed.try_verify().is_ok());
     }

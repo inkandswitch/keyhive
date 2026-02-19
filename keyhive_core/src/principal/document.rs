@@ -150,9 +150,8 @@ impl<S: Verifiable, T: ContentRef, L> Document<S, T, L> {
         csprng: Arc<Mutex<R>>,
     ) -> Result<Self, GenerateDocError>
     where
-        S: AsyncSigner<K>,
+        S: AsyncSigner<K, CgkaOperation>,
         L: CgkaListener<K>,
-        CgkaOperation: PayloadBound<K>,
     {
         let mut locked_csprng = csprng.lock().await;
         let (group_result, group_vk) =
@@ -230,8 +229,7 @@ impl<S: Verifiable, T: ContentRef, L> Document<S, T, L> {
         other_relevant_docs: &[Arc<Mutex<Document<S, T, L>>>],
     ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError>
     where
-        S: AsyncSigner<K>,
-        CgkaOperation: PayloadBound<K>,
+        S: AsyncSigner<K, CgkaOperation>,
     {
         let mut after_content: BTreeMap<_, _> =
             join_all(other_relevant_docs.iter().map(|doc| async {
@@ -272,8 +270,7 @@ impl<S: Verifiable, T: ContentRef, L> Document<S, T, L> {
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError>
     where
-        S: AsyncSigner<K>,
-        CgkaOperation: PayloadBound<K>,
+        S: AsyncSigner<K, CgkaOperation>,
     {
         let prekeys = delegation
             .payload
@@ -299,8 +296,7 @@ impl<S: Verifiable, T: ContentRef, L> Document<S, T, L> {
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError>
     where
-        S: AsyncSigner<K>,
-        CgkaOperation: PayloadBound<K>,
+        S: AsyncSigner<K, CgkaOperation>,
     {
         let RevokeMemberUpdate {
             revocations,
@@ -345,8 +341,7 @@ impl<S: Verifiable, T: ContentRef, L> Document<S, T, L> {
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError>
     where
-        S: AsyncSigner<K>,
-        CgkaOperation: PayloadBound<K>,
+        S: AsyncSigner<K, CgkaOperation>,
     {
         self.cgka_mut()?.remove::<K, S>(id, signer).await
     }
@@ -445,8 +440,7 @@ impl<S: Verifiable, T: ContentRef, L> Document<S, T, L> {
         csprng: &mut R,
     ) -> Result<Signed<CgkaOperation>, EncryptError>
     where
-        S: AsyncSigner<K>,
-        CgkaOperation: PayloadBound<K>,
+        S: AsyncSigner<K, CgkaOperation>,
     {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
@@ -469,8 +463,7 @@ impl<S: Verifiable, T: ContentRef, L> Document<S, T, L> {
         csprng: &mut R,
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptError>
     where
-        S: AsyncSigner<K>,
-        CgkaOperation: PayloadBound<K>,
+        S: AsyncSigner<K, CgkaOperation>,
     {
         let (app_secret, maybe_update_op) = self
             .cgka_mut()

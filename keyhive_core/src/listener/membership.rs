@@ -3,7 +3,7 @@
 use super::{cgka::CgkaListener, prekey::PrekeyListener};
 use crate::{
     content::reference::ContentRef,
-    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{signed::Signed, verifiable::Verifiable},
     principal::group::{delegation::Delegation, revocation::Revocation},
 };
 use future_form::FutureForm;
@@ -21,7 +21,7 @@ use std::sync::Arc;
 /// [`Document`]: crate::principal::document::Document
 /// [`Sendable`]: future_form::Sendable
 /// [`Local`]: future_form::Local
-pub trait MembershipListener<K: FutureForm, S: AsyncSigner<K>, T: ContentRef>:
+pub trait MembershipListener<K: FutureForm, S: Verifiable, T: ContentRef>:
     PrekeyListener<K> + CgkaListener<K>
 {
     /// React to new [`Delegation`]s.

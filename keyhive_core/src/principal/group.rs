@@ -253,7 +253,7 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
 
     #[tracing::instrument(skip(self), fields(group_id = %self.group_id()))]
     pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
-        struct GroupAccess<Z: AsyncSigner, U: ContentRef, M: MembershipListener<Z, U>> {
+        struct GroupAccess<Z: Verifiable, U: ContentRef, M> {
             agent: Agent<Z, U, M>,
             agent_access: Access,
             parent_access: Access,
@@ -397,10 +397,8 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
         relevant_docs: &[Arc<Mutex<Document<S, T, L>>>],
     ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError>
     where
-        S: AsyncSigner<K>,
+        S: AsyncSigner<K, Delegation<S, T, L>> + AsyncSigner<K, CgkaOperation>,
         L: MembershipListener<K, S, T>,
-        Delegation<S, T, L>: PayloadBound<K>,
-        CgkaOperation: PayloadBound<K>,
     {
         let mut after_content = BTreeMap::new();
         for d in relevant_docs {
@@ -423,9 +421,8 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
         after_content: BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError>
     where
-        S: AsyncSigner<K>,
+        S: AsyncSigner<K, CgkaOperation>,
         L: MembershipListener<K, S, T>,
-        CgkaOperation: PayloadBound<K>,
     {
         let proof = if self.verifying_key() == signer.verifying_key() {
             None
@@ -444,7 +441,7 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
             Some(p.dupe())
         };
 
-        let delegation = AsyncSigner::<K>::try_sign_async(
+        let delegation = AsyncSigner::<K, _>::try_sign_async(
             signer,
             Delegation {
                 delegate: member_to_add,
@@ -479,8 +476,7 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError>
     where
-        S: AsyncSigner<K>,
-        CgkaOperation: PayloadBound<K>,
+        S: AsyncSigner<K, CgkaOperation>,
     {
         let mut cgka_ops = Vec::new();
         let docs: Vec<Arc<Mutex<Document<S, T, L>>>> = self
