@@ -26,18 +26,18 @@ use tracing::instrument;
 /// Note that delegation and revocation events are stored as their static forms
 /// (using hashes instead of full references).
 #[derive(Debug, From, Into)]
-pub struct Deque<S: AsyncSigner, T: ContentRef = [u8; 32]>(
+pub struct Deque<S, T: ContentRef = [u8; 32]>(
     pub Arc<Mutex<VecDeque<StaticEvent<T>>>>,
     PhantomData<S>,
 );
 
-impl<S: AsyncSigner, T: ContentRef> Default for Deque<S, T> {
+impl<S, T: ContentRef> Default for Deque<S, T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Deque<S, T> {
+impl<S, T: ContentRef> Deque<S, T> {
     pub fn new() -> Self {
         Self(Arc::new(Mutex::new(VecDeque::new())), PhantomData)
     }
@@ -68,13 +68,13 @@ impl<S: AsyncSigner, T: ContentRef> Deque<S, T> {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Clone for Deque<S, T> {
+impl<S, T: ContentRef> Clone for Deque<S, T> {
     fn clone(&self) -> Self {
         Self(self.0.dupe(), PhantomData)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Dupe for Deque<S, T> {
+impl<S, T: ContentRef> Dupe for Deque<S, T> {
     fn dupe(&self) -> Self {
         self.clone()
     }
@@ -84,7 +84,7 @@ impl<S: AsyncSigner, T: ContentRef> Dupe for Deque<S, T> {
     Sendable where S: Send + Sync, T: Send + Sync, Self: Send + Sync,
     Local
 )]
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> PrekeyListener<K> for Deque<S, T> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef> PrekeyListener<K> for Deque<S, T> {
     #[instrument(skip(self))]
     fn on_prekeys_expanded<'a>(
         &'a self,
@@ -116,7 +116,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> PrekeyListener<K> fo
     Sendable where S: Send + Sync, T: Send + Sync, Self: Send + Sync,
     Local
 )]
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> CgkaListener<K> for Deque<S, T> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef> CgkaListener<K> for Deque<S, T> {
     #[instrument(skip(self))]
     fn on_cgka_op<'a>(&'a self, op: &'a Arc<Signed<CgkaOperation>>) -> K::Future<'a, ()> {
         K::from_future(async move {
@@ -126,7 +126,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> CgkaListener<K> for 
     }
 }
 
-impl<S: AsyncSigner + Send + Sync, T: ContentRef + Send + Sync> MembershipListener<Sendable, S, T>
+impl<S: AsyncSigner<Sendable> + Send + Sync, T: ContentRef + Send + Sync> MembershipListener<Sendable, S, T>
     for Deque<S, T>
 where
     Self: Send + Sync,
@@ -158,7 +158,7 @@ where
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> MembershipListener<Local, S, T> for Deque<S, T> {
+impl<S: AsyncSigner<Local>, T: ContentRef> MembershipListener<Local, S, T> for Deque<S, T> {
     #[instrument(skip(self))]
     fn on_delegation<'a>(
         &'a self,

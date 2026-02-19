@@ -27,12 +27,12 @@ use tracing::instrument;
 /// are stored as their static forms (using hashes instead of full references).
 #[derive(From, Into)]
 #[derive_where(Debug; T)]
-pub struct Log<S: AsyncSigner, T: ContentRef = [u8; 32]>(
+pub struct Log<S, T: ContentRef = [u8; 32]>(
     pub Arc<Mutex<Vec<StaticEvent<T>>>>,
     std::marker::PhantomData<S>,
 );
 
-impl<S: AsyncSigner, T: ContentRef> Log<S, T> {
+impl<S, T: ContentRef> Log<S, T> {
     pub fn new() -> Self {
         Self(Arc::new(Mutex::new(Vec::new())), std::marker::PhantomData)
     }
@@ -63,19 +63,19 @@ impl<S: AsyncSigner, T: ContentRef> Log<S, T> {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Clone for Log<S, T> {
+impl<S, T: ContentRef> Clone for Log<S, T> {
     fn clone(&self) -> Self {
         Self(self.0.dupe(), std::marker::PhantomData)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Dupe for Log<S, T> {
+impl<S, T: ContentRef> Dupe for Log<S, T> {
     fn dupe(&self) -> Self {
         self.clone()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Default for Log<S, T> {
+impl<S, T: ContentRef> Default for Log<S, T> {
     fn default() -> Self {
         Self::new()
     }
@@ -85,7 +85,7 @@ impl<S: AsyncSigner, T: ContentRef> Default for Log<S, T> {
     Sendable where S: Send + Sync, T: Send + Sync, Self: Send + Sync,
     Local
 )]
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> PrekeyListener<K> for Log<S, T> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef> PrekeyListener<K> for Log<S, T> {
     #[instrument(skip(self))]
     fn on_prekeys_expanded<'a>(
         &'a self,
@@ -117,7 +117,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> PrekeyListener<K> fo
     Sendable where S: Send + Sync, T: Send + Sync, Self: Send + Sync,
     Local
 )]
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> CgkaListener<K> for Log<S, T> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef> CgkaListener<K> for Log<S, T> {
     #[instrument(skip(self))]
     fn on_cgka_op<'a>(
         &'a self,
@@ -130,7 +130,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> CgkaListener<K> for 
     }
 }
 
-impl<S: AsyncSigner + Send + Sync, T: ContentRef + Send + Sync> MembershipListener<Sendable, S, T>
+impl<S: AsyncSigner<Sendable> + Send + Sync, T: ContentRef + Send + Sync> MembershipListener<Sendable, S, T>
     for Log<S, T>
 where
     Self: Send + Sync,
@@ -162,7 +162,7 @@ where
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> MembershipListener<Local, S, T> for Log<S, T> {
+impl<S: AsyncSigner<Local>, T: ContentRef> MembershipListener<Local, S, T> for Log<S, T> {
     #[instrument(skip(self))]
     fn on_delegation<'a>(
         &'a self,

@@ -31,7 +31,7 @@ use tracing::instrument;
 #[derive_where(Debug, Clone, Eq; T)]
 pub enum MembershipOperation<
     K: FutureForm + ?Sized,
-    S: AsyncSigner,
+    S: AsyncSigner<K>,
     T: ContentRef,
     L: MembershipListener<K, S, T>,
 > {
@@ -39,7 +39,7 @@ pub enum MembershipOperation<
     Revocation(Arc<Signed<Revocation<K, S, T, L>>>),
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> std::hash::Hash
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> std::hash::Hash
     for MembershipOperation<K, S, T, L>
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -54,7 +54,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> PartialEq
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> PartialEq
     for MembershipOperation<K, S, T, L>
 {
     fn eq(&self, other: &Self) -> bool {
@@ -66,7 +66,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef + Serialize, L: MembershipListener<K, S, T>> Serialize
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef + Serialize, L: MembershipListener<K, S, T>> Serialize
     for MembershipOperation<K, S, T, L>
 {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
@@ -77,7 +77,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef + Serialize, L: Membe
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> MembershipOperation<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> MembershipOperation<K, S, T, L> {
     pub fn subject_id(&self) -> Identifier {
         match self {
             MembershipOperation::Delegation(delegation) => delegation.subject_id(),
@@ -362,7 +362,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Dupe
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Dupe
     for MembershipOperation<K, S, T, L>
 {
     fn dupe(&self) -> Self {
@@ -370,7 +370,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable
     for MembershipOperation<K, S, T, L>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
@@ -381,7 +381,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Arc<Signed<Delegation<K, S, T, L>>>> for MembershipOperation<K, S, T, L>
 {
     fn from(delegation: Arc<Signed<Delegation<K, S, T, L>>>) -> Self {
@@ -389,7 +389,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Arc<Signed<Revocation<K, S, T, L>>>> for MembershipOperation<K, S, T, L>
 {
     fn from(revocation: Arc<Signed<Revocation<K, S, T, L>>>) -> Self {
@@ -404,7 +404,7 @@ pub enum StaticMembershipOperation<T: ContentRef> {
     Revocation(Signed<StaticRevocation<T>>),
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<MembershipOperation<K, S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<MembershipOperation<K, S, T, L>>
     for StaticMembershipOperation<T>
 {
     fn from(op: MembershipOperation<K, S, T, L>) -> Self {

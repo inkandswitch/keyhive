@@ -17,14 +17,14 @@ use std::sync::Arc;
 #[derive_where(Clone, Debug, Hash; T)]
 pub struct DelegationStore<
     K: FutureForm + ?Sized,
-    S: AsyncSigner,
+    S: AsyncSigner<K>,
     T: ContentRef,
     L: MembershipListener<K, S, T>,
 > {
     delegations: CaMap<Signed<Delegation<K, S, T, L>>>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> DelegationStore<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> DelegationStore<K, S, T, L> {
     /// Create a new delegation store.
     pub fn new() -> Self {
         Self {

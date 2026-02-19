@@ -21,7 +21,7 @@ use std::sync::Arc;
 ///
 /// [`Group`]: crate::principal::group::Group
 /// [`Document`]: crate::principal::document::Document
-pub trait MembershipListener<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef>:
+pub trait MembershipListener<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef>:
     PrekeyListener<K> + CgkaListener<K> + Sized
 {
     /// React to new [`Delegation`]s.

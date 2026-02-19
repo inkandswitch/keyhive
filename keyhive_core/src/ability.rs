@@ -15,12 +15,12 @@ use std::sync::Arc;
 
 /// [`Ability`] is a helper type for working with [`Document`] access capabilties.
 #[derive_where(Debug; T)]
-pub struct Ability<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
+pub struct Ability<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> {
     pub(crate) doc: Arc<Mutex<Document<K, S, T, L>>>,
     pub(crate) can: Access,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Ability<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Ability<K, S, T, L> {
     /// Getter for the referenced [`Document`].
     pub fn doc(&self) -> Arc<Mutex<Document<K, S, T, L>>> {
         self.doc.dupe()

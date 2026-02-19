@@ -25,6 +25,7 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use beekem::BeeKem;
+use future_form::FutureForm;
 use derivative::Derivative;
 use dupe::Dupe;
 use error::CgkaError;
@@ -87,7 +88,7 @@ fn hashed_key_bytes<T: Serialize, V, H: Hasher>(hmap: &HashMap<Digest<T>, V>, st
 }
 
 impl Cgka {
-    pub async fn new<S: AsyncSigner>(
+    pub async fn new<K: FutureForm + ?Sized, S: AsyncSigner<K>>(
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
@@ -152,7 +153,7 @@ impl Cgka {
     /// perform a leaf key rotation.
     #[instrument(skip_all)]
     pub async fn new_app_secret_for<
-        S: AsyncSigner,
+        S: AsyncSigner<K>,
         T: ContentRef,
         R: rand::CryptoRng + rand::RngCore,
     >(
@@ -223,7 +224,7 @@ impl Cgka {
 
     /// Add member to group.
     #[instrument(skip_all)]
-    pub async fn add<S: AsyncSigner>(
+    pub async fn add<K: FutureForm + ?Sized, S: AsyncSigner<K>>(
         &mut self,
         id: IndividualId,
         pk: ShareKey,
@@ -253,7 +254,7 @@ impl Cgka {
     }
 
     /// Add multiple members to group.
-    pub async fn add_multiple<S: AsyncSigner>(
+    pub async fn add_multiple<K: FutureForm + ?Sized, S: AsyncSigner<K>>(
         &mut self,
         members: NonEmpty<(IndividualId, ShareKey)>,
         signer: &S,
@@ -267,7 +268,7 @@ impl Cgka {
 
     /// Remove member from group.
     #[instrument(skip_all)]
-    pub async fn remove<S: AsyncSigner>(
+    pub async fn remove<K: FutureForm + ?Sized, S: AsyncSigner<K>>(
         &mut self,
         id: IndividualId,
         signer: &S,
@@ -298,7 +299,7 @@ impl Cgka {
     /// Update leaf key pair for this Identifier.
     /// This also triggers a tree path update for that leaf.
     #[instrument(skip_all)]
-    pub async fn update<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
+    pub async fn update<S: AsyncSigner<K>, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         new_pk: ShareKey,
         new_sk: ShareSecretKey,

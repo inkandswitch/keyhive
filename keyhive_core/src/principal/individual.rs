@@ -26,6 +26,9 @@ use tracing::instrument;
 use crate::crypto::{signed::SigningError, signer::async_signer::AsyncSigner};
 
 #[cfg(any(feature = "test_utils", test))]
+use future_form::FutureForm;
+
+#[cfg(any(feature = "test_utils", test))]
 use std::num::NonZeroUsize;
 
 /// Single agents with no internal membership.
@@ -75,7 +78,7 @@ impl Individual {
 
     #[cfg(any(feature = "test_utils", test))]
     #[instrument(skip_all)]
-    pub async fn generate<R: rand::CryptoRng + rand::RngCore, S: AsyncSigner>(
+    pub async fn generate<R: rand::CryptoRng + rand::RngCore, K: FutureForm + ?Sized, S: AsyncSigner<K>>(
         signer: &S,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {

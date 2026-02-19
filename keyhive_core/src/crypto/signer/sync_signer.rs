@@ -9,6 +9,7 @@ use crate::{
     util::hex::ToHexString,
 };
 use ed25519_dalek::Signer;
+use future_form::FutureForm;
 use serde::Serialize;
 use tracing::{info, instrument};
 
@@ -98,13 +99,13 @@ impl SyncSigner for ed25519_dalek::SigningKey {
     }
 }
 
-impl<T: SyncSigner> AsyncSigner for T {
-    #[instrument(skip_all)]
-    async fn try_sign_bytes_async(
-        &self,
-        payload_bytes: &[u8],
-    ) -> Result<ed25519_dalek::Signature, SigningError> {
-        self.try_sign_bytes_sync(payload_bytes)
+#[future_form::future_form(Sendable where Self: Send + Sync, Local)]
+impl<K: FutureForm + ?Sized, T: SyncSigner> AsyncSigner<K> for T {
+    fn try_sign_bytes_async<'a>(
+        &'a self,
+        payload_bytes: &'a [u8],
+    ) -> K::Future<'a, Result<ed25519_dalek::Signature, SigningError>> {
+        K::from_future(async move { self.try_sign_bytes_sync(payload_bytes) })
     }
 }
 

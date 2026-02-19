@@ -75,7 +75,7 @@ use tracing::instrument;
 #[derive(Clone)]
 pub struct Keyhive<
     K: FutureForm + ?Sized,
-    S: AsyncSigner + Clone,
+    S: AsyncSigner<K> + Clone,
     T: ContentRef,
     P: for<'de> Deserialize<'de>,
     C: CiphertextStore<K, T, P> + Clone,
@@ -123,7 +123,7 @@ pub struct Keyhive<
 
 impl<
         K: FutureForm + ?Sized,
-        S: AsyncSigner + Clone,
+        S: AsyncSigner<K> + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<K, T, P> + Clone,
@@ -1995,7 +1995,7 @@ impl<
 
 impl<
         K: FutureForm + ?Sized,
-        S: AsyncSigner + Clone,
+        S: AsyncSigner<K> + Clone,
         T: ContentRef + Debug,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<K, T, P> + Clone,
@@ -2018,7 +2018,7 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone,
+        S: AsyncSigner<K> + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<Local, T, P> + Clone,
@@ -2044,7 +2044,7 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone,
+        S: AsyncSigner<K> + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<Local, T, P> + Clone,
@@ -2094,7 +2094,7 @@ impl<
 
 impl<
         K: FutureForm + ?Sized,
-        S: AsyncSigner + Clone,
+        S: AsyncSigner<K> + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<K, T, P> + Clone,
@@ -2109,7 +2109,7 @@ impl<
 
 #[derive(Error)]
 #[derive_where(Debug; T)]
-pub enum ReceiveStaticEventError<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
+pub enum ReceiveStaticEventError<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> {
     #[error(transparent)]
     ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
 
@@ -2123,7 +2123,7 @@ pub enum ReceiveStaticEventError<K: FutureForm + ?Sized, S: AsyncSigner, T: Cont
 impl<K, S, T, L> ReceiveStaticEventError<K, S, T, L>
 where
     K: FutureForm + ?Sized,
-    S: AsyncSigner,
+    S: AsyncSigner<K>,
     T: ContentRef,
     L: MembershipListener<K, S, T>,
 {
@@ -2138,7 +2138,7 @@ where
 
 #[derive(Error)]
 #[derive_where(Debug; T)]
-pub enum ReceiveStaticDelegationError<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
+pub enum ReceiveStaticDelegationError<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> {
     #[error(transparent)]
     VerificationError(#[from] VerificationError),
 
@@ -2161,7 +2161,7 @@ pub enum ReceiveStaticDelegationError<K: FutureForm + ?Sized, S: AsyncSigner, T:
 impl<K, S, T, L> ReceiveStaticDelegationError<K, S, T, L>
 where
     K: FutureForm + ?Sized,
-    S: AsyncSigner,
+    S: AsyncSigner<K>,
     T: ContentRef,
     L: MembershipListener<K, S, T>,
 {
@@ -2179,7 +2179,7 @@ where
 
 #[derive(Clone, PartialEq, Eq, Error)]
 #[derive_where(Debug)]
-pub enum StaticEventConversionError<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
+pub enum StaticEventConversionError<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> {
     #[error("Missing delegation: {0}")]
     MissingDelegation(Digest<Signed<Delegation<K, S, T, L>>>),
 
@@ -2190,7 +2190,7 @@ pub enum StaticEventConversionError<K: FutureForm + ?Sized, S: AsyncSigner, T: C
     UnknownAgent(Identifier),
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>>
     From<StaticEventConversionError<K, S, T, L>> for ReceiveStaticDelegationError<K, S, T, L>
 {
     fn from(error: StaticEventConversionError<K, S, T, L>) -> Self {
@@ -2210,7 +2210,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
 
 #[derive(Clone, PartialEq, Eq, Error)]
 #[derive_where(Debug)]
-pub enum TryFromArchiveError<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
+pub enum TryFromArchiveError<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> {
     #[error("Missing delegation: {0}")]
     MissingDelegation(#[from] Digest<Signed<Delegation<K, S, T, L>>>),
 
@@ -2256,7 +2256,7 @@ impl ReceiveCgkaOpError {
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<MissingIndividualError>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<MissingIndividualError>
     for TryFromArchiveError<K, S, T, L>
 {
     fn from(e: MissingIndividualError) -> Self {
@@ -2274,7 +2274,7 @@ pub enum EncryptContentError {
 }
 
 #[derive(Debug, Error)]
-pub enum ReceiveEventError<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
+pub enum ReceiveEventError<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> {
     #[error(transparent)]
     ReceiveStaticDelegationError(#[from] ReceiveStaticDelegationError<K, S, T, L>),
 

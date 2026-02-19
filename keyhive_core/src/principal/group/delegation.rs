@@ -25,7 +25,7 @@ use std::{collections::BTreeMap, hash::Hash, sync::Arc};
 use thiserror::Error;
 
 #[derive_where(Debug, Clone, PartialEq; T)]
-pub struct Delegation<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
+pub struct Delegation<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> {
     pub(crate) delegate: Agent<K, S, T, L>,
     pub(crate) can: Access,
 
@@ -34,9 +34,9 @@ pub struct Delegation<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: 
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Eq for Delegation<K, S, T, L> {}
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Eq for Delegation<K, S, T, L> {}
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Delegation<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Delegation<K, S, T, L> {
     pub fn subject_id(&self, issuer: AgentId) -> Identifier {
         if let Some(proof) = &self.proof {
             proof.subject_id()
@@ -130,7 +130,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Signed<Delegation<K, S, T, L>> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Signed<Delegation<K, S, T, L>> {
     pub fn subject_id(&self) -> Identifier {
         let mut head = self;
 
@@ -142,7 +142,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Serialize for Delegation<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Serialize for Delegation<K, S, T, L> {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticDelegation::from(self.clone()).serialize(serializer)
     }
@@ -180,7 +180,7 @@ impl<'a, T: ContentRef + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Delegation<K, S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<Delegation<K, S, T, L>>
     for StaticDelegation<T>
 {
     fn from(delegation: Delegation<K, S, T, L>) -> Self {
@@ -199,7 +199,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AfterAuth<'a, K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
+pub struct AfterAuth<'a, K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> {
     #[allow(clippy::type_complexity)]
     pub(crate) optional_delegation: Option<Arc<Signed<Delegation<K, S, T, L>>>>,
 

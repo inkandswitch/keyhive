@@ -88,7 +88,7 @@ impl DebugEventTable {
     pub fn from_events<K, S, T, L>(events: Vec<Event<K, S, T, L>>, nicknames: Nicknames) -> Self
     where
         K: FutureForm + ?Sized,
-        S: AsyncSigner,
+        S: AsyncSigner<K>,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
         L: MembershipListener<K, S, T>,
     {
@@ -127,7 +127,7 @@ impl DebugEventRow {
     pub fn from_event<K, S, T, L>(idx: usize, event: &Event<K, S, T, L>, nicknames: &Nicknames) -> Self
     where
         K: FutureForm + ?Sized,
-        S: AsyncSigner,
+        S: AsyncSigner<K>,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
         L: MembershipListener<K, S, T>,
     {

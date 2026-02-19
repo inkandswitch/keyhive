@@ -25,7 +25,7 @@ use std::{cmp::Ordering, collections::BTreeMap, sync::Arc};
 #[derive_where(Debug, Hash; T)]
 pub struct GroupState<
     K: FutureForm + ?Sized,
-    S: AsyncSigner,
+    S: AsyncSigner<K>,
     T: ContentRef,
     L: MembershipListener<K, S, T>,
 > {
@@ -40,7 +40,7 @@ pub struct GroupState<
     pub(crate) revocation_heads: RevocationStore<K, S, T, L>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> GroupState<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> GroupState<K, S, T, L> {
     pub async fn new(
         delegation_head: Arc<Signed<Delegation<K, S, T, L>>>,
         delegations: Arc<Mutex<DelegationStore<K, S, T, L>>>,
@@ -268,7 +268,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable
     for GroupState<K, S, T, L>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {

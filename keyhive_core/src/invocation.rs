@@ -11,12 +11,12 @@ use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 #[derive_where(Clone; U)]
-pub struct Invocation<K: FutureForm + ?Sized, S: AsyncSigner, C: ContentRef, L: MembershipListener<K, S, C>, U: Clone = C> {
+pub struct Invocation<K: FutureForm + ?Sized, S: AsyncSigner<K>, C: ContentRef, L: MembershipListener<K, S, C>, U: Clone = C> {
     pub(crate) invoke: U,
     pub(crate) proof: Option<Arc<Signed<Delegation<K, S, C, L>>>>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, C: ContentRef, L: MembershipListener<K, S, C>, U: Clone + Serialize> Serialize
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, C: ContentRef, L: MembershipListener<K, S, C>, U: Clone + Serialize> Serialize
     for Invocation<K, S, C, L, U>
 {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
@@ -30,7 +30,7 @@ pub struct StaticInvocation<C: ContentRef, U: Clone> {
     pub(crate) proof: Option<Digest<Signed<StaticDelegation<C>>>>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, C: ContentRef, L: MembershipListener<K, S, C>, U: Clone>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, C: ContentRef, L: MembershipListener<K, S, C>, U: Clone>
     From<Invocation<K, S, C, L, U>> for StaticInvocation<C, U>
 {
     fn from(invocation: Invocation<K, S, C, L, U>) -> Self {

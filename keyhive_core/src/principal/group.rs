@@ -61,7 +61,7 @@ use thiserror::Error;
 /// through the network of [`Agent`]s.
 #[derive(Clone)]
 #[derive_where(Debug; T)]
-pub struct Group<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+pub struct Group<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>>
 {
     pub(crate) id_or_indie: IdOrIndividual,
 
@@ -80,7 +80,7 @@ pub struct Group<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: Membe
     pub(crate) listener: L,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Group<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Group<K, S, T, L> {
     #[tracing::instrument(skip_all)]
     pub async fn new(
         group_id: GroupId,
@@ -850,7 +850,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Hash for Group<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Hash for Group<K, S, T, L> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id_or_indie.hash(state);
         self.members.iter().collect::<BTreeMap<_, _>>().hash(state);
@@ -858,7 +858,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable for Group<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable for Group<K, S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }

@@ -1,4 +1,5 @@
 use super::{signed::JsSigned, signing_error::JsSigningError};
+use future_form::Local;
 use keyhive_core::crypto::{
     signed::SigningError, signer::async_signer::AsyncSigner, verifiable::Verifiable,
 };
@@ -130,7 +131,7 @@ impl JsSigner {
 
     #[wasm_bindgen(js_name = trySign)]
     pub async fn try_sign(&self, bytes: &[u8]) -> Result<JsSigned, JsSigningError> {
-        let signed = self.try_sign_async(bytes.to_vec()).await?;
+        let signed = AsyncSigner::<Local>::try_sign_async(self, bytes.to_vec()).await?;
         Ok(JsSigned(signed))
     }
 
@@ -151,12 +152,15 @@ impl Verifiable for JsSigner {
     }
 }
 
-impl AsyncSigner for JsSigner {
-    async fn try_sign_bytes_async(
-        &self,
-        bytes: &[u8],
-    ) -> Result<ed25519_dalek::Signature, SigningError> {
-        self.0.try_sign_bytes_async(bytes).await
+impl AsyncSigner<Local> for JsSigner {
+    fn try_sign_bytes_async<'a>(
+        &'a self,
+        bytes: &'a [u8],
+    ) -> <Local as future_form::FutureForm>::Future<'a, Result<ed25519_dalek::Signature, SigningError>>
+    {
+        Local::from_future(async move {
+            AsyncSigner::<Local>::try_sign_bytes_async(&self.0, bytes).await
+        })
     }
 }
 
@@ -182,49 +186,54 @@ impl Verifiable for JsSignerOptions {
     }
 }
 
-impl AsyncSigner for JsSignerOptions {
-    async fn try_sign_bytes_async(
-        &self,
-        bytes: &[u8],
-    ) -> Result<ed25519_dalek::Signature, SigningError> {
-        match self {
-            JsSignerOptions::Memory(key) => key.try_sign_bytes_async(bytes).await,
+impl AsyncSigner<Local> for JsSignerOptions {
+    fn try_sign_bytes_async<'a>(
+        &'a self,
+        bytes: &'a [u8],
+    ) -> <Local as future_form::FutureForm>::Future<'a, Result<ed25519_dalek::Signature, SigningError>>
+    {
+        Local::from_future(async move {
+            match self {
+                JsSignerOptions::Memory(key) => {
+                    AsyncSigner::<Local>::try_sign_bytes_async(key, bytes).await
+                }
 
-            #[cfg(feature = "web-sys")]
-            JsSignerOptions::WebCrypto { signing_key, .. } => {
-                use js_sys::Reflect;
-                use web_sys::Crypto;
+                #[cfg(feature = "web-sys")]
+                JsSignerOptions::WebCrypto { signing_key, .. } => {
+                    use js_sys::Reflect;
+                    use web_sys::Crypto;
 
-                let crypto_obj =
-                    Reflect::get(&js_sys::global(), &"crypto".into()).expect("crypto to exist");
-                let crypto = crypto_obj
-                    .dyn_into::<Crypto>()
-                    .expect("crypto to be a Crypto object");
-                let subtle = crypto.subtle();
+                    let crypto_obj =
+                        Reflect::get(&js_sys::global(), &"crypto".into()).expect("crypto to exist");
+                    let crypto = crypto_obj
+                        .dyn_into::<Crypto>()
+                        .expect("crypto to be a Crypto object");
+                    let subtle = crypto.subtle();
 
-                let signature_promise = subtle
-                    .sign_with_object_and_u8_array(
-                        &js_sys::JsString::from("Ed25519").into(),
-                        &signing_key.clone(),
-                        bytes,
-                    )
-                    .map_err(|_| {
+                    let signature_promise = subtle
+                        .sign_with_object_and_u8_array(
+                            &js_sys::JsString::from("Ed25519").into(),
+                            &signing_key.clone(),
+                            bytes,
+                        )
+                        .map_err(|_| {
+                            SigningError::SigningFailed(ed25519_dalek::SignatureError::new())
+                        })?;
+
+                    let js_signature = JsFuture::from(signature_promise).await.map_err(|_| {
                         SigningError::SigningFailed(ed25519_dalek::SignatureError::new())
                     })?;
 
-                let js_signature = JsFuture::from(signature_promise).await.map_err(|_| {
-                    SigningError::SigningFailed(ed25519_dalek::SignatureError::new())
-                })?;
+                    let signature_bytes = js_sys::Uint8Array::new(&js_signature).to_vec();
 
-                let signature_bytes = js_sys::Uint8Array::new(&js_signature).to_vec();
-
-                Ok(
-                    ed25519_dalek::Signature::from_slice(signature_bytes.as_slice()).map_err(
-                        |_| SigningError::SigningFailed(ed25519_dalek::SignatureError::new()),
-                    )?,
-                )
+                    Ok(
+                        ed25519_dalek::Signature::from_slice(signature_bytes.as_slice()).map_err(
+                            |_| SigningError::SigningFailed(ed25519_dalek::SignatureError::new()),
+                        )?,
+                    )
+                }
             }
-        }
+        })
     }
 }
 

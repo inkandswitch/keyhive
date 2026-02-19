@@ -61,7 +61,7 @@ use tracing::instrument;
 #[derive_where(Debug; T)]
 pub struct Document<
     K: FutureForm + ?Sized,
-    S: AsyncSigner,
+    S: AsyncSigner<K>,
     T: ContentRef,
     L: MembershipListener<K, S, T>,
 > {
@@ -73,7 +73,7 @@ pub struct Document<
     cgka: Option<Cgka>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Document<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Document<K, S, T, L> {
     // FIXME: We need a signing key for initializing Cgka and we need to share
     // the init add op.
     // NOTE doesn't register into the top-level Keyhive context
@@ -560,13 +560,13 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable for Document<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable for Document<K, S, T, L> {
     fn verifying_key(&self) -> VerifyingKey {
         self.group.verifying_key()
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Hash for Document<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Hash for Document<K, S, T, L> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.group.hash(state);
         crate::util::hasher::hash_set(&self.content_heads, state);
@@ -578,7 +578,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddMemberUpdate<
     K: FutureForm + ?Sized,
-    S: AsyncSigner,
+    S: AsyncSigner<K>,
     T: ContentRef,
     L: MembershipListener<K, S, T>,
 > {
@@ -593,7 +593,7 @@ pub struct MissingIndividualError(pub Box<IndividualId>);
 #[derive(Debug, Clone, PartialEq)]
 pub struct RevokeMemberUpdate<
     K: FutureForm + ?Sized,
-    S: AsyncSigner,
+    S: AsyncSigner<K>,
     T: ContentRef,
     L: MembershipListener<K, S, T>,
 > {
@@ -602,7 +602,7 @@ pub struct RevokeMemberUpdate<
     pub(crate) cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> RevokeMemberUpdate<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> RevokeMemberUpdate<K, S, T, L> {
     #[allow(clippy::type_complexity)]
     pub fn revocations(&self) -> &[Arc<Signed<Revocation<K, S, T, L>>>] {
         &self.revocations
@@ -619,7 +619,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Default
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Default
     for RevokeMemberUpdate<K, S, T, L>
 {
     fn default() -> Self {
@@ -708,7 +708,7 @@ pub enum DecryptError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum TryFromDocumentArchiveError<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
+pub enum TryFromDocumentArchiveError<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> {
     #[error("Cannot find individual: {0}")]
     MissingIndividual(IndividualId),
 
@@ -719,7 +719,7 @@ pub enum TryFromDocumentArchiveError<K: FutureForm + ?Sized, S: AsyncSigner, T: 
     MissingRevocation(Digest<Signed<Revocation<K, S, T, L>>>),
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<MissingDependency<Digest<Signed<Delegation<K, S, T, L>>>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<MissingDependency<Digest<Signed<Delegation<K, S, T, L>>>>>
     for TryFromDocumentArchiveError<K, S, T, L>
 {
     fn from(e: MissingDependency<Digest<Signed<Delegation<K, S, T, L>>>>) -> Self {

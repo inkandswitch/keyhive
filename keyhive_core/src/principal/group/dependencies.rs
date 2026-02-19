@@ -13,7 +13,7 @@ use std::{collections::BTreeMap, sync::Arc};
 pub struct Dependencies<
     'a,
     K: FutureForm + ?Sized,
-    S: AsyncSigner,
+    S: AsyncSigner<K>,
     T: ContentRef,
     L: MembershipListener<K, S, T>,
 > {

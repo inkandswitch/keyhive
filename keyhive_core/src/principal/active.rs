@@ -44,7 +44,7 @@ use thiserror::Error;
 /// The current user agent (which can sign and encrypt).
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
-pub struct Active<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: PrekeyListener<K>> {
+pub struct Active<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: PrekeyListener<K>> {
     /// The signing key of the active agent.
     #[derivative(Debug = "ignore")]
     pub(crate) signer: S,
@@ -64,7 +64,7 @@ pub struct Active<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: Prek
     pub(crate) _phantom: PhantomData<(fn() -> K, T)>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: PrekeyListener<K>> Active<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: PrekeyListener<K>> Active<K, S, T, L> {
     /// Generate a new active agent.
     ///
     /// # Arguments
@@ -300,19 +300,19 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: PrekeyListener<K>
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: PrekeyListener<K>> std::fmt::Display for Active<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: PrekeyListener<K>> std::fmt::Display for Active<K, S, T, L> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.id(), f)
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: PrekeyListener<K>> Verifiable for Active<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: PrekeyListener<K>> Verifiable for Active<K, S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.signer.verifying_key()
     }
 }
 
-impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener<Local>> Fork for Active<Local, S, T, L> {
+impl<S: AsyncSigner<Local> + Clone, T: ContentRef, L: PrekeyListener<Local>> Fork for Active<Local, S, T, L> {
     type Forked = Active<Local, S, T, Log<S, T>>;
 
     fn fork(&self) -> Self::Forked {
@@ -327,7 +327,7 @@ impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener<Local>> Fork for A
     }
 }
 
-impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener<Local>> MergeAsync for Active<Local, S, T, L> {
+impl<S: AsyncSigner<Local> + Clone, T: ContentRef, L: PrekeyListener<Local>> MergeAsync for Active<Local, S, T, L> {
     async fn merge_async(&self, fork: Self::AsyncForked) {
         let forked_individual = { fork.individual.lock().await.clone() };
         let forked_prekey_pairs = { fork.prekey_pairs.lock().await.clone() };

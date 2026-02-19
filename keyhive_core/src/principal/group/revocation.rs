@@ -16,13 +16,13 @@ use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(PartialEq, Eq)]
 #[derive_where(Debug, Clone; T)]
-pub struct Revocation<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
+pub struct Revocation<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> {
     pub(crate) revoke: Arc<Signed<Delegation<K, S, T, L>>>,
     pub(crate) proof: Option<Arc<Signed<Delegation<K, S, T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Revocation<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Revocation<K, S, T, L> {
     pub fn subject_id(&self) -> Identifier {
         self.revoke.subject_id()
     }
@@ -53,13 +53,13 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Signed<Revocation<K, S, T, L>> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Signed<Revocation<K, S, T, L>> {
     pub fn subject_id(&self) -> Identifier {
         self.payload.subject_id()
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> std::hash::Hash
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> std::hash::Hash
     for Revocation<K, S, T, L>
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -72,7 +72,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListene
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Serialize for Revocation<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Serialize for Revocation<K, S, T, L> {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticRevocation::from(self.clone()).serialize(serializer)
     }
@@ -91,7 +91,7 @@ pub struct StaticRevocation<T: ContentRef> {
     pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Revocation<K, S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<Revocation<K, S, T, L>>
     for StaticRevocation<T>
 {
     fn from(revocation: Revocation<K, S, T, L>) -> Self {
