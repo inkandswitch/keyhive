@@ -17,6 +17,7 @@ Cargo.lock
 .direnv
 
 # Other files + dirs
+.ignore/
 private
 *.temp
 *.tmp
