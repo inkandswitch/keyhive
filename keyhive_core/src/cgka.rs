@@ -232,15 +232,12 @@ impl Cgka {
 
     /// Add member to group.
     #[instrument(skip_all)]
-    pub async fn add<K: FutureForm, S: AsyncSigner<K>>(
+    pub async fn add<K: FutureForm, S: AsyncSigner<K, CgkaOperation>>(
         &mut self,
         id: IndividualId,
         pk: ShareKey,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError>
-    where
-        CgkaOperation: PayloadBound<K>,
-    {
+    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         if self.tree.contains_id(&id) {
             return Ok(None);
         }
@@ -259,20 +256,17 @@ impl Cgka {
             doc_id: self.doc_id,
         };
 
-        let signed_op = AsyncSigner::<K>::try_sign_async(signer, op).await?;
+        let signed_op = AsyncSigner::<K, _>::try_sign_async(signer, op).await?;
         self.ops_graph.add_local_op(&signed_op);
         Ok(Some(signed_op))
     }
 
     /// Add multiple members to group.
-    pub async fn add_multiple<K: FutureForm, S: AsyncSigner<K>>(
+    pub async fn add_multiple<K: FutureForm, S: AsyncSigner<K, CgkaOperation>>(
         &mut self,
         members: NonEmpty<(IndividualId, ShareKey)>,
         signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError>
-    where
-        CgkaOperation: PayloadBound<K>,
-    {
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut ops = Vec::new();
         for m in members {
             ops.push(self.add::<K, S>(m.0, m.1, signer).await?);
@@ -282,14 +276,11 @@ impl Cgka {
 
     /// Remove member from group.
     #[instrument(skip_all)]
-    pub async fn remove<K: FutureForm, S: AsyncSigner<K>>(
+    pub async fn remove<K: FutureForm, S: AsyncSigner<K, CgkaOperation>>(
         &mut self,
         id: IndividualId,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError>
-    where
-        CgkaOperation: PayloadBound<K>,
-    {
+    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         if !self.tree.contains_id(&id) {
             return Ok(None);
         }
@@ -308,7 +299,7 @@ impl Cgka {
             predecessors,
             doc_id: self.doc_id,
         };
-        let signed_op = AsyncSigner::<K>::try_sign_async(signer, op).await?;
+        let signed_op = AsyncSigner::<K, _>::try_sign_async(signer, op).await?;
         self.ops_graph.add_local_op(&signed_op);
         Ok(Some(signed_op))
     }
@@ -316,16 +307,17 @@ impl Cgka {
     /// Update leaf key pair for this Identifier.
     /// This also triggers a tree path update for that leaf.
     #[instrument(skip_all)]
-    pub async fn update<K: FutureForm, S: AsyncSigner<K>, R: rand::CryptoRng + rand::RngCore>(
+    pub async fn update<
+        K: FutureForm,
+        S: AsyncSigner<K, CgkaOperation>,
+        R: rand::CryptoRng + rand::RngCore,
+    >(
         &mut self,
         new_pk: ShareKey,
         new_sk: ShareSecretKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError>
-    where
-        CgkaOperation: PayloadBound<K>,
-    {
+    ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
@@ -342,7 +334,7 @@ impl Cgka {
                 doc_id: self.doc_id,
             };
 
-            let signed_op = AsyncSigner::<K>::try_sign_async(signer, op).await?;
+            let signed_op = AsyncSigner::<K, _>::try_sign_async(signer, op).await?;
             self.ops_graph.add_local_op(&signed_op);
             self.insert_pcs_key(&pcs_key, Digest::hash(&signed_op));
             Ok((pcs_key, signed_op))

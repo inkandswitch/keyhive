@@ -12,7 +12,7 @@ use crate::{
         encrypted::EncryptedContent,
         share_key::ShareKey,
         signed::{Signed, SigningError, VerificationError},
-        signer::{async_signer::AsyncSigner, payload_bound::PayloadBound},
+        signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,

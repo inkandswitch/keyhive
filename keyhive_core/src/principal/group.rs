@@ -32,7 +32,6 @@ use crate::{
         signer::{
             async_signer::AsyncSigner,
             ephemeral::EphemeralSigner,
-            payload_bound::PayloadBound,
             sync_signer::{try_sign_basic, SyncSignerBasic},
         },
         verifiable::Verifiable,

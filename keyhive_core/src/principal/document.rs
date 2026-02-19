@@ -18,9 +18,7 @@ use crate::{
         envelope::Envelope,
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
-        signer::{
-            async_signer::AsyncSigner, ephemeral::EphemeralSigner, payload_bound::PayloadBound,
-        },
+        signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
         symmetric_key::SymmetricKey,
         verifiable::Verifiable,
     },
