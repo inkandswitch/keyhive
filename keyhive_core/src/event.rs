@@ -32,7 +32,7 @@ use tracing::instrument;
 /// Top-level event variants.
 #[derive(PartialEq, Eq, From, TryInto)]
 #[derive_where(Debug, Hash; T)]
-pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
+pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<K, S, T> = NoListener> {
     /// Prekeys were expanded.
     PrekeysExpanded(Arc<Signed<AddKeyOp>>),
 
@@ -49,7 +49,7 @@ pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S
     Revoked(Arc<Signed<Revocation<S, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Event<S, T, L> {
     #[allow(clippy::type_complexity)]
     #[instrument(level = "debug", skip(ciphertext_store))]
     pub async fn now_decryptable<K, P, C>(
@@ -79,7 +79,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<KeyOp> for Event<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<KeyOp> for Event<S, T, L> {
     fn from(key_op: KeyOp) -> Self {
         match key_op {
             KeyOp::Add(add) => Event::PrekeysExpanded(add),
@@ -88,7 +88,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<KeyOp> for
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<MembershipOperation<S, T, L>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<MembershipOperation<S, T, L>>
     for Event<S, T, L>
 {
     fn from(op: MembershipOperation<S, T, L>) -> Self {
@@ -99,7 +99,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Membership
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Event<S, T, L>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Event<S, T, L>>
     for StaticEvent<T>
 {
     fn from(op: Event<S, T, L>) -> Self {
@@ -121,13 +121,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Event<S, T
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for Event<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Serialize for Event<S, T, L> {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticEvent::from(self.clone()).serialize(serializer)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Event<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Clone for Event<S, T, L> {
     fn clone(&self) -> Self {
         match self {
             Event::Delegated(d) => Event::Delegated(Arc::clone(d)),
@@ -141,7 +141,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Event
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for Event<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Dupe for Event<S, T, L> {
     fn dupe(&self) -> Self {
         self.clone()
     }

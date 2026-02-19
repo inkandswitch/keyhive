@@ -251,7 +251,7 @@ impl<T: Serialize> From<Digest<T>> for Vec<u8> {
 
 // Casts
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Digest<Signed<Delegation<S, T, L>>>> for Digest<Signed<StaticDelegation<T>>>
 {
     fn from(hash: Digest<Signed<Delegation<S, T, L>>>) -> Self {
@@ -259,7 +259,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Digest<Signed<StaticDelegation<T>>>> for Digest<Signed<Delegation<S, T, L>>>
 {
     fn from(hash: Digest<Signed<StaticDelegation<T>>>) -> Self {
@@ -267,7 +267,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Digest<Signed<Revocation<S, T, L>>>> for Digest<Signed<StaticRevocation<T>>>
 {
     fn from(hash: Digest<Signed<Revocation<S, T, L>>>) -> Self {
@@ -275,7 +275,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Digest<Signed<StaticRevocation<T>>>> for Digest<Signed<Revocation<S, T, L>>>
 {
     fn from(hash: Digest<Signed<StaticRevocation<T>>>) -> Self {
@@ -283,7 +283,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<&Digest<Signed<Delegation<S, T, L>>>> for Digest<Signed<StaticDelegation<T>>>
 {
     fn from(hash: &Digest<Signed<Delegation<S, T, L>>>) -> Self {
@@ -291,7 +291,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<&Digest<Signed<StaticDelegation<T>>>> for Digest<Signed<Delegation<S, T, L>>>
 {
     fn from(hash: &Digest<Signed<StaticDelegation<T>>>) -> Self {
@@ -299,7 +299,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<&Digest<Signed<Revocation<S, T, L>>>> for Digest<Signed<StaticRevocation<T>>>
 {
     fn from(hash: &Digest<Signed<Revocation<S, T, L>>>) -> Self {
@@ -307,7 +307,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<&Digest<Signed<StaticRevocation<T>>>> for Digest<Signed<Revocation<S, T, L>>>
 {
     fn from(hash: &Digest<Signed<StaticRevocation<T>>>) -> Self {
@@ -331,7 +331,7 @@ impl<T: ContentRef> From<Digest<Signed<StaticDelegation<T>>>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Digest<MembershipOperation<S, T, L>>> for Digest<StaticMembershipOperation<T>>
 {
     fn from(hash: Digest<MembershipOperation<S, T, L>>) -> Self {
@@ -347,7 +347,7 @@ impl<T: ContentRef> From<Digest<StaticMembershipOperation<T>>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Digest<StaticMembershipOperation<T>>> for Digest<Signed<Delegation<S, T, L>>>
 {
     fn from(hash: Digest<StaticMembershipOperation<T>>) -> Self {
@@ -355,7 +355,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Digest<StaticMembershipOperation<T>>> for Digest<Signed<Revocation<S, T, L>>>
 {
     fn from(hash: Digest<StaticMembershipOperation<T>>) -> Self {
@@ -371,7 +371,7 @@ impl<T: ContentRef> From<Digest<StaticMembershipOperation<T>>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Digest<StaticMembershipOperation<T>>> for Digest<MembershipOperation<S, T, L>>
 {
     fn from(hash: Digest<StaticMembershipOperation<T>>) -> Self {
@@ -379,7 +379,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<&Digest<StaticMembershipOperation<T>>> for Digest<MembershipOperation<S, T, L>>
 {
     fn from(hash: &Digest<StaticMembershipOperation<T>>) -> Self {
@@ -387,7 +387,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Digest<MembershipOperation<S, T, L>>> for Digest<Signed<Delegation<S, T, L>>>
 {
     fn from(hash: Digest<MembershipOperation<S, T, L>>) -> Self {
@@ -395,7 +395,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Digest<MembershipOperation<S, T, L>>> for Digest<Signed<Revocation<S, T, L>>>
 {
     fn from(hash: Digest<MembershipOperation<S, T, L>>) -> Self {
@@ -403,7 +403,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<&Digest<MembershipOperation<S, T, L>>> for Digest<Signed<Delegation<S, T, L>>>
 {
     fn from(hash: &Digest<MembershipOperation<S, T, L>>) -> Self {
@@ -411,7 +411,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<&Digest<MembershipOperation<S, T, L>>> for Digest<Signed<Revocation<S, T, L>>>
 {
     fn from(hash: &Digest<MembershipOperation<S, T, L>>) -> Self {
@@ -419,7 +419,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Digest<Signed<Delegation<S, T, L>>>> for Digest<MembershipOperation<S, T, L>>
 {
     fn from(hash: Digest<Signed<Delegation<S, T, L>>>) -> Self {
@@ -427,7 +427,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<&Digest<Signed<Delegation<S, T, L>>>> for Digest<MembershipOperation<S, T, L>>
 {
     fn from(hash: &Digest<Signed<Delegation<S, T, L>>>) -> Self {
@@ -435,7 +435,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Digest<Signed<Revocation<S, T, L>>>> for Digest<MembershipOperation<S, T, L>>
 {
     fn from(hash: Digest<Signed<Revocation<S, T, L>>>) -> Self {
@@ -443,7 +443,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<&Digest<Signed<Revocation<S, T, L>>>> for Digest<MembershipOperation<S, T, L>>
 {
     fn from(hash: &Digest<Signed<Revocation<S, T, L>>>) -> Self {
@@ -451,7 +451,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
     From<Digest<MembershipOperation<S, T, L>>> for Digest<Event<S, T, L>>
 {
     fn from(hash: Digest<MembershipOperation<S, T, L>>) -> Self {
@@ -459,7 +459,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Digest<Event<S, T, L>>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Digest<Event<S, T, L>>>
     for Digest<StaticEvent<T>>
 {
     fn from(hash: Digest<Event<S, T, L>>) -> Self {

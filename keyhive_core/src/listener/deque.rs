@@ -11,6 +11,7 @@ use crate::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
+use future_form::FutureForm;
 use futures::lock::Mutex;
 use std::{collections::VecDeque, sync::Arc};
 use tracing::instrument;
@@ -63,33 +64,69 @@ impl<S: AsyncSigner, T: ContentRef> Dupe for Deque<S, T> {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> PrekeyListener for Deque<S, T> {
+#[future_form::future_form(
+    Sendable where S: Send + Sync, T: Send + Sync, Self: Send + Sync,
+    Local
+)]
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> PrekeyListener<K> for Deque<S, T> {
     #[instrument(skip(self))]
-    async fn on_prekeys_expanded(&self, new_prekey: &Arc<Signed<AddKeyOp>>) {
-        self.push(Event::PrekeysExpanded(new_prekey.dupe())).await
+    fn on_prekeys_expanded<'a>(
+        &'a self,
+        new_prekey: &'a Arc<Signed<AddKeyOp>>,
+    ) -> K::Future<'a, ()> {
+        K::from_future(async move {
+            self.push(Event::PrekeysExpanded(new_prekey.dupe())).await
+        })
     }
 
     #[instrument(skip(self))]
-    async fn on_prekey_rotated(&self, rotate_key: &Arc<Signed<RotateKeyOp>>) {
-        self.push(Event::PrekeyRotated(rotate_key.dupe())).await
+    fn on_prekey_rotated<'a>(
+        &'a self,
+        rotate_key: &'a Arc<Signed<RotateKeyOp>>,
+    ) -> K::Future<'a, ()> {
+        K::from_future(async move {
+            self.push(Event::PrekeyRotated(rotate_key.dupe())).await
+        })
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for Deque<S, T> {
+#[future_form::future_form(
+    Sendable where S: Send + Sync, T: Send + Sync, Self: Send + Sync,
+    Local
+)]
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> CgkaListener<K> for Deque<S, T> {
     #[instrument(skip(self))]
-    async fn on_delegation(&self, data: &Arc<Signed<Delegation<S, T, Self>>>) {
-        self.push(Event::Delegated(data.dupe())).await
-    }
-
-    #[instrument(skip(self))]
-    async fn on_revocation(&self, data: &Arc<Signed<Revocation<S, T, Self>>>) {
-        self.push(Event::Revoked(data.dupe())).await
+    fn on_cgka_op<'a>(&'a self, op: &'a Arc<Signed<CgkaOperation>>) -> K::Future<'a, ()> {
+        K::from_future(async move {
+            self.push(Event::CgkaOperation(op.dupe())).await
+        })
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> CgkaListener for Deque<S, T> {
+#[future_form::future_form(
+    Sendable where S: Send + Sync, T: Send + Sync, Self: Send + Sync,
+    Local
+)]
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> MembershipListener<K, S, T>
+    for Deque<S, T>
+{
     #[instrument(skip(self))]
-    async fn on_cgka_op(&self, op: &Arc<Signed<CgkaOperation>>) {
-        self.push(Event::CgkaOperation(op.dupe())).await
+    fn on_delegation<'a>(
+        &'a self,
+        data: &'a Arc<Signed<Delegation<S, T, Self>>>,
+    ) -> K::Future<'a, ()> {
+        K::from_future(async move {
+            self.push(Event::Delegated(data.dupe())).await
+        })
+    }
+
+    #[instrument(skip(self))]
+    fn on_revocation<'a>(
+        &'a self,
+        data: &'a Arc<Signed<Revocation<S, T, Self>>>,
+    ) -> K::Future<'a, ()> {
+        K::from_future(async move {
+            self.push(Event::Revoked(data.dupe())).await
+        })
     }
 }

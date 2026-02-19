@@ -88,7 +88,7 @@ impl DebugEventTable {
     where
         S: AsyncSigner,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-        L: MembershipListener<S, T>,
+        L: MembershipListener<K, S, T>,
     {
         if events.is_empty() {
             return Self {
@@ -126,7 +126,7 @@ impl DebugEventRow {
     where
         S: AsyncSigner,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-        L: MembershipListener<S, T>,
+        L: MembershipListener<K, S, T>,
     {
         match event {
             Event::PrekeysExpanded(signed) => {

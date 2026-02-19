@@ -21,14 +21,14 @@ use std::{
 pub struct RevocationStore<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<K, S, T> = NoListener,
 > {
     revocations: CaMap<Signed<Revocation<S, T, L>>>,
     #[derive_where(skip(Hash))]
     agent_to_revocations: HashMap<AgentId, HashSet<Arc<Signed<Revocation<S, T, L>>>>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> RevocationStore<S, T, L> {
     /// Create a new revocation store.
     pub fn new() -> Self {
         Self {
