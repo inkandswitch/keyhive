@@ -73,11 +73,11 @@ use tracing::instrument;
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
 pub struct Keyhive<
-    S: AsyncSigner + Clone,
+    S: Verifiable + Clone,
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
     C: CiphertextStore<T, P> + Clone = MemoryCiphertextStore<T, P>,
-    L: MembershipListener<S, T> = NoListener,
+    L = NoListener,
     R: rand::CryptoRng = rand::rngs::OsRng,
 > {
     /// The public verifying key for the active user.
@@ -119,11 +119,11 @@ pub struct Keyhive<
 }
 
 impl<
-        S: AsyncSigner + Clone,
+        S: Verifiable + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T>,
+        L,
         R: rand::CryptoRng + rand::RngCore,
     > Keyhive<S, T, P, C, L, R>
 {
@@ -1988,11 +1988,11 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone,
+        S: Verifiable + Clone,
         T: ContentRef + Debug,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T>,
+        L,
         R: rand::CryptoRng + rand::RngCore,
     > Debug for Keyhive<S, T, P, C, L, R>
 {
@@ -2011,11 +2011,11 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone,
+        S: Verifiable + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T>,
+        L,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > ForkAsync for Keyhive<S, T, P, C, L, R>
 {
@@ -2037,11 +2037,11 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone,
+        S: Verifiable + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T>,
+        L,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > MergeAsync for Arc<Mutex<Keyhive<S, T, P, C, L, R>>>
 {
@@ -2086,11 +2086,11 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone,
+        S: Verifiable + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T>,
+        L,
         R: rand::CryptoRng + rand::RngCore,
     > Verifiable for Keyhive<S, T, P, C, L, R>
 {
@@ -2101,7 +2101,7 @@ impl<
 
 #[derive(Error)]
 #[derive_where(Debug; T)]
-pub enum ReceiveStaticEventError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
+pub enum ReceiveStaticEventError<S: Verifiable, T: ContentRef, L> {
     #[error(transparent)]
     ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
 
@@ -2112,12 +2112,7 @@ pub enum ReceiveStaticEventError<S: AsyncSigner, T: ContentRef, L: MembershipLis
     ReceiveStaticMembershipError(#[from] ReceiveStaticDelegationError<S, T, L>),
 }
 
-impl<S, T, L> ReceiveStaticEventError<S, T, L>
-where
-    S: AsyncSigner,
-    T: ContentRef,
-    L: MembershipListener<S, T>,
-{
+impl<S: Verifiable, T: ContentRef, L> ReceiveStaticEventError<S, T, L> {
     pub fn is_missing_dependency(&self) -> bool {
         match self {
             Self::ReceivePrekeyOpError(_) => false,
@@ -2129,11 +2124,7 @@ where
 
 #[derive(Error)]
 #[derive_where(Debug; T)]
-pub enum ReceiveStaticDelegationError<
-    S: AsyncSigner,
-    T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
-> {
+pub enum ReceiveStaticDelegationError<S: Verifiable, T: ContentRef = [u8; 32], L = NoListener> {
     #[error(transparent)]
     VerificationError(#[from] VerificationError),
 
@@ -2153,12 +2144,7 @@ pub enum ReceiveStaticDelegationError<
     UnknownAgent(Identifier),
 }
 
-impl<S, T, L> ReceiveStaticDelegationError<S, T, L>
-where
-    S: AsyncSigner,
-    T: ContentRef,
-    L: MembershipListener<S, T>,
-{
+impl<S: Verifiable, T: ContentRef, L> ReceiveStaticDelegationError<S, T, L> {
     pub fn is_missing_dependency(&self) -> bool {
         match self {
             Self::MissingProof(_) => true,
@@ -2173,7 +2159,7 @@ where
 
 #[derive(Clone, PartialEq, Eq, Error)]
 #[derive_where(Debug)]
-pub enum StaticEventConversionError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
+pub enum StaticEventConversionError<S: Verifiable, T: ContentRef, L> {
     #[error("Missing delegation: {0}")]
     MissingDelegation(Digest<Signed<Delegation<S, T, L>>>),
 
@@ -2184,8 +2170,8 @@ pub enum StaticEventConversionError<S: AsyncSigner, T: ContentRef, L: Membership
     UnknownAgent(Identifier),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<StaticEventConversionError<S, T, L>> for ReceiveStaticDelegationError<S, T, L>
+impl<S: Verifiable, T: ContentRef, L> From<StaticEventConversionError<S, T, L>>
+    for ReceiveStaticDelegationError<S, T, L>
 {
     fn from(error: StaticEventConversionError<S, T, L>) -> Self {
         match error {
@@ -2204,7 +2190,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
 
 #[derive(Clone, PartialEq, Eq, Error)]
 #[derive_where(Debug)]
-pub enum TryFromArchiveError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
+pub enum TryFromArchiveError<S: Verifiable, T: ContentRef, L> {
     #[error("Missing delegation: {0}")]
     MissingDelegation(#[from] Digest<Signed<Delegation<S, T, L>>>),
 
@@ -2250,7 +2236,7 @@ impl ReceiveCgkaOpError {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<MissingIndividualError>
+impl<S: Verifiable, T: ContentRef, L> From<MissingIndividualError>
     for TryFromArchiveError<S, T, L>
 {
     fn from(e: MissingIndividualError) -> Self {
@@ -2268,11 +2254,7 @@ pub enum EncryptContentError {
 }
 
 #[derive(Debug, Error)]
-pub enum ReceiveEventError<
-    S: AsyncSigner,
-    T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
-> {
+pub enum ReceiveEventError<S: Verifiable, T: ContentRef = [u8; 32], L = NoListener> {
     #[error(transparent)]
     ReceiveStaticDelegationError(#[from] ReceiveStaticDelegationError<S, T, L>),
 

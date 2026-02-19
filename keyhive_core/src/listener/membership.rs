@@ -6,6 +6,7 @@ use crate::{
     crypto::{signed::Signed, signer::async_signer::AsyncSigner},
     principal::group::{delegation::Delegation, revocation::Revocation},
 };
+use future_form::FutureForm;
 use std::sync::Arc;
 
 /// Trait for listening to [`Group`] or [`Document`] membership change events.
@@ -14,19 +15,24 @@ use std::sync::Arc;
 ///
 /// If you don't want this feature, you can use the default listener: [`NoListener`][super::no_listener::NoListener].
 ///
-/// <div class="warning">
-///
-/// Note that we assume single-threaded async.
-///
-/// </div>
+/// The `K` parameter determines whether futures must be `Send` ([`Sendable`]) or not ([`Local`]).
 ///
 /// [`Group`]: crate::principal::group::Group
 /// [`Document`]: crate::principal::document::Document
-#[allow(async_fn_in_trait)]
-pub trait MembershipListener<S: AsyncSigner, T: ContentRef>: PrekeyListener + CgkaListener {
+/// [`Sendable`]: future_form::Sendable
+/// [`Local`]: future_form::Local
+pub trait MembershipListener<K: FutureForm, S: AsyncSigner<K>, T: ContentRef>:
+    PrekeyListener<K> + CgkaListener<K>
+{
     /// React to new [`Delegation`]s.
-    async fn on_delegation(&self, data: &Arc<Signed<Delegation<S, T, Self>>>);
+    fn on_delegation<'a>(
+        &'a self,
+        data: &'a Arc<Signed<Delegation<S, T, Self>>>,
+    ) -> K::Future<'a, ()>;
 
     /// React to new [`Revocation`]s.
-    async fn on_revocation(&self, data: &Arc<Signed<Revocation<S, T, Self>>>);
+    fn on_revocation<'a>(
+        &'a self,
+        data: &'a Arc<Signed<Revocation<S, T, Self>>>,
+    ) -> K::Future<'a, ()>;
 }

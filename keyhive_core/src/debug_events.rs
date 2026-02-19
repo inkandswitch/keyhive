@@ -86,9 +86,9 @@ impl DebugEventTable {
     /// Create a new debug event table from a vector of events.
     pub fn from_events<S, T, L>(events: Vec<Event<S, T, L>>, nicknames: Nicknames) -> Self
     where
-        S: AsyncSigner,
+        S: Verifiable,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-        L: MembershipListener<S, T>,
+        L,
     {
         if events.is_empty() {
             return Self {
@@ -124,9 +124,9 @@ impl DebugEventRow {
     /// Create a new debug event row from an event.
     pub fn from_event<S, T, L>(idx: usize, event: &Event<S, T, L>, nicknames: &Nicknames) -> Self
     where
-        S: AsyncSigner,
+        S: Verifiable,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-        L: MembershipListener<S, T>,
+        L,
     {
         match event {
             Event::PrekeysExpanded(signed) => {

@@ -12,6 +12,7 @@ use crate::{
 };
 use derive_more::derive::Debug;
 use dupe::Dupe;
+use future_form::{future_form, FutureForm, Local, Sendable};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -21,16 +22,43 @@ use std::sync::Arc;
 #[derive(Debug, Default, Clone, Dupe, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoListener;
 
-impl PrekeyListener for NoListener {
-    async fn on_prekeys_expanded(&self, _e: &Arc<Signed<AddKeyOp>>) {}
-    async fn on_prekey_rotated(&self, _e: &Arc<Signed<RotateKeyOp>>) {}
+#[future_form(Sendable, Local)]
+impl<K: FutureForm> PrekeyListener<K> for NoListener {
+    fn on_prekeys_expanded<'a>(
+        &'a self,
+        _new_prekey: &'a Arc<Signed<AddKeyOp>>,
+    ) -> K::Future<'a, ()> {
+        K::from_future(async {})
+    }
+
+    fn on_prekey_rotated<'a>(
+        &'a self,
+        _rotate_key: &'a Arc<Signed<RotateKeyOp>>,
+    ) -> K::Future<'a, ()> {
+        K::from_future(async {})
+    }
 }
 
-impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for NoListener {
-    async fn on_delegation(&self, _data: &Arc<Signed<Delegation<S, T, NoListener>>>) {}
-    async fn on_revocation(&self, _data: &Arc<Signed<Revocation<S, T, NoListener>>>) {}
+#[future_form(Sendable where S: Send + Sync, T: Send + Sync, Local)]
+impl<K: FutureForm, S: AsyncSigner<K>, T: ContentRef> MembershipListener<K, S, T> for NoListener {
+    fn on_delegation<'a>(
+        &'a self,
+        _data: &'a Arc<Signed<Delegation<S, T, NoListener>>>,
+    ) -> K::Future<'a, ()> {
+        K::from_future(async {})
+    }
+
+    fn on_revocation<'a>(
+        &'a self,
+        _data: &'a Arc<Signed<Revocation<S, T, NoListener>>>,
+    ) -> K::Future<'a, ()> {
+        K::from_future(async {})
+    }
 }
 
-impl CgkaListener for NoListener {
-    async fn on_cgka_op(&self, _data: &Arc<Signed<CgkaOperation>>) {}
+#[future_form(Sendable, Local)]
+impl<K: FutureForm> CgkaListener<K> for NoListener {
+    fn on_cgka_op<'a>(&'a self, _data: &'a Arc<Signed<CgkaOperation>>) -> K::Future<'a, ()> {
+        K::from_future(async {})
+    }
 }

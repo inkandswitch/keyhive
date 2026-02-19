@@ -75,7 +75,7 @@ impl Individual {
 
     #[cfg(any(feature = "test_utils", test))]
     #[instrument(skip_all)]
-    pub async fn generate<R: rand::CryptoRng + rand::RngCore, S: AsyncSigner>(
+    pub async fn generate<R: rand::CryptoRng + rand::RngCore, S: Verifiable>(
         signer: &S,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {

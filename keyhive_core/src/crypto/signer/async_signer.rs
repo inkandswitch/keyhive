@@ -6,27 +6,22 @@ use crate::crypto::{
     signed::{Signed, SigningError},
     verifiable::Verifiable,
 };
+use future_form::FutureForm;
 use serde::Serialize;
-use tracing::instrument;
 
-#[allow(async_fn_in_trait)]
-/// Async [Ed25519] signer trait.
+use super::payload_bound::PayloadBound;
+
+/// Async [Ed25519] signer trait, parameterized by [`FutureForm`].
 ///
 /// This is especially helpful for signing with keys that are externally managed,
 /// such as via the WebCrypto API, a hardware wallet, or a remote signing service / KMS.
 ///
-/// <div class="warning">
-///
-/// NOTE: we presently assume single-threaded async (esp targetting Wasm which is `!Send`).
-/// If multithreaded async is desired, please let the authors know on the [GitHub Repo]
-/// or in the [Automerge Discord].
-///
-/// </div>
+/// The `K` parameter determines whether futures must be `Send` ([`Sendable`]) or not ([`Local`]).
 ///
 /// [Ed25519]: https://en.wikipedia.org/wiki/EdDSA#Ed25519
-/// [GitHub Repo]: https://github.com/inkandswitch/keyhive/issues
-/// [Automerge Discord]: https://discord.com/channels/1200006940210757672/1200006941586509876
-pub trait AsyncSigner: Verifiable {
+/// [`Sendable`]: future_form::Sendable
+/// [`Local`]: future_form::Local
+pub trait AsyncSigner<K: FutureForm>: Verifiable {
     /// Sign a byte slice asynchronously.
     ///
     /// # Arguments
@@ -36,6 +31,7 @@ pub trait AsyncSigner: Verifiable {
     /// # Examples
     ///
     /// ```
+    /// use future_form::Sendable;
     /// use keyhive_core::crypto::{
     ///    signed::Signed,
     ///    signer::{
@@ -47,14 +43,14 @@ pub trait AsyncSigner: Verifiable {
     /// #[tokio::main(flavor = "current_thread")]
     /// async fn main() {
     ///     let signer = MemorySigner::generate(&mut rand::thread_rng());
-    ///     let sig = signer.try_sign_bytes_async(b"hello world").await;
+    ///     let sig = AsyncSigner::<Sendable>::try_sign_bytes_async(&signer, b"hello world").await;
     ///     assert!(sig.is_ok());
     /// }
     /// ```
-    async fn try_sign_bytes_async(
-        &self,
-        payload_bytes: &[u8],
-    ) -> Result<ed25519_dalek::Signature, SigningError>;
+    fn try_sign_bytes_async<'a>(
+        &'a self,
+        payload_bytes: &'a [u8],
+    ) -> K::Future<'a, Result<ed25519_dalek::Signature, SigningError>>;
 
     /// Sign a serializable payload asynchronously.
     ///
@@ -68,6 +64,7 @@ pub trait AsyncSigner: Verifiable {
     /// # Examples
     ///
     /// ```
+    /// use future_form::Sendable;
     /// use keyhive_core::crypto::{
     ///     signed::Signed,
     ///     signer::{
@@ -81,37 +78,33 @@ pub trait AsyncSigner: Verifiable {
     ///     let signer = MemorySigner::generate(&mut rand::thread_rng());
     ///
     ///     let payload: Vec<u8> = vec![0, 1, 2];
-    ///     let sig = signer.try_sign_async(payload.clone()).await;
+    ///     let sig = AsyncSigner::<Sendable>::try_sign_async(&signer, payload.clone()).await;
     ///
     ///     assert!(sig.is_ok());
     ///     assert_eq!(*sig.unwrap().payload(), payload);
     /// }
     /// ```
-    #[instrument(skip_all)]
-    async fn try_sign_async<T: Serialize + std::fmt::Debug>(
-        &self,
+    fn try_sign_async<'a, T>(
+        &'a self,
         payload: T,
-    ) -> Result<Signed<T>, SigningError> {
-        let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
-
-        Ok(Signed {
-            payload,
-            issuer: self.verifying_key(),
-            signature: self.try_sign_bytes_async(payload_bytes.as_slice()).await?,
-        })
-    }
+    ) -> K::Future<'a, Result<Signed<T>, SigningError>>
+    where
+        T: Serialize + std::fmt::Debug + PayloadBound<K> + 'a;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::crypto::signer::memory::MemorySigner;
+    use future_form::Sendable;
 
     #[tokio::test]
     async fn test_round_trip() {
         test_utils::init_logging();
         let sk = MemorySigner::generate(&mut rand::thread_rng());
-        let signed = sk.try_sign_async(vec![1, 2, 3]).await.unwrap();
+        let signed = AsyncSigner::<Sendable>::try_sign_async(&sk, vec![1, 2, 3])
+            .await
+            .unwrap();
         assert!(signed.try_verify().is_ok());
     }
 }

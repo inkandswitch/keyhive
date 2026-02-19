@@ -2,7 +2,7 @@ use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyLi
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable},
     event::Event,
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
@@ -12,17 +12,18 @@ use crate::{
 use derive_more::{From, Into};
 use derive_where::derive_where;
 use dupe::Dupe;
+use future_form::{future_form, FutureForm};
 use futures::lock::Mutex;
 use std::sync::Arc;
 use tracing::instrument;
 
 #[derive(From, Into)]
 #[derive_where(Debug; T)]
-pub struct Log<S: AsyncSigner, T: ContentRef = [u8; 32]>(
+pub struct Log<S: Verifiable, T: ContentRef = [u8; 32]>(
     #[allow(clippy::type_complexity)] pub Arc<Mutex<Vec<Event<S, T, Log<S, T>>>>>,
 );
 
-impl<S: AsyncSigner, T: ContentRef> Log<S, T> {
+impl<S: Verifiable, T: ContentRef> Log<S, T> {
     pub fn new() -> Self {
         Self(Arc::new(Mutex::new(Vec::new())))
     }
@@ -53,51 +54,73 @@ impl<S: AsyncSigner, T: ContentRef> Log<S, T> {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Clone for Log<S, T> {
+impl<S: Verifiable, T: ContentRef> Clone for Log<S, T> {
     fn clone(&self) -> Self {
         Self(self.0.dupe())
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Dupe for Log<S, T> {
+impl<S: Verifiable, T: ContentRef> Dupe for Log<S, T> {
     fn dupe(&self) -> Self {
         self.clone()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Default for Log<S, T> {
+impl<S: Verifiable, T: ContentRef> Default for Log<S, T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> PrekeyListener for Log<S, T> {
+#[future_form(Sendable where S: Send + Sync + 'static, T: Send + Sync + 'static, Local)]
+impl<K: FutureForm, S: Verifiable, T: ContentRef> PrekeyListener<K> for Log<S, T> {
     #[instrument(skip(self))]
-    async fn on_prekeys_expanded(&self, new_prekey: &Arc<Signed<AddKeyOp>>) {
-        self.push(Event::PrekeysExpanded(new_prekey.dupe())).await
+    fn on_prekeys_expanded<'a>(
+        &'a self,
+        new_prekey: &'a Arc<Signed<AddKeyOp>>,
+    ) -> K::Future<'a, ()> {
+        let new_prekey = new_prekey.dupe();
+        K::from_future(async move { self.push(Event::PrekeysExpanded(new_prekey)).await })
     }
 
     #[instrument(skip(self))]
-    async fn on_prekey_rotated(&self, rotate_key: &Arc<Signed<RotateKeyOp>>) {
-        self.push(Event::PrekeyRotated(rotate_key.dupe())).await
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for Log<S, T> {
-    #[instrument(skip(self))]
-    async fn on_delegation(&self, data: &Arc<Signed<Delegation<S, T, Self>>>) {
-        self.push(Event::Delegated(data.dupe())).await
-    }
-
-    #[instrument(skip(self))]
-    async fn on_revocation(&self, data: &Arc<Signed<Revocation<S, T, Self>>>) {
-        self.push(Event::Revoked(data.dupe())).await
+    fn on_prekey_rotated<'a>(
+        &'a self,
+        rotate_key: &'a Arc<Signed<RotateKeyOp>>,
+    ) -> K::Future<'a, ()> {
+        let rotate_key = rotate_key.dupe();
+        K::from_future(async move { self.push(Event::PrekeyRotated(rotate_key)).await })
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> CgkaListener for Log<S, T> {
+#[future_form(Sendable where S: Send + Sync + 'static, T: Send + Sync + 'static, Local)]
+impl<K: FutureForm, S: AsyncSigner<K> + Clone, T: ContentRef> MembershipListener<K, S, T>
+    for Log<S, T>
+{
     #[instrument(skip(self))]
-    async fn on_cgka_op(&self, data: &Arc<Signed<CgkaOperation>>) {
-        self.push(Event::CgkaOperation(data.dupe())).await
+    fn on_delegation<'a>(
+        &'a self,
+        data: &'a Arc<Signed<Delegation<S, T, Self>>>,
+    ) -> K::Future<'a, ()> {
+        let data = data.dupe();
+        K::from_future(async move { self.push(Event::Delegated(data)).await })
+    }
+
+    #[instrument(skip(self))]
+    fn on_revocation<'a>(
+        &'a self,
+        data: &'a Arc<Signed<Revocation<S, T, Self>>>,
+    ) -> K::Future<'a, ()> {
+        let data = data.dupe();
+        K::from_future(async move { self.push(Event::Revoked(data)).await })
+    }
+}
+
+#[future_form(Sendable where S: Send + Sync + 'static, T: Send + Sync + 'static, Local)]
+impl<K: FutureForm, S: Verifiable, T: ContentRef> CgkaListener<K> for Log<S, T> {
+    #[instrument(skip(self))]
+    fn on_cgka_op<'a>(&'a self, data: &'a Arc<Signed<CgkaOperation>>) -> K::Future<'a, ()> {
+        let data = data.dupe();
+        K::from_future(async move { self.push(Event::CgkaOperation(data)).await })
     }
 }

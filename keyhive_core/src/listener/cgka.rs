@@ -1,7 +1,8 @@
 //! Trait for listening to [`Cgka`][crate::cgka::Cgka] changes.
 
 use crate::{cgka::operation::CgkaOperation, crypto::signed::Signed};
-use std::{future::Future, sync::Arc};
+use future_form::FutureForm;
+use std::sync::Arc;
 
 /// Trait for listening to [`Cgka`][crate::cgka::Cgka] changes.
 ///
@@ -9,15 +10,11 @@ use std::{future::Future, sync::Arc};
 ///
 /// If you don't want this feature, you can use the default listener: [`NoListener`][super::no_listener::NoListener].
 ///
-/// <div class="warning">
+/// The `K` parameter determines whether futures must be `Send` ([`Sendable`]) or not ([`Local`]).
 ///
-/// Note that we assume single-threaded async.
-///
-/// </div>
-pub trait CgkaListener {
-    #[cfg(not(feature = "sendable"))]
-    fn on_cgka_op(&self, data: &Arc<Signed<CgkaOperation>>) -> impl Future<Output = ()>;
-
-    #[cfg(feature = "sendable")]
-    fn on_cgka_op(&self, data: &Arc<Signed<CgkaOperation>>) -> impl Future<Output = ()> + Send;
+/// [`Sendable`]: future_form::Sendable
+/// [`Local`]: future_form::Local
+pub trait CgkaListener<K: FutureForm> {
+    /// React to CGKA operations.
+    fn on_cgka_op<'a>(&'a self, data: &'a Arc<Signed<CgkaOperation>>) -> K::Future<'a, ()>;
 }

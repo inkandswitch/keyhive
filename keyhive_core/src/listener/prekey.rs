@@ -4,6 +4,7 @@ use crate::{
     crypto::signed::Signed,
     principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
 };
+use future_form::FutureForm;
 use std::sync::Arc;
 
 /// Trait for listening to changes to [prekeys][crate::crypto::share_key::ShareKey].
@@ -12,16 +13,20 @@ use std::sync::Arc;
 ///
 /// If you don't want this feature, you can use the default listener: [`NoListener`][super::no_listener::NoListener].
 ///
-/// <div class="warning">
+/// The `K` parameter determines whether futures must be `Send` ([`Sendable`]) or not ([`Local`]).
 ///
-/// Note that we assume single-threaded async.
-///
-/// </div>
-#[allow(async_fn_in_trait)]
-pub trait PrekeyListener: Sized + Clone {
+/// [`Sendable`]: future_form::Sendable
+/// [`Local`]: future_form::Local
+pub trait PrekeyListener<K: FutureForm>: Sized + Clone {
     /// React to new prekeys.
-    async fn on_prekeys_expanded(&self, new_prekey: &Arc<Signed<AddKeyOp>>);
+    fn on_prekeys_expanded<'a>(
+        &'a self,
+        new_prekey: &'a Arc<Signed<AddKeyOp>>,
+    ) -> K::Future<'a, ()>;
 
     /// React to rotated prekeys.
-    async fn on_prekey_rotated(&self, rotate_key: &Arc<Signed<RotateKeyOp>>);
+    fn on_prekey_rotated<'a>(
+        &'a self,
+        rotate_key: &'a Arc<Signed<RotateKeyOp>>,
+    ) -> K::Future<'a, ()>;
 }

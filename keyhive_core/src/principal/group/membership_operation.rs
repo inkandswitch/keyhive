@@ -29,15 +29,15 @@ use tracing::instrument;
 
 #[derive_where(Debug, Clone, Eq; T)]
 pub enum MembershipOperation<
-    S: AsyncSigner,
+    S: Verifiable,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L = NoListener,
 > {
     Delegation(Arc<Signed<Delegation<S, T, L>>>),
     Revocation(Arc<Signed<Revocation<S, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
+impl<S: Verifiable, T: ContentRef, L> std::hash::Hash
     for MembershipOperation<S, T, L>
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -52,7 +52,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
+impl<S: Verifiable, T: ContentRef, L> PartialEq
     for MembershipOperation<S, T, L>
 {
     fn eq(&self, other: &Self) -> bool {
@@ -64,7 +64,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef + Serialize, L: MembershipListener<S, T>> Serialize
+impl<S: Verifiable, T: ContentRef + Serialize, L> Serialize
     for MembershipOperation<S, T, L>
 {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
@@ -75,7 +75,7 @@ impl<S: AsyncSigner, T: ContentRef + Serialize, L: MembershipListener<S, T>> Ser
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOperation<S, T, L> {
+impl<S: Verifiable, T: ContentRef, L> MembershipOperation<S, T, L> {
     pub fn subject_id(&self) -> Identifier {
         match self {
             MembershipOperation::Delegation(delegation) => delegation.subject_id(),
@@ -360,7 +360,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe
+impl<S: Verifiable, T: ContentRef, L> Dupe
     for MembershipOperation<S, T, L>
 {
     fn dupe(&self) -> Self {
@@ -368,7 +368,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
+impl<S: Verifiable, T: ContentRef, L> Verifiable
     for MembershipOperation<S, T, L>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
@@ -379,7 +379,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: Verifiable, T: ContentRef, L>
     From<Arc<Signed<Delegation<S, T, L>>>> for MembershipOperation<S, T, L>
 {
     fn from(delegation: Arc<Signed<Delegation<S, T, L>>>) -> Self {
@@ -387,7 +387,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
+impl<S: Verifiable, T: ContentRef, L>
     From<Arc<Signed<Revocation<S, T, L>>>> for MembershipOperation<S, T, L>
 {
     fn from(revocation: Arc<Signed<Revocation<S, T, L>>>) -> Self {
@@ -402,7 +402,7 @@ pub enum StaticMembershipOperation<T: ContentRef> {
     Revocation(Signed<StaticRevocation<T>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<MembershipOperation<S, T, L>>
+impl<S: Verifiable, T: ContentRef, L> From<MembershipOperation<S, T, L>>
     for StaticMembershipOperation<T>
 {
     fn from(op: MembershipOperation<S, T, L>) -> Self {

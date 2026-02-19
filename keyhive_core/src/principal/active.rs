@@ -22,28 +22,28 @@ use crate::{
         signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
     },
-    listener::{log::Log, no_listener::NoListener, prekey::PrekeyListener},
-    principal::{
-        agent::id::AgentId,
-        group::delegation::{Delegation, DelegationError},
-        membered::Membered,
-    },
-    transact::{
-        fork::Fork,
-        merge::{Merge, MergeAsync},
-    },
+    listener::{no_listener::NoListener, prekey::PrekeyListener},
+    principal::{agent::id::AgentId, group::delegation::Delegation, membered::Membered},
 };
 use derivative::Derivative;
 use dupe::Dupe;
+use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::{lock::Mutex, prelude::*};
 use serde::Serialize;
 use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
 use thiserror::Error;
 
+use super::group::delegation::DelegationError;
+
 /// The current user agent (which can sign and encrypt).
+///
+/// The struct is parameterized by:
+/// - `S`: The signer type (must implement [`Verifiable`], and [`AsyncSigner<K>`] for async operations)
+/// - `T`: The content reference type
+/// - `L`: The prekey listener type
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
-pub struct Active<S: AsyncSigner, T: ContentRef = [u8; 32], L: PrekeyListener = NoListener> {
+pub struct Active<S: Verifiable, T: ContentRef = [u8; 32], L = NoListener> {
     /// The signing key of the active agent.
     #[derivative(Debug = "ignore")]
     pub(crate) signer: S,
@@ -56,79 +56,15 @@ pub struct Active<S: AsyncSigner, T: ContentRef = [u8; 32], L: PrekeyListener = 
     /// The [`Individual`] representation (how others see this agent).
     pub(crate) individual: Arc<Mutex<Individual>>,
 
-    ///The listener for prekey events.
+    /// The listener for prekey events.
     #[derivative(Debug = "ignore", PartialEq = "ignore")]
     pub(crate) listener: L,
 
     pub(crate) _phantom: PhantomData<T>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
-    /// Generate a new active agent.
-    ///
-    /// # Arguments
-    ///
-    /// * `signer` - The signing key of the active agent.
-    /// * `listener` - The listener for changes to this agent's prekeys.
-    /// * `csprng` - The cryptographically secure random number generator.
-    pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
-        signer: S,
-        listener: L,
-        csprng: &mut R,
-    ) -> Result<Self, SigningError> {
-        let init_sk = ShareSecretKey::generate(csprng);
-        let init_pk = init_sk.share_key();
-        let init_op = Arc::new(
-            signer
-                .try_sign_async(AddKeyOp { share_key: init_pk })
-                .await?,
-        )
-        .into();
-
-        let mut prekey_state = PrekeyState::new(init_op);
-        let prekey_pairs =
-            (0..6).try_fold(BTreeMap::from_iter([(init_pk, init_sk)]), |mut acc, _| {
-                let sk = ShareSecretKey::generate(csprng);
-                let pk = sk.share_key();
-                acc.insert(pk, sk);
-                Ok::<_, SigningError>(acc)
-            })?;
-
-        let borrowed_signer = &signer;
-        let ops = stream::iter(prekey_pairs.keys().map(Ok::<_, SigningError>))
-            .try_fold(vec![], |mut acc, pk| async move {
-                acc.push(
-                    Arc::new(
-                        borrowed_signer
-                            .try_sign_async(AddKeyOp { share_key: *pk })
-                            .await?,
-                    )
-                    .into(),
-                );
-                Ok(acc)
-            })
-            .await?;
-
-        prekey_state
-            .extend(ops)
-            .expect("newly generated local op should be valid");
-
-        let id = signer.verifying_key().into();
-
-        Ok(Self {
-            id,
-            individual: Arc::new(Mutex::new(Individual {
-                id,
-                prekeys: prekey_state.build(),
-                prekey_state,
-            })),
-            prekey_pairs: Arc::new(Mutex::new(prekey_pairs)),
-            listener,
-            signer,
-            _phantom: PhantomData,
-        })
-    }
-
+// Non-async methods stay as inherent impls
+impl<S: Verifiable, T: ContentRef, L> Active<S, T, L> {
     /// Getter for the agent's [`IndividualId`].
     pub fn id(&self) -> IndividualId {
         self.id
@@ -142,144 +78,6 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     /// The agent's underlying [`Individual`].
     pub fn individual(&self) -> Arc<Mutex<Individual>> {
         self.individual.dupe()
-    }
-
-    /// Create a [`ShareKey`] that is not broadcast via the prekey state.
-    pub async fn generate_private_prekey<R: rand::CryptoRng + rand::RngCore>(
-        &mut self,
-        csprng: Arc<Mutex<R>>,
-    ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
-        let share_key = {
-            // TODO total hack
-            let locked = self.individual.lock().await;
-            locked.pick_prekey(DocumentId(self.id().into())).dupe()
-        };
-        let contact_key = self.rotate_prekey(share_key, csprng.dupe()).await?;
-        self.rotate_prekey(contact_key.payload.new, csprng).await?;
-        Ok(contact_key)
-    }
-
-    /// Pseudorandomly select a prekey out of the current prekeys.
-    pub async fn pick_prekey(&self, doc_id: DocumentId) -> ShareKey {
-        tracing::trace!("picking prekey for document {doc_id}",);
-        self.individual.lock().await.pick_prekey(doc_id).dupe()
-    }
-
-    /// Replace a particular prekey with a new one.
-    pub async fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
-        &mut self,
-        old_prekey: ShareKey,
-        csprng: Arc<Mutex<R>>,
-    ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
-        let new_secret = {
-            let mut locked_csprng = csprng.lock().await;
-            ShareSecretKey::generate(&mut *locked_csprng)
-        };
-        let new_public = new_secret.share_key();
-
-        let rot_op = Arc::new(
-            self.try_sign_async(RotateKeyOp {
-                old: old_prekey,
-                new: new_public,
-            })
-            .await?,
-        );
-
-        {
-            self.prekey_pairs
-                .lock()
-                .await
-                .insert(new_public, new_secret);
-        }
-
-        {
-            let mut locked_individual = self.individual.lock().await;
-            locked_individual
-                .prekey_state
-                .insert_op(KeyOp::Rotate(rot_op.dupe()))
-                .expect("the op we just signed to be valid");
-
-            locked_individual.prekeys.remove(&old_prekey);
-            locked_individual.prekeys.insert(new_public);
-        }
-
-        self.listener.on_prekey_rotated(&rot_op).await;
-        Ok(rot_op)
-    }
-
-    /// Add a new prekey, expanding the number of currently available prekeys.
-    pub async fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
-        &mut self,
-        csprng: Arc<Mutex<R>>,
-    ) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
-        let new_secret = {
-            let mut locked_csprng = csprng.lock().await;
-            ShareSecretKey::generate(&mut *locked_csprng)
-        };
-        let new_public = new_secret.share_key();
-
-        let op = Arc::new(
-            self.signer
-                .try_sign_async(AddKeyOp {
-                    share_key: new_public,
-                })
-                .await?,
-        );
-
-        {
-            let mut locked_individual = self.individual.lock().await;
-
-            locked_individual
-                .prekey_state
-                .insert_op(KeyOp::Add(op.dupe()))
-                .expect("the op we just signed to be valid");
-
-            locked_individual.prekeys.insert(new_public);
-        }
-
-        {
-            self.prekey_pairs
-                .lock()
-                .await
-                .insert(new_public, new_secret);
-        }
-
-        self.listener.on_prekeys_expanded(&op).await;
-        Ok(op)
-    }
-
-    /// Asyncronously sign a payload.
-    pub async fn try_sign_async<U: Serialize + std::fmt::Debug>(
-        &self,
-        payload: U,
-    ) -> Result<Signed<U>, SigningError> {
-        self.signer.try_sign_async(payload).await
-    }
-
-    /// Encrypt a payload for a member of some [`Group`] or [`Document`].
-    pub async fn get_capability(
-        &self,
-        subject: Membered<S, T>,
-        min: Access,
-    ) -> Option<Arc<Signed<Delegation<S, T>>>> {
-        subject
-            .get_capability(&self.id().into())
-            .await
-            .and_then(|cap| {
-                if cap.payload().can >= min {
-                    Some(cap)
-                } else {
-                    None
-                }
-            })
-    }
-
-    /// Serialize for storage.
-    pub async fn into_archive(&self) -> ActiveArchive {
-        ActiveArchive {
-            prekey_pairs: self.prekey_pairs.lock().await.clone(),
-            individual: self.individual.lock().await.clone(),
-        }
     }
 
     /// Deserialize from storage.
@@ -299,42 +97,300 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> std::fmt::Display for Active<S, T, L> {
+impl<S: Verifiable, T: ContentRef, L> std::fmt::Display for Active<S, T, L> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.id(), f)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Verifiable for Active<S, T, L> {
+impl<S: Verifiable, T: ContentRef, L> Verifiable for Active<S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.signer.verifying_key()
     }
 }
 
-impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Fork for Active<S, T, L> {
-    type Forked = Active<S, T, Log<S, T>>;
+/// Async operations for [`Active`] agents.
+///
+/// This trait is parameterized by `K: FutureForm` to support both
+/// multi-threaded ([`Sendable`]) and single-threaded ([`Local`]) async runtimes.
+///
+/// [`Sendable`]: future_form::Sendable
+/// [`Local`]: future_form::Local
+pub trait ActiveOps<K: FutureForm>: Verifiable {
+    /// The signer type.
+    type Signer: AsyncSigner<K>;
+    /// The content reference type.
+    type ContentRef: ContentRef;
+    /// The prekey listener type.
+    type Listener: PrekeyListener<K>;
 
-    fn fork(&self) -> Self::Forked {
-        Active {
-            id: self.id,
-            signer: self.signer.clone(),
-            prekey_pairs: self.prekey_pairs.clone(),
-            individual: self.individual.clone(),
-            listener: Log::new(),
-            _phantom: PhantomData,
-        }
-    }
+    /// Generate a new active agent.
+    fn generate<R: rand::CryptoRng + rand::RngCore>(
+        signer: Self::Signer,
+        listener: Self::Listener,
+        csprng: &mut R,
+    ) -> K::Future<'static, Result<Self, SigningError>>
+    where
+        Self: Sized,
+        Self::Signer: 'static,
+        Self::Listener: 'static;
+
+    /// Create a [`ShareKey`] that is not broadcast via the prekey state.
+    fn generate_private_prekey<'a, R: rand::CryptoRng + rand::RngCore + Send + 'static>(
+        &'a mut self,
+        csprng: Arc<Mutex<R>>,
+    ) -> K::Future<'a, Result<Arc<Signed<RotateKeyOp>>, SigningError>>;
+
+    /// Pseudorandomly select a prekey out of the current prekeys.
+    fn pick_prekey<'a>(&'a self, doc_id: DocumentId) -> K::Future<'a, ShareKey>;
+
+    /// Replace a particular prekey with a new one.
+    fn rotate_prekey<'a, R: rand::CryptoRng + rand::RngCore + Send + 'static>(
+        &'a mut self,
+        old_prekey: ShareKey,
+        csprng: Arc<Mutex<R>>,
+    ) -> K::Future<'a, Result<Arc<Signed<RotateKeyOp>>, SigningError>>;
+
+    /// Add a new prekey, expanding the number of currently available prekeys.
+    fn expand_prekeys<'a, R: rand::CryptoRng + rand::RngCore + Send + 'static>(
+        &'a mut self,
+        csprng: Arc<Mutex<R>>,
+    ) -> K::Future<'a, Result<Arc<Signed<AddKeyOp>>, SigningError>>;
+
+    /// Asynchronously sign a payload.
+    fn try_sign_async<'a, U: Serialize + std::fmt::Debug + Send + 'a>(
+        &'a self,
+        payload: U,
+    ) -> K::Future<'a, Result<Signed<U>, SigningError>>;
+
+    /// Get capability for the active agent on a membered entity.
+    fn get_capability<'a>(
+        &'a self,
+        subject: Membered<Self::Signer, Self::ContentRef>,
+        min: Access,
+    ) -> K::Future<'a, Option<Arc<Signed<Delegation<Self::Signer, Self::ContentRef>>>>>;
+
+    /// Serialize for storage.
+    fn into_archive<'a>(&'a self) -> K::Future<'a, ActiveArchive>;
 }
 
-impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> MergeAsync for Active<S, T, L> {
-    async fn merge_async(&self, fork: Self::AsyncForked) {
-        let forked_individual = { fork.individual.lock().await.clone() };
-        let forked_prekey_pairs = { fork.prekey_pairs.lock().await.clone() };
-        {
-            self.prekey_pairs.lock().await.extend(forked_prekey_pairs);
-        }
+#[future_form(Sendable where S: Send + Sync + 'static, T: Send + Sync + 'static, L: Send + Sync + 'static, Local)]
+impl<
+        K: FutureForm,
+        S: AsyncSigner<K> + Clone + 'static,
+        T: ContentRef + 'static,
+        L: PrekeyListener<K> + 'static,
+    > ActiveOps<K> for Active<S, T, L>
+{
+    type Signer = S;
+    type ContentRef = T;
+    type Listener = L;
 
-        self.individual.lock().await.merge(forked_individual);
+    fn generate<R: rand::CryptoRng + rand::RngCore>(
+        signer: S,
+        listener: L,
+        csprng: &mut R,
+    ) -> K::Future<'static, Result<Self, SigningError>>
+    where
+        S: 'static,
+        L: 'static,
+    {
+        // Pre-generate all the keys synchronously since csprng isn't Send
+        let init_sk = ShareSecretKey::generate(csprng);
+        let init_pk = init_sk.share_key();
+
+        let mut prekey_pairs = BTreeMap::from_iter([(init_pk, init_sk)]);
+        let additional_keys: Vec<_> = (0..6)
+            .map(|_| {
+                let sk = ShareSecretKey::generate(csprng);
+                let pk = sk.share_key();
+                prekey_pairs.insert(pk, sk);
+                pk
+            })
+            .collect();
+
+        K::from_future(async move {
+            let init_op = Arc::new(
+                AsyncSigner::<K>::try_sign_async(&signer, AddKeyOp { share_key: init_pk }).await?,
+            )
+            .into();
+
+            let mut prekey_state = PrekeyState::new(init_op);
+
+            // Sign all the additional keys
+            for pk in additional_keys {
+                let op = Arc::new(
+                    AsyncSigner::<K>::try_sign_async(&signer, AddKeyOp { share_key: pk }).await?,
+                )
+                .into();
+                prekey_state
+                    .extend(vec![op])
+                    .expect("newly generated local op should be valid");
+            }
+
+            let id = signer.verifying_key().into();
+
+            Ok(Self {
+                id,
+                individual: Arc::new(Mutex::new(Individual {
+                    id,
+                    prekeys: prekey_state.build(),
+                    prekey_state,
+                })),
+                prekey_pairs: Arc::new(Mutex::new(prekey_pairs)),
+                listener,
+                signer,
+                _phantom: PhantomData,
+            })
+        })
+    }
+
+    fn generate_private_prekey<'a, R: rand::CryptoRng + rand::RngCore + Send + 'static>(
+        &'a mut self,
+        csprng: Arc<Mutex<R>>,
+    ) -> K::Future<'a, Result<Arc<Signed<RotateKeyOp>>, SigningError>> {
+        K::from_future(async move {
+            let share_key = {
+                // TODO total hack
+                let locked = self.individual.lock().await;
+                locked.pick_prekey(DocumentId(self.id().into())).dupe()
+            };
+            let contact_key = ActiveOps::<K>::rotate_prekey(self, share_key, csprng.dupe()).await?;
+            ActiveOps::<K>::rotate_prekey(self, contact_key.payload.new, csprng).await?;
+            Ok(contact_key)
+        })
+    }
+
+    fn pick_prekey<'a>(&'a self, doc_id: DocumentId) -> K::Future<'a, ShareKey> {
+        K::from_future(async move {
+            tracing::trace!("picking prekey for document {doc_id}");
+            self.individual.lock().await.pick_prekey(doc_id).dupe()
+        })
+    }
+
+    fn rotate_prekey<'a, R: rand::CryptoRng + rand::RngCore + Send + 'static>(
+        &'a mut self,
+        old_prekey: ShareKey,
+        csprng: Arc<Mutex<R>>,
+    ) -> K::Future<'a, Result<Arc<Signed<RotateKeyOp>>, SigningError>> {
+        K::from_future(async move {
+            let new_secret = {
+                let mut locked_csprng = csprng.lock().await;
+                ShareSecretKey::generate(&mut *locked_csprng)
+            };
+            let new_public = new_secret.share_key();
+
+            let rot_op = Arc::new(
+                AsyncSigner::<K>::try_sign_async(
+                    &self.signer,
+                    RotateKeyOp {
+                        old: old_prekey,
+                        new: new_public,
+                    },
+                )
+                .await?,
+            );
+
+            {
+                self.prekey_pairs
+                    .lock()
+                    .await
+                    .insert(new_public, new_secret);
+            }
+
+            {
+                let mut locked_individual = self.individual.lock().await;
+                locked_individual
+                    .prekey_state
+                    .insert_op(KeyOp::Rotate(rot_op.dupe()))
+                    .expect("the op we just signed to be valid");
+
+                locked_individual.prekeys.remove(&old_prekey);
+                locked_individual.prekeys.insert(new_public);
+            }
+
+            PrekeyListener::<K>::on_prekey_rotated(&self.listener, &rot_op).await;
+            Ok(rot_op)
+        })
+    }
+
+    fn expand_prekeys<'a, R: rand::CryptoRng + rand::RngCore + Send + 'static>(
+        &'a mut self,
+        csprng: Arc<Mutex<R>>,
+    ) -> K::Future<'a, Result<Arc<Signed<AddKeyOp>>, SigningError>> {
+        K::from_future(async move {
+            let new_secret = {
+                let mut locked_csprng = csprng.lock().await;
+                ShareSecretKey::generate(&mut *locked_csprng)
+            };
+            let new_public = new_secret.share_key();
+
+            let op = Arc::new(
+                AsyncSigner::<K>::try_sign_async(
+                    &self.signer,
+                    AddKeyOp {
+                        share_key: new_public,
+                    },
+                )
+                .await?,
+            );
+
+            {
+                let mut locked_individual = self.individual.lock().await;
+
+                locked_individual
+                    .prekey_state
+                    .insert_op(KeyOp::Add(op.dupe()))
+                    .expect("the op we just signed to be valid");
+
+                locked_individual.prekeys.insert(new_public);
+            }
+
+            {
+                self.prekey_pairs
+                    .lock()
+                    .await
+                    .insert(new_public, new_secret);
+            }
+
+            PrekeyListener::<K>::on_prekeys_expanded(&self.listener, &op).await;
+            Ok(op)
+        })
+    }
+
+    fn try_sign_async<'a, U: Serialize + std::fmt::Debug + Send + 'a>(
+        &'a self,
+        payload: U,
+    ) -> K::Future<'a, Result<Signed<U>, SigningError>> {
+        K::from_future(async move { AsyncSigner::<K>::try_sign_async(&self.signer, payload).await })
+    }
+
+    fn get_capability<'a>(
+        &'a self,
+        subject: Membered<S, T>,
+        min: Access,
+    ) -> K::Future<'a, Option<Arc<Signed<Delegation<S, T>>>>> {
+        K::from_future(async move {
+            subject
+                .get_capability(&self.id().into())
+                .await
+                .and_then(|cap| {
+                    if cap.payload().can >= min {
+                        Some(cap)
+                    } else {
+                        None
+                    }
+                })
+        })
+    }
+
+    fn into_archive<'a>(&'a self) -> K::Future<'a, ActiveArchive> {
+        K::from_future(async move {
+            ActiveArchive {
+                prekey_pairs: self.prekey_pairs.lock().await.clone(),
+                individual: self.individual.lock().await.clone(),
+            }
+        })
     }
 }
 
@@ -386,9 +442,13 @@ mod tests {
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let active: Active<_, [u8; 32], _> =
-            Active::generate(signer, NoListener, csprng).await.unwrap();
+            ActiveOps::<Sendable>::generate(signer, NoListener, csprng)
+                .await
+                .unwrap();
         let message = "hello world".as_bytes();
-        let signed = active.try_sign_async(message).await.unwrap();
+        let signed = ActiveOps::<Sendable>::try_sign_async(&active, message)
+            .await
+            .unwrap();
 
         assert!(signed.try_verify().is_ok());
     }

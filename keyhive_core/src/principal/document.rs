@@ -59,9 +59,9 @@ use tracing::instrument;
 #[derive(Clone, Derivative)]
 #[derive_where(Debug; T)]
 pub struct Document<
-    S: AsyncSigner,
+    S: Verifiable,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L = NoListener,
 > {
     pub(crate) group: Group<S, T, L>,
     pub(crate) content_heads: HashSet<T>,
@@ -71,7 +71,7 @@ pub struct Document<
     cgka: Option<Cgka>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, L> {
+impl<S: Verifiable, T: ContentRef, L> Document<S, T, L> {
     // FIXME: We need a signing key for initializing Cgka and we need to share
     // the init add op.
     // NOTE doesn't register into the top-level Keyhive context
@@ -558,13 +558,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Document<S, T, L> {
+impl<S: Verifiable, T: ContentRef, L> Verifiable for Document<S, T, L> {
     fn verifying_key(&self) -> VerifyingKey {
         self.group.verifying_key()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Document<S, T, L> {
+impl<S: Verifiable, T: ContentRef, L> Hash for Document<S, T, L> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.group.hash(state);
         crate::util::hasher::hash_set(&self.content_heads, state);
@@ -575,9 +575,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Docume
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddMemberUpdate<
-    S: AsyncSigner,
+    S: Verifiable,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L = NoListener,
 > {
     pub delegation: Arc<Signed<Delegation<S, T, L>>>,
     pub cgka_ops: Vec<Signed<CgkaOperation>>,
@@ -589,16 +589,16 @@ pub struct MissingIndividualError(pub Box<IndividualId>);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RevokeMemberUpdate<
-    S: AsyncSigner,
+    S: Verifiable,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L = NoListener,
 > {
     pub(crate) revocations: Vec<Arc<Signed<Revocation<S, T, L>>>>,
     pub(crate) redelegations: Vec<Arc<Signed<Delegation<S, T, L>>>>,
     pub(crate) cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevokeMemberUpdate<S, T, L> {
+impl<S: Verifiable, T: ContentRef, L> RevokeMemberUpdate<S, T, L> {
     #[allow(clippy::type_complexity)]
     pub fn revocations(&self) -> &[Arc<Signed<Revocation<S, T, L>>>] {
         &self.revocations
@@ -615,7 +615,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevokeMemberUpd
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Default
+impl<S: Verifiable, T: ContentRef, L> Default
     for RevokeMemberUpdate<S, T, L>
 {
     fn default() -> Self {
@@ -704,7 +704,7 @@ pub enum DecryptError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum TryFromDocumentArchiveError<S: AsyncSigner, T: ContentRef> {
+pub enum TryFromDocumentArchiveError<S: Verifiable, T: ContentRef> {
     #[error("Cannot find individual: {0}")]
     MissingIndividual(IndividualId),
 
@@ -715,7 +715,7 @@ pub enum TryFromDocumentArchiveError<S: AsyncSigner, T: ContentRef> {
     MissingRevocation(Digest<Signed<Revocation<S, T>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef> From<MissingDependency<Digest<Signed<Delegation<S, T>>>>>
+impl<S: Verifiable, T: ContentRef> From<MissingDependency<Digest<Signed<Delegation<S, T>>>>>
     for TryFromDocumentArchiveError<S, T>
 {
     fn from(e: MissingDependency<Digest<Signed<Delegation<S, T>>>>) -> Self {

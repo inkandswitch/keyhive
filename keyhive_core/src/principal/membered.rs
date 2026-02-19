@@ -30,15 +30,15 @@ use std::{
 /// The union of Agents that have updatable membership
 #[derive(Debug, Clone, Dupe)]
 pub enum Membered<
-    S: AsyncSigner,
+    S: Verifiable,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L = NoListener,
 > {
     Group(GroupId, Arc<Mutex<Group<S, T, L>>>),
     Document(DocumentId, Arc<Mutex<Document<S, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, L> {
+impl<S: Verifiable, T: ContentRef, L> Membered<S, T, L> {
     pub async fn get_capability(
         &self,
         agent_id: &Identifier,
@@ -169,7 +169,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Membered<S, T, 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Group<S, T, L>>
+impl<S: Verifiable, T: ContentRef, L> From<Group<S, T, L>>
     for Membered<S, T, L>
 {
     fn from(group: Group<S, T, L>) -> Self {
@@ -177,7 +177,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Group<S, T
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Document<S, T, L>>
+impl<S: Verifiable, T: ContentRef, L> From<Document<S, T, L>>
     for Membered<S, T, L>
 {
     fn from(document: Document<S, T, L>) -> Self {
@@ -185,7 +185,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Document<S
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Membered<S, T, L> {
+impl<S: Verifiable, T: ContentRef, L> Verifiable for Membered<S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.agent_id().verifying_key()
     }
