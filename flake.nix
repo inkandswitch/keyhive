@@ -86,12 +86,12 @@
         ];
 
         cargoPath = "${rust-toolchain}/bin/cargo";
-        pnpm' = "${pkgs.pnpm}/bin/pnpm";
-        playwright = "${pnpm'} --dir=./keyhive_wasm exec playwright";
+        pnpmBin = "${pkgs.pnpm}/bin/pnpm";
+        playwright = "${pnpmBin} --dir=./keyhive_wasm exec playwright";
 
         # Built-in command modules from nix-command-utils
         rust = command-utils.rust.${system};
-        pnpm = command-utils.pnpm.${system};
+        pnpm' = command-utils.pnpm.${system};
         wasm = command-utils.wasm.${system};
         cmd = command-utils.cmd.${system};
 
@@ -104,11 +104,11 @@
             "${cargoPath} build ./keyhive_wasm --target wasm32-wasi";
 
           "test:all" = cmd "Run all tests"
-            "test && wasm:test:node && test:ts:web";
+            "rust:test && wasm:test:node && test:ts:web";
 
           "test:ts:web" = cmd "Run keyhive_wasm Typescript tests in Playwright" ''
             cd ./keyhive_wasm
-            ${pnpm'} exec playwright install --with-deps
+            ${pnpmBin} exec playwright install --with-deps
             cd ..
 
             ${pkgs.http-server}/bin/http-server --silent &
@@ -190,24 +190,24 @@
 
         command_menu = command-utils.commands.${system} [
           # Rust commands
-          (rust.build { cargo = rust-toolchain; })
-          (rust.test { cargo = rust-toolchain; cargo-watch = pkgs.cargo-watch; })
-          (rust.lint { cargo = rust-toolchain; })
-          (rust.fmt { cargo = rust-toolchain; })
-          (rust.doc { cargo = rust-toolchain; })
-          (rust.bench { cargo = rust-toolchain; cargo-criterion = pkgs.cargo-criterion; xdg-open = pkgs.xdg-utils; })
+          (rust.build { cargo = pkgs.cargo; })
+          (rust.test { cargo = pkgs.cargo; cargo-watch = pkgs.cargo-watch; })
+          (rust.lint { cargo = pkgs.cargo; })
+          (rust.fmt { cargo = pkgs.cargo; })
+          (rust.doc { cargo = pkgs.cargo; })
+          (rust.bench { cargo = pkgs.cargo; cargo-criterion = pkgs.cargo-criterion; xdg-open = pkgs.xdg-utils; })
           (rust.watch { cargo-watch = pkgs.cargo-watch; })
 
           # Wasm commands
           (wasm.build { wasm-pack = pkgs.wasm-pack; path = "./keyhive_wasm"; })
           (wasm.release { wasm-pack = pkgs.wasm-pack; path = "./keyhive_wasm"; gzip = pkgs.gzip; })
           (wasm.test { wasm-pack = pkgs.wasm-pack; path = "./keyhive_wasm"; features = "browser_test"; })
-          (wasm.doc { cargo = rust-toolchain; xdg-open = pkgs.xdg-utils; })
+          (wasm.doc { cargo = pkgs.cargo; xdg-open = pkgs.xdg-utils; })
 
           # pnpm commands
-          (pnpm.build { pnpm = "${pkgs.pnpm}/bin/pnpm"; })
-          (pnpm.install { pnpm = "${pkgs.pnpm}/bin/pnpm"; })
-          (pnpm.test { pnpm = "${pkgs.pnpm}/bin/pnpm"; })
+          (pnpm'.build { pnpm = pnpmBin; })
+          (pnpm'.install { pnpm = pnpmBin; })
+          (pnpm'.test { pnpm = pnpmBin; })
 
           # Project-specific commands
           { commands = projectCommands; packages = []; }
