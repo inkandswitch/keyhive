@@ -44,6 +44,7 @@ use derivative::Derivative;
 use derive_where::derive_where;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
+use future_form::FutureForm;
 use futures::{future::join_all, lock::Mutex};
 use id::DocumentId;
 use nonempty::NonEmpty;
@@ -661,9 +662,9 @@ pub enum GenerateDocError {
 }
 
 #[derive(Debug, Error)]
-pub enum DocCausalDecryptionError<T: ContentRef, P, C: CiphertextStore<T, P>> {
+pub enum DocCausalDecryptionError<K: FutureForm + ?Sized, T: ContentRef, P, C: CiphertextStore<K, T, P>> {
     #[error(transparent)]
-    CausalDecryptionError(#[from] CausalDecryptionError<T, P, C>),
+    CausalDecryptionError(#[from] CausalDecryptionError<K, T, P, C>),
 
     #[error("{0}")]
     GetCiphertextError(C::GetCiphertextError),

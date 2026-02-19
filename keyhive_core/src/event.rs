@@ -24,6 +24,7 @@ use crate::{
 use derive_more::{From, TryInto};
 use derive_where::derive_where;
 use dupe::Dupe;
+use future_form::FutureForm;
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
 use tracing::instrument;
@@ -51,10 +52,15 @@ pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> {
     #[allow(clippy::type_complexity)]
     #[instrument(level = "debug", skip(ciphertext_store))]
-    pub async fn now_decryptable<P, C: CiphertextStore<T, P>>(
+    pub async fn now_decryptable<K, P, C>(
         new_events: &[Event<S, T, L>],
         ciphertext_store: &C,
-    ) -> Result<HashMap<DocumentId, Vec<Arc<EncryptedContent<P, T>>>>, C::GetCiphertextError> {
+    ) -> Result<HashMap<DocumentId, Vec<Arc<EncryptedContent<P, T>>>>, C::GetCiphertextError>
+    where
+        K: FutureForm + ?Sized,
+        P: ContentRef,
+        C: CiphertextStore<K, T, P>,
+    {
         let mut acc: HashMap<DocumentId, Vec<Arc<EncryptedContent<P, T>>>> = HashMap::new();
 
         for event in new_events {

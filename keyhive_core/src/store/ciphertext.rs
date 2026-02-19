@@ -43,20 +43,20 @@ pub trait CiphertextStore<K: FutureForm + ?Sized, Cr: ContentRef, T>: Sized {
     type GetCiphertextError: Debug + Display;
     type MarkDecryptedError: Debug + Display;
 
-    fn get_ciphertext(
-        &self,
-        id: &Cr,
-    ) -> K::Future<'_, Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
+    fn get_ciphertext<'a>(
+        &'a self,
+        id: &'a Cr,
+    ) -> K::Future<'a, Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
 
-    fn get_ciphertext_by_pcs_update(
-        &self,
-        pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> K::Future<'_, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
+    fn get_ciphertext_by_pcs_update<'a>(
+        &'a self,
+        pcs_update: &'a Digest<Signed<CgkaOperation>>,
+    ) -> K::Future<'a, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
 
-    fn mark_decrypted(
-        &self,
-        id: &Cr,
-    ) -> K::Future<'_, Result<(), Self::MarkDecryptedError>>;
+    fn mark_decrypted<'a>(
+        &'a self,
+        id: &'a Cr,
+    ) -> K::Future<'a, Result<(), Self::MarkDecryptedError>>;
 
     #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
     /// Recursively decrypts a set of causally-related ciphertexts.
@@ -130,10 +130,10 @@ pub trait CiphertextStore<K: FutureForm + ?Sized, Cr: ContentRef, T>: Sized {
     ///
     /// It is normal for this to stop decryption if it encounters an already-decrypted
     /// ciphertext. There is no reason to decrypt it again if you already have the plaintext.
-    fn try_causal_decrypt(
-        &self,
-        to_decrypt: &mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
-    ) -> K::Future<'_, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<K, Cr, T, Self>>>
+    fn try_causal_decrypt<'a>(
+        &'a self,
+        to_decrypt: &'a mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
+    ) -> K::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<K, Cr, T, Self>>>
     where
         Cr: for<'de> Deserialize<'de>,
         T: Clone + Serialize + for<'de> Deserialize<'de>,
@@ -249,10 +249,10 @@ impl<Cr: ContentRef, T, C: CiphertextStore<Local, Cr, T>> CiphertextStore<Local,
     type GetCiphertextError = C::GetCiphertextError;
     type MarkDecryptedError = C::MarkDecryptedError;
 
-    fn get_ciphertext(
-        &self,
-        cr: &Cr,
-    ) -> <Local as FutureForm>::Future<'_, Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>
+    fn get_ciphertext<'a>(
+        &'a self,
+        cr: &'a Cr,
+    ) -> <Local as FutureForm>::Future<'a, Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>
     {
         Local::from_future(async move {
             let locked = self.lock().await;
@@ -260,20 +260,20 @@ impl<Cr: ContentRef, T, C: CiphertextStore<Local, Cr, T>> CiphertextStore<Local,
         })
     }
 
-    fn get_ciphertext_by_pcs_update(
-        &self,
-        pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> <Local as FutureForm>::Future<'_, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> {
+    fn get_ciphertext_by_pcs_update<'a>(
+        &'a self,
+        pcs_update: &'a Digest<Signed<CgkaOperation>>,
+    ) -> <Local as FutureForm>::Future<'a, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> {
         Local::from_future(async move {
             let locked = self.lock().await;
             locked.get_ciphertext_by_pcs_update(pcs_update).await
         })
     }
 
-    fn mark_decrypted(
-        &self,
-        content_ref: &Cr,
-    ) -> <Local as FutureForm>::Future<'_, Result<(), Self::MarkDecryptedError>> {
+    fn mark_decrypted<'a>(
+        &'a self,
+        content_ref: &'a Cr,
+    ) -> <Local as FutureForm>::Future<'a, Result<(), Self::MarkDecryptedError>> {
         Local::from_future(async move {
             let locked = self.lock().await;
             locked.mark_decrypted(content_ref).await
@@ -291,10 +291,10 @@ where
     type GetCiphertextError = C::GetCiphertextError;
     type MarkDecryptedError = C::MarkDecryptedError;
 
-    fn get_ciphertext(
-        &self,
-        cr: &Cr,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>
+    fn get_ciphertext<'a>(
+        &'a self,
+        cr: &'a Cr,
+    ) -> <Sendable as FutureForm>::Future<'a, Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>
     {
         Sendable::from_future(async move {
             let locked = self.lock().await;
@@ -302,20 +302,20 @@ where
         })
     }
 
-    fn get_ciphertext_by_pcs_update(
-        &self,
-        pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> {
+    fn get_ciphertext_by_pcs_update<'a>(
+        &'a self,
+        pcs_update: &'a Digest<Signed<CgkaOperation>>,
+    ) -> <Sendable as FutureForm>::Future<'a, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> {
         Sendable::from_future(async move {
             let locked = self.lock().await;
             locked.get_ciphertext_by_pcs_update(pcs_update).await
         })
     }
 
-    fn mark_decrypted(
-        &self,
-        content_ref: &Cr,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::MarkDecryptedError>> {
+    fn mark_decrypted<'a>(
+        &'a self,
+        content_ref: &'a Cr,
+    ) -> <Sendable as FutureForm>::Future<'a, Result<(), Self::MarkDecryptedError>> {
         Sendable::from_future(async move {
             let locked = self.lock().await;
             locked.mark_decrypted(content_ref).await
@@ -328,26 +328,26 @@ impl<T: Clone, Cr: ContentRef> CiphertextStore<Local, Cr, T> for MemoryCiphertex
     type GetCiphertextError = Infallible;
     type MarkDecryptedError = Infallible;
 
-    fn get_ciphertext(
-        &self,
-        cr: &Cr,
-    ) -> <Local as FutureForm>::Future<'_, Result<Option<Arc<EncryptedContent<T, Cr>>>, Infallible>>
+    fn get_ciphertext<'a>(
+        &'a self,
+        cr: &'a Cr,
+    ) -> <Local as FutureForm>::Future<'a, Result<Option<Arc<EncryptedContent<T, Cr>>>, Infallible>>
     {
         Local::from_future(async move { Ok(self.get_by_content_ref(cr).await) })
     }
 
-    fn get_ciphertext_by_pcs_update(
-        &self,
-        pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> <Local as FutureForm>::Future<'_, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Infallible>>
+    fn get_ciphertext_by_pcs_update<'a>(
+        &'a self,
+        pcs_update: &'a Digest<Signed<CgkaOperation>>,
+    ) -> <Local as FutureForm>::Future<'a, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Infallible>>
     {
         Local::from_future(async move { Ok(self.get_by_pcs_update(pcs_update).await) })
     }
 
-    fn mark_decrypted(
-        &self,
-        content_ref: &Cr,
-    ) -> <Local as FutureForm>::Future<'_, Result<(), Infallible>> {
+    fn mark_decrypted<'a>(
+        &'a self,
+        content_ref: &'a Cr,
+    ) -> <Local as FutureForm>::Future<'a, Result<(), Infallible>> {
         Local::from_future(async move {
             self.remove_all(content_ref).await;
             Ok(())
@@ -362,26 +362,26 @@ impl<T: Clone + Send + Sync, Cr: ContentRef + Send + Sync> CiphertextStore<Senda
     type GetCiphertextError = Infallible;
     type MarkDecryptedError = Infallible;
 
-    fn get_ciphertext(
-        &self,
-        cr: &Cr,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Option<Arc<EncryptedContent<T, Cr>>>, Infallible>>
+    fn get_ciphertext<'a>(
+        &'a self,
+        cr: &'a Cr,
+    ) -> <Sendable as FutureForm>::Future<'a, Result<Option<Arc<EncryptedContent<T, Cr>>>, Infallible>>
     {
         Sendable::from_future(async move { Ok(self.get_by_content_ref(cr).await) })
     }
 
-    fn get_ciphertext_by_pcs_update(
-        &self,
-        pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Infallible>>
+    fn get_ciphertext_by_pcs_update<'a>(
+        &'a self,
+        pcs_update: &'a Digest<Signed<CgkaOperation>>,
+    ) -> <Sendable as FutureForm>::Future<'a, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Infallible>>
     {
         Sendable::from_future(async move { Ok(self.get_by_pcs_update(pcs_update).await) })
     }
 
-    fn mark_decrypted(
-        &self,
-        content_ref: &Cr,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<(), Infallible>> {
+    fn mark_decrypted<'a>(
+        &'a self,
+        content_ref: &'a Cr,
+    ) -> <Sendable as FutureForm>::Future<'a, Result<(), Infallible>> {
         Sendable::from_future(async move {
             self.remove_all(content_ref).await;
             Ok(())
