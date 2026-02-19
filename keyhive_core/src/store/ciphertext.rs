@@ -136,10 +136,7 @@ pub trait CiphertextStore<K: FutureForm + ?Sized, Cr: ContentRef, T>: Sized {
     ) -> K::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<K, Cr, T, Self>>>
     where
         Cr: for<'de> Deserialize<'de>,
-        T: Clone + Serialize + for<'de> Deserialize<'de>,
-    {
-        K::from_future(try_causal_decrypt_impl(self, to_decrypt))
-    }
+        T: Clone + Serialize + for<'de> Deserialize<'de>;
 }
 
 #[instrument(skip(store, to_decrypt), fields(ciphertext_heads_count = %to_decrypt.len()))]
@@ -243,8 +240,11 @@ impl<T, Cr: ContentRef> CausalDecryptionState<Cr, T> {
 }
 
 // Implementation for Arc<Mutex<C>> - Local variant
-impl<Cr: ContentRef, T, C: CiphertextStore<Local, Cr, T>> CiphertextStore<Local, Cr, T>
+impl<Cr: ContentRef + 'static, T: 'static, C: CiphertextStore<Local, Cr, T>> CiphertextStore<Local, Cr, T>
     for Arc<Mutex<C>>
+where
+    C::GetCiphertextError: 'static,
+    C::MarkDecryptedError: 'static,
 {
     type GetCiphertextError = C::GetCiphertextError;
     type MarkDecryptedError = C::MarkDecryptedError;
@@ -279,14 +279,25 @@ impl<Cr: ContentRef, T, C: CiphertextStore<Local, Cr, T>> CiphertextStore<Local,
             locked.mark_decrypted(content_ref).await
         })
     }
+
+    fn try_causal_decrypt<'a>(
+        &'a self,
+        to_decrypt: &'a mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
+    ) -> <Local as FutureForm>::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<Local, Cr, T, Self>>>
+    where
+        Cr: for<'de> Deserialize<'de>,
+        T: Clone + Serialize + for<'de> Deserialize<'de>,
+    {
+        Local::from_future(try_causal_decrypt_impl::<Local, _, _, _>(self, to_decrypt))
+    }
 }
 
 // Implementation for Arc<Mutex<C>> - Sendable variant
-impl<Cr: ContentRef + Send + Sync, T: Send + Sync, C: CiphertextStore<Sendable, Cr, T> + Send + Sync>
+impl<Cr: ContentRef + Send + Sync + 'static, T: Send + Sync + 'static, C: CiphertextStore<Sendable, Cr, T> + Send + Sync>
     CiphertextStore<Sendable, Cr, T> for Arc<Mutex<C>>
 where
-    C::GetCiphertextError: Send,
-    C::MarkDecryptedError: Send,
+    C::GetCiphertextError: Send + 'static,
+    C::MarkDecryptedError: Send + 'static,
 {
     type GetCiphertextError = C::GetCiphertextError;
     type MarkDecryptedError = C::MarkDecryptedError;
@@ -321,6 +332,17 @@ where
             locked.mark_decrypted(content_ref).await
         })
     }
+
+    fn try_causal_decrypt<'a>(
+        &'a self,
+        to_decrypt: &'a mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
+    ) -> <Sendable as FutureForm>::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<Sendable, Cr, T, Self>>>
+    where
+        Cr: for<'de> Deserialize<'de>,
+        T: Clone + Serialize + for<'de> Deserialize<'de>,
+    {
+        Sendable::from_future(try_causal_decrypt_impl::<Sendable, _, _, _>(self, to_decrypt))
+    }
 }
 
 // Implementation for MemoryCiphertextStore - Local variant
@@ -353,10 +375,21 @@ impl<T: Clone, Cr: ContentRef> CiphertextStore<Local, Cr, T> for MemoryCiphertex
             Ok(())
         })
     }
+
+    fn try_causal_decrypt<'a>(
+        &'a self,
+        to_decrypt: &'a mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
+    ) -> <Local as FutureForm>::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<Local, Cr, T, Self>>>
+    where
+        Cr: for<'de> Deserialize<'de>,
+        T: Clone + Serialize + for<'de> Deserialize<'de>,
+    {
+        Local::from_future(try_causal_decrypt_impl::<Local, _, _, _>(self, to_decrypt))
+    }
 }
 
 // Implementation for MemoryCiphertextStore - Sendable variant
-impl<T: Clone + Send + Sync, Cr: ContentRef + Send + Sync> CiphertextStore<Sendable, Cr, T>
+impl<T: Clone + Send + Sync + 'static, Cr: ContentRef + Send + Sync + 'static> CiphertextStore<Sendable, Cr, T>
     for MemoryCiphertextStore<Cr, T>
 {
     type GetCiphertextError = Infallible;
@@ -386,6 +419,17 @@ impl<T: Clone + Send + Sync, Cr: ContentRef + Send + Sync> CiphertextStore<Senda
             self.remove_all(content_ref).await;
             Ok(())
         })
+    }
+
+    fn try_causal_decrypt<'a>(
+        &'a self,
+        to_decrypt: &'a mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
+    ) -> <Sendable as FutureForm>::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<Sendable, Cr, T, Self>>>
+    where
+        Cr: for<'de> Deserialize<'de>,
+        T: Clone + Serialize + for<'de> Deserialize<'de>,
+    {
+        Sendable::from_future(try_causal_decrypt_impl::<Sendable, _, _, _>(self, to_decrypt))
     }
 }
 

@@ -57,6 +57,7 @@ use crate::{
 };
 use derive_where::derive_where;
 use dupe::{Dupe, OptionDupedExt};
+use future_form::{FutureForm, Local};
 use futures::lock::Mutex;
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
@@ -76,7 +77,8 @@ pub struct Keyhive<
     S: AsyncSigner + Clone,
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
-    C: CiphertextStore<T, P> + Clone = MemoryCiphertextStore<T, P>,
+    K: FutureForm + ?Sized = Local,
+    C: CiphertextStore<K, T, P> + Clone = MemoryCiphertextStore<T, P>,
     L: MembershipListener<S, T> = NoListener,
     R: rand::CryptoRng = rand::rngs::OsRng,
 > {
@@ -116,16 +118,18 @@ pub struct Keyhive<
     csprng: Arc<Mutex<R>>,
 
     _plaintext_phantom: PhantomData<P>,
+    _future_form_phantom: PhantomData<fn() -> K>,
 }
 
 impl<
         S: AsyncSigner + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
+        K: FutureForm + ?Sized,
+        C: CiphertextStore<K, T, P> + Clone,
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
-    > Keyhive<S, T, P, C, L, R>
+    > Keyhive<S, T, P, K, C, L, R>
 {
     #[instrument(skip_all)]
     pub fn id(&self) -> IndividualId {
@@ -167,6 +171,7 @@ impl<
             event_listener,
             csprng: Arc::new(Mutex::new(csprng)),
             _plaintext_phantom: PhantomData,
+            _future_form_phantom: PhantomData,
         })
     }
 
@@ -511,14 +516,14 @@ impl<
         &self,
         doc: Arc<Mutex<Document<S, T, L>>>,
         encrypted: &EncryptedContent<P, T>,
-    ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<T, P, C>>
+    ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<K, T, P, C>>
     where
         T: for<'de> Deserialize<'de>,
         P: Serialize + Clone,
     {
         doc.lock()
             .await
-            .try_causal_decrypt_content(encrypted, self.ciphertext_store.clone())
+            .try_causal_decrypt_content::<K, _, _>(encrypted, self.ciphertext_store.clone())
             .await
     }
 
@@ -1759,6 +1764,7 @@ impl<
             ciphertext_store,
             event_listener: listener,
             _plaintext_phantom: PhantomData,
+            _future_form_phantom: PhantomData,
         })
     }
 
@@ -1991,10 +1997,11 @@ impl<
         S: AsyncSigner + Clone,
         T: ContentRef + Debug,
         P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
+        K: FutureForm + ?Sized,
+        C: CiphertextStore<K, T, P> + Clone,
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
-    > Debug for Keyhive<S, T, P, C, L, R>
+    > Debug for Keyhive<S, T, P, K, C, L, R>
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.debug_struct("Keyhive")
@@ -2014,12 +2021,13 @@ impl<
         S: AsyncSigner + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
-        C: CiphertextStore<T, P> + Clone,
+        K: FutureForm + ?Sized,
+        C: CiphertextStore<K, T, P> + Clone,
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > ForkAsync for Keyhive<S, T, P, C, L, R>
+    > ForkAsync for Keyhive<S, T, P, K, C, L, R>
 {
-    type AsyncForked = Keyhive<S, T, P, C, Log<S, T>, R>;
+    type AsyncForked = Keyhive<S, T, P, K, C, Log<S, T>, R>;
 
     async fn fork_async(&self) -> Self::AsyncForked {
         // TODO this is probably fairly slow, and due to the logger type changing
@@ -2040,10 +2048,11 @@ impl<
         S: AsyncSigner + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
-        C: CiphertextStore<T, P> + Clone,
+        K: FutureForm + ?Sized,
+        C: CiphertextStore<K, T, P> + Clone,
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > MergeAsync for Arc<Mutex<Keyhive<S, T, P, C, L, R>>>
+    > MergeAsync for Arc<Mutex<Keyhive<S, T, P, K, C, L, R>>>
 {
     async fn merge_async(&self, fork: Self::AsyncForked) {
         let forked_active = { fork.active.lock().await.clone() };
@@ -2089,10 +2098,11 @@ impl<
         S: AsyncSigner + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
+        K: FutureForm + ?Sized,
+        C: CiphertextStore<K, T, P> + Clone,
         L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
-    > Verifiable for Keyhive<S, T, P, C, L, R>
+    > Verifiable for Keyhive<S, T, P, K, C, L, R>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.verifying_key

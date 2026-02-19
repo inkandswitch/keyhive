@@ -489,13 +489,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
 
     #[instrument(skip_all)]
     pub async fn try_causal_decrypt_content<
-        C: CiphertextStore<T, P>,
+        K: FutureForm + ?Sized,
+        C: CiphertextStore<K, T, P>,
         P: for<'de> Deserialize<'de> + Serialize + Clone,
     >(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
         store: C,
-    ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<T, P, C>>
+    ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<K, T, P, C>>
     where
         T: for<'de> Deserialize<'de>,
     {
