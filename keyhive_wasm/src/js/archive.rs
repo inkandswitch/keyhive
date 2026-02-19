@@ -5,6 +5,7 @@ use super::{
     keyhive::JsKeyhive, signer::JsSigner,
 };
 use derive_more::{Display, From, Into};
+use future_form::Local;
 use futures::lock::Mutex;
 use keyhive_core::{
     archive::Archive,
@@ -56,10 +57,10 @@ impl JsArchive {
 }
 
 #[derive(Debug, Display, Error)]
-pub struct JsTryFromArchiveError(TryFromArchiveError<JsSigner, JsChangeId, JsEventHandler>);
+pub struct JsTryFromArchiveError(TryFromArchiveError<Local, JsSigner, JsChangeId, JsEventHandler>);
 
-impl From<TryFromArchiveError<JsSigner, JsChangeId, JsEventHandler>> for JsTryFromArchiveError {
-    fn from(err: TryFromArchiveError<JsSigner, JsChangeId, JsEventHandler>) -> Self {
+impl From<TryFromArchiveError<Local, JsSigner, JsChangeId, JsEventHandler>> for JsTryFromArchiveError {
+    fn from(err: TryFromArchiveError<Local, JsSigner, JsChangeId, JsEventHandler>) -> Self {
         JsTryFromArchiveError(err)
     }
 }

@@ -4,6 +4,7 @@ use super::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
+use future_form::Local;
 use keyhive_core::{
     crypto::{signed::Signed, verifiable::Verifiable},
     principal::group::delegation::Delegation,
@@ -14,7 +15,7 @@ use wasm_bindgen::prelude::*;
 #[derive(Debug, Clone, Dupe, From, Into)]
 #[wasm_bindgen(js_name = SignedDelegation)]
 pub struct JsSignedDelegation(
-    pub(crate) Arc<Signed<Delegation<JsSigner, JsChangeId, JsEventHandler>>>,
+    pub(crate) Arc<Signed<Delegation<Local, JsSigner, JsChangeId, JsEventHandler>>>,
 );
 
 #[wasm_bindgen(js_class = SignedDelegation)]
