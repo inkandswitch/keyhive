@@ -12,7 +12,7 @@ use crate::{
         encrypted::EncryptedContent,
         share_key::ShareKey,
         signed::{Signed, SigningError, VerificationError},
-        signer::async_signer::AsyncSigner,
+        signer::{async_signer::AsyncSigner, sync_signer::SyncSigner},
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
@@ -233,11 +233,15 @@ impl<
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub async fn generate_doc(
+    pub async fn generate_doc<K: FutureForm>(
         &self,
         coparents: Vec<Peer<S, T, L>>,
         initial_content_heads: NonEmpty<T>,
-    ) -> Result<Arc<Mutex<Document<S, T, L>>>, GenerateDocError> {
+    ) -> Result<Arc<Mutex<Document<S, T, L>>>, GenerateDocError>
+    where
+        S: AsyncSigner<K, CgkaOperation>,
+        L: CgkaListener<K>,
+    {
         for peer in coparents.iter() {
             if self.get_agent(peer.id()).await.is_none() {
                 self.register_peer(peer.dupe()).await;
@@ -250,7 +254,7 @@ impl<
         };
 
         let active_id = { self.active.lock().await.id() };
-        let new_doc = Document::generate(
+        let new_doc = Document::generate::<K, _>(
             NonEmpty {
                 head: Agent::Active(active_id, self.active.dupe()),
                 tail: coparents.into_iter().map(Into::into).collect(),
@@ -280,13 +284,15 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn contact_card(&self) -> Result<ContactCard, SigningError> {
-        let rot_key_op = self
-            .active
-            .lock()
-            .await
-            .generate_private_prekey(self.csprng.dupe())
-            .await?;
+    pub async fn contact_card<K: FutureForm>(&self) -> Result<ContactCard, SigningError>
+    where
+        S: AsyncSigner<K, AddKeyOp> + AsyncSigner<K, RotateKeyOp>,
+        L: PrekeyListener<K>,
+    {
+        let mut locked_active = self.active.lock().await;
+        let rot_key_op =
+            ActiveOps::<K>::generate_private_prekey(&mut *locked_active, self.csprng.dupe())
+                .await?;
 
         Ok(ContactCard(KeyOp::Rotate(rot_key_op)))
     }
@@ -321,30 +327,35 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn rotate_prekey(
+    pub async fn rotate_prekey<K: FutureForm>(
         &self,
         prekey: ShareKey,
-    ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
-        self.active
-            .lock()
-            .await
-            .rotate_prekey(prekey, self.csprng.dupe())
-            .await
+    ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError>
+    where
+        S: AsyncSigner<K, AddKeyOp> + AsyncSigner<K, RotateKeyOp>,
+        L: PrekeyListener<K>,
+    {
+        let mut locked_active = self.active.lock().await;
+        ActiveOps::<K>::rotate_prekey(&mut *locked_active, prekey, self.csprng.dupe()).await
     }
 
     #[instrument(skip_all)]
-    pub async fn expand_prekeys(&self) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
-        self.active
-            .lock()
-            .await
-            .expand_prekeys(self.csprng.dupe())
-            .await
+    pub async fn expand_prekeys<K: FutureForm>(&self) -> Result<Arc<Signed<AddKeyOp>>, SigningError>
+    where
+        S: AsyncSigner<K, AddKeyOp> + AsyncSigner<K, RotateKeyOp>,
+        L: PrekeyListener<K>,
+    {
+        let mut locked_active = self.active.lock().await;
+        ActiveOps::<K>::expand_prekeys(&mut *locked_active, self.csprng.dupe()).await
     }
 
     #[instrument(skip_all)]
-    pub async fn try_sign<U: Serialize + Debug>(&self, data: U) -> Result<Signed<U>, SigningError> {
+    pub async fn try_sign<U: Serialize + Debug>(&self, data: U) -> Result<Signed<U>, SigningError>
+    where
+        S: SyncSigner,
+    {
         let signer = self.active.lock().await.signer.clone();
-        signer.try_sign_async(data).await
+        signer.try_sign(data)
     }
 
     #[instrument(skip_all)]
@@ -384,7 +395,13 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn register_group(&self, root_delegation: Signed<Delegation<S, T, L>>) -> bool {
+    pub async fn register_group<K: FutureForm>(
+        &self,
+        root_delegation: Signed<Delegation<S, T, L>>,
+    ) -> bool
+    where
+        L: MembershipListener<K, S, T>,
+    {
         if self
             .groups
             .lock()
@@ -395,7 +412,7 @@ impl<
         }
 
         let group = Arc::new(Mutex::new(
-            Group::new(
+            Group::new::<K>(
                 GroupId(root_delegation.issuer.into()),
                 Arc::new(root_delegation),
                 self.delegations.dupe(),
@@ -432,24 +449,28 @@ impl<
     }
 
     #[allow(clippy::type_complexity)]
-    pub async fn add_member(
+    pub async fn add_member<K: FutureForm>(
         &self,
         to_add: Agent<S, T, L>,
         resource: &Membered<S, T, L>,
         can: Access,
         other_relevant_docs: &[Arc<Mutex<Document<S, T, L>>>], // TODO make this automatic
-    ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError> {
+    ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError>
+    where
+        S: AsyncSigner<K, CgkaOperation> + AsyncSigner<K, Delegation<S, T, L>>,
+        L: MembershipListener<K, S, T>,
+    {
         let signer = { self.active.lock().await.signer.clone() };
         match resource {
             Membered::Group(_, group) => Ok(group
                 .lock()
                 .await
-                .add_member(to_add, can, &signer, other_relevant_docs)
+                .add_member::<K>(to_add, can, &signer, other_relevant_docs)
                 .await?),
             Membered::Document(_, doc) => {
                 let mut locked = doc.lock().await;
                 locked
-                    .add_member(to_add, can, &signer, other_relevant_docs)
+                    .add_member::<K>(to_add, can, &signer, other_relevant_docs)
                     .await
             }
         }
@@ -457,12 +478,18 @@ impl<
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub async fn revoke_member(
+    pub async fn revoke_member<K: FutureForm>(
         &self,
         to_revoke: Identifier,
         retain_all_other_members: bool,
         resource: &Membered<S, T, L>,
-    ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError>
+    where
+        S: AsyncSigner<K, CgkaOperation>
+            + AsyncSigner<K, Delegation<S, T, L>>
+            + AsyncSigner<K, Revocation<S, T, L>>,
+        L: MembershipListener<K, S, T>,
+    {
         let mut relevant_docs = BTreeMap::new();
         for (doc_id, Ability { doc, .. }) in self.reachable_docs().await {
             let locked = doc.lock().await;
@@ -471,7 +498,7 @@ impl<
 
         let signer = { self.active.lock().await.signer.clone() };
         resource
-            .revoke_member(
+            .revoke_member::<K>(
                 to_revoke,
                 retain_all_other_members,
                 &signer,
@@ -481,19 +508,23 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn try_encrypt_content(
+    pub async fn try_encrypt_content<K: FutureForm>(
         &self,
         doc: Arc<Mutex<Document<S, T, L>>>,
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
-    ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError> {
+    ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError>
+    where
+        S: AsyncSigner<K, CgkaOperation>,
+        L: CgkaListener<K>,
+    {
         let signer = { self.active.lock().await.signer.clone() };
         let result = {
             let mut locked_csprng = self.csprng.lock().await;
             doc.lock()
                 .await
-                .try_encrypt_content(
+                .try_encrypt_content::<K, _>(
                     content_ref,
                     content,
                     pred_refs,
@@ -503,7 +534,7 @@ impl<
                 .await?
         };
         if let Some(op) = &result.update_op {
-            self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
+            CgkaListener::<K>::on_cgka_op(&self.event_listener, &Arc::new(op.clone())).await;
         }
         Ok(result)
     }
@@ -532,15 +563,18 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn force_pcs_update(
+    pub async fn force_pcs_update<K: FutureForm>(
         &self,
         doc: Arc<Mutex<Document<S, T, L>>>,
-    ) -> Result<Signed<CgkaOperation>, EncryptError> {
+    ) -> Result<Signed<CgkaOperation>, EncryptError>
+    where
+        S: AsyncSigner<K, CgkaOperation>,
+    {
         let signer = { self.active.lock().await.signer.clone() };
         let mut locked_csprng = self.csprng.lock().await;
         doc.lock()
             .await
-            .pcs_update(&signer, &mut *locked_csprng)
+            .pcs_update::<K, _>(&signer, &mut *locked_csprng)
             .await
     }
 
@@ -1144,10 +1178,13 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn receive_delegation(
+    pub async fn receive_delegation<K: FutureForm>(
         &self,
         static_dlg: &Signed<StaticDelegation<T>>,
-    ) -> Result<(), ReceiveStaticDelegationError<S, T, L>> {
+    ) -> Result<(), ReceiveStaticDelegationError<S, T, L>>
+    where
+        L: MembershipListener<K, S, T>,
+    {
         if self
             .delegations
             .lock()
@@ -1203,12 +1240,12 @@ impl<
                 .remove(&IndividualId(subject_id))
             {
                 found = true;
-                self.promote_individual_to_group(indie, delegation.clone())
+                self.promote_individual_to_group::<K>(indie, delegation.clone())
                     .await;
             }
         }
         if !found {
-            let group = Group::new(
+            let group = Group::new::<K>(
                 GroupId(subject_id),
                 delegation.dupe(),
                 self.delegations.dupe(),
@@ -1241,10 +1278,13 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn receive_revocation(
+    pub async fn receive_revocation<K: FutureForm>(
         &self,
         static_rev: &Signed<StaticRevocation<T>>,
-    ) -> Result<(), ReceiveStaticDelegationError<S, T, L>> {
+    ) -> Result<(), ReceiveStaticDelegationError<S, T, L>>
+    where
+        L: MembershipListener<K, S, T>,
+    {
         if self
             .revocations
             .lock()
@@ -1280,7 +1320,7 @@ impl<
                 .await?;
         } else if let Some(indie) = self.individuals.lock().await.remove(&IndividualId(id)) {
             let group = self
-                .promote_individual_to_group(indie, revocation.payload.revoke.dupe())
+                .promote_individual_to_group::<K>(indie, revocation.payload.revoke.dupe())
                 .await;
             group
                 .lock()
@@ -1289,7 +1329,7 @@ impl<
                 .await?;
         } else {
             let group = Arc::new(Mutex::new(
-                Group::new(
+                Group::new::<K>(
                     GroupId(static_rev.issuer.into()),
                     revocation.payload.revoke.dupe(),
                     self.delegations.dupe(),
@@ -1311,10 +1351,13 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn receive_static_event(
+    pub async fn receive_static_event<K: FutureForm>(
         &self,
         static_event: StaticEvent<T>,
-    ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+    ) -> Result<(), ReceiveStaticEventError<S, T, L>>
+    where
+        L: MembershipListener<K, S, T>,
+    {
         match static_event {
             StaticEvent::PrekeysExpanded(add_op) => {
                 self.receive_prekey_op(&Arc::new(*add_op).into()).await?
@@ -1323,31 +1366,37 @@ impl<
                 self.receive_prekey_op(&Arc::new(*rot_op).into()).await?
             }
             StaticEvent::CgkaOperation(cgka_op) => {
-                self.receive_cgka_op(*cgka_op).await?;
+                self.receive_cgka_op::<K>(*cgka_op).await?;
             }
-            StaticEvent::Delegated(dlg) => self.receive_delegation(&dlg).await?,
-            StaticEvent::Revoked(rev) => self.receive_revocation(&rev).await?,
+            StaticEvent::Delegated(dlg) => self.receive_delegation::<K>(&dlg).await?,
+            StaticEvent::Revoked(rev) => self.receive_revocation::<K>(&rev).await?,
         }
         Ok(())
     }
 
     #[instrument(skip_all)]
-    pub async fn receive_membership_op(
+    pub async fn receive_membership_op<K: FutureForm>(
         &self,
         static_op: &StaticMembershipOperation<T>,
-    ) -> Result<(), ReceiveStaticDelegationError<S, T, L>> {
+    ) -> Result<(), ReceiveStaticDelegationError<S, T, L>>
+    where
+        L: MembershipListener<K, S, T>,
+    {
         match static_op {
-            StaticMembershipOperation::Delegation(d) => self.receive_delegation(d).await?,
-            StaticMembershipOperation::Revocation(r) => self.receive_revocation(r).await?,
+            StaticMembershipOperation::Delegation(d) => self.receive_delegation::<K>(d).await?,
+            StaticMembershipOperation::Revocation(r) => self.receive_revocation::<K>(r).await?,
         }
         Ok(())
     }
 
     #[instrument(skip_all)]
-    pub async fn receive_cgka_op(
+    pub async fn receive_cgka_op<K: FutureForm>(
         &self,
         signed_op: Signed<CgkaOperation>,
-    ) -> Result<(), ReceiveCgkaOpError> {
+    ) -> Result<(), ReceiveCgkaOpError>
+    where
+        L: CgkaListener<K>,
+    {
         signed_op.try_verify()?;
 
         let doc_id = signed_op.payload.doc_id();
@@ -1375,7 +1424,7 @@ impl<
                     .await
                     .merge_cgka_invite_op(signed_op.clone(), &sk)?
                 {
-                    self.event_listener.on_cgka_op(&signed_op).await;
+                    CgkaListener::<K>::on_cgka_op(&self.event_listener, &signed_op).await;
                 };
                 return Ok(());
             } else if Public.individual().id() == added_id {
@@ -1385,26 +1434,29 @@ impl<
                     .await
                     .merge_cgka_invite_op(signed_op.clone(), &sk)?
                 {
-                    self.event_listener.on_cgka_op(&signed_op).await;
+                    CgkaListener::<K>::on_cgka_op(&self.event_listener, &signed_op).await;
                 }
                 return Ok(());
             }
         }
         if doc.lock().await.merge_cgka_op(signed_op.clone())? {
-            self.event_listener.on_cgka_op(&signed_op).await;
+            CgkaListener::<K>::on_cgka_op(&self.event_listener, &signed_op).await;
         }
         Ok(())
     }
 
     #[instrument(skip_all)]
-    pub async fn promote_individual_to_group(
+    pub async fn promote_individual_to_group<K: FutureForm>(
         &self,
         individual: Arc<Mutex<Individual>>,
         head: Arc<Signed<Delegation<S, T, L>>>,
-    ) -> Arc<Mutex<Group<S, T, L>>> {
+    ) -> Arc<Mutex<Group<S, T, L>>>
+    where
+        L: MembershipListener<K, S, T>,
+    {
         let indie = individual.lock().await.clone();
         let group = Arc::new(Mutex::new(
-            Group::from_individual(
+            Group::from_individual::<K>(
                 indie,
                 head,
                 self.delegations.dupe(),
@@ -1467,7 +1519,11 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn into_archive(&self) -> Archive<T> {
+    pub async fn into_archive<K: FutureForm>(&self) -> Archive<T>
+    where
+        S: AsyncSigner<K, AddKeyOp> + AsyncSigner<K, RotateKeyOp>,
+        L: PrekeyListener<K>,
+    {
         let topsorted_ops = {
             let delegations = self.delegations.lock().await;
             let revocations = self.revocations.lock().await;
@@ -1488,7 +1544,7 @@ impl<
 
         let active = {
             let locked_active = self.active.lock().await;
-            locked_active.into_archive().await
+            ActiveOps::<K>::into_archive(&*locked_active).await
         };
 
         let mut groups = HashMap::new();
@@ -1773,10 +1829,13 @@ impl<
 
     #[allow(clippy::type_complexity)]
     #[instrument(level = "trace", skip_all)]
-    pub async fn ingest_archive(
+    pub async fn ingest_archive<K: FutureForm>(
         &self,
         archive: Archive<T>,
-    ) -> Result<Vec<Arc<StaticEvent<T>>>, ReceiveStaticEventError<S, T, L>> {
+    ) -> Result<Vec<Arc<StaticEvent<T>>>, ReceiveStaticEventError<S, T, L>>
+    where
+        L: MembershipListener<K, S, T>,
+    {
         tracing::debug!("Keyhive::ingest_archive()");
         {
             let locked_active = self.active.lock().await;
@@ -1812,7 +1871,7 @@ impl<
                 StaticMembershipOperation::Revocation(signed) => StaticEvent::Revoked(signed),
             })
             .collect::<Vec<_>>();
-        Ok(self.ingest_unsorted_static_events(events).await)
+        Ok(self.ingest_unsorted_static_events::<K>(events).await)
     }
 
     #[instrument(skip_all)]
@@ -1821,10 +1880,13 @@ impl<
     }
 
     #[instrument(level = "trace", skip_all)]
-    pub async fn ingest_unsorted_static_events(
+    pub async fn ingest_unsorted_static_events<K: FutureForm>(
         &self,
         mut events: Vec<StaticEvent<T>>,
-    ) -> Vec<Arc<StaticEvent<T>>> {
+    ) -> Vec<Arc<StaticEvent<T>>>
+    where
+        L: MembershipListener<K, S, T>,
+    {
         // FIXME: Some errors might not be recoverable on future attempts
         tracing::debug!("Keyhive::ingest_unsorted_static_events()");
         for event in self.pending_events.as_ref().lock().await.iter() {
@@ -1846,7 +1908,7 @@ impl<
             let epoch_len = epoch.len();
 
             for event in epoch {
-                if let Err(e) = self.receive_static_event(event.clone()).await {
+                if let Err(e) = self.receive_static_event::<K>(event.clone()).await {
                     err = Some(e);
                     next_epoch.push(event);
                 }
@@ -1880,12 +1942,15 @@ impl<
     #[allow(clippy::type_complexity)]
     #[cfg(any(test, feature = "test_utils"))]
     #[instrument(level = "trace", skip_all)]
-    pub async fn ingest_event_table(
+    pub async fn ingest_event_table<K: FutureForm>(
         &self,
         events: HashMap<Digest<Event<S, T, L>>, Event<S, T, L>>,
-    ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+    ) -> Result<(), ReceiveStaticEventError<S, T, L>>
+    where
+        L: MembershipListener<K, S, T>,
+    {
         tracing::debug!("Keyhive::ingest_event_table");
-        self.ingest_unsorted_static_events(
+        self.ingest_unsorted_static_events::<K>(
             events.values().cloned().map(Into::into).collect::<Vec<_>>(),
         )
         .await;

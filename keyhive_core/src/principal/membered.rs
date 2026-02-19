@@ -11,6 +11,7 @@ use super::{
 };
 use crate::{
     access::Access,
+    cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{
         digest::Digest, signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable,
@@ -19,6 +20,7 @@ use crate::{
     store::{delegation::DelegationStore, revocation::RevocationStore},
 };
 use dupe::{Dupe, OptionDupedExt};
+use future_form::FutureForm;
 use futures::lock::Mutex;
 use id::MemberedId;
 use nonempty::NonEmpty;
@@ -29,11 +31,7 @@ use std::{
 
 /// The union of Agents that have updatable membership
 #[derive(Debug, Clone, Dupe)]
-pub enum Membered<
-    S: Verifiable,
-    T: ContentRef = [u8; 32],
-    L = NoListener,
-> {
+pub enum Membered<S: Verifiable, T: ContentRef = [u8; 32], L = NoListener> {
     Group(GroupId, Arc<Mutex<Group<S, T, L>>>),
     Document(DocumentId, Arc<Mutex<Document<S, T, L>>>),
 }
@@ -92,50 +90,60 @@ impl<S: Verifiable, T: ContentRef, L> Membered<S, T, L> {
     }
 
     #[allow(clippy::type_complexity)]
-    pub async fn add_member(
+    pub async fn add_member<K: FutureForm>(
         &self,
         member_to_add: Agent<S, T, L>,
         can: Access,
         signer: &S,
         other_relevant_docs: &[Arc<Mutex<Document<S, T, L>>>],
-    ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError> {
+    ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError>
+    where
+        S: AsyncSigner<K, CgkaOperation> + AsyncSigner<K, Delegation<S, T, L>>,
+        L: MembershipListener<K, S, T>,
+    {
         match self {
             Membered::Group(_, group) => Ok(group
                 .lock()
                 .await
-                .add_member(member_to_add, can, signer, other_relevant_docs)
+                .add_member::<K>(member_to_add, can, signer, other_relevant_docs)
                 .await?),
             Membered::Document(_, document) => {
                 document
                     .lock()
                     .await
-                    .add_member(member_to_add, can, signer, other_relevant_docs)
+                    .add_member::<K>(member_to_add, can, signer, other_relevant_docs)
                     .await
             }
         }
     }
 
     #[allow(clippy::type_complexity)]
-    pub async fn revoke_member(
+    pub async fn revoke_member<K: FutureForm>(
         &self,
         member_id: Identifier,
         retain_all_other_members: bool,
         signer: &S,
         relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError>
+    where
+        S: AsyncSigner<K, CgkaOperation>
+            + AsyncSigner<K, Delegation<S, T, L>>
+            + AsyncSigner<K, Revocation<S, T, L>>,
+        L: MembershipListener<K, S, T>,
+    {
         match self {
             Membered::Group(_, group) => {
                 group
                     .lock()
                     .await
-                    .revoke_member(member_id, retain_all_other_members, signer, relevant_docs)
+                    .revoke_member::<K>(member_id, retain_all_other_members, signer, relevant_docs)
                     .await
             }
             Membered::Document(_, document) => {
                 document
                     .lock()
                     .await
-                    .revoke_member(member_id, retain_all_other_members, signer, relevant_docs)
+                    .revoke_member::<K>(member_id, retain_all_other_members, signer, relevant_docs)
                     .await
             }
         }
@@ -169,17 +177,13 @@ impl<S: Verifiable, T: ContentRef, L> Membered<S, T, L> {
     }
 }
 
-impl<S: Verifiable, T: ContentRef, L> From<Group<S, T, L>>
-    for Membered<S, T, L>
-{
+impl<S: Verifiable, T: ContentRef, L> From<Group<S, T, L>> for Membered<S, T, L> {
     fn from(group: Group<S, T, L>) -> Self {
         Membered::Group(group.group_id(), Arc::new(Mutex::new(group)))
     }
 }
 
-impl<S: Verifiable, T: ContentRef, L> From<Document<S, T, L>>
-    for Membered<S, T, L>
-{
+impl<S: Verifiable, T: ContentRef, L> From<Document<S, T, L>> for Membered<S, T, L> {
     fn from(document: Document<S, T, L>) -> Self {
         Membered::Document(document.doc_id(), Arc::new(Mutex::new(document)))
     }

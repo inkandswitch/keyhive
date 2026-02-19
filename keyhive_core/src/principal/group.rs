@@ -82,14 +82,17 @@ pub struct Group<S: Verifiable, T: ContentRef = [u8; 32], L = NoListener> {
 
 impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
     #[tracing::instrument(skip_all)]
-    pub async fn new(
+    pub async fn new<K: FutureForm>(
         group_id: GroupId,
         head: Arc<Signed<Delegation<S, T, L>>>,
         delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
         listener: L,
-    ) -> Self {
-        listener.on_delegation(&head).await;
+    ) -> Self
+    where
+        L: MembershipListener<K, S, T>,
+    {
+        MembershipListener::<K, S, T>::on_delegation(&listener, &head).await;
         let mut group = Self {
             id_or_indie: IdOrIndividual::GroupId(group_id),
             members: HashMap::new(),
@@ -103,14 +106,17 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
     }
 
     #[tracing::instrument(skip_all)]
-    pub async fn from_individual(
+    pub async fn from_individual<K: FutureForm>(
         individual: Individual,
         head: Arc<Signed<Delegation<S, T, L>>>,
         delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
         listener: L,
-    ) -> Self {
-        listener.on_delegation(&head).await;
+    ) -> Self
+    where
+        L: MembershipListener<K, S, T>,
+    {
+        MembershipListener::<K, S, T>::on_delegation(&listener, &head).await;
         let mut group = Self {
             id_or_indie: IdOrIndividual::Individual(individual),
             members: HashMap::new(),
@@ -421,7 +427,7 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
         after_content: BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError>
     where
-        S: AsyncSigner<K, CgkaOperation>,
+        S: AsyncSigner<K, CgkaOperation> + AsyncSigner<K, Delegation<S, T, L>>,
         L: MembershipListener<K, S, T>,
     {
         let proof = if self.verifying_key() == signer.verifying_key() {
@@ -506,13 +512,19 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
 
     #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip_all)]
-    pub async fn revoke_member(
+    pub async fn revoke_member<K: FutureForm>(
         &mut self,
         member_to_remove: Identifier,
         retain_all_other_members: bool,
         signer: &S,
         after_content: &BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError>
+    where
+        S: AsyncSigner<K, CgkaOperation>
+            + AsyncSigner<K, Delegation<S, T, L>>
+            + AsyncSigner<K, Revocation<S, T, L>>,
+        L: MembershipListener<K, S, T>,
+    {
         let vk = signer.verifying_key();
         let mut revocations = vec![];
         let og_dlgs: Vec<_> = self.members.values().flatten().cloned().collect();
@@ -610,7 +622,7 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
         }
 
         for r in revocations.iter() {
-            self.listener.on_revocation(r).await
+            MembershipListener::<K, S, T>::on_revocation(&self.listener, r).await
         }
 
         let mut cgka_ops = Vec::new();
@@ -641,7 +653,7 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
             };
             for doc in &docs {
                 let mut locked_doc = doc.lock().await;
-                if let Some(op) = locked_doc.remove_cgka_member(id, signer).await? {
+                if let Some(op) = locked_doc.remove_cgka_member::<K>(id, signer).await? {
                     cgka_ops.push(op);
                 }
             }
@@ -658,7 +670,7 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
                 if let Some(proof) = &dlg.payload.proof {
                     if proof.payload.delegate.id() == member_to_remove {
                         let AddMemberUpdate { delegation, .. } = self
-                            .add_member_with_manual_content(
+                            .add_member_with_manual_content::<K>(
                                 dlg.payload.delegate.dupe(),
                                 dlg.payload.can,
                                 signer,

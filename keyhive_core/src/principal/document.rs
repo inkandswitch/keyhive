@@ -229,7 +229,8 @@ impl<S: Verifiable, T: ContentRef, L> Document<S, T, L> {
         other_relevant_docs: &[Arc<Mutex<Document<S, T, L>>>],
     ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError>
     where
-        S: AsyncSigner<K, CgkaOperation>,
+        S: AsyncSigner<K, CgkaOperation> + AsyncSigner<K, Delegation<S, T, L>>,
+        L: MembershipListener<K, S, T>,
     {
         let mut after_content: BTreeMap<_, _> =
             join_all(other_relevant_docs.iter().map(|doc| async {
@@ -247,7 +248,7 @@ impl<S: Verifiable, T: ContentRef, L> Document<S, T, L> {
 
         let mut update = self
             .group
-            .add_member_with_manual_content(member_to_add.dupe(), can, signer, after_content)
+            .add_member_with_manual_content::<K>(member_to_add.dupe(), can, signer, after_content)
             .await?;
 
         if can.is_reader() {
@@ -296,7 +297,10 @@ impl<S: Verifiable, T: ContentRef, L> Document<S, T, L> {
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError>
     where
-        S: AsyncSigner<K, CgkaOperation>,
+        S: AsyncSigner<K, CgkaOperation>
+            + AsyncSigner<K, Delegation<S, T, L>>
+            + AsyncSigner<K, Revocation<S, T, L>>,
+        L: MembershipListener<K, S, T>,
     {
         let RevokeMemberUpdate {
             revocations,
@@ -304,7 +308,7 @@ impl<S: Verifiable, T: ContentRef, L> Document<S, T, L> {
             cgka_ops,
         } = self
             .group
-            .revoke_member(
+            .revoke_member::<K>(
                 member_id,
                 retain_all_other_members,
                 signer,
