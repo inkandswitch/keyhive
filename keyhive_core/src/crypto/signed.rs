@@ -17,7 +17,8 @@ use tracing::instrument;
 /// A wrapper to add a signature and signer information to an arbitrary payload.
 #[derive(Clone, Derivative, Serialize, Deserialize)]
 #[derivative(Debug, PartialEq, Eq, Hash)]
-pub struct Signed<T: Serialize + Debug> {
+#[serde(bound(serialize = "T: Serialize", deserialize = "T: serde::de::DeserializeOwned"))]
+pub struct Signed<T: Debug> {
     /// The data that was signed.
     #[derivative(PartialEq = "ignore", Hash = "ignore")]
     pub(crate) payload: T,
@@ -47,7 +48,25 @@ fn hash_signature<H: Hasher>(signature: &ed25519_dalek::Signature, state: &mut H
     signature.to_bytes().hash(state);
 }
 
-impl<T: Serialize + Debug> Signed<T> {
+// Methods that don't require T: Serialize
+impl<T: Debug> Signed<T> {
+    /// Construct a new `Signed` value from its parts.
+    ///
+    /// This should only be used when implementing custom signers.
+    /// Prefer using [`SyncSigner::try_sign_sync`] or [`AsyncSignerLocal::try_sign_async`]
+    /// instead.
+    pub fn new(
+        payload: T,
+        issuer: ed25519_dalek::VerifyingKey,
+        signature: ed25519_dalek::Signature,
+    ) -> Self {
+        Self {
+            payload,
+            issuer,
+            signature,
+        }
+    }
+
     /// Getter for the payload.
     pub fn payload(&self) -> &T {
         &self.payload
@@ -68,6 +87,26 @@ impl<T: Serialize + Debug> Signed<T> {
         &self.signature
     }
 
+    /// Map over the payload of the signed data.
+    ///
+    /// This is primarily useful if you need to convert the payload to a different type
+    /// while preserving the signature and issuer information.
+    ///
+    /// # Warning
+    ///
+    /// This changes the payload without re-signing, so verification will fail
+    /// if the new payload serializes differently than the original.
+    pub fn map<U: Debug, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
+        Signed {
+            payload: f(self.payload),
+            issuer: self.issuer,
+            signature: self.signature,
+        }
+    }
+}
+
+// Methods that require T: Serialize (for verification)
+impl<T: Serialize + Debug> Signed<T> {
     /// Verify the payload and signature against the issuer's verifying key.
     ///
     /// # Examples
@@ -87,23 +126,6 @@ impl<T: Serialize + Debug> Signed<T> {
         Ok(self
             .verifying_key()
             .verify(buf.as_slice(), &self.signature)?)
-    }
-
-    /// Map over the payload of the signed data.
-    ///
-    /// This is primarily useful if you need to convert the payload to a different type
-    /// while preserving the signature and issuer information.
-    ///
-    /// # Warning
-    ///
-    /// This changes the payload without re-signing, so verification will fail
-    /// if the new payload serializes differently than the original.
-    pub fn map<U: Serialize + Debug, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
-        Signed {
-            payload: f(self.payload),
-            issuer: self.issuer,
-            signature: self.signature,
-        }
     }
 }
 
@@ -137,7 +159,7 @@ mod arb {
     }
 }
 
-impl<T: Serialize + PartialOrd + Debug> PartialOrd for Signed<T> {
+impl<T: PartialOrd + Debug> PartialOrd for Signed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self
             .verifying_key()
@@ -157,7 +179,7 @@ impl<T: Serialize + PartialOrd + Debug> PartialOrd for Signed<T> {
     }
 }
 
-impl<T: Serialize + Ord + Debug> Ord for Signed<T> {
+impl<T: Ord + Debug> Ord for Signed<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         match self
             .verifying_key()
@@ -173,7 +195,7 @@ impl<T: Serialize + Ord + Debug> Ord for Signed<T> {
     }
 }
 
-impl<T: Dupe + Serialize + Debug> Dupe for Signed<T> {
+impl<T: Dupe + Debug> Dupe for Signed<T> {
     fn dupe(&self) -> Self {
         Signed {
             payload: self.payload.dupe(),
@@ -183,7 +205,7 @@ impl<T: Dupe + Serialize + Debug> Dupe for Signed<T> {
     }
 }
 
-impl<T: Serialize + Debug> Verifiable for Signed<T> {
+impl<T: Debug> Verifiable for Signed<T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.issuer
     }

@@ -4,13 +4,13 @@ use super::{
 };
 use crate::{
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{digest::Digest, signed::Signed, signer::async_signer::{AsyncSigner, AsyncSignerLocal, AsyncSignerSend}},
     listener::membership::MembershipListener,
     principal::{agent::id::AgentId, document::id::DocumentId, identifier::Identifier},
 };
 use derive_where::derive_where;
 use dupe::Dupe;
-use future_form::FutureForm;
+use future_form::{FutureForm, Local, Sendable};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -72,11 +72,34 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Serialize for Revocation<K, S, T, L> {
-    fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
-        StaticRevocation::from(self.clone()).serialize(serializer)
-    }
+macro_rules! impl_serialize_revocation {
+    (sendable) => {
+        impl<
+            S: AsyncSignerSend + Send + Sync,
+            T: ContentRef,
+            L: MembershipListener<Sendable, S, T> + Send + Sync,
+        > Serialize for Revocation<Sendable, S, T, L> {
+            impl_serialize_revocation!(@body Sendable);
+        }
+    };
+    (local) => {
+        impl<
+            S: AsyncSignerLocal,
+            T: ContentRef,
+            L: MembershipListener<Local, S, T>,
+        > Serialize for Revocation<Local, S, T, L> {
+            impl_serialize_revocation!(@body Local);
+        }
+    };
+    (@body $K:ty) => {
+        fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
+            StaticRevocation::from(self.clone()).serialize(serializer)
+        }
+    };
 }
+
+impl_serialize_revocation!(sendable);
+impl_serialize_revocation!(local);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
@@ -91,14 +114,27 @@ pub struct StaticRevocation<T: ContentRef> {
     pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> From<Revocation<K, S, T, L>>
-    for StaticRevocation<T>
-{
-    fn from(revocation: Revocation<K, S, T, L>) -> Self {
-        Self {
-            revoke: Digest::hash(revocation.revoke.as_ref()).into(),
-            proof: revocation.proof.map(|p| Digest::hash(p.as_ref()).into()),
-            after_content: revocation.after_content,
+macro_rules! impl_from_revocation_for_static {
+    (sendable) => {
+        impl<S: AsyncSignerSend + Send + Sync, T: ContentRef, L: MembershipListener<Sendable, S, T> + Send + Sync> From<Revocation<Sendable, S, T, L>> for StaticRevocation<T> {
+            impl_from_revocation_for_static!(@body Sendable);
         }
-    }
+    };
+    (local) => {
+        impl<S: AsyncSignerLocal, T: ContentRef, L: MembershipListener<Local, S, T>> From<Revocation<Local, S, T, L>> for StaticRevocation<T> {
+            impl_from_revocation_for_static!(@body Local);
+        }
+    };
+    (@body $K:ty) => {
+        fn from(revocation: Revocation<$K, S, T, L>) -> Self {
+            Self {
+                revoke: Digest::hash(revocation.revoke.as_ref()).into(),
+                proof: revocation.proof.map(|p| Digest::hash(p.as_ref()).into()),
+                after_content: revocation.after_content,
+            }
+        }
+    };
 }
+
+impl_from_revocation_for_static!(sendable);
+impl_from_revocation_for_static!(local);

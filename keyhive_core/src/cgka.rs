@@ -16,7 +16,7 @@ use crate::{
         encrypted::EncryptedContent,
         share_key::{ShareKey, ShareSecretKey},
         signed::Signed,
-        signer::async_signer::AsyncSigner,
+        signer::async_signer::{AsyncSignerLocal, AsyncSignerSend},
         siv::Siv,
         symmetric_key::SymmetricKey,
     },
@@ -25,7 +25,6 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use beekem::BeeKem;
-use future_form::FutureForm;
 use derivative::Derivative;
 use dupe::Dupe;
 use error::CgkaError;
@@ -87,18 +86,325 @@ fn hashed_key_bytes<T: Serialize, V, H: Hasher>(hmap: &HashMap<Digest<T>, V>, st
         .hash(state)
 }
 
-impl Cgka {
-    pub async fn new<K: FutureForm + ?Sized, S: AsyncSigner<K>>(
-        doc_id: DocumentId,
-        owner_id: IndividualId,
-        owner_pk: ShareKey,
-        signer: &S,
-    ) -> Result<Self, CgkaError> {
-        let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk);
-        let signed_op = signer.try_sign_async(init_add_op).await?;
-        Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op)
-    }
+macro_rules! impl_cgka_signing {
+    (sendable) => {
+        impl Cgka {
+            pub async fn new_sendable<S: AsyncSignerSend>(
+                doc_id: DocumentId,
+                owner_id: IndividualId,
+                owner_pk: ShareKey,
+                signer: &S,
+            ) -> Result<Self, CgkaError> {
+                let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk);
+                let signed_op = signer.try_sign_async(init_add_op).await?;
+                Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op)
+            }
 
+            #[instrument(skip_all)]
+            pub async fn add_sendable<S: AsyncSignerSend>(
+                &mut self,
+                id: IndividualId,
+                pk: ShareKey,
+                signer: &S,
+            ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+                if self.tree.contains_id(&id) {
+                    return Ok(None);
+                }
+                if self.should_replay() {
+                    self.replay_ops_graph()?;
+                }
+                let leaf_index = self.tree.push_leaf(id, pk.into());
+                let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
+                let add_predecessors = Vec::from_iter(self.ops_graph.add_heads.iter().cloned());
+                let op = CgkaOperation::Add {
+                    added_id: id,
+                    pk,
+                    leaf_index,
+                    predecessors,
+                    add_predecessors,
+                    doc_id: self.doc_id,
+                };
+
+                let signed_op = signer.try_sign_async(op).await?;
+                self.ops_graph.add_local_op(&signed_op);
+                Ok(Some(signed_op))
+            }
+
+            pub async fn add_multiple_sendable<S: AsyncSignerSend>(
+                &mut self,
+                members: NonEmpty<(IndividualId, ShareKey)>,
+                signer: &S,
+            ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+                let mut ops = Vec::new();
+                for m in members {
+                    ops.push(self.add_sendable(m.0, m.1, signer).await?);
+                }
+                Ok(ops.into_iter().flatten().collect())
+            }
+
+            #[instrument(skip_all)]
+            pub async fn remove_sendable<S: AsyncSignerSend>(
+                &mut self,
+                id: IndividualId,
+                signer: &S,
+            ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+                if !self.tree.contains_id(&id) {
+                    return Ok(None);
+                }
+                if self.should_replay() {
+                    self.replay_ops_graph()?;
+                }
+                if self.group_size() == 1 {
+                    return Err(CgkaError::RemoveLastMember);
+                }
+                let (leaf_idx, removed_keys) = self.tree.remove_id(id)?;
+                let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
+                let op = CgkaOperation::Remove {
+                    id,
+                    leaf_idx,
+                    removed_keys,
+                    predecessors,
+                    doc_id: self.doc_id,
+                };
+                let signed_op = signer.try_sign_async(op).await?;
+                self.ops_graph.add_local_op(&signed_op);
+                Ok(Some(signed_op))
+            }
+
+            #[instrument(skip_all)]
+            pub async fn update_sendable<S: AsyncSignerSend, R: rand::CryptoRng + rand::RngCore>(
+                &mut self,
+                new_pk: ShareKey,
+                new_sk: ShareSecretKey,
+                signer: &S,
+                csprng: &mut R,
+            ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
+                if self.should_replay() {
+                    self.replay_ops_graph()?;
+                }
+                self.owner_sks.insert(new_pk, new_sk);
+                let maybe_key_and_path =
+                    self.tree
+                        .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
+                if let Some((pcs_key, new_path)) = maybe_key_and_path {
+                    let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
+                    let op = CgkaOperation::Update {
+                        id: self.owner_id,
+                        new_path: Box::new(new_path),
+                        predecessors,
+                        doc_id: self.doc_id,
+                    };
+
+                    let signed_op = signer.try_sign_async(op).await?;
+                    self.ops_graph.add_local_op(&signed_op);
+                    self.insert_pcs_key(&pcs_key, Digest::hash(&signed_op));
+                    Ok((pcs_key, signed_op))
+                } else {
+                    Err(CgkaError::IdentifierNotFound)
+                }
+            }
+
+            #[instrument(skip_all)]
+            pub async fn new_app_secret_for_sendable<T: ContentRef, S: AsyncSignerSend, R: rand::CryptoRng + rand::RngCore>(
+                &mut self,
+                content_ref: &T,
+                content: &[u8],
+                pred_refs: &Vec<T>,
+                signer: &S,
+                csprng: &mut R,
+            ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
+                let mut op = None;
+                let current_pcs_key = if !self.has_pcs_key() {
+                    let new_share_secret_key = ShareSecretKey::generate(csprng);
+                    let new_share_key = new_share_secret_key.share_key();
+                    let (pcs_key, update_op) = self
+                        .update_sendable(new_share_key, new_share_secret_key, signer, csprng)
+                        .await?;
+                    self.insert_pcs_key(&pcs_key, Digest::hash(&update_op));
+                    op = Some(update_op);
+                    pcs_key
+                } else {
+                    self.pcs_key_from_tree_root()?
+                };
+                let pcs_key_hash = Digest::hash(&current_pcs_key);
+                let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id)
+                    .map_err(|_e| CgkaError::Conversion)?;
+                Ok((
+                    current_pcs_key.derive_application_secret(
+                        &nonce,
+                        content_ref,
+                        &Digest::hash(pred_refs),
+                        self.pcs_key_ops
+                            .get(&pcs_key_hash)
+                            .expect("PcsKey hash should be present becuase we derived it above"),
+                    ),
+                    op,
+                ))
+            }
+        }
+    };
+    (local) => {
+        impl Cgka {
+            pub async fn new_local<S: AsyncSignerLocal>(
+                doc_id: DocumentId,
+                owner_id: IndividualId,
+                owner_pk: ShareKey,
+                signer: &S,
+            ) -> Result<Self, CgkaError> {
+                let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk);
+                let signed_op = signer.try_sign_async(init_add_op).await?;
+                Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op)
+            }
+
+            #[instrument(skip_all)]
+            pub async fn add_local<S: AsyncSignerLocal>(
+                &mut self,
+                id: IndividualId,
+                pk: ShareKey,
+                signer: &S,
+            ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+                if self.tree.contains_id(&id) {
+                    return Ok(None);
+                }
+                if self.should_replay() {
+                    self.replay_ops_graph()?;
+                }
+                let leaf_index = self.tree.push_leaf(id, pk.into());
+                let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
+                let add_predecessors = Vec::from_iter(self.ops_graph.add_heads.iter().cloned());
+                let op = CgkaOperation::Add {
+                    added_id: id,
+                    pk,
+                    leaf_index,
+                    predecessors,
+                    add_predecessors,
+                    doc_id: self.doc_id,
+                };
+
+                let signed_op = signer.try_sign_async(op).await?;
+                self.ops_graph.add_local_op(&signed_op);
+                Ok(Some(signed_op))
+            }
+
+            pub async fn add_multiple_local<S: AsyncSignerLocal>(
+                &mut self,
+                members: NonEmpty<(IndividualId, ShareKey)>,
+                signer: &S,
+            ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+                let mut ops = Vec::new();
+                for m in members {
+                    ops.push(self.add_local(m.0, m.1, signer).await?);
+                }
+                Ok(ops.into_iter().flatten().collect())
+            }
+
+            #[instrument(skip_all)]
+            pub async fn remove_local<S: AsyncSignerLocal>(
+                &mut self,
+                id: IndividualId,
+                signer: &S,
+            ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+                if !self.tree.contains_id(&id) {
+                    return Ok(None);
+                }
+                if self.should_replay() {
+                    self.replay_ops_graph()?;
+                }
+                if self.group_size() == 1 {
+                    return Err(CgkaError::RemoveLastMember);
+                }
+                let (leaf_idx, removed_keys) = self.tree.remove_id(id)?;
+                let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
+                let op = CgkaOperation::Remove {
+                    id,
+                    leaf_idx,
+                    removed_keys,
+                    predecessors,
+                    doc_id: self.doc_id,
+                };
+                let signed_op = signer.try_sign_async(op).await?;
+                self.ops_graph.add_local_op(&signed_op);
+                Ok(Some(signed_op))
+            }
+
+            #[instrument(skip_all)]
+            pub async fn update_local<S: AsyncSignerLocal, R: rand::CryptoRng + rand::RngCore>(
+                &mut self,
+                new_pk: ShareKey,
+                new_sk: ShareSecretKey,
+                signer: &S,
+                csprng: &mut R,
+            ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
+                if self.should_replay() {
+                    self.replay_ops_graph()?;
+                }
+                self.owner_sks.insert(new_pk, new_sk);
+                let maybe_key_and_path =
+                    self.tree
+                        .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
+                if let Some((pcs_key, new_path)) = maybe_key_and_path {
+                    let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
+                    let op = CgkaOperation::Update {
+                        id: self.owner_id,
+                        new_path: Box::new(new_path),
+                        predecessors,
+                        doc_id: self.doc_id,
+                    };
+
+                    let signed_op = signer.try_sign_async(op).await?;
+                    self.ops_graph.add_local_op(&signed_op);
+                    self.insert_pcs_key(&pcs_key, Digest::hash(&signed_op));
+                    Ok((pcs_key, signed_op))
+                } else {
+                    Err(CgkaError::IdentifierNotFound)
+                }
+            }
+
+            #[instrument(skip_all)]
+            pub async fn new_app_secret_for_local<T: ContentRef, S: AsyncSignerLocal, R: rand::CryptoRng + rand::RngCore>(
+                &mut self,
+                content_ref: &T,
+                content: &[u8],
+                pred_refs: &Vec<T>,
+                signer: &S,
+                csprng: &mut R,
+            ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
+                let mut op = None;
+                let current_pcs_key = if !self.has_pcs_key() {
+                    let new_share_secret_key = ShareSecretKey::generate(csprng);
+                    let new_share_key = new_share_secret_key.share_key();
+                    let (pcs_key, update_op) = self
+                        .update_local(new_share_key, new_share_secret_key, signer, csprng)
+                        .await?;
+                    self.insert_pcs_key(&pcs_key, Digest::hash(&update_op));
+                    op = Some(update_op);
+                    pcs_key
+                } else {
+                    self.pcs_key_from_tree_root()?
+                };
+                let pcs_key_hash = Digest::hash(&current_pcs_key);
+                let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id)
+                    .map_err(|_e| CgkaError::Conversion)?;
+                Ok((
+                    current_pcs_key.derive_application_secret(
+                        &nonce,
+                        content_ref,
+                        &Digest::hash(pred_refs),
+                        self.pcs_key_ops
+                            .get(&pcs_key_hash)
+                            .expect("PcsKey hash should be present becuase we derived it above"),
+                    ),
+                    op,
+                ))
+            }
+        }
+    };
+}
+
+impl_cgka_signing!(sendable);
+impl_cgka_signing!(local);
+
+impl Cgka {
     #[instrument(skip_all)]
     pub fn new_from_init_add(
         doc_id: DocumentId,
@@ -146,54 +452,6 @@ impl Cgka {
         self.ops_graph.cgka_ops.len()
     }
 
-    /// Derive an [`ApplicationSecret`] from our current [`PcsKey`] for new content
-    /// to encrypt.
-    ///
-    /// If the tree does not currently contain a root key, then we must first
-    /// perform a leaf key rotation.
-    #[instrument(skip_all)]
-    pub async fn new_app_secret_for<
-        K: FutureForm + ?Sized,
-        S: AsyncSigner<K>,
-        T: ContentRef,
-        R: rand::CryptoRng + rand::RngCore,
-    >(
-        &mut self,
-        content_ref: &T,
-        content: &[u8],
-        pred_refs: &Vec<T>,
-        signer: &S,
-        csprng: &mut R,
-    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
-        let mut op = None;
-        let current_pcs_key = if !self.has_pcs_key() {
-            let new_share_secret_key = ShareSecretKey::generate(csprng);
-            let new_share_key = new_share_secret_key.share_key();
-            let (pcs_key, update_op) = self
-                .update(new_share_key, new_share_secret_key, signer, csprng)
-                .await?;
-            self.insert_pcs_key(&pcs_key, Digest::hash(&update_op));
-            op = Some(update_op);
-            pcs_key
-        } else {
-            self.pcs_key_from_tree_root()?
-        };
-        let pcs_key_hash = Digest::hash(&current_pcs_key);
-        let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id)
-            .map_err(|_e| CgkaError::Conversion)?;
-        Ok((
-            current_pcs_key.derive_application_secret(
-                &nonce,
-                content_ref,
-                &Digest::hash(pred_refs),
-                self.pcs_key_ops
-                    .get(&pcs_key_hash)
-                    .expect("PcsKey hash should be present becuase we derived it above"),
-            ),
-            op,
-        ))
-    }
-
     /// Derive a decryption key for encrypted data.
     ///
     /// We must first derive a [`PcsKey`] for the encrypted data's associated
@@ -221,115 +479,6 @@ impl Cgka {
         self.tree.has_root_key()
             && self.ops_graph.has_single_head()
             && self.ops_graph.add_heads.len() < 2
-    }
-
-    /// Add member to group.
-    #[instrument(skip_all)]
-    pub async fn add<K: FutureForm + ?Sized, S: AsyncSigner<K>>(
-        &mut self,
-        id: IndividualId,
-        pk: ShareKey,
-        signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        if self.tree.contains_id(&id) {
-            return Ok(None);
-        }
-        if self.should_replay() {
-            self.replay_ops_graph()?;
-        }
-        let leaf_index = self.tree.push_leaf(id, pk.into());
-        let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
-        let add_predecessors = Vec::from_iter(self.ops_graph.add_heads.iter().cloned());
-        let op = CgkaOperation::Add {
-            added_id: id,
-            pk,
-            leaf_index,
-            predecessors,
-            add_predecessors,
-            doc_id: self.doc_id,
-        };
-
-        let signed_op = signer.try_sign_async(op).await?;
-        self.ops_graph.add_local_op(&signed_op);
-        Ok(Some(signed_op))
-    }
-
-    /// Add multiple members to group.
-    pub async fn add_multiple<K: FutureForm + ?Sized, S: AsyncSigner<K>>(
-        &mut self,
-        members: NonEmpty<(IndividualId, ShareKey)>,
-        signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
-        let mut ops = Vec::new();
-        for m in members {
-            ops.push(self.add(m.0, m.1, signer).await?);
-        }
-        Ok(ops.into_iter().flatten().collect())
-    }
-
-    /// Remove member from group.
-    #[instrument(skip_all)]
-    pub async fn remove<K: FutureForm + ?Sized, S: AsyncSigner<K>>(
-        &mut self,
-        id: IndividualId,
-        signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        if !self.tree.contains_id(&id) {
-            return Ok(None);
-        }
-        if self.should_replay() {
-            self.replay_ops_graph()?;
-        }
-        if self.group_size() == 1 {
-            return Err(CgkaError::RemoveLastMember);
-        }
-        let (leaf_idx, removed_keys) = self.tree.remove_id(id)?;
-        let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
-        let op = CgkaOperation::Remove {
-            id,
-            leaf_idx,
-            removed_keys,
-            predecessors,
-            doc_id: self.doc_id,
-        };
-        let signed_op = signer.try_sign_async(op).await?;
-        self.ops_graph.add_local_op(&signed_op);
-        Ok(Some(signed_op))
-    }
-
-    /// Update leaf key pair for this Identifier.
-    /// This also triggers a tree path update for that leaf.
-    #[instrument(skip_all)]
-    pub async fn update<K: FutureForm + ?Sized, S: AsyncSigner<K>, R: rand::CryptoRng + rand::RngCore>(
-        &mut self,
-        new_pk: ShareKey,
-        new_sk: ShareSecretKey,
-        signer: &S,
-        csprng: &mut R,
-    ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
-        if self.should_replay() {
-            self.replay_ops_graph()?;
-        }
-        self.owner_sks.insert(new_pk, new_sk);
-        let maybe_key_and_path =
-            self.tree
-                .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
-        if let Some((pcs_key, new_path)) = maybe_key_and_path {
-            let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
-            let op = CgkaOperation::Update {
-                id: self.owner_id,
-                new_path: Box::new(new_path),
-                predecessors,
-                doc_id: self.doc_id,
-            };
-
-            let signed_op = signer.try_sign_async(op).await?;
-            self.ops_graph.add_local_op(&signed_op);
-            self.insert_pcs_key(&pcs_key, Digest::hash(&signed_op));
-            Ok((pcs_key, signed_op))
-        } else {
-            Err(CgkaError::IdentifierNotFound)
-        }
     }
 
     /// The current group size

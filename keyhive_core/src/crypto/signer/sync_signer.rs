@@ -1,6 +1,6 @@
 //! Synchronous signer trait.
 
-use super::async_signer::AsyncSigner;
+use super::async_signer::{AsyncSigner, AsyncSignerLocal, AsyncSignerSend};
 use crate::{
     crypto::{
         signed::{Signed, SigningError},
@@ -105,15 +105,17 @@ impl<T: SyncSigner + Send + Sync> AsyncSigner<Sendable> for T {
         payload_bytes: &'a [u8],
     ) -> <Sendable as FutureForm>::Future<'a, Result<ed25519_dalek::Signature, SigningError>> {
         let result = self.try_sign_bytes_sync(payload_bytes);
-        Box::pin(std::future::ready(result))
+        Sendable::from_future(async move { result })
     }
+}
 
+impl<T: SyncSigner + Send + Sync> AsyncSignerSend for T {
     fn try_sign_async<'a, P: Serialize + std::fmt::Debug + Send + 'a>(
         &'a self,
         payload: P,
     ) -> <Sendable as FutureForm>::Future<'a, Result<Signed<P>, SigningError>> {
         let result = self.try_sign_sync(payload);
-        Box::pin(std::future::ready(result))
+        Sendable::from_future(async move { result })
     }
 }
 
@@ -124,8 +126,10 @@ impl<T: SyncSigner> AsyncSigner<Local> for T {
     ) -> <Local as FutureForm>::Future<'a, Result<ed25519_dalek::Signature, SigningError>> {
         Local::from_future(async move { self.try_sign_bytes_sync(payload_bytes) })
     }
+}
 
-    fn try_sign_async<'a, P: Serialize + std::fmt::Debug + Send + 'a>(
+impl<T: SyncSigner> AsyncSignerLocal for T {
+    fn try_sign_async<'a, P: Serialize + std::fmt::Debug + 'a>(
         &'a self,
         payload: P,
     ) -> <Local as FutureForm>::Future<'a, Result<Signed<P>, SigningError>> {

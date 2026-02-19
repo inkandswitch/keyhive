@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 /// However the references contained in `StaticEvent`s may be missing
 /// dependencies, unlike [`Event`][super::Event]s.
 #[derive(Debug, Clone, PartialEq, Eq, From, Hash, TryInto, Serialize, Deserialize)]
+#[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
 pub enum StaticEvent<T: ContentRef = [u8; 32]> {
     /// Prekeys were expanded.
     PrekeysExpanded(Box<Signed<AddKeyOp>>),

@@ -67,7 +67,7 @@ impl JsKeyhive {
         init_span!("JsKeyhive::init");
         tracing::info!("JsKeyhive::init");
         Ok(JsKeyhive(
-            Keyhive::generate(
+            Keyhive::<Local, JsSigner, JsChangeId, Vec<u8>, JsCiphertextStore, JsEventHandler, OsRng>::generate(
                 signer.clone(),
                 ciphertext_store.clone(),
                 JsEventHandler(event_handler.clone()),

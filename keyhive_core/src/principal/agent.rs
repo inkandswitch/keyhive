@@ -10,14 +10,14 @@ use super::{
 };
 use crate::{
     content::reference::ContentRef,
-    crypto::{share_key::ShareKey, signer::async_signer::AsyncSigner, verifiable::Verifiable},
+    crypto::{share_key::ShareKey, signer::async_signer::{AsyncSigner, AsyncSignerLocal, AsyncSignerSend}, verifiable::Verifiable},
     listener::membership::MembershipListener,
 };
 use derive_more::{From, TryInto};
 use derive_where::derive_where;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
-use future_form::FutureForm;
+use future_form::{FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use std::{
     collections::{HashMap, HashSet},
@@ -49,7 +49,8 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> Agent<K, S, T, L> {
+// Methods that don't require Send + Sync bounds
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Agent<K, S, T, L> {
     pub fn id(&self) -> Identifier {
         match self {
             Agent::Active(id, _) => (*id).into(),
@@ -67,7 +68,20 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
             Agent::Document(id, _) => (*id).into(),
         }
     }
+}
 
+macro_rules! impl_agent {
+    (sendable) => {
+        impl<S: AsyncSignerSend + Send + Sync, T: ContentRef, L: MembershipListener<Sendable, S, T> + Send + Sync> Agent<Sendable, S, T, L> {
+            impl_agent!(@body Sendable);
+        }
+    };
+    (local) => {
+        impl<S: AsyncSignerLocal, T: ContentRef, L: MembershipListener<Local, S, T>> Agent<Local, S, T, L> {
+            impl_agent!(@body Local);
+        }
+    };
+    (@body $K:ty) => {
     pub async fn individual_ids(&self) -> HashSet<IndividualId> {
         let mut ids = HashSet::new();
 
@@ -179,15 +193,32 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
             }
         }
     }
+    };
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T>> From<Active<K, S, T, L>>
-    for Agent<K, S, T, L>
-{
-    fn from(a: Active<K, S, T, L>) -> Self {
-        Agent::Active(a.id(), Arc::new(Mutex::new(a)))
-    }
+impl_agent!(sendable);
+impl_agent!(local);
+
+
+macro_rules! impl_agent_from_active {
+    (sendable) => {
+        impl<S: AsyncSignerSend + Send + Sync, T: ContentRef, L: MembershipListener<Sendable, S, T>> From<Active<Sendable, S, T, L>> for Agent<Sendable, S, T, L> {
+            fn from(a: Active<Sendable, S, T, L>) -> Self {
+                Agent::Active(a.id(), Arc::new(Mutex::new(a)))
+            }
+        }
+    };
+    (local) => {
+        impl<S: AsyncSignerLocal, T: ContentRef, L: MembershipListener<Local, S, T>> From<Active<Local, S, T, L>> for Agent<Local, S, T, L> {
+            fn from(a: Active<Local, S, T, L>) -> Self {
+                Agent::Active(a.id(), Arc::new(Mutex::new(a)))
+            }
+        }
+    };
 }
+
+impl_agent_from_active!(sendable);
+impl_agent_from_active!(local);
 
 impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<Individual>
     for Agent<K, S, T, L>
@@ -197,13 +228,25 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> From<Group<K, S, T, L>>
-    for Agent<K, S, T, L>
-{
-    fn from(g: Group<K, S, T, L>) -> Self {
-        Agent::Group(g.group_id(), Arc::new(Mutex::new(g)))
-    }
+macro_rules! impl_agent_from_group {
+    (sendable) => {
+        impl<S: AsyncSignerSend + Send + Sync, T: ContentRef, L: MembershipListener<Sendable, S, T> + Send + Sync> From<Group<Sendable, S, T, L>> for Agent<Sendable, S, T, L> {
+            fn from(g: Group<Sendable, S, T, L>) -> Self {
+                Agent::Group(g.group_id(), Arc::new(Mutex::new(g)))
+            }
+        }
+    };
+    (local) => {
+        impl<S: AsyncSignerLocal, T: ContentRef, L: MembershipListener<Local, S, T>> From<Group<Local, S, T, L>> for Agent<Local, S, T, L> {
+            fn from(g: Group<Local, S, T, L>) -> Self {
+                Agent::Group(g.group_id(), Arc::new(Mutex::new(g)))
+            }
+        }
+    };
 }
+
+impl_agent_from_group!(sendable);
+impl_agent_from_group!(local);
 
 impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<Membered<K, S, T, L>>
     for Agent<K, S, T, L>
@@ -216,19 +259,45 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> From<Document<K, S, T, L>>
-    for Agent<K, S, T, L>
-{
-    fn from(d: Document<K, S, T, L>) -> Self {
-        Agent::Document(d.doc_id(), Arc::new(Mutex::new(d)))
-    }
+macro_rules! impl_agent_from_document {
+    (sendable) => {
+        impl<S: AsyncSignerSend + Send + Sync, T: ContentRef, L: MembershipListener<Sendable, S, T> + Send + Sync> From<Document<Sendable, S, T, L>> for Agent<Sendable, S, T, L> {
+            fn from(d: Document<Sendable, S, T, L>) -> Self {
+                Agent::Document(d.doc_id(), Arc::new(Mutex::new(d)))
+            }
+        }
+    };
+    (local) => {
+        impl<S: AsyncSignerLocal, T: ContentRef, L: MembershipListener<Local, S, T>> From<Document<Local, S, T, L>> for Agent<Local, S, T, L> {
+            fn from(d: Document<Local, S, T, L>) -> Self {
+                Agent::Document(d.doc_id(), Arc::new(Mutex::new(d)))
+            }
+        }
+    };
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> Verifiable for Agent<K, S, T, L> {
-    fn verifying_key(&self) -> VerifyingKey {
-        self.id().verifying_key()
-    }
+impl_agent_from_document!(sendable);
+impl_agent_from_document!(local);
+
+macro_rules! impl_agent_verifiable {
+    (sendable) => {
+        impl<S: AsyncSignerSend + Send + Sync, T: ContentRef, L: MembershipListener<Sendable, S, T> + Send + Sync> Verifiable for Agent<Sendable, S, T, L> {
+            fn verifying_key(&self) -> VerifyingKey {
+                self.id().verifying_key()
+            }
+        }
+    };
+    (local) => {
+        impl<S: AsyncSignerLocal, T: ContentRef, L: MembershipListener<Local, S, T>> Verifiable for Agent<Local, S, T, L> {
+            fn verifying_key(&self) -> VerifyingKey {
+                self.id().verifying_key()
+            }
+        }
+    };
 }
+
+impl_agent_verifiable!(sendable);
+impl_agent_verifiable!(local);
 
 impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Dupe for Agent<K, S, T, L> {
     fn dupe(&self) -> Self {

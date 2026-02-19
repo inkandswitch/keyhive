@@ -15,22 +15,11 @@ use std::{
 /// a map that indexes by the same cryptographic hash is convenient.
 #[derive(Debug, PartialEq, Eq, Deserialize)]
 #[derive_where(Clone)]
-pub struct CaMap<T: Serialize>(pub(crate) HashMap<Digest<T>, Arc<T>>);
+#[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
+pub struct CaMap<T>(pub(crate) HashMap<Digest<T>, Arc<T>>);
 
+// Methods that require T: Serialize (for hashing)
 impl<T: Serialize> CaMap<T> {
-    /// Create an empty [`CaMap`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use keyhive_core::util::content_addressed_map::CaMap;
-    /// let fresh: CaMap<String> = CaMap::new();
-    /// assert_eq!(fresh.len(), 0);
-    /// ```
-    pub fn new() -> Self {
-        Self(HashMap::new())
-    }
-
     /// Add a new value to the map, and return the associated [`Digest`].
     pub fn insert(&mut self, value: Arc<T>) -> Digest<T> {
         let key: Digest<T> = Digest::hash(&value);
@@ -45,14 +34,44 @@ impl<T: Serialize> CaMap<T> {
         (key, is_new.is_none())
     }
 
-    /// Remove an element from the map by its [`Digest`].
-    pub fn remove_by_hash(&mut self, hash: &Digest<T>) -> Option<Arc<T>> {
-        self.0.remove(hash)
-    }
-
     pub fn remove_by_value(&mut self, value: &T) -> Option<Arc<T>> {
         let hash = Digest::hash(value);
         self.remove_by_hash(&hash)
+    }
+
+    pub fn contains_value(&self, value: &T) -> bool {
+        let hash = Digest::hash(value);
+        self.contains_key(&hash)
+    }
+
+    #[cfg(any(test, feature = "test_utils"))]
+    pub fn from_iter_direct(elements: impl IntoIterator<Item = Arc<T>>) -> Self {
+        let mut cam = CaMap::new();
+        for rc in elements.into_iter() {
+            cam.0.insert(Digest::hash(rc.as_ref()), rc);
+        }
+        cam
+    }
+}
+
+// Methods that don't require T: Serialize
+impl<T> CaMap<T> {
+    /// Create an empty [`CaMap`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use keyhive_core::util::content_addressed_map::CaMap;
+    /// let fresh: CaMap<String> = CaMap::new();
+    /// assert_eq!(fresh.len(), 0);
+    /// ```
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    /// Remove an element from the map by its [`Digest`].
+    pub fn remove_by_hash(&mut self, hash: &Digest<T>) -> Option<Arc<T>> {
+        self.0.remove(hash)
     }
 
     pub fn get(&self, hash: &Digest<T>) -> Option<&Arc<T>> {
@@ -71,20 +90,11 @@ impl<T: Serialize> CaMap<T> {
         self.0.iter()
     }
 
-    #[cfg(any(test, feature = "test_utils"))]
-    pub fn from_iter_direct(elements: impl IntoIterator<Item = Arc<T>>) -> Self {
-        let mut cam = CaMap::new();
-        for rc in elements.into_iter() {
-            cam.0.insert(Digest::hash(rc.as_ref()), rc);
-        }
-        cam
-    }
-
     pub fn keys(&self) -> std::collections::hash_map::Keys<'_, Digest<T>, Arc<T>> {
         self.0.keys()
     }
+
     pub fn values(&self) -> std::collections::hash_map::Values<'_, Digest<T>, Arc<T>> {
-        // Sorted because BTreeMap
         self.0.values()
     }
 
@@ -96,23 +106,18 @@ impl<T: Serialize> CaMap<T> {
         self.0.into_values()
     }
 
-    pub fn contains_value(&self, value: &T) -> bool {
-        let hash = Digest::hash(value);
-        self.contains_key(&hash)
-    }
-
     pub fn contains_key(&self, hash: &Digest<T>) -> bool {
         self.0.contains_key(hash)
     }
 }
 
-impl<T: Serialize> Default for CaMap<T> {
+impl<T> Default for CaMap<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: Serialize> Fork for CaMap<T> {
+impl<T> Fork for CaMap<T> {
     type Forked = Self;
 
     fn fork(&self) -> Self::Forked {
@@ -120,7 +125,7 @@ impl<T: Serialize> Fork for CaMap<T> {
     }
 }
 
-impl<T: Serialize> Merge for CaMap<T> {
+impl<T> Merge for CaMap<T> {
     fn merge(&mut self, other: Self) {
         for (k, v) in other.0 {
             self.0.entry(k).or_insert(v);
@@ -152,7 +157,7 @@ impl<T: Serialize> FromIterator<T> for CaMap<T> {
     }
 }
 
-impl<T: Serialize + PartialEq> PartialOrd for CaMap<T> {
+impl<T: PartialEq> PartialOrd for CaMap<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(
             self.0
@@ -163,7 +168,7 @@ impl<T: Serialize + PartialEq> PartialOrd for CaMap<T> {
     }
 }
 
-impl<T: Serialize + Eq> Ord for CaMap<T> {
+impl<T: Eq> Ord for CaMap<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.partial_cmp(other)
             .expect("hashes are always comparable")
@@ -177,7 +182,7 @@ impl<T: Serialize> Serialize for CaMap<T> {
     }
 }
 
-impl<T: Serialize> Extend<(Digest<T>, Arc<T>)> for CaMap<T> {
+impl<T> Extend<(Digest<T>, Arc<T>)> for CaMap<T> {
     fn extend<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = (Digest<T>, Arc<T>)>,
@@ -186,7 +191,7 @@ impl<T: Serialize> Extend<(Digest<T>, Arc<T>)> for CaMap<T> {
     }
 }
 
-impl<T: Serialize> std::hash::Hash for CaMap<T> {
+impl<T> std::hash::Hash for CaMap<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         let mut keys: Vec<_> = self.0.keys().collect();
         keys.sort();

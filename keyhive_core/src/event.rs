@@ -8,7 +8,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         digest::Digest, encrypted::EncryptedContent, signed::Signed,
-        signer::async_signer::AsyncSigner,
+        signer::async_signer::{AsyncSigner, AsyncSignerLocal, AsyncSignerSend},
     },
     listener::membership::MembershipListener,
     principal::{
@@ -24,7 +24,7 @@ use crate::{
 use derive_more::{From, TryInto};
 use derive_where::derive_where;
 use dupe::Dupe;
-use future_form::FutureForm;
+use future_form::{FutureForm, Local, Sendable};
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
 use tracing::instrument;
@@ -98,33 +98,69 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<Event<K, S, T, L>>
-    for StaticEvent<T>
-{
-    fn from(op: Event<K, S, T, L>) -> Self {
-        match op {
-            Event::Delegated(d) => StaticEvent::Delegated(Arc::unwrap_or_clone(d).map(Into::into)),
-            Event::Revoked(r) => StaticEvent::Revoked(Arc::unwrap_or_clone(r).map(Into::into)),
+macro_rules! impl_from_event_for_static {
+    (sendable) => {
+        impl<S: AsyncSignerSend + Send + Sync, T: ContentRef, L: MembershipListener<Sendable, S, T> + Send + Sync> From<Event<Sendable, S, T, L>> for StaticEvent<T> {
+            impl_from_event_for_static!(@body Sendable);
+        }
+    };
+    (local) => {
+        impl<S: AsyncSignerLocal, T: ContentRef, L: MembershipListener<Local, S, T>> From<Event<Local, S, T, L>> for StaticEvent<T> {
+            impl_from_event_for_static!(@body Local);
+        }
+    };
+    (@body $K:ty) => {
+        fn from(op: Event<$K, S, T, L>) -> Self {
+            match op {
+                Event::Delegated(d) => StaticEvent::Delegated(Arc::unwrap_or_clone(d).map(Into::into)),
+                Event::Revoked(r) => StaticEvent::Revoked(Arc::unwrap_or_clone(r).map(Into::into)),
 
-            Event::CgkaOperation(cgka) => {
-                StaticEvent::CgkaOperation(Box::new(Arc::unwrap_or_clone(cgka)))
-            }
+                Event::CgkaOperation(cgka) => {
+                    StaticEvent::CgkaOperation(Box::new(Arc::unwrap_or_clone(cgka)))
+                }
 
-            Event::PrekeyRotated(pkr) => {
-                StaticEvent::PrekeyRotated(Box::new(Arc::unwrap_or_clone(pkr).map(Into::into)))
-            }
-            Event::PrekeysExpanded(pke) => {
-                StaticEvent::PrekeysExpanded(Box::new(Arc::unwrap_or_clone(pke).map(Into::into)))
+                Event::PrekeyRotated(pkr) => {
+                    StaticEvent::PrekeyRotated(Box::new(Arc::unwrap_or_clone(pkr).map(Into::into)))
+                }
+                Event::PrekeysExpanded(pke) => {
+                    StaticEvent::PrekeysExpanded(Box::new(Arc::unwrap_or_clone(pke).map(Into::into)))
+                }
             }
         }
-    }
+    };
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Serialize for Event<K, S, T, L> {
-    fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
-        StaticEvent::from(self.clone()).serialize(serializer)
-    }
+impl_from_event_for_static!(sendable);
+impl_from_event_for_static!(local);
+
+macro_rules! impl_serialize_event {
+    (sendable) => {
+        impl<
+            S: AsyncSignerSend + Send + Sync,
+            T: ContentRef,
+            L: MembershipListener<Sendable, S, T> + Send + Sync,
+        > Serialize for Event<Sendable, S, T, L> {
+            impl_serialize_event!(@body Sendable);
+        }
+    };
+    (local) => {
+        impl<
+            S: AsyncSignerLocal,
+            T: ContentRef,
+            L: MembershipListener<Local, S, T>,
+        > Serialize for Event<Local, S, T, L> {
+            impl_serialize_event!(@body Local);
+        }
+    };
+    (@body $K:ty) => {
+        fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
+            StaticEvent::from(self.clone()).serialize(serializer)
+        }
+    };
 }
+
+impl_serialize_event!(sendable);
+impl_serialize_event!(local);
 
 impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Clone for Event<K, S, T, L> {
     fn clone(&self) -> Self {
@@ -210,7 +246,7 @@ mod tests {
         let hash2 = Digest::hash(&cgka_op_2);
         let hash3 = Digest::hash(&cgka_op_3);
 
-        let indie = Individual::generate(&signer, &mut csprng).await?;
+        let indie = Individual::generate_local(&signer, &mut csprng).await?;
         let events: Vec<Event<Local, MemorySigner, [u8; 32], NoListener>> = vec![
             Event::CgkaOperation(Arc::new(cgka_op_1)),
             Event::CgkaOperation(Arc::new(cgka_op_2)),

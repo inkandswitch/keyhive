@@ -2,14 +2,14 @@
 
 use crate::{
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{digest::Digest, signed::Signed, signer::async_signer::{AsyncSigner, AsyncSignerLocal, AsyncSignerSend}},
     listener::membership::MembershipListener,
     principal::{agent::id::AgentId, group::revocation::Revocation},
     util::content_addressed_map::CaMap,
 };
 use derive_where::derive_where;
 use dupe::Dupe;
-use future_form::FutureForm;
+use future_form::{FutureForm, Local, Sendable};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -30,7 +30,18 @@ pub struct RevocationStore<
     agent_to_revocations: HashMap<AgentId, HashSet<Arc<Signed<Revocation<K, S, T, L>>>>>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> RevocationStore<K, S, T, L> {
+macro_rules! impl_revocation_store {
+    (sendable) => {
+        impl<S: AsyncSignerSend + Send + Sync, T: ContentRef, L: MembershipListener<Sendable, S, T> + Send + Sync> RevocationStore<Sendable, S, T, L> {
+            impl_revocation_store!(@body Sendable);
+        }
+    };
+    (local) => {
+        impl<S: AsyncSignerLocal, T: ContentRef, L: MembershipListener<Local, S, T>> RevocationStore<Local, S, T, L> {
+            impl_revocation_store!(@body Local);
+        }
+    };
+    (@body $K:ty) => {
     /// Create a new revocation store.
     pub fn new() -> Self {
         Self {
@@ -50,18 +61,18 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
     /// Retrieve a [`Revocation`] by its [`Digest`].
     pub fn get(
         &self,
-        key: &Digest<Signed<Revocation<K, S, T, L>>>,
-    ) -> Option<Arc<Signed<Revocation<K, S, T, L>>>> {
+        key: &Digest<Signed<Revocation<$K, S, T, L>>>,
+    ) -> Option<Arc<Signed<Revocation<$K, S, T, L>>>> {
         self.revocations.get(key).cloned()
     }
 
     /// Check if a [`Digest`] is present in the store.
-    pub fn contains_key(&self, key: &Digest<Signed<Revocation<K, S, T, L>>>) -> bool {
+    pub fn contains_key(&self, key: &Digest<Signed<Revocation<$K, S, T, L>>>) -> bool {
         self.revocations.contains_key(key)
     }
 
     /// Check if a [`Revocation`] is present in the store.
-    pub fn contains_value(&self, value: &Signed<Revocation<K, S, T, L>>) -> bool {
+    pub fn contains_value(&self, value: &Signed<Revocation<$K, S, T, L>>) -> bool {
         self.revocations.contains_value(value)
     }
 
@@ -69,8 +80,8 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
     #[allow(clippy::mutable_key_type)]
     pub fn insert(
         &mut self,
-        revocation: Arc<Signed<Revocation<K, S, T, L>>>,
-    ) -> Digest<Signed<Revocation<K, S, T, L>>> {
+        revocation: Arc<Signed<Revocation<$K, S, T, L>>>,
+    ) -> Digest<Signed<Revocation<$K, S, T, L>>> {
         let digest = self.revocations.insert(revocation.dupe());
         let agent_id = revocation.payload.revoke.payload.delegate().agent_id();
         self.agent_to_revocations
@@ -84,8 +95,8 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
     #[allow(clippy::mutable_key_type)]
     pub fn remove_by_hash(
         &mut self,
-        hash: &Digest<Signed<Revocation<K, S, T, L>>>,
-    ) -> Option<Arc<Signed<Revocation<K, S, T, L>>>> {
+        hash: &Digest<Signed<Revocation<$K, S, T, L>>>,
+    ) -> Option<Arc<Signed<Revocation<$K, S, T, L>>>> {
         if let Some(revocation) = self.revocations.remove_by_hash(hash) {
             let agent_id = revocation.payload.revoke.payload.delegate().agent_id();
             if let Some(revocations_set) = self.agent_to_revocations.get_mut(&agent_id) {
@@ -105,7 +116,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
     pub fn get_revocations_for_agent(
         &self,
         agent_id: &AgentId,
-    ) -> Option<HashSet<Arc<Signed<Revocation<K, S, T, L>>>>> {
+    ) -> Option<HashSet<Arc<Signed<Revocation<$K, S, T, L>>>>> {
         self.agent_to_revocations.get(agent_id).cloned()
     }
 
@@ -115,8 +126,8 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
         &self,
     ) -> std::collections::hash_map::Values<
         '_,
-        Digest<Signed<Revocation<K, S, T, L>>>,
-        Arc<Signed<Revocation<K, S, T, L>>>,
+        Digest<Signed<Revocation<$K, S, T, L>>>,
+        Arc<Signed<Revocation<$K, S, T, L>>>,
     > {
         self.revocations.values()
     }
@@ -127,8 +138,8 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
         &self,
     ) -> std::collections::hash_map::Keys<
         '_,
-        Digest<Signed<Revocation<K, S, T, L>>>,
-        Arc<Signed<Revocation<K, S, T, L>>>,
+        Digest<Signed<Revocation<$K, S, T, L>>>,
+        Arc<Signed<Revocation<$K, S, T, L>>>,
     > {
         self.revocations.keys()
     }
@@ -139,8 +150,8 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
         &self,
     ) -> impl Iterator<
         Item = (
-            &Digest<Signed<Revocation<K, S, T, L>>>,
-            &Arc<Signed<Revocation<K, S, T, L>>>,
+            &Digest<Signed<Revocation<$K, S, T, L>>>,
+            &Arc<Signed<Revocation<$K, S, T, L>>>,
         ),
     > {
         self.revocations.iter()
@@ -149,7 +160,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
     /// Create a [`RevocationStore`] from an iterator of [`Revocation`]s.
     #[allow(clippy::mutable_key_type)]
     pub fn from_iter_direct(
-        iter: impl IntoIterator<Item = Arc<Signed<Revocation<K, S, T, L>>>>,
+        iter: impl IntoIterator<Item = Arc<Signed<Revocation<$K, S, T, L>>>>,
     ) -> Self {
         let mut store = Self::new();
         for revocation in iter {
@@ -157,4 +168,8 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
         }
         store
     }
+    };
 }
+
+impl_revocation_store!(sendable);
+impl_revocation_store!(local);

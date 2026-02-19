@@ -19,10 +19,10 @@ use crate::{
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
         signed::{Signed, SigningError},
-        signer::async_signer::AsyncSigner,
+        signer::async_signer::{AsyncSigner, AsyncSignerLocal, AsyncSignerSend},
         verifiable::Verifiable,
     },
-    listener::{log::Log, no_listener::NoListener, prekey::PrekeyListener},
+    listener::{log::Log, prekey::PrekeyListener},
     principal::{
         agent::id::AgentId,
         group::delegation::{Delegation, DelegationError},
@@ -35,7 +35,7 @@ use crate::{
 };
 use derivative::Derivative;
 use dupe::Dupe;
-use future_form::{FutureForm, Local};
+use future_form::{FutureForm, Local, Sendable};
 use futures::{lock::Mutex, prelude::*};
 use serde::Serialize;
 use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
@@ -64,7 +64,18 @@ pub struct Active<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: P
     pub(crate) _phantom: PhantomData<(fn() -> K, T)>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: PrekeyListener<K>> Active<K, S, T, L> {
+macro_rules! impl_active {
+    (sendable) => {
+        impl<S: AsyncSignerSend + Send + Sync, T: ContentRef, L: PrekeyListener<Sendable>> Active<Sendable, S, T, L> {
+            impl_active!(@body Sendable);
+        }
+    };
+    (local) => {
+        impl<S: AsyncSignerLocal, T: ContentRef, L: PrekeyListener<Local>> Active<Local, S, T, L> {
+            impl_active!(@body Local);
+        }
+    };
+    (@body $K:ty) => {
     /// Generate a new active agent.
     ///
     /// # Arguments
@@ -258,11 +269,11 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
     }
 
     /// Encrypt a payload for a member of some [`Group`] or [`Document`].
-    pub async fn get_capability<ML: crate::listener::membership::MembershipListener<K, S, T> + Send + Sync>(
+    pub async fn get_capability<ML: crate::listener::membership::MembershipListener<$K, S, T> + Send + Sync>(
         &self,
-        subject: Membered<K, S, T, ML>,
+        subject: Membered<$K, S, T, ML>,
         min: Access,
-    ) -> Option<Arc<Signed<Delegation<K, S, T, ML>>>> {
+    ) -> Option<Arc<Signed<Delegation<$K, S, T, ML>>>> {
         subject
             .get_capability(&self.id().into())
             .await
@@ -298,13 +309,33 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
             _phantom: PhantomData,
         }
     }
+    };
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: PrekeyListener<K>> std::fmt::Display for Active<K, S, T, L> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.id(), f)
-    }
+impl_active!(sendable);
+impl_active!(local);
+
+
+macro_rules! impl_active_display {
+    (sendable) => {
+        impl<S: AsyncSignerSend + Send + Sync, T: ContentRef, L: PrekeyListener<Sendable>> std::fmt::Display for Active<Sendable, S, T, L> {
+            impl_active_display!(@body);
+        }
+    };
+    (local) => {
+        impl<S: AsyncSignerLocal, T: ContentRef, L: PrekeyListener<Local>> std::fmt::Display for Active<Local, S, T, L> {
+            impl_active_display!(@body);
+        }
+    };
+    (@body) => {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            std::fmt::Display::fmt(&self.id(), f)
+        }
+    };
 }
+
+impl_active_display!(sendable);
+impl_active_display!(local);
 
 impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: PrekeyListener<K>> Verifiable for Active<K, S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
@@ -312,7 +343,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: PrekeyListener
     }
 }
 
-impl<S: AsyncSigner<Local> + Clone, T: ContentRef, L: PrekeyListener<Local>> Fork for Active<Local, S, T, L> {
+impl<S: AsyncSignerLocal + Clone, T: ContentRef, L: PrekeyListener<Local>> Fork for Active<Local, S, T, L> {
     type Forked = Active<Local, S, T, Log<S, T>>;
 
     fn fork(&self) -> Self::Forked {
@@ -327,7 +358,7 @@ impl<S: AsyncSigner<Local> + Clone, T: ContentRef, L: PrekeyListener<Local>> For
     }
 }
 
-impl<S: AsyncSigner<Local> + Clone, T: ContentRef, L: PrekeyListener<Local>> MergeAsync for Active<Local, S, T, L> {
+impl<S: AsyncSignerLocal + Clone, T: ContentRef, L: PrekeyListener<Local>> MergeAsync for Active<Local, S, T, L> {
     async fn merge_async(&self, fork: Self::AsyncForked) {
         let forked_individual = { fork.individual.lock().await.clone() };
         let forked_prekey_pairs = { fork.prekey_pairs.lock().await.clone() };
@@ -378,7 +409,7 @@ pub enum ActiveDelegationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::signer::memory::MemorySigner;
+    use crate::{crypto::signer::memory::MemorySigner, listener::no_listener::NoListener};
     use future_form::Local;
 
     #[tokio::test]
@@ -388,7 +419,7 @@ mod tests {
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let active: Active<Local, _, [u8; 32], _> =
-            Active::generate(signer, NoListener, csprng).await.unwrap();
+            Active::<Local, _, [u8; 32], _>::generate(signer, NoListener, csprng).await.unwrap();
         let message = "hello world".as_bytes();
         let signed = active.try_sign_async(message).await.unwrap();
 

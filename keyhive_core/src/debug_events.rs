@@ -1,14 +1,16 @@
 use crate::{
-    crypto::{digest::Digest, signer::async_signer::AsyncSigner},
+    content::reference::ContentRef,
+    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
     event::Event,
     listener::membership::MembershipListener,
+    principal::group::{delegation::Delegation, revocation::Revocation},
 };
 use future_form::FutureForm;
-use std::collections::HashMap;
+use serde::Serialize;
+use std::{collections::HashMap, sync::Arc};
 
 mod hash;
 pub use hash::Hash;
-use serde::Serialize;
 pub mod terminal;
 
 /// A table of events for debugging purposes.
@@ -89,8 +91,12 @@ impl DebugEventTable {
     where
         K: FutureForm + ?Sized,
         S: AsyncSigner<K>,
-        T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
+        T: ContentRef,
         L: MembershipListener<K, S, T>,
+        Event<K, S, T, L>: Serialize,
+        Signed<Delegation<K, S, T, L>>: Serialize,
+        Signed<Revocation<K, S, T, L>>: Serialize,
+        Arc<Signed<Delegation<K, S, T, L>>>: Serialize,
     {
         if events.is_empty() {
             return Self {
@@ -128,8 +134,12 @@ impl DebugEventRow {
     where
         K: FutureForm + ?Sized,
         S: AsyncSigner<K>,
-        T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
+        T: ContentRef,
         L: MembershipListener<K, S, T>,
+        Event<K, S, T, L>: Serialize,
+        Signed<Delegation<K, S, T, L>>: Serialize,
+        Signed<Revocation<K, S, T, L>>: Serialize,
+        Arc<Signed<Delegation<K, S, T, L>>>: Serialize,
     {
         match event {
             Event::PrekeysExpanded(signed) => {

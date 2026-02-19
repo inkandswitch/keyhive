@@ -8,7 +8,7 @@ use crate::{
     crypto::{
         digest::Digest,
         signed::Signed,
-        signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSigner},
+        signer::{async_signer::{AsyncSigner, AsyncSignerLocal, AsyncSignerSend}, memory::MemorySigner, sync_signer::SyncSigner},
         verifiable::Verifiable,
     },
     listener::membership::MembershipListener,
@@ -17,7 +17,7 @@ use crate::{
 };
 use derive_where::derive_where;
 use dupe::Dupe;
-use future_form::FutureForm;
+use future_form::{FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use std::{cmp::Ordering, collections::BTreeMap, sync::Arc};
 
@@ -40,11 +40,22 @@ pub struct GroupState<
     pub(crate) revocation_heads: RevocationStore<K, S, T, L>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> GroupState<K, S, T, L> {
+macro_rules! impl_group_state {
+    (sendable) => {
+        impl<S: AsyncSignerSend + Send + Sync, T: ContentRef, L: MembershipListener<Sendable, S, T> + Send + Sync> GroupState<Sendable, S, T, L> {
+            impl_group_state!(@body Sendable);
+        }
+    };
+    (local) => {
+        impl<S: AsyncSignerLocal, T: ContentRef, L: MembershipListener<Local, S, T>> GroupState<Local, S, T, L> {
+            impl_group_state!(@body Local);
+        }
+    };
+    (@body $K:ty) => {
     pub async fn new(
-        delegation_head: Arc<Signed<Delegation<K, S, T, L>>>,
-        delegations: Arc<Mutex<DelegationStore<K, S, T, L>>>,
-        revocations: Arc<Mutex<RevocationStore<K, S, T, L>>>,
+        delegation_head: Arc<Signed<Delegation<$K, S, T, L>>>,
+        delegations: Arc<Mutex<DelegationStore<$K, S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<$K, S, T, L>>>,
     ) -> Self {
         let id = GroupId(delegation_head.verifying_key().into());
         let mut heads = vec![delegation_head.dupe()];
@@ -80,15 +91,15 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
 
             // NOTE revocation_heads are guaranteed to be blank at this stage
             // because they can only come before the delegation passed in.
-            revocation_heads: RevocationStore::new(),
+            revocation_heads: RevocationStore::<$K, S, T, L>::new(),
             revocations,
         }
     }
 
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        parents: Vec<Agent<K, S, T, L>>,
-        delegations: Arc<Mutex<DelegationStore<K, S, T, L>>>,
-        revocations: Arc<Mutex<RevocationStore<K, S, T, L>>>,
+        parents: Vec<Agent<$K, S, T, L>>,
+        delegations: Arc<Mutex<DelegationStore<$K, S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<$K, S, T, L>>>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let signer = MemorySigner::generate(csprng);
@@ -97,10 +108,10 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
         let group = GroupState {
             id: GroupId(group_id),
 
-            delegation_heads: DelegationStore::new(),
+            delegation_heads: DelegationStore::<$K, S, T, L>::new(),
             delegations,
 
-            revocation_heads: RevocationStore::new(),
+            revocation_heads: RevocationStore::<$K, S, T, L>::new(),
             revocations,
         };
 
@@ -127,19 +138,19 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
         self.id
     }
 
-    pub fn delegation_heads(&self) -> &DelegationStore<K, S, T, L> {
+    pub fn delegation_heads(&self) -> &DelegationStore<$K, S, T, L> {
         &self.delegation_heads
     }
 
-    pub fn revocation_heads(&self) -> &RevocationStore<K, S, T, L> {
+    pub fn revocation_heads(&self) -> &RevocationStore<$K, S, T, L> {
         &self.revocation_heads
     }
 
     #[allow(clippy::type_complexity)]
     pub async fn add_delegation(
         &mut self,
-        delegation: Arc<Signed<Delegation<K, S, T, L>>>,
-    ) -> Result<Digest<Signed<Delegation<K, S, T, L>>>, AddError> {
+        delegation: Arc<Signed<Delegation<$K, S, T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<$K, S, T, L>>>, AddError> {
         if delegation.subject_id() != self.id.into() {
             return Err(AddError::InvalidSubject(Box::new(delegation.subject_id())));
         }
@@ -189,8 +200,8 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
     #[allow(clippy::type_complexity)]
     pub async fn add_revocation(
         &mut self,
-        revocation: Arc<Signed<Revocation<K, S, T, L>>>,
-    ) -> Result<Digest<Signed<Revocation<K, S, T, L>>>, AddError> {
+        revocation: Arc<Signed<Revocation<$K, S, T, L>>>,
+    ) -> Result<Digest<Signed<Revocation<$K, S, T, L>>>, AddError> {
         if revocation.subject_id() != self.id.into() {
             return Err(AddError::InvalidSubject(Box::new(revocation.subject_id())));
         }
@@ -232,8 +243,8 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
 
     pub async fn delegations_for(
         &self,
-        agent: Agent<K, S, T, L>,
-    ) -> Vec<Arc<Signed<Delegation<K, S, T, L>>>> {
+        agent: Agent<$K, S, T, L>,
+    ) -> Vec<Arc<Signed<Delegation<$K, S, T, L>>>> {
         let mut dlgs = Vec::new();
         for delegation in self.delegations.lock().await.values() {
             if agent == delegation.payload().delegate {
@@ -245,16 +256,16 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
 
     pub(crate) fn dummy_from_archive(
         archive: GroupStateArchive<T>,
-        delegations: Arc<Mutex<DelegationStore<K, S, T, L>>>,
-        revocations: Arc<Mutex<RevocationStore<K, S, T, L>>>,
+        delegations: Arc<Mutex<DelegationStore<$K, S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<$K, S, T, L>>>,
     ) -> Self {
         Self {
             id: archive.id,
 
-            delegation_heads: DelegationStore::new(),
+            delegation_heads: DelegationStore::<$K, S, T, L>::new(),
             delegations,
 
-            revocation_heads: RevocationStore::new(),
+            revocation_heads: RevocationStore::<$K, S, T, L>::new(),
             revocations,
         }
     }
@@ -266,7 +277,11 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: 
             revocation_heads: self.revocation_heads.keys().map(Into::into).collect(),
         }
     }
+    };
 }
+
+impl_group_state!(sendable);
+impl_group_state!(local);
 
 impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable
     for GroupState<K, S, T, L>

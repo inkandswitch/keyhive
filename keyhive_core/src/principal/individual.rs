@@ -23,10 +23,7 @@ use thiserror::Error;
 use tracing::instrument;
 
 #[cfg(any(feature = "test_utils", test))]
-use crate::crypto::{signed::SigningError, signer::async_signer::AsyncSigner};
-
-#[cfg(any(feature = "test_utils", test))]
-use future_form::FutureForm;
+use crate::crypto::{signed::SigningError, signer::async_signer::{AsyncSignerLocal, AsyncSignerSend}};
 
 #[cfg(any(feature = "test_utils", test))]
 use std::num::NonZeroUsize;
@@ -78,12 +75,28 @@ impl Individual {
 
     #[cfg(any(feature = "test_utils", test))]
     #[instrument(skip_all)]
-    pub async fn generate<R: rand::CryptoRng + rand::RngCore, K: FutureForm + ?Sized, S: AsyncSigner<K>>(
+    pub async fn generate_sendable<R: rand::CryptoRng + rand::RngCore, S: AsyncSignerSend>(
         signer: &S,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
         let prekey_state =
-            PrekeyState::generate(signer, NonZeroUsize::new(8).unwrap(), csprng).await?;
+            PrekeyState::generate_sendable(signer, NonZeroUsize::new(8).unwrap(), csprng).await?;
+
+        Ok(Self {
+            id: IndividualId(signer.verifying_key().into()),
+            prekeys: prekey_state.build(),
+            prekey_state,
+        })
+    }
+
+    #[cfg(any(feature = "test_utils", test))]
+    #[instrument(skip_all)]
+    pub async fn generate_local<R: rand::CryptoRng + rand::RngCore, S: AsyncSignerLocal>(
+        signer: &S,
+        csprng: &mut R,
+    ) -> Result<Self, SigningError> {
+        let prekey_state =
+            PrekeyState::generate_local(signer, NonZeroUsize::new(8).unwrap(), csprng).await?;
 
         Ok(Self {
             id: IndividualId(signer.verifying_key().into()),

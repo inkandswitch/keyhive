@@ -7,12 +7,12 @@ use super::{
 };
 use crate::{
     content::reference::ContentRef,
-    crypto::{share_key::ShareKey, signer::async_signer::AsyncSigner},
+    crypto::{share_key::ShareKey, signer::async_signer::{AsyncSigner, AsyncSignerLocal, AsyncSignerSend}},
     listener::membership::MembershipListener,
 };
 use derive_more::{From, TryInto};
 use dupe::Dupe;
-use future_form::FutureForm;
+use future_form::{FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use std::{
     collections::{HashMap, HashSet},
@@ -28,46 +28,69 @@ pub enum Peer<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: Membe
     Document(DocumentId, Arc<Mutex<Document<K, S, T, L>>>),
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> Peer<K, S, T, L> {
-    pub fn id(&self) -> Identifier {
-        match self {
-            Peer::Individual(id, _) => (*id).into(),
-            Peer::Group(id, _) => (*id).into(),
-            Peer::Document(id, _) => (*id).into(),
+macro_rules! impl_peer {
+    (sendable) => {
+        impl<
+            S: AsyncSignerSend + Send + Sync,
+            T: ContentRef,
+            L: MembershipListener<Sendable, S, T> + Send + Sync,
+        > Peer<Sendable, S, T, L> {
+            impl_peer!(@body Sendable);
         }
-    }
-
-    pub fn agent_id(&self) -> AgentId {
-        match self {
-            Peer::Individual(id, _) => (*id).into(),
-            Peer::Group(id, _) => (*id).into(),
-            Peer::Document(id, _) => (*id).into(),
+    };
+    (local) => {
+        impl<
+            S: AsyncSignerLocal,
+            T: ContentRef,
+            L: MembershipListener<Local, S, T>,
+        > Peer<Local, S, T, L> {
+            impl_peer!(@body Local);
         }
-    }
-
-    pub async fn individual_ids(&self) -> HashSet<IndividualId> {
-        match self {
-            Peer::Individual(id, _) => HashSet::from_iter([*id]),
-            Peer::Group(_, g) => g.lock().await.individual_ids().await,
-            Peer::Document(_, d) => d.lock().await.group.individual_ids().await,
-        }
-    }
-
-    pub async fn pick_individual_prekeys(
-        &self,
-        doc_id: DocumentId,
-    ) -> HashMap<IndividualId, ShareKey> {
-        match self {
-            Peer::Individual(id, i) => {
-                let locked = i.lock().await;
-                let prekey = locked.pick_prekey(doc_id);
-                HashMap::from_iter([(*id, *prekey)])
+    };
+    (@body $K:ty) => {
+        pub fn id(&self) -> Identifier {
+            match self {
+                Peer::Individual(id, _) => (*id).into(),
+                Peer::Group(id, _) => (*id).into(),
+                Peer::Document(id, _) => (*id).into(),
             }
-            Peer::Group(_, g) => g.lock().await.pick_individual_prekeys(doc_id).await,
-            Peer::Document(_, d) => d.lock().await.group.pick_individual_prekeys(doc_id).await,
         }
-    }
+
+        pub fn agent_id(&self) -> AgentId {
+            match self {
+                Peer::Individual(id, _) => (*id).into(),
+                Peer::Group(id, _) => (*id).into(),
+                Peer::Document(id, _) => (*id).into(),
+            }
+        }
+
+        pub async fn individual_ids(&self) -> HashSet<IndividualId> {
+            match self {
+                Peer::Individual(id, _) => HashSet::from_iter([*id]),
+                Peer::Group(_, g) => g.lock().await.individual_ids().await,
+                Peer::Document(_, d) => d.lock().await.group.individual_ids().await,
+            }
+        }
+
+        pub async fn pick_individual_prekeys(
+            &self,
+            doc_id: DocumentId,
+        ) -> HashMap<IndividualId, ShareKey> {
+            match self {
+                Peer::Individual(id, i) => {
+                    let locked = i.lock().await;
+                    let prekey = locked.pick_prekey(doc_id);
+                    HashMap::from_iter([(*id, *prekey)])
+                }
+                Peer::Group(_, g) => g.lock().await.pick_individual_prekeys(doc_id).await,
+                Peer::Document(_, d) => d.lock().await.group.pick_individual_prekeys(doc_id).await,
+            }
+        }
+    };
 }
+
+impl_peer!(sendable);
+impl_peer!(local);
 
 impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Dupe for Peer<K, S, T, L> {
     fn dupe(&self) -> Self {

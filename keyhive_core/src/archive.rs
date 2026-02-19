@@ -16,6 +16,7 @@ use std::collections::HashMap;
 
 /// Serialized representation of [`Keyhive`][crate::keyhive::Keyhive].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(bound(deserialize = "T: serde::de::DeserializeOwned"))]
 pub struct Archive<T: ContentRef> {
     pub(crate) active: ActiveArchive,
     pub(crate) topsorted_ops: Vec<(

@@ -2,7 +2,7 @@ use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyLi
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{signed::Signed, signer::async_signer::{AsyncSignerLocal, AsyncSignerSend}},
     event::static_event::StaticEvent,
     principal::{
         group::{
@@ -130,7 +130,7 @@ impl<K: FutureForm + ?Sized, S, T: ContentRef> CgkaListener<K> for Log<S, T> {
     }
 }
 
-impl<S: AsyncSigner<Sendable> + Send + Sync, T: ContentRef + Send + Sync> MembershipListener<Sendable, S, T>
+impl<S: AsyncSignerSend + Send + Sync, T: ContentRef + Send + Sync> MembershipListener<Sendable, S, T>
     for Log<S, T>
 where
     Self: Send + Sync,
@@ -162,7 +162,7 @@ where
     }
 }
 
-impl<S: AsyncSigner<Local>, T: ContentRef> MembershipListener<Local, S, T> for Log<S, T> {
+impl<S: AsyncSignerLocal, T: ContentRef> MembershipListener<Local, S, T> for Log<S, T> {
     #[instrument(skip(self))]
     fn on_delegation<'a>(
         &'a self,

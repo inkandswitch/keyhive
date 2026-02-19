@@ -8,7 +8,7 @@ use crate::{
     crypto::{
         digest::Digest,
         signed::{Signed, SigningError},
-        signer::async_signer::AsyncSigner,
+        signer::async_signer::{AsyncSigner, AsyncSignerLocal, AsyncSignerSend},
     },
     listener::membership::MembershipListener,
     principal::{
@@ -19,7 +19,7 @@ use crate::{
 };
 use derive_where::derive_where;
 use dupe::Dupe;
-use future_form::FutureForm;
+use future_form::{FutureForm, Local, Sendable};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, hash::Hash, sync::Arc};
 use thiserror::Error;
@@ -142,11 +142,34 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Serialize for Delegation<K, S, T, L> {
-    fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
-        StaticDelegation::from(self.clone()).serialize(serializer)
-    }
+macro_rules! impl_serialize_delegation {
+    (sendable) => {
+        impl<
+            S: AsyncSignerSend + Send + Sync,
+            T: ContentRef,
+            L: MembershipListener<Sendable, S, T> + Send + Sync,
+        > Serialize for Delegation<Sendable, S, T, L> {
+            impl_serialize_delegation!(@body Sendable);
+        }
+    };
+    (local) => {
+        impl<
+            S: AsyncSignerLocal,
+            T: ContentRef,
+            L: MembershipListener<Local, S, T>,
+        > Serialize for Delegation<Local, S, T, L> {
+            impl_serialize_delegation!(@body Local);
+        }
+    };
+    (@body $K:ty) => {
+        fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
+            StaticDelegation::from(self.clone()).serialize(serializer)
+        }
+    };
 }
+
+impl_serialize_delegation!(sendable);
+impl_serialize_delegation!(local);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct StaticDelegation<T: ContentRef> {
@@ -180,23 +203,36 @@ impl<'a, T: ContentRef + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> From<Delegation<K, S, T, L>>
-    for StaticDelegation<T>
-{
-    fn from(delegation: Delegation<K, S, T, L>) -> Self {
-        Self {
-            can: delegation.can,
-            proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).into()),
-            delegate: delegation.delegate.id(),
-            after_revocations: delegation
-                .after_revocations
-                .iter()
-                .map(|revocation| Digest::hash(revocation.as_ref()).into())
-                .collect(),
-            after_content: delegation.after_content,
+macro_rules! impl_from_delegation_for_static {
+    (sendable) => {
+        impl<S: AsyncSignerSend + Send + Sync, T: ContentRef, L: MembershipListener<Sendable, S, T> + Send + Sync> From<Delegation<Sendable, S, T, L>> for StaticDelegation<T> {
+            impl_from_delegation_for_static!(@body Sendable);
         }
-    }
+    };
+    (local) => {
+        impl<S: AsyncSignerLocal, T: ContentRef, L: MembershipListener<Local, S, T>> From<Delegation<Local, S, T, L>> for StaticDelegation<T> {
+            impl_from_delegation_for_static!(@body Local);
+        }
+    };
+    (@body $K:ty) => {
+        fn from(delegation: Delegation<$K, S, T, L>) -> Self {
+            Self {
+                can: delegation.can,
+                proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).into()),
+                delegate: delegation.delegate.id(),
+                after_revocations: delegation
+                    .after_revocations
+                    .iter()
+                    .map(|revocation| Digest::hash(revocation.as_ref()).into())
+                    .collect(),
+                after_content: delegation.after_content,
+            }
+        }
+    };
 }
+
+impl_from_delegation_for_static!(sendable);
+impl_from_delegation_for_static!(local);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AfterAuth<'a, K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> {

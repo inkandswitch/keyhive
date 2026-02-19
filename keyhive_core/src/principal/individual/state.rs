@@ -3,12 +3,11 @@ use crate::{
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
         signed::{SigningError, VerificationError},
-        signer::async_signer::AsyncSigner,
+        signer::async_signer::{AsyncSignerLocal, AsyncSignerSend},
     },
     transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
-use future_form::FutureForm;
 use futures::{prelude::*, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
@@ -72,7 +71,47 @@ impl PrekeyState {
     /// # Errors
     ///
     /// Returns a [`SigningError`] if the operation could not be signed.
-    pub async fn generate<K: FutureForm + ?Sized, S: AsyncSigner<K>, R: rand::CryptoRng + rand::RngCore>(
+    pub async fn generate_sendable<S: AsyncSignerSend, R: rand::CryptoRng + rand::RngCore>(
+        signer: &S,
+        size: NonZeroUsize,
+        csprng: &mut R,
+    ) -> Result<Self, SigningError> {
+        let mut futs = FuturesUnordered::new();
+        for sk in (0..size.into()).map(|_| ShareSecretKey::generate(csprng)) {
+            futs.push(async move {
+                signer
+                    .try_sign_async(AddKeyOp {
+                        share_key: sk.share_key(),
+                    })
+                    .await
+            });
+        }
+
+        let mut ops = CaMap::new();
+        while let Some(res) = futs.next().await {
+            let op = Arc::new(res?);
+            ops.insert(Arc::new(KeyOp::from(op)));
+        }
+
+        Ok(Self { ops })
+    }
+
+    /// Initialize a [`PrekeyState`] with a set number of randomly-generated [`ShareSecretKey`]s.
+    ///
+    /// # Arguments
+    ///
+    /// * `signing_key` - The key to sign the operations with.
+    /// * `size` - The number of [`ShareSecretKey`]s to generate.
+    /// * `csprng` - A cryptographically secure random number generator.
+    ///
+    /// # Returns
+    ///
+    /// A new [`PrekeyState`] with `size` [`ShareSecretKey`]s.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SigningError`] if the operation could not be signed.
+    pub async fn generate_local<S: AsyncSignerLocal, R: rand::CryptoRng + rand::RngCore>(
         signer: &S,
         size: NonZeroUsize,
         csprng: &mut R,

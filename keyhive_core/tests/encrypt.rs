@@ -35,7 +35,7 @@ async fn make_keyhive() -> NewKeyhive {
     let sk = MemorySigner::generate(&mut rand::thread_rng());
     let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
     let log = Log::new();
-    let keyhive = Keyhive::generate(sk.clone(), store, log.clone(), rand::thread_rng())
+    let keyhive = Keyhive::<Local, _, _, _, _, _, _>::generate(sk.clone(), store, log.clone(), rand::thread_rng())
         .await
         .unwrap();
     NewKeyhive {
@@ -117,7 +117,7 @@ async fn test_decrypt_after_to_from_archive() {
         .await
         .unwrap();
 
-    let alice: Keyhive<Local, _, _, _, _, _, _> = Keyhive::try_from_archive(
+    let alice: Keyhive<Local, _, _, _, _, _, _> = Keyhive::<Local, _, _, _, _, _, _>::try_from_archive(
         &archive,
         sk,
         MemoryCiphertextStore::new(),
@@ -194,7 +194,7 @@ async fn test_decrypt_after_fork_and_merge() {
     }
 
     let reloaded = {
-        let keyhive: Keyhive<Local, _, _, _, _, _, _> = Keyhive::try_from_archive(
+        let keyhive: Keyhive<Local, _, _, _, _, _, _> = Keyhive::<Local, _, _, _, _, _, _>::try_from_archive(
             &archive1,
             sk.clone(),
             MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),

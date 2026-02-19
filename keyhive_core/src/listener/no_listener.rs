@@ -4,7 +4,7 @@ use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyLi
 use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
-    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::{signed::Signed, signer::async_signer::{AsyncSignerLocal, AsyncSignerSend}},
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
@@ -49,7 +49,7 @@ impl<K: FutureForm + ?Sized> CgkaListener<K> for NoListener {
     }
 }
 
-impl<S: AsyncSigner<Sendable>, T: ContentRef> MembershipListener<Sendable, S, T> for NoListener {
+impl<S: AsyncSignerSend, T: ContentRef> MembershipListener<Sendable, S, T> for NoListener {
     fn on_delegation<'a>(
         &'a self,
         _data: &'a Arc<Signed<Delegation<Sendable, S, T, Self>>>,
@@ -65,7 +65,7 @@ impl<S: AsyncSigner<Sendable>, T: ContentRef> MembershipListener<Sendable, S, T>
     }
 }
 
-impl<S: AsyncSigner<Local>, T: ContentRef> MembershipListener<Local, S, T> for NoListener {
+impl<S: AsyncSignerLocal, T: ContentRef> MembershipListener<Local, S, T> for NoListener {
     fn on_delegation<'a>(
         &'a self,
         _data: &'a Arc<Signed<Delegation<Local, S, T, Self>>>,

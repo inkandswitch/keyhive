@@ -43,7 +43,7 @@ impl JsArchive {
         signer: &JsSigner,
         event_handler: &js_sys::Function,
     ) -> Result<JsKeyhive, JsTryFromArchiveError> {
-        Ok(Keyhive::try_from_archive(
+        Ok(Keyhive::<Local, JsSigner, JsChangeId, Vec<u8>, JsCiphertextStore, JsEventHandler, OsRng>::try_from_archive(
             &self.0,
             signer.clone(),
             ciphertext_store,

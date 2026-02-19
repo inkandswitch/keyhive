@@ -1,7 +1,7 @@
 use super::{signed::JsSigned, signing_error::JsSigningError};
-use future_form::Local;
+use future_form::{FutureForm, Local};
 use keyhive_core::crypto::{
-    signed::SigningError, signer::async_signer::AsyncSigner, verifiable::Verifiable,
+    signed::SigningError, signer::async_signer::{AsyncSigner, AsyncSignerLocal}, verifiable::Verifiable,
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -131,7 +131,7 @@ impl JsSigner {
 
     #[wasm_bindgen(js_name = trySign)]
     pub async fn try_sign(&self, bytes: &[u8]) -> Result<JsSigned, JsSigningError> {
-        let signed = AsyncSigner::<Local>::try_sign_async(self, bytes.to_vec()).await?;
+        let signed = AsyncSignerLocal::try_sign_async(self, bytes.to_vec()).await?;
         Ok(JsSigned(signed))
     }
 
@@ -162,14 +162,16 @@ impl AsyncSigner<Local> for JsSigner {
             AsyncSigner::<Local>::try_sign_bytes_async(&self.0, bytes).await
         })
     }
+}
 
-    fn try_sign_async<'a, T: serde::Serialize + std::fmt::Debug + Send + 'a>(
+impl AsyncSignerLocal for JsSigner {
+    fn try_sign_async<'a, T: serde::Serialize + std::fmt::Debug + 'a>(
         &'a self,
         payload: T,
     ) -> <Local as future_form::FutureForm>::Future<'a, Result<keyhive_core::crypto::signed::Signed<T>, SigningError>>
     {
         Local::from_future(async move {
-            AsyncSigner::<Local>::try_sign_async(&self.0, payload).await
+            AsyncSignerLocal::try_sign_async(&self.0, payload).await
         })
     }
 }
@@ -245,19 +247,19 @@ impl AsyncSigner<Local> for JsSignerOptions {
             }
         })
     }
+}
 
-    fn try_sign_async<'a, T: serde::Serialize + std::fmt::Debug + Send + 'a>(
+impl AsyncSignerLocal for JsSignerOptions {
+    fn try_sign_async<'a, T: serde::Serialize + std::fmt::Debug + 'a>(
         &'a self,
         payload: T,
     ) -> <Local as future_form::FutureForm>::Future<'a, Result<keyhive_core::crypto::signed::Signed<T>, SigningError>>
     {
         Local::from_future(async move {
             let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
-            Ok(keyhive_core::crypto::signed::Signed {
-                payload,
-                issuer: keyhive_core::crypto::verifiable::Verifiable::verifying_key(self),
-                signature: self.try_sign_bytes_async(payload_bytes.as_slice()).await?,
-            })
+            let issuer = keyhive_core::crypto::verifiable::Verifiable::verifying_key(self);
+            let signature = AsyncSigner::<Local>::try_sign_bytes_async(self, payload_bytes.as_slice()).await?;
+            Ok(keyhive_core::crypto::signed::Signed::new(payload, issuer, signature))
         })
     }
 }
