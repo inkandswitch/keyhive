@@ -20,8 +20,10 @@ rust-version = "1.90.0"
 version = "0.0.0-alpha.3"
 
 [workspace.dependencies]
+arbitrary = { version = "1.4.1", features = ["derive"] }
 bincode = "1.3"
-blake3 = "1.5"
+blake3 = "1.8"
+bolero = { version = "0.13.4", features = ["arbitrary"] }
 chacha20poly1305 = "0.10.1"
 derive_more = { version = "1.0", features = [
     "from",
@@ -34,21 +36,18 @@ derive_more = { version = "1.0", features = [
 dupe = "0.9.0"
 ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
 futures = "0.3.31"
-nonempty = { version = "0.10.0", features = ["serialize"] }
+hex = "0.4.3"
+nonempty = { version = "0.12.0", features = ["serialize"] }
+num = { version = "0.4.3", features = ["num-bigint"] }
 rand = "0.8.5"
 serde = { version = "1.0", features = ["derive", "rc"] }
 signature = "2.2"
-thiserror = "1.0"
-tracing = "0.1.40"
-# Temporarily using commit with support for `console` logging levels until the next release.
-wasm-tracing = { git = "https://github.com/dsgallups/wasm-tracing", rev = "8c9ed933539664119681b896badb2be933338765", version = "2.1.0" }
+thiserror = "2.0"
+tracing = "0.1.41"
+wasm-bindgen = "0.2.105"
+wasm-tracing = { git = "https://github.com/dsgallups/wasm-tracing", rev = "9288999e1fbbd315bfa0602488138d40b2a55299", version = "3.0.0-alpha.0" }
 x25519-dalek = { version = "2.0", features = [
     "serde",
     "reusable_secrets",
     "static_secrets",
 ] }
-bolero = { version = "0.11.1", features = ["arbitrary"] }
-arbitrary = { version = "1.4.1", features = ["derive"] }
-num = { version = "0.4.3", features = ["num-bigint"] }
-hex = "0.4.3"
-wasm-bindgen = "0.2.104"
