@@ -50,19 +50,19 @@ impl<K: FutureForm + ?Sized> CgkaListener<K> for NoListener {
 }
 
 #[future_form::future_form(Sendable, Local)]
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> MembershipListener<K, S, T>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> MembershipListener<S, T, K>
     for NoListener
 {
-    fn on_delegation<'a>(
+    fn on_delegation<'a, DL: MembershipListener<S, T>>(
         &'a self,
-        _data: &'a Arc<Signed<Delegation<S, T, NoListener>>>,
+        _data: &'a Arc<Signed<Delegation<S, T, DL>>>,
     ) -> K::Future<'a, ()> {
         K::from_future(async {})
     }
 
-    fn on_revocation<'a>(
+    fn on_revocation<'a, DL: MembershipListener<S, T>>(
         &'a self,
-        _data: &'a Arc<Signed<Revocation<S, T, NoListener>>>,
+        _data: &'a Arc<Signed<Revocation<S, T, DL>>>,
     ) -> K::Future<'a, ()> {
         K::from_future(async {})
     }

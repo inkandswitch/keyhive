@@ -17,13 +17,13 @@ use std::sync::Arc;
 pub struct Ability<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<K, S, T> = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     pub(crate) doc: Arc<Mutex<Document<S, T, L>>>,
     pub(crate) can: Access,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Ability<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Ability<S, T, L> {
     /// Getter for the referenced [`Document`].
     pub fn doc(&self) -> Arc<Mutex<Document<S, T, L>>> {
         self.doc.dupe()

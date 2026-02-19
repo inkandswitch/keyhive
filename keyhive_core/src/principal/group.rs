@@ -61,7 +61,7 @@ use thiserror::Error;
 /// through the network of [`Agent`]s.
 #[derive(Clone, Derivative)]
 #[derive_where(Debug; T)]
-pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<K, S, T> = NoListener>
+pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener>
 {
     pub(crate) id_or_indie: IdOrIndividual,
 
@@ -80,7 +80,7 @@ pub struct Group<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener
     pub(crate) listener: L,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Group<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> {
     #[tracing::instrument(skip_all)]
     pub async fn new(
         group_id: GroupId,
@@ -850,7 +850,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Group<S, T, 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Hash for Group<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Group<S, T, L> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id_or_indie.hash(state);
         self.members.iter().collect::<BTreeMap<_, _>>().hash(state);
@@ -858,7 +858,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Hash for Gro
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable for Group<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Group<S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }

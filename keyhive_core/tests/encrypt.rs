@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use dupe::Dupe;
+use future_form::Local;
 use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
@@ -23,6 +24,7 @@ struct NewKeyhive {
         MemorySigner,
         [u8; 32],
         Vec<u8>,
+        Local,
         MemoryCiphertextStore<[u8; 32], Vec<u8>>,
         Log<MemorySigner>,
         rand::rngs::ThreadRng,
@@ -115,7 +117,7 @@ async fn test_decrypt_after_to_from_archive() {
         .await
         .unwrap();
 
-    let alice = Keyhive::try_from_archive(
+    let alice: Keyhive<_, _, _, Local, _, _, _> = Keyhive::try_from_archive(
         &archive,
         sk,
         MemoryCiphertextStore::new(),
@@ -126,7 +128,7 @@ async fn test_decrypt_after_to_from_archive() {
     .unwrap();
     let mut events = Vec::new();
     while let Some(evt) = log.pop().await {
-        events.push(StaticEvent::from(evt));
+        events.push(evt);
     }
     alice.ingest_unsorted_static_events(events).await;
 
@@ -180,22 +182,19 @@ async fn test_decrypt_after_fork_and_merge() {
             .into()
     };
 
-    let mut events = log
-        .0
-        .lock()
-        .await
-        .clone()
-        .into_iter()
-        .chain(alice.events_for_agent(&indie).await.unwrap().into_values())
-        .map(StaticEvent::from)
-        .collect::<Vec<_>>();
+    let mut events: Vec<StaticEvent<_>> = log.0.lock().await.clone().into_iter().collect();
+
+    // Add events from events_for_agent (these are Event, need conversion to StaticEvent)
+    for event in alice.events_for_agent(&indie).await.unwrap().into_values() {
+        events.push(StaticEvent::from(event));
+    }
 
     if let Some(op) = encrypted.update_op() {
-        events.push(StaticEvent::from(Box::new(op.clone())));
+        events.push(StaticEvent::CgkaOperation(Box::new(op.clone())));
     }
 
     let reloaded = {
-        let keyhive = Keyhive::try_from_archive(
+        let keyhive: Keyhive<_, _, _, Local, _, _, _> = Keyhive::try_from_archive(
             &archive1,
             sk.clone(),
             MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),

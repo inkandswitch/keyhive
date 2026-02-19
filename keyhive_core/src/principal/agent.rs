@@ -30,14 +30,14 @@ use std::{
 /// This type is very lightweight to clone, since it only contains immutable references to the actual agents.
 #[derive_where(Clone, Debug; T)]
 #[derive(From, TryInto, Derivative)]
-pub enum Agent<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<K, S, T> = NoListener> {
+pub enum Agent<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
     Active(IndividualId, Arc<Mutex<Active<S, T, L>>>),
     Individual(IndividualId, Arc<Mutex<Individual>>),
     Group(GroupId, Arc<Mutex<Group<S, T, L>>>),
     Document(DocumentId, Arc<Mutex<Document<S, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> PartialEq for Agent<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq for Agent<S, T, L> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Agent::Active(a, _), Agent::Active(b, _)) => a == b,
@@ -49,7 +49,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> PartialEq fo
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Agent<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> {
     pub fn id(&self) -> Identifier {
         match self {
             Agent::Active(id, _) => (*id).into(),
@@ -181,7 +181,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Agent<S, T, 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Active<S, T, L>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Active<S, T, L>>
     for Agent<S, T, L>
 {
     fn from(a: Active<S, T, L>) -> Self {
@@ -189,7 +189,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Active<
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Individual>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Individual>
     for Agent<S, T, L>
 {
     fn from(i: Individual) -> Self {
@@ -197,7 +197,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Individ
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Group<S, T, L>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Group<S, T, L>>
     for Agent<S, T, L>
 {
     fn from(g: Group<S, T, L>) -> Self {
@@ -205,7 +205,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Group<S
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Membered<S, T, L>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Membered<S, T, L>>
     for Agent<S, T, L>
 {
     fn from(m: Membered<S, T, L>) -> Self {
@@ -216,26 +216,26 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Membere
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Document<S, T, L>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Document<S, T, L>>
     for Agent<S, T, L>
 {
     fn from(d: Document<S, T, L>) -> Self {
         Agent::Document(d.doc_id(), Arc::new(Mutex::new(d)))
     }
 }
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable for Agent<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Agent<S, T, L> {
     fn verifying_key(&self) -> VerifyingKey {
         self.id().verifying_key()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Dupe for Agent<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for Agent<S, T, L> {
     fn dupe(&self) -> Self {
         self.clone()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Display for Agent<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Display for Agent<S, T, L> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Agent::Active(id, _) => write!(f, "Active({id})"),

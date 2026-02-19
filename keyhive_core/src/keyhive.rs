@@ -79,7 +79,7 @@ pub struct Keyhive<
     P: for<'de> Deserialize<'de> = Vec<u8>,
     K: FutureForm + ?Sized = Local,
     C: CiphertextStore<K, T, P> + Clone = MemoryCiphertextStore<T, P>,
-    L: MembershipListener<K, S, T> = NoListener,
+    L: MembershipListener<S, T> = NoListener,
     R: rand::CryptoRng = rand::rngs::OsRng,
 > {
     /// The public verifying key for the active user.
@@ -127,7 +127,7 @@ impl<
         P: for<'de> Deserialize<'de>,
         K: FutureForm + ?Sized,
         C: CiphertextStore<K, T, P> + Clone,
-        L: MembershipListener<K, S, T>,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Keyhive<S, T, P, K, C, L, R>
 {
@@ -1999,7 +1999,7 @@ impl<
         P: for<'de> Deserialize<'de>,
         K: FutureForm + ?Sized,
         C: CiphertextStore<K, T, P> + Clone,
-        L: MembershipListener<K, S, T>,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Debug for Keyhive<S, T, P, K, C, L, R>
 {
@@ -2023,7 +2023,7 @@ impl<
         P: for<'de> Deserialize<'de> + Clone,
         K: FutureForm + ?Sized,
         C: CiphertextStore<K, T, P> + Clone,
-        L: MembershipListener<K, S, T>,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > ForkAsync for Keyhive<S, T, P, K, C, L, R>
 {
@@ -2050,7 +2050,7 @@ impl<
         P: for<'de> Deserialize<'de> + Clone,
         K: FutureForm + ?Sized,
         C: CiphertextStore<K, T, P> + Clone,
-        L: MembershipListener<K, S, T>,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > MergeAsync for Arc<Mutex<Keyhive<S, T, P, K, C, L, R>>>
 {
@@ -2077,17 +2077,17 @@ impl<
         let forked_listener = { fork.event_listener.0.lock().await.clone() };
         for event in forked_listener.iter() {
             match event {
-                Event::PrekeysExpanded(_add_op) => {
+                StaticEvent::PrekeysExpanded(_add_op) => {
                     continue; // NOTE: handled above
                 }
-                Event::PrekeyRotated(_rot_op) => {
+                StaticEvent::PrekeyRotated(_rot_op) => {
                     continue; // NOTE: handled above
                 }
                 _ => {}
             }
 
             locked
-                .receive_static_event(event.clone().into())
+                .receive_static_event(event.clone())
                 .await
                 .expect("prechecked events to work");
         }
@@ -2100,7 +2100,7 @@ impl<
         P: for<'de> Deserialize<'de>,
         K: FutureForm + ?Sized,
         C: CiphertextStore<K, T, P> + Clone,
-        L: MembershipListener<K, S, T>,
+        L: MembershipListener<S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Verifiable for Keyhive<S, T, P, K, C, L, R>
 {
@@ -2111,7 +2111,7 @@ impl<
 
 #[derive(Error)]
 #[derive_where(Debug; T)]
-pub enum ReceiveStaticEventError<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
+pub enum ReceiveStaticEventError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
     #[error(transparent)]
     ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
 
@@ -2126,7 +2126,7 @@ impl<S, T, L> ReceiveStaticEventError<S, T, L>
 where
     S: AsyncSigner,
     T: ContentRef,
-    L: MembershipListener<K, S, T>,
+    L: MembershipListener<S, T>,
 {
     pub fn is_missing_dependency(&self) -> bool {
         match self {
@@ -2142,7 +2142,7 @@ where
 pub enum ReceiveStaticDelegationError<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<K, S, T> = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     #[error(transparent)]
     VerificationError(#[from] VerificationError),
@@ -2167,7 +2167,7 @@ impl<S, T, L> ReceiveStaticDelegationError<S, T, L>
 where
     S: AsyncSigner,
     T: ContentRef,
-    L: MembershipListener<K, S, T>,
+    L: MembershipListener<S, T>,
 {
     pub fn is_missing_dependency(&self) -> bool {
         match self {
@@ -2183,7 +2183,7 @@ where
 
 #[derive(Clone, PartialEq, Eq, Error)]
 #[derive_where(Debug)]
-pub enum StaticEventConversionError<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
+pub enum StaticEventConversionError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
     #[error("Missing delegation: {0}")]
     MissingDelegation(Digest<Signed<Delegation<S, T, L>>>),
 
@@ -2194,7 +2194,7 @@ pub enum StaticEventConversionError<S: AsyncSigner, T: ContentRef, L: Membership
     UnknownAgent(Identifier),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
     From<StaticEventConversionError<S, T, L>> for ReceiveStaticDelegationError<S, T, L>
 {
     fn from(error: StaticEventConversionError<S, T, L>) -> Self {
@@ -2214,7 +2214,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
 
 #[derive(Clone, PartialEq, Eq, Error)]
 #[derive_where(Debug)]
-pub enum TryFromArchiveError<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
+pub enum TryFromArchiveError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
     #[error("Missing delegation: {0}")]
     MissingDelegation(#[from] Digest<Signed<Delegation<S, T, L>>>),
 
@@ -2260,7 +2260,7 @@ impl ReceiveCgkaOpError {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<MissingIndividualError>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<MissingIndividualError>
     for TryFromArchiveError<S, T, L>
 {
     fn from(e: MissingIndividualError) -> Self {
@@ -2281,7 +2281,7 @@ pub enum EncryptContentError {
 pub enum ReceiveEventError<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<K, S, T> = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     #[error(transparent)]
     ReceiveStaticDelegationError(#[from] ReceiveStaticDelegationError<S, T, L>),
@@ -2308,6 +2308,7 @@ mod tests {
         MemorySigner,
         [u8; 32],
         Vec<u8>,
+        Local,
         Arc<Mutex<MemoryCiphertextStore<[u8; 32], Vec<u8>>>>,
         NoListener,
     > {
@@ -2331,7 +2332,7 @@ mod tests {
 
         let sk = MemorySigner::generate(&mut csprng);
         let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], String>::new()));
-        let hive =
+        let hive: Keyhive<_, _, _, Local, _, _, _> =
             Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::rngs::OsRng).await?;
 
         let indie_sk = MemorySigner::generate(&mut csprng);
@@ -2367,7 +2368,7 @@ mod tests {
         assert_eq!(archive.docs.len(), 1);
         assert_eq!(archive.topsorted_ops.len(), 4);
 
-        let hive_from_archive = Keyhive::try_from_archive(
+        let hive_from_archive: Keyhive<_, _, _, Local, _, _, _> = Keyhive::try_from_archive(
             &archive,
             sk,
             store,
@@ -2410,7 +2411,7 @@ mod tests {
         let mut csprng = rand::rngs::OsRng;
         let sk = MemorySigner::generate(&mut csprng);
         let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], String>::new()));
-        let kh =
+        let kh: Keyhive<_, _, _, Local, _, _, _> =
             Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::rngs::OsRng).await?;
 
         let indie_sk = MemorySigner::generate(&mut csprng);
@@ -2432,7 +2433,7 @@ mod tests {
 
         // Create an archive and try to load it into a fresh Keyhive
         let archive = kh.into_archive().await;
-        let kh2 = Keyhive::try_from_archive(
+        let kh2: Keyhive<_, _, _, Local, _, _, _> = Keyhive::try_from_archive(
             &archive,
             sk,
             Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], String>::new())),
@@ -2970,7 +2971,7 @@ mod tests {
         test_utils::init_logging();
 
         let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
-        let hive = Keyhive::<_, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
+        let hive = Keyhive::<_, [u8; 32], Vec<u8>, Local, _, NoListener, _>::generate(
             sk,
             Arc::new(Mutex::new(MemoryCiphertextStore::new())),
             NoListener,
@@ -3015,7 +3016,7 @@ mod tests {
 
         let tx = transact_async(
             &trunk,
-            |fork: Keyhive<_, _, _, _, Log<_, [u8; 32]>, _>| async move {
+            |fork: Keyhive<_, _, _, _, _, Log<_, [u8; 32]>, _>| async move {
                 // Depending on when the async runs
                 let init_dlg_count = fork.delegations.lock().await.len();
                 assert!(init_dlg_count >= 4);
@@ -3059,19 +3060,19 @@ mod tests {
                 let mut prekey_expanded_count = 0;
                 for op in fork.event_listener().0.lock().await.iter() {
                     match op {
-                        Event::PrekeysExpanded(_) => {
+                        StaticEvent::PrekeysExpanded(_) => {
                             prekey_expanded_count += 1;
                         }
-                        Event::PrekeyRotated(_) => {
+                        StaticEvent::PrekeyRotated(_) => {
                             panic!("unexpected prekey rotation passed to listener")
                         }
-                        Event::CgkaOperation(_) => {
+                        StaticEvent::CgkaOperation(_) => {
                             cgka_count += 1;
                         }
-                        Event::Delegated(_) => {
+                        StaticEvent::Delegated(_) => {
                             dlg_count += 1;
                         }
-                        Event::Revoked(_) => {
+                        StaticEvent::Revoked(_) => {
                             panic!("unexpected revocation passed to listener")
                         }
                     }

@@ -12,7 +12,7 @@ pub struct Dependencies<
     'a,
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<K, S, T> = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     pub delegations: Vec<Arc<Signed<Delegation<S, T, L>>>>,
     pub revocations: Vec<Arc<Signed<Revocation<S, T, L>>>>,

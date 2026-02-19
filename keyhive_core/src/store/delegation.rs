@@ -17,12 +17,12 @@ use std::sync::Arc;
 pub struct DelegationStore<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<K, S, T> = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     delegations: CaMap<Signed<Delegation<S, T, L>>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> DelegationStore<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> DelegationStore<S, T, L> {
     /// Create a new delegation store.
     pub fn new() -> Self {
         Self {

@@ -4,6 +4,7 @@ use crate::{
     listener::no_listener::NoListener,
     store::ciphertext::memory::MemoryCiphertextStore,
 };
+use future_form::Local;
 use rand::rngs::OsRng;
 
 pub async fn make_simple_keyhive() -> Result<
@@ -11,6 +12,7 @@ pub async fn make_simple_keyhive() -> Result<
         MemorySigner,
         [u8; 32],
         Vec<u8>,
+        Local,
         MemoryCiphertextStore<[u8; 32], Vec<u8>>,
         NoListener,
         OsRng,

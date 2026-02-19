@@ -3,9 +3,12 @@ use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{signed::Signed, signer::async_signer::AsyncSigner},
-    event::Event,
+    event::static_event::StaticEvent,
     principal::{
-        group::{delegation::Delegation, revocation::Revocation},
+        group::{
+            delegation::{Delegation, StaticDelegation},
+            revocation::{Revocation, StaticRevocation},
+        },
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
 };
@@ -17,23 +20,29 @@ use futures::lock::Mutex;
 use std::sync::Arc;
 use tracing::instrument;
 
+/// A logging listener that stores events as [`StaticEvent`]s.
+///
+/// This listener stores events in a serializable form that can be used for
+/// gossip, persistence, or replay. Note that delegation and revocation events
+/// are stored as their static forms (using hashes instead of full references).
 #[derive(From, Into)]
 #[derive_where(Debug; T)]
 pub struct Log<S: AsyncSigner, T: ContentRef = [u8; 32]>(
-    #[allow(clippy::type_complexity)] pub Arc<Mutex<Vec<Event<S, T, Log<S, T>>>>>,
+    pub Arc<Mutex<Vec<StaticEvent<T>>>>,
+    std::marker::PhantomData<S>,
 );
 
 impl<S: AsyncSigner, T: ContentRef> Log<S, T> {
     pub fn new() -> Self {
-        Self(Arc::new(Mutex::new(Vec::new())))
+        Self(Arc::new(Mutex::new(Vec::new())), std::marker::PhantomData)
     }
 
-    pub async fn push(&self, event: Event<S, T, Self>) {
+    pub async fn push(&self, event: StaticEvent<T>) {
         let mut locked = self.0.lock().await;
         locked.push(event)
     }
 
-    pub async fn pop(&self) -> Option<Event<S, T, Self>> {
+    pub async fn pop(&self) -> Option<StaticEvent<T>> {
         let mut locked = self.0.lock().await;
         locked.pop()
     }
@@ -56,7 +65,7 @@ impl<S: AsyncSigner, T: ContentRef> Log<S, T> {
 
 impl<S: AsyncSigner, T: ContentRef> Clone for Log<S, T> {
     fn clone(&self) -> Self {
-        Self(self.0.dupe())
+        Self(self.0.dupe(), std::marker::PhantomData)
     }
 }
 
@@ -83,7 +92,10 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> PrekeyListener<K> fo
         new_prekey: &'a Arc<Signed<AddKeyOp>>,
     ) -> K::Future<'a, ()> {
         K::from_future(async move {
-            self.push(Event::PrekeysExpanded(new_prekey.dupe())).await
+            self.push(StaticEvent::PrekeysExpanded(Box::new(
+                new_prekey.as_ref().clone(),
+            )))
+            .await
         })
     }
 
@@ -93,7 +105,10 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> PrekeyListener<K> fo
         rotate_key: &'a Arc<Signed<RotateKeyOp>>,
     ) -> K::Future<'a, ()> {
         K::from_future(async move {
-            self.push(Event::PrekeyRotated(rotate_key.dupe())).await
+            self.push(StaticEvent::PrekeyRotated(Box::new(
+                rotate_key.as_ref().clone(),
+            )))
+            .await
         })
     }
 }
@@ -109,7 +124,8 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> CgkaListener<K> for 
         data: &'a Arc<Signed<CgkaOperation>>,
     ) -> K::Future<'a, ()> {
         K::from_future(async move {
-            self.push(Event::CgkaOperation(data.dupe())).await
+            self.push(StaticEvent::CgkaOperation(Box::new(data.as_ref().clone())))
+                .await
         })
     }
 }
@@ -118,26 +134,32 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> CgkaListener<K> for 
     Sendable where S: Send + Sync, T: Send + Sync, Self: Send + Sync,
     Local
 )]
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> MembershipListener<K, S, T>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> MembershipListener<S, T, K>
     for Log<S, T>
 {
     #[instrument(skip(self))]
-    fn on_delegation<'a>(
+    fn on_delegation<'a, DL: MembershipListener<S, T>>(
         &'a self,
-        data: &'a Arc<Signed<Delegation<S, T, Self>>>,
+        data: &'a Arc<Signed<Delegation<S, T, DL>>>,
     ) -> K::Future<'a, ()> {
+        // Convert to StaticDelegation eagerly to avoid capturing `data` in the async block
+        let static_dlg: StaticDelegation<T> = data.payload().clone().into();
+        let signed_static = data.as_ref().clone().map(|_| static_dlg);
         K::from_future(async move {
-            self.push(Event::Delegated(data.dupe())).await
+            self.push(StaticEvent::Delegated(signed_static)).await
         })
     }
 
     #[instrument(skip(self))]
-    fn on_revocation<'a>(
+    fn on_revocation<'a, DL: MembershipListener<S, T>>(
         &'a self,
-        data: &'a Arc<Signed<Revocation<S, T, Self>>>,
+        data: &'a Arc<Signed<Revocation<S, T, DL>>>,
     ) -> K::Future<'a, ()> {
+        // Convert to StaticRevocation eagerly to avoid capturing `data` in the async block
+        let static_rev: StaticRevocation<T> = data.payload().clone().into();
+        let signed_static = data.as_ref().clone().map(|_| static_rev);
         K::from_future(async move {
-            self.push(Event::Revoked(data.dupe())).await
+            self.push(StaticEvent::Revoked(signed_static)).await
         })
     }
 }

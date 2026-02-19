@@ -18,14 +18,14 @@ use std::{collections::BTreeMap, sync::Arc};
 pub struct Revocation<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<K, S, T> = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     pub(crate) revoke: Arc<Signed<Delegation<S, T, L>>>,
     pub(crate) proof: Option<Arc<Signed<Delegation<S, T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Revocation<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Revocation<S, T, L> {
     pub fn subject_id(&self) -> Identifier {
         self.revoke.subject_id()
     }
@@ -56,13 +56,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Revocation<S
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Signed<Revocation<S, T, L>> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Signed<Revocation<S, T, L>> {
     pub fn subject_id(&self) -> Identifier {
         self.payload.subject_id()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> std::hash::Hash
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
     for Revocation<S, T, L>
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -75,7 +75,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> std::hash::H
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Serialize for Revocation<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for Revocation<S, T, L> {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticRevocation::from(self.clone()).serialize(serializer)
     }
@@ -94,7 +94,7 @@ pub struct StaticRevocation<T: ContentRef = [u8; 32]> {
     pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Revocation<S, T, L>>
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Revocation<S, T, L>>
     for StaticRevocation<T>
 {
     fn from(revocation: Revocation<S, T, L>) -> Self {

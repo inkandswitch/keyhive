@@ -62,7 +62,7 @@ use tracing::instrument;
 pub struct Document<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<K, S, T> = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     pub(crate) group: Group<S, T, L>,
     pub(crate) content_heads: HashSet<T>,
@@ -72,7 +72,7 @@ pub struct Document<
     cgka: Option<Cgka>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Document<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, L> {
     // FIXME: We need a signing key for initializing Cgka and we need to share
     // the init add op.
     // NOTE doesn't register into the top-level Keyhive context
@@ -560,13 +560,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Document<S, 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable for Document<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Document<S, T, L> {
     fn verifying_key(&self) -> VerifyingKey {
         self.group.verifying_key()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Hash for Document<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Hash for Document<S, T, L> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.group.hash(state);
         crate::util::hasher::hash_set(&self.content_heads, state);
@@ -579,7 +579,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Hash for Doc
 pub struct AddMemberUpdate<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<K, S, T> = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     pub delegation: Arc<Signed<Delegation<S, T, L>>>,
     pub cgka_ops: Vec<Signed<CgkaOperation>>,
@@ -593,14 +593,14 @@ pub struct MissingIndividualError(pub Box<IndividualId>);
 pub struct RevokeMemberUpdate<
     S: AsyncSigner,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<K, S, T> = NoListener,
+    L: MembershipListener<S, T> = NoListener,
 > {
     pub(crate) revocations: Vec<Arc<Signed<Revocation<S, T, L>>>>,
     pub(crate) redelegations: Vec<Arc<Signed<Delegation<S, T, L>>>>,
     pub(crate) cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> RevokeMemberUpdate<S, T, L> {
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevokeMemberUpdate<S, T, L> {
     #[allow(clippy::type_complexity)]
     pub fn revocations(&self) -> &[Arc<Signed<Revocation<S, T, L>>>] {
         &self.revocations
@@ -617,7 +617,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> RevokeMember
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Default
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Default
     for RevokeMemberUpdate<S, T, L>
 {
     fn default() -> Self {
