@@ -126,35 +126,61 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> CgkaListener<K> for 
     }
 }
 
-#[future_form::future_form(
-    Sendable where S: Send + Sync, T: Send + Sync, Self: Send + Sync,
-    Local
-)]
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> MembershipListener<S, T, K>
+impl<S: AsyncSigner + Send + Sync, T: ContentRef + Send + Sync> MembershipListener<Sendable, S, T>
     for Deque<S, T>
+where
+    Self: Send + Sync,
 {
     #[instrument(skip(self))]
-    fn on_delegation<'a, DL: MembershipListener<S, T>>(
+    fn on_delegation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Delegation<S, T, DL>>>,
-    ) -> K::Future<'a, ()> {
+        data: &'a Arc<Signed<Delegation<Sendable, S, T, Self>>>,
+    ) -> <Sendable as FutureForm>::Future<'a, ()> {
         // Convert to StaticDelegation eagerly to avoid capturing `data` in the async block
         let static_dlg: StaticDelegation<T> = data.payload().clone().into();
         let signed_static = data.as_ref().clone().map(|_| static_dlg);
-        K::from_future(async move {
+        Sendable::from_future(async move {
             self.push(StaticEvent::Delegated(signed_static)).await
         })
     }
 
     #[instrument(skip(self))]
-    fn on_revocation<'a, DL: MembershipListener<S, T>>(
+    fn on_revocation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Revocation<S, T, DL>>>,
-    ) -> K::Future<'a, ()> {
+        data: &'a Arc<Signed<Revocation<Sendable, S, T, Self>>>,
+    ) -> <Sendable as FutureForm>::Future<'a, ()> {
         // Convert to StaticRevocation eagerly to avoid capturing `data` in the async block
         let static_rev: StaticRevocation<T> = data.payload().clone().into();
         let signed_static = data.as_ref().clone().map(|_| static_rev);
-        K::from_future(async move {
+        Sendable::from_future(async move {
+            self.push(StaticEvent::Revoked(signed_static)).await
+        })
+    }
+}
+
+impl<S: AsyncSigner, T: ContentRef> MembershipListener<Local, S, T> for Deque<S, T> {
+    #[instrument(skip(self))]
+    fn on_delegation<'a>(
+        &'a self,
+        data: &'a Arc<Signed<Delegation<Local, S, T, Self>>>,
+    ) -> <Local as FutureForm>::Future<'a, ()> {
+        // Convert to StaticDelegation eagerly to avoid capturing `data` in the async block
+        let static_dlg: StaticDelegation<T> = data.payload().clone().into();
+        let signed_static = data.as_ref().clone().map(|_| static_dlg);
+        Local::from_future(async move {
+            self.push(StaticEvent::Delegated(signed_static)).await
+        })
+    }
+
+    #[instrument(skip(self))]
+    fn on_revocation<'a>(
+        &'a self,
+        data: &'a Arc<Signed<Revocation<Local, S, T, Self>>>,
+    ) -> <Local as FutureForm>::Future<'a, ()> {
+        // Convert to StaticRevocation eagerly to avoid capturing `data` in the async block
+        let static_rev: StaticRevocation<T> = data.payload().clone().into();
+        let signed_static = data.as_ref().clone().map(|_| static_rev);
+        Local::from_future(async move {
             self.push(StaticEvent::Revoked(signed_static)).await
         })
     }

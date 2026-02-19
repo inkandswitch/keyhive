@@ -89,10 +89,16 @@ impl<T: Serialize + Debug> Signed<T> {
             .verify(buf.as_slice(), &self.signature)?)
     }
 
-    /// Map over the paylaod of the signed data.
+    /// Map over the payload of the signed data.
     ///
-    /// This is primarily useful if you need to
-    pub(crate) fn map<U: Serialize + Debug, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
+    /// This is primarily useful if you need to convert the payload to a different type
+    /// while preserving the signature and issuer information.
+    ///
+    /// # Warning
+    ///
+    /// This changes the payload without re-signing, so verification will fail
+    /// if the new payload serializes differently than the original.
+    pub fn map<U: Serialize + Debug, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
         Signed {
             payload: f(self.payload),
             issuer: self.issuer,

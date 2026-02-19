@@ -15,9 +15,11 @@ use super::{CgkaOperationDetails, DebugEventDetails, DebugEventTable};
 /// ```
 /// use keyhive_core::event::Event;
 /// use keyhive_core::crypto::signer::memory::MemorySigner;
+/// use keyhive_core::listener::no_listener::NoListener;
 /// use keyhive_core::debug_events::{DebugEventTable, Nicknames, terminal::print_event_table};
+/// use future_form::Local;
 ///
-/// let events: Vec<Event<MemorySigner>> = vec![];
+/// let events: Vec<Event<Local, MemorySigner, [u8; 32], NoListener>> = vec![];
 /// let table = DebugEventTable::from_events(events, Nicknames::default());
 ///
 /// // Print a table of events

@@ -49,21 +49,34 @@ impl<K: FutureForm + ?Sized> CgkaListener<K> for NoListener {
     }
 }
 
-#[future_form::future_form(Sendable, Local)]
-impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef> MembershipListener<S, T, K>
-    for NoListener
-{
-    fn on_delegation<'a, DL: MembershipListener<S, T>>(
+impl<S: AsyncSigner, T: ContentRef> MembershipListener<Sendable, S, T> for NoListener {
+    fn on_delegation<'a>(
         &'a self,
-        _data: &'a Arc<Signed<Delegation<S, T, DL>>>,
-    ) -> K::Future<'a, ()> {
-        K::from_future(async {})
+        _data: &'a Arc<Signed<Delegation<Sendable, S, T, Self>>>,
+    ) -> <Sendable as FutureForm>::Future<'a, ()> {
+        Sendable::from_future(async {})
     }
 
-    fn on_revocation<'a, DL: MembershipListener<S, T>>(
+    fn on_revocation<'a>(
         &'a self,
-        _data: &'a Arc<Signed<Revocation<S, T, DL>>>,
-    ) -> K::Future<'a, ()> {
-        K::from_future(async {})
+        _data: &'a Arc<Signed<Revocation<Sendable, S, T, Self>>>,
+    ) -> <Sendable as FutureForm>::Future<'a, ()> {
+        Sendable::from_future(async {})
+    }
+}
+
+impl<S: AsyncSigner, T: ContentRef> MembershipListener<Local, S, T> for NoListener {
+    fn on_delegation<'a>(
+        &'a self,
+        _data: &'a Arc<Signed<Delegation<Local, S, T, Self>>>,
+    ) -> <Local as FutureForm>::Future<'a, ()> {
+        Local::from_future(async {})
+    }
+
+    fn on_revocation<'a>(
+        &'a self,
+        _data: &'a Arc<Signed<Revocation<Local, S, T, Self>>>,
+    ) -> <Local as FutureForm>::Future<'a, ()> {
+        Local::from_future(async {})
     }
 }

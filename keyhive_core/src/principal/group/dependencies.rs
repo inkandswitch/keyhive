@@ -2,19 +2,22 @@ use super::{delegation::Delegation, revocation::Revocation};
 use crate::{
     content::reference::ContentRef,
     crypto::{signed::Signed, signer::async_signer::AsyncSigner},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::membership::MembershipListener,
     principal::document::id::DocumentId,
 };
-use std::{collections::BTreeMap, hash::Hash, sync::Arc};
+use derive_where::derive_where;
+use future_form::FutureForm;
+use std::{collections::BTreeMap, sync::Arc};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive_where(Debug, Clone, PartialEq, Eq, Hash; T)]
 pub struct Dependencies<
     'a,
+    K: FutureForm + ?Sized,
     S: AsyncSigner,
-    T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    T: ContentRef,
+    L: MembershipListener<K, S, T>,
 > {
-    pub delegations: Vec<Arc<Signed<Delegation<S, T, L>>>>,
-    pub revocations: Vec<Arc<Signed<Revocation<S, T, L>>>>,
+    pub delegations: Vec<Arc<Signed<Delegation<K, S, T, L>>>>,
+    pub revocations: Vec<Arc<Signed<Revocation<K, S, T, L>>>>,
     pub content: &'a BTreeMap<DocumentId, Vec<T>>,
 }

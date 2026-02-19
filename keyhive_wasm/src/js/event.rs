@@ -1,17 +1,17 @@
 use crate::js::archive::JsSerializationError;
 
-use super::{
-    change_id::JsChangeId, event_handler::JsEventHandler, signed_delegation::JsSignedDelegation,
-    signed_revocation::JsSignedRevocation, signer::JsSigner,
-};
+use super::change_id::JsChangeId;
 use derive_more::{From, Into};
 use dupe::Dupe;
-use keyhive_core::event::{static_event::StaticEvent, Event};
+use keyhive_core::event::static_event::StaticEvent;
 use wasm_bindgen::prelude::*;
 
+/// JavaScript wrapper for a Keyhive event.
+///
+/// Events are stored internally as [`StaticEvent`]s (serializable form).
 #[derive(Debug, Clone, Hash, From, Into)]
 #[wasm_bindgen(js_name = Event)]
-pub struct JsEvent(pub(crate) Event<JsSigner, JsChangeId, JsEventHandler>);
+pub struct JsEvent(pub(crate) StaticEvent<JsChangeId>);
 
 #[wasm_bindgen(js_class = Event)]
 impl JsEvent {
@@ -22,35 +22,18 @@ impl JsEvent {
 
     #[wasm_bindgen(getter, js_name = isDelegated)]
     pub fn is_delegated(&self) -> bool {
-        matches!(self.0, Event::Delegated(_))
+        matches!(self.0, StaticEvent::Delegated(_))
     }
 
     #[wasm_bindgen(getter, js_name = isRevoked)]
     pub fn is_revoked(&self) -> bool {
-        matches!(self.0, Event::Revoked(_))
+        matches!(self.0, StaticEvent::Revoked(_))
     }
 
-    #[wasm_bindgen(js_name = tryIntoSignedDelegation)]
-    pub fn try_into_signed_delegation(&self) -> Option<JsSignedDelegation> {
-        match &self.0 {
-            Event::Delegated(d) => Some(d.dupe().into()),
-            _ => None,
-        }
-    }
-
-    #[wasm_bindgen(js_name = tryIntoSignedRevocation)]
-    pub fn try_into_signed_revocation(&self) -> Option<JsSignedRevocation> {
-        match &self.0 {
-            Event::Revoked(r) => Some(r.dupe().into()),
-            _ => None,
-        }
-    }
-
-    /// Converts the underlying [`Event`] to a [`StaticEvent`] and then
-    /// serializes it.
+    /// Serializes the event to bytes.
     #[wasm_bindgen(js_name = toBytes)]
     pub fn to_bytes(&self) -> Result<Box<[u8]>, JsSerializationError> {
-        Ok(bincode::serialize(&StaticEvent::from(self.0.clone()))
+        Ok(bincode::serialize(&self.0)
             .map_err(JsSerializationError::from)?
             .into_boxed_slice())
     }
@@ -75,14 +58,14 @@ pub enum JsEventVariant {
 
 impl From<&JsEvent> for JsEventVariant {
     fn from(event: &JsEvent) -> Self {
-        match event.0 {
-            Event::Delegated(_) => JsEventVariant::Delegated,
-            Event::Revoked(_) => JsEventVariant::Revoked,
+        match &event.0 {
+            StaticEvent::Delegated(_) => JsEventVariant::Delegated,
+            StaticEvent::Revoked(_) => JsEventVariant::Revoked,
 
-            Event::CgkaOperation { .. } => JsEventVariant::CgkaOperation,
+            StaticEvent::CgkaOperation { .. } => JsEventVariant::CgkaOperation,
 
-            Event::PrekeyRotated { .. } => JsEventVariant::PrekeyRotated,
-            Event::PrekeysExpanded { .. } => JsEventVariant::PrekeysExpanded,
+            StaticEvent::PrekeyRotated { .. } => JsEventVariant::PrekeyRotated,
+            StaticEvent::PrekeysExpanded { .. } => JsEventVariant::PrekeysExpanded,
         }
     }
 }

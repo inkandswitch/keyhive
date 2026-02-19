@@ -3,12 +3,13 @@
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::membership::MembershipListener,
     principal::{agent::id::AgentId, group::revocation::Revocation},
     util::content_addressed_map::CaMap,
 };
 use derive_where::derive_where;
 use dupe::Dupe;
+use future_form::FutureForm;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -19,16 +20,17 @@ use std::{
 #[derive(Default)]
 #[derive_where(Debug, Clone, Hash; T)]
 pub struct RevocationStore<
+    K: FutureForm + ?Sized,
     S: AsyncSigner,
-    T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    T: ContentRef,
+    L: MembershipListener<K, S, T>,
 > {
-    revocations: CaMap<Signed<Revocation<S, T, L>>>,
+    revocations: CaMap<Signed<Revocation<K, S, T, L>>>,
     #[derive_where(skip(Hash))]
-    agent_to_revocations: HashMap<AgentId, HashSet<Arc<Signed<Revocation<S, T, L>>>>>,
+    agent_to_revocations: HashMap<AgentId, HashSet<Arc<Signed<Revocation<K, S, T, L>>>>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore<S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> RevocationStore<K, S, T, L> {
     /// Create a new revocation store.
     pub fn new() -> Self {
         Self {
@@ -48,18 +50,18 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore
     /// Retrieve a [`Revocation`] by its [`Digest`].
     pub fn get(
         &self,
-        key: &Digest<Signed<Revocation<S, T, L>>>,
-    ) -> Option<Arc<Signed<Revocation<S, T, L>>>> {
+        key: &Digest<Signed<Revocation<K, S, T, L>>>,
+    ) -> Option<Arc<Signed<Revocation<K, S, T, L>>>> {
         self.revocations.get(key).cloned()
     }
 
     /// Check if a [`Digest`] is present in the store.
-    pub fn contains_key(&self, key: &Digest<Signed<Revocation<S, T, L>>>) -> bool {
+    pub fn contains_key(&self, key: &Digest<Signed<Revocation<K, S, T, L>>>) -> bool {
         self.revocations.contains_key(key)
     }
 
     /// Check if a [`Revocation`] is present in the store.
-    pub fn contains_value(&self, value: &Signed<Revocation<S, T, L>>) -> bool {
+    pub fn contains_value(&self, value: &Signed<Revocation<K, S, T, L>>) -> bool {
         self.revocations.contains_value(value)
     }
 
@@ -67,8 +69,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore
     #[allow(clippy::mutable_key_type)]
     pub fn insert(
         &mut self,
-        revocation: Arc<Signed<Revocation<S, T, L>>>,
-    ) -> Digest<Signed<Revocation<S, T, L>>> {
+        revocation: Arc<Signed<Revocation<K, S, T, L>>>,
+    ) -> Digest<Signed<Revocation<K, S, T, L>>> {
         let digest = self.revocations.insert(revocation.dupe());
         let agent_id = revocation.payload.revoke.payload.delegate().agent_id();
         self.agent_to_revocations
@@ -82,8 +84,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore
     #[allow(clippy::mutable_key_type)]
     pub fn remove_by_hash(
         &mut self,
-        hash: &Digest<Signed<Revocation<S, T, L>>>,
-    ) -> Option<Arc<Signed<Revocation<S, T, L>>>> {
+        hash: &Digest<Signed<Revocation<K, S, T, L>>>,
+    ) -> Option<Arc<Signed<Revocation<K, S, T, L>>>> {
         if let Some(revocation) = self.revocations.remove_by_hash(hash) {
             let agent_id = revocation.payload.revoke.payload.delegate().agent_id();
             if let Some(revocations_set) = self.agent_to_revocations.get_mut(&agent_id) {
@@ -103,7 +105,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore
     pub fn get_revocations_for_agent(
         &self,
         agent_id: &AgentId,
-    ) -> Option<HashSet<Arc<Signed<Revocation<S, T, L>>>>> {
+    ) -> Option<HashSet<Arc<Signed<Revocation<K, S, T, L>>>>> {
         self.agent_to_revocations.get(agent_id).cloned()
     }
 
@@ -113,8 +115,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore
         &self,
     ) -> std::collections::hash_map::Values<
         '_,
-        Digest<Signed<Revocation<S, T, L>>>,
-        Arc<Signed<Revocation<S, T, L>>>,
+        Digest<Signed<Revocation<K, S, T, L>>>,
+        Arc<Signed<Revocation<K, S, T, L>>>,
     > {
         self.revocations.values()
     }
@@ -125,8 +127,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore
         &self,
     ) -> std::collections::hash_map::Keys<
         '_,
-        Digest<Signed<Revocation<S, T, L>>>,
-        Arc<Signed<Revocation<S, T, L>>>,
+        Digest<Signed<Revocation<K, S, T, L>>>,
+        Arc<Signed<Revocation<K, S, T, L>>>,
     > {
         self.revocations.keys()
     }
@@ -137,8 +139,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore
         &self,
     ) -> impl Iterator<
         Item = (
-            &Digest<Signed<Revocation<S, T, L>>>,
-            &Arc<Signed<Revocation<S, T, L>>>,
+            &Digest<Signed<Revocation<K, S, T, L>>>,
+            &Arc<Signed<Revocation<K, S, T, L>>>,
         ),
     > {
         self.revocations.iter()
@@ -147,7 +149,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore
     /// Create a [`RevocationStore`] from an iterator of [`Revocation`]s.
     #[allow(clippy::mutable_key_type)]
     pub fn from_iter_direct(
-        iter: impl IntoIterator<Item = Arc<Signed<Revocation<S, T, L>>>>,
+        iter: impl IntoIterator<Item = Arc<Signed<Revocation<K, S, T, L>>>>,
     ) -> Self {
         let mut store = Self::new();
         for revocation in iter {

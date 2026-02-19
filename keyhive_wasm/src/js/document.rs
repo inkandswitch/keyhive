@@ -5,6 +5,7 @@ use super::{
     peer::JsPeer, signer::JsSigner,
 };
 use dupe::Dupe;
+use future_form::Local;
 use futures::lock::Mutex;
 use keyhive_core::principal::{
     agent::Agent,
@@ -20,7 +21,7 @@ use wasm_refgen::wasm_refgen;
 #[derive(Debug, Clone, Dupe)]
 pub struct JsDocument {
     pub(crate) doc_id: DocumentId,
-    pub(crate) inner: Arc<Mutex<Document<JsSigner, JsChangeId, JsEventHandler>>>,
+    pub(crate) inner: Arc<Mutex<Document<Local, JsSigner, JsChangeId, JsEventHandler>>>,
 }
 
 #[wasm_refgen(js_ref = JsDocumentRef)]

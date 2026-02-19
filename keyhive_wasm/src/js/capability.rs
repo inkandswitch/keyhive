@@ -3,6 +3,7 @@ use super::{
     signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use dupe::Dupe;
+use future_form::Local;
 use keyhive_core::{
     crypto::signed::Signed,
     principal::{agent::Agent, group::delegation::Delegation},
@@ -13,8 +14,8 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 #[derive(Debug, Clone, Dupe)]
 pub struct Capability {
-    pub(crate) who: Agent<JsSigner, JsChangeId, JsEventHandler>,
-    pub(crate) proof: Arc<Signed<Delegation<JsSigner, JsChangeId, JsEventHandler>>>,
+    pub(crate) who: Agent<Local, JsSigner, JsChangeId, JsEventHandler>,
+    pub(crate) proof: Arc<Signed<Delegation<Local, JsSigner, JsChangeId, JsEventHandler>>>,
 }
 
 #[wasm_bindgen]

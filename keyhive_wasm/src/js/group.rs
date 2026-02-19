@@ -6,6 +6,7 @@ use super::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
+use future_form::Local;
 use futures::lock::Mutex;
 use keyhive_core::principal::{
     agent::Agent,
@@ -21,7 +22,7 @@ use wasm_refgen::wasm_refgen;
 #[derive(Debug, Clone, Dupe, Into, From)]
 pub struct JsGroup {
     pub(crate) group_id: GroupId,
-    pub(crate) inner: Arc<Mutex<Group<JsSigner, JsChangeId, JsEventHandler>>>,
+    pub(crate) inner: Arc<Mutex<Group<Local, JsSigner, JsChangeId, JsEventHandler>>>,
 }
 
 #[wasm_refgen(js_ref = JsGroupRef)]

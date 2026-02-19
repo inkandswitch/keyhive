@@ -11,6 +11,7 @@ use crate::{
         revocation::{Revocation, StaticRevocation},
     },
 };
+use future_form::FutureForm;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -251,64 +252,64 @@ impl<T: Serialize> From<Digest<T>> for Vec<u8> {
 
 // Casts
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<Signed<Delegation<S, T, L>>>> for Digest<Signed<StaticDelegation<T>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Digest<Signed<Delegation<K, S, T, L>>>> for Digest<Signed<StaticDelegation<T>>>
 {
-    fn from(hash: Digest<Signed<Delegation<S, T, L>>>) -> Self {
+    fn from(hash: Digest<Signed<Delegation<K, S, T, L>>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<Signed<StaticDelegation<T>>>> for Digest<Signed<Delegation<S, T, L>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Digest<Signed<StaticDelegation<T>>>> for Digest<Signed<Delegation<K, S, T, L>>>
 {
     fn from(hash: Digest<Signed<StaticDelegation<T>>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<Signed<Revocation<S, T, L>>>> for Digest<Signed<StaticRevocation<T>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Digest<Signed<Revocation<K, S, T, L>>>> for Digest<Signed<StaticRevocation<T>>>
 {
-    fn from(hash: Digest<Signed<Revocation<S, T, L>>>) -> Self {
+    fn from(hash: Digest<Signed<Revocation<K, S, T, L>>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<Signed<StaticRevocation<T>>>> for Digest<Signed<Revocation<S, T, L>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Digest<Signed<StaticRevocation<T>>>> for Digest<Signed<Revocation<K, S, T, L>>>
 {
     fn from(hash: Digest<Signed<StaticRevocation<T>>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<Signed<Delegation<S, T, L>>>> for Digest<Signed<StaticDelegation<T>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<&Digest<Signed<Delegation<K, S, T, L>>>> for Digest<Signed<StaticDelegation<T>>>
 {
-    fn from(hash: &Digest<Signed<Delegation<S, T, L>>>) -> Self {
+    fn from(hash: &Digest<Signed<Delegation<K, S, T, L>>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<Signed<StaticDelegation<T>>>> for Digest<Signed<Delegation<S, T, L>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<&Digest<Signed<StaticDelegation<T>>>> for Digest<Signed<Delegation<K, S, T, L>>>
 {
     fn from(hash: &Digest<Signed<StaticDelegation<T>>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<Signed<Revocation<S, T, L>>>> for Digest<Signed<StaticRevocation<T>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<&Digest<Signed<Revocation<K, S, T, L>>>> for Digest<Signed<StaticRevocation<T>>>
 {
-    fn from(hash: &Digest<Signed<Revocation<S, T, L>>>) -> Self {
+    fn from(hash: &Digest<Signed<Revocation<K, S, T, L>>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<Signed<StaticRevocation<T>>>> for Digest<Signed<Revocation<S, T, L>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<&Digest<Signed<StaticRevocation<T>>>> for Digest<Signed<Revocation<K, S, T, L>>>
 {
     fn from(hash: &Digest<Signed<StaticRevocation<T>>>) -> Self {
         hash.coerce()
@@ -331,10 +332,10 @@ impl<T: ContentRef> From<Digest<Signed<StaticDelegation<T>>>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<MembershipOperation<S, T, L>>> for Digest<StaticMembershipOperation<T>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Digest<MembershipOperation<K, S, T, L>>> for Digest<StaticMembershipOperation<T>>
 {
-    fn from(hash: Digest<MembershipOperation<S, T, L>>) -> Self {
+    fn from(hash: Digest<MembershipOperation<K, S, T, L>>) -> Self {
         hash.coerce()
     }
 }
@@ -347,16 +348,16 @@ impl<T: ContentRef> From<Digest<StaticMembershipOperation<T>>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<StaticMembershipOperation<T>>> for Digest<Signed<Delegation<S, T, L>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Digest<StaticMembershipOperation<T>>> for Digest<Signed<Delegation<K, S, T, L>>>
 {
     fn from(hash: Digest<StaticMembershipOperation<T>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<StaticMembershipOperation<T>>> for Digest<Signed<Revocation<S, T, L>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Digest<StaticMembershipOperation<T>>> for Digest<Signed<Revocation<K, S, T, L>>>
 {
     fn from(hash: Digest<StaticMembershipOperation<T>>) -> Self {
         hash.coerce()
@@ -371,98 +372,98 @@ impl<T: ContentRef> From<Digest<StaticMembershipOperation<T>>>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<StaticMembershipOperation<T>>> for Digest<MembershipOperation<S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Digest<StaticMembershipOperation<T>>> for Digest<MembershipOperation<K, S, T, L>>
 {
     fn from(hash: Digest<StaticMembershipOperation<T>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<StaticMembershipOperation<T>>> for Digest<MembershipOperation<S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<&Digest<StaticMembershipOperation<T>>> for Digest<MembershipOperation<K, S, T, L>>
 {
     fn from(hash: &Digest<StaticMembershipOperation<T>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<MembershipOperation<S, T, L>>> for Digest<Signed<Delegation<S, T, L>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Digest<MembershipOperation<K, S, T, L>>> for Digest<Signed<Delegation<K, S, T, L>>>
 {
-    fn from(hash: Digest<MembershipOperation<S, T, L>>) -> Self {
+    fn from(hash: Digest<MembershipOperation<K, S, T, L>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<MembershipOperation<S, T, L>>> for Digest<Signed<Revocation<S, T, L>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Digest<MembershipOperation<K, S, T, L>>> for Digest<Signed<Revocation<K, S, T, L>>>
 {
-    fn from(hash: Digest<MembershipOperation<S, T, L>>) -> Self {
+    fn from(hash: Digest<MembershipOperation<K, S, T, L>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<MembershipOperation<S, T, L>>> for Digest<Signed<Delegation<S, T, L>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<&Digest<MembershipOperation<K, S, T, L>>> for Digest<Signed<Delegation<K, S, T, L>>>
 {
-    fn from(hash: &Digest<MembershipOperation<S, T, L>>) -> Self {
+    fn from(hash: &Digest<MembershipOperation<K, S, T, L>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<MembershipOperation<S, T, L>>> for Digest<Signed<Revocation<S, T, L>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<&Digest<MembershipOperation<K, S, T, L>>> for Digest<Signed<Revocation<K, S, T, L>>>
 {
-    fn from(hash: &Digest<MembershipOperation<S, T, L>>) -> Self {
+    fn from(hash: &Digest<MembershipOperation<K, S, T, L>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<Signed<Delegation<S, T, L>>>> for Digest<MembershipOperation<S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Digest<Signed<Delegation<K, S, T, L>>>> for Digest<MembershipOperation<K, S, T, L>>
 {
-    fn from(hash: Digest<Signed<Delegation<S, T, L>>>) -> Self {
+    fn from(hash: Digest<Signed<Delegation<K, S, T, L>>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<Signed<Delegation<S, T, L>>>> for Digest<MembershipOperation<S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<&Digest<Signed<Delegation<K, S, T, L>>>> for Digest<MembershipOperation<K, S, T, L>>
 {
-    fn from(hash: &Digest<Signed<Delegation<S, T, L>>>) -> Self {
+    fn from(hash: &Digest<Signed<Delegation<K, S, T, L>>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<Signed<Revocation<S, T, L>>>> for Digest<MembershipOperation<S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Digest<Signed<Revocation<K, S, T, L>>>> for Digest<MembershipOperation<K, S, T, L>>
 {
-    fn from(hash: Digest<Signed<Revocation<S, T, L>>>) -> Self {
+    fn from(hash: Digest<Signed<Revocation<K, S, T, L>>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<Signed<Revocation<S, T, L>>>> for Digest<MembershipOperation<S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<&Digest<Signed<Revocation<K, S, T, L>>>> for Digest<MembershipOperation<K, S, T, L>>
 {
-    fn from(hash: &Digest<Signed<Revocation<S, T, L>>>) -> Self {
+    fn from(hash: &Digest<Signed<Revocation<K, S, T, L>>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<MembershipOperation<S, T, L>>> for Digest<Event<S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Digest<MembershipOperation<K, S, T, L>>> for Digest<Event<K, S, T, L>>
 {
-    fn from(hash: Digest<MembershipOperation<S, T, L>>) -> Self {
+    fn from(hash: Digest<MembershipOperation<K, S, T, L>>) -> Self {
         hash.coerce()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Digest<Event<S, T, L>>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Digest<Event<K, S, T, L>>>
     for Digest<StaticEvent<T>>
 {
-    fn from(hash: Digest<Event<S, T, L>>) -> Self {
+    fn from(hash: Digest<Event<K, S, T, L>>) -> Self {
         hash.coerce()
     }
 }

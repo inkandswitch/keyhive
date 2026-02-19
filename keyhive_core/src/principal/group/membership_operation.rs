@@ -8,7 +8,7 @@ use crate::{
     crypto::{
         digest::Digest, signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable,
     },
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::membership::MembershipListener,
     principal::{document::id::DocumentId, identifier::Identifier},
     reversed::Reversed,
     store::{delegation::DelegationStore, revocation::RevocationStore},
@@ -17,6 +17,7 @@ use crate::{
 use derive_more::{From, Into};
 use derive_where::derive_where;
 use dupe::Dupe;
+use future_form::FutureForm;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
@@ -29,16 +30,17 @@ use tracing::instrument;
 
 #[derive_where(Debug, Clone, Eq; T)]
 pub enum MembershipOperation<
+    K: FutureForm + ?Sized,
     S: AsyncSigner,
-    T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    T: ContentRef,
+    L: MembershipListener<K, S, T>,
 > {
-    Delegation(Arc<Signed<Delegation<S, T, L>>>),
-    Revocation(Arc<Signed<Revocation<S, T, L>>>),
+    Delegation(Arc<Signed<Delegation<K, S, T, L>>>),
+    Revocation(Arc<Signed<Revocation<K, S, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
-    for MembershipOperation<S, T, L>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> std::hash::Hash
+    for MembershipOperation<K, S, T, L>
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
@@ -52,8 +54,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
-    for MembershipOperation<S, T, L>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> PartialEq
+    for MembershipOperation<K, S, T, L>
 {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -64,8 +66,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef + Serialize, L: MembershipListener<S, T>> Serialize
-    for MembershipOperation<S, T, L>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef + Serialize, L: MembershipListener<K, S, T>> Serialize
+    for MembershipOperation<K, S, T, L>
 {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         match self {
@@ -75,7 +77,7 @@ impl<S: AsyncSigner, T: ContentRef + Serialize, L: MembershipListener<S, T>> Ser
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOperation<S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> MembershipOperation<K, S, T, L> {
     pub fn subject_id(&self) -> Identifier {
         match self {
             MembershipOperation::Delegation(delegation) => delegation.subject_id(),
@@ -101,7 +103,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         !self.is_delegation()
     }
 
-    pub fn after_auth(&self) -> Vec<MembershipOperation<S, T, L>> {
+    pub fn after_auth(&self) -> Vec<MembershipOperation<K, S, T, L>> {
         let deps = self.after();
         deps.delegations
             .into_iter()
@@ -110,7 +112,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
             .collect()
     }
 
-    pub fn after(&self) -> Dependencies<'_, S, T, L> {
+    pub fn after(&self) -> Dependencies<'_, K, S, T, L> {
         match self {
             MembershipOperation::Delegation(delegation) => delegation.payload.after(),
             MembershipOperation::Revocation(revocation) => revocation.payload.after(),
@@ -131,7 +133,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         }
     }
 
-    pub fn ancestors(&self) -> (CaMap<MembershipOperation<S, T, L>>, usize) {
+    pub fn ancestors(&self) -> (CaMap<MembershipOperation<K, S, T, L>>, usize) {
         if self.is_root() {
             return (CaMap::new(), 1);
         }
@@ -178,18 +180,18 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
     #[allow(clippy::type_complexity)] // Clippy doens't like the returned pair
     #[instrument(skip_all)]
     pub fn reverse_topsort(
-        delegation_heads: &DelegationStore<S, T, L>,
-        revocation_heads: &RevocationStore<S, T, L>,
+        delegation_heads: &DelegationStore<K, S, T, L>,
+        revocation_heads: &RevocationStore<K, S, T, L>,
     ) -> Reversed<(
-        Digest<MembershipOperation<S, T, L>>,
-        MembershipOperation<S, T, L>,
+        Digest<MembershipOperation<K, S, T, L>>,
+        MembershipOperation<K, S, T, L>,
     )> {
         // NOTE: BTreeMap to get deterministic order
         let mut ops_with_ancestors: BTreeMap<
-            Digest<MembershipOperation<S, T, L>>,
+            Digest<MembershipOperation<K, S, T, L>>,
             (
-                MembershipOperation<S, T, L>,
-                CaMap<MembershipOperation<S, T, L>>,
+                MembershipOperation<K, S, T, L>,
+                CaMap<MembershipOperation<K, S, T, L>>,
                 usize,
             ),
         > = BTreeMap::new();
@@ -209,17 +211,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
             }
         }
 
-        let mut leftovers: HashMap<Key, MembershipOperation<S, T, L>> = HashMap::new();
-        let mut explore: Vec<MembershipOperation<S, T, L>> = vec![];
+        let mut leftovers: HashMap<Key, MembershipOperation<K, S, T, L>> = HashMap::new();
+        let mut explore: Vec<MembershipOperation<K, S, T, L>> = vec![];
 
         for dlg in delegation_heads.values() {
-            let op: MembershipOperation<S, T, L> = dlg.dupe().into();
+            let op: MembershipOperation<K, S, T, L> = dlg.dupe().into();
             leftovers.insert(op.signature().into(), op.clone());
             explore.push(op);
         }
 
         for rev in revocation_heads.values() {
-            let op: MembershipOperation<S, T, L> = rev.dupe().into();
+            let op: MembershipOperation<K, S, T, L> = rev.dupe().into();
             leftovers.insert(op.signature().into(), op.clone());
             explore.push(op);
         }
@@ -228,8 +230,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         let mut revoked_dependencies: HashMap<
             Key,
             (
-                Digest<MembershipOperation<S, T, L>>,
-                MembershipOperation<S, T, L>,
+                Digest<MembershipOperation<K, S, T, L>>,
+                MembershipOperation<K, S, T, L>,
             ),
         > = HashMap::new();
 
@@ -250,8 +252,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         }
 
         let mut adjacencies: TopologicalSort<(
-            Digest<MembershipOperation<S, T, L>>,
-            &MembershipOperation<S, T, L>,
+            Digest<MembershipOperation<K, S, T, L>>,
+            &MembershipOperation<K, S, T, L>,
         )> = topological_sort::TopologicalSort::new();
 
         for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
@@ -271,11 +273,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
                     .expect("values that we just put there to be there");
 
                 #[allow(clippy::mutable_key_type)]
-                let ancestor_set: HashSet<&MembershipOperation<S, T, L>> =
+                let ancestor_set: HashSet<&MembershipOperation<K, S, T, L>> =
                     op_ancestors.values().map(|op| op.as_ref()).collect();
 
                 #[allow(clippy::mutable_key_type)]
-                let other_ancestor_set: HashSet<&MembershipOperation<S, T, L>> =
+                let other_ancestor_set: HashSet<&MembershipOperation<K, S, T, L>> =
                     other_ancestors.values().map(|op| op.as_ref()).collect();
 
                 if other_ancestor_set.contains(op) || ancestor_set.is_subset(&other_ancestor_set) {
@@ -333,8 +335,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         }
 
         let mut history: Vec<(
-            Digest<MembershipOperation<S, T, L>>,
-            MembershipOperation<S, T, L>,
+            Digest<MembershipOperation<K, S, T, L>>,
+            MembershipOperation<K, S, T, L>,
         )> = leftovers
             .values()
             .map(|op| (Digest::hash(op), op.clone()))
@@ -360,16 +362,16 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe
-    for MembershipOperation<S, T, L>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Dupe
+    for MembershipOperation<K, S, T, L>
 {
     fn dupe(&self) -> Self {
         self.clone()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
-    for MembershipOperation<S, T, L>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable
+    for MembershipOperation<K, S, T, L>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         match self {
@@ -379,18 +381,18 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Arc<Signed<Delegation<S, T, L>>>> for MembershipOperation<S, T, L>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Arc<Signed<Delegation<K, S, T, L>>>> for MembershipOperation<K, S, T, L>
 {
-    fn from(delegation: Arc<Signed<Delegation<S, T, L>>>) -> Self {
+    fn from(delegation: Arc<Signed<Delegation<K, S, T, L>>>) -> Self {
         MembershipOperation::Delegation(delegation)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Arc<Signed<Revocation<S, T, L>>>> for MembershipOperation<S, T, L>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<Arc<Signed<Revocation<K, S, T, L>>>> for MembershipOperation<K, S, T, L>
 {
-    fn from(revocation: Arc<Signed<Revocation<S, T, L>>>) -> Self {
+    fn from(revocation: Arc<Signed<Revocation<K, S, T, L>>>) -> Self {
         MembershipOperation::Revocation(revocation)
     }
 }
@@ -402,10 +404,10 @@ pub enum StaticMembershipOperation<T: ContentRef> {
     Revocation(Signed<StaticRevocation<T>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<MembershipOperation<S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<MembershipOperation<K, S, T, L>>
     for StaticMembershipOperation<T>
 {
-    fn from(op: MembershipOperation<S, T, L>) -> Self {
+    fn from(op: MembershipOperation<K, S, T, L>) -> Self {
         match op {
             MembershipOperation::Delegation(d) => {
                 StaticMembershipOperation::Delegation(Arc::unwrap_or_clone(d).map(Into::into))
@@ -423,10 +425,12 @@ mod tests {
     use crate::{
         access::Access,
         crypto::signer::{memory::MemorySigner, sync_signer::SyncSigner},
+        listener::no_listener::NoListener,
         principal::{agent::Agent, individual::Individual},
         store::{delegation::DelegationStore, revocation::RevocationStore},
     };
     use dupe::Dupe;
+    use future_form::Local;
     use futures::lock::Mutex;
     use std::sync::{Arc, LazyLock};
 
@@ -449,6 +453,11 @@ mod tests {
 
     static ERIN_SIGNER: LazyLock<MemorySigner> =
         LazyLock::new(|| MemorySigner::generate(&mut rand::thread_rng()));
+
+    // Type aliases for test code
+    type TestDelegation<T = String> = Delegation<Local, MemorySigner, T, NoListener>;
+    type TestRevocation<T = String> = Revocation<Local, MemorySigner, T, NoListener>;
+    type TestMembershipOp<T = String> = MembershipOperation<Local, MemorySigner, T, NoListener>;
 
     /*
              ┌────────┐
@@ -482,7 +491,7 @@ mod tests {
 
     async fn add_alice<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
+    ) -> Arc<Signed<TestDelegation>> {
         let alice = Individual::generate(fixture(&ALICE_SIGNER), csprng)
             .await
             .unwrap();
@@ -504,7 +513,7 @@ mod tests {
 
     async fn add_bob<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
+    ) -> Arc<Signed<TestDelegation>> {
         let bob = Individual::generate(fixture(&BOB_SIGNER), csprng)
             .await
             .unwrap();
@@ -524,7 +533,7 @@ mod tests {
 
     async fn add_carol<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
+    ) -> Arc<Signed<TestDelegation>> {
         let carol = Individual::generate(fixture(&CAROL_SIGNER), csprng)
             .await
             .unwrap();
@@ -544,7 +553,7 @@ mod tests {
 
     async fn add_dan<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
+    ) -> Arc<Signed<TestDelegation>> {
         let dan = Individual::generate(fixture(&DAN_SIGNER), csprng)
             .await
             .unwrap();
@@ -564,7 +573,7 @@ mod tests {
 
     async fn add_erin<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
+    ) -> Arc<Signed<TestDelegation>> {
         let erin = Individual::generate(fixture(&ERIN_SIGNER), csprng)
             .await
             .unwrap();
@@ -584,7 +593,7 @@ mod tests {
 
     async fn remove_carol<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Arc<Signed<Revocation<MemorySigner, String>>> {
+    ) -> Arc<Signed<TestRevocation>> {
         Arc::new(
             fixture(&ALICE_SIGNER)
                 .try_sign_sync(Revocation {
@@ -598,7 +607,7 @@ mod tests {
 
     async fn remove_dan<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Arc<Signed<Revocation<MemorySigner, String>>> {
+    ) -> Arc<Signed<TestRevocation>> {
         Arc::new(
             fixture(&BOB_SIGNER)
                 .try_sign_sync(Revocation {
@@ -681,11 +690,12 @@ mod tests {
         fn test_empty() {
             test_utils::init_logging();
 
-            let dlgs = DelegationStore::new();
-            let revs = RevocationStore::new();
+            let dlgs: DelegationStore<Local, MemorySigner, String, NoListener> =
+                DelegationStore::new();
+            let revs: RevocationStore<Local, MemorySigner, String, NoListener> =
+                RevocationStore::new();
 
-            let observed =
-                MembershipOperation::<MemorySigner, String>::reverse_topsort(&dlgs, &revs);
+            let observed = TestMembershipOp::reverse_topsort(&dlgs, &revs);
             assert_eq!(observed, Reversed(vec![]));
         }
 
@@ -747,13 +757,13 @@ mod tests {
 
             let observed = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
 
-            let alice_op: MembershipOperation<MemorySigner, String> = alice_dlg.into();
+            let alice_op: TestMembershipOp = alice_dlg.into();
             let alice_hash = Digest::hash(&alice_op);
 
-            let carol_op: MembershipOperation<MemorySigner, String> = carol_dlg.into();
+            let carol_op: TestMembershipOp = carol_dlg.into();
             let carol_hash = Digest::hash(&carol_op);
 
-            let dan_op: MembershipOperation<MemorySigner, String> = dan_dlg.into();
+            let dan_op: TestMembershipOp = dan_dlg.into();
             let dan_hash = Digest::hash(&dan_op);
 
             let a = (alice_hash, alice_op.clone());
@@ -788,7 +798,7 @@ mod tests {
 
             let alice_sk = fixture(&ALICE_SIGNER).clone();
             let alice = Arc::new(Mutex::new(
-                Active::<_, [u8; 32], _>::generate(alice_sk, NoListener, csprng)
+                Active::<Local, _, [u8; 32], _>::generate(alice_sk, NoListener, csprng)
                     .await
                     .unwrap(),
             ));
@@ -812,7 +822,7 @@ mod tests {
 
             let locked_alice = alice.lock().await;
 
-            let alice_to_bob: Arc<Signed<Delegation<MemorySigner>>> = Arc::new(
+            let alice_to_bob: Arc<Signed<TestDelegation<[u8; 32]>>> = Arc::new(
                 locked_alice
                     .signer
                     .try_sign_sync(Delegation {
@@ -899,7 +909,7 @@ mod tests {
                     })
                     .unwrap(),
             );
-            let rev_op: MembershipOperation<MemorySigner, String> = alice_revokes_bob.dupe().into();
+            let rev_op: TestMembershipOp = alice_revokes_bob.dupe().into();
             let rev_hash = Digest::hash(&rev_op);
 
             let dlgs = DelegationStore::new();
@@ -907,10 +917,10 @@ mod tests {
 
             let mut observed = MembershipOperation::reverse_topsort(&dlgs, &revs);
 
-            let alice_op: MembershipOperation<MemorySigner, String> = alice_dlg.into();
+            let alice_op: TestMembershipOp = alice_dlg.into();
             let alice_hash = Digest::hash(&alice_op);
 
-            let bob_op: MembershipOperation<MemorySigner, String> = bob_dlg.into();
+            let bob_op: TestMembershipOp = bob_dlg.into();
             let bob_hash = Digest::hash(&bob_op);
 
             let a = (alice_hash, alice_op.clone());
@@ -940,11 +950,11 @@ mod tests {
             let alice_revokes_carol = remove_carol(csprng).await;
             let bob_revokes_dan = remove_dan(csprng).await;
 
-            let rev_carol_op: MembershipOperation<MemorySigner, String> =
+            let rev_carol_op: TestMembershipOp =
                 alice_revokes_carol.dupe().into();
             let rev_carol_hash = Digest::hash(&rev_carol_op);
 
-            let rev_dan_op: MembershipOperation<MemorySigner, String> =
+            let rev_dan_op: TestMembershipOp =
                 bob_revokes_dan.dupe().into();
             let rev_dan_hash = Digest::hash(&rev_dan_op);
 
@@ -956,19 +966,19 @@ mod tests {
 
             let observed = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
 
-            let alice_op: MembershipOperation<MemorySigner, String> = alice_dlg.clone().into();
+            let alice_op: TestMembershipOp = alice_dlg.clone().into();
             let alice_hash = Digest::hash(&alice_op);
 
-            let bob_op: MembershipOperation<MemorySigner, String> = bob_dlg.clone().into();
+            let bob_op: TestMembershipOp = bob_dlg.clone().into();
             let bob_hash = Digest::hash(&bob_op);
 
-            let carol_op: MembershipOperation<MemorySigner, String> = carol_dlg.clone().into();
+            let carol_op: TestMembershipOp = carol_dlg.clone().into();
             let carol_hash = Digest::hash(&carol_op);
 
-            let dan_op: MembershipOperation<MemorySigner, String> = dan_dlg.clone().into();
+            let dan_op: TestMembershipOp = dan_dlg.clone().into();
             let dan_hash = Digest::hash(&dan_op);
 
-            let erin_op: MembershipOperation<MemorySigner, String> = erin_dlg.clone().into();
+            let erin_op: TestMembershipOp = erin_dlg.clone().into();
             let erin_hash = Digest::hash(&erin_op);
 
             let mut bob_and_revoke_carol = [

@@ -38,6 +38,7 @@ use super::{
 use derive_more::{From, Into};
 use dupe::{Dupe, IterDupedExt};
 use from_js_ref::FromJsRef;
+use future_form::Local;
 use keyhive_core::{
     crypto::digest::Digest,
     event::{static_event::StaticEvent, Event},
@@ -52,7 +53,7 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(js_name = Keyhive)]
 #[derive(Debug, From, Into)]
 pub struct JsKeyhive(
-    pub(crate) Keyhive<JsSigner, JsChangeId, Vec<u8>, JsCiphertextStore, JsEventHandler, OsRng>,
+    pub(crate) Keyhive<Local, JsSigner, JsChangeId, Vec<u8>, JsCiphertextStore, JsEventHandler, OsRng>,
 );
 
 #[wasm_bindgen(js_class = Keyhive)]
@@ -419,7 +420,8 @@ impl JsKeyhive {
         for (digest, op) in membership_ops {
             let hash = js_sys::Uint8Array::from(digest.as_slice());
             let event: Event<JsSigner, JsChangeId, JsEventHandler> = op.into();
-            let js_event = JsEvent::from(event);
+            let static_event: StaticEvent<JsChangeId> = event.into();
+            let js_event = JsEvent::from(static_event);
             map.set(&hash.into(), &JsValue::from(js_event));
         }
         map

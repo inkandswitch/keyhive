@@ -13,6 +13,7 @@ use crate::{
     listener::prekey::PrekeyListener,
 };
 use dupe::Dupe;
+use future_form::FutureForm;
 use futures::lock::Mutex;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -65,10 +66,10 @@ impl Public {
         }
     }
 
-    pub fn active<T: ContentRef, L: PrekeyListener>(
+    pub fn active<K: FutureForm + ?Sized, T: ContentRef, L: PrekeyListener<K>>(
         &self,
         listener: L,
-    ) -> Active<MemorySigner, T, L> {
+    ) -> Active<K, MemorySigner, T, L> {
         Active {
             id: self.signer().verifying_key().into(),
             signer: self.signer(),

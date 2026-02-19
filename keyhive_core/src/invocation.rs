@@ -1,27 +1,23 @@
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::membership::MembershipListener,
     principal::group::delegation::{Delegation, StaticDelegation},
 };
 use derive_where::derive_where;
+use future_form::FutureForm;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-#[derive_where(Clone; T)]
-pub struct Invocation<
-    S: AsyncSigner,
-    C: ContentRef = [u8; 32],
-    L: MembershipListener<S, C> = NoListener,
-    T: Clone = C,
-> {
-    pub(crate) invoke: T,
-    pub(crate) proof: Option<Arc<Signed<Delegation<S, C, L>>>>,
+#[derive_where(Clone; U)]
+pub struct Invocation<K: FutureForm + ?Sized, S: AsyncSigner, C: ContentRef, L: MembershipListener<K, S, C>, U: Clone = C> {
+    pub(crate) invoke: U,
+    pub(crate) proof: Option<Arc<Signed<Delegation<K, S, C, L>>>>,
 }
 
-impl<S: AsyncSigner, C: ContentRef, L: MembershipListener<S, C>, T: Clone + Serialize> Serialize
-    for Invocation<S, C, L, T>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, C: ContentRef, L: MembershipListener<K, S, C>, U: Clone + Serialize> Serialize
+    for Invocation<K, S, C, L, U>
 {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticInvocation::from(self.clone()).serialize(serializer)
@@ -29,15 +25,15 @@ impl<S: AsyncSigner, C: ContentRef, L: MembershipListener<S, C>, T: Clone + Seri
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct StaticInvocation<C: ContentRef, T: Clone> {
-    pub(crate) invoke: T,
+pub struct StaticInvocation<C: ContentRef, U: Clone> {
+    pub(crate) invoke: U,
     pub(crate) proof: Option<Digest<Signed<StaticDelegation<C>>>>,
 }
 
-impl<S: AsyncSigner, C: ContentRef, L: MembershipListener<S, C>, T: Clone>
-    From<Invocation<S, C, L, T>> for StaticInvocation<C, T>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, C: ContentRef, L: MembershipListener<K, S, C>, U: Clone>
+    From<Invocation<K, S, C, L, U>> for StaticInvocation<C, U>
 {
-    fn from(invocation: Invocation<S, C, L, T>) -> Self {
+    fn from(invocation: Invocation<K, S, C, L, U>) -> Self {
         let invoke = invocation.invoke;
         let proof = invocation
             .proof

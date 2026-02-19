@@ -74,36 +74,36 @@ use tracing::instrument;
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
 pub struct Keyhive<
+    K: FutureForm + ?Sized,
     S: AsyncSigner + Clone,
-    T: ContentRef = [u8; 32],
-    P: for<'de> Deserialize<'de> = Vec<u8>,
-    K: FutureForm + ?Sized = Local,
-    C: CiphertextStore<K, T, P> + Clone = MemoryCiphertextStore<T, P>,
-    L: MembershipListener<S, T> = NoListener,
-    R: rand::CryptoRng = rand::rngs::OsRng,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<K, T, P> + Clone,
+    L: MembershipListener<K, S, T>,
+    R: rand::CryptoRng,
 > {
     /// The public verifying key for the active user.
     verifying_key: ed25519_dalek::VerifyingKey,
 
     /// The [`Active`] user agent.
-    active: Arc<Mutex<Active<S, T, L>>>,
+    active: Arc<Mutex<Active<K, S, T, L>>>,
 
     /// The [`Individual`]s that are known to this agent.
     individuals: Arc<Mutex<HashMap<IndividualId, Arc<Mutex<Individual>>>>>,
 
     /// The [`Group`]s that are known to this agent.
     #[allow(clippy::type_complexity)]
-    groups: Arc<Mutex<HashMap<GroupId, Arc<Mutex<Group<S, T, L>>>>>>,
+    groups: Arc<Mutex<HashMap<GroupId, Arc<Mutex<Group<K, S, T, L>>>>>>,
 
     /// The [`Document`]s that are known to this agent.
     #[allow(clippy::type_complexity)]
-    docs: Arc<Mutex<HashMap<DocumentId, Arc<Mutex<Document<S, T, L>>>>>>,
+    docs: Arc<Mutex<HashMap<DocumentId, Arc<Mutex<Document<K, S, T, L>>>>>>,
 
     /// All applied [`Delegation`]s
-    delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+    delegations: Arc<Mutex<DelegationStore<K, S, T, L>>>,
 
     /// All applied [`Revocation`]s
-    revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
+    revocations: Arc<Mutex<RevocationStore<K, S, T, L>>>,
 
     /// [`StaticEvent`]s that are still awaiting dependencies.
     pending_events: Arc<Mutex<Vec<Arc<StaticEvent<T>>>>>,
@@ -122,14 +122,14 @@ pub struct Keyhive<
 }
 
 impl<
+        K: FutureForm + ?Sized,
         S: AsyncSigner + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
-        K: FutureForm + ?Sized,
         C: CiphertextStore<K, T, P> + Clone,
-        L: MembershipListener<S, T>,
+        L: MembershipListener<K, S, T>,
         R: rand::CryptoRng + rand::RngCore,
-    > Keyhive<S, T, P, K, C, L, R>
+    > Keyhive<K, S, T, P, C, L, R>
 {
     #[instrument(skip_all)]
     pub fn id(&self) -> IndividualId {
@@ -177,7 +177,7 @@ impl<
 
     /// The current [`Active`] Keyhive user.
     #[instrument(skip_all)]
-    pub fn active(&self) -> &Arc<Mutex<Active<S, T, L>>> {
+    pub fn active(&self) -> &Arc<Mutex<Active<K, S, T, L>>> {
         &self.active
     }
 
@@ -194,13 +194,13 @@ impl<
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub fn groups(&self) -> &Arc<Mutex<HashMap<GroupId, Arc<Mutex<Group<S, T, L>>>>>> {
+    pub fn groups(&self) -> &Arc<Mutex<HashMap<GroupId, Arc<Mutex<Group<K, S, T, L>>>>>> {
         &self.groups
     }
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub fn documents(&self) -> &Arc<Mutex<HashMap<DocumentId, Arc<Mutex<Document<S, T, L>>>>>> {
+    pub fn documents(&self) -> &Arc<Mutex<HashMap<DocumentId, Arc<Mutex<Document<K, S, T, L>>>>>> {
         &self.docs
     }
 
@@ -208,8 +208,8 @@ impl<
     #[instrument(skip_all)]
     pub async fn generate_group(
         &self,
-        coparents: Vec<Peer<S, T, L>>,
-    ) -> Result<Arc<Mutex<Group<S, T, L>>>, SigningError> {
+        coparents: Vec<Peer<K, S, T, L>>,
+    ) -> Result<Arc<Mutex<Group<K, S, T, L>>>, SigningError> {
         let group = Group::generate(
             NonEmpty {
                 head: Agent::Active(self.active.lock().await.id(), self.active.dupe()),
@@ -231,9 +231,9 @@ impl<
     #[instrument(skip_all)]
     pub async fn generate_doc(
         &self,
-        coparents: Vec<Peer<S, T, L>>,
+        coparents: Vec<Peer<K, S, T, L>>,
         initial_content_heads: NonEmpty<T>,
-    ) -> Result<Arc<Mutex<Document<S, T, L>>>, GenerateDocError> {
+    ) -> Result<Arc<Mutex<Document<K, S, T, L>>>, GenerateDocError> {
         for peer in coparents.iter() {
             if self.get_agent(peer.id()).await.is_none() {
                 self.register_peer(peer.dupe()).await;
@@ -344,7 +344,7 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn register_peer(&self, peer: Peer<S, T, L>) -> bool {
+    pub async fn register_peer(&self, peer: Peer<K, S, T, L>) -> bool {
         if self.get_peer(peer.id()).await.is_some() {
             return false;
         }
@@ -380,7 +380,7 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn register_group(&self, root_delegation: Signed<Delegation<S, T, L>>) -> bool {
+    pub async fn register_group(&self, root_delegation: Signed<Delegation<K, S, T, L>>) -> bool {
         if self
             .groups
             .lock()
@@ -414,8 +414,8 @@ impl<
     #[instrument(skip_all)]
     pub async fn get_membership_operation(
         &self,
-        digest: &Digest<MembershipOperation<S, T, L>>,
-    ) -> Option<MembershipOperation<S, T, L>> {
+        digest: &Digest<MembershipOperation<K, S, T, L>>,
+    ) -> Option<MembershipOperation<K, S, T, L>> {
         if let Some(d) = self.delegations.lock().await.get(&digest.into()) {
             Some(d.dupe().into())
         } else {
@@ -430,11 +430,11 @@ impl<
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &self,
-        to_add: Agent<S, T, L>,
-        resource: &Membered<S, T, L>,
+        to_add: Agent<K, S, T, L>,
+        resource: &Membered<K, S, T, L>,
         can: Access,
-        other_relevant_docs: &[Arc<Mutex<Document<S, T, L>>>], // TODO make this automatic
-    ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError> {
+        other_relevant_docs: &[Arc<Mutex<Document<K, S, T, L>>>], // TODO make this automatic
+    ) -> Result<AddMemberUpdate<K, S, T, L>, AddMemberError> {
         let signer = { self.active.lock().await.signer.clone() };
         match resource {
             Membered::Group(_, group) => Ok(group
@@ -457,8 +457,8 @@ impl<
         &self,
         to_revoke: Identifier,
         retain_all_other_members: bool,
-        resource: &Membered<S, T, L>,
-    ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
+        resource: &Membered<K, S, T, L>,
+    ) -> Result<RevokeMemberUpdate<K, S, T, L>, RevokeMemberError> {
         let mut relevant_docs = BTreeMap::new();
         for (doc_id, Ability { doc, .. }) in self.reachable_docs().await {
             let locked = doc.lock().await;
@@ -479,7 +479,7 @@ impl<
     #[instrument(skip_all)]
     pub async fn try_encrypt_content(
         &self,
-        doc: Arc<Mutex<Document<S, T, L>>>,
+        doc: Arc<Mutex<Document<K, S, T, L>>>,
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
@@ -506,7 +506,7 @@ impl<
 
     pub async fn try_decrypt_content(
         &self,
-        doc: Arc<Mutex<Document<S, T, L>>>,
+        doc: Arc<Mutex<Document<K, S, T, L>>>,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
         doc.lock().await.try_decrypt_content(encrypted)
@@ -514,7 +514,7 @@ impl<
 
     pub async fn try_causal_decrypt_content(
         &self,
-        doc: Arc<Mutex<Document<S, T, L>>>,
+        doc: Arc<Mutex<Document<K, S, T, L>>>,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<K, T, P, C>>
     where
@@ -523,14 +523,14 @@ impl<
     {
         doc.lock()
             .await
-            .try_causal_decrypt_content::<K, _, _>(encrypted, self.ciphertext_store.clone())
+            .try_causal_decrypt_content::<_, _>(encrypted, self.ciphertext_store.clone())
             .await
     }
 
     #[instrument(skip_all)]
     pub async fn force_pcs_update(
         &self,
-        doc: Arc<Mutex<Document<S, T, L>>>,
+        doc: Arc<Mutex<Document<K, S, T, L>>>,
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
         let signer = { self.active.lock().await.signer.clone() };
         let mut locked_csprng = self.csprng.lock().await;
@@ -541,7 +541,7 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<S, T, L>> {
+    pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<K, S, T, L>> {
         let active = self.active.dupe();
         let locked_active = self.active.lock().await;
         self.docs_reachable_by_agent(&Agent::Active(locked_active.id(), active))
@@ -551,8 +551,8 @@ impl<
     #[instrument(skip_all)]
     pub async fn reachable_members(
         &self,
-        membered: Membered<S, T, L>,
-    ) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
+        membered: Membered<K, S, T, L>,
+    ) -> HashMap<Identifier, (Agent<K, S, T, L>, Access)> {
         match membered {
             Membered::Group(_, group) => group.lock().await.transitive_members().await,
             Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
@@ -562,9 +562,9 @@ impl<
     #[instrument(skip_all)]
     pub async fn docs_reachable_by_agent(
         &self,
-        agent: &Agent<S, T, L>,
-    ) -> BTreeMap<DocumentId, Ability<S, T, L>> {
-        let mut caps: BTreeMap<DocumentId, Ability<S, T, L>> = BTreeMap::new();
+        agent: &Agent<K, S, T, L>,
+    ) -> BTreeMap<DocumentId, Ability<K, S, T, L>> {
+        let mut caps: BTreeMap<DocumentId, Ability<K, S, T, L>> = BTreeMap::new();
 
         // TODO will be very slow on large hives. Old code here: https://github.com/inkandswitch/keyhive/pull/111/files:
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
@@ -587,8 +587,8 @@ impl<
     #[instrument(skip_all)]
     pub async fn membered_reachable_by_agent(
         &self,
-        agent: &Agent<S, T, L>,
-    ) -> HashMap<MemberedId, (Membered<S, T, L>, Access)> {
+        agent: &Agent<K, S, T, L>,
+    ) -> HashMap<MemberedId, (Membered<K, S, T, L>, Access)> {
         let mut caps = HashMap::new();
 
         let groups = {
@@ -633,8 +633,8 @@ impl<
     #[instrument(skip_all)]
     pub async fn events_for_agent(
         &self,
-        agent: &Agent<S, T, L>,
-    ) -> Result<HashMap<Digest<Event<S, T, L>>, Event<S, T, L>>, CgkaError> {
+        agent: &Agent<K, S, T, L>,
+    ) -> Result<HashMap<Digest<Event<K, S, T, L>>, Event<K, S, T, L>>, CgkaError> {
         let mut ops: HashMap<_, _> = self
             .membership_ops_for_agent(agent)
             .await
@@ -644,13 +644,13 @@ impl<
 
         for key_ops in self.reachable_prekey_ops_for_agent(agent).await.values() {
             for key_op in key_ops.iter() {
-                let op = Event::<S, T, L>::from(key_op.as_ref().dupe());
+                let op = Event::<K, S, T, L>::from(key_op.as_ref().dupe());
                 ops.insert(Digest::hash(&op), op);
             }
         }
 
         for cgka_op in self.cgka_ops_reachable_by_agent(agent).await?.into_iter() {
-            let op = Event::<S, T, L>::from(cgka_op);
+            let op = Event::<K, S, T, L>::from(cgka_op);
             ops.insert(Digest::hash(&op), op);
         }
 
@@ -660,7 +660,7 @@ impl<
     #[instrument(skip_all)]
     pub async fn static_events_for_agent(
         &self,
-        agent: &Agent<S, T, L>,
+        agent: &Agent<K, S, T, L>,
     ) -> Result<HashMap<Digest<StaticEvent<T>>, StaticEvent<T>>, CgkaError> {
         Ok(self
             .events_for_agent(agent)
@@ -673,7 +673,7 @@ impl<
     #[instrument(skip_all)]
     pub async fn cgka_ops_reachable_by_agent(
         &self,
-        agent: &Agent<S, T, L>,
+        agent: &Agent<K, S, T, L>,
     ) -> Result<Vec<Arc<Signed<CgkaOperation>>>, CgkaError> {
         let mut ops = Vec::new();
         let reachable = { self.docs_reachable_by_agent(agent).await };
@@ -708,15 +708,15 @@ impl<
     #[instrument(skip_all)]
     pub async fn membership_ops_for_agent(
         &self,
-        agent: &Agent<S, T, L>,
-    ) -> HashMap<Digest<MembershipOperation<S, T, L>>, MembershipOperation<S, T, L>> {
+        agent: &Agent<K, S, T, L>,
+    ) -> HashMap<Digest<MembershipOperation<K, S, T, L>>, MembershipOperation<K, S, T, L>> {
         let mut ops = HashMap::new();
         let mut visited_hashes = HashSet::new();
 
         #[allow(clippy::type_complexity)]
         let mut heads: Vec<(
-            Digest<MembershipOperation<S, T, L>>,
-            MembershipOperation<S, T, L>,
+            Digest<MembershipOperation<K, S, T, L>>,
+            MembershipOperation<K, S, T, L>,
         )> = Vec::new();
 
         for (mem_rc, _max_acces) in self.membered_reachable_by_agent(agent).await.values() {
@@ -737,7 +737,7 @@ impl<
             .get_revocations_for_agent(&agent.agent_id())
         {
             for rev in agent_revocations {
-                let hash: Digest<MembershipOperation<S, T, L>> = Digest::hash(rev.as_ref()).into();
+                let hash: Digest<MembershipOperation<K, S, T, L>> = Digest::hash(rev.as_ref()).into();
                 heads.push((hash, rev.into()));
             }
         }
@@ -787,7 +787,7 @@ impl<
     #[instrument(skip_all)]
     pub async fn reachable_prekey_ops_for_agent(
         &self,
-        agent: &Agent<S, T, L>,
+        agent: &Agent<K, S, T, L>,
     ) -> HashMap<Identifier, Vec<Arc<KeyOp>>> {
         fn add_many_keys(
             map: &mut HashMap<Identifier, HashSet<Arc<KeyOp>>>,
@@ -913,18 +913,18 @@ impl<
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub async fn get_group(&self, id: GroupId) -> Option<Arc<Mutex<Group<S, T, L>>>> {
+    pub async fn get_group(&self, id: GroupId) -> Option<Arc<Mutex<Group<K, S, T, L>>>> {
         self.groups.lock().await.get(&id).duped()
     }
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub async fn get_document(&self, id: DocumentId) -> Option<Arc<Mutex<Document<S, T, L>>>> {
+    pub async fn get_document(&self, id: DocumentId) -> Option<Arc<Mutex<Document<K, S, T, L>>>> {
         self.docs.lock().await.get(&id).duped()
     }
 
     #[instrument(skip_all)]
-    pub async fn get_peer(&self, id: Identifier) -> Option<Peer<S, T, L>> {
+    pub async fn get_peer(&self, id: Identifier) -> Option<Peer<K, S, T, L>> {
         let indie_id = IndividualId(id);
 
         {
@@ -952,7 +952,7 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn get_agent(&self, id: Identifier) -> Option<Agent<S, T, L>> {
+    pub async fn get_agent(&self, id: Identifier) -> Option<Agent<K, S, T, L>> {
         let indie_id = id.into();
 
         let active_id = { self.active.lock().await.id() };
@@ -988,7 +988,7 @@ impl<
     pub async fn static_event_to_event(
         &self,
         static_event: StaticEvent<T>,
-    ) -> Result<Event<S, T, L>, StaticEventConversionError<S, T, L>> {
+    ) -> Result<Event<K, S, T, L>, StaticEventConversionError<K, S, T, L>> {
         match static_event {
             StaticEvent::PrekeysExpanded(op) => Ok(Event::PrekeysExpanded(Arc::new(*op))),
             StaticEvent::PrekeyRotated(op) => Ok(Event::PrekeyRotated(Arc::new(*op))),
@@ -1016,8 +1016,8 @@ impl<
     async fn static_delegation_to_delegation(
         &self,
         static_dlg: &Signed<StaticDelegation<T>>,
-    ) -> Result<Delegation<S, T, L>, StaticEventConversionError<S, T, L>> {
-        let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
+    ) -> Result<Delegation<K, S, T, L>, StaticEventConversionError<K, S, T, L>> {
+        let proof: Option<Arc<Signed<Delegation<K, S, T, L>>>> =
             if let Some(proof_hash) = static_dlg.payload().proof {
                 let hash = proof_hash.into();
                 Some(
@@ -1032,7 +1032,7 @@ impl<
             };
 
         let delegate_id = static_dlg.payload().delegate;
-        let delegate: Agent<S, T, L> = self
+        let delegate: Agent<K, S, T, L> = self
             .get_agent(delegate_id)
             .await
             .ok_or(StaticEventConversionError::UnknownAgent(delegate_id))?;
@@ -1062,16 +1062,16 @@ impl<
     async fn static_revocation_to_revocation(
         &self,
         static_rev: &Signed<StaticRevocation<T>>,
-    ) -> Result<Revocation<S, T, L>, StaticEventConversionError<S, T, L>> {
+    ) -> Result<Revocation<K, S, T, L>, StaticEventConversionError<K, S, T, L>> {
         let revoke_hash = static_rev.payload.revoke.into();
-        let revoke: Arc<Signed<Delegation<S, T, L>>> = self
+        let revoke: Arc<Signed<Delegation<K, S, T, L>>> = self
             .delegations
             .lock()
             .await
             .get(&revoke_hash)
             .ok_or(StaticEventConversionError::MissingDelegation(revoke_hash))?;
 
-        let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
+        let proof: Option<Arc<Signed<Delegation<K, S, T, L>>>> =
             if let Some(proof_hash) = static_rev.payload().proof {
                 let hash = proof_hash.into();
                 Some(
@@ -1143,7 +1143,7 @@ impl<
     pub async fn receive_delegation(
         &self,
         static_dlg: &Signed<StaticDelegation<T>>,
-    ) -> Result<(), ReceiveStaticDelegationError<S, T, L>> {
+    ) -> Result<(), ReceiveStaticDelegationError<K, S, T, L>> {
         if self
             .delegations
             .lock()
@@ -1240,7 +1240,7 @@ impl<
     pub async fn receive_revocation(
         &self,
         static_rev: &Signed<StaticRevocation<T>>,
-    ) -> Result<(), ReceiveStaticDelegationError<S, T, L>> {
+    ) -> Result<(), ReceiveStaticDelegationError<K, S, T, L>> {
         if self
             .revocations
             .lock()
@@ -1310,7 +1310,7 @@ impl<
     pub async fn receive_static_event(
         &self,
         static_event: StaticEvent<T>,
-    ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+    ) -> Result<(), ReceiveStaticEventError<K, S, T, L>> {
         match static_event {
             StaticEvent::PrekeysExpanded(add_op) => {
                 self.receive_prekey_op(&Arc::new(*add_op).into()).await?
@@ -1331,7 +1331,7 @@ impl<
     pub async fn receive_membership_op(
         &self,
         static_op: &StaticMembershipOperation<T>,
-    ) -> Result<(), ReceiveStaticDelegationError<S, T, L>> {
+    ) -> Result<(), ReceiveStaticDelegationError<K, S, T, L>> {
         match static_op {
             StaticMembershipOperation::Delegation(d) => self.receive_delegation(d).await?,
             StaticMembershipOperation::Revocation(r) => self.receive_revocation(r).await?,
@@ -1396,8 +1396,8 @@ impl<
     pub async fn promote_individual_to_group(
         &self,
         individual: Arc<Mutex<Individual>>,
-        head: Arc<Signed<Delegation<S, T, L>>>,
-    ) -> Arc<Mutex<Group<S, T, L>>> {
+        head: Arc<Signed<Delegation<K, S, T, L>>>,
+    ) -> Arc<Mutex<Group<K, S, T, L>>> {
         let indie = individual.lock().await.clone();
         let group = Arc::new(Mutex::new(
             Group::from_individual(
@@ -1467,7 +1467,7 @@ impl<
         let topsorted_ops = {
             let delegations = self.delegations.lock().await;
             let revocations = self.revocations.lock().await;
-            MembershipOperation::<S, T, L>::reverse_topsort(&delegations, &revocations)
+            MembershipOperation::<K, S, T, L>::reverse_topsort(&delegations, &revocations)
                 .into_iter()
                 .rev()
                 .map(|(k, v)| (k.into(), v.into()))
@@ -1528,7 +1528,7 @@ impl<
         ciphertext_store: C,
         listener: L,
         csprng: Arc<Mutex<R>>,
-    ) -> Result<Self, TryFromArchiveError<S, T, L>> {
+    ) -> Result<Self, TryFromArchiveError<K, S, T, L>> {
         let raw_active = Active::from_archive(&archive.active, signer, listener.clone());
 
         let delegations = Arc::new(Mutex::new(DelegationStore::new()));
@@ -1546,7 +1546,7 @@ impl<
         for (group_id, group_archive) in archive.groups.iter() {
             groups.insert(
                 *group_id,
-                Arc::new(Mutex::new(Group::<S, T, L>::dummy_from_archive(
+                Arc::new(Mutex::new(Group::<K, S, T, L>::dummy_from_archive(
                     group_archive.clone(),
                     delegations.dupe(),
                     revocations.dupe(),
@@ -1559,7 +1559,7 @@ impl<
         for (doc_id, doc_archive) in archive.docs.iter() {
             docs.insert(
                 *doc_id,
-                Arc::new(Mutex::new(Document::<S, T, L>::dummy_from_archive(
+                Arc::new(Mutex::new(Document::<K, S, T, L>::dummy_from_archive(
                     doc_archive.clone(),
                     delegations.dupe(),
                     revocations.dupe(),
@@ -1571,7 +1571,7 @@ impl<
         for (_digest, static_op) in archive.topsorted_ops.iter() {
             match static_op {
                 StaticMembershipOperation::Delegation(sd) => {
-                    let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
+                    let proof: Option<Arc<Signed<Delegation<K, S, T, L>>>> =
                         if let Some(proof_digest) = sd.payload.proof {
                             Some(delegations.lock().await.get(&proof_digest.into()).ok_or(
                                 TryFromArchiveError::MissingDelegation(proof_digest.into()),
@@ -1582,7 +1582,7 @@ impl<
 
                     let mut after_revocations = vec![];
                     for rev_digest in sd.payload.after_revocations.iter() {
-                        let r: Arc<Signed<Revocation<S, T, L>>> = revocations
+                        let r: Arc<Signed<Revocation<K, S, T, L>>> = revocations
                             .lock()
                             .await
                             .get(&rev_digest.into())
@@ -1593,7 +1593,7 @@ impl<
                     }
 
                     let id = sd.payload.delegate;
-                    let delegate: Agent<S, T, L> = if id == archive.active.individual.id().into() {
+                    let delegate: Agent<K, S, T, L> = if id == archive.active.individual.id().into() {
                         Agent::Active(id.into(), active.dupe())
                     } else {
                         individuals
@@ -1656,19 +1656,19 @@ impl<
         }
 
         #[allow(clippy::type_complexity)]
-        async fn reify_ops<Z: AsyncSigner, U: ContentRef, M: MembershipListener<Z, U>>(
-            group: &mut Group<Z, U, M>,
-            dlg_store: Arc<Mutex<DelegationStore<Z, U, M>>>,
-            rev_store: Arc<Mutex<RevocationStore<Z, U, M>>>,
+        async fn reify_ops<FF: FutureForm + ?Sized, Z: AsyncSigner, U: ContentRef, M: MembershipListener<FF, Z, U>>(
+            group: &mut Group<FF, Z, U, M>,
+            dlg_store: Arc<Mutex<DelegationStore<FF, Z, U, M>>>,
+            rev_store: Arc<Mutex<RevocationStore<FF, Z, U, M>>>,
             dlg_head_hashes: &HashSet<Digest<Signed<StaticDelegation<U>>>>,
             rev_head_hashes: &HashSet<Digest<Signed<StaticRevocation<U>>>>,
-            members: HashMap<Identifier, NonEmpty<Digest<Signed<Delegation<Z, U, M>>>>>,
-        ) -> Result<(), TryFromArchiveError<Z, U, M>> {
+            members: HashMap<Identifier, NonEmpty<Digest<Signed<Delegation<FF, Z, U, M>>>>>,
+        ) -> Result<(), TryFromArchiveError<FF, Z, U, M>> {
             let read_dlgs = dlg_store.lock().await;
             let read_revs = rev_store.lock().await;
 
             for dlg_hash in dlg_head_hashes.iter() {
-                let actual_dlg: Arc<Signed<Delegation<Z, U, M>>> = read_dlgs
+                let actual_dlg: Arc<Signed<Delegation<FF, Z, U, M>>> = read_dlgs
                     .get(&dlg_hash.into())
                     .ok_or(TryFromArchiveError::MissingDelegation(dlg_hash.into()))?
                     .dupe();
@@ -1773,7 +1773,7 @@ impl<
     pub async fn ingest_archive(
         &self,
         archive: Archive<T>,
-    ) -> Result<Vec<Arc<StaticEvent<T>>>, ReceiveStaticEventError<S, T, L>> {
+    ) -> Result<Vec<Arc<StaticEvent<T>>>, ReceiveStaticEventError<K, S, T, L>> {
         tracing::debug!("Keyhive::ingest_archive()");
         {
             let locked_active = self.active.lock().await;
@@ -1879,8 +1879,8 @@ impl<
     #[instrument(level = "trace", skip_all)]
     pub async fn ingest_event_table(
         &self,
-        events: HashMap<Digest<Event<S, T, L>>, Event<S, T, L>>,
-    ) -> Result<(), ReceiveStaticEventError<S, T, L>> {
+        events: HashMap<Digest<Event<K, S, T, L>>, Event<K, S, T, L>>,
+    ) -> Result<(), ReceiveStaticEventError<K, S, T, L>> {
         tracing::debug!("Keyhive::ingest_event_table");
         self.ingest_unsorted_static_events(
             events.values().cloned().map(Into::into).collect::<Vec<_>>(),
@@ -1994,14 +1994,14 @@ impl<
 }
 
 impl<
+        K: FutureForm + ?Sized,
         S: AsyncSigner + Clone,
         T: ContentRef + Debug,
         P: for<'de> Deserialize<'de>,
-        K: FutureForm + ?Sized,
         C: CiphertextStore<K, T, P> + Clone,
-        L: MembershipListener<S, T>,
+        L: MembershipListener<K, S, T>,
         R: rand::CryptoRng + rand::RngCore,
-    > Debug for Keyhive<S, T, P, K, C, L, R>
+    > Debug for Keyhive<K, S, T, P, C, L, R>
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.debug_struct("Keyhive")
@@ -2021,13 +2021,12 @@ impl<
         S: AsyncSigner + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
-        K: FutureForm + ?Sized,
-        C: CiphertextStore<K, T, P> + Clone,
-        L: MembershipListener<S, T>,
+        C: CiphertextStore<Local, T, P> + Clone,
+        L: MembershipListener<Local, S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > ForkAsync for Keyhive<S, T, P, K, C, L, R>
+    > ForkAsync for Keyhive<Local, S, T, P, C, L, R>
 {
-    type AsyncForked = Keyhive<S, T, P, K, C, Log<S, T>, R>;
+    type AsyncForked = Keyhive<Local, S, T, P, C, Log<S, T>, R>;
 
     async fn fork_async(&self) -> Self::AsyncForked {
         // TODO this is probably fairly slow, and due to the logger type changing
@@ -2048,11 +2047,10 @@ impl<
         S: AsyncSigner + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
-        K: FutureForm + ?Sized,
-        C: CiphertextStore<K, T, P> + Clone,
-        L: MembershipListener<S, T>,
+        C: CiphertextStore<Local, T, P> + Clone,
+        L: MembershipListener<Local, S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
-    > MergeAsync for Arc<Mutex<Keyhive<S, T, P, K, C, L, R>>>
+    > MergeAsync for Arc<Mutex<Keyhive<Local, S, T, P, C, L, R>>>
 {
     async fn merge_async(&self, fork: Self::AsyncForked) {
         let forked_active = { fork.active.lock().await.clone() };
@@ -2095,14 +2093,14 @@ impl<
 }
 
 impl<
+        K: FutureForm + ?Sized,
         S: AsyncSigner + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
-        K: FutureForm + ?Sized,
         C: CiphertextStore<K, T, P> + Clone,
-        L: MembershipListener<S, T>,
+        L: MembershipListener<K, S, T>,
         R: rand::CryptoRng + rand::RngCore,
-    > Verifiable for Keyhive<S, T, P, K, C, L, R>
+    > Verifiable for Keyhive<K, S, T, P, C, L, R>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.verifying_key
@@ -2111,7 +2109,7 @@ impl<
 
 #[derive(Error)]
 #[derive_where(Debug; T)]
-pub enum ReceiveStaticEventError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
+pub enum ReceiveStaticEventError<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
     #[error(transparent)]
     ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
 
@@ -2119,14 +2117,15 @@ pub enum ReceiveStaticEventError<S: AsyncSigner, T: ContentRef, L: MembershipLis
     ReceiveCgkaOpError(#[from] ReceiveCgkaOpError),
 
     #[error(transparent)]
-    ReceiveStaticMembershipError(#[from] ReceiveStaticDelegationError<S, T, L>),
+    ReceiveStaticMembershipError(#[from] ReceiveStaticDelegationError<K, S, T, L>),
 }
 
-impl<S, T, L> ReceiveStaticEventError<S, T, L>
+impl<K, S, T, L> ReceiveStaticEventError<K, S, T, L>
 where
+    K: FutureForm + ?Sized,
     S: AsyncSigner,
     T: ContentRef,
-    L: MembershipListener<S, T>,
+    L: MembershipListener<K, S, T>,
 {
     pub fn is_missing_dependency(&self) -> bool {
         match self {
@@ -2139,19 +2138,15 @@ where
 
 #[derive(Error)]
 #[derive_where(Debug; T)]
-pub enum ReceiveStaticDelegationError<
-    S: AsyncSigner,
-    T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
-> {
+pub enum ReceiveStaticDelegationError<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
     #[error(transparent)]
     VerificationError(#[from] VerificationError),
 
     #[error("Missing proof: {0}")]
-    MissingProof(#[from] MissingDependency<Digest<Signed<Delegation<S, T, L>>>>),
+    MissingProof(#[from] MissingDependency<Digest<Signed<Delegation<K, S, T, L>>>>),
 
     #[error("Missing revocation dependency: {0}")]
-    MissingRevocationDependency(#[from] MissingDependency<Digest<Signed<Revocation<S, T, L>>>>),
+    MissingRevocationDependency(#[from] MissingDependency<Digest<Signed<Revocation<K, S, T, L>>>>),
 
     #[error("Cgka init error: {0}")]
     CgkaInitError(#[from] CgkaError),
@@ -2163,11 +2158,12 @@ pub enum ReceiveStaticDelegationError<
     UnknownAgent(Identifier),
 }
 
-impl<S, T, L> ReceiveStaticDelegationError<S, T, L>
+impl<K, S, T, L> ReceiveStaticDelegationError<K, S, T, L>
 where
+    K: FutureForm + ?Sized,
     S: AsyncSigner,
     T: ContentRef,
-    L: MembershipListener<S, T>,
+    L: MembershipListener<K, S, T>,
 {
     pub fn is_missing_dependency(&self) -> bool {
         match self {
@@ -2183,21 +2179,21 @@ where
 
 #[derive(Clone, PartialEq, Eq, Error)]
 #[derive_where(Debug)]
-pub enum StaticEventConversionError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
+pub enum StaticEventConversionError<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
     #[error("Missing delegation: {0}")]
-    MissingDelegation(Digest<Signed<Delegation<S, T, L>>>),
+    MissingDelegation(Digest<Signed<Delegation<K, S, T, L>>>),
 
     #[error("Missing revocation: {0}")]
-    MissingRevocation(Digest<Signed<Revocation<S, T, L>>>),
+    MissingRevocation(Digest<Signed<Revocation<K, S, T, L>>>),
 
     #[error("Unknown agent: {0}")]
     UnknownAgent(Identifier),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<StaticEventConversionError<S, T, L>> for ReceiveStaticDelegationError<S, T, L>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>>
+    From<StaticEventConversionError<K, S, T, L>> for ReceiveStaticDelegationError<K, S, T, L>
 {
-    fn from(error: StaticEventConversionError<S, T, L>) -> Self {
+    fn from(error: StaticEventConversionError<K, S, T, L>) -> Self {
         match error {
             StaticEventConversionError::MissingDelegation(hash) => {
                 ReceiveStaticDelegationError::MissingProof(MissingDependency(hash))
@@ -2214,12 +2210,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
 
 #[derive(Clone, PartialEq, Eq, Error)]
 #[derive_where(Debug)]
-pub enum TryFromArchiveError<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> {
+pub enum TryFromArchiveError<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
     #[error("Missing delegation: {0}")]
-    MissingDelegation(#[from] Digest<Signed<Delegation<S, T, L>>>),
+    MissingDelegation(#[from] Digest<Signed<Delegation<K, S, T, L>>>),
 
     #[error("Missing revocation: {0}")]
-    MissingRevocation(#[from] Digest<Signed<Revocation<S, T, L>>>),
+    MissingRevocation(#[from] Digest<Signed<Revocation<K, S, T, L>>>),
 
     #[error("Missing individual: {0}")]
     MissingIndividual(Box<IndividualId>),
@@ -2260,8 +2256,8 @@ impl ReceiveCgkaOpError {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<MissingIndividualError>
-    for TryFromArchiveError<S, T, L>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<MissingIndividualError>
+    for TryFromArchiveError<K, S, T, L>
 {
     fn from(e: MissingIndividualError) -> Self {
         TryFromArchiveError::MissingIndividual(e.0)
@@ -2278,13 +2274,9 @@ pub enum EncryptContentError {
 }
 
 #[derive(Debug, Error)]
-pub enum ReceiveEventError<
-    S: AsyncSigner,
-    T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
-> {
+pub enum ReceiveEventError<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
     #[error(transparent)]
-    ReceiveStaticDelegationError(#[from] ReceiveStaticDelegationError<S, T, L>),
+    ReceiveStaticDelegationError(#[from] ReceiveStaticDelegationError<K, S, T, L>),
 
     #[error(transparent)]
     ReceivePrekeyOpError(#[from] ReceivePrekeyOpError),
@@ -2305,12 +2297,13 @@ mod tests {
     use testresult::TestResult;
 
     async fn make_keyhive() -> Keyhive<
+        Local,
         MemorySigner,
         [u8; 32],
         Vec<u8>,
-        Local,
         Arc<Mutex<MemoryCiphertextStore<[u8; 32], Vec<u8>>>>,
         NoListener,
+        rand::rngs::OsRng,
     > {
         let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
         let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
@@ -2332,7 +2325,7 @@ mod tests {
 
         let sk = MemorySigner::generate(&mut csprng);
         let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], String>::new()));
-        let hive: Keyhive<_, _, _, Local, _, _, _> =
+        let hive: Keyhive<Local, _, _, _, _, _, _> =
             Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::rngs::OsRng).await?;
 
         let indie_sk = MemorySigner::generate(&mut csprng);
@@ -2368,7 +2361,7 @@ mod tests {
         assert_eq!(archive.docs.len(), 1);
         assert_eq!(archive.topsorted_ops.len(), 4);
 
-        let hive_from_archive: Keyhive<_, _, _, Local, _, _, _> = Keyhive::try_from_archive(
+        let hive_from_archive: Keyhive<Local, _, _, _, _, _, _> = Keyhive::try_from_archive(
             &archive,
             sk,
             store,
@@ -2411,7 +2404,7 @@ mod tests {
         let mut csprng = rand::rngs::OsRng;
         let sk = MemorySigner::generate(&mut csprng);
         let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], String>::new()));
-        let kh: Keyhive<_, _, _, Local, _, _, _> =
+        let kh: Keyhive<Local, _, _, _, _, _, _> =
             Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::rngs::OsRng).await?;
 
         let indie_sk = MemorySigner::generate(&mut csprng);
@@ -2433,7 +2426,7 @@ mod tests {
 
         // Create an archive and try to load it into a fresh Keyhive
         let archive = kh.into_archive().await;
-        let kh2: Keyhive<_, _, _, Local, _, _, _> = Keyhive::try_from_archive(
+        let kh2: Keyhive<Local, _, _, _, _, _, _> = Keyhive::try_from_archive(
             &archive,
             sk,
             Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], String>::new())),
@@ -2971,7 +2964,7 @@ mod tests {
         test_utils::init_logging();
 
         let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
-        let hive = Keyhive::<_, [u8; 32], Vec<u8>, Local, _, NoListener, _>::generate(
+        let hive = Keyhive::<Local, _, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
             sk,
             Arc::new(Mutex::new(MemoryCiphertextStore::new())),
             NoListener,
@@ -2987,7 +2980,7 @@ mod tests {
         )
         .await?;
 
-        let alice: Peer<MemorySigner, [u8; 32], NoListener> =
+        let alice: Peer<Local, MemorySigner, [u8; 32], NoListener> =
             Peer::Individual(alice_indie.id(), Arc::new(Mutex::new(alice_indie)));
 
         {
@@ -3041,7 +3034,7 @@ mod tests {
                 .await
                 .unwrap();
 
-                let bob: Peer<MemorySigner, [u8; 32], Log<MemorySigner>> =
+                let bob: Peer<Local, MemorySigner, [u8; 32], Log<MemorySigner>> =
                     Peer::Individual(bob_indie.id(), Arc::new(Mutex::new(bob_indie)));
 
                 fork.generate_group(vec![bob.dupe()]).await.unwrap(); // 2 events (dlgs)

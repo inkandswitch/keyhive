@@ -35,6 +35,7 @@ use crate::{
 };
 use derivative::Derivative;
 use dupe::Dupe;
+use future_form::{FutureForm, Local};
 use futures::{lock::Mutex, prelude::*};
 use serde::Serialize;
 use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
@@ -43,7 +44,7 @@ use thiserror::Error;
 /// The current user agent (which can sign and encrypt).
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
-pub struct Active<S: AsyncSigner, T: ContentRef = [u8; 32], L: PrekeyListener = NoListener> {
+pub struct Active<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: PrekeyListener<K>> {
     /// The signing key of the active agent.
     #[derivative(Debug = "ignore")]
     pub(crate) signer: S,
@@ -60,10 +61,10 @@ pub struct Active<S: AsyncSigner, T: ContentRef = [u8; 32], L: PrekeyListener = 
     #[derivative(Debug = "ignore", PartialEq = "ignore")]
     pub(crate) listener: L,
 
-    pub(crate) _phantom: PhantomData<T>,
+    pub(crate) _phantom: PhantomData<(fn() -> K, T)>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: PrekeyListener<K>> Active<K, S, T, L> {
     /// Generate a new active agent.
     ///
     /// # Arguments
@@ -257,11 +258,11 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     }
 
     /// Encrypt a payload for a member of some [`Group`] or [`Document`].
-    pub async fn get_capability(
+    pub async fn get_capability<ML: crate::listener::membership::MembershipListener<K, S, T>>(
         &self,
-        subject: Membered<S, T>,
+        subject: Membered<K, S, T, ML>,
         min: Access,
-    ) -> Option<Arc<Signed<Delegation<S, T>>>> {
+    ) -> Option<Arc<Signed<Delegation<K, S, T, ML>>>> {
         subject
             .get_capability(&self.id().into())
             .await
@@ -299,20 +300,20 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> std::fmt::Display for Active<S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: PrekeyListener<K>> std::fmt::Display for Active<K, S, T, L> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.id(), f)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Verifiable for Active<S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: PrekeyListener<K>> Verifiable for Active<K, S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.signer.verifying_key()
     }
 }
 
-impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Fork for Active<S, T, L> {
-    type Forked = Active<S, T, Log<S, T>>;
+impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener<Local>> Fork for Active<Local, S, T, L> {
+    type Forked = Active<Local, S, T, Log<S, T>>;
 
     fn fork(&self) -> Self::Forked {
         Active {
@@ -326,7 +327,7 @@ impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Fork for Active<S
     }
 }
 
-impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> MergeAsync for Active<S, T, L> {
+impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener<Local>> MergeAsync for Active<Local, S, T, L> {
     async fn merge_async(&self, fork: Self::AsyncForked) {
         let forked_individual = { fork.individual.lock().await.clone() };
         let forked_prekey_pairs = { fork.prekey_pairs.lock().await.clone() };
@@ -378,6 +379,7 @@ pub enum ActiveDelegationError {
 mod tests {
     use super::*;
     use crate::crypto::signer::memory::MemorySigner;
+    use future_form::Local;
 
     #[tokio::test]
     async fn test_seal() {
@@ -385,7 +387,7 @@ mod tests {
 
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let active: Active<_, [u8; 32], _> =
+        let active: Active<Local, _, [u8; 32], _> =
             Active::generate(signer, NoListener, csprng).await.unwrap();
         let message = "hello world".as_bytes();
         let signed = active.try_sign_async(message).await.unwrap();

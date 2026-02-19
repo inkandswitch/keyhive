@@ -5,32 +5,29 @@ use super::{
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::membership::MembershipListener,
     principal::{agent::id::AgentId, document::id::DocumentId, identifier::Identifier},
 };
 use derive_where::derive_where;
 use dupe::Dupe;
+use future_form::FutureForm;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(PartialEq, Eq)]
 #[derive_where(Debug, Clone; T)]
-pub struct Revocation<
-    S: AsyncSigner,
-    T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
-> {
-    pub(crate) revoke: Arc<Signed<Delegation<S, T, L>>>,
-    pub(crate) proof: Option<Arc<Signed<Delegation<S, T, L>>>>,
+pub struct Revocation<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
+    pub(crate) revoke: Arc<Signed<Delegation<K, S, T, L>>>,
+    pub(crate) proof: Option<Arc<Signed<Delegation<K, S, T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Revocation<S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Revocation<K, S, T, L> {
     pub fn subject_id(&self) -> Identifier {
         self.revoke.subject_id()
     }
 
-    pub fn revoked(&self) -> &Arc<Signed<Delegation<S, T, L>>> {
+    pub fn revoked(&self) -> &Arc<Signed<Delegation<K, S, T, L>>> {
         &self.revoke
     }
 
@@ -38,11 +35,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Revocation<S, T
         self.revoke.payload().delegate.agent_id()
     }
 
-    pub fn proof(&self) -> Option<Arc<Signed<Delegation<S, T, L>>>> {
+    pub fn proof(&self) -> Option<Arc<Signed<Delegation<K, S, T, L>>>> {
         self.proof.dupe()
     }
 
-    pub fn after(&self) -> Dependencies<'_, S, T, L> {
+    pub fn after(&self) -> Dependencies<'_, K, S, T, L> {
         let mut delegations = vec![self.revoke.dupe()];
         if let Some(dlg) = &self.proof {
             delegations.push(dlg.clone());
@@ -56,14 +53,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Revocation<S, T
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Signed<Revocation<S, T, L>> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Signed<Revocation<K, S, T, L>> {
     pub fn subject_id(&self) -> Identifier {
         self.payload.subject_id()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
-    for Revocation<S, T, L>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> std::hash::Hash
+    for Revocation<K, S, T, L>
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.revoke.hash(state);
@@ -75,7 +72,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for Revocation<S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Serialize for Revocation<K, S, T, L> {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticRevocation::from(self.clone()).serialize(serializer)
     }
@@ -83,7 +80,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for R
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
-pub struct StaticRevocation<T: ContentRef = [u8; 32]> {
+pub struct StaticRevocation<T: ContentRef> {
     /// The [`Delegation`] being revoked.
     pub revoke: Digest<Signed<StaticDelegation<T>>>,
 
@@ -94,10 +91,10 @@ pub struct StaticRevocation<T: ContentRef = [u8; 32]> {
     pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Revocation<S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Revocation<K, S, T, L>>
     for StaticRevocation<T>
 {
-    fn from(revocation: Revocation<S, T, L>) -> Self {
+    fn from(revocation: Revocation<K, S, T, L>) -> Self {
         Self {
             revoke: Digest::hash(revocation.revoke.as_ref()).into(),
             proof: revocation.proof.map(|p| Digest::hash(p.as_ref()).into()),

@@ -3,6 +3,7 @@ use crate::{
     event::Event,
     listener::membership::MembershipListener,
 };
+use future_form::FutureForm;
 use std::collections::HashMap;
 
 mod hash;
@@ -84,11 +85,12 @@ pub enum CgkaOperationDetails {
 
 impl DebugEventTable {
     /// Create a new debug event table from a vector of events.
-    pub fn from_events<S, T, L>(events: Vec<Event<S, T, L>>, nicknames: Nicknames) -> Self
+    pub fn from_events<K, S, T, L>(events: Vec<Event<K, S, T, L>>, nicknames: Nicknames) -> Self
     where
+        K: FutureForm + ?Sized,
         S: AsyncSigner,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-        L: MembershipListener<S, T>,
+        L: MembershipListener<K, S, T>,
     {
         if events.is_empty() {
             return Self {
@@ -122,11 +124,12 @@ impl DebugEventTable {
 
 impl DebugEventRow {
     /// Create a new debug event row from an event.
-    pub fn from_event<S, T, L>(idx: usize, event: &Event<S, T, L>, nicknames: &Nicknames) -> Self
+    pub fn from_event<K, S, T, L>(idx: usize, event: &Event<K, S, T, L>, nicknames: &Nicknames) -> Self
     where
+        K: FutureForm + ?Sized,
         S: AsyncSigner,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-        L: MembershipListener<S, T>,
+        L: MembershipListener<K, S, T>,
     {
         match event {
             Event::PrekeysExpanded(signed) => {

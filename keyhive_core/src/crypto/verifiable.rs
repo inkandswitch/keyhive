@@ -34,7 +34,8 @@ pub trait Verifiable {
     ///
     ///     // Principal
     ///     let signer = MemorySigner::generate(&mut csprng);
-    ///     let alice: Active::<_, [u8; 32], _> = Active::generate(signer, NoListener, &mut csprng).await.unwrap();
+    ///     use future_form::Local;
+///     let alice: Active::<Local, _, [u8; 32], _> = Active::generate(signer, NoListener, &mut csprng).await.unwrap();
     ///     assert_eq!(alice.verifying_key().to_bytes().len(), 32);
     ///
     ///     // Signed

@@ -29,7 +29,8 @@ use x25519_dalek::SharedSecret;
 ///
 ///     let sk = MemorySigner::generate(&mut csprng);
 ///     let user = Individual::generate(&sk, &mut csprng).await.unwrap();
-///     let user_agent: Agent<MemorySigner, String> = Agent::Individual(user.id(), Arc::new(Mutex::new(user)));
+///     use future_form::Local;
+///     let user_agent: Agent<Local, MemorySigner, String, NoListener> = Agent::Individual(user.id(), Arc::new(Mutex::new(user)));
 ///
 ///     let delegation_store = Arc::new(Mutex::new(DelegationStore::new()));
 ///     let revocation_store = Arc::new(Mutex::new(RevocationStore::new()));

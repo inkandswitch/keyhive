@@ -9,10 +9,10 @@ use rand::rngs::OsRng;
 
 pub async fn make_simple_keyhive() -> Result<
     Keyhive<
+        Local,
         MemorySigner,
         [u8; 32],
         Vec<u8>,
-        Local,
         MemoryCiphertextStore<[u8; 32], Vec<u8>>,
         NoListener,
         OsRng,

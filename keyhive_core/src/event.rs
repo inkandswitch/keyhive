@@ -10,7 +10,7 @@ use crate::{
         digest::Digest, encrypted::EncryptedContent, signed::Signed,
         signer::async_signer::AsyncSigner,
     },
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::membership::MembershipListener,
     principal::{
         document::id::DocumentId,
         group::{
@@ -32,7 +32,7 @@ use tracing::instrument;
 /// Top-level event variants.
 #[derive(PartialEq, Eq, From, TryInto)]
 #[derive_where(Debug, Hash; T)]
-pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
+pub enum Event<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> {
     /// Prekeys were expanded.
     PrekeysExpanded(Arc<Signed<AddKeyOp>>),
 
@@ -43,21 +43,20 @@ pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S
     CgkaOperation(Arc<Signed<CgkaOperation>>),
 
     /// A delegation was created.
-    Delegated(Arc<Signed<Delegation<S, T, L>>>),
+    Delegated(Arc<Signed<Delegation<K, S, T, L>>>),
 
     /// A delegation was revoked.
-    Revoked(Arc<Signed<Revocation<S, T, L>>>),
+    Revoked(Arc<Signed<Revocation<K, S, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Event<K, S, T, L> {
     #[allow(clippy::type_complexity)]
     #[instrument(level = "debug", skip(ciphertext_store))]
-    pub async fn now_decryptable<K, P, C>(
-        new_events: &[Event<S, T, L>],
+    pub async fn now_decryptable<P, C>(
+        new_events: &[Event<K, S, T, L>],
         ciphertext_store: &C,
     ) -> Result<HashMap<DocumentId, Vec<Arc<EncryptedContent<P, T>>>>, C::GetCiphertextError>
     where
-        K: FutureForm + ?Sized,
         P: ContentRef,
         C: CiphertextStore<K, T, P>,
     {
@@ -79,7 +78,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<KeyOp> for Event<S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<KeyOp> for Event<K, S, T, L> {
     fn from(key_op: KeyOp) -> Self {
         match key_op {
             KeyOp::Add(add) => Event::PrekeysExpanded(add),
@@ -88,10 +87,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<KeyOp> for
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<MembershipOperation<S, T, L>>
-    for Event<S, T, L>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<MembershipOperation<K, S, T, L>>
+    for Event<K, S, T, L>
 {
-    fn from(op: MembershipOperation<S, T, L>) -> Self {
+    fn from(op: MembershipOperation<K, S, T, L>) -> Self {
         match op {
             MembershipOperation::Delegation(d) => Event::Delegated(d),
             MembershipOperation::Revocation(r) => Event::Revoked(r),
@@ -99,10 +98,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Membership
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Event<S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> From<Event<K, S, T, L>>
     for StaticEvent<T>
 {
-    fn from(op: Event<S, T, L>) -> Self {
+    fn from(op: Event<K, S, T, L>) -> Self {
         match op {
             Event::Delegated(d) => StaticEvent::Delegated(Arc::unwrap_or_clone(d).map(Into::into)),
             Event::Revoked(r) => StaticEvent::Revoked(Arc::unwrap_or_clone(r).map(Into::into)),
@@ -121,13 +120,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Event<S, T
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for Event<S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Serialize for Event<K, S, T, L> {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticEvent::from(self.clone()).serialize(serializer)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Event<S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Clone for Event<K, S, T, L> {
     fn clone(&self) -> Self {
         match self {
             Event::Delegated(d) => Event::Delegated(Arc::clone(d)),
@@ -141,7 +140,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Event
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for Event<S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef, L: MembershipListener<K, S, T>> Dupe for Event<K, S, T, L> {
     fn dupe(&self) -> Self {
         self.clone()
     }
@@ -158,6 +157,7 @@ mod tests {
             siv::Siv,
             symmetric_key::SymmetricKey,
         },
+        listener::no_listener::NoListener,
         principal::{
             agent::Agent,
             individual::{id::IndividualId, Individual},
@@ -211,7 +211,7 @@ mod tests {
         let hash3 = Digest::hash(&cgka_op_3);
 
         let indie = Individual::generate(&signer, &mut csprng).await?;
-        let events: Vec<Event<MemorySigner, [u8; 32], NoListener>> = vec![
+        let events: Vec<Event<Local, MemorySigner, [u8; 32], NoListener>> = vec![
             Event::CgkaOperation(Arc::new(cgka_op_1)),
             Event::CgkaOperation(Arc::new(cgka_op_2)),
             Event::PrekeysExpanded(Arc::new(
@@ -266,7 +266,7 @@ mod tests {
             )))
             .await;
 
-        let decryptable = Event::now_decryptable::<Local, _, _>(&events, &store).await?;
+        let decryptable = Event::now_decryptable::<_, _>(&events, &store).await?;
         tracing::info!("decryptable: {:?}", decryptable);
         assert_eq!(decryptable.len(), 2);
         assert!(decryptable.contains_key(&doc_id1));

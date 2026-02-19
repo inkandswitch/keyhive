@@ -1,11 +1,14 @@
 use derive_more::{Deref, Display, From, Into};
 use keyhive_core::{
-    contact_card::ContactCard, crypto::verifiable::Verifiable, event::Event,
-    principal::identifier::Identifier,
+    contact_card::ContactCard,
+    crypto::verifiable::Verifiable,
+    event::static_event::StaticEvent,
+    principal::{identifier::Identifier, individual::op::KeyOp},
 };
+use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
-use crate::js::{event::JsEvent, identifier::JsIdentifier};
+use crate::js::{change_id::JsChangeId, event::JsEvent, identifier::JsIdentifier};
 
 use super::{individual_id::JsIndividualId, share_key::JsShareKey};
 
@@ -33,7 +36,11 @@ impl JsContactCard {
 
     #[wasm_bindgen(getter)]
     pub fn op(&self) -> JsEvent {
-        JsEvent(Event::from(self.0.op().clone()))
+        let static_event: StaticEvent<JsChangeId> = match self.0.op().clone() {
+            KeyOp::Add(add) => StaticEvent::PrekeysExpanded(Box::new(Arc::unwrap_or_clone(add))),
+            KeyOp::Rotate(rot) => StaticEvent::PrekeyRotated(Box::new(Arc::unwrap_or_clone(rot))),
+        };
+        JsEvent(static_event)
     }
 
     pub fn signature(&self) -> Vec<u8> {

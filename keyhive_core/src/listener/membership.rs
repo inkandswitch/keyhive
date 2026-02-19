@@ -6,7 +6,7 @@ use crate::{
     crypto::{signed::Signed, signer::async_signer::AsyncSigner},
     principal::group::{delegation::Delegation, revocation::Revocation},
 };
-use future_form::{FutureForm, Local};
+use future_form::FutureForm;
 use std::sync::Arc;
 
 /// Trait for listening to [`Group`] or [`Document`] membership change events.
@@ -17,30 +17,22 @@ use std::sync::Arc;
 ///
 /// The `K` type parameter controls whether futures are `Send` (`Sendable`) or not (`Local`).
 /// Use `Sendable` for multi-threaded runtimes (e.g., Tokio) and `Local` for single-threaded
-/// contexts (e.g., Wasm). Defaults to `Local`.
+/// contexts (e.g., Wasm).
 ///
 /// [`Group`]: crate::principal::group::Group
 /// [`Document`]: crate::principal::document::Document
-pub trait MembershipListener<S: AsyncSigner, T: ContentRef, K: FutureForm + ?Sized = Local>:
+pub trait MembershipListener<K: FutureForm + ?Sized, S: AsyncSigner, T: ContentRef>:
     PrekeyListener<K> + CgkaListener<K> + Sized
 {
     /// React to new [`Delegation`]s.
-    ///
-    /// The `DL` type parameter allows the delegation to carry any listener type,
-    /// avoiding recursive type constraints while still accepting delegations from
-    /// any context.
-    fn on_delegation<'a, DL: MembershipListener<S, T>>(
+    fn on_delegation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Delegation<S, T, DL>>>,
+        data: &'a Arc<Signed<Delegation<K, S, T, Self>>>,
     ) -> K::Future<'a, ()>;
 
     /// React to new [`Revocation`]s.
-    ///
-    /// The `DL` type parameter allows the revocation to carry any listener type,
-    /// avoiding recursive type constraints while still accepting revocations from
-    /// any context.
-    fn on_revocation<'a, DL: MembershipListener<S, T>>(
+    fn on_revocation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Revocation<S, T, DL>>>,
+        data: &'a Arc<Signed<Revocation<K, S, T, Self>>>,
     ) -> K::Future<'a, ()>;
 }
