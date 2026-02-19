@@ -9,7 +9,7 @@ use crate::{
     util::hex::ToHexString,
 };
 use ed25519_dalek::Signer;
-use future_form::FutureForm;
+use future_form::{FutureForm, Local, Sendable};
 use serde::Serialize;
 use tracing::{info, instrument};
 
@@ -99,13 +99,37 @@ impl SyncSigner for ed25519_dalek::SigningKey {
     }
 }
 
-#[future_form::future_form(Sendable where Self: Send + Sync, Local)]
-impl<K: FutureForm + ?Sized, T: SyncSigner> AsyncSigner<K> for T {
+impl<T: SyncSigner + Send + Sync> AsyncSigner<Sendable> for T {
     fn try_sign_bytes_async<'a>(
         &'a self,
         payload_bytes: &'a [u8],
-    ) -> K::Future<'a, Result<ed25519_dalek::Signature, SigningError>> {
-        K::from_future(async move { self.try_sign_bytes_sync(payload_bytes) })
+    ) -> <Sendable as FutureForm>::Future<'a, Result<ed25519_dalek::Signature, SigningError>> {
+        let result = self.try_sign_bytes_sync(payload_bytes);
+        Box::pin(std::future::ready(result))
+    }
+
+    fn try_sign_async<'a, P: Serialize + std::fmt::Debug + Send + 'a>(
+        &'a self,
+        payload: P,
+    ) -> <Sendable as FutureForm>::Future<'a, Result<Signed<P>, SigningError>> {
+        let result = self.try_sign_sync(payload);
+        Box::pin(std::future::ready(result))
+    }
+}
+
+impl<T: SyncSigner> AsyncSigner<Local> for T {
+    fn try_sign_bytes_async<'a>(
+        &'a self,
+        payload_bytes: &'a [u8],
+    ) -> <Local as FutureForm>::Future<'a, Result<ed25519_dalek::Signature, SigningError>> {
+        Local::from_future(async move { self.try_sign_bytes_sync(payload_bytes) })
+    }
+
+    fn try_sign_async<'a, P: Serialize + std::fmt::Debug + Send + 'a>(
+        &'a self,
+        payload: P,
+    ) -> <Local as FutureForm>::Future<'a, Result<Signed<P>, SigningError>> {
+        Local::from_future(async move { self.try_sign_sync(payload) })
     }
 }
 

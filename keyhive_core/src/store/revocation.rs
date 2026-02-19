@@ -30,7 +30,7 @@ pub struct RevocationStore<
     agent_to_revocations: HashMap<AgentId, HashSet<Arc<Signed<Revocation<K, S, T, L>>>>>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> RevocationStore<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> RevocationStore<K, S, T, L> {
     /// Create a new revocation store.
     pub fn new() -> Self {
         Self {

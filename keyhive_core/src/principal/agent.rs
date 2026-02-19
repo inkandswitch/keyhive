@@ -49,7 +49,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Agent<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> Agent<K, S, T, L> {
     pub fn id(&self) -> Identifier {
         match self {
             Agent::Active(id, _) => (*id).into(),
@@ -181,7 +181,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<Active<K, S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T>> From<Active<K, S, T, L>>
     for Agent<K, S, T, L>
 {
     fn from(a: Active<K, S, T, L>) -> Self {
@@ -197,7 +197,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<Group<K, S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> From<Group<K, S, T, L>>
     for Agent<K, S, T, L>
 {
     fn from(g: Group<K, S, T, L>) -> Self {
@@ -216,7 +216,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<Document<K, S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> From<Document<K, S, T, L>>
     for Agent<K, S, T, L>
 {
     fn from(d: Document<K, S, T, L>) -> Self {
@@ -224,7 +224,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable for Agent<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> Verifiable for Agent<K, S, T, L> {
     fn verifying_key(&self) -> VerifyingKey {
         self.id().verifying_key()
     }

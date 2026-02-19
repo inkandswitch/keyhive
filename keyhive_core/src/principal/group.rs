@@ -80,7 +80,7 @@ pub struct Group<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: Me
     pub(crate) listener: L,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Group<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> Group<K, S, T, L> {
     #[tracing::instrument(skip_all)]
     pub async fn new(
         group_id: GroupId,
@@ -253,7 +253,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
 
     #[tracing::instrument(skip(self), fields(group_id = %self.group_id()))]
     pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<K, S, T, L>, Access)> {
-        struct GroupAccess<F: FutureForm + ?Sized, Z: AsyncSigner, U: ContentRef, M: MembershipListener<F, Z, U>> {
+        struct GroupAccess<F: FutureForm + ?Sized, Z: AsyncSigner<F>, U: ContentRef, M: MembershipListener<F, Z, U>> {
             agent: Agent<F, Z, U, M>,
             agent_access: Access,
             parent_access: Access,

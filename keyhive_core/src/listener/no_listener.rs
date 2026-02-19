@@ -49,7 +49,7 @@ impl<K: FutureForm + ?Sized> CgkaListener<K> for NoListener {
     }
 }
 
-impl<S: AsyncSigner<K>, T: ContentRef> MembershipListener<Sendable, S, T> for NoListener {
+impl<S: AsyncSigner<Sendable>, T: ContentRef> MembershipListener<Sendable, S, T> for NoListener {
     fn on_delegation<'a>(
         &'a self,
         _data: &'a Arc<Signed<Delegation<Sendable, S, T, Self>>>,
@@ -65,7 +65,7 @@ impl<S: AsyncSigner<K>, T: ContentRef> MembershipListener<Sendable, S, T> for No
     }
 }
 
-impl<S: AsyncSigner<K>, T: ContentRef> MembershipListener<Local, S, T> for NoListener {
+impl<S: AsyncSigner<Local>, T: ContentRef> MembershipListener<Local, S, T> for NoListener {
     fn on_delegation<'a>(
         &'a self,
         _data: &'a Arc<Signed<Delegation<Local, S, T, Self>>>,

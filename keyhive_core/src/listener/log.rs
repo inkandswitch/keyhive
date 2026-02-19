@@ -85,7 +85,7 @@ impl<S, T: ContentRef> Default for Log<S, T> {
     Sendable where S: Send + Sync, T: Send + Sync, Self: Send + Sync,
     Local
 )]
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef> PrekeyListener<K> for Log<S, T> {
+impl<K: FutureForm + ?Sized, S, T: ContentRef> PrekeyListener<K> for Log<S, T> {
     #[instrument(skip(self))]
     fn on_prekeys_expanded<'a>(
         &'a self,
@@ -117,7 +117,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef> PrekeyListener<K>
     Sendable where S: Send + Sync, T: Send + Sync, Self: Send + Sync,
     Local
 )]
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef> CgkaListener<K> for Log<S, T> {
+impl<K: FutureForm + ?Sized, S, T: ContentRef> CgkaListener<K> for Log<S, T> {
     #[instrument(skip(self))]
     fn on_cgka_op<'a>(
         &'a self,

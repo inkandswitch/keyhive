@@ -28,7 +28,7 @@ pub enum Peer<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: Membe
     Document(DocumentId, Arc<Mutex<Document<K, S, T, L>>>),
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Peer<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> Peer<K, S, T, L> {
     pub fn id(&self) -> Identifier {
         match self {
             Peer::Individual(id, _) => (*id).into(),

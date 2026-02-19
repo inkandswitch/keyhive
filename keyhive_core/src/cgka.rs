@@ -153,6 +153,7 @@ impl Cgka {
     /// perform a leaf key rotation.
     #[instrument(skip_all)]
     pub async fn new_app_secret_for<
+        K: FutureForm + ?Sized,
         S: AsyncSigner<K>,
         T: ContentRef,
         R: rand::CryptoRng + rand::RngCore,
@@ -299,7 +300,7 @@ impl Cgka {
     /// Update leaf key pair for this Identifier.
     /// This also triggers a tree path update for that leaf.
     #[instrument(skip_all)]
-    pub async fn update<S: AsyncSigner<K>, R: rand::CryptoRng + rand::RngCore>(
+    pub async fn update<K: FutureForm + ?Sized, S: AsyncSigner<K>, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         new_pk: ShareKey,
         new_sk: ShareSecretKey,

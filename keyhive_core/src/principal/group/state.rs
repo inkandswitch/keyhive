@@ -40,7 +40,7 @@ pub struct GroupState<
     pub(crate) revocation_heads: RevocationStore<K, S, T, L>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> GroupState<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> GroupState<K, S, T, L> {
     pub async fn new(
         delegation_head: Arc<Signed<Delegation<K, S, T, L>>>,
         delegations: Arc<Mutex<DelegationStore<K, S, T, L>>>,

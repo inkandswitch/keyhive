@@ -123,11 +123,11 @@ pub struct Keyhive<
 
 impl<
         K: FutureForm + ?Sized,
-        S: AsyncSigner<K> + Clone,
+        S: AsyncSigner<K> + Clone + Send + Sync,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<K, T, P> + Clone,
-        L: MembershipListener<K, S, T>,
+        L: MembershipListener<K, S, T> + Send + Sync,
         R: rand::CryptoRng + rand::RngCore,
     > Keyhive<K, S, T, P, C, L, R>
 {
@@ -338,7 +338,7 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn try_sign<U: Serialize + Debug>(&self, data: U) -> Result<Signed<U>, SigningError> {
+    pub async fn try_sign<U: Serialize + Debug + Send>(&self, data: U) -> Result<Signed<U>, SigningError> {
         let signer = self.active.lock().await.signer.clone();
         signer.try_sign_async(data).await
     }
@@ -1656,7 +1656,7 @@ impl<
         }
 
         #[allow(clippy::type_complexity)]
-        async fn reify_ops<FF: FutureForm + ?Sized, Z: AsyncSigner, U: ContentRef, M: MembershipListener<FF, Z, U>>(
+        async fn reify_ops<FF: FutureForm + ?Sized, Z: AsyncSigner<FF> + Send + Sync, U: ContentRef, M: MembershipListener<FF, Z, U> + Send + Sync>(
             group: &mut Group<FF, Z, U, M>,
             dlg_store: Arc<Mutex<DelegationStore<FF, Z, U, M>>>,
             rev_store: Arc<Mutex<RevocationStore<FF, Z, U, M>>>,
@@ -2018,11 +2018,11 @@ impl<
 }
 
 impl<
-        S: AsyncSigner<K> + Clone,
+        S: AsyncSigner<Local> + Clone + Send + Sync,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<Local, T, P> + Clone,
-        L: MembershipListener<Local, S, T>,
+        L: MembershipListener<Local, S, T> + Send + Sync,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > ForkAsync for Keyhive<Local, S, T, P, C, L, R>
 {
@@ -2044,11 +2044,11 @@ impl<
 }
 
 impl<
-        S: AsyncSigner<K> + Clone,
+        S: AsyncSigner<Local> + Clone + Send + Sync,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<Local, T, P> + Clone,
-        L: MembershipListener<Local, S, T>,
+        L: MembershipListener<Local, S, T> + Send + Sync,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > MergeAsync for Arc<Mutex<Keyhive<Local, S, T, P, C, L, R>>>
 {

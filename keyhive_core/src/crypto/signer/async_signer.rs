@@ -82,20 +82,10 @@ pub trait AsyncSigner<K: FutureForm + ?Sized>: Verifiable {
     ///     assert_eq!(*sig.unwrap().payload(), payload);
     /// }
     /// ```
-    fn try_sign_async<'a, T: Serialize + std::fmt::Debug + 'a>(
+    fn try_sign_async<'a, T: Serialize + std::fmt::Debug + Send + 'a>(
         &'a self,
         payload: T,
-    ) -> K::Future<'a, Result<Signed<T>, SigningError>> {
-        K::from_future(async move {
-            let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
-
-            Ok(Signed {
-                payload,
-                issuer: self.verifying_key(),
-                signature: self.try_sign_bytes_async(payload_bytes.as_slice()).await?,
-            })
-        })
-    }
+    ) -> K::Future<'a, Result<Signed<T>, SigningError>>;
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{
         share_key::{ShareKey, ShareSecretKey},
-        signer::{memory::MemorySigner, sync_signer::SyncSigner},
+        signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSigner},
         verifiable::Verifiable,
     },
     listener::prekey::PrekeyListener,
@@ -69,7 +69,10 @@ impl Public {
     pub fn active<K: FutureForm + ?Sized, T: ContentRef, L: PrekeyListener<K>>(
         &self,
         listener: L,
-    ) -> Active<K, MemorySigner, T, L> {
+    ) -> Active<K, MemorySigner, T, L>
+    where
+        MemorySigner: AsyncSigner<K>,
+    {
         Active {
             id: self.signer().verifying_key().into(),
             signer: self.signer(),

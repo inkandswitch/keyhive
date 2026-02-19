@@ -64,7 +64,7 @@ pub struct Active<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: P
     pub(crate) _phantom: PhantomData<(fn() -> K, T)>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: PrekeyListener<K>> Active<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: PrekeyListener<K>> Active<K, S, T, L> {
     /// Generate a new active agent.
     ///
     /// # Arguments
@@ -250,7 +250,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: PrekeyListener
     }
 
     /// Asyncronously sign a payload.
-    pub async fn try_sign_async<U: Serialize + std::fmt::Debug>(
+    pub async fn try_sign_async<U: Serialize + std::fmt::Debug + Send>(
         &self,
         payload: U,
     ) -> Result<Signed<U>, SigningError> {
@@ -258,7 +258,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: PrekeyListener
     }
 
     /// Encrypt a payload for a member of some [`Group`] or [`Document`].
-    pub async fn get_capability<ML: crate::listener::membership::MembershipListener<K, S, T>>(
+    pub async fn get_capability<ML: crate::listener::membership::MembershipListener<K, S, T> + Send + Sync>(
         &self,
         subject: Membered<K, S, T, ML>,
         min: Access,
@@ -300,7 +300,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: PrekeyListener
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: PrekeyListener<K>> std::fmt::Display for Active<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: PrekeyListener<K>> std::fmt::Display for Active<K, S, T, L> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.id(), f)
     }

@@ -8,6 +8,7 @@ use crate::{
     transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
+use future_form::FutureForm;
 use futures::{prelude::*, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
@@ -71,7 +72,7 @@ impl PrekeyState {
     /// # Errors
     ///
     /// Returns a [`SigningError`] if the operation could not be signed.
-    pub async fn generate<S: AsyncSigner<K>, R: rand::CryptoRng + rand::RngCore>(
+    pub async fn generate<K: FutureForm + ?Sized, S: AsyncSigner<K>, R: rand::CryptoRng + rand::RngCore>(
         signer: &S,
         size: NonZeroUsize,
         csprng: &mut R,

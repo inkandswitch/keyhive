@@ -180,7 +180,7 @@ impl<'a, T: ContentRef + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<Delegation<K, S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> From<Delegation<K, S, T, L>>
     for StaticDelegation<T>
 {
     fn from(delegation: Delegation<K, S, T, L>) -> Self {

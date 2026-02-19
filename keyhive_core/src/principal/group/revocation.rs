@@ -91,7 +91,7 @@ pub struct StaticRevocation<T: ContentRef> {
     pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<Revocation<K, S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> From<Revocation<K, S, T, L>>
     for StaticRevocation<T>
 {
     fn from(revocation: Revocation<K, S, T, L>) -> Self {

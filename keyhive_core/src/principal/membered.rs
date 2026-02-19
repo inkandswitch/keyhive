@@ -40,7 +40,7 @@ pub enum Membered<
     Document(DocumentId, Arc<Mutex<Document<K, S, T, L>>>),
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Membered<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> Membered<K, S, T, L> {
     pub async fn get_capability(
         &self,
         agent_id: &Identifier,
@@ -171,7 +171,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<Group<K, S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> From<Group<K, S, T, L>>
     for Membered<K, S, T, L>
 {
     fn from(group: Group<K, S, T, L>) -> Self {
@@ -179,7 +179,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> From<Document<K, S, T, L>>
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> From<Document<K, S, T, L>>
     for Membered<K, S, T, L>
 {
     fn from(document: Document<K, S, T, L>) -> Self {
@@ -187,7 +187,7 @@ impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipList
     }
 }
 
-impl<K: FutureForm + ?Sized, S: AsyncSigner<K>, T: ContentRef, L: MembershipListener<K, S, T>> Verifiable for Membered<K, S, T, L> {
+impl<K: FutureForm + ?Sized, S: AsyncSigner<K> + Send + Sync, T: ContentRef, L: MembershipListener<K, S, T> + Send + Sync> Verifiable for Membered<K, S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.agent_id().verifying_key()
     }

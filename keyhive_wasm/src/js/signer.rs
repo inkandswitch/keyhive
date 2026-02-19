@@ -162,6 +162,16 @@ impl AsyncSigner<Local> for JsSigner {
             AsyncSigner::<Local>::try_sign_bytes_async(&self.0, bytes).await
         })
     }
+
+    fn try_sign_async<'a, T: serde::Serialize + std::fmt::Debug + Send + 'a>(
+        &'a self,
+        payload: T,
+    ) -> <Local as future_form::FutureForm>::Future<'a, Result<keyhive_core::crypto::signed::Signed<T>, SigningError>>
+    {
+        Local::from_future(async move {
+            AsyncSigner::<Local>::try_sign_async(&self.0, payload).await
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +243,21 @@ impl AsyncSigner<Local> for JsSignerOptions {
                     )
                 }
             }
+        })
+    }
+
+    fn try_sign_async<'a, T: serde::Serialize + std::fmt::Debug + Send + 'a>(
+        &'a self,
+        payload: T,
+    ) -> <Local as future_form::FutureForm>::Future<'a, Result<keyhive_core::crypto::signed::Signed<T>, SigningError>>
+    {
+        Local::from_future(async move {
+            let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
+            Ok(keyhive_core::crypto::signed::Signed {
+                payload,
+                issuer: keyhive_core::crypto::verifiable::Verifiable::verifying_key(self),
+                signature: self.try_sign_bytes_async(payload_bytes.as_slice()).await?,
+            })
         })
     }
 }
