@@ -19,7 +19,6 @@ use crate::{
         signer::async_signer::AsyncSigner,
         siv::Siv,
         symmetric_key::SymmetricKey,
-        verifiable::Verifiable,
     },
     principal::{document::id::DocumentId, individual::id::IndividualId},
     transact::{fork::Fork, merge::Merge},

@@ -27,9 +27,8 @@ use crate::{
 };
 use derivative::Derivative;
 use dupe::Dupe;
-use future_form::{future_form, FutureForm, Local, Sendable};
-use futures::{lock::Mutex, prelude::*};
-use serde::Serialize;
+use future_form::{future_form, FutureForm};
+use futures::lock::Mutex;
 use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
 use thiserror::Error;
 
@@ -423,6 +422,7 @@ pub enum ActiveDelegationError {
 mod tests {
     use super::*;
     use crate::crypto::signer::{memory::MemorySigner, sync_signer::SyncSigner};
+    use future_form::Sendable;
 
     #[tokio::test]
     async fn test_seal() {
@@ -435,7 +435,7 @@ mod tests {
                 .await
                 .unwrap();
         let message = "hello world".as_bytes();
-        let signed = signer.try_sign(message).unwrap();
+        let signed = signer.try_sign_sync(message).unwrap();
 
         assert!(signed.try_verify().is_ok());
     }

@@ -12,7 +12,7 @@ use crate::{
 };
 use derive_more::derive::Debug;
 use dupe::Dupe;
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{future_form, FutureForm};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

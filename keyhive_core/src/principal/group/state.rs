@@ -8,10 +8,10 @@ use crate::{
     crypto::{
         digest::Digest,
         signed::Signed,
-        signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSigner},
+        signer::{memory::MemorySigner, sync_signer::SyncSigner},
         verifiable::Verifiable,
     },
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::no_listener::NoListener,
     principal::{agent::Agent, group::delegation::DelegationError, identifier::Identifier},
     store::{delegation::DelegationStore, revocation::RevocationStore},
 };

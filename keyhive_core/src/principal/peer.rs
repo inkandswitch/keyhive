@@ -8,7 +8,7 @@ use super::{
 use crate::{
     content::reference::ContentRef,
     crypto::{share_key::ShareKey, verifiable::Verifiable},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::no_listener::NoListener,
 };
 use derive_more::{From, TryInto};
 use dupe::Dupe;

@@ -3,7 +3,7 @@
 use crate::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, verifiable::Verifiable},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::no_listener::NoListener,
     principal::{agent::id::AgentId, group::revocation::Revocation},
     util::content_addressed_map::CaMap,
 };

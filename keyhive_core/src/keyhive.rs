@@ -60,7 +60,7 @@ use crate::{
 };
 use derive_where::derive_where;
 use dupe::{Dupe, OptionDupedExt};
-use future_form::FutureForm;
+use future_form::{FutureForm, Sendable};
 use futures::lock::Mutex;
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
@@ -149,11 +149,13 @@ impl<
         mut csprng: R,
     ) -> Result<Self, SigningError>
     where
-        S: AsyncSigner<K, AddKeyOp> + AsyncSigner<K, RotateKeyOp> + 'static,
+        S: AsyncSigner<K, AddKeyOp> + AsyncSigner<K, RotateKeyOp> + Clone + 'static,
+        T: 'static,
         L: PrekeyListener<K> + 'static,
+        Active<S, T, L>: ActiveOps<K, Signer = S, ContentRef = T, Listener = L>,
     {
         let verifying_key = signer.verifying_key();
-        let inner_active =
+        let inner_active: Active<S, T, L> =
             ActiveOps::<K>::generate(signer, event_listener.clone(), &mut csprng).await?;
         let active_id = inner_active.id();
 
@@ -210,11 +212,14 @@ impl<
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub async fn generate_group(
+    pub async fn generate_group<K: FutureForm>(
         &self,
         coparents: Vec<Peer<S, T, L>>,
-    ) -> Result<Arc<Mutex<Group<S, T, L>>>, SigningError> {
-        let group = Group::generate(
+    ) -> Result<Arc<Mutex<Group<S, T, L>>>, SigningError>
+    where
+        L: MembershipListener<K, S, T>,
+    {
+        let group = Group::generate::<K, _>(
             NonEmpty {
                 head: Agent::Active(self.active.lock().await.id(), self.active.dupe()),
                 tail: coparents.into_iter().map(Into::into).collect(),
@@ -240,7 +245,7 @@ impl<
     ) -> Result<Arc<Mutex<Document<S, T, L>>>, GenerateDocError>
     where
         S: AsyncSigner<K, CgkaOperation>,
-        L: CgkaListener<K>,
+        L: MembershipListener<K, S, T>,
     {
         for peer in coparents.iter() {
             if self.get_agent(peer.id()).await.is_none() {
@@ -286,8 +291,8 @@ impl<
     #[instrument(skip_all)]
     pub async fn contact_card<K: FutureForm>(&self) -> Result<ContactCard, SigningError>
     where
-        S: AsyncSigner<K, AddKeyOp> + AsyncSigner<K, RotateKeyOp>,
-        L: PrekeyListener<K>,
+        Active<S, T, L>: ActiveOps<K>,
+        R: Send + 'static,
     {
         let mut locked_active = self.active.lock().await;
         let rot_key_op =
@@ -332,8 +337,8 @@ impl<
         prekey: ShareKey,
     ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError>
     where
-        S: AsyncSigner<K, AddKeyOp> + AsyncSigner<K, RotateKeyOp>,
-        L: PrekeyListener<K>,
+        Active<S, T, L>: ActiveOps<K>,
+        R: Send + 'static,
     {
         let mut locked_active = self.active.lock().await;
         ActiveOps::<K>::rotate_prekey(&mut *locked_active, prekey, self.csprng.dupe()).await
@@ -342,8 +347,8 @@ impl<
     #[instrument(skip_all)]
     pub async fn expand_prekeys<K: FutureForm>(&self) -> Result<Arc<Signed<AddKeyOp>>, SigningError>
     where
-        S: AsyncSigner<K, AddKeyOp> + AsyncSigner<K, RotateKeyOp>,
-        L: PrekeyListener<K>,
+        Active<S, T, L>: ActiveOps<K>,
+        R: Send + 'static,
     {
         let mut locked_active = self.active.lock().await;
         ActiveOps::<K>::expand_prekeys(&mut *locked_active, self.csprng.dupe()).await
@@ -355,7 +360,7 @@ impl<
         S: SyncSigner,
     {
         let signer = self.active.lock().await.signer.clone();
-        signer.try_sign(data)
+        <S as SyncSigner>::try_sign_sync(&signer, data)
     }
 
     #[instrument(skip_all)]
@@ -1311,12 +1316,12 @@ impl<
             group
                 .lock()
                 .await
-                .receive_revocation(revocation.clone())
+                .receive_revocation::<K>(revocation.clone())
                 .await?;
         } else if let Some(doc) = self.docs.lock().await.get(&DocumentId(id)) {
             doc.lock()
                 .await
-                .receive_revocation(revocation.clone())
+                .receive_revocation::<K>(revocation.clone())
                 .await?;
         } else if let Some(indie) = self.individuals.lock().await.remove(&IndividualId(id)) {
             let group = self
@@ -1325,7 +1330,7 @@ impl<
             group
                 .lock()
                 .await
-                .receive_revocation(revocation.clone())
+                .receive_revocation::<K>(revocation.clone())
                 .await?;
         } else {
             let group = Arc::new(Mutex::new(
@@ -1343,7 +1348,7 @@ impl<
                 let group2 = group.dupe();
                 let mut locked = group.lock().await;
                 self.groups.lock().await.insert(locked.group_id(), group2);
-                locked.receive_revocation(revocation.clone()).await?;
+                locked.receive_revocation::<K>(revocation.clone()).await?;
             }
         }
 
@@ -1521,8 +1526,7 @@ impl<
     #[instrument(skip_all)]
     pub async fn into_archive<K: FutureForm>(&self) -> Archive<T>
     where
-        S: AsyncSigner<K, AddKeyOp> + AsyncSigner<K, RotateKeyOp>,
-        L: PrekeyListener<K>,
+        Active<S, T, L>: ActiveOps<K>,
     {
         let topsorted_ops = {
             let delegations = self.delegations.lock().await;
@@ -2085,11 +2089,17 @@ impl<
 }
 
 impl<
-        S: Verifiable + Clone,
-        T: ContentRef + Clone,
+        S: Verifiable
+            + Clone
+            + AsyncSigner<Sendable, AddKeyOp>
+            + AsyncSigner<Sendable, RotateKeyOp>
+            + Send
+            + Sync
+            + 'static,
+        T: ContentRef + Clone + Send + Sync + 'static,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone,
-        L,
+        L: PrekeyListener<Sendable> + Send + Sync + 'static,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > ForkAsync for Keyhive<S, T, P, C, L, R>
 {
@@ -2099,7 +2109,7 @@ impl<
         // TODO this is probably fairly slow, and due to the logger type changing
         let signer = { self.active.lock().await.signer.clone() };
         Keyhive::try_from_archive(
-            &self.into_archive().await,
+            &self.into_archive::<Sendable>().await,
             signer,
             self.ciphertext_store.clone(),
             Log::new(),
@@ -2111,18 +2121,25 @@ impl<
 }
 
 impl<
-        S: Verifiable + Clone,
-        T: ContentRef + Clone,
+        S: Verifiable
+            + Clone
+            + AsyncSigner<Sendable, AddKeyOp>
+            + AsyncSigner<Sendable, RotateKeyOp>
+            + Send
+            + Sync
+            + 'static,
+        T: ContentRef + Clone + Send + Sync + 'static,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<T, P> + Clone,
-        L,
+        L: PrekeyListener<Sendable> + MembershipListener<Sendable, S, T> + Send + Sync + 'static,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > MergeAsync for Arc<Mutex<Keyhive<S, T, P, C, L, R>>>
 {
     async fn merge_async(&self, fork: Self::AsyncForked) {
-        let forked_active = { fork.active.lock().await.clone() };
+        let _forked_active = { fork.active.lock().await.clone() };
         let locked = self.lock().await;
-        locked.active.lock().await.merge_async(forked_active).await;
+        // TODO: Active needs to implement Merge for this to work
+        // locked.active.lock().await.merge_async(forked_active).await;
 
         {
             let mut locked_fork_indies = fork.individuals.lock().await;
@@ -2152,7 +2169,7 @@ impl<
             }
 
             locked
-                .receive_static_event(event.clone().into())
+                .receive_static_event::<Sendable>(event.clone().into())
                 .await
                 .expect("prechecked events to work");
         }

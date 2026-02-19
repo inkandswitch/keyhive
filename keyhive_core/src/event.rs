@@ -7,7 +7,7 @@ use crate::{
     cgka::operation::CgkaOperation,
     content::reference::ContentRef,
     crypto::{digest::Digest, encrypted::EncryptedContent, signed::Signed, verifiable::Verifiable},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::no_listener::NoListener,
     principal::{
         document::id::DocumentId,
         group::{

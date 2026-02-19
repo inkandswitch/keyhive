@@ -10,8 +10,8 @@ use super::{
 };
 use crate::{
     content::reference::ContentRef,
-    crypto::{share_key::ShareKey, signer::async_signer::AsyncSigner, verifiable::Verifiable},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    crypto::{share_key::ShareKey, verifiable::Verifiable},
+    listener::no_listener::NoListener,
 };
 use derivative::Derivative;
 use derive_more::{From, TryInto};
@@ -116,7 +116,8 @@ impl<S: Verifiable, T: ContentRef, L> Agent<S, T, L> {
                     let (id, prekey) = {
                         let locked = a.lock().await;
                         let id = locked.id();
-                        let prekey = locked.pick_prekey(doc_id).await;
+                        // Access individual directly to avoid needing K type parameter
+                        let prekey = locked.individual.lock().await.pick_prekey(doc_id).dupe();
                         (id, prekey)
                     };
                     result.insert(id, prekey);
@@ -181,33 +182,25 @@ impl<S: Verifiable, T: ContentRef, L> Agent<S, T, L> {
     }
 }
 
-impl<S: Verifiable, T: ContentRef, L> From<Active<S, T, L>>
-    for Agent<S, T, L>
-{
+impl<S: Verifiable, T: ContentRef, L> From<Active<S, T, L>> for Agent<S, T, L> {
     fn from(a: Active<S, T, L>) -> Self {
         Agent::Active(a.id(), Arc::new(Mutex::new(a)))
     }
 }
 
-impl<S: Verifiable, T: ContentRef, L> From<Individual>
-    for Agent<S, T, L>
-{
+impl<S: Verifiable, T: ContentRef, L> From<Individual> for Agent<S, T, L> {
     fn from(i: Individual) -> Self {
         Agent::Individual(i.id(), Arc::new(Mutex::new(i)))
     }
 }
 
-impl<S: Verifiable, T: ContentRef, L> From<Group<S, T, L>>
-    for Agent<S, T, L>
-{
+impl<S: Verifiable, T: ContentRef, L> From<Group<S, T, L>> for Agent<S, T, L> {
     fn from(g: Group<S, T, L>) -> Self {
         Agent::Group(g.group_id(), Arc::new(Mutex::new(g)))
     }
 }
 
-impl<S: Verifiable, T: ContentRef, L> From<Membered<S, T, L>>
-    for Agent<S, T, L>
-{
+impl<S: Verifiable, T: ContentRef, L> From<Membered<S, T, L>> for Agent<S, T, L> {
     fn from(m: Membered<S, T, L>) -> Self {
         match m {
             Membered::Group(id, g) => Agent::Group(id, g),
@@ -216,9 +209,7 @@ impl<S: Verifiable, T: ContentRef, L> From<Membered<S, T, L>>
     }
 }
 
-impl<S: Verifiable, T: ContentRef, L> From<Document<S, T, L>>
-    for Agent<S, T, L>
-{
+impl<S: Verifiable, T: ContentRef, L> From<Document<S, T, L>> for Agent<S, T, L> {
     fn from(d: Document<S, T, L>) -> Self {
         Agent::Document(d.doc_id(), Arc::new(Mutex::new(d)))
     }

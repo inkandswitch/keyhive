@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use dupe::Dupe;
+use future_form::Sendable;
 use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
@@ -33,7 +34,7 @@ async fn make_keyhive() -> NewKeyhive {
     let sk = MemorySigner::generate(&mut rand::thread_rng());
     let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
     let log = Log::new();
-    let keyhive = Keyhive::generate(sk.clone(), store, log.clone(), rand::thread_rng())
+    let keyhive = Keyhive::generate::<Sendable>(sk.clone(), store, log.clone(), rand::thread_rng())
         .await
         .unwrap();
     NewKeyhive {
@@ -53,7 +54,7 @@ async fn test_encrypt_to_added_member() -> TestResult {
     let init_hash = blake3::hash(&init_content);
 
     let doc = alice
-        .generate_doc(vec![], nonempty![init_hash.into()])
+        .generate_doc::<Sendable>(vec![], nonempty![init_hash.into()])
         .await?;
     let doc_id = { doc.lock().await.doc_id() };
 
@@ -61,7 +62,7 @@ async fn test_encrypt_to_added_member() -> TestResult {
 
     let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
     alice
-        .add_member(
+        .add_member::<Sendable>(
             Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
             &Membered::Document(doc_id, doc.dupe()),
             Access::Read,
@@ -106,7 +107,7 @@ async fn test_decrypt_after_to_from_archive() {
     let init_hash = blake3::hash(&init_content);
 
     let doc = alice
-        .generate_doc(vec![], nonempty![init_hash.into()])
+        .generate_doc::<Sendable>(vec![], nonempty![init_hash.into()])
         .await
         .unwrap();
 
@@ -158,7 +159,7 @@ async fn test_decrypt_after_fork_and_merge() {
     let init_hash = blake3::hash(&init_content);
 
     let doc = alice
-        .generate_doc(vec![], nonempty![init_hash.into()])
+        .generate_doc::<Sendable>(vec![], nonempty![init_hash.into()])
         .await
         .unwrap();
 

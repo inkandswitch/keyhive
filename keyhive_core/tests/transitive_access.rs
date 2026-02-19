@@ -1,4 +1,5 @@
 use dupe::Dupe;
+use future_form::Sendable;
 use keyhive_core::{
     access::Access,
     principal::{agent::Agent, membered::Membered, peer::Peer},
@@ -19,40 +20,40 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
     //
     // Both Alice and Bob should be able to access the document
     //
-    // ┌─────────────────────┐   ┌─────────────────────┐
-    // │                     │   │                     │
-    // │        Alice        │   │         Bob         │
-    // │                     │   │                     │
-    // └─────────────────────┘   └─────────────────────┘
-    //            ▲                         ▲
-    //            │                         │
-    //            │                         │
-    //            │ ┌─────────────────────┐ │
-    //            │ │                     │ │
-    //            └─│        Group        │─┘
-    //              │                     │
-    //              └─────────────────────┘
-    //                         ▲
-    //                         │
-    //                         │
-    //              ┌─────────────────────┐
-    //              │                     │
-    //              │         Doc         │
-    //              │                     │
-    //              └─────────────────────┘
+    // +-----------------------+   +-----------------------+
+    // |                       |   |                       |
+    // |        Alice          |   |         Bob           |
+    // |                       |   |                       |
+    // +-----------------------+   +-----------------------+
+    //            ^                           ^
+    //            |                           |
+    //            |                           |
+    //            | +-----------------------+ |
+    //            | |                       | |
+    //            +-|        Group          |-+
+    //              |                       |
+    //              +-----------------------+
+    //                         ^
+    //                         |
+    //                         |
+    //              +-----------------------+
+    //              |                       |
+    //              |         Doc           |
+    //              |                       |
+    //              +-----------------------+
     test_utils::init_logging();
 
     let alice = make_simple_keyhive().await?;
     let bob = make_simple_keyhive().await?;
 
-    let bob_contact = bob.contact_card().await?;
+    let bob_contact = bob.contact_card::<Sendable>().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
 
-    let group = alice.generate_group(vec![]).await?;
+    let group = alice.generate_group::<Sendable>(vec![]).await?;
     let group_id = { group.lock().await.group_id() };
     let bob_id = { bob_on_alice.lock().await.id() };
     alice
-        .add_member(
+        .add_member::<Sendable>(
             Agent::Individual(bob_id, bob_on_alice.dupe()),
             &Membered::Group(group_id, group.dupe()),
             Access::Read,
@@ -61,7 +62,7 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
         .await?;
 
     let doc = alice
-        .generate_doc(
+        .generate_doc::<Sendable>(
             vec![Peer::Group(group_id, group.dupe())],
             nonempty![[0u8; 32]],
         )
@@ -91,40 +92,40 @@ async fn test_group_members_cycle() -> TestResult {
     //
     //
     //
-    // ┌─────────────────────┐   ┌─────────────────────┐
-    // │                     │   │                     │
-    // │        Alice        │   │         Bob         │
-    // │                     │   │                     │
-    // └─────────────────────┘   └─────────────────────┘
-    //            ▲                         ▲
-    //            │                         │
-    //            │                         │
-    //            │ ┌─────────────────────┐ │
-    //            │ │                     │ │
-    //            └─│        Group        │─┘
-    //              │                     │
-    //              └─────────────────────┘
-    //                      ▲     │
-    //                      │     │
-    //                      │     ▼
-    //              ┌─────────────────────┐
-    //              │                     │
-    //              │         Doc         │
-    //              │                     │
-    //              └─────────────────────┘
+    // +-----------------------+   +-----------------------+
+    // |                       |   |                       |
+    // |        Alice          |   |         Bob           |
+    // |                       |   |                       |
+    // +-----------------------+   +-----------------------+
+    //            ^                           ^
+    //            |                           |
+    //            |                           |
+    //            | +-----------------------+ |
+    //            | |                       | |
+    //            +-|        Group          |-+
+    //              |                       |
+    //              +-----------------------+
+    //                      ^     |
+    //                      |     |
+    //                      |     v
+    //              +-----------------------+
+    //              |                       |
+    //              |         Doc           |
+    //              |                       |
+    //              +-----------------------+
     test_utils::init_logging();
 
     let alice = make_simple_keyhive().await?;
     let bob = make_simple_keyhive().await?;
 
-    let bob_contact = bob.contact_card().await?;
+    let bob_contact = bob.contact_card::<Sendable>().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
 
-    let group = alice.generate_group(vec![]).await?;
+    let group = alice.generate_group::<Sendable>(vec![]).await?;
     let group_id = { group.lock().await.group_id() };
     let bob_id = { bob_on_alice.lock().await.id() };
     alice
-        .add_member(
+        .add_member::<Sendable>(
             Agent::Individual(bob_id, bob_on_alice.dupe()),
             &Membered::Group(group_id, group.dupe()),
             Access::Read,
@@ -133,7 +134,7 @@ async fn test_group_members_cycle() -> TestResult {
         .await?;
 
     let doc = alice
-        .generate_doc(
+        .generate_doc::<Sendable>(
             vec![Peer::Group(group_id, group.dupe())],
             nonempty![[0u8; 32]],
         )
@@ -141,7 +142,7 @@ async fn test_group_members_cycle() -> TestResult {
     let doc_id = { doc.lock().await.doc_id() };
 
     alice
-        .add_member(
+        .add_member::<Sendable>(
             Agent::Group(group_id, group.dupe()),
             &Membered::Document(doc_id, doc.dupe()),
             Access::Read,

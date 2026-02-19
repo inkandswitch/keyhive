@@ -151,12 +151,12 @@ impl<S: Verifiable, T: ContentRef, L> Document<S, T, L> {
     ) -> Result<Self, GenerateDocError>
     where
         S: AsyncSigner<K, CgkaOperation>,
-        L: CgkaListener<K>,
+        L: MembershipListener<K, S, T>,
     {
         let mut locked_csprng = csprng.lock().await;
         let (group_result, group_vk) =
             EphemeralSigner::with_signer(&mut *locked_csprng, |verifier, signer| {
-                Group::generate_after_content(
+                Group::generate_after_content::<K>(
                     signer,
                     verifier,
                     parents,
@@ -370,11 +370,14 @@ impl<S: Verifiable, T: ContentRef, L> Document<S, T, L> {
         self.group.receive_delegation(delegation).await
     }
 
-    pub async fn receive_revocation(
+    pub async fn receive_revocation<K: FutureForm>(
         &mut self,
         revocation: Arc<Signed<Revocation<S, T, L>>>,
-    ) -> Result<Digest<Signed<Revocation<S, T, L>>>, AddError> {
-        self.group.receive_revocation(revocation).await
+    ) -> Result<Digest<Signed<Revocation<S, T, L>>>, AddError>
+    where
+        L: MembershipListener<K, S, T>,
+    {
+        self.group.receive_revocation::<K>(revocation).await
     }
 
     /// Merges [`CgkaOperation`]. Returns `Ok(true)` if merge is successful.

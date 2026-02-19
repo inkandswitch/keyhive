@@ -10,7 +10,7 @@ use crate::{
         signed::{Signed, SigningError},
         verifiable::Verifiable,
     },
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::no_listener::NoListener,
     principal::{
         agent::{id::AgentId, Agent},
         document::id::DocumentId,
@@ -19,7 +19,6 @@ use crate::{
 };
 use derive_where::derive_where;
 use dupe::Dupe;
-use future_form::FutureForm;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, hash::Hash, sync::Arc};
 use thiserror::Error;

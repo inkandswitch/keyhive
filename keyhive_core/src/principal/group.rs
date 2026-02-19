@@ -44,7 +44,7 @@ use derive_more::Debug;
 use derive_where::derive_where;
 use dupe::{Dupe, IterDupedExt};
 use future_form::FutureForm;
-use futures::{lock::Mutex, stream::FuturesUnordered, StreamExt};
+use futures::lock::Mutex;
 use id::GroupId;
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
@@ -129,17 +129,20 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
     }
 
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
-    pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
+    pub async fn generate<K: FutureForm, R: rand::CryptoRng + rand::RngCore>(
         parents: NonEmpty<Agent<S, T, L>>,
         delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
         listener: L,
         csprng: Arc<Mutex<R>>,
-    ) -> Result<Group<S, T, L>, SigningError> {
+    ) -> Result<Group<S, T, L>, SigningError>
+    where
+        L: MembershipListener<K, S, T>,
+    {
         let mut locked_csprng = csprng.lock().await;
         let (group_result, _vk) =
             EphemeralSigner::with_signer(&mut *locked_csprng, |verifier, signer| {
-                Self::generate_after_content(
+                Self::generate_after_content::<K>(
                     signer,
                     verifier,
                     parents,
@@ -154,7 +157,7 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
     }
 
     #[tracing::instrument(skip_all)]
-    pub(crate) async fn generate_after_content(
+    pub(crate) async fn generate_after_content<K: FutureForm>(
         signer: Box<dyn SyncSignerBasic>,
         verifier: ed25519_dalek::VerifyingKey,
         parents: NonEmpty<Agent<S, T, L>>,
@@ -162,42 +165,33 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
         revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
         listener: L,
-    ) -> Result<Self, SigningError> {
+    ) -> Result<Self, SigningError>
+    where
+        L: MembershipListener<K, S, T>,
+    {
         let id = verifier.into();
         let group_id = GroupId(id);
         let mut delegation_heads = DelegationStore::new();
 
-        {
-            let async_listener = Arc::new(&listener);
+        // Process delegations sequentially to avoid lifetime issues with FuturesUnordered
+        for parent in parents.iter() {
+            let dlg = try_sign_basic(
+                &*signer,
+                verifier,
+                Delegation {
+                    delegate: parent.dupe(),
+                    can: Access::Admin,
+                    proof: None,
+                    after_revocations: vec![],
+                    after_content: after_content.clone(),
+                },
+            )?;
 
-            let mut futs = FuturesUnordered::new();
-            for parent in parents.iter() {
-                let dlg = try_sign_basic(
-                    &*signer,
-                    verifier,
-                    Delegation {
-                        delegate: parent.dupe(),
-                        can: Access::Admin,
-                        proof: None,
-                        after_revocations: vec![],
-                        after_content: after_content.clone(),
-                    },
-                )?;
+            let rc = Arc::new(dlg);
+            delegations.lock().await.insert(rc.dupe());
+            delegation_heads.insert(rc.dupe());
 
-                let rc = Arc::new(dlg);
-                delegations.lock().await.insert(rc.dupe());
-                delegation_heads.insert(rc.dupe());
-
-                let listen = async_listener.dupe();
-                futs.push(async move {
-                    listen.on_delegation(&rc).await;
-                    Ok::<(), SigningError>(())
-                });
-            }
-
-            while let Some(res) = futs.next().await {
-                res?;
-            }
+            MembershipListener::<K, S, T>::on_delegation(&listener, &rc).await;
         }
 
         let mut group = Group {
@@ -383,11 +377,14 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
 
     #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip(self), fields(group_id = %self.group_id()))]
-    pub async fn receive_revocation(
+    pub async fn receive_revocation<K: FutureForm>(
         &mut self,
         revocation: Arc<Signed<Revocation<S, T, L>>>,
-    ) -> Result<Digest<Signed<Revocation<S, T, L>>>, error::AddError> {
-        self.listener.on_revocation(&revocation).await;
+    ) -> Result<Digest<Signed<Revocation<S, T, L>>>, error::AddError>
+    where
+        L: MembershipListener<K, S, T>,
+    {
+        MembershipListener::<K, S, T>::on_revocation(&self.listener, &revocation).await;
         let digest = self.state.add_revocation(revocation).await?;
         self.rebuild().await;
         Ok(digest)
@@ -545,7 +542,7 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
             // Arguably this could be made impossible, but it would likely be surprising behaviour.
             for to_revoke in all_to_revoke.iter() {
                 let r = self
-                    .build_revocation(signer, to_revoke.dupe(), None, after_content.clone())
+                    .build_revocation::<K>(signer, to_revoke.dupe(), None, after_content.clone())
                     .await?;
                 self.receive_revocation(r.dupe()).await?;
                 revocations.push(r);
@@ -569,14 +566,14 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
                             // 1. Unknown to you, the cycle may be broken with some other revocation
                             // 2. It all gets resolved at materialization time
                             let r = self
-                                .build_revocation(
+                                .build_revocation::<K>(
                                     signer,
                                     to_revoke.dupe(),
                                     Some(mem_dlg.dupe()), // Admin proof
                                     after_content.clone(),
                                 )
                                 .await?;
-                            self.receive_revocation(r.dupe()).await?;
+                            self.receive_revocation::<K>(r.dupe()).await?;
                             revocations.push(r);
                             found = true;
                         }
@@ -585,14 +582,14 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
 
                 if to_revoke.issuer == vk {
                     let r = self
-                        .build_revocation(
+                        .build_revocation::<K>(
                             signer,
                             to_revoke.dupe(),
                             Some(to_revoke.dupe()), // You issued it!
                             after_content.clone(),
                         )
                         .await?;
-                    self.receive_revocation(r.dupe()).await?;
+                    self.receive_revocation::<K>(r.dupe()).await?;
                     revocations.push(r);
                     found = true;
                 } else {
@@ -601,7 +598,7 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
                         if ancestor.issuer == vk {
                             found = true;
                             let r = self
-                                .build_revocation(
+                                .build_revocation::<K>(
                                     signer,
                                     to_revoke.dupe(),
                                     Some(ancestor.dupe()),
@@ -609,7 +606,7 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
                                 )
                                 .await?;
                             revocations.push(r.dupe());
-                            self.receive_revocation(r).await?;
+                            self.receive_revocation::<K>(r).await?;
                             break;
                         }
                     }
@@ -691,20 +688,25 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
         })
     }
 
-    async fn build_revocation(
+    async fn build_revocation<K: FutureForm>(
         &mut self,
         signer: &S,
         revoke: Arc<Signed<Delegation<S, T, L>>>,
         proof: Option<Arc<Signed<Delegation<S, T, L>>>>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Arc<Signed<Revocation<S, T, L>>>, SigningError> {
-        let revocation = signer
-            .try_sign_async(Revocation {
+    ) -> Result<Arc<Signed<Revocation<S, T, L>>>, SigningError>
+    where
+        S: AsyncSigner<K, Revocation<S, T, L>>,
+    {
+        let revocation = AsyncSigner::<K, _>::try_sign_async(
+            signer,
+            Revocation {
                 revoke,
                 proof,
                 after_content,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         Ok(Arc::new(revocation))
     }

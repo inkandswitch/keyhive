@@ -5,10 +5,8 @@ use super::{
 };
 use crate::{
     content::reference::ContentRef,
-    crypto::{
-        digest::Digest, signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable,
-    },
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    crypto::{digest::Digest, signed::Signed, verifiable::Verifiable},
+    listener::no_listener::NoListener,
     principal::{document::id::DocumentId, identifier::Identifier},
     reversed::Reversed,
     store::{delegation::DelegationStore, revocation::RevocationStore},

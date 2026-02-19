@@ -4,7 +4,7 @@ use crate::{
     access::Access,
     content::reference::ContentRef,
     crypto::verifiable::Verifiable,
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::no_listener::NoListener,
     principal::document::Document,
 };
 use derive_where::derive_where;

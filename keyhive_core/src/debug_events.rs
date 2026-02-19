@@ -1,7 +1,6 @@
 use crate::{
-    crypto::{digest::Digest, signer::async_signer::AsyncSigner},
+    crypto::{digest::Digest, verifiable::Verifiable},
     event::Event,
-    listener::membership::MembershipListener,
 };
 use std::collections::HashMap;
 
@@ -84,11 +83,12 @@ pub enum CgkaOperationDetails {
 
 impl DebugEventTable {
     /// Create a new debug event table from a vector of events.
-    pub fn from_events<S, T, L>(events: Vec<Event<S, T, L>>, nicknames: Nicknames) -> Self
+    pub fn from_events<S: Verifiable, T, L>(
+        events: Vec<Event<S, T, L>>,
+        nicknames: Nicknames,
+    ) -> Self
     where
-        S: Verifiable,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-        L,
     {
         if events.is_empty() {
             return Self {
@@ -122,11 +122,13 @@ impl DebugEventTable {
 
 impl DebugEventRow {
     /// Create a new debug event row from an event.
-    pub fn from_event<S, T, L>(idx: usize, event: &Event<S, T, L>, nicknames: &Nicknames) -> Self
+    pub fn from_event<S: Verifiable, T, L>(
+        idx: usize,
+        event: &Event<S, T, L>,
+        nicknames: &Nicknames,
+    ) -> Self
     where
-        S: Verifiable,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-        L,
     {
         match event {
             Event::PrekeysExpanded(signed) => {
