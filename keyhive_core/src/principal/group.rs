@@ -32,6 +32,7 @@ use crate::{
         signer::{
             async_signer::AsyncSigner,
             ephemeral::EphemeralSigner,
+            payload_bound::PayloadBound,
             sync_signer::{try_sign_basic, SyncSignerBasic},
         },
         verifiable::Verifiable,
@@ -43,6 +44,7 @@ use derivative::Derivative;
 use derive_more::Debug;
 use derive_where::derive_where;
 use dupe::{Dupe, IterDupedExt};
+use future_form::FutureForm;
 use futures::{lock::Mutex, stream::FuturesUnordered, StreamExt};
 use id::GroupId;
 use nonempty::{nonempty, NonEmpty};
@@ -61,8 +63,7 @@ use thiserror::Error;
 /// through the network of [`Agent`]s.
 #[derive(Clone, Derivative)]
 #[derive_where(Debug; T)]
-pub struct Group<S: Verifiable, T: ContentRef = [u8; 32], L = NoListener>
-{
+pub struct Group<S: Verifiable, T: ContentRef = [u8; 32], L = NoListener> {
     pub(crate) id_or_indie: IdOrIndividual,
 
     /// The current view of members of a group.
@@ -389,13 +390,19 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
 
     #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip_all)]
-    pub async fn add_member(
+    pub async fn add_member<K: FutureForm>(
         &mut self,
         member_to_add: Agent<S, T, L>,
         can: Access,
         signer: &S,
         relevant_docs: &[Arc<Mutex<Document<S, T, L>>>],
-    ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError> {
+    ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError>
+    where
+        S: AsyncSigner<K>,
+        L: MembershipListener<K, S, T>,
+        Delegation<S, T, L>: PayloadBound<K>,
+        CgkaOperation: PayloadBound<K>,
+    {
         let mut after_content = BTreeMap::new();
         for d in relevant_docs {
             let locked = d.lock().await;
@@ -405,17 +412,22 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
             );
         }
 
-        self.add_member_with_manual_content(member_to_add, can, signer, after_content)
+        self.add_member_with_manual_content::<K>(member_to_add, can, signer, after_content)
             .await
     }
 
-    pub(crate) async fn add_member_with_manual_content(
+    pub(crate) async fn add_member_with_manual_content<K: FutureForm>(
         &mut self,
         member_to_add: Agent<S, T, L>,
         can: Access,
         signer: &S,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError> {
+    ) -> Result<AddMemberUpdate<S, T, L>, AddGroupMemberError>
+    where
+        S: AsyncSigner<K>,
+        L: MembershipListener<K, S, T>,
+        CgkaOperation: PayloadBound<K>,
+    {
         let proof = if self.verifying_key() == signer.verifying_key() {
             None
         } else {
@@ -433,22 +445,24 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
             Some(p.dupe())
         };
 
-        let delegation = signer
-            .try_sign_async(Delegation {
+        let delegation = AsyncSigner::<K>::try_sign_async(
+            signer,
+            Delegation {
                 delegate: member_to_add,
                 can,
                 proof,
                 after_revocations: self.state.revocation_heads.values().duped().collect(),
                 after_content,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         let rc = Arc::new(delegation);
         let _digest = self.receive_delegation(rc.dupe()).await?;
-        self.listener.on_delegation(&rc).await;
+        MembershipListener::<K, S, T>::on_delegation(&self.listener, &rc).await;
 
         let cgka_ops = if rc.payload.can.is_reader() {
-            self.add_cgka_member(rc.dupe(), signer).await?
+            self.add_cgka_member::<K>(rc.dupe(), signer).await?
         } else {
             Vec::new()
         };
@@ -460,11 +474,15 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
     }
 
     #[tracing::instrument(skip_all)]
-    pub(crate) async fn add_cgka_member(
+    pub(crate) async fn add_cgka_member<K: FutureForm>(
         &mut self,
         delegation: Arc<Signed<Delegation<S, T, L>>>,
         signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError>
+    where
+        S: AsyncSigner<K>,
+        CgkaOperation: PayloadBound<K>,
+    {
         let mut cgka_ops = Vec::new();
         let docs: Vec<Arc<Mutex<Document<S, T, L>>>> = self
             .transitive_members()
@@ -482,7 +500,7 @@ impl<S: Verifiable, T: ContentRef, L> Group<S, T, L> {
             for op in doc
                 .lock()
                 .await
-                .add_cgka_member(&delegation, signer)
+                .add_cgka_member::<K>(&delegation, signer)
                 .await?
             {
                 cgka_ops.push(op);

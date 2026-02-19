@@ -16,7 +16,7 @@ use crate::{
         encrypted::EncryptedContent,
         share_key::{ShareKey, ShareSecretKey},
         signed::Signed,
-        signer::{async_signer::AsyncSigner, payload_bound::PayloadBound},
+        signer::async_signer::AsyncSigner,
         siv::Siv,
         symmetric_key::SymmetricKey,
         verifiable::Verifiable,
@@ -89,17 +89,17 @@ fn hashed_key_bytes<T: Serialize, V, H: Hasher>(hmap: &HashMap<Digest<T>, V>, st
 }
 
 impl Cgka {
-    pub async fn new<K: FutureForm, S: AsyncSigner<K>>(
+    pub async fn new<K: FutureForm, S>(
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
         signer: &S,
     ) -> Result<Self, CgkaError>
     where
-        CgkaOperation: PayloadBound<K>,
+        S: AsyncSigner<K, CgkaOperation>,
     {
         let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk);
-        let signed_op = AsyncSigner::<K>::try_sign_async(signer, init_add_op).await?;
+        let signed_op = AsyncSigner::<K, _>::try_sign_async(signer, init_add_op).await?;
         Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op)
     }
 
@@ -157,7 +157,8 @@ impl Cgka {
     /// perform a leaf key rotation.
     #[instrument(skip_all)]
     pub async fn new_app_secret_for<
-        S: Verifiable,
+        K: FutureForm,
+        S,
         T: ContentRef,
         R: rand::CryptoRng + rand::RngCore,
     >(
@@ -167,7 +168,10 @@ impl Cgka {
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
+    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError>
+    where
+        S: AsyncSigner<K, CgkaOperation>,
+    {
         let mut op = None;
         let current_pcs_key = if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);

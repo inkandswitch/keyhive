@@ -1,6 +1,6 @@
 //! Synchronous signer trait.
 
-use super::{async_signer::AsyncSigner, payload_bound::PayloadBound};
+use super::async_signer::AsyncSigner;
 use crate::{
     crypto::{
         signed::{Signed, SigningError},
@@ -9,8 +9,9 @@ use crate::{
     util::hex::ToHexString,
 };
 use ed25519_dalek::Signer;
-use future_form::{FutureForm, Local, Sendable};
+use future_form::{FutureExt, FutureForm, Local, Sendable};
 use serde::Serialize;
+use std::fmt::Debug;
 use tracing::{info, instrument};
 
 /// Synchronous signer trait. This is the primary sync signer API.
@@ -99,51 +100,52 @@ impl SyncSigner for ed25519_dalek::SigningKey {
     }
 }
 
-/// Blanket implementation of [`AsyncSigner<Sendable>`] for all [`SyncSigner`]s.
+/// Blanket implementation of [`AsyncSigner<Sendable, T>`] for all [`SyncSigner`]s.
 ///
 /// This allows any synchronous signer to be used in async contexts with `Send` futures.
-impl<T: SyncSigner + Send + Sync> AsyncSigner<Sendable> for T {
+/// The `T: Send` bound is required for the future to be `Send`.
+impl<S: SyncSigner + Send + Sync, T: Serialize + Debug + Send> AsyncSigner<Sendable, T> for S {
     #[instrument(skip_all)]
     fn try_sign_bytes_async<'a>(
         &'a self,
         payload_bytes: &'a [u8],
     ) -> <Sendable as FutureForm>::Future<'a, Result<ed25519_dalek::Signature, SigningError>> {
-        Sendable::from_future(async move { self.try_sign_bytes_sync(payload_bytes) })
+        std::future::ready(self.try_sign_bytes_sync(payload_bytes)).boxed()
     }
 
     #[instrument(skip_all)]
-    fn try_sign_async<'a, P>(
+    fn try_sign_async<'a>(
         &'a self,
-        payload: P,
-    ) -> <Sendable as FutureForm>::Future<'a, Result<Signed<P>, SigningError>>
+        payload: T,
+    ) -> <Sendable as FutureForm>::Future<'a, Result<Signed<T>, SigningError>>
     where
-        P: Serialize + std::fmt::Debug + PayloadBound<Sendable> + 'a,
+        T: 'a,
     {
-        Sendable::from_future(async move { self.try_sign_sync(payload) })
+        std::future::ready(self.try_sign_sync(payload)).boxed()
     }
 }
 
-/// Blanket implementation of [`AsyncSigner<Local>`] for all [`SyncSigner`]s.
+/// Blanket implementation of [`AsyncSigner<Local, T>`] for all [`SyncSigner`]s.
 ///
 /// This allows any synchronous signer to be used in async contexts with `!Send` futures.
-impl<T: SyncSigner> AsyncSigner<Local> for T {
+impl<S: SyncSigner, T: Serialize + Debug> AsyncSigner<Local, T> for S {
     #[instrument(skip_all)]
     fn try_sign_bytes_async<'a>(
         &'a self,
         payload_bytes: &'a [u8],
     ) -> <Local as FutureForm>::Future<'a, Result<ed25519_dalek::Signature, SigningError>> {
-        Local::from_future(async move { self.try_sign_bytes_sync(payload_bytes) })
+        std::future::ready(self.try_sign_bytes_sync(payload_bytes)).boxed_local()
     }
 
     #[instrument(skip_all)]
-    fn try_sign_async<'a, P>(
+    fn try_sign_async<'a>(
         &'a self,
-        payload: P,
-    ) -> <Local as FutureForm>::Future<'a, Result<Signed<P>, SigningError>>
+        payload: T,
+    ) -> <Local as FutureForm>::Future<'a, Result<Signed<T>, SigningError>>
     where
-        P: Serialize + std::fmt::Debug + PayloadBound<Local> + 'a,
+        T: 'a,
     {
-        Local::from_future(async move { self.try_sign_sync(payload) })
+        std::future::ready(self.try_sign_sync(payload)).boxed_local()
     }
 }
 

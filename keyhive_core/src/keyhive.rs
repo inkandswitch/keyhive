@@ -12,14 +12,17 @@ use crate::{
         encrypted::EncryptedContent,
         share_key::ShareKey,
         signed::{Signed, SigningError, VerificationError},
-        signer::async_signer::AsyncSigner,
+        signer::{async_signer::AsyncSigner, payload_bound::PayloadBound},
         verifiable::Verifiable,
     },
     error::missing_dependency::MissingDependency,
     event::{static_event::StaticEvent, Event},
-    listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
+    listener::{
+        cgka::CgkaListener, log::Log, membership::MembershipListener, no_listener::NoListener,
+        prekey::PrekeyListener,
+    },
     principal::{
-        active::Active,
+        active::{Active, ActiveOps},
         agent::{id::AgentId, Agent},
         document::{
             id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError,
@@ -57,6 +60,7 @@ use crate::{
 };
 use derive_where::derive_where;
 use dupe::{Dupe, OptionDupedExt};
+use future_form::FutureForm;
 use futures::lock::Mutex;
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
@@ -123,7 +127,7 @@ impl<
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<T, P> + Clone,
-        L,
+        L: Clone,
         R: rand::CryptoRng + rand::RngCore,
     > Keyhive<S, T, P, C, L, R>
 {
@@ -138,14 +142,19 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn generate(
+    pub async fn generate<K: FutureForm>(
         signer: S,
         ciphertext_store: C,
         event_listener: L,
         mut csprng: R,
-    ) -> Result<Self, SigningError> {
+    ) -> Result<Self, SigningError>
+    where
+        S: AsyncSigner<K> + 'static,
+        L: PrekeyListener<K> + 'static,
+    {
         let verifying_key = signer.verifying_key();
-        let inner_active = Active::generate(signer, event_listener.clone(), &mut csprng).await?;
+        let inner_active =
+            ActiveOps::<K>::generate(signer, event_listener.clone(), &mut csprng).await?;
         let active_id = inner_active.id();
 
         Ok(Self {

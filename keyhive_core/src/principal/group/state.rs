@@ -22,11 +22,7 @@ use std::{cmp::Ordering, collections::BTreeMap, sync::Arc};
 
 #[derive(Clone)]
 #[derive_where(Debug, Hash; T)]
-pub struct GroupState<
-    S: Verifiable,
-    T: ContentRef = [u8; 32],
-    L = NoListener,
-> {
+pub struct GroupState<S: Verifiable, T: ContentRef = [u8; 32], L = NoListener> {
     pub(crate) id: GroupId,
 
     #[derive_where(skip)]
@@ -266,9 +262,7 @@ impl<S: Verifiable, T: ContentRef, L> GroupState<S, T, L> {
     }
 }
 
-impl<S: Verifiable, T: ContentRef, L> Verifiable
-    for GroupState<S, T, L>
-{
+impl<S: Verifiable, T: ContentRef, L> Verifiable for GroupState<S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.id.0.verifying_key()
     }
