@@ -943,19 +943,31 @@ pub enum RevokeMemberError {
 #[cfg(test)]
 mod tests {
     use super::{delegation::Delegation, *};
-    use crate::{crypto::signer::memory::MemorySigner, principal::active::Active};
+    use crate::{
+        crypto::signer::memory::MemorySigner,
+        principal::active::{Active, ActiveOps},
+    };
+    use future_form::Sendable;
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
     use rand::rngs::OsRng;
 
-    async fn setup_user<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
+    async fn setup_user<
+        T: ContentRef + Send + Sync + 'static,
+        R: rand::CryptoRng + rand::RngCore,
+    >(
         csprng: &mut R,
     ) -> Active<MemorySigner, T> {
         let sk = MemorySigner::generate(csprng);
-        Active::generate(sk, NoListener, csprng).await.unwrap()
+        ActiveOps::<Sendable>::generate(sk, NoListener, csprng)
+            .await
+            .unwrap()
     }
 
-    async fn setup_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
+    async fn setup_groups<
+        T: ContentRef + Send + Sync + 'static,
+        R: rand::CryptoRng + rand::RngCore,
+    >(
         alice: Arc<Mutex<Active<MemorySigner, T>>>,
         bob: Arc<Mutex<Active<MemorySigner, T>>>,
         csprng: Arc<Mutex<R>>,
@@ -991,7 +1003,7 @@ mod tests {
         let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
 
         let g0 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![alice_agent.dupe()],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1004,7 +1016,7 @@ mod tests {
         let g0_gid = g0.lock().await.group_id();
 
         let g1 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![alice_agent, Agent::Group(g0_gid, g0.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1016,7 +1028,7 @@ mod tests {
         ));
 
         let g2 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![
                     bob_agent,
                     Agent::Group(g0.lock().await.group_id(), g0.clone())
@@ -1031,7 +1043,7 @@ mod tests {
         ));
 
         let g3 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![
                     Agent::Group(g1.lock().await.group_id(), g1.clone()),
                     Agent::Group(g2.lock().await.group_id(), g2.clone())
@@ -1048,7 +1060,10 @@ mod tests {
         [g0, g1, g2, g3]
     }
 
-    async fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
+    async fn setup_cyclic_groups<
+        T: ContentRef + Send + Sync + 'static,
+        R: rand::CryptoRng + rand::RngCore,
+    >(
         alice: Arc<Mutex<Active<MemorySigner, T>>>,
         bob: Arc<Mutex<Active<MemorySigner, T>>>,
         csprng: Arc<Mutex<R>>,
@@ -1057,7 +1072,7 @@ mod tests {
         let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
 
         let group0 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![Agent::Active(alice.lock().await.id(), alice.dupe())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1069,7 +1084,7 @@ mod tests {
         ));
 
         let group1 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![Agent::Active(bob.lock().await.id(), bob.dupe())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1081,7 +1096,7 @@ mod tests {
         ));
 
         let group2 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![Agent::Group(group1.lock().await.group_id(), group1.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1093,7 +1108,7 @@ mod tests {
         ));
 
         let group3 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![Agent::Group(group2.lock().await.group_id(), group2.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1105,7 +1120,7 @@ mod tests {
         ));
 
         let group4 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![Agent::Group(group3.lock().await.group_id(), group3.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1117,7 +1132,7 @@ mod tests {
         ));
 
         let group5 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![Agent::Group(group4.lock().await.group_id(), group4.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1129,7 +1144,7 @@ mod tests {
         ));
 
         let group6 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![Agent::Group(group5.lock().await.group_id(), group5.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1141,7 +1156,7 @@ mod tests {
         ));
 
         let group7 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![Agent::Group(group6.lock().await.group_id(), group6.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1153,7 +1168,7 @@ mod tests {
         ));
 
         let group8 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![Agent::Group(group7.lock().await.group_id(), group7.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1165,7 +1180,7 @@ mod tests {
         ));
 
         let group9 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![Agent::Group(group8.lock().await.group_id(), group8.clone())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1190,16 +1205,18 @@ mod tests {
 
             locked_group0
                 .receive_delegation(Arc::new(
-                    alice_signer
-                        .try_sign_async(Delegation {
+                    AsyncSigner::<Sendable, _>::try_sign_async(
+                        &alice_signer,
+                        Delegation {
                             delegate: Agent::Group(group9.lock().await.group_id(), group9.dupe()),
                             can: Access::Admin,
                             proof: Some(proof),
                             after_revocations: vec![],
                             after_content: BTreeMap::new(),
-                        })
-                        .await
-                        .unwrap(),
+                        },
+                    )
+                    .await
+                    .unwrap(),
                 ))
                 .await
                 .unwrap();
@@ -1374,8 +1391,8 @@ mod tests {
         let carol_agent: Agent<MemorySigner> = Agent::Active(carol.lock().await.id(), carol.dupe());
 
         let signer = MemorySigner::generate(&mut csprng);
-        let active = Arc::new(Mutex::new(
-            Active::generate(signer, NoListener, &mut csprng)
+        let active: Arc<Mutex<Active<_, [u8; 32], _>>> = Arc::new(Mutex::new(
+            ActiveOps::<Sendable>::generate(signer, NoListener, &mut csprng)
                 .await
                 .unwrap(),
         ));
@@ -1391,7 +1408,7 @@ mod tests {
         let arc_csprng = Arc::new(Mutex::new(csprng));
 
         let g0 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![Agent::Active(active_id, active.dupe())],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1405,7 +1422,7 @@ mod tests {
         let group0_agent = Agent::Group(g0.lock().await.group_id(), g0.dupe());
 
         let g1 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![alice_agent.dupe(), bob_agent.dupe(), group0_agent],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1419,7 +1436,7 @@ mod tests {
         let group1_agent = Agent::Group(g1.lock().await.group_id(), g1.dupe());
 
         let g2 = Arc::new(Mutex::new(
-            Group::generate(
+            Group::generate::<Sendable, _>(
                 nonempty![group1_agent],
                 dlg_store.dupe(),
                 rev_store.dupe(),
@@ -1432,7 +1449,7 @@ mod tests {
 
         g0.lock()
             .await
-            .add_member(carol_agent.dupe(), Access::Write, &active_signer, &[])
+            .add_member::<Sendable>(carol_agent.dupe(), Access::Write, &active_signer, &[])
             .await
             .unwrap();
 
@@ -1553,7 +1570,7 @@ mod tests {
         let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
         let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
 
-        let mut g1 = Group::generate(
+        let mut g1 = Group::generate::<Sendable, _>(
             nonempty![alice_agent.dupe()],
             dlg_store.dupe(),
             rev_store.dupe(),
@@ -1564,12 +1581,12 @@ mod tests {
         .unwrap();
 
         let _alice_adds_bob = g1
-            .add_member(bob_agent.dupe(), Access::Write, &alice_signer, &[])
+            .add_member::<Sendable>(bob_agent.dupe(), Access::Write, &alice_signer, &[])
             .await
             .unwrap();
 
         let _bob_adds_carol = g1
-            .add_member(carol_agent.dupe(), Access::Read, &bob_signer, &[])
+            .add_member::<Sendable>(carol_agent.dupe(), Access::Read, &bob_signer, &[])
             .await
             .unwrap();
 
@@ -1579,7 +1596,7 @@ mod tests {
         assert!(!g1.members().contains_key(&dan_id));
 
         let _carol_adds_dan = g1
-            .add_member(dan_agent.dupe(), Access::Read, &carol_signer, &[])
+            .add_member::<Sendable>(dan_agent.dupe(), Access::Read, &carol_signer, &[])
             .await
             .unwrap();
 
@@ -1590,7 +1607,7 @@ mod tests {
         assert_eq!(g1.members.len(), 4);
 
         let _alice_revokes_bob = g1
-            .revoke_member(bob_id.into(), true, &alice_signer, &BTreeMap::new())
+            .revoke_member::<Sendable>(bob_id.into(), true, &alice_signer, &BTreeMap::new())
             .await
             .unwrap();
 
@@ -1605,7 +1622,7 @@ mod tests {
         assert!(g1.members.contains_key(&dan_id.into()));
 
         let _bob_to_carol = g1
-            .add_member(bob_agent.dupe(), Access::Read, &carol_signer, &[])
+            .add_member::<Sendable>(bob_agent.dupe(), Access::Read, &carol_signer, &[])
             .await
             .unwrap();
 
@@ -1614,7 +1631,7 @@ mod tests {
         assert!(g1.members.contains_key(&dan_id.into()));
 
         let _alice_revokes_carol = g1
-            .revoke_member(carol_id.into(), false, &alice_signer, &BTreeMap::new())
+            .revoke_member::<Sendable>(carol_id.into(), false, &alice_signer, &BTreeMap::new())
             .await
             .unwrap();
 
@@ -1622,7 +1639,7 @@ mod tests {
         assert!(!g1.members.contains_key(&carol_id.into()));
         // FIXME assert!(!g1.members.contains_key(&dan.borrow().id().into()));
 
-        g1.revoke_member(alice_id.into(), false, &alice_signer, &BTreeMap::new())
+        g1.revoke_member::<Sendable>(alice_id.into(), false, &alice_signer, &BTreeMap::new())
             .await
             .unwrap();
 

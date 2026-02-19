@@ -11,7 +11,7 @@ use crate::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
-use future_form::{future_form, FutureForm};
+use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use std::{collections::VecDeque, sync::Arc};
 use tracing::instrument;

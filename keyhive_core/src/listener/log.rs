@@ -12,7 +12,7 @@ use crate::{
 use derive_more::{From, Into};
 use derive_where::derive_where;
 use dupe::Dupe;
-use future_form::{future_form, FutureForm};
+use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use std::sync::Arc;
 use tracing::instrument;

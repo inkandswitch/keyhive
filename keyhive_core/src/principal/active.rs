@@ -22,12 +22,16 @@ use crate::{
         signer::async_signer::AsyncSigner,
         verifiable::Verifiable,
     },
-    listener::{no_listener::NoListener, prekey::PrekeyListener},
+    listener::{log::Log, no_listener::NoListener, prekey::PrekeyListener},
     principal::{agent::id::AgentId, group::delegation::Delegation, membered::Membered},
+    transact::{
+        fork::Fork,
+        merge::{Merge, MergeAsync},
+    },
 };
 use derivative::Derivative;
 use dupe::Dupe;
-use future_form::{future_form, FutureForm};
+use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
 use thiserror::Error;
@@ -382,6 +386,33 @@ impl<
     }
 }
 
+impl<S: Verifiable + Clone, T: ContentRef, L> Fork for Active<S, T, L> {
+    type Forked = Active<S, T, Log<S, T>>;
+
+    fn fork(&self) -> Self::Forked {
+        Active {
+            id: self.id,
+            signer: self.signer.clone(),
+            prekey_pairs: self.prekey_pairs.clone(),
+            individual: self.individual.clone(),
+            listener: Log::new(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<S: Verifiable + Clone, T: ContentRef, L> MergeAsync for Active<S, T, L> {
+    async fn merge_async(&self, fork: Self::AsyncForked) {
+        let forked_individual = { fork.individual.lock().await.clone() };
+        let forked_prekey_pairs = { fork.prekey_pairs.lock().await.clone() };
+        {
+            self.prekey_pairs.lock().await.extend(forked_prekey_pairs);
+        }
+
+        self.individual.lock().await.merge(forked_individual);
+    }
+}
+
 /// Errors when sharing encrypted content.
 #[derive(Debug, Error)]
 pub enum ShareError {
@@ -430,7 +461,7 @@ mod tests {
 
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let active: Active<_, [u8; 32], _> =
+        let _active: Active<_, [u8; 32], _> =
             ActiveOps::<Sendable>::generate(signer.clone(), NoListener, csprng)
                 .await
                 .unwrap();

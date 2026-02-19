@@ -411,6 +411,7 @@ mod tests {
         store::{delegation::DelegationStore, revocation::RevocationStore},
     };
     use dupe::Dupe;
+    use future_form::Sendable;
     use futures::lock::Mutex;
     use std::sync::{Arc, LazyLock};
 
@@ -467,7 +468,7 @@ mod tests {
     async fn add_alice<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
     ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
-        let alice = Individual::generate(fixture(&ALICE_SIGNER), csprng)
+        let alice = Individual::generate::<Sendable, _, _>(fixture(&ALICE_SIGNER), csprng)
             .await
             .unwrap();
         let group_sk = LazyLock::force(&GROUP_SIGNER).clone();
@@ -489,7 +490,7 @@ mod tests {
     async fn add_bob<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
     ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
-        let bob = Individual::generate(fixture(&BOB_SIGNER), csprng)
+        let bob = Individual::generate::<Sendable, _, _>(fixture(&BOB_SIGNER), csprng)
             .await
             .unwrap();
 
@@ -509,7 +510,7 @@ mod tests {
     async fn add_carol<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
     ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
-        let carol = Individual::generate(fixture(&CAROL_SIGNER), csprng)
+        let carol = Individual::generate::<Sendable, _, _>(fixture(&CAROL_SIGNER), csprng)
             .await
             .unwrap();
 
@@ -529,7 +530,7 @@ mod tests {
     async fn add_dan<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
     ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
-        let dan = Individual::generate(fixture(&DAN_SIGNER), csprng)
+        let dan = Individual::generate::<Sendable, _, _>(fixture(&DAN_SIGNER), csprng)
             .await
             .unwrap();
 
@@ -549,7 +550,7 @@ mod tests {
     async fn add_erin<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
     ) -> Arc<Signed<Delegation<MemorySigner, String>>> {
-        let erin = Individual::generate(fixture(&ERIN_SIGNER), csprng)
+        let erin = Individual::generate::<Sendable, _, _>(fixture(&ERIN_SIGNER), csprng)
             .await
             .unwrap();
 
@@ -657,7 +658,7 @@ mod tests {
     }
 
     mod topsort {
-        use crate::principal::active::Active;
+        use crate::principal::active::{Active, ActiveOps};
 
         use super::*;
 
@@ -771,27 +772,31 @@ mod tests {
             let csprng = &mut rand::thread_rng();
 
             let alice_sk = fixture(&ALICE_SIGNER).clone();
-            let alice = Arc::new(Mutex::new(
-                Active::<_, [u8; 32], _>::generate(alice_sk, NoListener, csprng)
+            let alice: Arc<Mutex<Active<_, [u8; 32], _>>> = Arc::new(Mutex::new(
+                ActiveOps::<Sendable>::generate(alice_sk, NoListener, csprng)
                     .await
                     .unwrap(),
             ));
 
             let bob_sk = fixture(&BOB_SIGNER).clone();
-            let bob = Arc::new(Mutex::new(
-                Active::generate(bob_sk, NoListener, csprng).await.unwrap(),
+            let bob: Arc<Mutex<Active<_, [u8; 32], _>>> = Arc::new(Mutex::new(
+                ActiveOps::<Sendable>::generate(bob_sk, NoListener, csprng)
+                    .await
+                    .unwrap(),
             ));
 
             let carol_sk = fixture(&CAROL_SIGNER).clone();
-            let carol = Arc::new(Mutex::new(
-                Active::generate(carol_sk, NoListener, csprng)
+            let carol: Arc<Mutex<Active<_, [u8; 32], _>>> = Arc::new(Mutex::new(
+                ActiveOps::<Sendable>::generate(carol_sk, NoListener, csprng)
                     .await
                     .unwrap(),
             ));
 
             let dan_sk = fixture(&DAN_SIGNER).clone();
-            let dan = Arc::new(Mutex::new(
-                Active::generate(dan_sk, NoListener, csprng).await.unwrap(),
+            let dan: Arc<Mutex<Active<_, [u8; 32], _>>> = Arc::new(Mutex::new(
+                ActiveOps::<Sendable>::generate(dan_sk, NoListener, csprng)
+                    .await
+                    .unwrap(),
             ));
 
             let locked_alice = alice.lock().await;

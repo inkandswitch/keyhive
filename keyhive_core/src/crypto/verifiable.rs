@@ -12,16 +12,18 @@ pub trait Verifiable {
     /// # Examples
     ///
     /// ```
+    /// use future_form::Sendable;
     /// use keyhive_core::{
     ///     crypto::{
     ///         signer::{
     ///             async_signer::AsyncSigner,
-    ///             memory::MemorySigner
+    ///             memory::MemorySigner,
+    ///             sync_signer::SyncSigner,
     ///         },
     ///         verifiable::Verifiable
     ///     },
     ///     listener::no_listener::NoListener,
-    ///     principal::active::Active
+    ///     principal::active::{Active, ActiveOps}
     /// };
     ///
     /// #[tokio::main(flavor = "current_thread")]
@@ -34,11 +36,11 @@ pub trait Verifiable {
     ///
     ///     // Principal
     ///     let signer = MemorySigner::generate(&mut csprng);
-    ///     let alice: Active::<_, [u8; 32], _> = Active::generate(signer, NoListener, &mut csprng).await.unwrap();
+    ///     let alice: Active::<_, [u8; 32], _> = ActiveOps::<Sendable>::generate(signer.clone(), NoListener, &mut csprng).await.unwrap();
     ///     assert_eq!(alice.verifying_key().to_bytes().len(), 32);
     ///
-    ///     // Signed
-    ///     let signed = alice.try_sign_async(vec![1u8, 2, 3]).await.unwrap();
+    ///     // Signed (using the signer directly)
+    ///     let signed = signer.try_sign_sync(vec![1u8, 2, 3]).unwrap();
     ///     assert_eq!(signed.verifying_key(), alice.verifying_key());
     /// }
     /// ```

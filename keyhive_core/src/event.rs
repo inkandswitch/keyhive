@@ -151,6 +151,7 @@ mod tests {
         },
         store::ciphertext::memory::MemoryCiphertextStore,
     };
+    use future_form::Sendable;
     use futures::lock::Mutex;
     use rand::rngs::OsRng;
     use std::collections::BTreeMap;
@@ -196,7 +197,7 @@ mod tests {
         let hash2 = Digest::hash(&cgka_op_2);
         let hash3 = Digest::hash(&cgka_op_3);
 
-        let indie = Individual::generate(&signer, &mut csprng).await?;
+        let indie = Individual::generate::<Sendable, _, _>(&signer, &mut csprng).await?;
         let events: Vec<Event<MemorySigner, [u8; 32], NoListener>> = vec![
             Event::CgkaOperation(Arc::new(cgka_op_1)),
             Event::CgkaOperation(Arc::new(cgka_op_2)),
