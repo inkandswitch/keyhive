@@ -28,6 +28,11 @@ impl JsSignedDelegation {
         self.0.payload().clone().into()
     }
 
+    #[wasm_bindgen(getter, js_name = subjectId)]
+    pub fn subject_id(&self) -> super::identifier::JsIdentifier {
+        self.0.subject_id().into()
+    }
+
     #[wasm_bindgen(getter, js_name = verifyingKey)]
     pub fn verifying_key(&self) -> Vec<u8> {
         self.0.verifying_key().to_bytes().to_vec()

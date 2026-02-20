@@ -1178,12 +1178,14 @@ impl<
                     .await
                     .receive_delegation(delegation.clone())
                     .await?;
+                self.event_listener.on_delegation(&delegation).await;
             } else if let Some(doc) = self.docs.lock().await.get(&DocumentId(subject_id)) {
                 found = true;
                 doc.lock()
                     .await
                     .receive_delegation(delegation.clone())
                     .await?;
+                self.event_listener.on_delegation(&delegation).await;
             } else if let Some(indie) = self
                 .individuals
                 .lock()
