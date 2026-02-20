@@ -11,6 +11,7 @@ use x25519_dalek::SharedSecret;
 /// # Example
 ///
 /// ```
+/// # use future_form::Sendable;
 /// # use keyhive_core::{
 /// #     crypto::{siv::Siv, symmetric_key::SymmetricKey, signer::memory::MemorySigner},
 /// #     listener::no_listener::NoListener,
@@ -28,12 +29,12 @@ use x25519_dalek::SharedSecret;
 ///     let mut csprng = rand::rngs::OsRng;
 ///
 ///     let sk = MemorySigner::generate(&mut csprng);
-///     let user = Individual::generate(&sk, &mut csprng).await.unwrap();
+///     let user = Individual::generate::<Sendable, _, _>(&sk, &mut csprng).await.unwrap();
 ///     let user_agent: Agent<MemorySigner, String> = Agent::Individual(user.id(), Arc::new(Mutex::new(user)));
 ///
 ///     let delegation_store = Arc::new(Mutex::new(DelegationStore::new()));
 ///     let revocation_store = Arc::new(Mutex::new(RevocationStore::new()));
-///     let doc = Document::generate(
+///     let doc = Document::generate::<Sendable, _>(
 ///         nonempty![user_agent],
 ///         nonempty!["commit-1".to_string()],
 ///         delegation_store,
@@ -43,7 +44,7 @@ use x25519_dalek::SharedSecret;
 ///         Arc::new(Mutex::new(csprng)),
 ///     ).await.unwrap();
 ///
-///     let key = SymmetricKey::generate(&mut csprng);
+///     let key = SymmetricKey::generate(&mut rand::rngs::OsRng);
 ///     let nonce = Siv::new(&key, plaintext, doc.doc_id()).unwrap();
 ///
 ///     let mut roundtrip_buf = plaintext.to_vec();

@@ -22,6 +22,7 @@ bincode = { workspace = true }
 derive_more = { workspace = true }
 dupe = { workspace = true }
 ed25519-dalek = { workspace = true }
+future_form = { git = "https://codeberg.org/expede/future_form", branch = "macro-update" }
 futures = { workspace = true }
 nonempty = { workspace = true }
 thiserror = { workspace = true }

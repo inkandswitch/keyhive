@@ -2,8 +2,8 @@
 
 use crate::{
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    crypto::{digest::Digest, signed::Signed, verifiable::Verifiable},
+    listener::no_listener::NoListener,
     principal::group::delegation::Delegation,
     util::content_addressed_map::CaMap,
 };
@@ -14,15 +14,11 @@ use std::sync::Arc;
 #[allow(clippy::type_complexity)]
 #[derive(Default)]
 #[derive_where(Clone, Debug, Hash; T)]
-pub struct DelegationStore<
-    S: AsyncSigner,
-    T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
-> {
+pub struct DelegationStore<S: Verifiable, T: ContentRef = [u8; 32], L = NoListener> {
     delegations: CaMap<Signed<Delegation<S, T, L>>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> DelegationStore<S, T, L> {
+impl<S: Verifiable, T: ContentRef, L> DelegationStore<S, T, L> {
     /// Create a new delegation store.
     pub fn new() -> Self {
         Self {

@@ -8,6 +8,7 @@ use crate::{
     transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
+use future_form::FutureForm;
 use futures::{prelude::*, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
@@ -71,7 +72,11 @@ impl PrekeyState {
     /// # Errors
     ///
     /// Returns a [`SigningError`] if the operation could not be signed.
-    pub async fn generate<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
+    pub async fn generate<
+        K: FutureForm,
+        S: AsyncSigner<K, AddKeyOp>,
+        R: rand::CryptoRng + rand::RngCore,
+    >(
         signer: &S,
         size: NonZeroUsize,
         csprng: &mut R,
@@ -79,11 +84,13 @@ impl PrekeyState {
         let mut futs = FuturesUnordered::new();
         for sk in (0..size.into()).map(|_| ShareSecretKey::generate(csprng)) {
             futs.push(async move {
-                signer
-                    .try_sign_async(AddKeyOp {
+                AsyncSigner::<K, _>::try_sign_async(
+                    signer,
+                    AddKeyOp {
                         share_key: sk.share_key(),
-                    })
-                    .await
+                    },
+                )
+                .await
             });
         }
 

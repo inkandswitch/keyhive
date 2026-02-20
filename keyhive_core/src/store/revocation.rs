@@ -2,8 +2,8 @@
 
 use crate::{
     content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    crypto::{digest::Digest, signed::Signed, verifiable::Verifiable},
+    listener::no_listener::NoListener,
     principal::{agent::id::AgentId, group::revocation::Revocation},
     util::content_addressed_map::CaMap,
 };
@@ -18,17 +18,13 @@ use std::{
 #[allow(clippy::type_complexity)]
 #[derive(Default)]
 #[derive_where(Debug, Clone, Hash; T)]
-pub struct RevocationStore<
-    S: AsyncSigner,
-    T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
-> {
+pub struct RevocationStore<S: Verifiable, T: ContentRef = [u8; 32], L = NoListener> {
     revocations: CaMap<Signed<Revocation<S, T, L>>>,
     #[derive_where(skip(Hash))]
     agent_to_revocations: HashMap<AgentId, HashSet<Arc<Signed<Revocation<S, T, L>>>>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore<S, T, L> {
+impl<S: Verifiable, T: ContentRef, L> RevocationStore<S, T, L> {
     /// Create a new revocation store.
     pub fn new() -> Self {
         Self {

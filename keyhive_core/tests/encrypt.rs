@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use dupe::Dupe;
+use future_form::Sendable;
 use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
@@ -33,7 +34,7 @@ async fn make_keyhive() -> NewKeyhive {
     let sk = MemorySigner::generate(&mut rand::thread_rng());
     let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
     let log = Log::new();
-    let keyhive = Keyhive::generate(sk.clone(), store, log.clone(), rand::thread_rng())
+    let keyhive = Keyhive::generate::<Sendable>(sk.clone(), store, log.clone(), rand::thread_rng())
         .await
         .unwrap();
     NewKeyhive {
@@ -53,7 +54,7 @@ async fn test_encrypt_to_added_member() -> TestResult {
     let init_hash = blake3::hash(&init_content);
 
     let doc = alice
-        .generate_doc(vec![], nonempty![init_hash.into()])
+        .generate_doc::<Sendable>(vec![], nonempty![init_hash.into()])
         .await?;
     let doc_id = { doc.lock().await.doc_id() };
 
@@ -61,7 +62,7 @@ async fn test_encrypt_to_added_member() -> TestResult {
 
     let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
     alice
-        .add_member(
+        .add_member::<Sendable>(
             Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
             &Membered::Document(doc_id, doc.dupe()),
             Access::Read,
@@ -70,14 +71,14 @@ async fn test_encrypt_to_added_member() -> TestResult {
         .await?;
 
     let encrypted = alice
-        .try_encrypt_content(doc.clone(), &init_hash.into(), &vec![], &init_content)
+        .try_encrypt_content::<Sendable>(doc.clone(), &init_hash.into(), &vec![], &init_content)
         .await?;
 
     // Sync everything to bob
     let alice_events = alice
         .static_events_for_agent(&bob.active().lock().await.clone().into())
         .await?;
-    bob.ingest_unsorted_static_events(alice_events.into_values().collect())
+    bob.ingest_unsorted_static_events::<Sendable>(alice_events.into_values().collect())
         .await;
 
     // Attempt to decrypt on bob
@@ -100,18 +101,18 @@ async fn test_decrypt_after_to_from_archive() {
         log,
     } = make_keyhive().await;
 
-    let archive = alice.into_archive().await;
+    let archive = alice.into_archive::<Sendable>().await;
 
     let init_content = "hello world".as_bytes().to_vec();
     let init_hash = blake3::hash(&init_content);
 
     let doc = alice
-        .generate_doc(vec![], nonempty![init_hash.into()])
+        .generate_doc::<Sendable>(vec![], nonempty![init_hash.into()])
         .await
         .unwrap();
 
     let encrypted = alice
-        .try_encrypt_content(doc.clone(), &init_hash.into(), &vec![], &init_content)
+        .try_encrypt_content::<Sendable>(doc.clone(), &init_hash.into(), &vec![], &init_content)
         .await
         .unwrap();
 
@@ -128,7 +129,9 @@ async fn test_decrypt_after_to_from_archive() {
     while let Some(evt) = log.pop().await {
         events.push(StaticEvent::from(evt));
     }
-    alice.ingest_unsorted_static_events(events).await;
+    alice
+        .ingest_unsorted_static_events::<Sendable>(events)
+        .await;
 
     let doc = {
         let locked_doc = doc.lock().await;
@@ -152,22 +155,22 @@ async fn test_decrypt_after_fork_and_merge() {
         log,
     } = make_keyhive().await;
 
-    let archive1 = alice.into_archive().await;
+    let archive1 = alice.into_archive::<Sendable>().await;
 
     let init_content = "hello world".as_bytes().to_vec();
     let init_hash = blake3::hash(&init_content);
 
     let doc = alice
-        .generate_doc(vec![], nonempty![init_hash.into()])
+        .generate_doc::<Sendable>(vec![], nonempty![init_hash.into()])
         .await
         .unwrap();
 
     let encrypted = alice
-        .try_encrypt_content(doc.clone(), &init_hash.into(), &vec![], &init_content)
+        .try_encrypt_content::<Sendable>(doc.clone(), &init_hash.into(), &vec![], &init_content)
         .await
         .unwrap();
 
-    let archive2 = alice.into_archive().await;
+    let archive2 = alice.into_archive::<Sendable>().await;
     let indie = {
         alice
             .active()
@@ -205,8 +208,10 @@ async fn test_decrypt_after_fork_and_merge() {
         .await
         .unwrap();
 
-        keyhive.ingest_archive(archive2).await.unwrap();
-        keyhive.ingest_unsorted_static_events(events).await;
+        keyhive.ingest_archive::<Sendable>(archive2).await.unwrap();
+        keyhive
+            .ingest_unsorted_static_events::<Sendable>(events)
+            .await;
 
         keyhive
     };

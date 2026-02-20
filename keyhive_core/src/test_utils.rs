@@ -4,6 +4,7 @@ use crate::{
     listener::no_listener::NoListener,
     store::ciphertext::memory::MemoryCiphertextStore,
 };
+use future_form::Sendable;
 use rand::rngs::OsRng;
 
 pub async fn make_simple_keyhive() -> Result<
@@ -19,5 +20,5 @@ pub async fn make_simple_keyhive() -> Result<
 > {
     let mut csprng = OsRng;
     let sk = MemorySigner::generate(&mut csprng);
-    Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng).await
+    Keyhive::generate::<Sendable>(sk, MemoryCiphertextStore::new(), NoListener, csprng).await
 }

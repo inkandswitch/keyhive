@@ -13,6 +13,7 @@ use crate::{
     listener::prekey::PrekeyListener,
 };
 use dupe::Dupe;
+use future_form::FutureForm;
 use futures::lock::Mutex;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -65,7 +66,7 @@ impl Public {
         }
     }
 
-    pub fn active<T: ContentRef, L: PrekeyListener>(
+    pub fn active<K: FutureForm, T: ContentRef, L: PrekeyListener<K>>(
         &self,
         listener: L,
     ) -> Active<MemorySigner, T, L> {

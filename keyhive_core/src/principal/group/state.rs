@@ -8,10 +8,10 @@ use crate::{
     crypto::{
         digest::Digest,
         signed::Signed,
-        signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSigner},
+        signer::{memory::MemorySigner, sync_signer::SyncSigner},
         verifiable::Verifiable,
     },
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    listener::no_listener::NoListener,
     principal::{agent::Agent, group::delegation::DelegationError, identifier::Identifier},
     store::{delegation::DelegationStore, revocation::RevocationStore},
 };
@@ -22,11 +22,7 @@ use std::{cmp::Ordering, collections::BTreeMap, sync::Arc};
 
 #[derive(Clone)]
 #[derive_where(Debug, Hash; T)]
-pub struct GroupState<
-    S: AsyncSigner,
-    T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
-> {
+pub struct GroupState<S: Verifiable, T: ContentRef = [u8; 32], L = NoListener> {
     pub(crate) id: GroupId,
 
     #[derive_where(skip)]
@@ -38,7 +34,7 @@ pub struct GroupState<
     pub(crate) revocation_heads: RevocationStore<S, T, L>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T, L> {
+impl<S: Verifiable, T: ContentRef, L> GroupState<S, T, L> {
     pub async fn new(
         delegation_head: Arc<Signed<Delegation<S, T, L>>>,
         delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
@@ -266,9 +262,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable
-    for GroupState<S, T, L>
-{
+impl<S: Verifiable, T: ContentRef, L> Verifiable for GroupState<S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.id.0.verifying_key()
     }

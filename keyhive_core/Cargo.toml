@@ -30,6 +30,9 @@ x25519-dalek = { workspace = true }
 # Error Handling
 thiserror = { workspace = true }
 
+# Async Abstraction
+future_form = { git = "https://codeberg.org/expede/future_form", branch = "macro-update" }
+
 # Utilities
 derivative = "2.2"
 derive_more = { workspace = true }
