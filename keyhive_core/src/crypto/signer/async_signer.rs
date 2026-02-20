@@ -37,6 +37,24 @@ pub trait AsyncSigner<K: FutureForm, T: Serialize + Debug>: Verifiable {
         T: 'a;
 }
 
+/// Helper to implement [`AsyncSigner::try_sign_async`] by calling [`AsyncSigner::try_sign_bytes_async`].
+///
+/// This is useful for external crates implementing [`AsyncSigner`] for async signers
+/// (e.g., WebCrypto). Call this from your `try_sign_async` implementation.
+pub async fn sign_payload<K: FutureForm, T: Serialize + Debug, S: AsyncSigner<K, T> + ?Sized>(
+    signer: &S,
+    payload: T,
+) -> Result<Signed<T>, SigningError> {
+    let issuer = signer.verifying_key();
+    let payload_bytes = bincode::serialize(&payload).map_err(SigningError::SerializationFailed)?;
+    let signature = signer.try_sign_bytes_async(&payload_bytes).await?;
+    Ok(Signed {
+        payload,
+        issuer,
+        signature,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

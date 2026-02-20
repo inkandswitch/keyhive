@@ -38,6 +38,7 @@ use super::{
 use derive_more::{From, Into};
 use dupe::{Dupe, IterDupedExt};
 use from_js_ref::FromJsRef;
+use future_form::Local;
 use keyhive_core::{
     crypto::digest::Digest,
     event::{static_event::StaticEvent, Event},
@@ -163,7 +164,11 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = trySign)]
     pub async fn try_sign(&self, data: &[u8]) -> Result<JsSigned, JsSigningError> {
         init_span!("JsKeyhive::try_sign");
-        Ok(self.0.try_sign(data.to_vec()).await.map(JsSigned)?)
+        Ok(self
+            .0
+            .try_sign_async::<Local, _>(data.to_vec())
+            .await
+            .map(JsSigned)?)
     }
 
     #[wasm_bindgen(js_name = tryEncrypt)]

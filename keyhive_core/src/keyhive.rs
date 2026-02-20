@@ -363,6 +363,19 @@ impl<
         <S as SyncSigner>::try_sign_sync(&signer, data)
     }
 
+    /// Async version of [`try_sign`] for signers that don't implement [`SyncSigner`].
+    #[instrument(skip_all)]
+    pub async fn try_sign_async<K: FutureForm, U: Serialize + Debug>(
+        &self,
+        data: U,
+    ) -> Result<Signed<U>, SigningError>
+    where
+        S: AsyncSigner<K, U>,
+    {
+        let signer = self.active.lock().await.signer.clone();
+        AsyncSigner::<K, U>::try_sign_async(&signer, data).await
+    }
+
     #[instrument(skip_all)]
     pub async fn register_peer(&self, peer: Peer<S, T, L>) -> bool {
         if self.get_peer(peer.id()).await.is_some() {
