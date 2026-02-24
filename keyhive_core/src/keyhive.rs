@@ -61,7 +61,7 @@ use futures::lock::Mutex;
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
     fmt::{Debug, Formatter},
     marker::PhantomData,
     mem,
@@ -1089,23 +1089,19 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn receive_prekey_op(&self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
+        key_op.try_verify()?;
         let id = Identifier(*key_op.issuer());
         self.receive_prekey_ops_for_individual(id, NonEmpty::singleton(key_op.clone()))
-            .await
+            .await;
+        Ok(())
     }
 
     /// Batch-inserts prekey ops for a single individual and rebuilds once.
-    async fn receive_prekey_ops_for_individual(
-        &self,
-        id: Identifier,
-        ops: NonEmpty<KeyOp>,
-    ) -> Result<(), ReceivePrekeyOpError> {
-        let agent = if let Some(agent) = self.get_agent(id).await {
-            agent
-        } else {
-            let indie = Arc::new(Mutex::new(Individual::new(ops.head.clone())));
-            self.register_individual(indie.dupe()).await;
-            Agent::Individual(id.into(), indie)
+    async fn receive_prekey_ops_for_individual(&self, id: Identifier, ops: NonEmpty<KeyOp>) {
+        let Some(agent) = self.get_agent(id).await else {
+            let indie = Arc::new(Mutex::new(Individual::from_ops(ops)));
+            self.register_individual(indie).await;
+            return;
         };
 
         match agent {
@@ -1116,34 +1112,29 @@ impl<
                     .individual
                     .lock()
                     .await
-                    .receive_prekey_ops(ops)?;
+                    .receive_prekey_ops(ops);
             }
             Agent::Individual(_, indie) => {
-                indie.lock().await.receive_prekey_ops(ops)?;
+                indie.lock().await.receive_prekey_ops(ops);
             }
             Agent::Group(_, group) => {
                 let mut locked = group.lock().await;
                 if let IdOrIndividual::Individual(indie) = &mut locked.id_or_indie {
-                    indie.receive_prekey_ops(ops)?;
+                    indie.receive_prekey_ops(ops);
                 } else {
-                    let mut individual = Individual::new(ops.head);
-                    individual.receive_prekey_ops(ops.tail)?;
-                    locked.id_or_indie = IdOrIndividual::Individual(individual);
+                    locked.id_or_indie = IdOrIndividual::Individual(Individual::from_ops(ops));
                 }
             }
             Agent::Document(_, doc) => {
                 let mut locked = doc.lock().await;
                 if let IdOrIndividual::Individual(indie) = &mut locked.group.id_or_indie {
-                    indie.receive_prekey_ops(ops)?;
+                    indie.receive_prekey_ops(ops);
                 } else {
-                    let mut individual = Individual::new(ops.head);
-                    individual.receive_prekey_ops(ops.tail)?;
-                    locked.group.id_or_indie = IdOrIndividual::Individual(individual);
+                    locked.group.id_or_indie =
+                        IdOrIndividual::Individual(Individual::from_ops(ops));
                 }
             }
         }
-
-        Ok(())
     }
 
     #[instrument(skip_all)]
@@ -1851,29 +1842,25 @@ impl<
         let mut epoch = Vec::new();
 
         for event in all_events {
-            let key_op: Option<KeyOp> = match event {
-                StaticEvent::PrekeysExpanded(add_op) => Some(Arc::new(*add_op).into()),
-                StaticEvent::PrekeyRotated(rot_op) => Some(Arc::new(*rot_op).into()),
+            let key_op: KeyOp = match event {
+                StaticEvent::PrekeysExpanded(add_op) => Arc::new(*add_op).into(),
+                StaticEvent::PrekeyRotated(rot_op) => Arc::new(*rot_op).into(),
                 other => {
                     epoch.push(other);
-                    None
+                    continue;
                 }
             };
-            if let Some(key_op) = key_op {
-                let id = Identifier(*key_op.issuer());
-                match prekey_ops.entry(id) {
-                    std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().push(key_op),
-                    std::collections::hash_map::Entry::Vacant(e) => {
-                        e.insert(NonEmpty::singleton(key_op));
-                    }
+            let id = Identifier(*key_op.issuer());
+            match prekey_ops.entry(id) {
+                Entry::Occupied(mut e) => e.get_mut().push(key_op),
+                Entry::Vacant(e) => {
+                    e.insert(NonEmpty::singleton(key_op));
                 }
             }
         }
 
         for (id, ops) in prekey_ops {
-            if let Err(e) = self.receive_prekey_ops_for_individual(id, ops).await {
-                tracing::warn!("Failed to process prekey ops for {:?}: {:?}", id, e);
-            }
+            self.receive_prekey_ops_for_individual(id, ops).await;
         }
 
         // Attempt to process the remaining (non-prekey) events
