@@ -1090,10 +1090,20 @@ impl<
     #[instrument(skip_all)]
     pub async fn receive_prekey_op(&self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
         let id = Identifier(*key_op.issuer());
+        self.receive_prekey_ops_for_individual(id, NonEmpty::singleton(key_op.clone()))
+            .await
+    }
+
+    /// Batch-inserts prekey ops for a single individual and rebuilds once.
+    async fn receive_prekey_ops_for_individual(
+        &self,
+        id: Identifier,
+        ops: NonEmpty<KeyOp>,
+    ) -> Result<(), ReceivePrekeyOpError> {
         let agent = if let Some(agent) = self.get_agent(id).await {
             agent
         } else {
-            let indie = Arc::new(Mutex::new(Individual::new(key_op.clone())));
+            let indie = Arc::new(Mutex::new(Individual::new(ops.head.clone())));
             self.register_individual(indie.dupe()).await;
             Agent::Individual(id.into(), indie)
         };
@@ -1106,26 +1116,28 @@ impl<
                     .individual
                     .lock()
                     .await
-                    .receive_prekey_op(key_op.clone())?;
+                    .receive_prekey_ops(ops)?;
             }
             Agent::Individual(_, indie) => {
-                indie.lock().await.receive_prekey_op(key_op.clone())?;
+                indie.lock().await.receive_prekey_ops(ops)?;
             }
             Agent::Group(_, group) => {
                 let mut locked = group.lock().await;
                 if let IdOrIndividual::Individual(indie) = &mut locked.id_or_indie {
-                    indie.receive_prekey_op(key_op.clone())?;
+                    indie.receive_prekey_ops(ops)?;
                 } else {
-                    let individual = Individual::new(key_op.dupe());
+                    let mut individual = Individual::new(ops.head);
+                    individual.receive_prekey_ops(ops.tail)?;
                     locked.id_or_indie = IdOrIndividual::Individual(individual);
                 }
             }
             Agent::Document(_, doc) => {
                 let mut locked = doc.lock().await;
                 if let IdOrIndividual::Individual(indie) = &mut locked.group.id_or_indie {
-                    indie.receive_prekey_op(key_op.clone())?;
+                    indie.receive_prekey_ops(ops)?;
                 } else {
-                    let individual = Individual::new(key_op.dupe());
+                    let mut individual = Individual::new(ops.head);
+                    individual.receive_prekey_ops(ops.tail)?;
                     locked.group.id_or_indie = IdOrIndividual::Individual(individual);
                 }
             }
@@ -1829,8 +1841,42 @@ impl<
             let hash = Digest::hash(&event);
             unique_events.entry(hash).or_insert(event);
         }
-        let mut epoch: Vec<StaticEvent<T>> = unique_events.into_values().collect();
+        let all_events: Vec<StaticEvent<T>> = unique_events.into_values().collect();
 
+        // Process prekey events first. Prekey events are independent
+        // of delegation/revocation events and don't require predecessors for
+        // processing. A failure to process is permanent. We batch them
+        // per-individual (so we only have to build once per-individual).
+        let mut prekey_ops: HashMap<Identifier, NonEmpty<KeyOp>> = HashMap::new();
+        let mut epoch = Vec::new();
+
+        for event in all_events {
+            let key_op: Option<KeyOp> = match event {
+                StaticEvent::PrekeysExpanded(add_op) => Some(Arc::new(*add_op).into()),
+                StaticEvent::PrekeyRotated(rot_op) => Some(Arc::new(*rot_op).into()),
+                other => {
+                    epoch.push(other);
+                    None
+                }
+            };
+            if let Some(key_op) = key_op {
+                let id = Identifier(*key_op.issuer());
+                match prekey_ops.entry(id) {
+                    std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().push(key_op),
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(NonEmpty::singleton(key_op));
+                    }
+                }
+            }
+        }
+
+        for (id, ops) in prekey_ops {
+            if let Err(e) = self.receive_prekey_ops_for_individual(id, ops).await {
+                tracing::warn!("Failed to process prekey ops for {:?}: {:?}", id, e);
+            }
+        }
+
+        // Attempt to process the remaining (non-prekey) events
         loop {
             let mut next_epoch = vec![];
             let mut err = None;

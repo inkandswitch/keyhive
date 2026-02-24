@@ -104,11 +104,20 @@ impl Individual {
 
     #[instrument(skip(self), fields(indie_id = %self.id))]
     pub fn receive_prekey_op(&mut self, op: op::KeyOp) -> Result<(), ReceivePrekeyOpError> {
-        if op.verifying_key() != self.id.verifying_key() {
-            return Err(ReceivePrekeyOpError::IncorrectSigner);
-        }
+        self.receive_prekey_ops(std::iter::once(op))
+    }
 
-        self.prekey_state.insert_op(op)?;
+    /// Insert prekey ops and rebuild once at the end.
+    pub fn receive_prekey_ops(
+        &mut self,
+        ops: impl IntoIterator<Item = op::KeyOp>,
+    ) -> Result<(), ReceivePrekeyOpError> {
+        for op in ops {
+            if op.verifying_key() != self.id.verifying_key() {
+                return Err(ReceivePrekeyOpError::IncorrectSigner);
+            }
+            self.prekey_state.insert_op(op)?;
+        }
         self.prekeys = self.prekey_state.build();
         Ok(())
     }
