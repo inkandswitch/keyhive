@@ -113,6 +113,24 @@ impl PrekeyState {
         Ok(())
     }
 
+    /// Insert multiple ops, logging and skipping any that fail validation.
+    pub(crate) fn insert_ops(
+        &mut self,
+        ops: impl IntoIterator<Item = KeyOp>,
+        expected_key: &ed25519_dalek::VerifyingKey,
+    ) {
+        use crate::crypto::verifiable::Verifiable;
+        for op in ops {
+            if op.verifying_key() != *expected_key {
+                tracing::warn!("Prekey op has incorrect signer, skipping");
+                continue;
+            }
+            if let Err(e) = self.insert_op(op) {
+                tracing::warn!("Failed to insert prekey op: {:?}", e);
+            }
+        }
+    }
+
     /// Check if a [`ShareKey`] is in the [`PrekeyState`].
     pub fn contains_share_key(&self, key: &ShareKey) -> bool {
         self.ops.values().any(|op| op.new_key() == key)
