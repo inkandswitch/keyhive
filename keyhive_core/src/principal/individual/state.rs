@@ -120,8 +120,8 @@ impl PrekeyState {
 
     /// Rebuild the most recent set of active [`ShareKey`]s in the [`PrekeyState`].
     pub fn build(&self) -> HashSet<ShareKey> {
-        let mut keys = HashSet::new();
-        let mut to_drop = vec![];
+        let mut keys = HashSet::with_capacity(self.ops.len());
+        let mut to_drop = Vec::with_capacity(self.ops.len());
 
         for op in self.ops.values() {
             match op.as_ref() {
