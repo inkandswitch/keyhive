@@ -852,7 +852,9 @@ impl<
                 );
 
                 for (agent_id, (agent, _access)) in &transitive {
-                    add_many_keys(&mut map, *agent_id, agent.key_ops().await);
+                    if !map.contains_key(agent_id) {
+                        add_many_keys(&mut map, *agent_id, agent.key_ops().await);
+                    }
                 }
             }
         }
@@ -871,7 +873,9 @@ impl<
                 );
 
                 for (agent_id, (agent, _access)) in &transitive {
-                    add_many_keys(&mut map, *agent_id, agent.key_ops().await);
+                    if !map.contains_key(agent_id) {
+                        add_many_keys(&mut map, *agent_id, agent.key_ops().await);
+                    }
                 }
             }
         }
