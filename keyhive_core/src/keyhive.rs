@@ -50,6 +50,7 @@ use crate::{
         delegation::DelegationStore,
         revocation::RevocationStore,
     },
+    util::content_addressed_map::CaMap,
     transact::{
         fork::ForkAsync,
         merge::{Merge, MergeAsync},
@@ -785,18 +786,18 @@ impl<
         agent: &Agent<S, T, L>,
     ) -> HashMap<Identifier, Vec<Arc<KeyOp>>> {
         fn add_many_keys(
-            map: &mut HashMap<Identifier, HashSet<Arc<KeyOp>>>,
+            map: &mut HashMap<Identifier, CaMap<KeyOp>>,
             agent_id: Identifier,
-            key_ops: HashSet<Arc<KeyOp>>,
+            key_ops: CaMap<KeyOp>,
         ) {
-            map.entry(agent_id).or_default().extend(key_ops);
+            map.entry(agent_id).or_default().extend(key_ops.0);
         }
 
-        fn topsort_keys(key_ops: &HashSet<Arc<KeyOp>>) -> Vec<Arc<KeyOp>> {
+        fn topsort_keys(key_ops: &CaMap<KeyOp>) -> Vec<Arc<KeyOp>> {
             let mut heads: Vec<Arc<KeyOp>> = vec![];
-            let mut rotate_key_ops: HashMap<ShareKey, HashSet<Arc<KeyOp>>> = HashMap::new();
+            let mut rotate_key_ops: HashMap<ShareKey, Vec<Arc<KeyOp>>> = HashMap::new();
 
-            for key_op in key_ops {
+            for key_op in key_ops.values() {
                 match key_op.as_ref() {
                     KeyOp::Add(_add) => {
                         heads.push(key_op.dupe());
@@ -804,10 +805,8 @@ impl<
                     KeyOp::Rotate(rot) => {
                         rotate_key_ops
                             .entry(rot.payload.old)
-                            .and_modify(|set| {
-                                set.insert(key_op.dupe());
-                            })
-                            .or_insert(HashSet::from_iter([key_op.dupe()]));
+                            .or_default()
+                            .push(key_op.dupe());
                     }
                 }
             }
@@ -831,16 +830,7 @@ impl<
 
         let (active_id, prekeys) = {
             let locked = self.active.lock().await;
-            let prekeys = {
-                locked
-                    .individual
-                    .lock()
-                    .await
-                    .prekey_ops()
-                    .values()
-                    .cloned()
-                    .collect()
-            };
+            let prekeys = locked.individual.lock().await.prekey_ops().clone();
             (locked.id().into(), prekeys)
         };
         add_many_keys(&mut map, active_id, prekeys);
@@ -858,19 +848,11 @@ impl<
                 add_many_keys(
                     &mut map,
                     group_id.into(),
-                    Agent::Group(group_id, group.dupe())
-                        .key_ops()
-                        .await
-                        .into_iter()
-                        .collect(),
+                    Agent::Group(group_id, group.dupe()).key_ops().await,
                 );
 
                 for (agent_id, (agent, _access)) in &transitive {
-                    add_many_keys(
-                        &mut map,
-                        *agent_id,
-                        agent.key_ops().await.into_iter().collect(),
-                    );
+                    add_many_keys(&mut map, *agent_id, agent.key_ops().await);
                 }
             }
         }
@@ -885,19 +867,11 @@ impl<
                 add_many_keys(
                     &mut map,
                     doc_id.into(),
-                    Agent::Document(doc_id, doc.dupe())
-                        .key_ops()
-                        .await
-                        .into_iter()
-                        .collect(),
+                    Agent::Document(doc_id, doc.dupe()).key_ops().await,
                 );
 
                 for (agent_id, (agent, _access)) in &transitive {
-                    add_many_keys(
-                        &mut map,
-                        *agent_id,
-                        agent.key_ops().await.into_iter().collect(),
-                    );
+                    add_many_keys(&mut map, *agent_id, agent.key_ops().await);
                 }
             }
         }
