@@ -848,50 +848,56 @@ impl<
         // Add the agents own keys
         add_many_keys(&mut map, agent.id(), agent.key_ops().await);
 
-        for (mem, _) in self.membered_reachable_by_agent(agent).await.values() {
-            match mem {
-                Membered::Group(group_id, group) => {
-                    let group_transitive_members =
-                        { group.lock().await.transitive_members().await };
+        let groups = { self.groups.lock().await.values().cloned().collect::<Vec<_>>() };
+        for group in groups {
+            let (group_id, transitive) = {
+                let locked = group.lock().await;
+                (locked.group_id(), locked.transitive_members().await)
+            };
+            if transitive.contains_key(&agent.id()) {
+                add_many_keys(
+                    &mut map,
+                    group_id.into(),
+                    Agent::Group(group_id, group.dupe())
+                        .key_ops()
+                        .await
+                        .into_iter()
+                        .collect(),
+                );
 
+                for (agent_id, (agent, _access)) in &transitive {
                     add_many_keys(
                         &mut map,
-                        (*group_id).into(),
-                        Agent::Group(*group_id, group.dupe())
-                            .key_ops()
-                            .await
-                            .into_iter()
-                            .collect(),
+                        *agent_id,
+                        agent.key_ops().await.into_iter().collect(),
                     );
-
-                    for (agent_id, (agent, _acess)) in &group_transitive_members {
-                        add_many_keys(
-                            &mut map,
-                            *agent_id,
-                            agent.key_ops().await.into_iter().collect(),
-                        );
-                    }
                 }
-                Membered::Document(doc_id, doc) => {
-                    let doc_transitive_members = { doc.lock().await.transitive_members().await };
+            }
+        }
 
+        let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
+        for doc in docs {
+            let (doc_id, transitive) = {
+                let locked = doc.lock().await;
+                (locked.doc_id(), locked.transitive_members().await)
+            };
+            if transitive.contains_key(&agent.id()) {
+                add_many_keys(
+                    &mut map,
+                    doc_id.into(),
+                    Agent::Document(doc_id, doc.dupe())
+                        .key_ops()
+                        .await
+                        .into_iter()
+                        .collect(),
+                );
+
+                for (agent_id, (agent, _access)) in &transitive {
                     add_many_keys(
                         &mut map,
-                        (*doc_id).into(),
-                        Agent::Document(*doc_id, doc.dupe())
-                            .key_ops()
-                            .await
-                            .into_iter()
-                            .collect(),
+                        *agent_id,
+                        agent.key_ops().await.into_iter().collect(),
                     );
-
-                    for (agent_id, (agent, _acess)) in &doc_transitive_members {
-                        add_many_keys(
-                            &mut map,
-                            *agent_id,
-                            agent.key_ops().await.into_iter().collect(),
-                        );
-                    }
                 }
             }
         }
