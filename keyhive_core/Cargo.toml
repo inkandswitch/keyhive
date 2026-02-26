@@ -82,5 +82,10 @@ name = "bench_cgka"
 harness = false
 required-features = ["test_utils"]
 
+[[bench]]
+name = "bench_reachable_prekey_ops"
+harness = false
+required-features = ["test_utils"]
+
 [lints.clippy]
 doc_overindented_list_items = "allow"
