@@ -1,6 +1,4 @@
-//! Benchmarks for `ingest_unsorted_static_events`.
-//!
-//! cargo bench --bench bench_ingest --features test_utils
+use std::sync::Arc;
 
 use dupe::Dupe;
 use futures::lock::Mutex;
@@ -11,18 +9,26 @@ use keyhive_core::{
     test_utils::make_simple_keyhive,
 };
 use nonempty::nonempty;
-use std::sync::Arc;
 
 fn main() {
     divan::main();
 }
 
+/// Generate a batch of events simulating the demo sync server scenario.
+///
+/// Models the following scenario:
+/// - Many docs are made public
+/// - Each peer is directly added to some docs
+/// - When syncing events for any peer, the system must traverse delegation
+///   chains for all public docs (since both individual access and public access
+///   are checked)
 async fn generate_events(n_peers: usize, n_public_docs: usize) -> Vec<StaticEvent<[u8; 32]>> {
     let alice = make_simple_keyhive().await.unwrap();
 
     let public_indie = Public.individual();
     let public_peer = Peer::Individual(public_indie.id(), Arc::new(Mutex::new(public_indie)));
 
+    // Create public docs (Public individual as coparent, like the demo)
     let mut docs = Vec::with_capacity(n_public_docs);
     for i in 0..n_public_docs {
         let hash: [u8; 32] = blake3::hash(&(i as u64).to_le_bytes()).into();
@@ -33,6 +39,7 @@ async fn generate_events(n_peers: usize, n_public_docs: usize) -> Vec<StaticEven
         docs.push(doc);
     }
 
+    // Register peers and add each to every doc directly
     for _ in 0..n_peers {
         let peer = make_simple_keyhive().await.unwrap();
         let peer_contact = peer.contact_card().await.unwrap();
@@ -45,7 +52,7 @@ async fn generate_events(n_peers: usize, n_public_docs: usize) -> Vec<StaticEven
                 .add_member(
                     Agent::Individual(peer_id, peer_on_alice.dupe()),
                     &Membered::Document(doc_id, doc.dupe()),
-                    Access::Edit,
+                    Access::Write,
                     &[],
                 )
                 .await
@@ -53,29 +60,25 @@ async fn generate_events(n_peers: usize, n_public_docs: usize) -> Vec<StaticEven
         }
     }
 
-    let active = alice.active().lock().await;
-    let alice_active = Agent::Active(active.id(), alice.active().dupe());
-    drop(active);
+    // Extract all events (HashMap iteration order = effectively shuffled)
+    let alice_active: Agent<_, _, _> = alice.active().lock().await.clone().into();
     let events_map = alice.static_events_for_agent(&alice_active).await.unwrap();
     events_map.into_values().collect()
 }
 
-#[divan::bench(
-    args = [
-        (5, 10),
-        (10, 20),
-        (15, 30),
-        (20, 40),
-        (30, 60),
-    ],
-    sample_count = 5,
-    sample_size = 1,
-)]
+#[divan::bench(args = [
+    (5, 10),
+    (10, 20),
+    (15, 30),
+    (20, 40),
+    (30, 60),
+])]
 fn ingest_unsorted_static_events(
     bencher: divan::Bencher,
     (n_peers, n_public_docs): (usize, usize),
 ) {
     let rt = tokio::runtime::Runtime::new().unwrap();
+
     let events = rt.block_on(generate_events(n_peers, n_public_docs));
     let event_count = events.len();
 
