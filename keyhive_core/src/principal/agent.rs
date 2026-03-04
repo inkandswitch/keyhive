@@ -12,6 +12,7 @@ use crate::{
     content::reference::ContentRef,
     crypto::{share_key::ShareKey, signer::async_signer::AsyncSigner, verifiable::Verifiable},
     listener::{membership::MembershipListener, no_listener::NoListener},
+    util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
 use derive_more::{From, TryInto};
@@ -150,7 +151,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
         result
     }
 
-    pub async fn key_ops(&self) -> HashSet<Arc<KeyOp>> {
+    pub async fn key_ops(&self) -> CaMap<KeyOp> {
         match self {
             Agent::Active(_, a) => a
                 .lock()
@@ -159,20 +160,18 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
                 .lock()
                 .await
                 .prekey_ops()
-                .values()
-                .cloned()
-                .collect(),
-            Agent::Individual(_, i) => i.lock().await.prekey_ops().values().cloned().collect(),
+                .clone(),
+            Agent::Individual(_, i) => i.lock().await.prekey_ops().clone(),
             Agent::Group(_, g) => {
                 if let IdOrIndividual::Individual(indie) = &g.lock().await.id_or_indie {
-                    indie.prekey_ops().values().cloned().collect()
+                    indie.prekey_ops().clone()
                 } else {
                     Default::default()
                 }
             }
             Agent::Document(_, d) => {
                 if let IdOrIndividual::Individual(indie) = &d.lock().await.group.id_or_indie {
-                    indie.prekey_ops().values().cloned().collect()
+                    indie.prekey_ops().clone()
                 } else {
                     Default::default()
                 }
