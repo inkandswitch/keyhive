@@ -62,10 +62,7 @@ async fn generate_events(n_peers: usize, n_public_docs: usize) -> Vec<StaticEven
 
     // Extract all events (HashMap iteration order = effectively shuffled)
     let alice_active: Agent<_, _, _> = alice.active().lock().await.clone().into();
-    let events_map = alice
-        .static_events_for_agent(&alice_active)
-        .await
-        .unwrap();
+    let events_map = alice.static_events_for_agent(&alice_active).await.unwrap();
     events_map.into_values().collect()
 }
 
