@@ -62,7 +62,7 @@ use keyhive_crypto::{
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
     fmt::{Debug, Formatter},
     marker::PhantomData,
     mem,
@@ -70,6 +70,40 @@ use std::{
 };
 use thiserror::Error;
 use tracing::instrument;
+
+/// Reachable prekey ops for all agents, with shared storage.
+///
+/// Instead of duplicating topsorted key ops across agents, the ops are stored
+/// once in [`ops`] and each agent has an index into that shared map.
+#[derive(Debug)]
+pub struct AllReachablePrekeyOps {
+    /// Topsorted key ops per identifier (agent, group, or doc), computed once.
+    pub ops: HashMap<Identifier, Vec<Arc<KeyOp>>>,
+
+    /// For each agent: the set of identifiers whose ops in [`ops`] are reachable.
+    pub index: HashMap<Identifier, HashSet<Identifier>>,
+}
+
+impl AllReachablePrekeyOps {
+    /// Returns the set of agent identifiers that have reachable ops.
+    pub fn agents(&self) -> impl Iterator<Item = &Identifier> {
+        self.index.keys()
+    }
+
+    /// Returns an iterator over all reachable [`KeyOp`]s for the given agent
+    /// (flattened across all source identifiers), or `None` if the agent is not
+    /// in the index.
+    pub fn ops_for_agent(
+        &self,
+        agent_id: &Identifier,
+    ) -> Option<impl Iterator<Item = &Arc<KeyOp>>> {
+        self.index.get(agent_id).map(|ids| {
+            ids.iter()
+                .filter_map(|id| self.ops.get(id))
+                .flat_map(|ops| ops.iter())
+        })
+    }
+}
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
@@ -299,17 +333,28 @@ impl<
         &self,
         contact_card: &ContactCard,
     ) -> Result<Arc<Mutex<Individual>>, ReceivePrekeyOpError> {
-        if let Some(indie) = self.get_individual(contact_card.id()).await {
+        let result = if let Some(indie) = self.get_individual(contact_card.id()).await {
             indie
                 .lock()
                 .await
                 .receive_prekey_op(contact_card.op().dupe())?;
-            Ok(indie.dupe())
+            indie.dupe()
         } else {
             let new_user = Arc::new(Mutex::new(Individual::from(contact_card)));
             self.register_individual(new_user.dupe()).await;
-            Ok(new_user)
+            new_user
+        };
+
+        match contact_card.op() {
+            KeyOp::Add(add_op) => {
+                self.event_listener.on_prekeys_expanded(add_op).await;
+            }
+            KeyOp::Rotate(rot_op) => {
+                self.event_listener.on_prekey_rotated(rot_op).await;
+            }
         }
+
+        Ok(result)
     }
 
     #[instrument(skip_all)]
@@ -794,39 +839,6 @@ impl<
             map.entry(agent_id).or_default().extend(key_ops.0);
         }
 
-        fn topsort_keys(key_ops: &CaMap<KeyOp>) -> Vec<Arc<KeyOp>> {
-            let mut heads: Vec<Arc<KeyOp>> = vec![];
-            let mut rotate_key_ops: HashMap<ShareKey, Vec<Arc<KeyOp>>> = HashMap::new();
-
-            for key_op in key_ops.values() {
-                match key_op.as_ref() {
-                    KeyOp::Add(_add) => {
-                        heads.push(key_op.dupe());
-                    }
-                    KeyOp::Rotate(rot) => {
-                        rotate_key_ops
-                            .entry(rot.payload.old)
-                            .or_default()
-                            .push(key_op.dupe());
-                    }
-                }
-            }
-
-            let mut topsorted = vec![];
-
-            while let Some(head) = heads.pop() {
-                if let Some(ops) = rotate_key_ops.get(head.new_key()) {
-                    for op in ops.iter() {
-                        heads.push(op.dupe());
-                    }
-                }
-
-                topsorted.push(head.dupe());
-            }
-
-            topsorted
-        }
-
         let mut map = HashMap::new();
 
         let (active_id, prekeys) = {
@@ -889,8 +901,147 @@ impl<
         }
 
         map.into_iter()
-            .map(|(id, keys)| (id, topsort_keys(&keys)))
+            .map(|(id, keys)| (id, KeyOp::topsort(&keys)))
             .collect()
+    }
+
+    /// Compute reachable prekey ops for all agents in a single pass.
+    ///
+    /// This avoids the redundant `transitive_members()` and `key_ops()` calls
+    /// that happen when calling `reachable_prekey_ops_for_agent` once per agent.
+    ///
+    /// Returns an [`AllReachablePrekeyOps`] containing:
+    /// - `ops`: topsorted key ops per identifier, computed once and shared
+    /// - `index`: for each agent, the set of identifier keys into `ops` that are
+    ///   reachable for that agent
+    #[instrument(skip_all)]
+    pub async fn reachable_prekey_ops_for_all_agents(&self) -> AllReachablePrekeyOps {
+        // Phase 1: Precompute shared data
+        let (active_id, active_prekeys) = {
+            let locked = self.active.lock().await;
+            let prekeys = locked.individual.lock().await.prekey_ops().clone();
+            (locked.id().into(), prekeys)
+        };
+
+        let groups = {
+            self.groups
+                .lock()
+                .await
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
+
+        type TransitiveMembers<S, T, L> = HashMap<Identifier, (Agent<S, T, L>, Access)>;
+
+        // For each group: (group_id, group_arc, transitive_members)
+        let mut group_data: Vec<(
+            GroupId,
+            Arc<Mutex<Group<S, T, L>>>,
+            TransitiveMembers<S, T, L>,
+        )> = Vec::with_capacity(groups.len());
+        for group in groups {
+            let (group_id, transitive) = {
+                let locked = group.lock().await;
+                (locked.group_id(), locked.transitive_members().await)
+            };
+            group_data.push((group_id, group, transitive));
+        }
+
+        // For each doc: (doc_id, doc_arc, transitive_members)
+        let mut doc_data: Vec<(
+            DocumentId,
+            Arc<Mutex<Document<S, T, L>>>,
+            TransitiveMembers<S, T, L>,
+        )> = Vec::with_capacity(docs.len());
+        for doc in docs {
+            let (doc_id, transitive) = {
+                let locked = doc.lock().await;
+                (locked.doc_id(), locked.transitive_members().await)
+            };
+            doc_data.push((doc_id, doc, transitive));
+        }
+
+        // Phase 2: Collect all key_ops (call key_ops() once per unique agent),
+        // then topsort once per identifier.
+        let mut key_ops_cache: HashMap<Identifier, CaMap<KeyOp>> = HashMap::new();
+        key_ops_cache.insert(active_id, active_prekeys);
+
+        for (group_id, group, transitive) in &group_data {
+            let g_id: Identifier = (*group_id).into();
+            if let Entry::Vacant(e) = key_ops_cache.entry(g_id) {
+                e.insert(Agent::Group(*group_id, group.dupe()).key_ops().await);
+            }
+            for (agent_id, (agent, _access)) in transitive {
+                if let Entry::Vacant(e) = key_ops_cache.entry(*agent_id) {
+                    e.insert(agent.key_ops().await);
+                }
+            }
+        }
+
+        for (doc_id, doc, transitive) in &doc_data {
+            let d_id: Identifier = (*doc_id).into();
+            if let Entry::Vacant(e) = key_ops_cache.entry(d_id) {
+                e.insert(Agent::Document(*doc_id, doc.dupe()).key_ops().await);
+            }
+            for (agent_id, (agent, _access)) in transitive {
+                if let Entry::Vacant(e) = key_ops_cache.entry(*agent_id) {
+                    e.insert(agent.key_ops().await);
+                }
+            }
+        }
+
+        // Include all registered individuals (even those not in any group/doc)
+        for (id, indie) in self.individuals.lock().await.iter() {
+            let agent_id: Identifier = (*id).into();
+            if let Entry::Vacant(e) = key_ops_cache.entry(agent_id) {
+                e.insert(indie.lock().await.prekey_ops().clone());
+            }
+        }
+
+        let ops: HashMap<Identifier, Vec<Arc<KeyOp>>> = key_ops_cache
+            .iter()
+            .map(|(id, ca_map)| (*id, KeyOp::topsort(ca_map)))
+            .collect();
+
+        // Phase 3: Build per-agent index (just sets of identifiers, no data cloning)
+        let mut index: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
+
+        // Active agent gets its own entry
+        index.entry(active_id).or_default().insert(active_id);
+
+        // Every registered individual gets at least their own ops + active's ops
+        for id in self.individuals.lock().await.keys() {
+            let agent_id: Identifier = (*id).into();
+            let entry = index.entry(agent_id).or_default();
+            entry.insert(active_id);
+            entry.insert(agent_id);
+        }
+
+        for (group_id, _, transitive) in &group_data {
+            let g_id: Identifier = (*group_id).into();
+            for agent_id in transitive.keys() {
+                let entry = index.entry(*agent_id).or_default();
+                entry.insert(active_id);
+                entry.insert(*agent_id);
+                entry.insert(g_id);
+                entry.extend(transitive.keys());
+            }
+        }
+
+        for (doc_id, _, transitive) in &doc_data {
+            let d_id: Identifier = (*doc_id).into();
+            for agent_id in transitive.keys() {
+                let entry = index.entry(*agent_id).or_default();
+                entry.insert(active_id);
+                entry.insert(*agent_id);
+                entry.insert(d_id);
+                entry.extend(transitive.keys());
+            }
+        }
+
+        AllReachablePrekeyOps { ops, index }
     }
 
     #[instrument(skip_all)]
@@ -2935,6 +3086,273 @@ mod tests {
             "all 3 of Bob's prekey ops should be present, but got {}",
             bob_prekey_vec.len()
         );
+    }
+
+    /// Test that reachable_prekey_ops_for_all_agents matches
+    /// reachable_prekey_ops_for_agent for each agent.
+    #[tokio::test]
+    async fn test_reachable_prekey_ops_for_all_agents_matches_per_agent() {
+        use crate::crypto::digest::Digest;
+
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let bob = make_keyhive().await;
+        let carol = make_keyhive().await;
+        let dan = make_keyhive().await;
+        let eve = make_keyhive().await;
+
+        // Register all individuals on alice, with varying numbers of prekey rotations
+        // so that op counts differ across agents.
+        let bob_add_op = bob.expand_prekeys().await.unwrap();
+        let bob_rot1 = bob
+            .rotate_prekey(bob_add_op.payload.share_key)
+            .await
+            .unwrap();
+        let bob_rot2 = bob.rotate_prekey(bob_rot1.payload.new).await.unwrap();
+        let mut bob_individual = Individual::new(KeyOp::Add(bob_add_op));
+        bob_individual
+            .receive_prekey_op(KeyOp::Rotate(bob_rot1))
+            .unwrap();
+        bob_individual
+            .receive_prekey_op(KeyOp::Rotate(bob_rot2))
+            .unwrap();
+        let bob_indie = Arc::new(Mutex::new(bob_individual));
+        assert!(alice.register_individual(bob_indie.clone()).await);
+        let bob_id = bob_indie.lock().await.id();
+
+        let carol_add_op = carol.expand_prekeys().await.unwrap();
+        let carol_rot1 = carol
+            .rotate_prekey(carol_add_op.payload.share_key)
+            .await
+            .unwrap();
+        let mut carol_individual = Individual::new(KeyOp::Add(carol_add_op));
+        carol_individual
+            .receive_prekey_op(KeyOp::Rotate(carol_rot1))
+            .unwrap();
+        let carol_indie = Arc::new(Mutex::new(carol_individual));
+        assert!(alice.register_individual(carol_indie.clone()).await);
+        let carol_id = carol_indie.lock().await.id();
+
+        let dan_add_op = dan.expand_prekeys().await.unwrap();
+        let dan_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(dan_add_op))));
+        assert!(alice.register_individual(dan_indie.clone()).await);
+        let dan_id = dan_indie.lock().await.id();
+
+        let eve_add_op = eve.expand_prekeys().await.unwrap();
+        let eve_rot1 = eve
+            .rotate_prekey(eve_add_op.payload.share_key)
+            .await
+            .unwrap();
+        let eve_rot2 = eve.rotate_prekey(eve_rot1.payload.new).await.unwrap();
+        let eve_rot3 = eve.rotate_prekey(eve_rot2.payload.new).await.unwrap();
+        let mut eve_individual = Individual::new(KeyOp::Add(eve_add_op));
+        eve_individual
+            .receive_prekey_op(KeyOp::Rotate(eve_rot1))
+            .unwrap();
+        eve_individual
+            .receive_prekey_op(KeyOp::Rotate(eve_rot2))
+            .unwrap();
+        eve_individual
+            .receive_prekey_op(KeyOp::Rotate(eve_rot3))
+            .unwrap();
+        let eve_indie = Arc::new(Mutex::new(eve_individual));
+        assert!(alice.register_individual(eve_indie.clone()).await);
+        let eve_id = eve_indie.lock().await.id();
+
+        // Frank: registered but not added to any doc or group, with extra ops
+        let frank = make_keyhive().await;
+        let frank_add_op = frank.expand_prekeys().await.unwrap();
+        let frank_rot1 = frank
+            .rotate_prekey(frank_add_op.payload.share_key)
+            .await
+            .unwrap();
+        let frank_rot2 = frank.rotate_prekey(frank_rot1.payload.new).await.unwrap();
+        let frank_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(frank_add_op))));
+        assert!(alice.register_individual(frank_indie.clone()).await);
+        let frank_id = frank_indie.lock().await.id();
+        // Receive additional prekey ops after registration
+        alice
+            .receive_prekey_op(&KeyOp::Rotate(frank_rot1))
+            .await
+            .unwrap();
+        alice
+            .receive_prekey_op(&KeyOp::Rotate(frank_rot2))
+            .await
+            .unwrap();
+
+        // Create doc1 with bob (3 ops) and carol (2 ops)
+        let doc1 = alice
+            .generate_doc(vec![], nonempty![[0u8; 32]])
+            .await
+            .unwrap();
+        let doc1_id = doc1.lock().await.doc_id();
+        alice
+            .add_member(
+                Agent::Individual(bob_id, bob_indie.dupe()),
+                &Membered::Document(doc1_id, doc1.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+        alice
+            .add_member(
+                Agent::Individual(carol_id, carol_indie.dupe()),
+                &Membered::Document(doc1_id, doc1.dupe()),
+                Access::Write,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Create doc2 with dan (1 op)
+        let doc2 = alice
+            .generate_doc(vec![], nonempty![[1u8; 32]])
+            .await
+            .unwrap();
+        let doc2_id = doc2.lock().await.doc_id();
+        alice
+            .add_member(
+                Agent::Individual(dan_id, dan_indie.dupe()),
+                &Membered::Document(doc2_id, doc2.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Create a group with carol (2 ops) and eve (4 ops), then add group to doc2
+        let group = alice.generate_group(vec![]).await.unwrap();
+        let group_id = group.lock().await.group_id();
+        alice
+            .add_member(
+                Agent::Individual(carol_id, carol_indie.dupe()),
+                &Membered::Group(group_id, group.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+        alice
+            .add_member(
+                Agent::Individual(eve_id, eve_indie.dupe()),
+                &Membered::Group(group_id, group.dupe()),
+                Access::Write,
+                &[],
+            )
+            .await
+            .unwrap();
+        alice
+            .add_member(
+                Agent::Group(group_id, group.dupe()),
+                &Membered::Document(doc2_id, doc2.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Get the all-agents result
+        let all_results = alice.reachable_prekey_ops_for_all_agents().await;
+
+        // Verify no phantom agents: every agent in the index should match
+        // a per-agent call. Count checked after all per-agent comparisons below.
+
+        // Check the active agent
+        let active_agent: Agent<_, _, _> = alice.active().lock().await.clone().into();
+        let active_id: Identifier = active_agent.id();
+        let active_all_ops = all_results.ops_for_agent(&active_id);
+        assert!(active_all_ops.is_some(), "active agent should be in all_results");
+        let active_per_agent_ops = alice.reachable_prekey_ops_for_agent(&active_agent).await;
+        let active_indexed_ids = &all_results.index[&active_id];
+        let mut active_all_keys: Vec<_> = active_indexed_ids.iter().collect();
+        active_all_keys.sort();
+        let mut active_per_agent_keys: Vec<_> = active_per_agent_ops.keys().collect();
+        active_per_agent_keys.sort();
+        assert_eq!(
+            active_all_keys, active_per_agent_keys,
+            "key sets should match for active agent"
+        );
+
+        // For each agent in the index, compare with per-agent result
+        let mut expected_checked: HashSet<Identifier> = HashSet::new();
+        expected_checked.insert(active_id);
+        let agents: Vec<(IndividualId, Arc<Mutex<Individual>>)> = vec![
+            (bob_id, bob_indie),
+            (carol_id, carol_indie),
+            (dan_id, dan_indie),
+            (eve_id, eve_indie),
+            (frank_id, frank_indie),
+        ];
+        for (id, indie) in &agents {
+            let agent_id: Identifier = (*id).into();
+            expected_checked.insert(agent_id);
+
+            let all_ops = all_results.ops_for_agent(&agent_id);
+            assert!(all_ops.is_some(), "agent {:?} should be in all_results", id);
+
+            let per_agent_ops = alice
+                .reachable_prekey_ops_for_agent(&Agent::Individual(*id, indie.dupe()))
+                .await;
+
+            // Same identifier keys in index vs per-agent
+            let indexed_ids = &all_results.index[&agent_id];
+            let mut all_keys: Vec<_> = indexed_ids.iter().collect();
+            all_keys.sort();
+            let mut per_agent_keys: Vec<_> = per_agent_ops.keys().collect();
+            per_agent_keys.sort();
+            assert_eq!(
+                all_keys, per_agent_keys,
+                "key sets should match for agent {:?}",
+                id
+            );
+
+            // Same flattened ops (compare by content digest)
+            let mut all_digests: Vec<_> = all_ops
+                .unwrap()
+                .map(|op| Digest::hash(op.as_ref()))
+                .collect();
+            all_digests.sort();
+            let mut per_agent_digests: Vec<_> = per_agent_ops
+                .values()
+                .flat_map(|ops| ops.iter())
+                .map(|op| Digest::hash(op.as_ref()))
+                .collect();
+            per_agent_digests.sort();
+            assert_eq!(
+                all_digests, per_agent_digests,
+                "ops should match for agent {:?}",
+                id
+            );
+        }
+
+        // Verify no phantom agents: every agent in the index should
+        // produce results matching reachable_prekey_ops_for_agent.
+        // (Some agents like group/doc owners may be implicitly registered.)
+        for agent_id in all_results.agents() {
+            if expected_checked.contains(agent_id) {
+                continue; // already verified above
+            }
+            if let Some(indie) = alice.get_individual((*agent_id).into()).await {
+                let per_agent_ops = alice
+                    .reachable_prekey_ops_for_agent(&Agent::Individual(
+                        (*agent_id).into(),
+                        indie,
+                    ))
+                    .await;
+                let indexed_ids = &all_results.index[agent_id];
+                let mut all_keys: Vec<_> = indexed_ids.iter().collect();
+                all_keys.sort();
+                let mut per_agent_keys: Vec<_> = per_agent_ops.keys().collect();
+                per_agent_keys.sort();
+                assert_eq!(
+                    all_keys, per_agent_keys,
+                    "key sets should match for implicitly registered agent {:?}",
+                    agent_id
+                );
+            }
+        }
     }
 
     #[tokio::test]
