@@ -61,7 +61,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> DelegationStore
         &mut self,
         delegation: Arc<Signed<Delegation<S, T, L>>>,
     ) -> Digest<Signed<Delegation<S, T, L>>> {
-        self.delegations.insert(delegation)
+        let digest = delegation.digest();
+        self.delegations.insert_with_key(digest, delegation);
+        digest
     }
 
     /// Remove a [`Delegation`] by its [`Digest`].

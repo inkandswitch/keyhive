@@ -71,6 +71,12 @@ use std::{
 use thiserror::Error;
 use tracing::instrument;
 
+type MembershipOpMap<S, T, L> =
+    HashMap<Digest<MembershipOperation<S, T, L>>, MembershipOperation<S, T, L>>;
+
+type MembershipOpIndex<S, T, L> =
+    HashMap<Identifier, HashSet<Digest<MembershipOperation<S, T, L>>>>;
+
 /// Reachable prekey ops for all agents, with shared storage.
 ///
 /// Instead of duplicating topsorted key ops across agents, the ops are stored
@@ -103,6 +109,24 @@ impl AllReachablePrekeyOps {
                 .flat_map(|ops| ops.iter())
         })
     }
+}
+
+/// Membership ops for all agents, with shared storage.
+///
+/// Instead of computing BFS per agent (which repeats work for agents sharing
+/// groups/docs), the BFS is computed once per group/doc and results are indexed
+/// per agent.
+#[derive_where(Debug; T)]
+pub struct AllMembershipOps<
+    S: AsyncSigner,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<S, T> = NoListener,
+> {
+    /// All unique membership ops discovered across all groups/docs.
+    pub ops: MembershipOpMap<S, T, L>,
+
+    /// For each agent: the set of membership op digests reachable by that agent.
+    pub index: MembershipOpIndex<S, T, L>,
 }
 
 /// The main object for a user agent & top-level owned stores.
@@ -778,7 +802,7 @@ impl<
             .get_revocations_for_agent(&agent.agent_id())
         {
             for rev in agent_revocations {
-                let hash: Digest<MembershipOperation<S, T, L>> = Digest::hash(rev.as_ref()).into();
+                let hash: Digest<MembershipOperation<S, T, L>> = rev.digest().into();
                 heads.push((hash, rev.into()));
             }
         }
@@ -794,17 +818,17 @@ impl<
             match op {
                 MembershipOperation::Delegation(dlg) => {
                     if let Some(proof) = &dlg.payload.proof {
-                        heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
+                        heads.push((proof.digest().into(), proof.dupe().into()));
                     }
 
                     for rev in dlg.payload.after_revocations.iter() {
-                        heads.push((Digest::hash(rev.as_ref()).into(), rev.dupe().into()));
+                        heads.push((rev.digest().into(), rev.dupe().into()));
                     }
 
                     // If this delegation is to a group, include the group's delegation heads
                     if let Agent::Group(_group_id, group) = &dlg.payload.delegate {
                         for dlg in group.lock().await.delegation_heads().values() {
-                            let dlg_hash = Digest::hash(dlg.as_ref()).into();
+                            let dlg_hash = dlg.digest().into();
                             if !visited_hashes.contains(&dlg_hash) {
                                 heads.push((dlg_hash, dlg.dupe().into()));
                             }
@@ -813,16 +837,233 @@ impl<
                 }
                 MembershipOperation::Revocation(rev) => {
                     if let Some(proof) = &rev.payload.proof {
-                        heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
+                        heads.push((proof.digest().into(), proof.dupe().into()));
                     }
 
                     let r = rev.payload.revoke.dupe();
-                    heads.push((Digest::hash(r.as_ref()).into(), r.into()));
+                    heads.push((r.digest().into(), r.into()));
                 }
             }
         }
 
         ops
+    }
+
+    /// Compute membership ops for all agents at once, avoiding redundant BFS.
+    ///
+    /// Instead of calling `membership_ops_for_agent` per agent (which repeats
+    /// the BFS for shared groups/docs), this iterates each group/doc once,
+    /// does a single BFS from its delegation/revocation heads, and maps the
+    /// results to all transitive members.
+    pub async fn membership_ops_for_all_agents(&self) -> AllMembershipOps<S, T, L> {
+        let mut all_ops: MembershipOpMap<S, T, L> = HashMap::new();
+        #[allow(clippy::type_complexity)]
+        let mut membered_digests: HashMap<
+            MemberedId,
+            HashSet<Digest<MembershipOperation<S, T, L>>>,
+        > = HashMap::new();
+        let mut agent_to_membereds: HashMap<Identifier, Vec<MemberedId>> = HashMap::new();
+
+        // Phase 1: For each group, BFS once from heads, collect transitive members
+        let groups = {
+            self.groups
+                .lock()
+                .await
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        for group in &groups {
+            let (group_id, dlg_heads, rev_heads, transitive) = {
+                let locked = group.lock().await;
+                (
+                    locked.group_id(),
+                    locked.delegation_heads().clone(),
+                    locked.revocation_heads().clone(),
+                    locked.transitive_members().await,
+                )
+            };
+            let membered_id = MemberedId::GroupId(group_id);
+
+            let ops = Self::bfs_membership_ops(&dlg_heads, &rev_heads).await;
+            let digests: HashSet<_> = ops.keys().copied().collect();
+            all_ops.extend(ops);
+            membered_digests.insert(membered_id, digests);
+
+            for agent_id in transitive.keys() {
+                agent_to_membereds
+                    .entry(*agent_id)
+                    .or_default()
+                    .push(membered_id);
+            }
+        }
+
+        // Phase 2: Same for docs
+        let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
+        for doc in &docs {
+            let (doc_id, dlg_heads, rev_heads, transitive) = {
+                let locked = doc.lock().await;
+                (
+                    locked.doc_id(),
+                    locked.delegation_heads().clone(),
+                    locked.revocation_heads().clone(),
+                    locked.transitive_members().await,
+                )
+            };
+            let membered_id = MemberedId::DocumentId(doc_id);
+
+            let ops = Self::bfs_membership_ops(&dlg_heads, &rev_heads).await;
+            let digests: HashSet<_> = ops.keys().copied().collect();
+            all_ops.extend(ops);
+            membered_digests.insert(membered_id, digests);
+
+            for agent_id in transitive.keys() {
+                agent_to_membereds
+                    .entry(*agent_id)
+                    .or_default()
+                    .push(membered_id);
+            }
+        }
+
+        // Phase 3: Build per-agent index by unioning their groups'/docs' ops
+        let mut index: MembershipOpIndex<S, T, L> = HashMap::new();
+
+        for (agent_id, membereds) in &agent_to_membereds {
+            let entry = index.entry(*agent_id).or_default();
+            for membered_id in membereds {
+                if let Some(digests) = membered_digests.get(membered_id) {
+                    entry.extend(digests.iter().copied());
+                }
+            }
+        }
+
+        // Include agent-specific revocations that may not be reachable
+        // from group/doc heads
+        {
+            let revocations = self.revocations.lock().await;
+            for (agent_id, agent_revs) in revocations.all_agent_revocations() {
+                let identifier: Identifier = (*agent_id).into();
+                if let Some(entry) = index.get_mut(&identifier) {
+                    for rev in agent_revs {
+                        let hash: Digest<MembershipOperation<S, T, L>> = rev.digest().into();
+                        if entry.insert(hash) {
+                            all_ops.entry(hash).or_insert_with(|| rev.dupe().into());
+
+                            Self::bfs_extend_from_revocation(rev, &mut all_ops, entry).await;
+                        }
+                    }
+                }
+            }
+        }
+
+        AllMembershipOps {
+            ops: all_ops,
+            index,
+        }
+    }
+
+    /// BFS from delegation/revocation heads, collecting all reachable membership ops.
+    /// Uses memoized digests throughout.
+    async fn bfs_membership_ops(
+        dlg_heads: &DelegationStore<S, T, L>,
+        rev_heads: &RevocationStore<S, T, L>,
+    ) -> HashMap<Digest<MembershipOperation<S, T, L>>, MembershipOperation<S, T, L>> {
+        let mut ops = HashMap::new();
+        let mut visited: HashSet<Digest<MembershipOperation<S, T, L>>> = HashSet::new();
+
+        #[allow(clippy::type_complexity)]
+        let mut heads: Vec<(
+            Digest<MembershipOperation<S, T, L>>,
+            MembershipOperation<S, T, L>,
+        )> = Vec::new();
+
+        for (hash, dlg_head) in dlg_heads.iter() {
+            heads.push((hash.into(), dlg_head.dupe().into()));
+        }
+        for (hash, rev_head) in rev_heads.iter() {
+            heads.push((hash.into(), rev_head.dupe().into()));
+        }
+
+        while let Some((hash, op)) = heads.pop() {
+            if visited.contains(&hash) {
+                continue;
+            }
+            visited.insert(hash);
+            ops.insert(hash, op.clone());
+
+            match op {
+                MembershipOperation::Delegation(dlg) => {
+                    if let Some(proof) = &dlg.payload.proof {
+                        heads.push((proof.digest().into(), proof.dupe().into()));
+                    }
+                    for rev in dlg.payload.after_revocations.iter() {
+                        heads.push((rev.digest().into(), rev.dupe().into()));
+                    }
+                    if let Agent::Group(_group_id, group) = &dlg.payload.delegate {
+                        for dlg in group.lock().await.delegation_heads().values() {
+                            let dlg_hash = dlg.digest().into();
+                            if !visited.contains(&dlg_hash) {
+                                heads.push((dlg_hash, dlg.dupe().into()));
+                            }
+                        }
+                    }
+                }
+                MembershipOperation::Revocation(rev) => {
+                    if let Some(proof) = &rev.payload.proof {
+                        heads.push((proof.digest().into(), proof.dupe().into()));
+                    }
+                    let r = rev.payload.revoke.dupe();
+                    heads.push((r.digest().into(), r.into()));
+                }
+            }
+        }
+
+        ops
+    }
+
+    /// Follow a revocation's proof and revoke chains, adding new ops.
+    async fn bfs_extend_from_revocation(
+        rev: &Arc<Signed<Revocation<S, T, L>>>,
+        all_ops: &mut MembershipOpMap<S, T, L>,
+        visited: &mut HashSet<Digest<MembershipOperation<S, T, L>>>,
+    ) {
+        #[allow(clippy::type_complexity)]
+        let mut heads: Vec<(
+            Digest<MembershipOperation<S, T, L>>,
+            MembershipOperation<S, T, L>,
+        )> = Vec::new();
+
+        if let Some(proof) = &rev.payload.proof {
+            heads.push((proof.digest().into(), proof.dupe().into()));
+        }
+        let r = rev.payload.revoke.dupe();
+        heads.push((r.digest().into(), r.into()));
+
+        while let Some((hash, op)) = heads.pop() {
+            if visited.contains(&hash) {
+                continue;
+            }
+            visited.insert(hash);
+            all_ops.entry(hash).or_insert_with(|| op.clone());
+
+            match op {
+                MembershipOperation::Delegation(dlg) => {
+                    if let Some(proof) = &dlg.payload.proof {
+                        heads.push((proof.digest().into(), proof.dupe().into()));
+                    }
+                    for rev in dlg.payload.after_revocations.iter() {
+                        heads.push((rev.digest().into(), rev.dupe().into()));
+                    }
+                }
+                MembershipOperation::Revocation(rev) => {
+                    if let Some(proof) = &rev.payload.proof {
+                        heads.push((proof.digest().into(), proof.dupe().into()));
+                    }
+                    let r = rev.payload.revoke.dupe();
+                    heads.push((r.digest().into(), r.into()));
+                }
+            }
+        }
     }
 
     #[instrument(skip_all)]
@@ -999,6 +1240,7 @@ impl<
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
 
         // For each group: (group_id, transitive_members)
+        #[allow(clippy::type_complexity)]
         let mut group_data: Vec<(GroupId, HashMap<Identifier, (Agent<S, T, L>, Access)>)> =
             Vec::with_capacity(groups.len());
         for group in &groups {
@@ -1010,6 +1252,7 @@ impl<
         }
 
         // For each doc: (doc_id, transitive_members)
+        #[allow(clippy::type_complexity)]
         let mut doc_data: Vec<(DocumentId, HashMap<Identifier, (Agent<S, T, L>, Access)>)> =
             Vec::with_capacity(docs.len());
         for doc in &docs {
@@ -1027,9 +1270,9 @@ impl<
 
         for (group_id, transitive) in &group_data {
             let gid: Identifier = (*group_id).into();
-            if !key_ops_cache.contains_key(&gid) {
+            if let std::collections::hash_map::Entry::Vacant(e) = key_ops_cache.entry(gid) {
                 let group = self.groups.lock().await.get(group_id).unwrap().dupe();
-                key_ops_cache.insert(gid, Agent::Group(*group_id, group).key_ops().await);
+                e.insert(Agent::Group(*group_id, group).key_ops().await);
             }
             for (agent_id, (agent, _access)) in transitive {
                 if !key_ops_cache.contains_key(agent_id) {
@@ -1040,9 +1283,9 @@ impl<
 
         for (doc_id, transitive) in &doc_data {
             let did: Identifier = (*doc_id).into();
-            if !key_ops_cache.contains_key(&did) {
+            if let std::collections::hash_map::Entry::Vacant(e) = key_ops_cache.entry(did) {
                 let doc = self.docs.lock().await.get(doc_id).unwrap().dupe();
-                key_ops_cache.insert(did, Agent::Document(*doc_id, doc).key_ops().await);
+                e.insert(Agent::Document(*doc_id, doc).key_ops().await);
             }
             for (agent_id, (agent, _access)) in transitive {
                 if !key_ops_cache.contains_key(agent_id) {
@@ -1477,6 +1720,398 @@ impl<
         }
 
         Ok(())
+    }
+
+    /// Topologically sort delegation/revocation events by their intra-batch
+    /// dependencies. Events whose dependencies are all external (outside the
+    /// batch) come first. CGKA events are appended after all
+    /// delegations/revocations. Events involved in cycles are appended at the
+    /// end.
+    fn topsort_epoch_events(events: Vec<StaticEvent<T>>) -> Vec<StaticEvent<T>> {
+        use topological_sort::TopologicalSort;
+
+        let mut dlg_rev_events: Vec<StaticEvent<T>> = Vec::new();
+        let mut cgka_events: Vec<StaticEvent<T>> = Vec::new();
+
+        for event in events {
+            match &event {
+                StaticEvent::CgkaOperation(_) => cgka_events.push(event),
+                StaticEvent::PrekeysExpanded(_) | StaticEvent::PrekeyRotated(_) => {
+                    // Prekeys should already be filtered out before calling this
+                    debug_assert!(false, "Prekey events should not be in epoch");
+                }
+                _ => dlg_rev_events.push(event),
+            }
+        }
+
+        if dlg_rev_events.len() <= 1 {
+            dlg_rev_events.extend(cgka_events);
+            return dlg_rev_events;
+        }
+
+        // Map each event's hash to its index
+        let mut hash_to_idx: HashMap<blake3::Hash, usize> =
+            HashMap::with_capacity(dlg_rev_events.len());
+        let mut event_hashes: Vec<blake3::Hash> = Vec::with_capacity(dlg_rev_events.len());
+
+        for (idx, event) in dlg_rev_events.iter().enumerate() {
+            let hash = match event {
+                StaticEvent::Delegated(dlg) => Digest::hash(dlg).raw,
+                StaticEvent::Revoked(rev) => Digest::hash(rev).raw,
+                _ => unreachable!(),
+            };
+            hash_to_idx.insert(hash, idx);
+            event_hashes.push(hash);
+        }
+
+        let mut ts: TopologicalSort<usize> = TopologicalSort::new();
+
+        // Add dependencies for each event
+        for (idx, event) in dlg_rev_events.iter().enumerate() {
+            // Collect dependency hashes
+            let mut deps: Vec<blake3::Hash> = Vec::new();
+            match event {
+                StaticEvent::Delegated(dlg) => {
+                    if let Some(proof) = &dlg.payload().proof {
+                        deps.push(proof.raw);
+                    }
+                    for rev in &dlg.payload().after_revocations {
+                        deps.push(rev.raw);
+                    }
+                }
+                StaticEvent::Revoked(rev) => {
+                    deps.push(rev.payload().revoke.raw);
+                    if let Some(proof) = &rev.payload().proof {
+                        deps.push(proof.raw);
+                    }
+                }
+                _ => unreachable!(),
+            }
+
+            let mut has_intra_dep = false;
+            for dep_hash in deps {
+                if let Some(&dep_idx) = hash_to_idx.get(&dep_hash) {
+                    if dep_idx != idx {
+                        // dep_idx is a predecessor of idx (dep_idx must come first)
+                        ts.add_dependency(dep_idx, idx);
+                        has_intra_dep = true;
+                    }
+                }
+            }
+            if !has_intra_dep {
+                // Ensure isolated nodes still appear in the sort
+                ts.insert(idx);
+            }
+        }
+
+        // Pop in topological order
+        let total = dlg_rev_events.len();
+        let mut sorted_indices: Vec<usize> = Vec::with_capacity(total);
+
+        while !ts.is_empty() {
+            let batch = ts.pop_all();
+            if batch.is_empty() {
+                // Remaining items have cycles — break to avoid infinite loop
+                break;
+            }
+            sorted_indices.extend(batch);
+        }
+
+        // Build result: take events out of dlg_rev_events by index
+        // We need to handle the case where some indices weren't popped (cycles)
+        let mut result: Vec<StaticEvent<T>> = Vec::with_capacity(total + cgka_events.len());
+
+        let mut opt_events: Vec<Option<StaticEvent<T>>> =
+            dlg_rev_events.into_iter().map(Some).collect();
+
+        for idx in sorted_indices {
+            if let Some(event) = opt_events[idx].take() {
+                result.push(event);
+            }
+        }
+
+        // Append any remaining events (cycles or other issues)
+        for event in opt_events.into_iter().flatten() {
+            result.push(event);
+        }
+
+        // CGKA events go after all delegations/revocations
+        result.extend(cgka_events);
+        result
+    }
+
+    #[instrument(skip_all)]
+    async fn receive_delegation_deferred(
+        &self,
+        static_dlg: &Signed<StaticDelegation<T>>,
+    ) -> Result<Option<Identifier>, ReceiveStaticDelegationError<S, T, L>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _fn_start = std::time::Instant::now();
+
+        let dedup_hash: Digest<Signed<Delegation<S, T, L>>> = Digest::hash(static_dlg).into();
+        if self.delegations.lock().await.contains_key(&dedup_hash) {
+            return Ok(None);
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let t0 = std::time::Instant::now();
+
+        static_dlg.try_verify()?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let t1 = std::time::Instant::now();
+
+        let payload = self.static_delegation_to_delegation(static_dlg).await?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let t2 = std::time::Instant::now();
+
+        let mut after_revocations = Vec::new();
+        for static_rev_hash in static_dlg.payload().after_revocations.iter() {
+            let rev_hash = static_rev_hash.into();
+            let locked_revs = self.revocations.lock().await;
+            let resolved_rev = locked_revs
+                .get(&rev_hash)
+                .ok_or(MissingDependency(rev_hash))?;
+            after_revocations.push(resolved_rev.dupe());
+        }
+
+        let delegation = Signed::new(payload, static_dlg.issuer, static_dlg.signature);
+
+        let subject_id = delegation.subject_id();
+        let delegation = Arc::new(delegation);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let t3 = std::time::Instant::now();
+
+        let mut found = false;
+        let mut path = "none";
+        {
+            if let Some(group) = self.groups.lock().await.get(&GroupId(subject_id)) {
+                found = true;
+                path = "group";
+                group
+                    .lock()
+                    .await
+                    .receive_delegation_no_rebuild(delegation.clone())
+                    .await?;
+            } else if let Some(doc) = self.docs.lock().await.get(&DocumentId(subject_id)) {
+                found = true;
+                path = "doc";
+                doc.lock()
+                    .await
+                    .receive_delegation_no_rebuild(delegation.clone())
+                    .await?;
+            } else if let Some(indie) = self
+                .individuals
+                .lock()
+                .await
+                .remove(&IndividualId(subject_id))
+            {
+                found = true;
+                path = "promote";
+                // Use no-rebuild variant: skip rebuild() and store cloning.
+                // rebuild_modified will handle this group later.
+                let group = Arc::new(Mutex::new(
+                    Group::from_individual_no_rebuild(
+                        indie.lock().await.clone(),
+                        delegation.clone(),
+                        self.delegations.dupe(),
+                        self.revocations.dupe(),
+                        self.event_listener.clone(),
+                    )
+                    .await,
+                ));
+                self.groups.lock().await.insert(GroupId(subject_id), group);
+            }
+        }
+        if !found {
+            path = "new";
+            let group = Group::new_no_rebuild(
+                GroupId(subject_id),
+                delegation.dupe(),
+                self.delegations.dupe(),
+                self.revocations.dupe(),
+                self.event_listener.clone(),
+            )
+            .await;
+
+            if let Some(content_heads) = static_dlg
+                .payload
+                .after_content
+                .get(&subject_id.into())
+                .and_then(|content_heads| NonEmpty::collect(content_heads.iter().cloned()))
+            {
+                path = "new_doc";
+                let doc = Document::from_group_no_rebuild(group, content_heads).await;
+                let mut locked_docs = self.docs.lock().await;
+                locked_docs.insert(doc.doc_id(), Arc::new(Mutex::new(doc)));
+            } else {
+                self.groups
+                    .lock()
+                    .await
+                    .insert(group.group_id(), Arc::new(Mutex::new(group)));
+            }
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let t4 = std::time::Instant::now();
+            let total = _fn_start.elapsed();
+            if total.as_millis() > 100 {
+                tracing::warn!(
+                    "SLOW DLG: total={:?} verify={:?} convert={:?} setup={:?} insert={:?} path={}",
+                    total,
+                    t1 - t0,
+                    t2 - t1,
+                    t3 - t2,
+                    t4 - t3,
+                    path,
+                );
+            }
+        }
+
+        Ok(Some(subject_id))
+    }
+
+    #[instrument(skip_all)]
+    async fn receive_revocation_deferred(
+        &self,
+        static_rev: &Signed<StaticRevocation<T>>,
+    ) -> Result<Option<Identifier>, ReceiveStaticDelegationError<S, T, L>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _rev_start = std::time::Instant::now();
+
+        if self
+            .revocations
+            .lock()
+            .await
+            .contains_key(&Digest::hash(static_rev).into())
+        {
+            return Ok(None);
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let rt0 = std::time::Instant::now();
+
+        static_rev.try_verify()?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let rt1 = std::time::Instant::now();
+
+        let payload = self.static_revocation_to_revocation(static_rev).await?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let rt2 = std::time::Instant::now();
+
+        let revocation = Signed::new(payload, static_rev.issuer, static_rev.signature);
+
+        let id = revocation.subject_id();
+        let revocation = Arc::new(revocation);
+
+        if let Some(group) = self.groups.lock().await.get(&GroupId(id)) {
+            group
+                .lock()
+                .await
+                .receive_revocation_no_rebuild(revocation.clone())
+                .await?;
+        } else if let Some(doc) = self.docs.lock().await.get(&DocumentId(id)) {
+            #[cfg(not(target_arch = "wasm32"))]
+            let doc_t0 = std::time::Instant::now();
+
+            let mut locked_doc = doc.lock().await;
+
+            #[cfg(not(target_arch = "wasm32"))]
+            let doc_t1 = std::time::Instant::now();
+
+            locked_doc
+                .receive_revocation_no_rebuild(revocation.clone())
+                .await?;
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let doc_t2 = std::time::Instant::now();
+                let total = doc_t2 - doc_t0;
+                if total.as_millis() > 50 {
+                    tracing::warn!(
+                        "SLOW DOC REV: total={:?} lock={:?} recv={:?}",
+                        total,
+                        doc_t1 - doc_t0,
+                        doc_t2 - doc_t1,
+                    );
+                }
+            }
+        } else if let Some(indie) = self.individuals.lock().await.remove(&IndividualId(id)) {
+            // Use no-rebuild variant: skip rebuild() and store cloning.
+            let group = Arc::new(Mutex::new(
+                Group::from_individual_no_rebuild(
+                    indie.lock().await.clone(),
+                    revocation.payload.revoke.dupe(),
+                    self.delegations.dupe(),
+                    self.revocations.dupe(),
+                    self.event_listener.clone(),
+                )
+                .await,
+            ));
+            self.groups.lock().await.insert(GroupId(id), group.dupe());
+            group
+                .lock()
+                .await
+                .receive_revocation_no_rebuild(revocation.clone())
+                .await?;
+        } else {
+            let group = Arc::new(Mutex::new(
+                Group::new_no_rebuild(
+                    GroupId(static_rev.issuer.into()),
+                    revocation.payload.revoke.dupe(),
+                    self.delegations.dupe(),
+                    self.revocations.dupe(),
+                    self.event_listener.clone(),
+                )
+                .await,
+            ));
+
+            {
+                let group2 = group.dupe();
+                let mut locked = group.lock().await;
+                self.groups.lock().await.insert(locked.group_id(), group2);
+                locked
+                    .receive_revocation_no_rebuild(revocation.clone())
+                    .await?;
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let rt3 = std::time::Instant::now();
+            let total = _rev_start.elapsed();
+            if total.as_millis() > 50 {
+                tracing::warn!(
+                    "SLOW REV: total={:?} verify={:?} convert={:?} insert={:?}",
+                    total,
+                    rt1 - rt0,
+                    rt2 - rt1,
+                    rt3 - rt2,
+                );
+            }
+        }
+
+        Ok(Some(id))
+    }
+
+    /// Rebuild all modified groups and documents after deferred processing.
+    async fn rebuild_modified(&self, modified_ids: &HashSet<Identifier>) {
+        for id in modified_ids {
+            if let Some(group) = self.groups.lock().await.get(&GroupId(*id)) {
+                let mut locked = group.lock().await;
+                locked.state.recalculate_heads().await;
+                locked.rebuild().await;
+            } else if let Some(doc) = self.docs.lock().await.get(&DocumentId(*id)) {
+                let mut locked = doc.lock().await;
+                locked.group.state.recalculate_heads().await;
+                locked.rebuild().await;
+            }
+        }
     }
 
     #[instrument(skip_all)]
@@ -2038,32 +2673,191 @@ impl<
             self.receive_prekey_ops_for_individual(id, ops).await;
         }
 
-        // Attempt to process the remaining (non-prekey) events
-        loop {
-            let mut next_epoch = vec![];
-            let mut err = None;
-            let epoch_len = epoch.len();
+        // Topologically sort delegation/revocation events so we process
+        // dependencies before dependents, avoiding most retries.
+        epoch = Self::topsort_epoch_events(epoch);
 
-            for event in epoch {
-                if let Err(e) = self.receive_static_event(event.clone()).await {
-                    err = Some(e);
-                    next_epoch.push(event);
+        // Process topsorted events with deferred rebuild. Track which
+        // groups/docs were modified so we can rebuild each once at the end.
+        let mut modified_ids: HashSet<Identifier> = HashSet::new();
+        let mut next_epoch: Vec<StaticEvent<T>> = Vec::new();
+
+        tracing::info!("FIRST PASS: processing {} topsorted events", epoch.len());
+        let mut success_count = 0u32;
+        let mut dedup_count = 0u32;
+        let mut fail_count = 0u32;
+        for event in epoch {
+            let event_type = match &event {
+                StaticEvent::Delegated(_) => "dlg",
+                StaticEvent::Revoked(_) => "rev",
+                StaticEvent::CgkaOperation(_) => "cgka",
+                _ => "other",
+            };
+
+            #[cfg(not(target_arch = "wasm32"))]
+            let ev_start = std::time::Instant::now();
+
+            let result = match &event {
+                StaticEvent::Delegated(dlg) => self
+                    .receive_delegation_deferred(dlg)
+                    .await
+                    .map_err(ReceiveStaticEventError::from),
+                StaticEvent::Revoked(rev) => self
+                    .receive_revocation_deferred(rev)
+                    .await
+                    .map_err(ReceiveStaticEventError::from),
+                StaticEvent::CgkaOperation(_) => {
+                    // Skip CGKA ops in the first pass — they'll go to the
+                    // retry loop and be processed after rebuild.
+                    Err(ReceiveStaticEventError::CgkaDeferred)
+                }
+                _ => self.receive_static_event(event.clone()).await.map(|_| None),
+            };
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let ev_elapsed = ev_start.elapsed();
+                if ev_elapsed.as_millis() > 100 {
+                    tracing::warn!(
+                        "SLOW EVENT: type={} elapsed={:?} outcome={}",
+                        event_type,
+                        ev_elapsed,
+                        match &result {
+                            Ok(Some(_)) => "ok",
+                            Ok(None) => "dedup",
+                            Err(_) => "fail",
+                        }
+                    );
                 }
             }
 
-            if next_epoch.is_empty() {
-                tracing::debug!("Finished ingesting static events");
+            match result {
+                Ok(Some(id)) => {
+                    success_count += 1;
+                    modified_ids.insert(id);
+                }
+                Ok(None) => {
+                    dedup_count += 1;
+                }
+                Err(_e) => {
+                    fail_count += 1;
+                    next_epoch.push(event);
+                }
+            }
+            if (success_count + dedup_count + fail_count).is_multiple_of(500) {
+                tracing::info!(
+                    "FIRST PASS progress: {} ok, {} dedup, {} fail",
+                    success_count,
+                    dedup_count,
+                    fail_count
+                );
+            }
+        }
+        tracing::info!(
+            "FIRST PASS totals: {} ok, {} dedup, {} fail",
+            success_count,
+            dedup_count,
+            fail_count
+        );
+
+        // Rebuild all modified groups/docs once
+        tracing::info!(
+            "REBUILD: {} groups/docs, {} failed events for retry",
+            modified_ids.len(),
+            next_epoch.len()
+        );
+        self.rebuild_modified(&modified_ids).await;
+        tracing::info!("REBUILD done");
+
+        if next_epoch.is_empty() {
+            tracing::debug!("Finished ingesting static events");
+            return Vec::new();
+        }
+
+        // Safety net: retry loop for events that failed (implicit deps like
+        // agent identity or CGKA doc existence that the topsort can't express).
+        // Uses deferred rebuild — only rebuild once after the entire retry loop,
+        // not per iteration. Delegations/revocations don't need rebuilt state
+        // (get_agent checks maps directly), only CGKA ops do.
+        let mut all_retry_modified_ids: HashSet<Identifier> = HashSet::new();
+        let mut retry_iteration = 0u32;
+        loop {
+            retry_iteration += 1;
+            let mut retry_next = vec![];
+            let mut err = None;
+            let epoch_len = next_epoch.len();
+            tracing::info!(
+                "RETRY LOOP iteration {}: processing {} events",
+                retry_iteration,
+                epoch_len
+            );
+
+            for event in next_epoch {
+                let result = match &event {
+                    StaticEvent::Delegated(dlg) => self
+                        .receive_delegation_deferred(dlg)
+                        .await
+                        .map_err(ReceiveStaticEventError::from),
+                    StaticEvent::Revoked(rev) => self
+                        .receive_revocation_deferred(rev)
+                        .await
+                        .map_err(ReceiveStaticEventError::from),
+                    StaticEvent::CgkaOperation(cgka_op) => {
+                        // CGKA ops need membership to be up-to-date
+                        if !all_retry_modified_ids.is_empty() {
+                            self.rebuild_modified(&all_retry_modified_ids).await;
+                            all_retry_modified_ids.clear();
+                        }
+                        self.receive_cgka_op((**cgka_op).clone())
+                            .await
+                            .map(|_| None)
+                            .map_err(ReceiveStaticEventError::from)
+                    }
+                    _ => self.receive_static_event(event.clone()).await.map(|_| None),
+                };
+                match result {
+                    Ok(Some(id)) => {
+                        all_retry_modified_ids.insert(id);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        err = Some(e);
+                        retry_next.push(event);
+                    }
+                }
+            }
+
+            tracing::info!(
+                "RETRY LOOP iteration {} done: {} succeeded, {} failed",
+                retry_iteration,
+                epoch_len - retry_next.len(),
+                retry_next.len()
+            );
+
+            if retry_next.is_empty() {
+                tracing::info!(
+                    "RETRY LOOP: all events succeeded, rebuilding {} groups/docs",
+                    all_retry_modified_ids.len()
+                );
+                self.rebuild_modified(&all_retry_modified_ids).await;
+                tracing::info!("Finished ingesting static events");
                 return Vec::new();
             }
 
-            if next_epoch.len() == epoch_len {
+            if retry_next.len() == epoch_len {
+                tracing::info!(
+                    "RETRY LOOP: stuck at fixed point with {} events, rebuilding {} groups/docs",
+                    epoch_len,
+                    all_retry_modified_ids.len()
+                );
+                self.rebuild_modified(&all_retry_modified_ids).await;
                 tracing::debug!(
                     "ingest_unsorted_static_events: Stuck on a fixed point: {:?}. Error: {:?}",
                     epoch_len,
                     err
                 );
                 let new_pending: Vec<Arc<StaticEvent<T>>> =
-                    next_epoch.clone().into_iter().map(Arc::new).collect();
+                    retry_next.clone().into_iter().map(Arc::new).collect();
                 drop(mem::replace(
                     &mut *self.pending_events.lock().await,
                     new_pending.clone(),
@@ -2072,7 +2866,7 @@ impl<
                 return new_pending;
             }
 
-            epoch = next_epoch
+            next_epoch = retry_next
         }
     }
 
@@ -2318,6 +3112,9 @@ pub enum ReceiveStaticEventError<S: AsyncSigner, T: ContentRef, L: MembershipLis
 
     #[error(transparent)]
     ReceiveStaticMembershipError(#[from] ReceiveStaticDelegationError<S, T, L>),
+
+    #[error("CGKA op deferred to retry loop")]
+    CgkaDeferred,
 }
 
 impl<S, T, L> ReceiveStaticEventError<S, T, L>
@@ -2331,6 +3128,7 @@ where
             Self::ReceivePrekeyOpError(_) => false,
             Self::ReceiveCgkaOpError(e) => e.is_missing_dependency(),
             Self::ReceiveStaticMembershipError(e) => e.is_missing_dependency(),
+            Self::CgkaDeferred => true,
         }
     }
 }
@@ -3356,6 +4154,133 @@ mod tests {
                 "ops should match for agent {:?}",
                 id
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_membership_ops_for_all_agents_matches_per_agent() {
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let bob = make_keyhive().await;
+        let carol = make_keyhive().await;
+
+        // Register bob and carol on alice
+        let bob_add_op = bob.expand_prekeys().await.unwrap();
+        let bob_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(bob_add_op))));
+        assert!(alice.register_individual(bob_indie.clone()).await);
+        let bob_id = bob_indie.lock().await.id();
+
+        let carol_add_op = carol.expand_prekeys().await.unwrap();
+        let carol_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(carol_add_op))));
+        assert!(alice.register_individual(carol_indie.clone()).await);
+        let carol_id = carol_indie.lock().await.id();
+
+        // Create doc1 with bob and carol
+        let doc1 = alice
+            .generate_doc(vec![], nonempty![[0u8; 32]])
+            .await
+            .unwrap();
+        let doc1_id = doc1.lock().await.doc_id();
+        alice
+            .add_member(
+                Agent::Individual(bob_id, bob_indie.dupe()),
+                &Membered::Document(doc1_id, doc1.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+        alice
+            .add_member(
+                Agent::Individual(carol_id, carol_indie.dupe()),
+                &Membered::Document(doc1_id, doc1.dupe()),
+                Access::Write,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Create a group with bob and carol, add group to a second doc
+        let group = alice.generate_group(vec![]).await.unwrap();
+        let group_id = group.lock().await.group_id();
+        alice
+            .add_member(
+                Agent::Individual(bob_id, bob_indie.dupe()),
+                &Membered::Group(group_id, group.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+        alice
+            .add_member(
+                Agent::Individual(carol_id, carol_indie.dupe()),
+                &Membered::Group(group_id, group.dupe()),
+                Access::Write,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let doc2 = alice
+            .generate_doc(vec![], nonempty![[1u8; 32]])
+            .await
+            .unwrap();
+        let doc2_id = doc2.lock().await.doc_id();
+        alice
+            .add_member(
+                Agent::Group(group_id, group.dupe()),
+                &Membered::Document(doc2_id, doc2.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Revoke bob from doc1
+        alice
+            .revoke_member(
+                bob_id.into(),
+                false,
+                &Membered::Document(doc1_id, doc1.dupe()),
+            )
+            .await
+            .unwrap();
+
+        // Get the all-agents result
+        let all_results = alice.membership_ops_for_all_agents().await;
+
+        // For each agent, compare with per-agent result
+        let agents: Vec<(IndividualId, Arc<Mutex<Individual>>)> =
+            vec![(bob_id, bob_indie), (carol_id, carol_indie)];
+        for (id, indie) in &agents {
+            let agent = Agent::Individual(*id, indie.dupe());
+            let agent_id: Identifier = (*id).into();
+
+            let per_agent_ops = alice.membership_ops_for_agent(&agent).await;
+            let per_agent_digests: HashSet<_> = per_agent_ops.keys().copied().collect();
+
+            let all_digests = all_results
+                .index
+                .get(&agent_id)
+                .cloned()
+                .unwrap_or_default();
+
+            assert_eq!(
+                per_agent_digests, all_digests,
+                "membership op digests should match for agent {:?}",
+                id
+            );
+
+            // Verify all ops are present in the shared ops map
+            for digest in &all_digests {
+                assert!(
+                    all_results.ops.contains_key(digest),
+                    "op {:?} should be in shared ops map",
+                    digest
+                );
+            }
         }
     }
 

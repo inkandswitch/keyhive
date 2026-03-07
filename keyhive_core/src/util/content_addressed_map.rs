@@ -38,6 +38,11 @@ impl<T: Serialize> CaMap<T> {
         key
     }
 
+    /// Add a value with a pre-computed [`Digest`], skipping the hash computation.
+    pub fn insert_with_key(&mut self, key: Digest<T>, value: Arc<T>) {
+        self.0.insert(key, value);
+    }
+
     /// Inserts, and returns if the value was newly inserted.
     pub fn insert_checked(&mut self, value: Arc<T>) -> (Digest<T>, bool) {
         let key: Digest<T> = Digest::hash(&value);

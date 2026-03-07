@@ -19,7 +19,6 @@ use derive_where::derive_where;
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{
-    cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
     hash::Hash,
     sync::Arc,
@@ -183,6 +182,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
 
     /// Returns operations in reverse topological order (i.e., dependencies come
     /// later).
+    ///
+    /// Uses direct parent-child edges from `after_auth()` to build the DAG in
+    /// O(V+E) instead of computing full ancestor sets (which was O(N²+)).
+    /// Concurrent revocations are ordered by `(longest_path, digest)` to ensure
+    /// deterministic outcomes across distributed nodes (CRDT requirement).
     #[allow(clippy::type_complexity)] // Clippy doens't like the returned pair
     #[instrument(skip_all)]
     pub fn reverse_topsort(
@@ -193,13 +197,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         MembershipOperation<S, T, L>,
     )> {
         // NOTE: BTreeMap to get deterministic order
-        let mut ops_with_ancestors: BTreeMap<
+        let mut all_ops: BTreeMap<
             Digest<MembershipOperation<S, T, L>>,
-            (
-                MembershipOperation<S, T, L>,
-                CaMap<MembershipOperation<S, T, L>>,
-                usize,
-            ),
+            MembershipOperation<S, T, L>,
         > = BTreeMap::new();
 
         #[derive(Debug, Clone, PartialEq, Eq, From, Into)]
@@ -217,157 +217,182 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
             }
         }
 
-        let mut leftovers: HashMap<Key, MembershipOperation<S, T, L>> = HashMap::new();
+        // {being revoked signature => revocation digest}
+        let mut revoked_dependencies: HashMap<Key, Digest<MembershipOperation<S, T, L>>> =
+            HashMap::new();
+
         let mut explore: Vec<MembershipOperation<S, T, L>> = vec![];
 
         for dlg in delegation_heads.values() {
             let op: MembershipOperation<S, T, L> = dlg.dupe().into();
-            leftovers.insert(op.signature().into(), op.clone());
             explore.push(op);
         }
 
         for rev in revocation_heads.values() {
             let op: MembershipOperation<S, T, L> = rev.dupe().into();
-            leftovers.insert(op.signature().into(), op.clone());
             explore.push(op);
         }
 
-        // {being revoked => revocation}
-        let mut revoked_dependencies: HashMap<
-            Key,
-            (
-                Digest<MembershipOperation<S, T, L>>,
-                MembershipOperation<S, T, L>,
-            ),
-        > = HashMap::new();
-
+        // Collect all reachable ops via BFS from heads
         while let Some(op) = explore.pop() {
             let digest = op.digest();
-            if ops_with_ancestors.contains_key(&digest) {
+            if all_ops.contains_key(&digest) {
                 continue;
             }
 
-            let (ancestors, longest_path) = op.ancestors();
-
-            for ancestor in ancestors.values() {
-                explore.push(ancestor.as_ref().dupe());
+            for parent in op.after_auth() {
+                explore.push(parent);
             }
 
             if let MembershipOperation::Revocation(r) = &op {
-                revoked_dependencies
-                    .insert((*r.payload.revoke.signature()).into(), (digest, op.dupe()));
+                revoked_dependencies.insert((*r.payload.revoke.signature()).into(), digest);
             }
 
-            ops_with_ancestors.insert(digest, (op, ancestors, longest_path));
+            all_ops.insert(digest, op);
         }
 
+        // Build parent-child edges map for longest_path computation.
+        // We collect edges during the topsort build and compute longest_path
+        // after the topsort (iterating in dependency order).
+        let mut parent_digests: HashMap<
+            Digest<MembershipOperation<S, T, L>>,
+            Vec<Digest<MembershipOperation<S, T, L>>>,
+        > = HashMap::new();
+
+        // Build topological sort from direct parent-child edges.
+        // Edges are reversed (child → parent) because the output has
+        // dependencies later and rebuild() pops from the end.
         let mut adjacencies: TopologicalSort<(
             Digest<MembershipOperation<S, T, L>>,
             &MembershipOperation<S, T, L>,
         )> = topological_sort::TopologicalSort::new();
 
-        for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
+        for (digest, op) in all_ops.iter() {
+            let mut parents = Vec::new();
+            for parent in op.after_auth() {
+                let parent_digest = parent.digest();
+                if let Some(parent_op) = all_ops.get(&parent_digest) {
+                    adjacencies.add_dependency((*digest, op), (parent_digest, parent_op));
+                    parents.push(parent_digest);
+                }
+            }
+
+            // Revocation dependency: if this delegation's proof was revoked,
+            // force the revocation to be processed before this delegation
+            // (revocation appears later in output → popped first by rebuild)
             if let MembershipOperation::Delegation(d) = op {
                 if let Some(proof) = &d.payload.proof {
-                    if let Some((revoked_digest, revoked_op)) =
-                        revoked_dependencies.get(&Key(proof.signature))
-                    {
-                        adjacencies.add_dependency((*digest, op), (*revoked_digest, revoked_op));
+                    if let Some(revoked_digest) = revoked_dependencies.get(&Key(proof.signature)) {
+                        if let Some(revoked_op) = all_ops.get(revoked_digest) {
+                            adjacencies
+                                .add_dependency((*digest, op), (*revoked_digest, revoked_op));
+                            parents.push(*revoked_digest);
+                        }
                     }
                 }
             }
 
-            #[allow(clippy::mutable_key_type)]
-            let ancestor_set: HashSet<&MembershipOperation<S, T, L>> =
-                op_ancestors.values().map(|op| op.as_ref()).collect();
+            parent_digests.insert(*digest, parents);
+        }
 
-            for (other_digest, other_op) in op_ancestors.iter() {
-                let (_, other_ancestors, other_longest_path) = ops_with_ancestors
-                    .get(other_digest)
-                    .expect("values that we just put there to be there");
+        // First pass: run topsort to get dependency order, computing
+        // longest_path for each op as we go (roots have path 1, children
+        // have 1 + max(parent paths)).
+        let mut longest_paths: HashMap<Digest<MembershipOperation<S, T, L>>, usize> =
+            HashMap::new();
+        let mut first_pass: Vec<
+            Vec<(
+                Digest<MembershipOperation<S, T, L>>,
+                &MembershipOperation<S, T, L>,
+            )>,
+        > = vec![];
 
-                #[allow(clippy::mutable_key_type)]
-                let other_ancestor_set: HashSet<&MembershipOperation<S, T, L>> =
-                    other_ancestors.values().map(|op| op.as_ref()).collect();
+        while !adjacencies.is_empty() {
+            let level = adjacencies.pop_all();
+            for (digest, _) in &level {
+                let lp = parent_digests
+                    .get(digest)
+                    .map(|parents| {
+                        parents
+                            .iter()
+                            .filter_map(|pd| longest_paths.get(pd))
+                            .max()
+                            .copied()
+                            .unwrap_or(0)
+                            + 1
+                    })
+                    .unwrap_or(1);
+                longest_paths.insert(*digest, lp);
+            }
+            first_pass.push(level);
+        }
 
-                if other_ancestor_set.contains(op) || ancestor_set.is_subset(&other_ancestor_set) {
-                    leftovers.remove(&Key(other_op.signature()));
-                    adjacencies.add_dependency((*other_digest, other_op.as_ref()), (*digest, op));
-                    continue;
-                }
+        // Second pass: rebuild the topsort with explicit ordering edges
+        // between concurrent revocations (by longest_path then digest)
+        // to ensure deterministic outcomes across distributed nodes.
+        let mut adjacencies2: TopologicalSort<(
+            Digest<MembershipOperation<S, T, L>>,
+            &MembershipOperation<S, T, L>,
+        )> = topological_sort::TopologicalSort::new();
 
-                if ancestor_set.contains(other_op.as_ref())
-                    || ancestor_set.is_superset(&other_ancestor_set)
-                {
-                    leftovers.remove(&Key(op.signature()));
-                    adjacencies.add_dependency((*digest, op), (*other_digest, other_op.as_ref()));
-                    continue;
-                }
-
-                // NOTE for concurrent case:
-                // if both are revocations then do extra checks to force order
-                // in order to ensure no revocation cycles
-                if op.is_revocation() && other_op.is_revocation() {
-                    match longest_path.cmp(other_longest_path) {
-                        Ordering::Less => {
-                            leftovers.remove(&Key(op.signature()));
-                            adjacencies
-                                .add_dependency((*digest, op), (*other_digest, other_op.as_ref()));
+        for level in &first_pass {
+            // Re-add all original edges
+            for (digest, op) in level {
+                if let Some(parents) = parent_digests.get(digest) {
+                    for pd in parents {
+                        if let Some(pop) = all_ops.get(pd) {
+                            adjacencies2.add_dependency((*digest, *op), (*pd, pop));
                         }
-                        Ordering::Greater => {
-                            leftovers.remove(&Key(other_op.signature()));
-                            adjacencies
-                                .add_dependency((*other_digest, other_op.as_ref()), (*digest, op));
-                        }
-                        Ordering::Equal => match other_digest.cmp(digest) {
-                            Ordering::Less => {
-                                leftovers.remove(&Key(op.signature()));
-                                adjacencies.add_dependency(
-                                    (*digest, op),
-                                    (*other_digest, other_op.as_ref()),
-                                );
-                            }
-                            Ordering::Greater => {
-                                leftovers.remove(&Key(other_op.signature()));
-                                adjacencies.add_dependency(
-                                    (*other_digest, other_op.as_ref()),
-                                    (*digest, op),
-                                );
-                            }
-                            Ordering::Equal => {
-                                debug_assert!(false, "should not need to compare to self")
-                            }
-                        },
                     }
-                    continue;
+                }
+            }
+
+            // For concurrent revocations, add ordering edges
+            let revocations: Vec<_> = level.iter().filter(|(_, op)| op.is_revocation()).collect();
+
+            if revocations.len() > 1 {
+                let mut sorted_revs: Vec<_> = revocations
+                    .iter()
+                    .map(|(d, op)| {
+                        let lp = longest_paths.get(d).copied().unwrap_or(1);
+                        (*d, *op, lp)
+                    })
+                    .collect();
+                sorted_revs
+                    .sort_by(|(d1, _, lp1), (d2, _, lp2)| lp1.cmp(lp2).then_with(|| d1.cmp(d2)));
+
+                for pair in sorted_revs.windows(2) {
+                    let (d1, op1, _) = &pair[0];
+                    let (d2, op2, _) = &pair[1];
+                    adjacencies2.add_dependency((*d1, *op1), (*d2, *op2));
                 }
             }
         }
 
-        let mut history: Vec<(
-            Digest<MembershipOperation<S, T, L>>,
-            MembershipOperation<S, T, L>,
-        )> = leftovers
-            .values()
-            .map(|op| (op.digest(), op.clone()))
-            .collect();
-
-        history.sort_by_key(|(digest, _)| *digest);
-
         let mut dependencies = vec![];
+        let mut seen: HashSet<Digest<MembershipOperation<S, T, L>>> = HashSet::new();
 
-        while !adjacencies.is_empty() {
-            let mut latest = adjacencies.pop_all();
+        while !adjacencies2.is_empty() {
+            let mut latest = adjacencies2.pop_all();
 
-            // NOTE sort all concurrent heads by hash for more determinism
+            // Sort concurrent ops by digest for determinism
             latest.sort_by_key(|(digest, _)| *digest);
 
             for (digest, op) in latest.into_iter() {
+                seen.insert(digest);
                 dependencies.push((digest, op.clone()));
             }
         }
 
-        dependencies.extend(history);
+        // Leftovers: ops not in any dependency chain (e.g., isolated root ops)
+        let mut leftovers: Vec<_> = all_ops
+            .iter()
+            .filter(|(d, _)| !seen.contains(d))
+            .map(|(d, op)| (*d, op.clone()))
+            .collect();
+        leftovers.sort_by_key(|(digest, _)| *digest);
+        dependencies.extend(leftovers);
+
         Reversed(dependencies)
     }
 }

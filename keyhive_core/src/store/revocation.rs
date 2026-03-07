@@ -69,12 +69,42 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore
         &mut self,
         revocation: Arc<Signed<Revocation<S, T, L>>>,
     ) -> Digest<Signed<Revocation<S, T, L>>> {
-        let digest = self.revocations.insert(revocation.dupe());
+        #[cfg(not(target_arch = "wasm32"))]
+        let t0 = std::time::Instant::now();
+
+        let digest = revocation.digest();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let t1 = std::time::Instant::now();
+
+        self.revocations.insert_with_key(digest, revocation.dupe());
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let t2 = std::time::Instant::now();
+
         let agent_id = revocation.payload.revoke.payload.delegate().agent_id();
         self.agent_to_revocations
             .entry(agent_id)
             .or_default()
             .insert(revocation);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let t3 = std::time::Instant::now();
+            let total = t3 - t0;
+            if total.as_millis() > 50 {
+                tracing::warn!(
+                    "SLOW REVSTORE INSERT: total={:?} digest={:?} camap={:?} agent_map={:?} revocations_len={} agent_revs_count={}",
+                    total,
+                    t1 - t0,
+                    t2 - t1,
+                    t3 - t2,
+                    self.revocations.len(),
+                    self.agent_to_revocations.values().map(|s| s.len()).sum::<usize>(),
+                );
+            }
+        }
+
         digest
     }
 
@@ -105,6 +135,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore
         agent_id: &AgentId,
     ) -> Option<HashSet<Arc<Signed<Revocation<S, T, L>>>>> {
         self.agent_to_revocations.get(agent_id).cloned()
+    }
+
+    /// Iterate over all (agent_id, revocations) pairs in the store.
+    #[allow(clippy::type_complexity)]
+    pub fn all_agent_revocations(
+        &self,
+    ) -> impl Iterator<Item = (&AgentId, &HashSet<Arc<Signed<Revocation<S, T, L>>>>)> {
+        self.agent_to_revocations.iter()
     }
 
     /// Iterate over all [`Revocation`]s in the store.
