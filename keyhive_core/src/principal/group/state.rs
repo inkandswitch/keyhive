@@ -83,6 +83,53 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
         }
     }
 
+    /// Create a new GroupState, inserting proof chain into global stores
+    /// using memoized digests instead of fresh serialization.
+    /// Used during deferred-rebuild ingestion.
+    pub async fn new_with_memoized_digest(
+        delegation_head: Arc<Signed<Delegation<S, T, L>>>,
+        delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
+    ) -> Self {
+        let id = GroupId(delegation_head.verifying_key().into());
+        let mut heads = vec![delegation_head.dupe()];
+
+        while let Some(head) = heads.pop() {
+            if delegations
+                .lock()
+                .await
+                .contains_key(&head.digest().into())
+            {
+                continue;
+            }
+
+            delegations.lock().await.insert(head.dupe());
+
+            for dlg in head.payload().proof_lineage() {
+                delegations.lock().await.insert(dlg.dupe());
+
+                for rev in dlg.payload().after_revocations.as_slice() {
+                    revocations.lock().await.insert(rev.dupe());
+
+                    if let Some(proof) = &rev.payload().proof {
+                        heads.push(proof.dupe());
+                    }
+                }
+            }
+        }
+
+        let mut delegation_heads = DelegationStore::new();
+        delegation_heads.insert(delegation_head);
+
+        Self {
+            id,
+            delegation_heads,
+            delegations,
+            revocation_heads: RevocationStore::new(),
+            revocations,
+        }
+    }
+
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
         parents: Vec<Agent<S, T, L>>,
         delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
@@ -226,6 +273,159 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
 
         let hash = self.revocations.lock().await.insert(revocation);
         Ok(hash)
+    }
+
+    /// Insert a delegation with only validation and global store insertion.
+    /// Skips delegation_heads/revocation_heads maintenance for batch performance.
+    /// Call `recalculate_heads()` before rebuild after using this method.
+    #[allow(clippy::type_complexity)]
+    pub async fn add_delegation_bare(
+        &mut self,
+        delegation: Arc<Signed<Delegation<S, T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<S, T, L>>>, AddError> {
+        if delegation.subject_id() != self.id.into() {
+            return Err(AddError::InvalidSubject(Box::new(delegation.subject_id())));
+        }
+
+        if delegation.payload().proof.is_none() && delegation.issuer != self.verifying_key() {
+            return Err(AddError::InvalidProofChain);
+        }
+
+        delegation.payload.proof_lineage().iter().try_fold(
+            delegation.as_ref(),
+            |head, proof| {
+                if delegation.payload.can > proof.payload.can {
+                    return Err(AddError::Escelation {
+                        claimed: delegation.payload.can,
+                        proof: proof.payload.can,
+                    });
+                }
+
+                if head.verifying_key() != proof.payload.delegate.verifying_key() {
+                    return Err(AddError::InvalidProofChain);
+                }
+
+                Ok(proof.as_ref())
+            },
+        )?;
+
+        let hash = self.delegations.lock().await.insert(delegation);
+        Ok(hash)
+    }
+
+    /// Insert a revocation with only validation and global store insertion.
+    /// Skips heads maintenance for batch performance.
+    /// Call `recalculate_heads()` before rebuild after using this method.
+    #[allow(clippy::type_complexity)]
+    pub async fn add_revocation_bare(
+        &mut self,
+        revocation: Arc<Signed<Revocation<S, T, L>>>,
+    ) -> Result<Digest<Signed<Revocation<S, T, L>>>, AddError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        let arb_t0 = std::time::Instant::now();
+
+        if revocation.subject_id() != self.id.into() {
+            return Err(AddError::InvalidSubject(Box::new(revocation.subject_id())));
+        }
+
+        if let Some(proof) = &revocation.payload.proof {
+            if revocation.payload.revoke != *proof
+                && !revocation.payload.revoke.payload.is_descendant_of(proof)
+            {
+                return Err(AddError::InvalidProofChain);
+            }
+
+            proof
+                .payload
+                .proof_lineage()
+                .iter()
+                .try_fold(proof.as_ref(), |head, next_proof| {
+                    if proof.payload.can.cmp(&next_proof.payload.can) == Ordering::Greater {
+                        return Err(AddError::Escelation {
+                            claimed: proof.payload.can,
+                            proof: next_proof.payload.can,
+                        });
+                    }
+
+                    if head.verifying_key() != next_proof.payload.delegate.verifying_key() {
+                        return Err(AddError::InvalidProofChain);
+                    }
+
+                    Ok(proof.as_ref())
+                })?;
+        } else if revocation.issuer != self.verifying_key() {
+            return Err(AddError::InvalidProofChain);
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let arb_t1 = std::time::Instant::now();
+
+        let hash = self.revocations.lock().await.insert(revocation);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let arb_t2 = std::time::Instant::now();
+            let total = arb_t2 - arb_t0;
+            if total.as_millis() > 50 {
+                eprintln!(
+                    "SLOW ADD_REV_BARE: total={:?} validate={:?} store={:?}",
+                    total,
+                    arb_t1 - arb_t0,
+                    arb_t2 - arb_t1,
+                );
+            }
+        }
+
+        Ok(hash)
+    }
+
+    /// Recalculate delegation_heads and revocation_heads from the global stores.
+    /// Must be called before rebuild after using `add_delegation_bare`/`add_revocation_bare`.
+    pub async fn recalculate_heads(&mut self) {
+        // A delegation is a head if no other delegation in this group uses it as a proof
+        // (i.e., it's not an ancestor of any other delegation).
+        let all_dlgs: Vec<Arc<Signed<Delegation<S, T, L>>>> = {
+            let locked = self.delegations.lock().await;
+            locked
+                .values()
+                .filter(|d| d.subject_id() == self.id.into())
+                .map(|d| d.dupe())
+                .collect()
+        };
+
+        // Collect all proof hashes (delegations that are ancestors of others)
+        use std::collections::HashSet;
+        let mut non_heads: HashSet<Digest<Signed<Delegation<S, T, L>>>> = HashSet::new();
+        for dlg in &all_dlgs {
+            for ancestor in dlg.payload.proof_lineage() {
+                non_heads.insert(Digest::hash(ancestor.as_ref()));
+            }
+        }
+
+        self.delegation_heads = DelegationStore::new();
+        for dlg in &all_dlgs {
+            let hash = Digest::hash(dlg.as_ref());
+            if !non_heads.contains(&hash) {
+                self.delegation_heads.insert(dlg.dupe());
+            }
+        }
+
+        // For revocation heads: a revocation is a head if it's not superseded
+        // For simplicity, include all revocations for this group as heads
+        // (rebuild handles the full dependency analysis)
+        let all_revs: Vec<Arc<Signed<Revocation<S, T, L>>>> = {
+            let locked = self.revocations.lock().await;
+            locked
+                .values()
+                .filter(|r| r.subject_id() == self.id.into())
+                .map(|r| r.dupe())
+                .collect()
+        };
+
+        self.revocation_heads = RevocationStore::new();
+        for rev in all_revs {
+            self.revocation_heads.insert(rev);
+        }
     }
 
     pub async fn delegations_for(

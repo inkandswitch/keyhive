@@ -122,6 +122,43 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         group
     }
 
+    /// Create a new group from an ID and founding delegation without rebuilding.
+    /// Used during deferred-rebuild ingestion where rebuild happens once at the end.
+    pub async fn new_no_rebuild(
+        group_id: GroupId,
+        head: Arc<Signed<Delegation<S, T, L>>>,
+        delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
+        listener: L,
+    ) -> Self {
+        Self {
+            id_or_indie: IdOrIndividual::GroupId(group_id),
+            members: HashMap::new(),
+            state: state::GroupState::new_with_memoized_digest(head, delegations, revocations)
+                .await,
+            active_revocations: HashMap::new(),
+            listener,
+        }
+    }
+
+    /// Promote an individual to a group without rebuilding.
+    /// Used during deferred-rebuild ingestion where rebuild happens once at the end.
+    pub async fn from_individual_no_rebuild(
+        individual: Individual,
+        head: Arc<Signed<Delegation<S, T, L>>>,
+        delegations: Arc<Mutex<DelegationStore<S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<S, T, L>>>,
+        listener: L,
+    ) -> Self {
+        Self {
+            id_or_indie: IdOrIndividual::Individual(individual),
+            members: HashMap::new(),
+            state: GroupState::new_with_memoized_digest(head, delegations, revocations).await,
+            active_revocations: HashMap::new(),
+            listener,
+        }
+    }
+
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
         parents: NonEmpty<Agent<S, T, L>>,
@@ -376,6 +413,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
     }
 
     #[allow(clippy::type_complexity)]
+    #[tracing::instrument(skip_all)]
+    pub async fn receive_delegation_no_rebuild(
+        &mut self,
+        delegation: Arc<Signed<Delegation<S, T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<S, T, L>>>, error::AddError> {
+        let digest = self.state.add_delegation_bare(delegation).await?;
+        tracing::info!("{:x?}", &digest);
+        Ok(digest)
+    }
+
+    #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip(self), fields(group_id = %self.group_id()))]
     pub async fn receive_revocation(
         &mut self,
@@ -384,6 +432,38 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         self.listener.on_revocation(&revocation).await;
         let digest = self.state.add_revocation(revocation).await?;
         self.rebuild().await;
+        Ok(digest)
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub async fn receive_revocation_no_rebuild(
+        &mut self,
+        revocation: Arc<Signed<Revocation<S, T, L>>>,
+    ) -> Result<Digest<Signed<Revocation<S, T, L>>>, error::AddError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        let grr_t0 = std::time::Instant::now();
+
+        self.listener.on_revocation(&revocation).await;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let grr_t1 = std::time::Instant::now();
+
+        let digest = self.state.add_revocation_bare(revocation).await?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let grr_t2 = std::time::Instant::now();
+            let total = grr_t2 - grr_t0;
+            if total.as_millis() > 50 {
+                eprintln!(
+                    "SLOW GRP RECV REV: total={:?} listener={:?} add_bare={:?}",
+                    total,
+                    grr_t1 - grr_t0,
+                    grr_t2 - grr_t1,
+                );
+            }
+        }
+
         Ok(digest)
     }
 

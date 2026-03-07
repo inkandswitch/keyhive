@@ -72,6 +72,12 @@ wasm-opt = ["-Oz"]
 lto = true
 debug = true
 
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[package.metadata.wasm-pack.profile.profiling]
+wasm-opt = false
+
 [features]
 default = ["console_error_panic_hook", "web-sys", "json"]
 browser_test = []

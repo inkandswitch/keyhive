@@ -91,6 +91,19 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         Ok(doc)
     }
 
+    pub async fn from_group_no_rebuild(
+        group: Group<S, T, L>,
+        content_heads: NonEmpty<T>,
+    ) -> Self {
+        Document {
+            cgka: None,
+            group,
+            content_heads: content_heads.iter().cloned().collect(),
+            content_state: Default::default(),
+            known_decryption_keys: HashMap::new(),
+        }
+    }
+
     pub fn id(&self) -> Identifier {
         self.group.id()
     }
@@ -346,11 +359,26 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.group.receive_delegation(delegation).await
     }
 
+    #[allow(clippy::type_complexity)]
+    pub async fn receive_delegation_no_rebuild(
+        &mut self,
+        delegation: Arc<Signed<Delegation<S, T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<S, T, L>>>, AddError> {
+        self.group.receive_delegation_no_rebuild(delegation).await
+    }
+
     pub async fn receive_revocation(
         &mut self,
         revocation: Arc<Signed<Revocation<S, T, L>>>,
     ) -> Result<Digest<Signed<Revocation<S, T, L>>>, AddError> {
         self.group.receive_revocation(revocation).await
+    }
+
+    pub async fn receive_revocation_no_rebuild(
+        &mut self,
+        revocation: Arc<Signed<Revocation<S, T, L>>>,
+    ) -> Result<Digest<Signed<Revocation<S, T, L>>>, AddError> {
+        self.group.receive_revocation_no_rebuild(revocation).await
     }
 
     /// Merges [`CgkaOperation`]. Returns `Ok(true)` if merge is successful.

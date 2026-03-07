@@ -1,13 +1,13 @@
 {
   "name": "@keyhive/keyhive",
-  "version": "0.0.0-alpha.54s",
+  "version": "0.0.0-alpha.54w",
   "description": "",
   "main": "pkg/keyhive_wasm.js",
   "scripts": {
     "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
-    "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release",
-    "build-bundler": "wasm-pack build --out-dir pkg --target bundler --release",
-    "build-web": "wasm-pack build --out-dir pkg-web --target web --release",
+    "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --profiling",
+    "build-bundler": "wasm-pack build --out-dir pkg --target bundler --profiling",
+    "build-web": "wasm-pack build --out-dir pkg-web --target web --profiling",
     "build-slim": "node build_slim.js",
     "copy-e2e": "cp -r pkg-slim/* e2e/server/pkg/"
   },
