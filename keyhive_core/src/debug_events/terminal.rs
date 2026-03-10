@@ -14,7 +14,7 @@ use super::{CgkaOperationDetails, DebugEventDetails, DebugEventTable};
 /// # Example
 /// ```
 /// use keyhive_core::event::Event;
-/// use keyhive_core::crypto::signer::memory::MemorySigner;
+/// use keyhive_crypto::signer::memory::MemorySigner;
 /// use keyhive_core::debug_events::{DebugEventTable, Nicknames, terminal::print_event_table};
 ///
 /// let events: Vec<Event<MemorySigner>> = vec![];

@@ -9,8 +9,6 @@ use super::{
     membered::Membered,
 };
 use crate::{
-    content::reference::ContentRef,
-    crypto::{share_key::ShareKey, signer::async_signer::AsyncSigner, verifiable::Verifiable},
     listener::{membership::MembershipListener, no_listener::NoListener},
     util::content_addressed_map::CaMap,
 };
@@ -20,6 +18,10 @@ use derive_where::derive_where;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use futures::lock::Mutex;
+use keyhive_crypto::{
+    content::reference::ContentRef, share_key::ShareKey, signer::async_signer::AsyncSigner,
+    verifiable::Verifiable,
+};
 use std::{
     collections::{HashMap, HashSet},
     fmt::{Display, Formatter},
@@ -153,14 +155,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
 
     pub async fn key_ops(&self) -> CaMap<KeyOp> {
         match self {
-            Agent::Active(_, a) => a
-                .lock()
-                .await
-                .individual
-                .lock()
-                .await
-                .prekey_ops()
-                .clone(),
+            Agent::Active(_, a) => a.lock().await.individual.lock().await.prekey_ops().clone(),
             Agent::Individual(_, i) => i.lock().await.prekey_ops().clone(),
             Agent::Group(_, g) => {
                 if let IdOrIndividual::Individual(indie) = &g.lock().await.id_or_indie {

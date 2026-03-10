@@ -1,5 +1,5 @@
+use beekem::operation::CgkaOperation;
 use derive_more::{From, Into};
-use keyhive_core::cgka::operation::CgkaOperation;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = CgkaOperation)]

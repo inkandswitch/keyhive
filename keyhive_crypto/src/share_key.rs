@@ -3,9 +3,11 @@
 //! [ECDH]: https://wikipedia.org/wiki/Elliptic-curve_Diffie%E2%80%93Hellman
 
 use super::{separable::Separable, symmetric_key::SymmetricKey};
+use alloc::vec::Vec;
+use core::fmt;
+#[cfg(feature = "std")]
 use dupe::Dupe;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use tracing::instrument;
 
 /// Newtype around [x25519_dalek::PublicKey].
@@ -38,6 +40,7 @@ impl ShareKey {
     }
 }
 
+#[cfg(feature = "std")]
 impl Dupe for ShareKey {
     fn dupe(&self) -> Self {
         Self(self.0)
@@ -46,7 +49,7 @@ impl Dupe for ShareKey {
 
 impl fmt::LowerHex for ShareKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        crate::util::hex::bytes_as_hex(self.0.as_bytes().iter(), f)
+        crate::hex::bytes_as_hex(self.0.as_bytes().iter(), f)
     }
 }
 
@@ -63,13 +66,13 @@ impl fmt::Debug for ShareKey {
 }
 
 impl PartialOrd for ShareKey {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for ShareKey {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.0.as_bytes().cmp(other.0.as_bytes())
     }
 }
@@ -138,7 +141,7 @@ impl ShareSecretKey {
         (0..n).fold(*self, |acc, _| acc.ratchet_forward())
     }
 
-    pub(crate) fn force_from_bytes(bytes: [u8; 32]) -> Self {
+    pub fn force_from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 }
@@ -169,7 +172,7 @@ impl Separable for ShareSecretKey {
 
 impl fmt::LowerHex for ShareSecretKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        crate::util::hex::bytes_as_hex(self.0.iter(), f)
+        crate::hex::bytes_as_hex(self.0.iter(), f)
     }
 }
 

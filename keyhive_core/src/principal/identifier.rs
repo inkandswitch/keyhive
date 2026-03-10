@@ -1,7 +1,7 @@
 //! The universally unique identifier of an [`Agent`](crate::principal::agentAgent).
 
-use crate::crypto::verifiable::Verifiable;
 use dupe::Dupe;
+use keyhive_crypto::verifiable::Verifiable;
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(feature = "test_utils", test))]
@@ -70,7 +70,7 @@ impl std::hash::Hash for Identifier {
 
 impl std::fmt::LowerHex for Identifier {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        crate::util::hex::bytes_as_hex(self.0.as_bytes().iter(), f)
+        keyhive_crypto::hex::bytes_as_hex(self.0.as_bytes().iter(), f)
     }
 }
 

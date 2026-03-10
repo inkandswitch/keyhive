@@ -1,11 +1,9 @@
-use crate::{
-    crypto::verifiable::Verifiable,
-    principal::{
-        document::id::DocumentId, group::id::GroupId, identifier::Identifier,
-        individual::id::IndividualId,
-    },
+use crate::principal::{
+    document::id::DocumentId, group::id::GroupId, identifier::Identifier,
+    individual::id::IndividualId,
 };
 use derive_more::Display;
+use keyhive_crypto::verifiable::Verifiable;
 use serde::{Deserialize, Serialize};
 
 #[derive(

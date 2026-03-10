@@ -1,9 +1,8 @@
 use super::{change_id::JsChangeId, event::JsEvent, signer::JsSigner};
+use beekem::operation::CgkaOperation;
 use derive_more::{From, Into};
 use dupe::Dupe;
 use keyhive_core::{
-    cgka::operation::CgkaOperation,
-    crypto::signed::Signed,
     event::Event,
     listener::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener},
     principal::{
@@ -11,6 +10,7 @@ use keyhive_core::{
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
 };
+use keyhive_crypto::signed::Signed;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 

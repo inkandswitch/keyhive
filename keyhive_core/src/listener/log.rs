@@ -1,18 +1,19 @@
 use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener};
 use crate::{
-    cgka::operation::CgkaOperation,
-    content::reference::ContentRef,
-    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
     event::Event,
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
 };
+use beekem::operation::CgkaOperation;
 use derive_more::{From, Into};
 use derive_where::derive_where;
 use dupe::Dupe;
 use futures::lock::Mutex;
+use keyhive_crypto::{
+    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
+};
 use std::sync::Arc;
 use tracing::instrument;
 

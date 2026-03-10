@@ -4,10 +4,7 @@ use super::{
     revocation::{Revocation, StaticRevocation},
 };
 use crate::{
-    content::reference::ContentRef,
-    crypto::{
-        digest::Digest, signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable,
-    },
+    crypto::signed_ext::SignedSubjectId,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{document::id::DocumentId, identifier::Identifier},
     reversed::Reversed,
@@ -17,6 +14,10 @@ use crate::{
 use derive_more::{From, Into};
 use derive_where::derive_where;
 use dupe::Dupe;
+use keyhive_crypto::{
+    content::reference::ContentRef, digest::Digest, signed::Signed,
+    signer::async_signer::AsyncSigner, verifiable::Verifiable,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
@@ -422,12 +423,12 @@ mod tests {
     use super::*;
     use crate::{
         access::Access,
-        crypto::signer::{memory::MemorySigner, sync_signer::SyncSigner},
         principal::{agent::Agent, individual::Individual},
         store::{delegation::DelegationStore, revocation::RevocationStore},
     };
     use dupe::Dupe;
     use futures::lock::Mutex;
+    use keyhive_crypto::signer::{memory::MemorySigner, sync_signer::SyncSigner};
     use std::sync::{Arc, LazyLock};
 
     // FIXME
@@ -673,9 +674,8 @@ mod tests {
     }
 
     mod topsort {
-        use crate::principal::active::Active;
-
         use super::*;
+        use crate::principal::active::Active;
 
         #[test]
         fn test_empty() {

@@ -11,16 +11,17 @@ use super::{
 };
 use crate::{
     access::Access,
-    content::reference::ContentRef,
-    crypto::{
-        digest::Digest, signed::Signed, signer::async_signer::AsyncSigner, verifiable::Verifiable,
-    },
+    crypto::digest::Digest,
     listener::{membership::MembershipListener, no_listener::NoListener},
     store::{delegation::DelegationStore, revocation::RevocationStore},
 };
 use dupe::{Dupe, OptionDupedExt};
 use futures::lock::Mutex;
 use id::MemberedId;
+use keyhive_crypto::{
+    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
+    verifiable::Verifiable,
+};
 use nonempty::NonEmpty;
 use std::{
     collections::{BTreeMap, HashMap},

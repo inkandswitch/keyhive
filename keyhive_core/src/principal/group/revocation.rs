@@ -3,13 +3,16 @@ use super::{
     dependencies::Dependencies,
 };
 use crate::{
-    content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::signed_ext::SignedSubjectId,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::id::AgentId, document::id::DocumentId, identifier::Identifier},
 };
 use derive_where::derive_where;
 use dupe::Dupe;
+use keyhive_crypto::{
+    content::reference::ContentRef, digest::Digest, signed::Signed,
+    signer::async_signer::AsyncSigner,
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -56,12 +59,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Revocation<S, T
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Signed<Revocation<S, T, L>> {
-    pub fn subject_id(&self) -> Identifier {
-        self.payload.subject_id()
-    }
-}
-
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> std::hash::Hash
     for Revocation<S, T, L>
 {
@@ -99,8 +96,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Revocation
 {
     fn from(revocation: Revocation<S, T, L>) -> Self {
         Self {
-            revoke: Digest::hash(revocation.revoke.as_ref()).into(),
-            proof: revocation.proof.map(|p| Digest::hash(p.as_ref()).into()),
+            revoke: Digest::hash(revocation.revoke.as_ref()).coerce(),
+            proof: revocation.proof.map(|p| Digest::hash(p.as_ref()).coerce()),
             after_content: revocation.after_content,
         }
     }

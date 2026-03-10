@@ -1,9 +1,10 @@
-use crate::{
-    crypto::{share_key::ShareKey, verifiable::Verifiable},
-    principal::individual::{id::IndividualId, op::KeyOp, Individual},
-    util::hex::{self, ToHexString},
-};
+use crate::principal::individual::{id::IndividualId, op::KeyOp, Individual};
 use derive_more::{From, Into};
+use keyhive_crypto::{
+    hex::{self, ToHexString},
+    share_key::ShareKey,
+    verifiable::Verifiable,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, From, Into, Hash, Serialize, Deserialize)]

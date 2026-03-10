@@ -5,23 +5,8 @@ use self::archive::DocumentArchive;
 use super::{group::AddGroupMemberError, individual::id::IndividualId};
 use crate::{
     access::Access,
-    cgka::{
-        error::CgkaError,
-        keys::ShareKeyMap,
-        operation::{CgkaEpoch, CgkaOperation},
-        Cgka,
-    },
-    content::reference::ContentRef,
-    crypto::{
-        digest::Digest,
-        encrypted::EncryptedContent,
-        envelope::Envelope,
-        share_key::{ShareKey, ShareSecretKey},
-        signed::{Signed, SigningError},
-        signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
-        symmetric_key::SymmetricKey,
-        verifiable::Verifiable,
-    },
+    cgka::Cgka,
+    crypto::envelope::Envelope,
     error::missing_dependency::MissingDependency,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
@@ -40,12 +25,27 @@ use crate::{
         revocation::RevocationStore,
     },
 };
+use beekem::{
+    encrypted::EncryptedContent,
+    error::CgkaError,
+    keys::ShareKeyMap,
+    operation::{CgkaEpoch, CgkaOperation},
+};
 use derivative::Derivative;
 use derive_where::derive_where;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use futures::{future::join_all, lock::Mutex};
 use id::DocumentId;
+use keyhive_crypto::{
+    content::reference::ContentRef,
+    digest::Digest,
+    share_key::{ShareKey, ShareSecretKey},
+    signed::{Signed, SigningError},
+    signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
+    symmetric_key::SymmetricKey,
+    verifiable::Verifiable,
+};
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -369,7 +369,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
                     }
                     self.cgka = Some(Cgka::new_from_init_add(
                         self.doc_id(),
-                        added_id,
+                        IndividualId::from(added_id),
                         pk,
                         (*op).clone(),
                     )?)
@@ -403,9 +403,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         {
             return Err(CgkaError::OutOfOrderOperation);
         }
-        let mut owner_sks = self.cgka()?.owner_sks.clone();
+        let mut owner_sks = self.cgka()?.owner_sks().clone();
         owner_sks.insert(pk, *sk);
-        self.cgka = Some(self.cgka()?.with_new_owner(added_id, owner_sks)?);
+        self.cgka = Some(
+            self.cgka()?
+                .with_new_owner(IndividualId::from(added_id), owner_sks)?,
+        );
         self.merge_cgka_op(op)
     }
 

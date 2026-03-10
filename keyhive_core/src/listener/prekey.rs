@@ -1,12 +1,10 @@
 //! Listener for changes to sharing prekeys.
 
-use crate::{
-    crypto::signed::Signed,
-    principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
-};
+use crate::principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
+use keyhive_crypto::signed::Signed;
 use std::sync::Arc;
 
-/// Trait for listening to changes to [prekeys][crate::crypto::share_key::ShareKey].
+/// Trait for listening to changes to [prekeys][keyhive_crypto::share_key::ShareKey].
 ///
 /// This can be helpful for logging, live streaming of changes, gossip, and so on.
 ///

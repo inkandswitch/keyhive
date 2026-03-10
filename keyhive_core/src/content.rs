@@ -1,3 +1,3 @@
 //! The content being protected by Keyhive.
-
-pub mod reference;
+//!
+//! The [`ContentRef`] trait lives in [`keyhive_crypto::content::reference`].

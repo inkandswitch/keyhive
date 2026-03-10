@@ -3,17 +3,15 @@ use super::{
     identifier::Identifier,
     individual::{op::add_key::AddKeyOp, state::PrekeyState, Individual},
 };
-use crate::{
-    content::reference::ContentRef,
-    crypto::{
-        share_key::{ShareKey, ShareSecretKey},
-        signer::{memory::MemorySigner, sync_signer::SyncSigner},
-        verifiable::Verifiable,
-    },
-    listener::prekey::PrekeyListener,
-};
+use crate::listener::prekey::PrekeyListener;
 use dupe::Dupe;
 use futures::lock::Mutex;
+use keyhive_crypto::{
+    content::reference::ContentRef,
+    share_key::{ShareKey, ShareSecretKey},
+    signer::{memory::MemorySigner, sync_signer::SyncSigner},
+    verifiable::Verifiable,
+};
 use std::{collections::BTreeMap, sync::Arc};
 
 /// A well-known agent that can be used by anyone. ⚠ USE WITH CAUTION ⚠

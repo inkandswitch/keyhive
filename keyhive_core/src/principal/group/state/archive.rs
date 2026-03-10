@@ -1,8 +1,7 @@
-use crate::{
-    content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed},
-    principal::group::{delegation::StaticDelegation, id::GroupId, revocation::StaticRevocation},
+use crate::principal::group::{
+    delegation::StaticDelegation, id::GroupId, revocation::StaticRevocation,
 };
+use keyhive_crypto::{content::reference::ContentRef, digest::Digest, signed::Signed};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 

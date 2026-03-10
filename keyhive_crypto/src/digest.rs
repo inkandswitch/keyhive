@@ -1,22 +1,12 @@
 //! Helpers for working with hashes.
 
-use super::{signed::Signed, signer::async_signer::AsyncSigner};
-use crate::{
-    content::reference::ContentRef,
-    event::{static_event::StaticEvent, Event},
-    listener::membership::MembershipListener,
-    principal::group::{
-        delegation::{Delegation, StaticDelegation},
-        membership_operation::{MembershipOperation, StaticMembershipOperation},
-        revocation::{Revocation, StaticRevocation},
-    },
-};
-use serde::{Deserialize, Serialize};
-use std::{
+use alloc::vec::Vec;
+use core::{
     fmt,
     hash::{Hash, Hasher},
     marker::PhantomData,
 };
+use serde::{Deserialize, Serialize};
 
 /// A [`blake3::Hash`] tagged with which type it is a hash of.
 ///
@@ -25,7 +15,7 @@ use std::{
 /// # Examples
 ///
 /// ```
-/// # use keyhive_core::crypto::digest::Digest;
+/// # use keyhive_crypto::digest::Digest;
 /// #
 /// let string_hash: Digest<String> = Digest::hash(&"hello world".to_string());
 /// let array_hash: Digest<[u8; 3]> = Digest::hash(&[1, 2, 3]);
@@ -37,20 +27,23 @@ pub struct Digest<T: Serialize> {
     pub raw: blake3::Hash,
 
     /// A phantom parameter to retain the type of the preimage.
-    pub(crate) _phantom: PhantomData<T>,
+    pub _phantom: PhantomData<T>,
 }
 
 impl<T: Serialize> Digest<T> {
     /// Digest a value and retain its type as a phantom parameter.
     ///
+    /// Requires the `std` feature (uses [`bincode`] for serialization).
+    ///
     /// # Examples
     ///
     /// ```
-    /// # use keyhive_core::crypto::digest::Digest;
+    /// # use keyhive_crypto::digest::Digest;
     /// #
     /// let digest = Digest::hash(&vec![1u8, 2, 3]);
     /// assert_eq!(digest.as_slice().len(), 32);
     /// ```
+    #[cfg(feature = "std")]
     pub fn hash(preimage: &T) -> Self {
         let bytes: Vec<u8> = bincode::serialize(&preimage).expect("unable to serialize to bytes");
 
@@ -65,7 +58,7 @@ impl<T: Serialize> Digest<T> {
     /// # Examples
     ///
     /// ```
-    /// # use keyhive_core::crypto::digest::Digest;
+    /// # use keyhive_crypto::digest::Digest;
     /// #
     /// let digest = Digest::hash(&vec![1u8, 2, 3]);
     /// assert_eq!(
@@ -85,7 +78,7 @@ impl<T: Serialize> Digest<T> {
     /// # Example
     ///
     /// ```
-    /// # use keyhive_core::crypto::digest::Digest;
+    /// # use keyhive_crypto::digest::Digest;
     /// #
     /// let hash = Digest::hash(&"hello world!".to_string());
     /// assert_eq!(hash.trailing_zeros(), 3);
@@ -113,7 +106,7 @@ impl<T: Serialize> Digest<T> {
     /// # Example
     ///
     /// ```
-    /// # use keyhive_core::crypto::digest::Digest;
+    /// # use keyhive_crypto::digest::Digest;
     /// #
     /// let hash = Digest::hash(&"hello world");
     /// assert_eq!(hash.trailing_zero_bytes(), 0);
@@ -132,10 +125,11 @@ impl<T: Serialize> Digest<T> {
         count
     }
 
-    // NOTE a private helper for implementing From instances.
-    // We do this instead of exposing it because only certain hash types
-    // are considered equivalent.
-    fn coerce<U: Serialize>(&self) -> Digest<U> {
+    /// Coerce a `Digest<T>` into a `Digest<U>`, preserving the underlying hash.
+    ///
+    /// This is useful for implementing `From` conversions between digest types
+    /// that are considered equivalent (e.g. static/dynamic variants of the same type).
+    pub fn coerce<U: Serialize>(&self) -> Digest<U> {
         Digest {
             raw: self.raw,
             _phantom: PhantomData,
@@ -143,7 +137,7 @@ impl<T: Serialize> Digest<T> {
     }
 }
 
-#[cfg(any(test, feature = "arbitrary"))]
+#[cfg(all(feature = "std", any(test, feature = "arbitrary")))]
 impl<'a, T: arbitrary::Arbitrary<'a> + Serialize> arbitrary::Arbitrary<'a> for Digest<T> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let preimage = T::arbitrary(u)?;
@@ -196,13 +190,13 @@ impl<T: Serialize> PartialEq for Digest<T> {
 impl<T: Serialize> Eq for Digest<T> {}
 
 impl<T: Serialize> PartialOrd for Digest<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl<T: Serialize> Ord for Digest<T> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.raw.as_bytes().cmp(other.raw.as_bytes())
     }
 }
@@ -246,223 +240,5 @@ impl<T: Serialize> From<Digest<T>> for [u8; 32] {
 impl<T: Serialize> From<Digest<T>> for Vec<u8> {
     fn from(hash: Digest<T>) -> Vec<u8> {
         hash.raw.as_bytes().to_vec()
-    }
-}
-
-// Casts
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<Signed<Delegation<S, T, L>>>> for Digest<Signed<StaticDelegation<T>>>
-{
-    fn from(hash: Digest<Signed<Delegation<S, T, L>>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<Signed<StaticDelegation<T>>>> for Digest<Signed<Delegation<S, T, L>>>
-{
-    fn from(hash: Digest<Signed<StaticDelegation<T>>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<Signed<Revocation<S, T, L>>>> for Digest<Signed<StaticRevocation<T>>>
-{
-    fn from(hash: Digest<Signed<Revocation<S, T, L>>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<Signed<StaticRevocation<T>>>> for Digest<Signed<Revocation<S, T, L>>>
-{
-    fn from(hash: Digest<Signed<StaticRevocation<T>>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<Signed<Delegation<S, T, L>>>> for Digest<Signed<StaticDelegation<T>>>
-{
-    fn from(hash: &Digest<Signed<Delegation<S, T, L>>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<Signed<StaticDelegation<T>>>> for Digest<Signed<Delegation<S, T, L>>>
-{
-    fn from(hash: &Digest<Signed<StaticDelegation<T>>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<Signed<Revocation<S, T, L>>>> for Digest<Signed<StaticRevocation<T>>>
-{
-    fn from(hash: &Digest<Signed<Revocation<S, T, L>>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<Signed<StaticRevocation<T>>>> for Digest<Signed<Revocation<S, T, L>>>
-{
-    fn from(hash: &Digest<Signed<StaticRevocation<T>>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<T: ContentRef> From<Digest<Signed<StaticRevocation<T>>>>
-    for Digest<StaticMembershipOperation<T>>
-{
-    fn from(hash: Digest<Signed<StaticRevocation<T>>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<T: ContentRef> From<Digest<Signed<StaticDelegation<T>>>>
-    for Digest<StaticMembershipOperation<T>>
-{
-    fn from(hash: Digest<Signed<StaticDelegation<T>>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<MembershipOperation<S, T, L>>> for Digest<StaticMembershipOperation<T>>
-{
-    fn from(hash: Digest<MembershipOperation<S, T, L>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<T: ContentRef> From<Digest<StaticMembershipOperation<T>>>
-    for Digest<Signed<StaticDelegation<T>>>
-{
-    fn from(hash: Digest<StaticMembershipOperation<T>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<StaticMembershipOperation<T>>> for Digest<Signed<Delegation<S, T, L>>>
-{
-    fn from(hash: Digest<StaticMembershipOperation<T>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<StaticMembershipOperation<T>>> for Digest<Signed<Revocation<S, T, L>>>
-{
-    fn from(hash: Digest<StaticMembershipOperation<T>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<T: ContentRef> From<Digest<StaticMembershipOperation<T>>>
-    for Digest<Signed<StaticRevocation<T>>>
-{
-    fn from(hash: Digest<StaticMembershipOperation<T>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<StaticMembershipOperation<T>>> for Digest<MembershipOperation<S, T, L>>
-{
-    fn from(hash: Digest<StaticMembershipOperation<T>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<StaticMembershipOperation<T>>> for Digest<MembershipOperation<S, T, L>>
-{
-    fn from(hash: &Digest<StaticMembershipOperation<T>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<MembershipOperation<S, T, L>>> for Digest<Signed<Delegation<S, T, L>>>
-{
-    fn from(hash: Digest<MembershipOperation<S, T, L>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<MembershipOperation<S, T, L>>> for Digest<Signed<Revocation<S, T, L>>>
-{
-    fn from(hash: Digest<MembershipOperation<S, T, L>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<MembershipOperation<S, T, L>>> for Digest<Signed<Delegation<S, T, L>>>
-{
-    fn from(hash: &Digest<MembershipOperation<S, T, L>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<MembershipOperation<S, T, L>>> for Digest<Signed<Revocation<S, T, L>>>
-{
-    fn from(hash: &Digest<MembershipOperation<S, T, L>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<Signed<Delegation<S, T, L>>>> for Digest<MembershipOperation<S, T, L>>
-{
-    fn from(hash: Digest<Signed<Delegation<S, T, L>>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<Signed<Delegation<S, T, L>>>> for Digest<MembershipOperation<S, T, L>>
-{
-    fn from(hash: &Digest<Signed<Delegation<S, T, L>>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<Signed<Revocation<S, T, L>>>> for Digest<MembershipOperation<S, T, L>>
-{
-    fn from(hash: Digest<Signed<Revocation<S, T, L>>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<&Digest<Signed<Revocation<S, T, L>>>> for Digest<MembershipOperation<S, T, L>>
-{
-    fn from(hash: &Digest<Signed<Revocation<S, T, L>>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>
-    From<Digest<MembershipOperation<S, T, L>>> for Digest<Event<S, T, L>>
-{
-    fn from(hash: Digest<MembershipOperation<S, T, L>>) -> Self {
-        hash.coerce()
-    }
-}
-
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Digest<Event<S, T, L>>>
-    for Digest<StaticEvent<T>>
-{
-    fn from(hash: Digest<Event<S, T, L>>) -> Self {
-        hash.coerce()
     }
 }

@@ -4,12 +4,6 @@ use super::{
 };
 use crate::{
     access::Access,
-    content::reference::ContentRef,
-    crypto::{
-        digest::Digest,
-        signed::{Signed, SigningError},
-        signer::async_signer::AsyncSigner,
-    },
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
         agent::{id::AgentId, Agent},
@@ -19,6 +13,14 @@ use crate::{
 };
 use derive_where::derive_where;
 use dupe::Dupe;
+use keyhive_crypto::{
+    content::reference::ContentRef,
+    digest::Digest,
+    signed::{Signed, SigningError},
+    signer::async_signer::AsyncSigner,
+};
+
+use crate::crypto::signed_ext::SignedSubjectId;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, hash::Hash, sync::Arc};
 use thiserror::Error;
@@ -133,18 +135,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Signed<Delegation<S, T, L>> {
-    pub fn subject_id(&self) -> Identifier {
-        let mut head = self;
-
-        while let Some(proof) = &head.payload.proof {
-            head = proof;
-        }
-
-        head.issuer.into()
-    }
-}
-
 impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for Delegation<S, T, L> {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticDelegation::from(self.clone()).serialize(serializer)
@@ -189,12 +179,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Delegation
     fn from(delegation: Delegation<S, T, L>) -> Self {
         Self {
             can: delegation.can,
-            proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).into()),
+            proof: delegation.proof.map(|p| Digest::hash(p.as_ref()).coerce()),
             delegate: delegation.delegate.id(),
             after_revocations: delegation
                 .after_revocations
                 .iter()
-                .map(|revocation| Digest::hash(revocation.as_ref()).into())
+                .map(|revocation| Digest::hash(revocation.as_ref()).coerce())
                 .collect(),
             after_content: delegation.after_content,
         }

@@ -4,13 +4,13 @@ use dupe::Dupe;
 use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
-    crypto::signer::memory::MemorySigner,
     event::static_event::StaticEvent,
     keyhive::Keyhive,
     listener::{log::Log, no_listener::NoListener},
     principal::{agent::Agent, membered::Membered},
     store::ciphertext::memory::MemoryCiphertextStore,
 };
+use keyhive_crypto::signer::memory::MemorySigner;
 use nonempty::nonempty;
 use rand::rngs::OsRng;
 use testresult::TestResult;

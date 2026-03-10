@@ -1,4 +1,4 @@
-use keyhive_core::crypto::{signed::Signed, verifiable::Verifiable};
+use keyhive_crypto::{signed::Signed, verifiable::Verifiable};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;

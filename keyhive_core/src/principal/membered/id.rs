@@ -1,7 +1,5 @@
-use crate::{
-    crypto::verifiable::Verifiable,
-    principal::{document::id::DocumentId, group::id::GroupId, identifier::Identifier},
-};
+use crate::principal::{document::id::DocumentId, group::id::GroupId, identifier::Identifier};
+use keyhive_crypto::verifiable::Verifiable;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 

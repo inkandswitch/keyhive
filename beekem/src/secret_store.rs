@@ -1,17 +1,19 @@
-use super::{
+//! Secret store for inner tree nodes.
+
+use crate::{
+    collections::Set,
+    encrypted::EncryptedSecret,
     error::CgkaError,
     keys::{ConflictKeys, NodeKey, ShareKeyMap},
     treemath::TreeNodeIndex,
 };
-use crate::crypto::{
-    encrypted::EncryptedSecret,
-    share_key::{ShareKey, ShareSecretKey},
-};
+use alloc::collections::BTreeMap;
+use alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::cmp::Ordering;
+use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, HashSet},
-};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
@@ -84,13 +86,12 @@ impl SecretStore {
         self.versions[0].decrypt_secret(child_node_key, child_sks, seen_idxs)
     }
 
-    // TODO: Is it possible we're bringing in duplicate keys here?
-    pub fn merge(&mut self, other: &SecretStore, removed_keys: &HashSet<ShareKey>) {
+    pub fn merge(&mut self, other: &SecretStore, removed_keys: &Set<ShareKey>) {
         self.remove_keys_from(removed_keys);
         self.versions.append(&mut other.versions.clone());
     }
 
-    fn remove_keys_from(&mut self, removed_keys: &HashSet<ShareKey>) {
+    fn remove_keys_from(&mut self, removed_keys: &Set<ShareKey>) {
         if removed_keys.is_empty() {
             return;
         }
@@ -106,22 +107,22 @@ impl SecretStore {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
-pub(crate) struct SecretStoreVersion {
+pub struct SecretStoreVersion {
     /// Every encrypted secret key (and hence version) corresponds to a single public
     /// key.
-    pub(crate) pk: ShareKey,
+    pub pk: ShareKey,
     /// This is a map in order to handle the case of blank siblings, when we must encrypt
     /// the same secret key separately for each public key in the sibling resolution.
-    pub(crate) sk: BTreeMap<TreeNodeIndex, EncryptedSecret<ShareSecretKey>>,
+    pub sk: BTreeMap<TreeNodeIndex, EncryptedSecret<ShareSecretKey>>,
     /// The PublicKey of the child that encrypted this parent.
-    pub(crate) encrypter_pk: ShareKey,
+    pub encrypter_pk: ShareKey,
 }
 
 impl SecretStoreVersion {
-    pub(crate) fn decrypt_secret(
+    pub fn decrypt_secret(
         &self,
         child_node_key: &NodeKey,
-        child_sks: &ShareKeyMap,
+        child_sks: &mut ShareKeyMap,
         seen_idxs: &[TreeNodeIndex],
     ) -> Result<ShareSecretKey, CgkaError> {
         let is_encrypter = child_node_key.contains_key(&self.encrypter_pk);

@@ -4,13 +4,13 @@ pub mod add_key;
 pub mod rotate_key;
 
 use self::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
-use crate::crypto::{
+use derive_more::{From, TryInto};
+use dupe::Dupe;
+use keyhive_crypto::{
     share_key::ShareKey,
     signed::{Signed, VerificationError},
     verifiable::Verifiable,
 };
-use derive_more::{From, TryInto};
-use dupe::Dupe;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},

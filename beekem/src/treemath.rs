@@ -18,19 +18,20 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use std::{
+use alloc::vec;
+use alloc::vec::Vec;
+use core::{
     cmp::Ordering,
     ops::{Add, AddAssign, Sub, SubAssign},
 };
-
 use serde::{Deserialize, Serialize};
 
 /// LeafNodeIndex references a leaf node in a tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LeafNodeIndex(u32);
 
-impl std::fmt::Display for LeafNodeIndex {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for LeafNodeIndex {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!("{:?}", self.0))
     }
 }

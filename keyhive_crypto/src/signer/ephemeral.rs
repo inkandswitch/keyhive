@@ -1,9 +1,10 @@
 //! Ephemeral signers that are only valid for a short period of time.
 
 use super::sync_signer::SyncSignerBasic;
-use crate::crypto::verifiable::Verifiable;
+use crate::verifiable::Verifiable;
+use alloc::boxed::Box;
+use core::future::Future;
 use derive_more::{From, Into};
-use std::future::Future;
 use tracing::instrument;
 
 /// An ephemeral signer that never exposes its signing key.
@@ -12,8 +13,8 @@ use tracing::instrument;
 /// a specified closure. This is useful for initial setup and delegation of a
 /// [`Group`] or [`Document`], where the signing key should then be forgotten.
 ///
-/// [`Document`]: crate::principal::document::Document
-/// [`Group`]: crate::principal::group::Group
+/// [`Document`]: https://docs.rs/keyhive_core/latest/keyhive_core/principal/document/struct.Document.html
+/// [`Group`]: https://docs.rs/keyhive_core/latest/keyhive_core/principal/group/struct.Group.html
 #[derive(Debug, From, Into)]
 pub struct EphemeralSigner(ed25519_dalek::SigningKey);
 
@@ -28,7 +29,7 @@ impl EphemeralSigner {
     /// # Examples
     ///
     /// ```
-    /// use keyhive_core::crypto::{
+    /// use keyhive_crypto::{
     ///     signed::Signed,
     ///     signer::{
     ///         async_signer::AsyncSigner,
@@ -58,7 +59,7 @@ impl EphemeralSigner {
     /// Run an async closure with a randomly generated ephemeral key.
     ///
     /// ```
-    /// use keyhive_core::crypto::{
+    /// use keyhive_crypto::{
     ///     signed::Signed,
     ///     signer::{
     ///         async_signer::AsyncSigner,

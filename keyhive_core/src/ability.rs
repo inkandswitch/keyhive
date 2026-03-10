@@ -2,14 +2,13 @@
 
 use crate::{
     access::Access,
-    content::reference::ContentRef,
-    crypto::signer::async_signer::AsyncSigner,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::document::Document,
 };
 use derive_where::derive_where;
 use dupe::Dupe;
 use futures::lock::Mutex;
+use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::AsyncSigner};
 use std::sync::Arc;
 
 /// [`Ability`] is a helper type for working with [`Document`] access capabilties.

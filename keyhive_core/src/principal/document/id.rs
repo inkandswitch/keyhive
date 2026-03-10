@@ -1,9 +1,7 @@
-use crate::{
-    crypto::verifiable::Verifiable,
-    principal::{identifier::Identifier, membered::id::MemberedId},
-};
+use crate::principal::{identifier::Identifier, membered::id::MemberedId};
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
+use keyhive_crypto::verifiable::Verifiable;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 
@@ -45,6 +43,12 @@ impl From<Identifier> for DocumentId {
 impl From<DocumentId> for MemberedId {
     fn from(id: DocumentId) -> MemberedId {
         MemberedId::DocumentId(id)
+    }
+}
+
+impl From<beekem::id::TreeId> for DocumentId {
+    fn from(tree_id: beekem::id::TreeId) -> Self {
+        DocumentId(tree_id.0.into())
     }
 }
 

@@ -1,8 +1,9 @@
 use crate::{
-    crypto::{digest::Digest, signer::async_signer::AsyncSigner},
+    crypto::{digest::Digest, signed_ext::SignedSubjectId},
     event::Event,
     listener::membership::MembershipListener,
 };
+use keyhive_crypto::signer::async_signer::AsyncSigner;
 use std::collections::HashMap;
 
 mod hash;
@@ -169,7 +170,7 @@ impl DebugEventRow {
                 let doc_id = Hash::new(payload.doc_id().as_bytes(), nicknames);
 
                 let (op_type, op_details) = match payload {
-                    crate::cgka::operation::CgkaOperation::Add {
+                    beekem::operation::CgkaOperation::Add {
                         added_id,
                         pk,
                         leaf_index,
@@ -187,7 +188,7 @@ impl DebugEventRow {
                         };
                         ("Add", op_details)
                     }
-                    crate::cgka::operation::CgkaOperation::Remove {
+                    beekem::operation::CgkaOperation::Remove {
                         id,
                         leaf_idx,
                         removed_keys,
@@ -208,23 +209,20 @@ impl DebugEventRow {
                         };
                         ("Remove", op_details)
                     }
-                    crate::cgka::operation::CgkaOperation::Update {
+                    beekem::operation::CgkaOperation::Update {
                         id,
                         new_path,
                         predecessors,
                         ..
                     } => {
                         let new_keys = match &new_path.leaf_pk {
-                            crate::cgka::keys::NodeKey::ShareKey(share_key) => {
+                            beekem::keys::NodeKey::ShareKey(share_key) => {
                                 vec![Hash::new(share_key.as_bytes(), nicknames)]
                             }
-                            crate::cgka::keys::NodeKey::ConflictKeys(conflict_keys) => {
-                                // For conflict keys, we'll just use the first one for display purposes
-                                conflict_keys
-                                    .iter()
-                                    .map(|k| Hash::new(k.as_bytes(), nicknames))
-                                    .collect()
-                            }
+                            beekem::keys::NodeKey::ConflictKeys(conflict_keys) => conflict_keys
+                                .iter()
+                                .map(|k| Hash::new(k.as_bytes(), nicknames))
+                                .collect(),
                         };
                         let op_details = CgkaOperationDetails::Update {
                             id: Hash::new(id.as_bytes(), nicknames),

@@ -1,15 +1,12 @@
 //! Serializable version of [`Event`][super::Event].
 
-use crate::{
-    cgka::operation::CgkaOperation,
-    content::reference::ContentRef,
-    crypto::signed::Signed,
-    principal::{
-        group::{delegation::StaticDelegation, revocation::StaticRevocation},
-        individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
-    },
+use crate::principal::{
+    group::{delegation::StaticDelegation, revocation::StaticRevocation},
+    individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
 };
+use beekem::operation::CgkaOperation;
 use derive_more::{From, TryInto};
+use keyhive_crypto::{content::reference::ContentRef, signed::Signed};
 use serde::{Deserialize, Serialize};
 
 /// Serailizable version of [`Event`][super::Event].
