@@ -1,9 +1,8 @@
 use crate::{
-    crypto::{signed::SigningError, signer::memory::MemorySigner},
-    keyhive::Keyhive,
-    listener::no_listener::NoListener,
+    keyhive::Keyhive, listener::no_listener::NoListener,
     store::ciphertext::memory::MemoryCiphertextStore,
 };
+use keyhive_crypto::{signed::SigningError, signer::memory::MemorySigner};
 use rand::rngs::OsRng;
 
 pub async fn make_simple_keyhive() -> Result<

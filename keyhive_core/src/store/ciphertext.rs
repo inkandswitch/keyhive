@@ -3,17 +3,12 @@
 pub mod memory;
 
 use self::memory::MemoryCiphertextStore;
-use crate::{
-    cgka::operation::CgkaOperation,
-    content::reference::ContentRef,
-    crypto::{
-        digest::Digest, encrypted::EncryptedContent, envelope::Envelope, signed::Signed,
-        symmetric_key::SymmetricKey,
-    },
-};
+use crate::crypto::{digest::Digest, envelope::Envelope};
+use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
 use derive_where::derive_where;
 use dupe::Dupe;
 use futures::lock::Mutex;
+use keyhive_crypto::{content::reference::ContentRef, signed::Signed, symmetric_key::SymmetricKey};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -360,13 +355,11 @@ pub enum ErrorReason<Cr: ContentRef, T, S: CiphertextStore<Cr, T>> {
 mod tests {
     use super::*;
     use crate::{
-        cgka::operation::CgkaOperation,
-        crypto::{
-            application_secret::PcsKey, digest::Digest, envelope::Envelope,
-            share_key::ShareSecretKey, signed::Signed, siv::Siv,
-        },
+        crypto::{digest::Digest, envelope::Envelope},
         principal::document::id::DocumentId,
     };
+    use beekem::{operation::CgkaOperation, pcs_key::PcsKey};
+    use keyhive_crypto::{share_key::ShareSecretKey, signed::Signed, siv::Siv};
     use rand::rngs::OsRng;
     use std::marker::PhantomData;
     use testresult::TestResult;
@@ -388,7 +381,7 @@ mod tests {
             ancestors,
         };
         let mut bytes = bincode::serialize(&envelope).unwrap();
-        let nonce = Siv::new(&key, bytes.as_slice(), doc_id).unwrap();
+        let nonce = Siv::new(&key, bytes.as_slice(), doc_id.as_bytes());
         key.try_encrypt(nonce, &mut bytes).unwrap();
 
         (

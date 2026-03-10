@@ -1,10 +1,12 @@
 use crate::{
-    content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::digest::Digest,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::group::delegation::{Delegation, StaticDelegation},
 };
 use derive_where::derive_where;
+use keyhive_crypto::{
+    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -41,7 +43,7 @@ impl<S: AsyncSigner, C: ContentRef, L: MembershipListener<S, C>, T: Clone>
         let invoke = invocation.invoke;
         let proof = invocation
             .proof
-            .map(|proof| Digest::hash(proof.as_ref()).into());
+            .map(|proof| Digest::hash(proof.as_ref()).coerce());
 
         Self { invoke, proof }
     }

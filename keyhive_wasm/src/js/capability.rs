@@ -3,10 +3,8 @@ use super::{
     signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use dupe::Dupe;
-use keyhive_core::{
-    crypto::signed::Signed,
-    principal::{agent::Agent, group::delegation::Delegation},
-};
+use keyhive_core::principal::{agent::Agent, group::delegation::Delegation};
+use keyhive_crypto::signed::Signed;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 

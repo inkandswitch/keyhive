@@ -1,14 +1,14 @@
 use super::op::{add_key::AddKeyOp, KeyOp};
 use crate::{
-    crypto::{
-        share_key::{ShareKey, ShareSecretKey},
-        signed::{SigningError, VerificationError},
-        signer::async_signer::AsyncSigner,
-    },
     transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
 use futures::{prelude::*, stream::FuturesUnordered};
+use keyhive_crypto::{
+    share_key::{ShareKey, ShareSecretKey},
+    signed::{SigningError, VerificationError},
+    signer::async_signer::AsyncSigner,
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
 
@@ -160,10 +160,9 @@ impl Merge for PrekeyState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        crypto::signer::sync_signer::SyncSigner, principal::individual::op::rotate_key::RotateKeyOp,
-    };
+    use crate::principal::individual::op::rotate_key::RotateKeyOp;
     use dupe::Dupe;
+    use keyhive_crypto::signer::sync_signer::SyncSigner;
 
     #[test]
     fn test_rebuild() {

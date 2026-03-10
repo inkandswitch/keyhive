@@ -1,9 +1,10 @@
 use super::{delegation::Delegation, revocation::Revocation};
 use crate::{
-    content::reference::ContentRef,
-    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::document::id::DocumentId,
+};
+use keyhive_crypto::{
+    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
 };
 use std::{collections::BTreeMap, hash::Hash, sync::Arc};
 

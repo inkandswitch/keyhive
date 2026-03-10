@@ -23,28 +23,28 @@ use super::{
 };
 use crate::{
     access::Access,
-    cgka::{error::CgkaError, operation::CgkaOperation},
-    content::reference::ContentRef,
-    crypto::{
-        digest::Digest,
-        share_key::ShareKey,
-        signed::{Signed, SigningError},
-        signer::{
-            async_signer::AsyncSigner,
-            ephemeral::EphemeralSigner,
-            sync_signer::{try_sign_basic, SyncSignerBasic},
-        },
-        verifiable::Verifiable,
-    },
     listener::{membership::MembershipListener, no_listener::NoListener},
     store::{delegation::DelegationStore, revocation::RevocationStore},
 };
+use beekem::{error::CgkaError, operation::CgkaOperation};
 use derivative::Derivative;
 use derive_more::Debug;
 use derive_where::derive_where;
 use dupe::{Dupe, IterDupedExt};
 use futures::{lock::Mutex, stream::FuturesUnordered, StreamExt};
 use id::GroupId;
+use keyhive_crypto::{
+    content::reference::ContentRef,
+    digest::Digest,
+    share_key::ShareKey,
+    signed::{Signed, SigningError},
+    signer::{
+        async_signer::AsyncSigner,
+        ephemeral::EphemeralSigner,
+        sync_signer::{try_sign_basic, SyncSignerBasic},
+    },
+    verifiable::Verifiable,
+};
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -838,8 +838,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                 .members
                 .iter()
                 .fold(HashMap::new(), |mut acc, (k, vs)| {
-                    let hashes: Vec<_> =
-                        vs.iter().map(|v| Digest::hash(v.as_ref()).into()).collect();
+                    let hashes: Vec<_> = vs
+                        .iter()
+                        .map(|v| Digest::hash(v.as_ref()).coerce())
+                        .collect();
                     if let Some(ne) = NonEmpty::from_vec(hashes) {
                         acc.insert(*k, ne);
                     }
@@ -916,7 +918,8 @@ pub enum RevokeMemberError {
 #[cfg(test)]
 mod tests {
     use super::{delegation::Delegation, *};
-    use crate::{crypto::signer::memory::MemorySigner, principal::active::Active};
+    use crate::principal::active::Active;
+    use keyhive_crypto::signer::memory::MemorySigner;
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
     use rand::rngs::OsRng;

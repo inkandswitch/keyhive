@@ -1,10 +1,11 @@
 //! In-memory signer.
 
 use super::sync_signer::SyncSigner;
-use crate::crypto::{signed::SigningError, verifiable::Verifiable};
+use crate::{signed::SigningError, verifiable::Verifiable};
+use core::hash::Hash;
+#[cfg(feature = "std")]
 use dupe::Dupe;
 use ed25519_dalek::Signer;
-use std::hash::Hash;
 use tracing::instrument;
 
 /// An in-memory signer.
@@ -19,7 +20,7 @@ use tracing::instrument;
 ///
 /// </div>
 ///
-/// [`AsyncSigner`]: crate::crypto::signer::async_signer::AsyncSigner
+/// [`AsyncSigner`]: crate::signer::async_signer::AsyncSigner
 #[derive(Debug, Clone)]
 pub struct MemorySigner(
     /// Raw underlying Ed25519 signing key.
@@ -36,7 +37,7 @@ impl MemorySigner {
     /// # Examples
     ///
     /// ```
-    /// # use keyhive_core::crypto::{
+    /// # use keyhive_crypto::{
     /// #    signer::memory::MemorySigner,
     /// #    verifiable::Verifiable
     /// # };
@@ -61,11 +62,12 @@ impl SyncSigner for MemorySigner {
 }
 
 impl Hash for MemorySigner {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.verifying_key().hash(state);
     }
 }
 
+#[cfg(feature = "std")]
 impl Dupe for MemorySigner {
     fn dupe(&self) -> Self {
         Self(self.0.clone())

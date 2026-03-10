@@ -1,0 +1,52 @@
+[package]
+name = "keyhive_crypto"
+version = "0.1.0"
+description = "Shared cryptographic primitives for Keyhive"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+blake3 = { version = "1.5", default-features = false }
+chacha20poly1305 = { workspace = true }
+derive_more = { version = "1.0", default-features = false, features = ["debug", "deref", "display", "from", "into", "try_into"] }
+ed25519-dalek = { version = "2.1", default-features = false, features = ["rand_core", "serde"] }
+rand = { version = "0.8.5", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
+signature = { workspace = true }
+tracing = { version = "0.1.40", default-features = false, features = ["attributes"] }
+x25519-dalek = { workspace = true }
+
+# std-only dependencies
+bincode = { workspace = true, optional = true }
+dupe = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+
+arbitrary = { workspace = true, optional = true }
+
+[dev-dependencies]
+arbitrary = { workspace = true }
+tokio = { version = "1.43", features = ["macros", "rt"] }
+
+[features]
+default = ["std"]
+std = [
+    "bincode",
+    "blake3/std",
+    "derive_more/std",
+    "dupe",
+    "ed25519-dalek/std",
+    "rand/std",
+    "rand/std_rng",
+    "serde/std",
+    "serde/rc",
+    "thiserror",
+    "tracing/std",
+]
+arbitrary = ["dep:arbitrary"]
+
+[lints.clippy]
+doc_overindented_list_items = "allow"

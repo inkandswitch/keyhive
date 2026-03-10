@@ -2,12 +2,9 @@
 //!
 //! [Ed25519]: https://en.wikipedia.org/wiki/EdDSA#Ed25519
 
-use crate::crypto::{
-    signed::{Signed, SigningError},
-    verifiable::Verifiable,
-};
-use serde::Serialize;
-use tracing::instrument;
+use crate::{signed::SigningError, verifiable::Verifiable};
+#[cfg(feature = "std")]
+use {crate::signed::Signed, alloc::vec::Vec, serde::Serialize, tracing::instrument};
 
 #[allow(async_fn_in_trait)]
 /// Async [Ed25519] signer trait.
@@ -36,7 +33,7 @@ pub trait AsyncSigner: Verifiable {
     /// # Examples
     ///
     /// ```
-    /// use keyhive_core::crypto::{
+    /// use keyhive_crypto::{
     ///    signed::Signed,
     ///    signer::{
     ///        async_signer::AsyncSigner,
@@ -61,6 +58,8 @@ pub trait AsyncSigner: Verifiable {
     /// This helper automatically serializes using [`bincode`], signs the resulting bytes,
     /// and wraps the result in [`Signed`].
     ///
+    /// Requires the `std` feature.
+    ///
     /// # Arguments
     ///
     /// * `payload` - The payload to serialize and sign.
@@ -68,7 +67,7 @@ pub trait AsyncSigner: Verifiable {
     /// # Examples
     ///
     /// ```
-    /// use keyhive_core::crypto::{
+    /// use keyhive_crypto::{
     ///     signed::Signed,
     ///     signer::{
     ///         async_signer::AsyncSigner,
@@ -87,8 +86,9 @@ pub trait AsyncSigner: Verifiable {
     ///     assert_eq!(*sig.unwrap().payload(), payload);
     /// }
     /// ```
+    #[cfg(feature = "std")]
     #[instrument(skip_all)]
-    async fn try_sign_async<T: Serialize + std::fmt::Debug>(
+    async fn try_sign_async<T: Serialize + core::fmt::Debug>(
         &self,
         payload: T,
     ) -> Result<Signed<T>, SigningError> {
@@ -105,13 +105,12 @@ pub trait AsyncSigner: Verifiable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::signer::memory::MemorySigner;
+    use crate::signer::memory::MemorySigner;
 
     #[tokio::test]
     async fn test_round_trip() {
-        test_utils::init_logging();
         let sk = MemorySigner::generate(&mut rand::thread_rng());
-        let signed = sk.try_sign_async(vec![1, 2, 3]).await.unwrap();
+        let signed = sk.try_sign_async(alloc::vec![1, 2, 3]).await.unwrap();
         assert!(signed.try_verify().is_ok());
     }
 }

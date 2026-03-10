@@ -4,17 +4,8 @@ use crate::{
     ability::Ability,
     access::Access,
     archive::Archive,
-    cgka::{error::CgkaError, operation::CgkaOperation},
     contact_card::ContactCard,
-    content::reference::ContentRef,
-    crypto::{
-        digest::Digest,
-        encrypted::EncryptedContent,
-        share_key::ShareKey,
-        signed::{Signed, SigningError, VerificationError},
-        signer::async_signer::AsyncSigner,
-        verifiable::Verifiable,
-    },
+    crypto::signed_ext::{SignedId, SignedSubjectId},
     error::missing_dependency::MissingDependency,
     event::{static_event::StaticEvent, Event},
     listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
@@ -50,15 +41,24 @@ use crate::{
         delegation::DelegationStore,
         revocation::RevocationStore,
     },
-    util::content_addressed_map::CaMap,
     transact::{
         fork::ForkAsync,
         merge::{Merge, MergeAsync},
     },
+    util::content_addressed_map::CaMap,
 };
+use beekem::{encrypted::EncryptedContent, error::CgkaError, operation::CgkaOperation};
 use derive_where::derive_where;
 use dupe::{Dupe, OptionDupedExt};
 use futures::lock::Mutex;
+use keyhive_crypto::{
+    content::reference::ContentRef,
+    digest::Digest,
+    share_key::ShareKey,
+    signed::{Signed, SigningError, VerificationError},
+    signer::async_signer::AsyncSigner,
+    verifiable::Verifiable,
+};
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -412,13 +412,13 @@ impl<
         &self,
         digest: &Digest<MembershipOperation<S, T, L>>,
     ) -> Option<MembershipOperation<S, T, L>> {
-        if let Some(d) = self.delegations.lock().await.get(&digest.into()) {
+        if let Some(d) = self.delegations.lock().await.get(&digest.coerce()) {
             Some(d.dupe().into())
         } else {
             self.revocations
                 .lock()
                 .await
-                .get(&digest.into())
+                .get(&digest.coerce())
                 .map(|r| r.dupe().into())
         }
     }
@@ -635,7 +635,7 @@ impl<
             .membership_ops_for_agent(agent)
             .await
             .into_iter()
-            .map(|(op_digest, op)| (op_digest.into(), op.into()))
+            .map(|(op_digest, op)| (op_digest.coerce(), op.into()))
             .collect();
 
         for key_ops in self.reachable_prekey_ops_for_agent(agent).await.values() {
@@ -662,7 +662,7 @@ impl<
             .events_for_agent(agent)
             .await?
             .into_iter()
-            .map(|(k, v)| (k.into(), v.into()))
+            .map(|(k, v)| (k.coerce(), v.into()))
             .collect())
     }
 
@@ -717,11 +717,11 @@ impl<
 
         for (mem_rc, _max_acces) in self.membered_reachable_by_agent(agent).await.values() {
             for (hash, dlg_head) in mem_rc.delegation_heads().await.iter() {
-                heads.push((hash.into(), dlg_head.dupe().into()));
+                heads.push((hash.coerce(), dlg_head.dupe().into()));
             }
 
             for (hash, rev_head) in mem_rc.revocation_heads().await.iter() {
-                heads.push((hash.into(), rev_head.dupe().into()));
+                heads.push((hash.coerce(), rev_head.dupe().into()));
             }
         }
 
@@ -733,7 +733,8 @@ impl<
             .get_revocations_for_agent(&agent.agent_id())
         {
             for rev in agent_revocations {
-                let hash: Digest<MembershipOperation<S, T, L>> = Digest::hash(rev.as_ref()).into();
+                let hash: Digest<MembershipOperation<S, T, L>> =
+                    Digest::hash(rev.as_ref()).coerce();
                 heads.push((hash, rev.into()));
             }
         }
@@ -749,17 +750,17 @@ impl<
             match op {
                 MembershipOperation::Delegation(dlg) => {
                     if let Some(proof) = &dlg.payload.proof {
-                        heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
+                        heads.push((Digest::hash(proof.as_ref()).coerce(), proof.dupe().into()));
                     }
 
                     for rev in dlg.payload.after_revocations.iter() {
-                        heads.push((Digest::hash(rev.as_ref()).into(), rev.dupe().into()));
+                        heads.push((Digest::hash(rev.as_ref()).coerce(), rev.dupe().into()));
                     }
 
                     // If this delegation is to a group, include the group's delegation heads
                     if let Agent::Group(_group_id, group) = &dlg.payload.delegate {
                         for dlg in group.lock().await.delegation_heads().values() {
-                            let dlg_hash = Digest::hash(dlg.as_ref()).into();
+                            let dlg_hash = Digest::hash(dlg.as_ref()).coerce();
                             if !visited_hashes.contains(&dlg_hash) {
                                 heads.push((dlg_hash, dlg.dupe().into()));
                             }
@@ -768,11 +769,11 @@ impl<
                 }
                 MembershipOperation::Revocation(rev) => {
                     if let Some(proof) = &rev.payload.proof {
-                        heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
+                        heads.push((Digest::hash(proof.as_ref()).coerce(), proof.dupe().into()));
                     }
 
                     let r = rev.payload.revoke.dupe();
-                    heads.push((Digest::hash(r.as_ref()).into(), r.into()));
+                    heads.push((Digest::hash(r.as_ref()).coerce(), r.into()));
                 }
             }
         }
@@ -838,7 +839,14 @@ impl<
         // Add the agents own keys
         add_many_keys(&mut map, agent.id(), agent.key_ops().await);
 
-        let groups = { self.groups.lock().await.values().cloned().collect::<Vec<_>>() };
+        let groups = {
+            self.groups
+                .lock()
+                .await
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
         for group in groups {
             let (group_id, transitive) = {
                 let locked = group.lock().await;
@@ -998,7 +1006,7 @@ impl<
     ) -> Result<Delegation<S, T, L>, StaticEventConversionError<S, T, L>> {
         let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
             if let Some(proof_hash) = static_dlg.payload().proof {
-                let hash = proof_hash.into();
+                let hash = proof_hash.coerce();
                 Some(
                     self.delegations
                         .lock()
@@ -1018,7 +1026,7 @@ impl<
 
         let mut after_revocations = Vec::new();
         for static_rev_hash in static_dlg.payload().after_revocations.iter() {
-            let rev_hash = static_rev_hash.into();
+            let rev_hash = static_rev_hash.coerce();
             let resolved_rev = self
                 .revocations
                 .lock()
@@ -1042,7 +1050,7 @@ impl<
         &self,
         static_rev: &Signed<StaticRevocation<T>>,
     ) -> Result<Revocation<S, T, L>, StaticEventConversionError<S, T, L>> {
-        let revoke_hash = static_rev.payload.revoke.into();
+        let revoke_hash = static_rev.payload.revoke.coerce();
         let revoke: Arc<Signed<Delegation<S, T, L>>> = self
             .delegations
             .lock()
@@ -1052,7 +1060,7 @@ impl<
 
         let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
             if let Some(proof_hash) = static_rev.payload().proof {
-                let hash = proof_hash.into();
+                let hash = proof_hash.coerce();
                 Some(
                     self.delegations
                         .lock()
@@ -1127,7 +1135,7 @@ impl<
             .delegations
             .lock()
             .await
-            .contains_key(&Digest::hash(static_dlg).into())
+            .contains_key(&Digest::hash(static_dlg).coerce())
         {
             return Ok(());
         }
@@ -1140,7 +1148,7 @@ impl<
 
         let mut after_revocations = Vec::new();
         for static_rev_hash in static_dlg.payload().after_revocations.iter() {
-            let rev_hash = static_rev_hash.into();
+            let rev_hash = static_rev_hash.coerce();
             let locked_revs = self.revocations.lock().await;
             let resolved_rev = locked_revs
                 .get(&rev_hash)
@@ -1224,7 +1232,7 @@ impl<
             .revocations
             .lock()
             .await
-            .contains_key(&Digest::hash(static_rev).into())
+            .contains_key(&Digest::hash(static_rev).coerce())
         {
             return Ok(());
         }
@@ -1325,17 +1333,18 @@ impl<
     ) -> Result<(), ReceiveCgkaOpError> {
         signed_op.try_verify()?;
 
-        let doc_id = signed_op.payload.doc_id();
+        let doc_id: DocumentId = (*signed_op.payload.doc_id()).into();
         let doc = {
             let locked_docs = self.docs.lock().await;
             locked_docs
-                .get(doc_id)
-                .ok_or(ReceiveCgkaOpError::UnknownDocument(*doc_id))?
+                .get(&doc_id)
+                .ok_or(ReceiveCgkaOpError::UnknownDocument(doc_id))?
                 .dupe()
         };
 
         let signed_op = Arc::new(signed_op);
         if let CgkaOperation::Add { added_id, pk, .. } = signed_op.payload {
+            let added_id: IndividualId = added_id.into();
             let locked_active = self.active.lock().await;
             let active_id = locked_active.id();
             if active_id == added_id {
@@ -1449,7 +1458,7 @@ impl<
             MembershipOperation::<S, T, L>::reverse_topsort(&delegations, &revocations)
                 .into_iter()
                 .rev()
-                .map(|(k, v)| (k.into(), v.into()))
+                .map(|(k, v)| (k.coerce(), v.into()))
                 .collect()
         };
 
@@ -1552,8 +1561,8 @@ impl<
                 StaticMembershipOperation::Delegation(sd) => {
                     let proof: Option<Arc<Signed<Delegation<S, T, L>>>> =
                         if let Some(proof_digest) = sd.payload.proof {
-                            Some(delegations.lock().await.get(&proof_digest.into()).ok_or(
-                                TryFromArchiveError::MissingDelegation(proof_digest.into()),
+                            Some(delegations.lock().await.get(&proof_digest.coerce()).ok_or(
+                                TryFromArchiveError::MissingDelegation(proof_digest.coerce()),
                             )?)
                         } else {
                             None
@@ -1564,8 +1573,8 @@ impl<
                         let r: Arc<Signed<Revocation<S, T, L>>> = revocations
                             .lock()
                             .await
-                            .get(&rev_digest.into())
-                            .ok_or(TryFromArchiveError::MissingRevocation(rev_digest.into()))?
+                            .get(&rev_digest.coerce())
+                            .ok_or(TryFromArchiveError::MissingRevocation(rev_digest.coerce()))?
                             .dupe();
 
                         after_revocations.push(r);
@@ -1607,19 +1616,18 @@ impl<
                     let revoke = delegations
                         .lock()
                         .await
-                        .get(&sr.payload.revoke.into())
+                        .get(&sr.payload.revoke.coerce())
                         .ok_or(TryFromArchiveError::MissingDelegation(
-                            sr.payload.revoke.into(),
+                            sr.payload.revoke.coerce(),
                         ))?;
 
-                    let proof =
-                        if let Some(proof_digest) = sr.payload.proof {
-                            Some(delegations.lock().await.get(&proof_digest.into()).ok_or(
-                                TryFromArchiveError::MissingDelegation(proof_digest.into()),
-                            )?)
-                        } else {
-                            None
-                        };
+                    let proof = if let Some(proof_digest) = sr.payload.proof {
+                        Some(delegations.lock().await.get(&proof_digest.coerce()).ok_or(
+                            TryFromArchiveError::MissingDelegation(proof_digest.coerce()),
+                        )?)
+                    } else {
+                        None
+                    };
 
                     revocations.lock().await.insert(Arc::new(Signed {
                         issuer: sr.issuer,
@@ -1648,8 +1656,8 @@ impl<
 
             for dlg_hash in dlg_head_hashes.iter() {
                 let actual_dlg: Arc<Signed<Delegation<Z, U, M>>> = read_dlgs
-                    .get(&dlg_hash.into())
-                    .ok_or(TryFromArchiveError::MissingDelegation(dlg_hash.into()))?
+                    .get(&dlg_hash.coerce())
+                    .ok_or(TryFromArchiveError::MissingDelegation(dlg_hash.coerce()))?
                     .dupe();
 
                 group.state.delegation_heads.insert(actual_dlg);
@@ -1657,8 +1665,8 @@ impl<
 
             for rev_hash in rev_head_hashes.iter() {
                 let actual_rev = read_revs
-                    .get(&rev_hash.into())
-                    .ok_or(TryFromArchiveError::MissingRevocation(rev_hash.into()))?;
+                    .get(&rev_hash.coerce())
+                    .ok_or(TryFromArchiveError::MissingRevocation(rev_hash.coerce()))?;
                 group.state.revocation_heads.insert(actual_rev.dupe());
             }
 
@@ -1696,7 +1704,7 @@ impl<
                 group_archive
                     .members
                     .iter()
-                    .map(|(k, v)| (*k, v.clone().map(|x| x.into())))
+                    .map(|(k, v)| (*k, v.clone().map(|x| x.coerce())))
                     .collect(),
             )
             .await?;
@@ -1719,7 +1727,7 @@ impl<
                     .group
                     .members
                     .iter()
-                    .map(|(k, v)| (*k, v.clone().map(|x| x.into())))
+                    .map(|(k, v)| (*k, v.clone().map(|x| x.coerce())))
                     .collect(),
             )
             .await?;
@@ -2270,10 +2278,8 @@ pub enum ReceiveEventError<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        access::Access, crypto::signer::memory::MemorySigner, principal::public::Public,
-        transact::transact_async,
-    };
+    use crate::{access::Access, principal::public::Public, transact::transact_async};
+    use keyhive_crypto::signer::memory::MemorySigner;
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
     use testresult::TestResult;

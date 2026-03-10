@@ -1,61 +1,83 @@
 //! Wrap data in signatures.
 
 use super::verifiable::Verifiable;
-use crate::principal::identifier::Identifier;
-use derivative::Derivative;
-use dupe::Dupe;
-use ed25519_dalek::Verifier;
-use serde::{Deserialize, Serialize};
-use std::{
+#[cfg(feature = "std")]
+use alloc::vec::Vec;
+use core::{
     cmp::Ordering,
-    fmt::Debug,
+    fmt::{self, Debug},
     hash::{Hash, Hasher},
 };
+#[cfg(feature = "std")]
+use dupe::Dupe;
+#[cfg(feature = "std")]
+use ed25519_dalek::Verifier;
+use serde::{Deserialize, Serialize};
+#[cfg(feature = "std")]
 use thiserror::Error;
+#[cfg(feature = "std")]
 use tracing::instrument;
 
 /// A wrapper to add a signature and signer information to an arbitrary payload.
-#[derive(Clone, Derivative, Serialize, Deserialize)]
-#[derivative(Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Signed<T: Serialize + Debug> {
     /// The data that was signed.
-    #[derivative(PartialEq = "ignore", Hash = "ignore")]
-    pub(crate) payload: T,
+    pub payload: T,
 
     /// The verifying key of the signer (for verifying the signature).
-    #[derivative(Debug(format_with = "format_key"))]
-    pub(crate) issuer: ed25519_dalek::VerifyingKey,
+    pub issuer: ed25519_dalek::VerifyingKey,
 
     /// The signature of the payload, which can be verified by the `verifying_key`.
-    #[derivative(Hash(hash_with = "hash_signature"))]
-    #[derivative(Debug(format_with = "format_sig"))]
-    pub(crate) signature: ed25519_dalek::Signature,
+    pub signature: ed25519_dalek::Signature,
 }
 
-fn format_sig(sig: &ed25519_dalek::Signature, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    crate::util::hex::bytes_as_hex(sig.to_bytes().iter(), f)
+impl<T: Serialize + Debug> Debug for Signed<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Signed")
+            .field("payload", &self.payload)
+            .field("issuer", &format_args!("{}", HexKey(&self.issuer)))
+            .field("signature", &format_args!("{}", HexSig(&self.signature)))
+            .finish()
+    }
 }
 
-fn format_key(
-    key: &ed25519_dalek::VerifyingKey,
-    f: &mut std::fmt::Formatter<'_>,
-) -> std::fmt::Result {
-    crate::util::hex::bytes_as_hex(key.as_bytes().iter(), f)
+struct HexSig<'a>(&'a ed25519_dalek::Signature);
+
+impl fmt::Display for HexSig<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        crate::hex::bytes_as_hex(self.0.to_bytes().iter(), f)
+    }
 }
 
-fn hash_signature<H: Hasher>(signature: &ed25519_dalek::Signature, state: &mut H) {
-    signature.to_bytes().hash(state);
+struct HexKey<'a>(&'a ed25519_dalek::VerifyingKey);
+
+impl fmt::Display for HexKey<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        crate::hex::bytes_as_hex(self.0.as_bytes().iter(), f)
+    }
+}
+
+/// Equality is based on issuer + signature only (payload is ignored).
+impl<T: Serialize + Debug> PartialEq for Signed<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.issuer == other.issuer && self.signature == other.signature
+    }
+}
+
+impl<T: Serialize + Debug> Eq for Signed<T> {}
+
+/// Hash is based on issuer + signature bytes (payload is ignored).
+impl<T: Serialize + Debug> Hash for Signed<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.issuer.hash(state);
+        self.signature.to_bytes().hash(state);
+    }
 }
 
 impl<T: Serialize + Debug> Signed<T> {
     /// Getter for the payload.
     pub fn payload(&self) -> &T {
         &self.payload
-    }
-
-    /// Getter for the [`Identifier`] of the signer.
-    pub fn id(&self) -> Identifier {
-        self.verifying_key().into()
     }
 
     /// Getter for the verifying key of the signer.
@@ -70,17 +92,21 @@ impl<T: Serialize + Debug> Signed<T> {
 
     /// Verify the payload and signature against the issuer's verifying key.
     ///
+    /// Requires the `std` feature (uses [`bincode`] for serialization).
+    ///
     /// # Examples
     ///
     /// ```
-    /// # use keyhive_core::crypto::signed::Signed;
-    /// # use keyhive_core::crypto::signer::memory::MemorySigner;
-    /// # use keyhive_core::crypto::signer::sync_signer::SyncSigner;
+    /// # use keyhive_crypto::{
+    /// #     signed::Signed,
+    /// #     signer::{memory::MemorySigner, sync_signer::SyncSigner},
+    /// # };
     /// #
     /// let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
     /// let signed = signer.try_sign_sync("Hello, world!").unwrap();
     /// assert!(signed.try_verify().is_ok());
     /// ```
+    #[cfg(feature = "std")]
     #[instrument(skip(self))]
     pub fn try_verify(&self) -> Result<(), VerificationError> {
         let buf: Vec<u8> = bincode::serialize(&self.payload)?;
@@ -89,10 +115,8 @@ impl<T: Serialize + Debug> Signed<T> {
             .verify(buf.as_slice(), &self.signature)?)
     }
 
-    /// Map over the paylaod of the signed data.
-    ///
-    /// This is primarily useful if you need to
-    pub(crate) fn map<U: Serialize + Debug, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
+    /// Map over the payload of the signed data.
+    pub fn map<U: Serialize + Debug, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
         Signed {
             payload: f(self.payload),
             issuer: self.issuer,
@@ -101,10 +125,10 @@ impl<T: Serialize + Debug> Signed<T> {
     }
 }
 
-#[cfg(any(test, feature = "arbitrary"))]
+#[cfg(all(feature = "std", any(test, feature = "arbitrary")))]
 mod arb {
+    use core::fmt::Debug;
     use signature::SignerMut;
-    use std::fmt::Debug;
 
     fn arb_signing_key(
         unstructured: &mut arbitrary::Unstructured,
@@ -167,6 +191,7 @@ impl<T: Serialize + Ord + Debug> Ord for Signed<T> {
     }
 }
 
+#[cfg(feature = "std")]
 impl<T: Dupe + Serialize + Debug> Dupe for Signed<T> {
     fn dupe(&self) -> Self {
         Signed {
@@ -183,6 +208,7 @@ impl<T: Serialize + Debug> Verifiable for Signed<T> {
     }
 }
 
+#[cfg(feature = "std")]
 #[derive(Debug, Error)]
 pub enum VerificationError {
     #[error("Signature verification failed: {0}")]
@@ -192,6 +218,31 @@ pub enum VerificationError {
     SerializationFailed(#[from] bincode::Error),
 }
 
+#[cfg(not(feature = "std"))]
+#[derive(Debug)]
+pub enum VerificationError {
+    SignatureVerificationFailed(signature::Error),
+}
+
+#[cfg(not(feature = "std"))]
+impl fmt::Display for VerificationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SignatureVerificationFailed(e) => {
+                write!(f, "Signature verification failed: {e}")
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "std"))]
+impl From<signature::Error> for VerificationError {
+    fn from(e: signature::Error) -> Self {
+        Self::SignatureVerificationFailed(e)
+    }
+}
+
+#[cfg(feature = "std")]
 #[derive(Debug, Error)]
 pub enum SigningError {
     #[error("Signing failed: {0}")]
@@ -199,4 +250,26 @@ pub enum SigningError {
 
     #[error("Payload serialization failed: {0}")]
     SerializationFailed(#[from] bincode::Error),
+}
+
+#[cfg(not(feature = "std"))]
+#[derive(Debug)]
+pub enum SigningError {
+    SigningFailed(ed25519_dalek::SignatureError),
+}
+
+#[cfg(not(feature = "std"))]
+impl fmt::Display for SigningError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SigningFailed(e) => write!(f, "Signing failed: {e}"),
+        }
+    }
+}
+
+#[cfg(not(feature = "std"))]
+impl From<ed25519_dalek::SignatureError> for SigningError {
+    fn from(e: ed25519_dalek::SignatureError) -> Self {
+        Self::SigningFailed(e)
+    }
 }

@@ -5,13 +5,11 @@ use super::{
 };
 use dupe::Dupe;
 use futures::lock::Mutex;
-use keyhive_core::{
-    crypto::signed::Signed,
-    principal::{
-        document::id::DocumentId,
-        group::{delegation::Delegation, dependencies::Dependencies, revocation::Revocation},
-    },
+use keyhive_core::principal::{
+    document::id::DocumentId,
+    group::{delegation::Delegation, dependencies::Dependencies, revocation::Revocation},
 };
+use keyhive_crypto::signed::Signed;
 use std::{collections::BTreeMap, sync::Arc};
 use wasm_bindgen::prelude::*;
 

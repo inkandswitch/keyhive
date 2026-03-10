@@ -3,10 +3,8 @@ use super::{
     signer::JsSigner,
 };
 use dupe::Dupe;
-use keyhive_core::{
-    crypto::{signed::Signed, verifiable::Verifiable},
-    principal::group::revocation::Revocation,
-};
+use keyhive_core::principal::group::revocation::Revocation;
+use keyhive_crypto::{signed::Signed, verifiable::Verifiable};
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 

@@ -1,5 +1,5 @@
 use super::{signed::JsSigned, signing_error::JsSigningError};
-use keyhive_core::crypto::{
+use keyhive_crypto::{
     signed::SigningError, signer::async_signer::AsyncSigner, verifiable::Verifiable,
 };
 use thiserror::Error;

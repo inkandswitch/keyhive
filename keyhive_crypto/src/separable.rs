@@ -16,7 +16,7 @@ pub trait Separable: Sized {
     /// # Examples
     ///
     /// ```
-    /// # use keyhive_core::crypto::{
+    /// # use keyhive_crypto::{
     /// #    separable::Separable,
     /// #    symmetric_key::SymmetricKey
     /// # };
@@ -31,7 +31,7 @@ pub trait Separable: Sized {
     /// # Examples
     ///
     /// ```
-    /// # use keyhive_core::crypto::{
+    /// # use keyhive_crypto::{
     /// #    separable::Separable,
     /// #    symmetric_key::SymmetricKey
     /// # };

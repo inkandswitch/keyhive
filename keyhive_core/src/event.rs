@@ -4,12 +4,6 @@ pub mod static_event;
 
 use self::static_event::StaticEvent;
 use crate::{
-    cgka::operation::CgkaOperation,
-    content::reference::ContentRef,
-    crypto::{
-        digest::Digest, encrypted::EncryptedContent, signed::Signed,
-        signer::async_signer::AsyncSigner,
-    },
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
         document::id::DocumentId,
@@ -21,9 +15,14 @@ use crate::{
     },
     store::ciphertext::CiphertextStore,
 };
+use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
 use derive_more::{From, TryInto};
 use derive_where::derive_where;
 use dupe::Dupe;
+use keyhive_crypto::{
+    content::reference::ContentRef, digest::Digest, signed::Signed,
+    signer::async_signer::AsyncSigner,
+};
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
 use tracing::instrument;
@@ -60,12 +59,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> 
         for event in new_events {
             if let Event::CgkaOperation(op) = event {
                 let op_digest = Digest::hash(op.as_ref());
-                let doc_id = op.payload.doc_id();
+                let doc_id: DocumentId = (*op.payload.doc_id()).into();
                 let more = ciphertext_store
                     .get_ciphertext_by_pcs_update(&op_digest)
                     .await?;
 
-                acc.entry(*doc_id).or_default().extend(more.into_iter());
+                acc.entry(doc_id).or_default().extend(more.into_iter());
             }
         }
 
@@ -146,19 +145,21 @@ mod tests {
     use super::*;
     use crate::{
         access::Access,
-        crypto::{
-            share_key::ShareKey,
-            signer::{memory::MemorySigner, sync_signer::SyncSigner},
-            siv::Siv,
-            symmetric_key::SymmetricKey,
-        },
         principal::{
             agent::Agent,
             individual::{id::IndividualId, Individual},
         },
         store::ciphertext::memory::MemoryCiphertextStore,
     };
+    use beekem::id::{MemberId, TreeId};
     use futures::lock::Mutex;
+    use keyhive_crypto::{
+        share_key::ShareKey,
+        signer::{memory::MemorySigner, sync_signer::SyncSigner},
+        siv::Siv,
+        symmetric_key::SymmetricKey,
+        verifiable::Verifiable,
+    };
     use rand::rngs::OsRng;
     use std::collections::BTreeMap;
     use test_utils::init_logging;
@@ -174,29 +175,29 @@ mod tests {
         let doc_id2 = DocumentId::generate(&mut csprng);
 
         let cgka_op_1 = signer.try_sign_sync(CgkaOperation::Add {
-            added_id: IndividualId::generate(&mut csprng),
+            added_id: MemberId(IndividualId::generate(&mut csprng).verifying_key()),
             pk: ShareKey::generate(&mut csprng),
             leaf_index: 42,
             predecessors: vec![],
             add_predecessors: vec![],
-            doc_id: doc_id1,
+            doc_id: TreeId(doc_id1.verifying_key()),
         })?;
 
         let cgka_op_2 = signer.try_sign_sync(CgkaOperation::Remove {
-            id: IndividualId::generate(&mut csprng),
+            id: MemberId(IndividualId::generate(&mut csprng).verifying_key()),
             leaf_idx: 4,
             predecessors: vec![],
             removed_keys: vec![],
-            doc_id: doc_id2,
+            doc_id: TreeId(doc_id2.verifying_key()),
         })?;
 
         let cgka_op_3 = signer.try_sign_sync(CgkaOperation::Add {
-            added_id: IndividualId::generate(&mut csprng),
+            added_id: MemberId(IndividualId::generate(&mut csprng).verifying_key()),
             pk: ShareKey::generate(&mut csprng),
             leaf_index: 11,
             predecessors: vec![],
             add_predecessors: vec![],
-            doc_id: doc_id1,
+            doc_id: TreeId(doc_id1.verifying_key()),
         })?;
 
         let hash1 = Digest::hash(&cgka_op_1);
@@ -226,7 +227,11 @@ mod tests {
         ];
 
         let ciphertext1 = Arc::new(EncryptedContent::new(
-            Siv::new(&SymmetricKey::generate(&mut csprng), &[4, 5, 6], doc_id1)?,
+            Siv::new(
+                &SymmetricKey::generate(&mut csprng),
+                &[4, 5, 6],
+                doc_id1.as_bytes(),
+            ),
             vec![4, 5, 6],
             [1u8; 32].into(),
             hash1,
@@ -235,7 +240,11 @@ mod tests {
         ));
 
         let ciphertext2 = Arc::new(EncryptedContent::new(
-            Siv::new(&SymmetricKey::generate(&mut csprng), &[1, 2, 3], doc_id2)?,
+            Siv::new(
+                &SymmetricKey::generate(&mut csprng),
+                &[1, 2, 3],
+                doc_id2.as_bytes(),
+            ),
             vec![1, 2, 3],
             [2u8; 32].into(),
             hash2,
@@ -250,7 +259,11 @@ mod tests {
         // Should not show up in updates
         store
             .insert(Arc::new(EncryptedContent::new(
-                Siv::new(&SymmetricKey::generate(&mut csprng), &[0], doc_id1)?,
+                Siv::new(
+                    &SymmetricKey::generate(&mut csprng),
+                    &[0],
+                    doc_id1.as_bytes(),
+                ),
                 vec![0],
                 [3u8; 32].into(),
                 hash3,

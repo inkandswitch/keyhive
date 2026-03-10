@@ -1,13 +1,10 @@
-//! Encryption keys, key derivation, and associated metadata.
+//! PCS keys and application secrets for content encryption.
 
-use super::signed::Signed;
-use crate::{
-    cgka::operation::CgkaOperation,
-    content::reference::ContentRef,
-    crypto::{
-        digest::Digest, encrypted::EncryptedContent, separable::Separable,
-        share_key::ShareSecretKey, siv::Siv, symmetric_key::SymmetricKey,
-    },
+use crate::{encrypted::EncryptedContent, operation::CgkaOperation};
+use alloc::{format, vec::Vec};
+use keyhive_crypto::{
+    content::reference::ContentRef, digest::Digest, separable::Separable,
+    share_key::ShareSecretKey, signed::Signed, siv::Siv, symmetric_key::SymmetricKey,
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -51,11 +48,6 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
     }
 
     /// Encrypt some plaintext.
-    ///
-    /// # Arguments
-    ///
-    /// * `plaintext` - The plaintext to encrypt.
-    /// ```
     pub fn try_encrypt<T>(
         &self,
         plaintext: &[u8],
@@ -83,8 +75,9 @@ impl PcsKey {
         Self(share_secret_key)
     }
 
+    /// Derive an [`ApplicationSecret`] from this PCS key.
     #[instrument]
-    pub(crate) fn derive_application_secret<Cr: ContentRef>(
+    pub fn derive_application_secret<Cr: ContentRef>(
         &self,
         nonce: &Siv,
         content_ref: &Cr,

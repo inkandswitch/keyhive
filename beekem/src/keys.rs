@@ -1,16 +1,18 @@
+//! Share key management for CGKA tree nodes.
+
 use crate::{
-    crypto::{
-        encrypted::EncryptedSecret,
-        share_key::{ShareKey, ShareSecretKey},
-    },
-    transact::{fork::Fork, merge::Merge},
+    encrypted::EncryptedSecret,
+    error::CgkaError,
+    transact::{Fork, Merge},
 };
+use alloc::collections::BTreeMap;
+use alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
+use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
-use super::error::CgkaError;
-
-/// A [`ShareKeyMap`] is used to store the secret keys for all of the public keys
+/// A [`ShareKeyMap`] stores the secret keys for all of the public keys
 /// on your path that you have encountered so far (either because you added them
 /// to your path as part of an update or decrypted them when decrypting your path).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -67,12 +69,13 @@ impl Merge for ShareKeyMap {
     }
 }
 
-impl std::hash::Hash for ShareKeyMap {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl core::hash::Hash for ShareKeyMap {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.0.keys().for_each(|k| k.hash(state));
     }
 }
 
+/// A node key can be either a single share key or a set of conflict keys.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum NodeKey {
@@ -110,8 +113,8 @@ impl ConflictKeys {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &ShareKey> {
-        std::iter::once(&self.first)
-            .chain(std::iter::once(&self.second))
+        core::iter::once(&self.first)
+            .chain(core::iter::once(&self.second))
             .chain(self.more.iter())
     }
 }
@@ -157,11 +160,10 @@ impl NodeKey {
     ///
     /// # Arguments
     ///
-    /// * `self`
-    /// * `new_key` —  The new key to merge into the existing keys.
-    /// * `removed` —  The keys removed as part of a [`PathChange`](super::beekem::PathChange).
-    ///                It's possible that `self` will be one of those,
-    ///                in which case a new key is substituted.
+    /// * `new_key` — The new key to merge into the existing keys.
+    /// * `removed` — The keys removed as part of a [`PathChange`](crate::tree::PathChange).
+    ///               It's possible that `self` will be one of those,
+    ///               in which case a new key is substituted.
     pub fn merge(&self, new_key: &NodeKey, removed: &[ShareKey]) -> Self {
         match self {
             NodeKey::ShareKey(key) => {

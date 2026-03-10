@@ -8,7 +8,6 @@ use self::op::KeyOp;
 use super::{agent::id::AgentId, document::id::DocumentId};
 use crate::{
     contact_card::ContactCard,
-    crypto::{share_key::ShareKey, signed::VerificationError, verifiable::Verifiable},
     transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
@@ -16,6 +15,7 @@ use derivative::Derivative;
 use derive_more::Debug;
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
+use keyhive_crypto::{share_key::ShareKey, signed::VerificationError, verifiable::Verifiable};
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
 use std::{collections::HashSet, sync::Arc};
@@ -23,7 +23,7 @@ use thiserror::Error;
 use tracing::instrument;
 
 #[cfg(any(feature = "test_utils", test))]
-use crate::crypto::{signed::SigningError, signer::async_signer::AsyncSigner};
+use keyhive_crypto::{signed::SigningError, signer::async_signer::AsyncSigner};
 
 #[cfg(any(feature = "test_utils", test))]
 use std::num::NonZeroUsize;
@@ -231,9 +231,8 @@ fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        crypto::signer::sync_signer::SyncSigner, principal::individual::op::add_key::AddKeyOp,
-    };
+    use crate::principal::individual::op::add_key::AddKeyOp;
+    use keyhive_crypto::signer::sync_signer::SyncSigner;
 
     #[test]
     fn test_to_bytes() {

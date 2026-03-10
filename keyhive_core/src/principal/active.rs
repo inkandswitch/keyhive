@@ -15,13 +15,6 @@ use super::{
 };
 use crate::{
     access::Access,
-    content::reference::ContentRef,
-    crypto::{
-        share_key::{ShareKey, ShareSecretKey},
-        signed::{Signed, SigningError},
-        signer::async_signer::AsyncSigner,
-        verifiable::Verifiable,
-    },
     listener::{log::Log, no_listener::NoListener, prekey::PrekeyListener},
     principal::{
         agent::id::AgentId,
@@ -36,6 +29,13 @@ use crate::{
 use derivative::Derivative;
 use dupe::Dupe;
 use futures::{lock::Mutex, prelude::*};
+use keyhive_crypto::{
+    content::reference::ContentRef,
+    share_key::{ShareKey, ShareSecretKey},
+    signed::{Signed, SigningError},
+    signer::async_signer::AsyncSigner,
+    verifiable::Verifiable,
+};
 use serde::Serialize;
 use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
 use thiserror::Error;
@@ -357,7 +357,7 @@ pub enum ShareError {
     #[error("Encryption failed: {0}")]
     EncryptionFailed(chacha20poly1305::Error),
 
-    /// [`Siv`][crate::crypto::siv::Siv] construction failed with an IO error.
+    /// [`Siv`][keyhive_crypto::siv::Siv] construction failed with an IO error.
     #[error("Siv error: {0}")]
     SivError(std::io::Error),
 }
@@ -377,7 +377,7 @@ pub enum ActiveDelegationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::signer::memory::MemorySigner;
+    use keyhive_crypto::signer::memory::MemorySigner;
 
     #[tokio::test]
     async fn test_seal() {

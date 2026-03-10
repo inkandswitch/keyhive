@@ -1,4 +1,4 @@
-//! Signing keys and helpers.
+//! Signer traits and implementations.
 
 pub mod async_signer;
 pub mod ephemeral;

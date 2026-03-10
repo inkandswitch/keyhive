@@ -1,5 +1,5 @@
-use crate::crypto::share_key::ShareKey;
 use dupe::Dupe;
+use keyhive_crypto::share_key::ShareKey;
 use serde::{Deserialize, Serialize};
 
 /// Add a new key to the prekeys.

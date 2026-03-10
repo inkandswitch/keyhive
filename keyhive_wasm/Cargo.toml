@@ -13,8 +13,10 @@ rust-version.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
+beekem = { path = "../beekem" }
 from_js_ref = "0.1.3"
 keyhive_core = { path = "../keyhive_core" }
+keyhive_crypto = { path = "../keyhive_crypto" }
 wasm_refgen = "0.1.5"
 
 base64-simd = "0.8.0"

@@ -1,13 +1,15 @@
 //! [`Delegation`] storage.
 
 use crate::{
-    content::reference::ContentRef,
-    crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
+    crypto::digest::Digest,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::group::delegation::Delegation,
     util::content_addressed_map::CaMap,
 };
 use derive_where::derive_where;
+use keyhive_crypto::{
+    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
+};
 use std::sync::Arc;
 
 /// [`Delegation`] storage.

@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use super::{base64::Base64, change_id::JsChangeId};
+use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
 use keyhive_core::{
-    cgka::operation::CgkaOperation,
-    crypto::{digest::Digest, encrypted::EncryptedContent, signed::Signed},
+    crypto::digest::Digest,
     store::ciphertext::{memory::MemoryCiphertextStore, CiphertextStore},
 };
+use keyhive_crypto::signed::Signed;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 

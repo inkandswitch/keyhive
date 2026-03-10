@@ -1,9 +1,7 @@
 //! Nonce-misuse resistant initialization vector.
 
 use super::{domain_separator::SEPARATOR, symmetric_key::SymmetricKey};
-use crate::principal::document::id::DocumentId;
 use serde::{Deserialize, Serialize};
-use std::io::Read;
 
 /// Nonce-misuse resistant initialization vector.
 ///
@@ -31,21 +29,17 @@ use std::io::Read;
 pub struct Siv([u8; 24]);
 
 impl Siv {
-    pub fn new(
-        key: &SymmetricKey,
-        plaintext: &[u8],
-        doc_id: DocumentId,
-    ) -> Result<Self, std::io::Error> {
+    pub fn new(key: &SymmetricKey, plaintext: &[u8], doc_id: &[u8]) -> Siv {
         let mut hasher = blake3::Hasher::new();
         hasher.update(SEPARATOR);
-        hasher.update(doc_id.as_slice());
+        hasher.update(doc_id);
         hasher.update(key.as_slice());
         hasher.update(plaintext);
 
         let mut buf = [0; 24];
-        hasher.finalize_xof().read_exact(&mut buf)?;
+        hasher.finalize_xof().fill(&mut buf);
 
-        Ok(Siv(buf))
+        Siv(buf)
     }
 
     /// Convert to a [`chacha20poly1305::XNonce`].

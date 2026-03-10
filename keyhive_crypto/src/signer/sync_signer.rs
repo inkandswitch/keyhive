@@ -1,23 +1,23 @@
 //! Synchronous signer trait.
 
 use super::async_signer::AsyncSigner;
-use crate::{
-    crypto::{
-        signed::{Signed, SigningError},
-        verifiable::Verifiable,
-    },
-    util::hex::ToHexString,
-};
+use crate::{signed::SigningError, verifiable::Verifiable};
 use ed25519_dalek::Signer;
-use serde::Serialize;
-use tracing::{info, instrument};
+use tracing::instrument;
+#[cfg(feature = "std")]
+use {
+    crate::{hex::ToHexString, signed::Signed},
+    alloc::vec::Vec,
+    serde::Serialize,
+    tracing::info,
+};
 
 /// Synchronous signer trait. This is the primary sync signer API.
 ///
 /// This trait is primarily used for the [`MemorySigner`],
 /// but any synchronous signer can implement this trait.
 ///
-/// [`MemorySigner`]: crate::crypto::signer::memory::MemorySigner
+/// [`MemorySigner`]: crate::signer::memory::MemorySigner
 pub trait SyncSigner: Verifiable {
     /// Sign a byte slice synchronously.
     ///
@@ -28,7 +28,7 @@ pub trait SyncSigner: Verifiable {
     /// # Examples
     ///
     /// ```
-    /// use keyhive_core::crypto::{
+    /// use keyhive_crypto::{
     ///     signed::Signed,
     ///     signer::{
     ///         memory::MemorySigner,
@@ -50,6 +50,8 @@ pub trait SyncSigner: Verifiable {
     /// This helper automatically serializes using [`bincode`], signs the resulting bytes,
     /// and wraps the result in [`Signed`].
     ///
+    /// Requires the `std` feature.
+    ///
     /// # Arguments
     ///
     /// * `payload` - The payload to serialize and sign.
@@ -57,13 +59,13 @@ pub trait SyncSigner: Verifiable {
     /// # Examples
     ///
     /// ```
-    ///  use keyhive_core::crypto::{
-    ///      signed::Signed,
-    ///      signer::{
-    ///          memory::MemorySigner,
-    ///          sync_signer::SyncSigner
-    ///      }
-    ///  };
+    /// use keyhive_crypto::{
+    ///     signed::Signed,
+    ///     signer::{
+    ///         memory::MemorySigner,
+    ///         sync_signer::SyncSigner
+    ///     }
+    /// };
     ///
     /// let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
     ///
@@ -73,7 +75,8 @@ pub trait SyncSigner: Verifiable {
     /// assert!(sig.is_ok());
     /// assert_eq!(*sig.unwrap().payload(), payload);
     /// ```
-    fn try_sign_sync<T: Serialize + std::fmt::Debug>(
+    #[cfg(feature = "std")]
+    fn try_sign_sync<T: Serialize + core::fmt::Debug>(
         &self,
         payload: T,
     ) -> Result<Signed<T>, SigningError> {
@@ -120,7 +123,7 @@ pub trait SyncSignerBasic {
     /// # Examples
     ///
     /// ```
-    /// # use keyhive_core::crypto::{
+    /// # use keyhive_crypto::{
     /// #   signed::Signed,
     /// #   signer::{
     /// #     memory::MemorySigner,
@@ -149,8 +152,11 @@ impl<T: SyncSigner> SyncSignerBasic for T {
 }
 
 /// Wrapper to lift the result of a low-level [`SyncSignerBasic`] into [`Signed`].
+///
+/// Requires the `std` feature (uses [`bincode`] for serialization).
+#[cfg(feature = "std")]
 #[instrument(skip_all, fields(issuer = issuer.to_hex_string()))]
-pub fn try_sign_basic<S: SyncSignerBasic + ?Sized, T: Serialize + std::fmt::Debug>(
+pub fn try_sign_basic<S: SyncSignerBasic + ?Sized, T: Serialize + core::fmt::Debug>(
     signer: &S,
     issuer: ed25519_dalek::VerifyingKey,
     payload: T,
