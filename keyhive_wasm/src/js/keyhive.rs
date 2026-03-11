@@ -507,7 +507,8 @@ impl JsKeyhive {
                 let digest = Digest::hash(&event);
                 let hash = js_sys::Uint8Array::from(digest.as_slice());
                 let static_event = StaticEvent::from(event);
-                let bytes = bincode::serialize(&static_event).map_err(JsSerializationError::from)?;
+                let bytes =
+                    bincode::serialize(&static_event).map_err(JsSerializationError::from)?;
                 let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
                 events_map.set(&hash.clone().into(), &js_bytes.into());
                 source_hashes.push(&hash.into());
@@ -530,9 +531,21 @@ impl JsKeyhive {
 
         let result = js_sys::Object::new();
         let _ = js_sys::Reflect::set(&result, &JsValue::from_str("events"), &events_map.into());
-        let _ = js_sys::Reflect::set(&result, &JsValue::from_str("prekeySources"), &prekey_sources_map.into());
-        let _ = js_sys::Reflect::set(&result, &JsValue::from_str("agentPrekeySources"), &agent_prekey_sources_map.into());
-        let _ = js_sys::Reflect::set(&result, &JsValue::from_str("agentMembershipHashes"), &agent_membership_hashes_map.into());
+        let _ = js_sys::Reflect::set(
+            &result,
+            &JsValue::from_str("prekeySources"),
+            &prekey_sources_map.into(),
+        );
+        let _ = js_sys::Reflect::set(
+            &result,
+            &JsValue::from_str("agentPrekeySources"),
+            &agent_prekey_sources_map.into(),
+        );
+        let _ = js_sys::Reflect::set(
+            &result,
+            &JsValue::from_str("agentMembershipHashes"),
+            &agent_membership_hashes_map.into(),
+        );
 
         Ok(result.into())
     }
@@ -605,6 +618,18 @@ impl JsKeyhive {
         let doc = self.0.get_document(doc_id.0).await?;
         let mems = { doc.lock().await.transitive_members().await };
         mems.get(&id.0).map(|(_, access)| JsAccess(*access))
+    }
+
+    #[wasm_bindgen(js_name = exportPrekeySecrets)]
+    pub async fn export_prekey_secrets(&self) -> Box<[u8]> {
+        init_span!("JsKeyhive::export_prekey_secrets");
+        self.0.export_prekey_secrets().await.into_boxed_slice()
+    }
+
+    #[wasm_bindgen(js_name = importPrekeySecrets)]
+    pub async fn import_prekey_secrets(&mut self, bytes: &[u8]) -> Result<(), JsSerializationError> {
+        init_span!("JsKeyhive::import_prekey_secrets");
+        self.0.import_prekey_secrets(bytes).await.map_err(JsSerializationError::from)
     }
 
     #[wasm_bindgen(js_name = intoArchive)]

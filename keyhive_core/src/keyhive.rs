@@ -2270,6 +2270,14 @@ impl<
         group
     }
 
+    pub async fn export_prekey_secrets(&self) -> Vec<u8> {
+        self.active.lock().await.export_prekey_secrets().await
+    }
+
+    pub async fn import_prekey_secrets(&self, bytes: &[u8]) -> Result<(), bincode::Error> {
+        self.active.lock().await.import_prekey_secrets(bytes).await
+    }
+
     #[instrument(skip_all)]
     pub async fn into_archive(&self) -> Archive<T> {
         let topsorted_ops = {
