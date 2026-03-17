@@ -32,7 +32,7 @@ pub struct Signed<T: Serialize + Debug> {
     /// The signature of the payload, which can be verified by the `verifying_key`.
     pub signature: ed25519_dalek::Signature,
 
-    /// Digest hash (computed lazily on first access).
+    /// Digest hash (computed eagerly on construction).
     #[cfg(feature = "std")]
     #[serde(skip)]
     digest_hash: OnceLock<[u8; 32]>,
@@ -102,19 +102,22 @@ impl<T: Clone + Serialize + Debug> Clone for Signed<T> {
 }
 
 impl<T: Serialize + Debug> Signed<T> {
-    /// Create a new [`Signed`]. The digest hash will be computed lazily.
+    /// Create a new [`Signed`]. The digest hash will be computed eagerly.
     pub fn new(
         payload: T,
         issuer: ed25519_dalek::VerifyingKey,
         signature: ed25519_dalek::Signature,
     ) -> Self {
-        Self {
+        let signed = Self {
             payload,
             issuer,
             signature,
             #[cfg(feature = "std")]
             digest_hash: OnceLock::new(),
-        }
+        };
+        #[cfg(feature = "std")]
+        let _ = signed.digest();
+        signed
     }
 
     /// Getter for the payload.

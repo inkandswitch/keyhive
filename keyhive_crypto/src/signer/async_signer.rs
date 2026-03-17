@@ -95,9 +95,6 @@ pub trait AsyncSigner: Verifiable {
         let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
         let signature = self.try_sign_bytes_async(payload_bytes.as_slice()).await?;
         let signed = Signed::new(payload, self.verifying_key(), signature);
-        // Pre-compute the digest
-        let _ = signed.digest();
-
         Ok(signed)
     }
 }

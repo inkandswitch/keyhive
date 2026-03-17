@@ -83,9 +83,6 @@ pub trait SyncSigner: Verifiable {
         let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
         let signature = self.try_sign_bytes_sync(payload_bytes.as_slice())?;
         let signed = Signed::new(payload, self.verifying_key(), signature);
-        // Pre-compute the digest
-        let _ = signed.digest();
-
         Ok(signed)
     }
 }
@@ -165,8 +162,5 @@ pub fn try_sign_basic<S: SyncSignerBasic + ?Sized, T: Serialize + core::fmt::Deb
     let signature = signer.try_sign_bytes_sync_basic(bytes.as_slice())?;
     info!("signature: {:0x?}", signature.to_bytes());
     let signed = Signed::new(payload, issuer, signature);
-    // Pre-compute the digest
-    let _ = signed.digest();
-
     Ok(signed)
 }
