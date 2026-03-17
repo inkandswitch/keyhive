@@ -71,6 +71,9 @@ use std::{
 use thiserror::Error;
 use tracing::instrument;
 
+type MembershipOpMap<S, T, L> =
+    HashMap<Digest<MembershipOperation<S, T, L>>, MembershipOperation<S, T, L>>;
+
 /// Reachable prekey ops for all agents, with shared storage.
 ///
 /// Instead of duplicating topsorted key ops across agents, the ops are stored
@@ -97,6 +100,53 @@ impl AllReachablePrekeyOps {
         &self,
         agent_id: &Identifier,
     ) -> Option<impl Iterator<Item = &Arc<KeyOp>>> {
+        self.index.get(agent_id).map(|ids| {
+            ids.iter()
+                .filter_map(|id| self.ops.get(id))
+                .flat_map(|ops| ops.iter())
+        })
+    }
+}
+
+/// Membership ops for all agents, with shared storage.
+///
+/// Instead of computing BFS per agent (which repeats work for agents sharing
+/// groups/docs), the BFS is computed once per source (group, doc, or agent)
+/// and each agent has an index into the shared source sets.
+#[derive_where(Debug; T)]
+pub struct AllMembershipOps<
+    S: AsyncSigner,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<S, T> = NoListener,
+> {
+    /// Membership ops per source (group, doc, or agent), computed once.
+    pub ops: HashMap<Identifier, MembershipOpMap<S, T, L>>,
+
+    /// For each agent: the set of source identifiers whose ops are reachable.
+    pub index: HashMap<Identifier, HashSet<Identifier>>,
+}
+
+#[allow(clippy::type_complexity)]
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> AllMembershipOps<S, T, L> {
+    /// Returns the set of agent identifiers that have reachable ops.
+    pub fn agents(&self) -> impl Iterator<Item = &Identifier> {
+        self.index.keys()
+    }
+
+    /// Returns an iterator over all reachable membership ops for the given agent
+    /// (flattened across all source identifiers), or `None` if the agent is not
+    /// in the index. May contain duplicates if sources share sub-chains.
+    pub fn ops_for_agent(
+        &self,
+        agent_id: &Identifier,
+    ) -> Option<
+        impl Iterator<
+            Item = (
+                &Digest<MembershipOperation<S, T, L>>,
+                &MembershipOperation<S, T, L>,
+            ),
+        >,
+    > {
         self.index.get(agent_id).map(|ids| {
             ids.iter()
                 .filter_map(|id| self.ops.get(id))
@@ -826,6 +876,209 @@ impl<
         ops
     }
 
+    /// Compute membership ops for all agents in a single pass.
+    ///
+    /// Instead of calling `membership_ops_for_agent` per agent (which repeats
+    /// the BFS for shared groups/docs), this iterates each group/doc once,
+    /// does a single BFS from its delegation/revocation heads, and maps the
+    /// results to all transitive members. Ops are stored per source (group,
+    /// doc, or agent) and each agent's index points to the sources it can reach.
+    pub async fn membership_ops_for_all_agents(&self) -> AllMembershipOps<S, T, L> {
+        let mut ops: HashMap<Identifier, MembershipOpMap<S, T, L>> = HashMap::new();
+        let mut index: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
+
+        // Phase 1: For each group, collect heads (while holding lock), then BFS
+        let groups = {
+            self.groups
+                .lock()
+                .await
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        for group in &groups {
+            let (group_id, heads, transitive) = {
+                let locked = group.lock().await;
+                (
+                    locked.group_id(),
+                    Self::collect_membership_heads(
+                        locked.delegation_heads(),
+                        locked.revocation_heads(),
+                    ),
+                    locked.transitive_members().await,
+                )
+            };
+            let source_id: Identifier = group_id.into();
+            ops.insert(source_id, Self::bfs_membership_ops(heads).await);
+
+            for agent_id in transitive.keys() {
+                index.entry(*agent_id).or_default().insert(source_id);
+            }
+        }
+
+        // Phase 2: Same for docs
+        let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
+        for doc in &docs {
+            let (doc_id, heads, transitive) = {
+                let locked = doc.lock().await;
+                (
+                    locked.doc_id(),
+                    Self::collect_membership_heads(
+                        locked.delegation_heads(),
+                        locked.revocation_heads(),
+                    ),
+                    locked.transitive_members().await,
+                )
+            };
+            let source_id: Identifier = doc_id.into();
+            ops.insert(source_id, Self::bfs_membership_ops(heads).await);
+
+            for agent_id in transitive.keys() {
+                index.entry(*agent_id).or_default().insert(source_id);
+            }
+        }
+
+        // Phase 3: Include agent-specific revocations that may not be reachable
+        // from group/doc heads. These go under the agent's own identifier as source.
+        {
+            let revocations = self.revocations.lock().await;
+            for (agent_id, agent_revs) in revocations.all_agent_revocations() {
+                let identifier: Identifier = (*agent_id).into();
+                if index.contains_key(&identifier) {
+                    let agent_ops = ops.entry(identifier).or_default();
+                    let mut visited: HashSet<Digest<MembershipOperation<S, T, L>>> =
+                        agent_ops.keys().copied().collect();
+                    for rev in agent_revs {
+                        let hash: Digest<MembershipOperation<S, T, L>> =
+                            Digest::hash(rev.as_ref()).into();
+                        if visited.insert(hash) {
+                            agent_ops.entry(hash).or_insert_with(|| rev.dupe().into());
+                            Self::bfs_extend_from_revocation(rev, agent_ops, &mut visited).await;
+                        }
+                    }
+                    if !agent_ops.is_empty() {
+                        index.entry(identifier).or_default().insert(identifier);
+                    }
+                }
+            }
+        }
+
+        AllMembershipOps { ops, index }
+    }
+
+    /// Collect BFS starting heads from delegation/revocation stores.
+    /// This should be cheap (Arc clones + digest copies).
+    #[allow(clippy::type_complexity)]
+    fn collect_membership_heads(
+        dlg_heads: &DelegationStore<S, T, L>,
+        rev_heads: &RevocationStore<S, T, L>,
+    ) -> Vec<(
+        Digest<MembershipOperation<S, T, L>>,
+        MembershipOperation<S, T, L>,
+    )> {
+        let mut heads = Vec::with_capacity(dlg_heads.len() + rev_heads.len());
+        for (hash, dlg_head) in dlg_heads.iter() {
+            heads.push((hash.into(), dlg_head.dupe().into()));
+        }
+        for (hash, rev_head) in rev_heads.iter() {
+            heads.push((hash.into(), rev_head.dupe().into()));
+        }
+        heads
+    }
+
+    /// BFS from delegation/revocation heads, collecting all reachable membership ops.
+    #[allow(clippy::type_complexity)]
+    async fn bfs_membership_ops(
+        mut heads: Vec<(
+            Digest<MembershipOperation<S, T, L>>,
+            MembershipOperation<S, T, L>,
+        )>,
+    ) -> HashMap<Digest<MembershipOperation<S, T, L>>, MembershipOperation<S, T, L>> {
+        let mut ops = HashMap::new();
+        let mut visited: HashSet<Digest<MembershipOperation<S, T, L>>> = HashSet::new();
+
+        while let Some((hash, op)) = heads.pop() {
+            if visited.contains(&hash) {
+                continue;
+            }
+            visited.insert(hash);
+            ops.insert(hash, op.clone());
+
+            match op {
+                MembershipOperation::Delegation(dlg) => {
+                    if let Some(proof) = &dlg.payload.proof {
+                        heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
+                    }
+                    for rev in dlg.payload.after_revocations.iter() {
+                        heads.push((Digest::hash(rev.as_ref()).into(), rev.dupe().into()));
+                    }
+                    if let Agent::Group(_group_id, group) = &dlg.payload.delegate {
+                        for dlg in group.lock().await.delegation_heads().values() {
+                            let dlg_hash = Digest::hash(dlg.as_ref()).into();
+                            if !visited.contains(&dlg_hash) {
+                                heads.push((dlg_hash, dlg.dupe().into()));
+                            }
+                        }
+                    }
+                }
+                MembershipOperation::Revocation(rev) => {
+                    if let Some(proof) = &rev.payload.proof {
+                        heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
+                    }
+                    let r = rev.payload.revoke.dupe();
+                    heads.push((Digest::hash(r.as_ref()).into(), r.into()));
+                }
+            }
+        }
+
+        ops
+    }
+
+    /// Follow a revocation's proof and revoke chains, adding new ops.
+    async fn bfs_extend_from_revocation(
+        rev: &Arc<Signed<Revocation<S, T, L>>>,
+        all_ops: &mut MembershipOpMap<S, T, L>,
+        visited: &mut HashSet<Digest<MembershipOperation<S, T, L>>>,
+    ) {
+        #[allow(clippy::type_complexity)]
+        let mut heads: Vec<(
+            Digest<MembershipOperation<S, T, L>>,
+            MembershipOperation<S, T, L>,
+        )> = Vec::new();
+
+        if let Some(proof) = &rev.payload.proof {
+            heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
+        }
+        let r = rev.payload.revoke.dupe();
+        heads.push((Digest::hash(r.as_ref()).into(), r.into()));
+
+        while let Some((hash, op)) = heads.pop() {
+            if visited.contains(&hash) {
+                continue;
+            }
+            visited.insert(hash);
+            all_ops.entry(hash).or_insert_with(|| op.clone());
+
+            match op {
+                MembershipOperation::Delegation(dlg) => {
+                    if let Some(proof) = &dlg.payload.proof {
+                        heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
+                    }
+                    for rev in dlg.payload.after_revocations.iter() {
+                        heads.push((Digest::hash(rev.as_ref()).into(), rev.dupe().into()));
+                    }
+                }
+                MembershipOperation::Revocation(rev) => {
+                    if let Some(proof) = &rev.payload.proof {
+                        heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
+                    }
+                    let r = rev.payload.revoke.dupe();
+                    heads.push((Digest::hash(r.as_ref()).into(), r.into()));
+                }
+            }
+        }
+    }
+
     #[instrument(skip_all)]
     pub async fn reachable_prekey_ops_for_agent(
         &self,
@@ -936,6 +1189,7 @@ impl<
         type TransitiveMembers<S, T, L> = HashMap<Identifier, (Agent<S, T, L>, Access)>;
 
         // For each group: (group_id, group_arc, transitive_members)
+        #[allow(clippy::type_complexity)]
         let mut group_data: Vec<(
             GroupId,
             Arc<Mutex<Group<S, T, L>>>,
@@ -950,6 +1204,7 @@ impl<
         }
 
         // For each doc: (doc_id, doc_arc, transitive_members)
+        #[allow(clippy::type_complexity)]
         let mut doc_data: Vec<(
             DocumentId,
             Arc<Mutex<Document<S, T, L>>>,
@@ -3263,7 +3518,10 @@ mod tests {
         let active_agent: Agent<_, _, _> = alice.active().lock().await.clone().into();
         let active_id: Identifier = active_agent.id();
         let active_all_ops = all_results.ops_for_agent(&active_id);
-        assert!(active_all_ops.is_some(), "active agent should be in all_results");
+        assert!(
+            active_all_ops.is_some(),
+            "active agent should be in all_results"
+        );
         let active_per_agent_ops = alice.reachable_prekey_ops_for_agent(&active_agent).await;
         let active_indexed_ids = &all_results.index[&active_id];
         let mut active_all_keys: Vec<_> = active_indexed_ids.iter().collect();
@@ -3336,10 +3594,7 @@ mod tests {
             }
             if let Some(indie) = alice.get_individual((*agent_id).into()).await {
                 let per_agent_ops = alice
-                    .reachable_prekey_ops_for_agent(&Agent::Individual(
-                        (*agent_id).into(),
-                        indie,
-                    ))
+                    .reachable_prekey_ops_for_agent(&Agent::Individual((*agent_id).into(), indie))
                     .await;
                 let indexed_ids = &all_results.index[agent_id];
                 let mut all_keys: Vec<_> = indexed_ids.iter().collect();
@@ -3352,6 +3607,154 @@ mod tests {
                     agent_id
                 );
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_membership_ops_for_all_agents_matches_per_agent() {
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let bob = make_keyhive().await;
+        let carol = make_keyhive().await;
+        let dave = make_keyhive().await;
+        let eve = make_keyhive().await;
+
+        // Register all on alice
+        let bob_add_op = bob.expand_prekeys().await.unwrap();
+        let bob_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(bob_add_op))));
+        assert!(alice.register_individual(bob_indie.clone()).await);
+        let bob_id = bob_indie.lock().await.id();
+
+        let carol_add_op = carol.expand_prekeys().await.unwrap();
+        let carol_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(carol_add_op))));
+        assert!(alice.register_individual(carol_indie.clone()).await);
+        let carol_id = carol_indie.lock().await.id();
+
+        let dave_add_op = dave.expand_prekeys().await.unwrap();
+        let dave_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(dave_add_op))));
+        assert!(alice.register_individual(dave_indie.clone()).await);
+        let dave_id = dave_indie.lock().await.id();
+
+        let eve_add_op = eve.expand_prekeys().await.unwrap();
+        let eve_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(eve_add_op))));
+        assert!(alice.register_individual(eve_indie.clone()).await);
+        let eve_id = eve_indie.lock().await.id();
+
+        // doc1: bob and carol are direct members
+        let doc1 = alice
+            .generate_doc(vec![], nonempty![[0u8; 32]])
+            .await
+            .unwrap();
+        let doc1_id = doc1.lock().await.doc_id();
+        alice
+            .add_member(
+                Agent::Individual(bob_id, bob_indie.dupe()),
+                &Membered::Document(doc1_id, doc1.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+        alice
+            .add_member(
+                Agent::Individual(carol_id, carol_indie.dupe()),
+                &Membered::Document(doc1_id, doc1.dupe()),
+                Access::Write,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // group: bob and carol
+        let group = alice.generate_group(vec![]).await.unwrap();
+        let group_id = group.lock().await.group_id();
+        alice
+            .add_member(
+                Agent::Individual(bob_id, bob_indie.dupe()),
+                &Membered::Group(group_id, group.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+        alice
+            .add_member(
+                Agent::Individual(carol_id, carol_indie.dupe()),
+                &Membered::Group(group_id, group.dupe()),
+                Access::Write,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // doc2: group is a member (so bob and carol are transitive members)
+        let doc2 = alice
+            .generate_doc(vec![], nonempty![[1u8; 32]])
+            .await
+            .unwrap();
+        let doc2_id = doc2.lock().await.doc_id();
+        alice
+            .add_member(
+                Agent::Group(group_id, group.dupe()),
+                &Membered::Document(doc2_id, doc2.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // dave: only on doc1 directly (not in any group)
+        alice
+            .add_member(
+                Agent::Individual(dave_id, dave_indie.dupe()),
+                &Membered::Document(doc1_id, doc1.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // eve: registered but not a member of anything
+
+        // Revoke bob from doc1
+        alice
+            .revoke_member(
+                bob_id.into(),
+                false,
+                &Membered::Document(doc1_id, doc1.dupe()),
+            )
+            .await
+            .unwrap();
+
+        // Get the all-agents result
+        let all_results = alice.membership_ops_for_all_agents().await;
+
+        // For each agent, compare with per-agent result
+        let agents: Vec<(IndividualId, Arc<Mutex<Individual>>)> = vec![
+            (bob_id, bob_indie),
+            (carol_id, carol_indie),
+            (dave_id, dave_indie),
+            (eve_id, eve_indie),
+        ];
+        for (id, indie) in &agents {
+            let agent = Agent::Individual(*id, indie.dupe());
+            let agent_id: Identifier = (*id).into();
+
+            let per_agent_ops = alice.membership_ops_for_agent(&agent).await;
+            let per_agent_digests: HashSet<_> = per_agent_ops.keys().copied().collect();
+
+            // Collect all digests for this agent across all sources
+            let all_digests: HashSet<_> = all_results
+                .ops_for_agent(&agent_id)
+                .map(|iter| iter.map(|(digest, _)| *digest).collect())
+                .unwrap_or_default();
+
+            assert_eq!(
+                per_agent_digests, all_digests,
+                "membership op digests should match for agent {:?}",
+                id
+            );
         }
     }
 

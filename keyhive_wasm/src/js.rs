@@ -1,6 +1,7 @@
 pub mod access;
 pub mod add_member_error;
 pub mod agent;
+pub mod all_agent_events;
 pub mod archive;
 pub mod capability;
 pub mod cgka_operation;
