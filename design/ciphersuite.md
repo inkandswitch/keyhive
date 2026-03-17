@@ -55,9 +55,9 @@ Note that to avoid allocating space for the entire payload in the nonce preimage
 | Feature                  | Algorithm                                                                             |
 |--------------------------|---------------------------------------------------------------------------------------|
 | Group Definition         | Capability Graphs                                                                     |
-| Read Group Key Agreement | DCGKA ("Duckling")                                                                    |
-| Read Access Revocation   | DCGKA's in-built PCS mechanism                                                        |
-| Transitive Read Access   | DCGKA + Capabilities                                                                  |
+| Read Group Key Agreement | [BeeKEM](./beekem.md) (concurrent TreeKEM variant)                                   |
+| Read Access Revocation   | BeeKEM's in-built PCS mechanism                                                       |
+| Transitive Read Access   | BeeKEM + Capabilities                                                                 |
 | Granular Write Access    | Modified (partition tolerant) OCap, predicate attenuation                             |
 | Write Revocation         | Causality locking, backdating detection, default to "whiteout" (skip materialization) |
 
