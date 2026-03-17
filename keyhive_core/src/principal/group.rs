@@ -1437,7 +1437,7 @@ mod tests {
 
         g0.lock()
             .await
-            .add_member(carol_agent.dupe(), Access::Write, &active_signer, &[])
+            .add_member(carol_agent.dupe(), Access::Edit, &active_signer, &[])
             .await
             .unwrap();
 
@@ -1462,7 +1462,7 @@ mod tests {
 
         assert_eq!(
             g0_mems.get(&carol_agent.id()),
-            Some(&(carol.lock().await.clone().into(), Access::Write)) // NOTE: non-admin!
+            Some(&(carol.lock().await.clone().into(), Access::Edit)) // NOTE: non-admin!
         );
 
         let g2_mems = g2.lock().await.transitive_members().await;
@@ -1479,7 +1479,7 @@ mod tests {
 
         assert_eq!(
             g2_mems.get(&carol_agent.id()),
-            Some(&(carol.lock().await.clone().into(), Access::Write)) // NOTE: non-admin!
+            Some(&(carol.lock().await.clone().into(), Access::Edit)) // NOTE: non-admin!
         );
 
         let g0_id = { g0.lock().await.id() };
@@ -1569,7 +1569,7 @@ mod tests {
         .unwrap();
 
         let _alice_adds_bob = g1
-            .add_member(bob_agent.dupe(), Access::Write, &alice_signer, &[])
+            .add_member(bob_agent.dupe(), Access::Edit, &alice_signer, &[])
             .await
             .unwrap();
 

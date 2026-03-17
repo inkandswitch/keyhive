@@ -60,8 +60,8 @@ Note that to avoid allocating space for the entire payload in the nonce preimage
 | Read Group Key Agreement | DCGKA ("Duckling")                                                                    |
 | Read Access Revocation   | DCGKA's in-built PCS mechanism                                                        |
 | Transitive Read Access   | DCGKA + Capabilities                                                                  |
-| Granular Write Access    | Modified (partition tolerant) OCap, predicate attenuation                             |
-| Write Revocation         | Causality locking, backdating detection, default to "whiteout" (skip materialization) |
+| Granular Edit Access     | Modified (partition tolerant) OCap, predicate attenuation                             |
+| Edit Revocation          | Causality locking, backdating detection, default to "whiteout" (skip materialization) |
 
 <!-- External Links -->
 [encryptment]: https://eprint.iacr.org/2019/016.pdf
