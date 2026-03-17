@@ -12,7 +12,7 @@ impl JsAccess {
     #[wasm_bindgen(js_name = tryFromString)]
     pub fn try_from_string(s: String) -> Option<JsAccess> {
         match s.as_str() {
-            "fetch" => Some(JsAccess(Access::Fetch)),
+            "relay" => Some(JsAccess(Access::Relay)),
             "read" => Some(JsAccess(Access::Read)),
             "edit" => Some(JsAccess(Access::Edit)),
             "admin" => Some(JsAccess(Access::Admin)),

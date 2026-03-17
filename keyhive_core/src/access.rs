@@ -25,9 +25,9 @@ pub enum Access {
     /// All encryption is fallable. For example, a key may be leaked, or a cipher may be broken.
     ///
     /// While a Byzantine node may fail to enforce this rule,
-    /// a node with only `Fetch` access does not have decryption (`Read`) access
+    /// a node with only `Relay` access does not have decryption (`Read`) access
     /// to the underlying data.
-    Fetch,
+    Relay,
 
     /// The ability to read (decrypt) the content of a document.
     Read,
@@ -52,7 +52,7 @@ impl Access {
 impl fmt::Display for Access {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Access::Fetch => write!(f, "Fetch"),
+            Access::Relay => write!(f, "Relay"),
             Access::Read => write!(f, "Read"),
             Access::Edit => write!(f, "Edit"),
             Access::Admin => write!(f, "Admin"),

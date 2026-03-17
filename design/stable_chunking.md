@@ -384,7 +384,7 @@ flowchart TD
 
 ## Merging & Encryption
 
-Under encryption, the contents cannot be inspected, and the same ops may be encrypted with a different key (yielding a different ciphertext). An [Agent] with [Fetch] access may want to know which granular chunks can be be retired after a period of time. This is achieved by nothing the head hashed and metric used:
+Under encryption, the contents cannot be inspected, and the same ops may be encrypted with a different key (yielding a different ciphertext). An [Agent] with [Relay] access may want to know which granular chunks can be be retired after a period of time. This is achieved by nothing the head hashed and metric used:
 
 ```rust
 struct EncryptedChunk {
