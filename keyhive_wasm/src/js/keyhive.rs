@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     js::{
@@ -12,6 +12,7 @@ use super::{
     access::JsAccess,
     add_member_error::JsAddMemberError,
     agent::JsAgent,
+    all_agent_events::JsAllAgentEvents,
     archive::JsArchive,
     change_id::{JsChangeId, JsChangeIdRef},
     ciphertext_store::JsCiphertextStore,
@@ -409,6 +410,100 @@ impl JsKeyhive {
         }
 
         Ok(map)
+    }
+
+    /// Returns all agent events with deduplicated storage and two-tier indirection
+    /// for both membership and prekey ops.
+    #[wasm_bindgen(js_name = allAgentEvents)]
+    pub async fn all_agent_events(&self) -> Result<JsAllAgentEvents, JsSerializationError> {
+        init_span!("JsKeyhive::all_agent_events");
+
+        let all_membership = self.0.membership_ops_for_all_agents().await;
+        let all_prekey = self.0.reachable_prekey_ops_for_all_agents().await;
+
+        // Deduplicated events map: hash bytes -> serialized event bytes.
+        // Tracks which digests have already been serialized to avoid redundant
+        // serialization when the same op appears in multiple sources.
+        let events_map = js_sys::Map::new();
+        let mut serialized_hashes: HashSet<Vec<u8>> = HashSet::new();
+
+        // Build membershipSources: one per source (group/doc/agent), shared across agents.
+        // Also serialize membership events into the deduplicated events map.
+        let membership_sources_map = js_sys::Map::new();
+        for (source_id, source_ops) in &all_membership.ops {
+            let source_hashes = js_sys::Array::new();
+            for (digest, op) in source_ops {
+                let hash_bytes = digest.as_slice().to_vec();
+                let hash = js_sys::Uint8Array::from(digest.as_slice());
+                if serialized_hashes.insert(hash_bytes) {
+                    let event: Event<JsSigner, JsChangeId, JsEventHandler> = op.clone().into();
+                    let static_event = StaticEvent::from(event);
+                    let bytes =
+                        bincode::serialize(&static_event).map_err(JsSerializationError::from)?;
+                    let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
+                    events_map.set(&hash.clone().into(), &js_bytes.into());
+                }
+                source_hashes.push(&hash.into());
+            }
+            let id_bytes = js_sys::Uint8Array::from(source_id.as_bytes().as_slice());
+            membership_sources_map.set(&id_bytes.into(), &source_hashes.into());
+        }
+
+        // Build agentMembershipSources: agent -> array of source identifier Uint8Arrays
+        let agent_membership_sources_map = js_sys::Map::new();
+        for (agent_id, source_ids) in &all_membership.index {
+            let sources = js_sys::Array::new();
+            for source_id in source_ids {
+                let id_bytes = js_sys::Uint8Array::from(source_id.as_bytes().as_slice());
+                sources.push(&id_bytes.into());
+            }
+            let agent_id_bytes = js_sys::Uint8Array::from(agent_id.as_bytes().as_slice());
+            agent_membership_sources_map.set(&agent_id_bytes.into(), &sources.into());
+        }
+
+        // Build prekey sources: one per identifier, shared across agents.
+        // Also serialize prekey events into the deduplicated events map.
+        let prekey_sources_map = js_sys::Map::new();
+        for (identifier, ops_vec) in &all_prekey.ops {
+            let source_hashes = js_sys::Array::new();
+            for key_op in ops_vec {
+                let event: Event<JsSigner, JsChangeId, JsEventHandler> =
+                    Event::from(key_op.as_ref().dupe());
+                let digest = Digest::hash(&event);
+                let hash_bytes = digest.as_slice().to_vec();
+                let hash = js_sys::Uint8Array::from(digest.as_slice());
+                if serialized_hashes.insert(hash_bytes) {
+                    let static_event = StaticEvent::from(event);
+                    let bytes =
+                        bincode::serialize(&static_event).map_err(JsSerializationError::from)?;
+                    let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
+                    events_map.set(&hash.clone().into(), &js_bytes.into());
+                }
+                source_hashes.push(&hash.into());
+            }
+            let id_bytes = js_sys::Uint8Array::from(identifier.as_bytes().as_slice());
+            prekey_sources_map.set(&id_bytes.into(), &source_hashes.into());
+        }
+
+        // Build agentPrekeySources: agent -> array of identifier Uint8Arrays
+        let agent_prekey_sources_map = js_sys::Map::new();
+        for (agent_id, reachable_ids) in &all_prekey.index {
+            let source_ids = js_sys::Array::new();
+            for reachable_id in reachable_ids {
+                let id_bytes = js_sys::Uint8Array::from(reachable_id.as_bytes().as_slice());
+                source_ids.push(&id_bytes.into());
+            }
+            let agent_id_bytes = js_sys::Uint8Array::from(agent_id.as_bytes().as_slice());
+            agent_prekey_sources_map.set(&agent_id_bytes.into(), &source_ids.into());
+        }
+
+        Ok(JsAllAgentEvents::new(
+            events_map,
+            membership_sources_map,
+            agent_membership_sources_map,
+            prekey_sources_map,
+            agent_prekey_sources_map,
+        ))
     }
 
     #[wasm_bindgen(js_name = membershipOpsForAgent)]

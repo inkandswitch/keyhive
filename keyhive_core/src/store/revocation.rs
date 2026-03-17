@@ -107,6 +107,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> RevocationStore
         self.agent_to_revocations.get(agent_id).cloned()
     }
 
+    /// Iterate over all (agent_id, revocations) pairs in the store.
+    #[allow(clippy::type_complexity)]
+    pub fn all_agent_revocations(
+        &self,
+    ) -> impl Iterator<Item = (&AgentId, &HashSet<Arc<Signed<Revocation<S, T, L>>>>)> {
+        self.agent_to_revocations.iter()
+    }
+
     /// Iterate over all [`Revocation`]s in the store.
     #[allow(clippy::type_complexity)]
     pub fn values(
