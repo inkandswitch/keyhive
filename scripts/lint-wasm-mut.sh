@@ -41,48 +41,53 @@ for crate_dir in "$workspace_root"/*_wasm; do
   crate_name="$(basename "$crate_dir")"
 
   # State machine in awk:
-  #   - On `#[wasm_bindgen` attribute  -> mark next fn as wasm-exported
+  #   - On `#[wasm_bindgen` attribute  -> mark next item as wasm-exported
   #   - On `impl` block preceded by `#[wasm_bindgen` -> all fns in the block
   #     are wasm-exported until brace depth returns to 0
-  #   - Inside a wasm-exported context, flag any `&mut self` or `&mut <Ident>`
-  #     in fn parameter lists
+  #   - When `fn` appears in a wasm-exported context, enter `in_fn_sig` mode
+  #     and scan every line until `{` (the fn body opener) for `&mut`
   #
   # Intentionally conservative: may false-positive on private helpers inside
   # a wasm_bindgen impl block. That's fine -- the fix (RefCell) is always safe,
   # and false negatives (missing a real problem) are worse.
   while IFS= read -r src_file; do
     $AWK -v github="$github_annotations" '
-      BEGIN { in_wb_impl = 0; brace_depth = 0; wb_attr = 0; found = 0 }
+      BEGIN {
+        in_wb_impl = 0; brace_depth = 0; wb_attr = 0
+        in_fn_sig = 0; found = 0
+      }
 
+      # Detect #[wasm_bindgen...] attribute
       /^[[:space:]]*#\[wasm_bindgen/ { wb_attr = 1 }
 
+      # Detect impl block preceded by wasm_bindgen attribute
       /^[[:space:]]*(pub[[:space:]]+)?impl[[:space:]]/ {
         if (wb_attr) { in_wb_impl = 1; brace_depth = 0 }
         wb_attr = 0
       }
 
+      # Track brace depth inside a wasm_bindgen impl block (POSIX-safe)
       in_wb_impl {
-        n = split($0, chars, "")
-        for (i = 1; i <= n; i++) {
-          if (chars[i] == "{") brace_depth++
-          if (chars[i] == "}") {
-            brace_depth--
-            if (brace_depth <= 0) { in_wb_impl = 0; brace_depth = 0 }
-          }
-        }
+        tmp = $0
+        opens = gsub(/{/, "{", tmp)
+        tmp = $0
+        closes = gsub(/}/, "}", tmp)
+        brace_depth += opens - closes
+        if (brace_depth <= 0) { in_wb_impl = 0; brace_depth = 0 }
       }
 
+      # When fn appears in a wasm-exported context, start scanning the signature
       (in_wb_impl || wb_attr) && /fn[[:space:]]+[a-zA-Z_]/ {
-        if (/&mut[[:space:]]/) {
-          if (github == "true")
-            printf "::error file=%s,line=%d::%s\n", FILENAME, NR, $0
-          else
-            printf "  %s:%d: %s\n", FILENAME, NR, $0
-          found = 1
-        }
+        in_fn_sig = 1
       }
 
+      # Standalone fn preceded by #[wasm_bindgen] attribute
       wb_attr && /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]/ {
+        in_fn_sig = 1
+      }
+
+      # Inside a fn signature: check every line for &mut until we see {
+      in_fn_sig {
         if (/&mut[[:space:]]/) {
           if (github == "true")
             printf "::error file=%s,line=%d::%s\n", FILENAME, NR, $0
@@ -90,10 +95,11 @@ for crate_dir in "$workspace_root"/*_wasm; do
             printf "  %s:%d: %s\n", FILENAME, NR, $0
           found = 1
         }
-        wb_attr = 0
+        if (/{/) { in_fn_sig = 0; wb_attr = 0 }
       }
 
-      !/^[[:space:]]*#/ && !/^[[:space:]]*$/ && !/^[[:space:]]*(pub[[:space:]]+)?impl/ && !/^[[:space:]]*(pub[[:space:]]+)?fn/ {
+      # Reset wb_attr on non-blank, non-attribute, non-fn, non-impl lines
+      !in_fn_sig && !/^[[:space:]]*#/ && !/^[[:space:]]*$/ && !/^[[:space:]]*(pub[[:space:]]+)?impl/ && !/^[[:space:]]*(pub[[:space:]]+)?fn/ {
         wb_attr = 0
       }
 
