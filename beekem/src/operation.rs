@@ -285,10 +285,7 @@ impl CgkaOperationGraph {
                 .ok_or(CgkaError::OperationNotFound)?;
             for update_pred in preds {
                 dependencies.add_dependency(*update_pred, op_hash);
-                successors
-                    .entry(*update_pred)
-                    .or_insert_with(Set::new)
-                    .insert(op_hash);
+                successors.entry(*update_pred).or_default().insert(op_hash);
                 if seen.contains(update_pred) {
                     continue;
                 }

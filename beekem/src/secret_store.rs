@@ -7,10 +7,7 @@ use crate::{
     keys::{ConflictKeys, NodeKey, ShareKeyMap},
     treemath::TreeNodeIndex,
 };
-use alloc::collections::BTreeMap;
-use alloc::string::ToString;
-use alloc::vec;
-use alloc::vec::Vec;
+use alloc::{collections::BTreeMap, string::ToString, vec, vec::Vec};
 use core::cmp::Ordering;
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};

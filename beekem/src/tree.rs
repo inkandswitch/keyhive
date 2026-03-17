@@ -9,9 +9,7 @@ use crate::{
     secret_store::SecretStore,
     treemath,
 };
-use alloc::collections::BTreeMap;
-use alloc::vec;
-use alloc::vec::Vec;
+use alloc::{collections::BTreeMap, vec, vec::Vec};
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
