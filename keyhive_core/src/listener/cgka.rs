@@ -1,9 +1,10 @@
-//! Trait for listening to [`Cgka`][crate::cgka::Cgka] changes.
+//! Trait for listening to [`Cgka`](crate::cgka::Cgka) changes.
 
-use crate::{cgka::operation::CgkaOperation, crypto::signed::Signed};
+use beekem::operation::CgkaOperation;
+use keyhive_crypto::signed::Signed;
 use std::{future::Future, sync::Arc};
 
-/// Trait for listening to [`Cgka`][crate::cgka::Cgka] changes.
+/// Trait for listening to [`Cgka`](crate::cgka::Cgka) changes.
 ///
 /// This can be helpful for logging, live streaming of changes, gossip, and so on.
 ///

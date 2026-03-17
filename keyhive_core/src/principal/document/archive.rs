@@ -1,4 +1,5 @@
-use crate::{cgka::Cgka, content::reference::ContentRef, principal::group::GroupArchive};
+use crate::{cgka::Cgka, principal::group::GroupArchive};
+use keyhive_crypto::content::reference::ContentRef;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 

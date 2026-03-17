@@ -1,5 +1,5 @@
 use super::change_id::JsChangeId;
-use keyhive_core::crypto::encrypted::EncryptedContent;
+use beekem::encrypted::EncryptedContent;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 

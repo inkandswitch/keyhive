@@ -1,7 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
+    "beekem",
     "keyhive_core",
+    "keyhive_crypto",
     "keyhive_wasm",
     "test-utils"
 ]

@@ -1,9 +1,7 @@
 //! Serializable representation of an [`Active`][super::Active] agent.
 
-use crate::{
-    crypto::share_key::{ShareKey, ShareSecretKey},
-    principal::individual::Individual,
-};
+use crate::principal::individual::Individual;
+use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,

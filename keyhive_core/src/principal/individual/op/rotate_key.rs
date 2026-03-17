@@ -1,5 +1,5 @@
-use crate::crypto::share_key::ShareKey;
 use dupe::Dupe;
+use keyhive_crypto::share_key::ShareKey;
 use serde::{Deserialize, Serialize};
 
 /// Retire a prekey and replace it with a new one.

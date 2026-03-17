@@ -1,6 +1,7 @@
-use crate::{crypto::verifiable::Verifiable, principal::identifier::Identifier};
+use crate::principal::identifier::Identifier;
 use derive_more::Display;
 use dupe::Dupe;
+use keyhive_crypto::verifiable::Verifiable;
 use serde::{Deserialize, Serialize};
 
 #[derive(
@@ -53,6 +54,12 @@ impl From<ed25519_dalek::VerifyingKey> for IndividualId {
 impl From<&ed25519_dalek::VerifyingKey> for IndividualId {
     fn from(verifying_key: &ed25519_dalek::VerifyingKey) -> Self {
         IndividualId((*verifying_key).into())
+    }
+}
+
+impl From<beekem::id::MemberId> for IndividualId {
+    fn from(member_id: beekem::id::MemberId) -> Self {
+        IndividualId(member_id.0.into())
     }
 }
 

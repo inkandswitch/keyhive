@@ -1,6 +1,7 @@
-use crate::{crypto::verifiable::Verifiable, principal::identifier::Identifier};
+use crate::principal::identifier::Identifier;
 use derive_more::{From, Into};
 use dupe::Dupe;
+use keyhive_crypto::verifiable::Verifiable;
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 

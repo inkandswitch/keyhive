@@ -5,14 +5,13 @@ use super::{
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
 };
-use crate::{
-    content::reference::ContentRef,
-    crypto::{share_key::ShareKey, signer::async_signer::AsyncSigner},
-    listener::{membership::MembershipListener, no_listener::NoListener},
-};
+use crate::listener::{membership::MembershipListener, no_listener::NoListener};
 use derive_more::{From, TryInto};
 use dupe::Dupe;
 use futures::lock::Mutex;
+use keyhive_crypto::{
+    content::reference::ContentRef, share_key::ShareKey, signer::async_signer::AsyncSigner,
+};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,

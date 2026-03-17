@@ -1,4 +1,4 @@
-use keyhive_core::crypto::share_key::ShareSecretKey;
+use keyhive_crypto::share_key::ShareSecretKey;
 
 fn main() {
     divan::main();

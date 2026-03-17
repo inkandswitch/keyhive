@@ -1,8 +1,6 @@
-use crate::{
-    crypto::digest::Digest,
-    transact::{fork::Fork, merge::Merge},
-};
+use crate::transact::{fork::Fork, merge::Merge};
 use derive_where::derive_where;
+use keyhive_crypto::digest::Digest;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},

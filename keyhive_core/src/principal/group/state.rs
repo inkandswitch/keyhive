@@ -4,13 +4,7 @@ use self::archive::GroupStateArchive;
 use super::{delegation::Delegation, error::AddError, id::GroupId, revocation::Revocation};
 use crate::{
     access::Access,
-    content::reference::ContentRef,
-    crypto::{
-        digest::Digest,
-        signed::Signed,
-        signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSigner},
-        verifiable::Verifiable,
-    },
+    crypto::signed_ext::SignedSubjectId,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::Agent, group::delegation::DelegationError, identifier::Identifier},
     store::{delegation::DelegationStore, revocation::RevocationStore},
@@ -18,6 +12,13 @@ use crate::{
 use derive_where::derive_where;
 use dupe::Dupe;
 use futures::lock::Mutex;
+use keyhive_crypto::{
+    content::reference::ContentRef,
+    digest::Digest,
+    signed::Signed,
+    signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSigner},
+    verifiable::Verifiable,
+};
 use std::{cmp::Ordering, collections::BTreeMap, sync::Arc};
 
 #[derive(Clone)]
@@ -138,7 +139,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
         &mut self,
         delegation: Arc<Signed<Delegation<S, T, L>>>,
     ) -> Result<Digest<Signed<Delegation<S, T, L>>>, AddError> {
-        if delegation.subject_id() != self.id.into() {
+        if delegation.subject_id() != Identifier::from(self.id) {
             return Err(AddError::InvalidSubject(Box::new(delegation.subject_id())));
         }
 
@@ -189,7 +190,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
         &mut self,
         revocation: Arc<Signed<Revocation<S, T, L>>>,
     ) -> Result<Digest<Signed<Revocation<S, T, L>>>, AddError> {
-        if revocation.subject_id() != self.id.into() {
+        if revocation.subject_id() != Identifier::from(self.id) {
             return Err(AddError::InvalidSubject(Box::new(revocation.subject_id())));
         }
 
@@ -260,8 +261,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> GroupState<S, T
     pub fn into_archive(&self) -> GroupStateArchive<T> {
         GroupStateArchive {
             id: self.id,
-            delegation_heads: self.delegation_heads.keys().map(Into::into).collect(),
-            revocation_heads: self.revocation_heads.keys().map(Into::into).collect(),
+            delegation_heads: self.delegation_heads.keys().map(|d| d.coerce()).collect(),
+            revocation_heads: self.revocation_heads.keys().map(|d| d.coerce()).collect(),
         }
     }
 }

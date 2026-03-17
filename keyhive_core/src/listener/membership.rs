@@ -1,10 +1,9 @@
 //! Trait for listening to membership change events.
 
 use super::{cgka::CgkaListener, prekey::PrekeyListener};
-use crate::{
-    content::reference::ContentRef,
-    crypto::{signed::Signed, signer::async_signer::AsyncSigner},
-    principal::group::{delegation::Delegation, revocation::Revocation},
+use crate::principal::group::{delegation::Delegation, revocation::Revocation};
+use keyhive_crypto::{
+    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
 };
 use std::sync::Arc;
 

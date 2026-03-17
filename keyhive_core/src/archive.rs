@@ -1,8 +1,6 @@
 //! Archive of [`Keyhive`][crate::keyhive::Keyhive].
 
 use crate::{
-    content::reference::ContentRef,
-    crypto::digest::Digest,
     event::static_event::StaticEvent,
     principal::{
         active::archive::ActiveArchive,
@@ -11,6 +9,7 @@ use crate::{
         individual::{id::IndividualId, Individual},
     },
 };
+use keyhive_crypto::{content::reference::ContentRef, digest::Digest};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

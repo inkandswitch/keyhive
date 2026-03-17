@@ -1,4 +1,4 @@
-use keyhive_core::crypto::signed::SigningError;
+use keyhive_crypto::signed::SigningError;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
