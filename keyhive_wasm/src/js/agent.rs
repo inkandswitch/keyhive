@@ -73,7 +73,7 @@ impl JsAgent {
     pub async fn key_op_hashes(&self) -> js_sys::Array {
         let key_ops = self.0.key_ops().await;
         let arr = js_sys::Array::new();
-        for key_op in key_ops {
+        for key_op in key_ops.values() {
             let event: Event<JsSigner, JsChangeId, JsEventHandler> =
                 Event::from(key_op.as_ref().dupe());
             let digest = Digest::hash(&event);

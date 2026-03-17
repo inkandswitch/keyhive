@@ -175,6 +175,24 @@ impl<T: Serialize> Serialize for CaMap<T> {
     }
 }
 
+impl<T: Serialize> IntoIterator for CaMap<T> {
+    type Item = (Digest<T>, Arc<T>);
+    type IntoIter = std::collections::hash_map::IntoIter<Digest<T>, Arc<T>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a, T: Serialize> IntoIterator for &'a CaMap<T> {
+    type Item = (&'a Digest<T>, &'a Arc<T>);
+    type IntoIter = std::collections::hash_map::Iter<'a, Digest<T>, Arc<T>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
 impl<T: Serialize> Extend<(Digest<T>, Arc<T>)> for CaMap<T> {
     fn extend<I>(&mut self, iter: I)
     where
