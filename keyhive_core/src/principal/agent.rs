@@ -153,14 +153,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
 
     pub async fn key_ops(&self) -> CaMap<KeyOp> {
         match self {
-            Agent::Active(_, a) => a
-                .lock()
-                .await
-                .individual
-                .lock()
-                .await
-                .prekey_ops()
-                .clone(),
+            Agent::Active(_, a) => a.lock().await.individual.lock().await.prekey_ops().clone(),
             Agent::Individual(_, i) => i.lock().await.prekey_ops().clone(),
             Agent::Group(_, g) => {
                 if let IdOrIndividual::Individual(indie) = &g.lock().await.id_or_indie {

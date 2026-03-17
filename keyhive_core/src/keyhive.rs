@@ -50,11 +50,11 @@ use crate::{
         delegation::DelegationStore,
         revocation::RevocationStore,
     },
-    util::content_addressed_map::CaMap,
     transact::{
         fork::ForkAsync,
         merge::{Merge, MergeAsync},
     },
+    util::content_addressed_map::CaMap,
 };
 use derive_where::derive_where;
 use dupe::{Dupe, OptionDupedExt};
@@ -838,7 +838,14 @@ impl<
         // Add the agents own keys
         add_many_keys(&mut map, agent.id(), agent.key_ops().await);
 
-        let groups = { self.groups.lock().await.values().cloned().collect::<Vec<_>>() };
+        let groups = {
+            self.groups
+                .lock()
+                .await
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
         for group in groups {
             let (group_id, transitive) = {
                 let locked = group.lock().await;
@@ -1439,6 +1446,21 @@ impl<
         }
 
         group
+    }
+
+    /// Export prekey secrets as an opaque blob for backup/migration.
+    ///
+    /// # Security
+    ///
+    /// The returned bytes contain unencrypted secret key material.
+    /// Callers are responsible for protecting this data at rest and in transit.
+    pub async fn export_prekey_secrets(&self) -> Result<Vec<u8>, bincode::Error> {
+        self.active.lock().await.export_prekey_secrets().await
+    }
+
+    /// Import prekey secrets from a previously exported blob, extending the existing set.
+    pub async fn import_prekey_secrets(&self, bytes: &[u8]) -> Result<(), bincode::Error> {
+        self.active.lock().await.import_prekey_secrets(bytes).await
     }
 
     #[instrument(skip_all)]

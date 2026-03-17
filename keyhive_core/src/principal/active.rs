@@ -274,6 +274,25 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
             })
     }
 
+    /// Export prekey secrets as an opaque blob.
+    ///
+    /// # Security
+    ///
+    /// The returned bytes contain unencrypted secret key material.
+    /// Callers are responsible for protecting this data at rest and in transit.
+    pub async fn export_prekey_secrets(&self) -> Result<Vec<u8>, bincode::Error> {
+        let pairs = self.prekey_pairs.lock().await;
+        bincode::serialize(&*pairs)
+    }
+
+    /// Import prekey secrets from an opaque blob, extending the existing set.
+    pub async fn import_prekey_secrets(&self, bytes: &[u8]) -> Result<(), bincode::Error> {
+        let imported: BTreeMap<ShareKey, ShareSecretKey> = bincode::deserialize(bytes)?;
+        let mut pairs = self.prekey_pairs.lock().await;
+        pairs.extend(imported);
+        Ok(())
+    }
+
     /// Serialize for storage.
     pub async fn into_archive(&self) -> ActiveArchive {
         ActiveArchive {
@@ -391,5 +410,59 @@ mod tests {
         let signed = active.try_sign_async(message).await.unwrap();
 
         assert!(signed.try_verify().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_export_import_prekey_secrets() {
+        test_utils::init_logging();
+
+        let csprng = &mut rand::thread_rng();
+        let signer1 = MemorySigner::generate(csprng);
+        let active1: Active<_, [u8; 32], _> =
+            Active::generate(signer1, NoListener, csprng).await.unwrap();
+
+        let exported = active1.export_prekey_secrets().await.unwrap();
+
+        let signer2 = MemorySigner::generate(csprng);
+        let active2: Active<_, [u8; 32], _> =
+            Active::generate(signer2, NoListener, csprng).await.unwrap();
+
+        let original_pairs: BTreeMap<ShareKey, ShareSecretKey> =
+            active2.prekey_pairs.lock().await.clone();
+
+        active2.import_prekey_secrets(&exported).await.unwrap();
+
+        let merged_pairs = active2.prekey_pairs.lock().await;
+        let exported_pairs: BTreeMap<ShareKey, ShareSecretKey> =
+            active1.prekey_pairs.lock().await.clone();
+
+        // All original pairs should still be present
+        for (k, v) in &original_pairs {
+            assert_eq!(merged_pairs.get(k), Some(v));
+        }
+
+        // All imported pairs should be present
+        for (k, v) in &exported_pairs {
+            assert_eq!(merged_pairs.get(k), Some(v));
+        }
+
+        // Total count should be the union
+        assert_eq!(
+            merged_pairs.len(),
+            original_pairs.len() + exported_pairs.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_import_invalid_bytes() {
+        test_utils::init_logging();
+
+        let csprng = &mut rand::thread_rng();
+        let signer = MemorySigner::generate(csprng);
+        let active: Active<_, [u8; 32], _> =
+            Active::generate(signer, NoListener, csprng).await.unwrap();
+
+        let result = active.import_prekey_secrets(b"not valid bincode").await;
+        assert!(result.is_err());
     }
 }
