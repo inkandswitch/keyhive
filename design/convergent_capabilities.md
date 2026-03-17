@@ -39,7 +39,7 @@ flowchart
 
 ## Variants
 
-Fetch, Read, Edit, Admin.
+Relay, Read, Edit, Admin.
 
 # FAQ
 

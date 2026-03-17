@@ -119,7 +119,7 @@ flowchart TB
 
 ### Encrypted Content
 
-Note that the above may not all be available as cleartext to all participants. For example, a sync server (which only has [Fetch] rights) will see the [Document] example above as something along the following lines:
+Note that the above may not all be available as cleartext to all participants. For example, a sync server (which only has [Relay] rights) will see the [Document] example above as something along the following lines:
 
 ```mermaid
 flowchart TB
@@ -293,7 +293,7 @@ The above example materializes to the following:
 ```mermaid
 %%{ init: { 'themeVariables': { 'lineColor': '#FFF' } } }%%
 flowchart BT
-    subgraph pullers[Fetch]
+    subgraph pullers[Relay]
         Francine
 
         subgraph read_only[Read]
@@ -342,11 +342,11 @@ flowchart BT
     style also_change_membership color:white,fill:darkred,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
 ```
 
-Validating [capabilities] proceeds recursively. Given read access to the caveats of each group, a complete list of users and their capabilities. The lowest level of rights MUST be `fetch`, which only requires knowing the current public key of leaf agents.
+Validating [capabilities] proceeds recursively. Given read access to the caveats of each group, a complete list of users and their capabilities. The lowest level of rights MUST be `relay`, which only requires knowing the current public key of leaf agents.
 
 In this case, we have the following authority for Doc A:
 
-| Agent       | Fetch Doc A | E2EE Read Doc A | Edit Doc A | Change Membership on Doc A |
+| Agent       | Relay Doc A | E2EE Read Doc A | Edit Doc A | Change Membership on Doc A |
 |-------------|-------------|-----------------|------------|----------------------------|
 | Alice       | ✅         | ✅              | ✅             | ✅                         |
 | Bob         | ✅         | ✅              | ✅             | ✅                         |
@@ -361,7 +361,7 @@ In this case, we have the following authority for Doc A:
 
 And for Doc B:
 
-| Agent       | Fetch Doc B | E2EE Read Doc B | Edit Doc B | Change Membership on Doc B |
+| Agent       | Relay Doc B | E2EE Read Doc B | Edit Doc B | Change Membership on Doc B |
 |-------------|-------------|-----------------|------------|----------------------------|
 | Alice       | ✅         | ✅              | ✅             | ✅                         |
 | Bob         | ✅         | ✅              | ✅             | ✅                         |

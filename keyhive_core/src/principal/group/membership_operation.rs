@@ -858,7 +858,7 @@ mod tests {
                     .signer
                     .try_sign_sync(Delegation {
                         delegate: Agent::Active(carol.lock().await.id(), carol.dupe()),
-                        can: Access::Fetch,
+                        can: Access::Relay,
                         proof: Some(alice_to_bob.dupe()),
                         after_revocations: vec![],
                         after_content: BTreeMap::new(),
