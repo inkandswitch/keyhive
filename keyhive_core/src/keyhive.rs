@@ -782,7 +782,6 @@ impl<
     }
 
     #[instrument(skip_all)]
-    #[allow(clippy::mutable_key_type)]
     pub async fn reachable_prekey_ops_for_agent(
         &self,
         agent: &Agent<S, T, L>,
