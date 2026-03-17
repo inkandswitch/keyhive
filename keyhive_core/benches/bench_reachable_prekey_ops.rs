@@ -85,7 +85,7 @@ fn reachable_prekey_ops_for_agent(
                     .add_member(
                         Agent::Individual(peer_id, peer_on_alice.dupe()),
                         &Membered::Document(doc_id, doc.dupe()),
-                        Access::Write,
+                        Access::Edit,
                         &[],
                     )
                     .await

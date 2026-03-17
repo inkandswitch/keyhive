@@ -514,7 +514,7 @@ mod tests {
             fixture(&ALICE_SIGNER)
                 .try_sign_sync(Delegation {
                     delegate: Agent::Individual(bob.id(), Arc::new(Mutex::new(bob))),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(add_alice(csprng).await),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -534,7 +534,7 @@ mod tests {
             fixture(&ALICE_SIGNER)
                 .try_sign_sync(Delegation {
                     delegate: carol.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(add_alice(csprng).await),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -554,7 +554,7 @@ mod tests {
             fixture(&CAROL_SIGNER)
                 .try_sign_sync(Delegation {
                     delegate: dan.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(add_carol(csprng).await),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -574,7 +574,7 @@ mod tests {
             fixture(&BOB_SIGNER)
                 .try_sign_sync(Delegation {
                     delegate: erin.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(add_bob(csprng).await),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -817,7 +817,7 @@ mod tests {
                     .signer
                     .try_sign_sync(Delegation {
                         delegate: Agent::Active(bob.lock().await.id(), bob.dupe()),
-                        can: Access::Write,
+                        can: Access::Edit,
                         proof: None,
                         after_revocations: vec![],
                         after_content: BTreeMap::new(),
@@ -846,7 +846,7 @@ mod tests {
                     .signer
                     .try_sign_sync(Delegation {
                         delegate: Agent::Active(carol.lock().await.id(), carol.dupe()),
-                        can: Access::Pull,
+                        can: Access::Fetch,
                         proof: Some(alice_to_bob.dupe()),
                         after_revocations: vec![],
                         after_content: BTreeMap::new(),

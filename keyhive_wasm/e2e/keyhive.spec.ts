@@ -130,7 +130,7 @@ test.describe("Keyhive", async () => {
       await kh.generateGroup([g2.toPeer(), d1.toPeer()]);
 
       const individual = await kh.receiveContactCard(testContactCard)
-      const access = Access.tryFromString("write");
+      const access = Access.tryFromString("edit");
       await kh.addMember(individual.toAgent(), g2.toMembered(), access, []);
 
       const archive = await kh.intoArchive();
@@ -256,7 +256,7 @@ test.describe("Keyhive", async () => {
 
         // Delegate to an individual
         const individual = await kh.receiveContactCard(testContactCard);
-        const access = Access.tryFromString("write");
+        const access = Access.tryFromString("edit");
         await kh.addMember(individual.toAgent(), doc.toMembered(), access, []);
 
         // Revoke that individual

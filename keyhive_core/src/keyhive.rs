@@ -2405,7 +2405,7 @@ mod tests {
         // Delegate to an individual and then revoke
         let indie_id = indie.lock().await.id();
         let indie_agent = Agent::Individual(indie_id, indie.dupe());
-        kh.add_member(indie_agent, &membered_doc, Access::Write, &[])
+        kh.add_member(indie_agent, &membered_doc, Access::Edit, &[])
             .await?;
         kh.revoke_member(indie_id.into(), true, &membered_doc)
             .await?;
@@ -2739,7 +2739,7 @@ mod tests {
             .add_member(
                 Agent::Individual(hive2_on_hive1_id, hive2_on_hive1.dupe()),
                 &Membered::Document(doc_id, doc.dupe()),
-                Access::Write,
+                Access::Edit,
                 &[],
             )
             .await
