@@ -103,5 +103,10 @@ name = "bench_ingest_unsorted_static_events"
 harness = false
 required-features = ["test_utils"]
 
+[[bench]]
+name = "bench_reverse_topsort"
+harness = false
+required-features = ["test_utils"]
+
 [lints.clippy]
 doc_overindented_list_items = "allow"
