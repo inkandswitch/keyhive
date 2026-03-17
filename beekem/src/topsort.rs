@@ -26,18 +26,15 @@ impl<T: Eq + Hash + Ord + Clone> TopologicalSort<T> {
     /// Add a dependency: `dependent` depends on `dependency`.
     pub fn add_dependency(&mut self, dependency: T, dependent: T) {
         // Ensure both nodes exist in the dep map
-        self.deps.entry(dependency.clone()).or_insert_with(Set::new);
+        self.deps.entry(dependency.clone()).or_default();
         self.deps
             .entry(dependent.clone())
-            .or_insert_with(Set::new)
+            .or_default()
             .insert(dependency.clone());
 
         // Track reverse deps
-        self.rdeps.entry(dependent.clone()).or_insert_with(Set::new);
-        self.rdeps
-            .entry(dependency)
-            .or_insert_with(Set::new)
-            .insert(dependent);
+        self.rdeps.entry(dependent.clone()).or_default();
+        self.rdeps.entry(dependency).or_default().insert(dependent);
     }
 
     /// Returns whether the sort is empty (all nodes have been popped).

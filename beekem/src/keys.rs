@@ -5,10 +5,7 @@ use crate::{
     error::CgkaError,
     transact::{Fork, Merge},
 };
-use alloc::collections::BTreeMap;
-use alloc::string::ToString;
-use alloc::vec;
-use alloc::vec::Vec;
+use alloc::{collections::BTreeMap, string::ToString, vec, vec::Vec};
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
 

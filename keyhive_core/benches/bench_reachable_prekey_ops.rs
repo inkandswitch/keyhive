@@ -4,13 +4,13 @@ use dupe::Dupe;
 use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
-    crypto::signer::memory::MemorySigner,
     listener::no_listener::NoListener,
     principal::{
         agent::Agent, individual::op::KeyOp, membered::Membered, peer::Peer, public::Public,
     },
     test_utils::make_simple_keyhive,
 };
+use keyhive_crypto::signer::memory::MemorySigner;
 use nonempty::nonempty;
 
 fn main() {
