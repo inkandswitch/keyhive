@@ -66,4 +66,19 @@ impl JsAgent {
         }
         Ok(map)
     }
+
+    /// Returns prekey operation hashes for this [`Agent`] as an array of hash bytes.
+    #[wasm_bindgen(js_name = keyOpHashes)]
+    pub async fn key_op_hashes(&self) -> Vec<js_sys::Uint8Array> {
+        let key_ops = self.0.key_ops().await;
+        let mut arr = Vec::new();
+        for key_op in key_ops.values() {
+            let event: Event<JsSigner, JsChangeId, JsEventHandler> =
+                Event::from(key_op.as_ref().dupe());
+            let digest = Digest::hash(&event);
+            let hash = digest.as_slice();
+            arr.push(hash.into());
+        }
+        arr
+    }
 }
