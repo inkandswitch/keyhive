@@ -5,6 +5,9 @@ set -euo pipefail
 # These cause "recursive use of an object" runtime panics when JS callbacks
 # re-enter during the call. Use RefCell for interior mutability instead.
 #
+# Suppress for a specific parameter with a comment on the preceding line:
+#   // lint:allow(wasm_mut) — reason goes here
+#
 # Usage:
 #   scripts/lint-wasm-mut.sh [--workspace-root DIR] [--github-annotations]
 #
@@ -54,7 +57,7 @@ for crate_dir in "$workspace_root"/*_wasm; do
     $AWK -v github="$github_annotations" '
       BEGIN {
         in_wb_impl = 0; brace_depth = 0; wb_attr = 0
-        in_fn_sig = 0; found = 0
+        in_fn_sig = 0; found = 0; prev_allow = 0
       }
 
       # Detect #[wasm_bindgen...] attribute
@@ -88,7 +91,7 @@ for crate_dir in "$workspace_root"/*_wasm; do
 
       # Inside a fn signature: check every line for &mut until we see {
       in_fn_sig {
-        if (/&mut[[:space:]]/) {
+        if (/&mut[[:space:]]/ && !prev_allow) {
           if (github == "true")
             printf "::error file=%s,line=%d::%s\n", FILENAME, NR, $0
           else
@@ -97,6 +100,9 @@ for crate_dir in "$workspace_root"/*_wasm; do
         }
         if (/{/) { in_fn_sig = 0; wb_attr = 0 }
       }
+
+      # Track lint:allow(wasm_mut) on the preceding line
+      { prev_allow = /lint:allow\(wasm_mut\)/ }
 
       # Reset wb_attr on non-blank, non-attribute, non-fn, non-impl lines
       !in_fn_sig && !/^[[:space:]]*#/ && !/^[[:space:]]*$/ && !/^[[:space:]]*(pub[[:space:]]+)?impl/ && !/^[[:space:]]*(pub[[:space:]]+)?fn/ {
