@@ -74,16 +74,19 @@ use tracing::instrument;
 type MembershipOpMap<S, T, L> =
     HashMap<Digest<MembershipOperation<S, T, L>>, MembershipOperation<S, T, L>>;
 
+type MembershipOpEntry<S, T, L> =
+    (Digest<MembershipOperation<S, T, L>>, MembershipOperation<S, T, L>);
+
 /// Reachable prekey ops for all agents, with shared storage.
 ///
 /// Instead of duplicating topsorted key ops across agents, the ops are stored
-/// once in [`ops`] and each agent has an index into that shared map.
+/// once in `ops` and each agent has an index into that shared map.
 #[derive(Debug)]
 pub struct AllReachablePrekeyOps {
     /// Topsorted key ops per identifier (agent, group, or doc), computed once.
     pub ops: HashMap<Identifier, Vec<Arc<KeyOp>>>,
 
-    /// For each agent: the set of identifiers whose ops in [`ops`] are reachable.
+    /// For each agent: the set of identifiers whose ops in `ops` are reachable.
     pub index: HashMap<Identifier, HashSet<Identifier>>,
 }
 
@@ -967,14 +970,10 @@ impl<
 
     /// Collect BFS starting heads from delegation/revocation stores.
     /// This should be cheap (Arc clones + digest copies).
-    #[allow(clippy::type_complexity)]
     fn collect_membership_heads(
         dlg_heads: &DelegationStore<S, T, L>,
         rev_heads: &RevocationStore<S, T, L>,
-    ) -> Vec<(
-        Digest<MembershipOperation<S, T, L>>,
-        MembershipOperation<S, T, L>,
-    )> {
+    ) -> Vec<MembershipOpEntry<S, T, L>> {
         let mut heads = Vec::with_capacity(dlg_heads.len() + rev_heads.len());
         for (hash, dlg_head) in dlg_heads.iter() {
             heads.push((hash.into(), dlg_head.dupe().into()));
@@ -985,32 +984,26 @@ impl<
         heads
     }
 
-    /// BFS from delegation/revocation heads, collecting all reachable membership ops.
-    #[allow(clippy::type_complexity)]
-    async fn bfs_membership_ops(
-        mut heads: Vec<(
-            Digest<MembershipOperation<S, T, L>>,
-            MembershipOperation<S, T, L>,
-        )>,
-    ) -> HashMap<Digest<MembershipOperation<S, T, L>>, MembershipOperation<S, T, L>> {
-        let mut ops = HashMap::new();
-        let mut visited: HashSet<Digest<MembershipOperation<S, T, L>>> = HashSet::new();
-
-        while let Some((hash, op)) = heads.pop() {
-            if visited.contains(&hash) {
-                continue;
-            }
-            visited.insert(hash);
-            ops.insert(hash, op.clone());
-
-            match op {
-                MembershipOperation::Delegation(dlg) => {
-                    if let Some(proof) = &dlg.payload.proof {
-                        heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
-                    }
-                    for rev in dlg.payload.after_revocations.iter() {
-                        heads.push((Digest::hash(rev.as_ref()).into(), rev.dupe().into()));
-                    }
+    /// Push BFS edges from a [`MembershipOperation`] onto the heads queue.
+    ///
+    /// When `follow_group_heads` is true, delegation edges into groups also
+    /// enqueue the group's own delegation heads (used during full BFS but not
+    /// when extending from a single revocation).
+    async fn push_membership_edges(
+        op: &MembershipOperation<S, T, L>,
+        heads: &mut Vec<MembershipOpEntry<S, T, L>>,
+        visited: &HashSet<Digest<MembershipOperation<S, T, L>>>,
+        follow_group_heads: bool,
+    ) {
+        match op {
+            MembershipOperation::Delegation(dlg) => {
+                if let Some(proof) = &dlg.payload.proof {
+                    heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
+                }
+                for rev in dlg.payload.after_revocations.iter() {
+                    heads.push((Digest::hash(rev.as_ref()).into(), rev.dupe().into()));
+                }
+                if follow_group_heads {
                     if let Agent::Group(_group_id, group) = &dlg.payload.delegate {
                         for dlg in group.lock().await.delegation_heads().values() {
                             let dlg_hash = Digest::hash(dlg.as_ref()).into();
@@ -1020,14 +1013,31 @@ impl<
                         }
                     }
                 }
-                MembershipOperation::Revocation(rev) => {
-                    if let Some(proof) = &rev.payload.proof {
-                        heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
-                    }
-                    let r = rev.payload.revoke.dupe();
-                    heads.push((Digest::hash(r.as_ref()).into(), r.into()));
-                }
             }
+            MembershipOperation::Revocation(rev) => {
+                if let Some(proof) = &rev.payload.proof {
+                    heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
+                }
+                let r = rev.payload.revoke.dupe();
+                heads.push((Digest::hash(r.as_ref()).into(), r.into()));
+            }
+        }
+    }
+
+    /// BFS from delegation/revocation heads, collecting all reachable membership ops.
+    async fn bfs_membership_ops(
+        mut heads: Vec<MembershipOpEntry<S, T, L>>,
+    ) -> MembershipOpMap<S, T, L> {
+        let mut ops = HashMap::new();
+        let mut visited: HashSet<Digest<MembershipOperation<S, T, L>>> = HashSet::new();
+
+        while let Some((hash, op)) = heads.pop() {
+            if visited.contains(&hash) {
+                continue;
+            }
+            visited.insert(hash);
+            Self::push_membership_edges(&op, &mut heads, &visited, true).await;
+            ops.insert(hash, op);
         }
 
         ops
@@ -1039,11 +1049,7 @@ impl<
         all_ops: &mut MembershipOpMap<S, T, L>,
         visited: &mut HashSet<Digest<MembershipOperation<S, T, L>>>,
     ) {
-        #[allow(clippy::type_complexity)]
-        let mut heads: Vec<(
-            Digest<MembershipOperation<S, T, L>>,
-            MembershipOperation<S, T, L>,
-        )> = Vec::new();
+        let mut heads: Vec<MembershipOpEntry<S, T, L>> = Vec::new();
 
         if let Some(proof) = &rev.payload.proof {
             heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
@@ -1056,25 +1062,8 @@ impl<
                 continue;
             }
             visited.insert(hash);
-            all_ops.entry(hash).or_insert_with(|| op.clone());
-
-            match op {
-                MembershipOperation::Delegation(dlg) => {
-                    if let Some(proof) = &dlg.payload.proof {
-                        heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
-                    }
-                    for rev in dlg.payload.after_revocations.iter() {
-                        heads.push((Digest::hash(rev.as_ref()).into(), rev.dupe().into()));
-                    }
-                }
-                MembershipOperation::Revocation(rev) => {
-                    if let Some(proof) = &rev.payload.proof {
-                        heads.push((Digest::hash(proof.as_ref()).into(), proof.dupe().into()));
-                    }
-                    let r = rev.payload.revoke.dupe();
-                    heads.push((Digest::hash(r.as_ref()).into(), r.into()));
-                }
-            }
+            Self::push_membership_edges(&op, &mut heads, visited, false).await;
+            all_ops.entry(hash).or_insert(op);
         }
     }
 
@@ -3724,7 +3713,7 @@ mod tests {
             .await
             .unwrap();
 
-        // eve: registered but not a member of anything
+        // eve: registered but not a member of anything (verified below)
 
         // Revoke bob from doc1
         alice
@@ -3739,12 +3728,19 @@ mod tests {
         // Get the all-agents result
         let all_results = alice.membership_ops_for_all_agents().await;
 
+        // Eve is registered but not a member of anything — she should not
+        // appear in the all-agents index.
+        let eve_identifier: Identifier = eve_id.into();
+        assert!(
+            all_results.ops_for_agent(&eve_identifier).is_none(),
+            "eve should not be in all_results since she is not a member of anything"
+        );
+
         // For each agent, compare with per-agent result
         let agents: Vec<(IndividualId, Arc<Mutex<Individual>>)> = vec![
             (bob_id, bob_indie),
             (carol_id, carol_indie),
             (dave_id, dave_indie),
-            (eve_id, eve_indie),
         ];
         for (id, indie) in &agents {
             let agent = Agent::Individual(*id, indie.dupe());
