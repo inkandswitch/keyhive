@@ -62,7 +62,7 @@
 
 | Term | Definition |
 |------|-----------|
-| **Beelay** | The Keyhive relay: syncs E2EE chunks using stateless RPCs over TLS. Does not require identities; capability proofs authorize data access. |
+| **Subduction** | The sync relay: syncs E2EE chunks using stateless RPCs over TLS. Does not require identities; capability proofs authorize data access. |
 | **Sedimentree** | A data structure that recursively compresses ranges of a commit DAG. Older commits are compressed into larger strata (like sedimentary rock layers). |
 | **Stratum** | A compressed range of commits within a sedimentree, defined by start hash, end hash, level, and interior checkpoint hashes. |
 | **Stable Chunking** | Coordination-free chunking using hash hardness (trailing zeros). All replicas with shared history produce the same chunks independently. |

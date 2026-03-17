@@ -3,15 +3,13 @@
 | Feature           | Algorithm                 |
 |-------------------|---------------------------|
 | Hash              | BLAKE3                    |
-| Symmetric Crypto  | [XChaCha20-BLAKE3-MiCKey] |
+| Symmetric Crypto  | [XChaCha20-BLAKE3 w/ misuse-resistant nonce] |
 | Asymmetric Crypto | Curve25519, EdDSA, X25519 |
 
-## XChaCha20-BLAKE3-MiCKey
-[XChaCha20-BLAKE3-MiCKey]: #xchacha20-blake3-mickey
+## XChaCha20-BLAKE3 with Misuse-Resistant Nonce
+[XChaCha20-BLAKE3 w/ misuse-resistant nonce]: #xchacha20-blake3-with-misuse-resistant-nonce
 
-(Where "MiCKey" provisionally stands for "Misuse-resistant and Committed Key")
-
-This is a key committing, nonce misuse-resistant variant of [XChaCha20-BLAKE3] [^bchacha-note].
+This is a key-committing, nonce-misuse-resistant variant of [XChaCha20-BLAKE3] [^bchacha-note].
 
 [^bchacha-note]: Why not SChaCha or BChaCha? These look even better, but we're starting to increase the amount of custom crypto that we're rolling. The reasons for the enhancements in these variants make sense, but we're not going to (e.g.) implement our own library that doesn't include HChaCha.
 

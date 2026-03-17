@@ -1,4 +1,4 @@
-# Contributing to `keyhive` and `beelay`
+# Contributing to `keyhive` and `subduction`
 
 Before all else: _thank you for taking the time to contribute!_
 

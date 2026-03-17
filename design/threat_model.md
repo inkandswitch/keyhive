@@ -2,7 +2,7 @@
 
 ## Scope
 
-This document describes the threat model for Keyhive: the authorization, encryption, and group key agreement layers. Threats specific to the Beelay sync relay, transport security (TLS/mTLS), or specific identity systems are out of scope here.
+This document describes the threat model for Keyhive: the authorization, encryption, and group key agreement layers. Threats specific to the Subduction sync relay, transport security (TLS/mTLS), or specific identity systems are out of scope here.
 
 ## Security Goals
 
@@ -30,7 +30,7 @@ This document describes the threat model for Keyhive: the authorization, encrypt
 | **Ed25519 is secure** | Signing keys are unforgeable; verifying keys faithfully identify agents. |
 | **X25519 is secure** | Diffie-Hellman key exchange produces shared secrets unknown to passive observers. |
 | **BLAKE3 is collision-resistant** | Content addressing and SIV construction depend on collision resistance. |
-| **XChaCha20-BLAKE3-MiCKey is IND-CPA secure** | Symmetric encryption is semantically secure under chosen-plaintext attack. _Note: this construction needs further cryptographic review (see [cipher suite](./ciphersuite.md))._ |
+| **XChaCha20-BLAKE3 with misuse-resistant nonce is IND-CPA secure** | Symmetric encryption is semantically secure under chosen-plaintext attack. _Note: this construction needs further cryptographic review (see [cipher suite](./ciphersuite.md))._ |
 | **Signing keys are kept secret** | Compromise of a signing key grants the attacker all capabilities of that agent until revoked. |
 | **Causal delivery** | Operations are received in causal order (guaranteed by Keyhive's event system and sync protocol). |
 
@@ -66,7 +66,7 @@ An agent who was once a legitimate member but has been revoked, or a member who 
 
 ### Compromised Sync Server (Honest-but-Curious Relay)
 
-A Beelay relay that stores and forwards E2EE chunks but may attempt to learn content.
+A Subduction relay that stores and forwards E2EE chunks but may attempt to learn content.
 
 **Capabilities:**
 - Store all ciphertext
@@ -130,6 +130,6 @@ An attacker who can intercept, modify, and inject network messages.
 
 ## Open Questions
 
-- The XChaCha20-BLAKE3-MiCKey construction needs further cryptographic review (flagged in [cipher suite](./ciphersuite.md))
+- The XChaCha20-BLAKE3 misuse-resistant nonce construction needs further cryptographic review (flagged in [cipher suite](./ciphersuite.md))
 - Post-quantum migration path: X25519 and ChaCha20 are replaceable, but the migration mechanism is not yet specified
 - Formal verification of the BeeKEM security properties against the concurrent TreeKEM threat model
