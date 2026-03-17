@@ -2,13 +2,83 @@
 
 This directory contains the design rationale for the core components of Keyhive.
 
+## Documents
+
+| Document                                                    | Status   | Summary                                                    |
+|-------------------------------------------------------------|----------|------------------------------------------------------------|
+| [Convergent Capabilities](./convergent_capabilities.md)     | Draft    | CRDT-aware capability system for mutation control (concap) |
+| [Group Membership](./group_membership.md)                   | Complete | Agent hierarchy, delegation, revocation, device management |
+| [Causal Encryption](./causal_encryption.md)                 | Complete | E2EE with per-content keys linked to causal predecessors   |
+| [Cipher Suite](./ciphersuite.md)                            | Complete | BLAKE3, XChaCha20-BLAKE3-MiCKey, Curve25519/Ed25519/X25519 |
+| [BeeKEM](./beekem.md)                                       | Draft    | Concurrent TreeKEM variant for CGKA (BeeKEM)               |
+| [Collection Sync](./collection_sync.md)                     | Complete | Multi-document sync via reverse auth graph traversal       |
+| [Sedimentree](./sedimentree.md)                             | Complete | Depth-based commit graph compression for sync              |
+| [Stable Chunking](./stable_chunking.md)                     | Complete | Coordination-free chunking via hash hardness               |
+| [Edge Names](./edge_names.md)                               | Complete | Lightweight pet-name-based identity discovery              |
+| [Inter-Document References](./inter_document_references.md) | Stub     | Soft pointers and branch-head tracking                     |
+| [Threat Model](./threat_model.md)                           | Draft    | Threat actors, trust boundaries, security goals            |
+| [Glossary](./glossary.md)                                   | Draft    | Terminology reference                                      |
+
 ## Overview
 
 The Keyhive project focuses on the [authorization][auth n vs z] (authZ) of updates to [local-first][LoFi] data such as [Automerge]. It includes end-to-end encryption (E2EE), continuous group key agreement (CGKA), and a capability system. We designed Keyhive to run both natively and in the browser. It aims to "do one thing well" (local-first access control), and be agnostic about questions of identity and account recovery so that so that it will be compatible with [PKI] and [identity] systems including [DID]s, [Keyoxide], [KERI], [OpenPGP], [petnames], [edgenames], [ATProto], etc.
 
 Below is a high level overview of how the parts fit together. We have included dashed boxes to show where ID and recovery systems would fit, but we emphasize that implementing these are not in scope.
 
-![](./assets/overview.png)
+```mermaid
+%%{ init: { "flowchart": { "htmlLabels": true } } }%%
+flowchart TD
+    classDef cap    fill:#f5deb3,stroke:#d2691e,color:#333
+    classDef enc    fill:#d6eaf8,stroke:#2980b9,color:#333
+    classDef crypto fill:#e8e8e8,stroke:#333,color:#333
+    classDef ext    fill:none,stroke:#b19cd9,stroke-dasharray:5 5,color:#999
+
+    SP("Sync Protocol"):::ext
+
+    subgraph capabilities ["Capabilities"]
+        direction TB
+        MC["Mutation Control"]:::cap
+        CC["Convergent Capabilities"]:::cap
+        MC --> CC
+    end
+
+    subgraph encryption ["Encryption"]
+        direction TB
+        CE["Causal Encryption"]:::enc
+    end
+
+    CGKA["Continuous Group Key Agreement"]:::enc
+
+    ED["Ed25519"]:::crypto
+    X2["X25519"]:::crypto
+    CH["ChaCha20"]:::crypto
+
+    ID("Identity"):::ext
+    KR("Key Recovery"):::ext
+
+    %% Sync Protocol interacts with both subsystems
+    SP -.-> capabilities
+    SP -.-> encryption
+
+    %% CGKA sits at the intersection
+    CC --> CGKA
+    CGKA --> CE
+
+    %% Crypto primitives
+    CC  --> ED
+    CGKA --> X2
+    CGKA --> CH
+    CE  --> CH
+
+    %% Out-of-scope systems
+    ID  -.-> ED
+    KR  -.-> ED
+    KR  -.-> X2
+```
+
+> [!NOTE]
+> Dashed boxes denote systems that are _out of scope_ for Keyhive.
+> An [image version](./assets/overview.png) of this diagram is also available.
 
 Automerge was designed for the local-first use case. This precludes network-based auth protocols like [OPAQUE], which is a network-based authentication (authN) protocol and thus depends on the encapsulation provided by the network to keep the information on the client and server separate. Crucially, local-first apps require [partition tolerance], so the entire application runs at every replica based on their [eventually-consistent][EC] view of the data, and thus we cannot rely on a network boundary like in OPAQUE (in addition to being authZ not authN). Our authorization needs are very simple: signing and verifying data with public key crypto (in our case: [Ed25519]).
 

@@ -1,3 +1,13 @@
+//! Wasm bindings for Keyhive.
+//!
+//! This crate wraps [`keyhive_core`] for use from JavaScript via
+//! [`wasm-bindgen`]. All public types use shared references (`&self`) at the
+//! JS boundary and `RefCell` for interior mutability to avoid
+//! `wasm-bindgen`'s exclusive-borrow runtime panics.
+//!
+//! See `keyhive_wasm/HACKING.md` for build instructions and the
+//! conditional-exports packaging strategy.
+
 pub(crate) mod macros;
 
 pub mod js;
