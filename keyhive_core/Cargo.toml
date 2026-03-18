@@ -89,6 +89,11 @@ harness = false
 required-features = ["test_utils"]
 
 [[bench]]
+name = "bench_ingest"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
 name = "bench_reachable_prekey_ops"
 harness = false
 required-features = ["test_utils"]
@@ -105,6 +110,16 @@ required-features = ["test_utils"]
 
 [[bench]]
 name = "bench_reverse_topsort"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "bench_reachable_prekey_ops_all"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "bench_membership_ops_all"
 harness = false
 required-features = ["test_utils"]
 
