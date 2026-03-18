@@ -98,5 +98,10 @@ name = "bench_toggling_delegate_revoke"
 harness = false
 required-features = ["test_utils"]
 
+[[bench]]
+name = "bench_reverse_topsort"
+harness = false
+required-features = ["test_utils"]
+
 [lints.clippy]
 doc_overindented_list_items = "allow"
