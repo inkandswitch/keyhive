@@ -525,7 +525,7 @@ impl JsKeyhive {
 
     #[wasm_bindgen(js_name = ingestArchive)]
     pub async fn ingest_archive(
-        &mut self,
+        &self,
         archive: &JsArchive,
     ) -> Result<(), JsReceiveStaticEventError> {
         init_span!("JsKeyhive::ingest_archive");
@@ -536,7 +536,7 @@ impl JsKeyhive {
 
     #[wasm_bindgen(js_name = ingestEventsBytes)]
     pub async fn ingest_events_bytes(
-        &mut self,
+        &self,
         events_bytes_array: js_sys::Array,
     ) -> Result<js_sys::Array, JsError> {
         init_span!("JsKeyhive::ingest_events_bytes");
