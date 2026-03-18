@@ -51,6 +51,7 @@ impl JsAgent {
 
     /// Returns prekey operations for this agent as a Map of hash -> serialized bytes for [`StaticEvent`]
     #[wasm_bindgen(js_name = keyOps)]
+    #[allow(clippy::mutable_key_type)]
     pub async fn key_ops(&self) -> Result<js_sys::Map, JsSerializationError> {
         let key_ops = self.0.key_ops().await;
         let map = js_sys::Map::new();
