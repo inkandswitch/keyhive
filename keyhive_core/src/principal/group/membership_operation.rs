@@ -235,8 +235,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         > = HashMap::new();
 
         while let Some(op) = explore.pop() {
-            let (ancestors, longest_path) = op.ancestors();
             let digest = Digest::hash(&op);
+            if ops_with_ancestors.contains_key(&digest) {
+                continue;
+            }
+
+            let (ancestors, longest_path) = op.ancestors();
 
             for ancestor in ancestors.values() {
                 explore.push(ancestor.as_ref().dupe());
@@ -266,14 +270,14 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
                 }
             }
 
+            #[allow(clippy::mutable_key_type)]
+            let ancestor_set: HashSet<&MembershipOperation<S, T, L>> =
+                op_ancestors.values().map(|op| op.as_ref()).collect();
+
             for (other_digest, other_op) in op_ancestors.iter() {
                 let (_, other_ancestors, other_longest_path) = ops_with_ancestors
                     .get(other_digest)
                     .expect("values that we just put there to be there");
-
-                #[allow(clippy::mutable_key_type)]
-                let ancestor_set: HashSet<&MembershipOperation<S, T, L>> =
-                    op_ancestors.values().map(|op| op.as_ref()).collect();
 
                 #[allow(clippy::mutable_key_type)]
                 let other_ancestor_set: HashSet<&MembershipOperation<S, T, L>> =
