@@ -173,15 +173,9 @@ impl<T: Serialize + Debug> Signed<T> {
 
     /// Map over the payload of the signed data.
     ///
-    /// The digest hash is not preserved since the payload type changes.
+    /// The digest hash is recomputed eagerly since the payload type changes.
     pub fn map<U: Serialize + Debug, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
-        Signed {
-            payload: f(self.payload),
-            issuer: self.issuer,
-            signature: self.signature,
-            #[cfg(feature = "std")]
-            digest_hash: OnceLock::new(),
-        }
+        Signed::new(f(self.payload), self.issuer, self.signature)
     }
 }
 
@@ -206,12 +200,7 @@ mod arb {
             let mut key = arb_signing_key(u)?;
             let encoded = bincode::serialize(&payload).unwrap();
             let signature = key.sign(&encoded);
-            Ok(super::Signed {
-                payload,
-                issuer: key.verifying_key(),
-                signature,
-                digest_hash: std::sync::OnceLock::new(),
-            })
+            Ok(super::Signed::new(payload, key.verifying_key(), signature))
         }
     }
 }

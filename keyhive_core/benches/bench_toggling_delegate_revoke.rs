@@ -13,78 +13,64 @@ use keyhive_core::{
 };
 use keyhive_crypto::signer::memory::MemorySigner;
 use nonempty::nonempty;
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 fn main() {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(run_toggling_delegate_revoke_benchmark());
+    divan::main();
 }
 
-async fn run_toggling_delegate_revoke_benchmark() {
-    println!("Benchmark: Toggling Delegate/Revoke on a Public Document\n");
+#[divan::bench(
+    args = [1, 3, 5, 7, 10],
+    sample_count = 1,
+    sample_size = 1,
+)]
+fn toggle_delegate_revoke(bencher: divan::Bencher, prior_toggles: usize) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
-    let mut csprng = rand::rngs::OsRng;
-    let sk = MemorySigner::generate(&mut csprng);
-    let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new()));
+    let (kh, membered_doc, public_agent, public_id) = rt.block_on(async {
+        let mut csprng = rand::rngs::OsRng;
+        let sk = MemorySigner::generate(&mut csprng);
+        let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new()));
 
-    let kh = Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::rngs::OsRng)
-        .await
-        .expect("keyhive generation should succeed");
-
-    kh.register_individual(Arc::new(Mutex::new(Public.individual())))
-        .await;
-
-    let doc = kh
-        .generate_doc(vec![], nonempty![[1u8; 32]])
-        .await
-        .expect("doc generation should succeed");
-
-    let doc_id = doc.lock().await.doc_id();
-    let membered_doc = Membered::Document(doc_id, doc.dupe());
-
-    let public_agent: Agent<MemorySigner> = Public.individual().into();
-    let public_id = Public.id();
-
-    println!(
-        "{:>9} | {:>13} | {:>11} | {:>10}",
-        "Iteration", "Delegate (ms)", "Revoke (ms)", "Total (ms)"
-    );
-    println!("-----------------------------------------------------");
-
-    let iterations = 10;
-
-    for i in 1..=iterations {
-        let delegate_start = Instant::now();
-        kh.add_member(public_agent.clone(), &membered_doc, Access::Write, &[])
+        let kh = Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::rngs::OsRng)
             .await
-            .expect("add_member should succeed");
-        let delegate_elapsed = delegate_start.elapsed();
+            .expect("keyhive generation should succeed");
 
-        let revoke_start = Instant::now();
-        kh.revoke_member(public_id, true, &membered_doc)
+        kh.register_individual(Arc::new(Mutex::new(Public.individual())))
+            .await;
+
+        let doc = kh
+            .generate_doc(vec![], nonempty![[1u8; 32]])
             .await
-            .expect("revoke_member should succeed");
-        let revoke_elapsed = revoke_start.elapsed();
+            .expect("doc generation should succeed");
 
-        let total_ms =
-            delegate_elapsed.as_secs_f64() * 1000.0 + revoke_elapsed.as_secs_f64() * 1000.0;
+        let doc_id = doc.lock().await.doc_id();
+        let membered_doc = Membered::Document(doc_id, doc.dupe());
 
-        println!(
-            "{:>9} | {:>13.2} | {:>11.2} | {:>10.2}",
-            i,
-            delegate_elapsed.as_secs_f64() * 1000.0,
-            revoke_elapsed.as_secs_f64() * 1000.0,
-            total_ms
-        );
+        let public_agent: Agent<MemorySigner> = Public.individual().into();
+        let public_id = Public.id();
 
-        if total_ms > 30_000.0 {
-            println!("\nExiting early. Iteration took over 30 seconds");
-            break;
+        // Build up history of prior toggles
+        for _ in 0..prior_toggles {
+            kh.add_member(public_agent.clone(), &membered_doc, Access::Write, &[])
+                .await
+                .expect("add_member should succeed");
+            kh.revoke_member(public_id, true, &membered_doc)
+                .await
+                .expect("revoke_member should succeed");
         }
-    }
 
-    println!("\nFinished...");
+        (kh, membered_doc, public_agent, public_id)
+    });
+
+    bencher.bench_local(|| {
+        rt.block_on(async {
+            kh.add_member(public_agent.clone(), &membered_doc, Access::Write, &[])
+                .await
+                .expect("add_member should succeed");
+            kh.revoke_member(public_id, true, &membered_doc)
+                .await
+                .expect("revoke_member should succeed");
+        });
+    });
 }
