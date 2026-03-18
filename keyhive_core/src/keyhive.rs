@@ -1822,8 +1822,12 @@ impl<
 
             for event in epoch {
                 if let Err(e) = self.receive_static_event(event.clone()).await {
-                    err = Some(e);
-                    next_epoch.push(event);
+                    if matches!(e, ReceiveStaticEventError::ReceivePrekeyOpError(_)) {
+                        tracing::warn!("Dropping unrecoverable prekey event: {:?}", e);
+                    } else {
+                        err = Some(e);
+                        next_epoch.push(event);
+                    }
                 }
             }
 
@@ -1844,7 +1848,6 @@ impl<
                     &mut *self.pending_events.lock().await,
                     new_pending.clone(),
                 ));
-                // FIXME: Some errors might not be recoverable on future attempts
                 return new_pending;
             }
 
