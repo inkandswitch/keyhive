@@ -103,5 +103,15 @@ name = "bench_ingest_unsorted_static_events"
 harness = false
 required-features = ["test_utils"]
 
+[[bench]]
+name = "bench_reachable_prekey_ops_all"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "bench_membership_ops_all"
+harness = false
+required-features = ["test_utils"]
+
 [lints.clippy]
 doc_overindented_list_items = "allow"
