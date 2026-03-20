@@ -945,25 +945,26 @@ impl<
 
         // Phase 3: Include agent-specific revocations that may not be reachable
         // from group/doc heads. These go under the agent's own identifier as source.
+        // NOTE: We must include revocations even for agents no longer in the index
+        // (i.e., fully revoked agents), so that those revocation events can be
+        // synced to the revoked peer.
         {
             let revocations = self.revocations.lock().await;
             for (agent_id, agent_revs) in revocations.all_agent_revocations() {
                 let identifier: Identifier = (*agent_id).into();
-                if index.contains_key(&identifier) {
-                    let agent_ops = ops.entry(identifier).or_default();
-                    let mut visited: HashSet<Digest<MembershipOperation<S, T, L>>> =
-                        agent_ops.keys().copied().collect();
-                    for rev in agent_revs {
-                        let hash: Digest<MembershipOperation<S, T, L>> =
-                            Digest::hash(rev.as_ref()).coerce();
-                        if visited.insert(hash) {
-                            agent_ops.entry(hash).or_insert_with(|| rev.dupe().into());
-                            Self::bfs_extend_from_revocation(rev, agent_ops, &mut visited).await;
-                        }
+                let agent_ops = ops.entry(identifier).or_default();
+                let mut visited: HashSet<Digest<MembershipOperation<S, T, L>>> =
+                    agent_ops.keys().copied().collect();
+                for rev in agent_revs {
+                    let hash: Digest<MembershipOperation<S, T, L>> =
+                        Digest::hash(rev.as_ref()).coerce();
+                    if visited.insert(hash) {
+                        agent_ops.entry(hash).or_insert_with(|| rev.dupe().into());
+                        Self::bfs_extend_from_revocation(rev, agent_ops, &mut visited).await;
                     }
-                    if !agent_ops.is_empty() {
-                        index.entry(identifier).or_default().insert(identifier);
-                    }
+                }
+                if !agent_ops.is_empty() {
+                    index.entry(identifier).or_default().insert(identifier);
                 }
             }
         }
