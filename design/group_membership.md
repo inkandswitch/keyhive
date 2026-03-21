@@ -119,7 +119,7 @@ flowchart TB
 
 ### Encrypted Content
 
-Note that the above may not all be available as cleartext to all participants. For example, a sync server (which only has [Pull] rights) will see the [Document] example above as something along the following lines:
+Note that the above may not all be available as cleartext to all participants. For example, a sync server (which only has [Relay] rights) will see the [Document] example above as something along the following lines:
 
 ```mermaid
 flowchart TB
@@ -293,7 +293,7 @@ The above example materializes to the following:
 ```mermaid
 %%{ init: { 'themeVariables': { 'lineColor': '#FFF' } } }%%
 flowchart BT
-    subgraph pullers[Pull]
+    subgraph pullers[Relay]
         Francine
 
         subgraph read_only[Read]
@@ -306,7 +306,7 @@ flowchart BT
                 reader_root
             end
 
-            subgraph also_write[Write]
+            subgraph also_write[Edit]
                 subgraph also_change_membership[Unrestricted]
                     subgraph admins[Team Group]
                         direction TB
@@ -342,12 +342,12 @@ flowchart BT
     style also_change_membership color:white,fill:darkred,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
 ```
 
-Validating [capabilities] proceeds recursively. Given read access to the caveats of each group, a complete list of users and their capabilities. The lowest level of rights MUST be `pull`, which only requires knowing the current public key of leaf agents.
+Validating [capabilities] proceeds recursively. Given read access to the caveats of each group, a complete list of users and their capabilities. The lowest level of rights MUST be `relay`, which only requires knowing the current public key of leaf agents.
 
 In this case, we have the following authority for Doc A:
 
-| Agent       | Pull Doc A | E2EE Read Doc A | Write to Doc A | Change Membership on Doc A |
-|-------------|------------|-----------------|----------------|----------------------------|
+| Agent       | Relay Doc A | E2EE Read Doc A | Edit Doc A | Change Membership on Doc A |
+|-------------|-------------|-----------------|------------|----------------------------|
 | Alice       | ✅         | ✅              | ✅             | ✅                         |
 | Bob         | ✅         | ✅              | ✅             | ✅                         |
 | Carol       | ✅         | ✅              | ✅             | ✅                         |
@@ -361,8 +361,8 @@ In this case, we have the following authority for Doc A:
 
 And for Doc B:
 
-| Agent       | Pull Doc B | E2EE Read Doc B | Write to Doc B | Change Membership on Doc B |
-|-------------|------------|-----------------|----------------|----------------------------|
+| Agent       | Relay Doc B | E2EE Read Doc B | Edit Doc B | Change Membership on Doc B |
+|-------------|-------------|-----------------|------------|----------------------------|
 | Alice       | ✅         | ✅              | ✅             | ✅                         |
 | Bob         | ✅         | ✅              | ✅             | ✅                         |
 | Carol       | ✅         | ✅              | ✅             | ✅                         |
@@ -452,20 +452,20 @@ sequenceDiagram
     Note over Doc,Ink & Switch: Setup Groups
     Ink & Switch ->> Ink & Switch: 🐣 Init
     Doc ->> Doc: 🐣 Init
-    Doc ->> Ink & Switch: 🎟️ Delegate(Doc, Write)
+    Doc ->> Ink & Switch: 🎟️ Delegate(Doc, Edit)
 
     Note over Ink & Switch,Mallory: Add users to Ink & Switch
 
     Ink & Switch ->> PvH: 🎟️ Delegate all (including manage membership)
-    Ink & Switch ->> Mallory: 🎟️ Delegate [Doc: Write]
+    Ink & Switch ->> Mallory: 🎟️ Delegate [Doc: Edit]
 
     Note over Doc,Mallory: Users write ops to Doc
-    PvH -->> Doc: ✍️ Write Op1 (authorized by ➋→➌→➍←➊)
-    Mallory -->> Doc: ✍️ Write Op2 (authorized by ➋→➌→➎←➊)
+    PvH -->> Doc: ✍️ Edit Op1 (authorized by ➋→➌→➍←➊)
+    Mallory -->> Doc: ✍️ Edit Op2 (authorized by ➋→➌→➎←➊)
 
     Note over Doc,Mallory: Mallory Revoked
     PvH -->> Ink & Switch: 💔 Revoke Mallory (authorized by ➊→➍)
-    Mallory --x Doc: 🚫 Write Op3 (REJECTED becuase ➑)
+    Mallory --x Doc: 🚫 Edit Op3 (REJECTED becuase ➑)
 ```
 
 ### Cycles
