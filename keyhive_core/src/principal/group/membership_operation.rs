@@ -490,6 +490,7 @@ mod tests {
     use futures::lock::Mutex;
     use keyhive_crypto::signer::{memory::MemorySigner, sync_signer::SyncSigner};
     use std::sync::{Arc, LazyLock};
+    use testresult::TestResult;
 
     // FIXME
     // FIXME these should probbaly use `lazy_static!`

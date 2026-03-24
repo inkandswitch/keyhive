@@ -5,15 +5,14 @@ use std::{
     hash::Hash,
 };
 
-/// Variant of Khan's topological sort over nodes of type `T`.
+/// Variant of Kahn's topological sort over nodes of type `T`.
 ///
 /// Nodes are inserted implicitly via [`add_dependency`]. When drained
-/// via repeated calls to [`pop_all`], each call returns every node
-/// whose predecessors have already been popped, sorted for
+/// via repeated calls to [`pop_frontier`], each call returns every
+/// node whose predecessors have already been popped, sorted for
 /// determinism.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
-pub struct TopologicalSort<T: Eq + Hash + Clone> {
+pub struct Topsort<T: Eq + Hash + Clone> {
     /// For each node, the set of its predecessors (nodes that must
     /// come before it).
     deps: HashMap<T, HashSet<T>>,
@@ -23,7 +22,7 @@ pub struct TopologicalSort<T: Eq + Hash + Clone> {
     rdeps: HashMap<T, HashSet<T>>,
 }
 
-impl<T: Eq + Hash + Clone> TopologicalSort<T> {
+impl<T: Eq + Hash + Clone> Topsort<T> {
     pub fn new() -> Self {
         Self {
             deps: HashMap::new(),
@@ -91,7 +90,7 @@ impl<T: Eq + Hash + Clone> TopologicalSort<T> {
     }
 }
 
-impl<T: Eq + Hash + Clone> Default for TopologicalSort<T> {
+impl<T: Eq + Hash + Clone> Default for Topsort<T> {
     fn default() -> Self {
         Self::new()
     }
@@ -102,18 +101,16 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    // ── Unit tests ──────────────────────────────────────────────
-
     #[test]
     fn empty() {
-        let mut ts = TopologicalSort::<u32>::new();
+        let mut ts = Topsort::<u32>::new();
         assert!(ts.is_empty());
         assert!(ts.pop_frontier().is_empty());
     }
 
     #[test]
     fn single_node() {
-        let mut ts = TopologicalSort::new();
+        let mut ts = Topsort::new();
         ts.add_node(1);
         assert!(!ts.is_empty());
         assert_eq!(ts.pop_frontier(), vec![1]);
@@ -122,7 +119,7 @@ mod tests {
 
     #[test]
     fn linear_chain() {
-        let mut ts = TopologicalSort::new();
+        let mut ts = Topsort::new();
         // 1 -> 2 -> 3
         ts.add_dependency(1, 2);
         ts.add_dependency(2, 3);
@@ -141,7 +138,7 @@ mod tests {
 
     #[test]
     fn diamond() {
-        let mut ts = TopologicalSort::new();
+        let mut ts = Topsort::new();
         // 1 -> 2, 1 -> 3, 2 -> 4, 3 -> 4
         ts.add_dependency(1, 2);
         ts.add_dependency(1, 3);
@@ -164,7 +161,7 @@ mod tests {
 
     #[test]
     fn cycle_detected() {
-        let mut ts = TopologicalSort::new();
+        let mut ts = Topsort::new();
         ts.add_dependency(1, 2);
         ts.add_dependency(2, 1);
 
@@ -175,7 +172,7 @@ mod tests {
 
     #[test]
     fn isolated_nodes() {
-        let mut ts = TopologicalSort::new();
+        let mut ts = Topsort::new();
         ts.add_node(1);
         ts.add_node(2);
         ts.add_node(3);
@@ -188,7 +185,7 @@ mod tests {
 
     #[test]
     fn add_dependency_after_partial_drain() {
-        let mut ts = TopologicalSort::new();
+        let mut ts = Topsort::new();
         ts.add_dependency(1, 3);
         ts.add_dependency(2, 3);
 
@@ -211,7 +208,7 @@ mod tests {
 
     #[test]
     fn duplicate_edges_are_idempotent() {
-        let mut ts = TopologicalSort::new();
+        let mut ts = Topsort::new();
         ts.add_dependency(1, 2);
         ts.add_dependency(1, 2);
         ts.add_dependency(1, 2);
@@ -223,7 +220,7 @@ mod tests {
 
     #[test]
     fn self_loop_is_a_cycle() {
-        let mut ts = TopologicalSort::new();
+        let mut ts = Topsort::new();
         ts.add_dependency(1, 1);
 
         assert!(ts.pop_frontier().is_empty());
@@ -232,7 +229,7 @@ mod tests {
 
     #[test]
     fn three_node_cycle() {
-        let mut ts = TopologicalSort::new();
+        let mut ts = Topsort::new();
         ts.add_dependency(1, 2);
         ts.add_dependency(2, 3);
         ts.add_dependency(3, 1);
@@ -244,7 +241,7 @@ mod tests {
     #[test]
     fn mixed_cycle_and_acyclic() {
         // 0 -> 1, 1 -> 2, 2 -> 1 (cycle), 0 -> 3
-        let mut ts = TopologicalSort::new();
+        let mut ts = Topsort::new();
         ts.add_dependency(0, 1);
         ts.add_dependency(1, 2);
         ts.add_dependency(2, 1); // cycle between 1 and 2
@@ -265,7 +262,7 @@ mod tests {
 
     #[test]
     fn wide_fan_out() {
-        let mut ts = TopologicalSort::new();
+        let mut ts = Topsort::new();
         for i in 1..=100 {
             ts.add_dependency(0, i);
         }
@@ -280,7 +277,7 @@ mod tests {
 
     #[test]
     fn wide_fan_in() {
-        let mut ts = TopologicalSort::new();
+        let mut ts = Topsort::new();
         for i in 0..100 {
             ts.add_dependency(i, 100);
         }
@@ -299,8 +296,8 @@ mod tests {
 
         /// Build a DAG from a list of edges on nodes 0..n, filtering
         /// out back-edges (where `from >= to`) to guarantee acyclicity.
-        fn build_dag(n: usize, edges: &[(usize, usize)]) -> TopologicalSort<usize> {
-            let mut ts = TopologicalSort::new();
+        fn build_dag(n: usize, edges: &[(usize, usize)]) -> Topsort<usize> {
+            let mut ts = Topsort::new();
             for i in 0..n {
                 ts.add_node(i);
             }
@@ -313,7 +310,7 @@ mod tests {
         }
 
         /// Fully drain a topsort and return the flattened output.
-        fn drain(ts: &mut TopologicalSort<usize>) -> Vec<usize> {
+        fn drain(ts: &mut Topsort<usize>) -> Vec<usize> {
             let mut output = vec![];
             loop {
                 let batch = ts.pop_frontier();
@@ -452,7 +449,7 @@ mod tests {
             /// in a single batch.
             #[test]
             fn prop_no_edges_single_batch(n in 1..50usize) {
-                let mut ts = TopologicalSort::new();
+                let mut ts = Topsort::new();
                 for i in 0..n {
                     ts.add_node(i);
                 }
@@ -466,7 +463,7 @@ mod tests {
             /// A linear chain of n nodes produces n singleton batches.
             #[test]
             fn prop_linear_chain_produces_singleton_batches(n in 1..50usize) {
-                let mut ts = TopologicalSort::new();
+                let mut ts = Topsort::new();
                 for i in 0..n.saturating_sub(1) {
                     ts.add_dependency(i, i + 1);
                 }
