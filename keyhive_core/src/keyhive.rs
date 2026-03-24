@@ -1442,6 +1442,21 @@ impl<
         group
     }
 
+    /// Export prekey secrets as an opaque blob for backup/migration.
+    ///
+    /// # Security
+    ///
+    /// The returned bytes contain unencrypted secret key material.
+    /// Callers are responsible for protecting this data at rest and in transit.
+    pub async fn export_prekey_secrets(&self) -> Result<Vec<u8>, bincode::Error> {
+        self.active.lock().await.export_prekey_secrets().await
+    }
+
+    /// Import prekey secrets from a previously exported blob, extending the existing set.
+    pub async fn import_prekey_secrets(&self, bytes: &[u8]) -> Result<(), bincode::Error> {
+        self.active.lock().await.import_prekey_secrets(bytes).await
+    }
+
     #[instrument(skip_all)]
     pub async fn into_archive(&self) -> Archive<T> {
         let topsorted_ops = {

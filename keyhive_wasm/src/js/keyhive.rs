@@ -533,6 +533,28 @@ impl JsKeyhive {
         mems.get(&id.0).map(|(_, access)| JsAccess(*access))
     }
 
+    #[wasm_bindgen(js_name = exportPrekeySecrets)]
+    pub async fn export_prekey_secrets(&self) -> Result<Box<[u8]>, JsSerializationError> {
+        init_span!("JsKeyhive::export_prekey_secrets");
+        self.0
+            .export_prekey_secrets()
+            .await
+            .map(Vec::into_boxed_slice)
+            .map_err(JsSerializationError::from)
+    }
+
+    #[wasm_bindgen(js_name = importPrekeySecrets)]
+    pub async fn import_prekey_secrets(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<(), JsSerializationError> {
+        init_span!("JsKeyhive::import_prekey_secrets");
+        self.0
+            .import_prekey_secrets(bytes)
+            .await
+            .map_err(JsSerializationError::from)
+    }
+
     #[wasm_bindgen(js_name = intoArchive)]
     pub async fn into_archive(self) -> JsArchive {
         init_span!("JsKeyhive::into_archive");
