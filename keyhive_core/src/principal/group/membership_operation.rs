@@ -63,6 +63,24 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
     }
 }
 
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialOrd
+    for MembershipOperation<S, T, L>
+{
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Ord
+    for MembershipOperation<S, T, L>
+{
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.signature()
+            .to_bytes()
+            .cmp(&other.signature().to_bytes())
+    }
+}
+
 impl<S: AsyncSigner, T: ContentRef + Serialize, L: MembershipListener<S, T>> Serialize
     for MembershipOperation<S, T, L>
 {
