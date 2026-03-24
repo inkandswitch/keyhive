@@ -1852,6 +1852,7 @@ mod tests {
         }
 
         /// Assert two Reversed outputs are identical element-by-element.
+        #[allow(clippy::type_complexity)]
         fn assert_same_output<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>(
             label: &str,
             expected: &Reversed<(
