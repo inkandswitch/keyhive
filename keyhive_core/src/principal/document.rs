@@ -126,6 +126,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         self.group.transitive_members().await
     }
 
+    pub fn revoked_members(&self) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
+        self.group.revoked_members()
+    }
+
     pub fn delegation_heads(&self) -> &DelegationStore<S, T, L> {
         self.group.delegation_heads()
     }

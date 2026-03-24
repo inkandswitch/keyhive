@@ -4,7 +4,7 @@ use super::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
-use keyhive_core::principal::group::delegation::Delegation;
+use keyhive_core::{crypto::signed_ext::SignedSubjectId, principal::group::delegation::Delegation};
 use keyhive_crypto::{signed::Signed, verifiable::Verifiable};
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
@@ -24,6 +24,11 @@ impl JsSignedDelegation {
     #[wasm_bindgen(getter)]
     pub fn delegation(&self) -> JsDelegation {
         self.0.payload().clone().into()
+    }
+
+    #[wasm_bindgen(getter, js_name = subjectId)]
+    pub fn subject_id(&self) -> super::identifier::JsIdentifier {
+        (*self.0).subject_id().into()
     }
 
     #[wasm_bindgen(getter, js_name = verifyingKey)]

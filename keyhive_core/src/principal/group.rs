@@ -328,6 +328,35 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         caps
     }
 
+    /// Returns agents whose delegations were revoked and who have no remaining
+    /// active delegation in this group. Each entry includes the agent and the
+    /// access level of the (now-revoked) delegation.
+    pub fn revoked_members(&self) -> HashMap<Identifier, (Agent<S, T, L>, Access)> {
+        let mut revoked: HashMap<Identifier, (Agent<S, T, L>, Access)> = HashMap::new();
+
+        for r in self.active_revocations.values() {
+            let delegate = &r.payload.revoke.payload.delegate;
+            let id = delegate.id();
+            let access = r.payload.revoke.payload.can;
+
+            // Skip if agent still has an active delegation
+            if self.members.contains_key(&id) {
+                continue;
+            }
+
+            revoked
+                .entry(id)
+                .and_modify(|(_, existing)| {
+                    if access > *existing {
+                        *existing = access;
+                    }
+                })
+                .or_insert_with(|| (delegate.clone(), access));
+        }
+
+        revoked
+    }
+
     pub fn delegation_heads(&self) -> &DelegationStore<S, T, L> {
         &self.state.delegation_heads
     }

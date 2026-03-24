@@ -499,6 +499,28 @@ impl JsKeyhive {
         }
     }
 
+    #[wasm_bindgen(js_name = revokedMembersForDoc)]
+    pub async fn revoked_members_for_doc(&self, doc_id: &JsDocumentId) -> Vec<Membership> {
+        init_span!("JsKeyhive::revoked_members_for_doc");
+        if let Some(doc) = self.0.get_document(doc_id.0).await {
+            let revoked = { doc.lock().await.revoked_members() };
+            revoked
+                .into_iter()
+                .filter(|(id, _)| *id != doc_id.0.into())
+                .filter_map(|(_, (agent, access))| {
+                    matches!(agent, Agent::Individual(_, _) | Agent::Active(_, _)).then(|| {
+                        Membership {
+                            who: agent,
+                            can: access,
+                        }
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
     #[wasm_bindgen(js_name = accessForDoc)]
     pub async fn access_for_doc(
         &self,
