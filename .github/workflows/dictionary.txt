@@ -5,6 +5,8 @@ Automerge
 BCP
 BChaCha
 BeeKEM
+BeeKEM's
+BLS
 Beelay
 BigCo
 CGKA
@@ -15,6 +17,7 @@ ChaCha's
 Cohn-Gordon
 Crypto
 Cryptree
+Diffie-Hellman
 DCGKA
 DCGKA's
 DNS
@@ -28,9 +31,11 @@ HChaCha
 Invariants
 JS
 JS-imported
+KDF
 JS-representation
 Keyhive
 Keyoxide
+LCA
 MLS
 Memoization
 MiCKey
@@ -84,11 +89,15 @@ cryptographically
 data's
 decrypt
 decrypted
+decrypters
 decrypting
+decryptions
+decrypts
 deduplicate
 delegator
 edgenames
 encrypter
+encrypter's
 encryptment
 et
 expede
@@ -100,6 +109,7 @@ img
 invariant
 invariants
 keyhive
+keypair
 linearizability
 lookups
 mTLS
@@ -133,6 +143,7 @@ statefulness
 struct
 struct's
 subgraph
+subtree
 subpath
 subsumptions
 subtype
