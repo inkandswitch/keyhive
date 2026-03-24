@@ -927,10 +927,12 @@ mod tests {
                 .position(|(_, op)| op == &alice_to_bob.dupe().into())
                 .unwrap();
 
-            let ad_idx = sorted
+            // alice_to_dan has no causal relationship with the other
+            // ops — just verify it exists in the output.
+            sorted
                 .iter()
                 .position(|(_, op)| op == &alice_to_dan.dupe().into())
-                .unwrap();
+                .expect("alice_to_dan should be in output");
 
             let bc_idx = sorted
                 .iter()
@@ -938,10 +940,6 @@ mod tests {
                 .unwrap();
 
             assert!(ab_idx < bc_idx);
-            // alice_to_dan has no causal relationship with the other ops,
-            // so we only check that it exists (already verified via unwrap
-            // above) and that the real causal constraint holds.
-            let _ = ad_idx;
         }
 
         #[tokio::test]
