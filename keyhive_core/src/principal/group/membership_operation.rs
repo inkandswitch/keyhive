@@ -276,8 +276,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
             all_ops.insert(digest, (op, parent_digests));
         }
 
-        // ── Compute distance_to_root (memoized DFS) ────────────────
-        //
         // distance_to_root(node) = 1 + max(distance_to_root(p) for p in parents)
         // Root nodes (no parents in all_ops) have distance_to_root = 1.
         //
@@ -288,7 +286,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         // Lower distance = closer to root = more senior authority.
         // An attacker cannot reduce their distance by creating puppet
         // delegations — those only increase depth.
-
         fn compute_distance<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>(
             digest: &Digest<MembershipOperation<S, T, L>>,
             all_ops: &BTreeMap<
@@ -325,8 +322,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
             compute_distance(digest, &all_ops, &mut distance_to_root);
         }
 
-        // ── Build topsort with structural + revocation edges ────────
-
         type TsKey<'a, S, T, L> = (
             Digest<MembershipOperation<S, T, L>>,
             &'a MembershipOperation<S, T, L>,
@@ -335,9 +330,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         let mut adjacencies: crate::util::topsort::TopologicalSort<TsKey<'_, S, T, L>> =
             crate::util::topsort::TopologicalSort::new();
 
-        // Reverse index: for each op, which ops list it as a parent.
-        // Used when re-inserting deferred revocations to restore their
-        // outgoing edges.
         let mut successors_of: HashMap<
             Digest<MembershipOperation<S, T, L>>,
             Vec<Digest<MembershipOperation<S, T, L>>>,
@@ -348,10 +340,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
 
             for parent_digest in parent_digests {
                 if let Some((parent_op, _)) = all_ops.get(parent_digest) {
-                    // "child before parent" in drain order
                     adjacencies.add_dependency((*digest, op), (*parent_digest, parent_op));
-                    // child (digest) is a predecessor of parent — so
-                    // parent is a successor of child.
                     successors_of
                         .entry(*digest)
                         .or_default()
@@ -359,7 +348,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
                 }
             }
 
-            // If this delegation's proof was revoked, add an edge to the revocation
             if let MembershipOperation::Delegation(d) = op {
                 if let Some(proof) = &d.payload.proof {
                     if let Some(revoked_digest) = revoked_dependencies.get(&Key(proof.signature)) {
@@ -376,18 +364,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
             }
         }
 
-        // ── Drain, forcing concurrent revocations into separate levels ──
-        //
-        // Each pop_frontier() returns all nodes with zero in-degree
-        // (concurrent frontier). Non-revocations are emitted
-        // immediately. When multiple revocations appear in the same
-        // frontier, they are concurrent and must be forced into
-        // separate frontiers ordered by distance to root (with
-        // digest as tie-breaker): we emit only the first and
-        // re-insert the rest — restoring their outgoing edges so
-        // that downstream nodes stay blocked until the revocation
-        // is actually emitted.
-
         let mut dependencies = vec![];
 
         while !adjacencies.is_empty() {
@@ -399,7 +375,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
             let (mut revocations, mut others): (Vec<_>, Vec<_>) =
                 batch.into_iter().partition(|(_, op)| op.is_revocation());
 
-            // Emit all non-revocations sorted by digest for determinism.
             others.sort_by_key(|(d, _)| *d);
             for (digest, op) in &others {
                 dependencies.push((*digest, (*op).clone()));
@@ -410,25 +385,15 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
                     dependencies.push((*digest, (*op).clone()));
                 }
             } else {
-                // Multiple concurrent revocations: force ordering by
-                // distance to root (lower = closer to root = more
-                // senior), breaking ties by digest. This prevents
-                // gaming: an attacker cannot shorten their chain, and
-                // adding puppet delegations only increases distance.
                 revocations.sort_by(|(d1, _), (d2, _)| {
                     let dist1 = distance_to_root.get(d1).copied().unwrap_or(1);
                     let dist2 = distance_to_root.get(d2).copied().unwrap_or(1);
                     dist1.cmp(&dist2).then_with(|| d1.cmp(d2))
                 });
 
-                // Emit the first (closest to root).
                 let (first_digest, first_op) = revocations[0];
                 dependencies.push((first_digest, first_op.clone()));
 
-                // Re-insert remaining revocations chained pairwise, and
-                // restore their outgoing edges so that successor nodes
-                // (which had their in-degrees decremented when this
-                // batch was popped) stay blocked.
                 let remaining = &revocations[1..];
                 for window in remaining.windows(2) {
                     let before = window[0];
@@ -443,7 +408,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
                     if let Some(succs) = successors_of.get(&rev_digest) {
                         for succ_digest in succs {
                             if let Some((succ_op, _)) = all_ops.get(succ_digest) {
-                                // "rev before succ" — succ depends on rev
                                 adjacencies
                                     .add_dependency((rev_digest, rev_op), (*succ_digest, succ_op));
                             }
