@@ -276,6 +276,55 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
             all_ops.insert(digest, (op, parent_digests));
         }
 
+        // ── Compute distance_to_root (memoized DFS) ────────────────
+        //
+        // distance_to_root(node) = 1 + max(distance_to_root(p) for p in parents)
+        // Root nodes (no parents in all_ops) have distance_to_root = 1.
+        //
+        // Computed via recursive DFS with memoization — each node is
+        // visited at most once. The graph is a DAG (no cycles in
+        // after_auth edges), so recursion terminates.
+        //
+        // Lower distance = closer to root = more senior authority.
+        // An attacker cannot reduce their distance by creating puppet
+        // delegations — those only increase depth.
+
+        fn compute_distance<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>(
+            digest: &Digest<MembershipOperation<S, T, L>>,
+            all_ops: &BTreeMap<
+                Digest<MembershipOperation<S, T, L>>,
+                (
+                    MembershipOperation<S, T, L>,
+                    Vec<Digest<MembershipOperation<S, T, L>>>,
+                ),
+            >,
+            memo: &mut HashMap<Digest<MembershipOperation<S, T, L>>, usize>,
+        ) -> usize {
+            if let Some(&dist) = memo.get(digest) {
+                return dist;
+            }
+            let dist = all_ops
+                .get(digest)
+                .map(|(_, parents)| {
+                    parents
+                        .iter()
+                        .filter(|pd| all_ops.contains_key(pd))
+                        .map(|pd| compute_distance(pd, all_ops, memo))
+                        .max()
+                        .unwrap_or(0)
+                        + 1
+                })
+                .unwrap_or(1);
+            memo.insert(*digest, dist);
+            dist
+        }
+
+        let mut distance_to_root: HashMap<Digest<MembershipOperation<S, T, L>>, usize> =
+            HashMap::new();
+        for digest in all_ops.keys() {
+            compute_distance(digest, &all_ops, &mut distance_to_root);
+        }
+
         // ── Build topsort with structural + revocation edges ────────
 
         type TsKey<'a, S, T, L> = (
@@ -329,54 +378,22 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
 
         // ── Drain, forcing concurrent revocations into separate levels ──
         //
-        // Each pop_all() returns all nodes with zero in-degree
+        // Each pop_frontier() returns all nodes with zero in-degree
         // (concurrent frontier). Non-revocations are emitted
         // immediately. When multiple revocations appear in the same
-        // batch, they are concurrent and must be forced into separate
-        // levels ordered by distance to root (with digest as
-        // tie-breaker): we emit only the first and re-insert the
-        // rest — restoring their outgoing edges so that downstream
-        // nodes stay blocked until the revocation is actually
-        // emitted.
-        //
-        // Distance to root is computed inline as each frontier is
-        // drained. Kahn's algorithm guarantees all parents have
-        // been popped in prior frontiers (and thus memoized) before
-        // their children appear.
-        //
-        // distance_to_root(node) = 1 + max(distance_to_root(p) for p in parents)
-        //
-        // Lower distance = closer to root = more senior authority.
-        // An attacker cannot reduce their distance by creating
-        // puppet delegations — those only increase depth.
+        // frontier, they are concurrent and must be forced into
+        // separate frontiers ordered by distance to root (with
+        // digest as tie-breaker): we emit only the first and
+        // re-insert the rest — restoring their outgoing edges so
+        // that downstream nodes stay blocked until the revocation
+        // is actually emitted.
 
-        let mut distance_to_root: HashMap<Digest<MembershipOperation<S, T, L>>, usize> =
-            HashMap::new();
         let mut dependencies = vec![];
 
         while !adjacencies.is_empty() {
             let batch = adjacencies.pop_frontier();
             if batch.is_empty() {
                 break; // cycle guard
-            }
-
-            // Compute distance_to_root for each node in this
-            // frontier. All parents are in prior frontiers, so their
-            // values are already in the memo table.
-            for (digest, _) in &batch {
-                let dist = all_ops
-                    .get(digest)
-                    .map(|(_, parents)| {
-                        parents
-                            .iter()
-                            .filter_map(|pd| distance_to_root.get(pd))
-                            .max()
-                            .copied()
-                            .unwrap_or(0)
-                            + 1
-                    })
-                    .unwrap_or(1);
-                distance_to_root.insert(*digest, dist);
             }
 
             let (mut revocations, mut others): (Vec<_>, Vec<_>) =
