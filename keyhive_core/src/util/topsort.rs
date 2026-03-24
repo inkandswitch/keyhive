@@ -377,7 +377,7 @@ mod tests {
                 }
             }
 
-            /// Nodes in the same pop_all batch are concurrent: no edge
+            /// Nodes in the same frontier are concurrent: no edge
             /// exists between any pair.
             #[test]
             fn prop_batch_members_are_concurrent((n, edges) in dag_strategy(30, 60)) {
