@@ -46,7 +46,7 @@ copyFileSync(
 
 // Now compile the `pkg-slim/index.ts` file
 execSync(
-  "pnpm exec tsc pkg-slim/index.ts --outDir pkg-slim --target esnext --module esnext --declaration --moduleResolution bundler",
+  "pnpm exec tsc --project tsconfig.slim.json",
   { stdio: "inherit" },
 );
 

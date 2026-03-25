@@ -74,6 +74,40 @@ use std::{
 use thiserror::Error;
 use tracing::instrument;
 
+/// CGKA ops for all agents, with shared storage.
+///
+/// CGKA ops are stored per document. Each agent has an index pointing to the
+/// documents whose CGKA ops it can reach (via `transitive_members`).
+#[derive(Debug)]
+pub struct AllCgkaOps {
+    /// CGKA ops per doc, keyed by doc Identifier.
+    pub ops: HashMap<Identifier, Vec<Arc<Signed<CgkaOperation>>>>,
+
+    /// For each agent: the set of doc identifiers whose ops are reachable.
+    pub index: HashMap<Identifier, HashSet<Identifier>>,
+}
+
+impl AllCgkaOps {
+    /// Returns the set of agent identifiers that have reachable CGKA ops.
+    pub fn agents(&self) -> impl Iterator<Item = &Identifier> {
+        self.index.keys()
+    }
+
+    /// Returns an iterator over all reachable CGKA ops for the given agent
+    /// (flattened across all documents), or `None` if the agent is not in the index.
+    pub fn ops_for_agent(
+        &self,
+        agent_id: &Identifier,
+    ) -> Option<impl Iterator<Item = &Arc<Signed<CgkaOperation>>>> {
+        self.index.get(agent_id).map(|doc_ids| {
+            doc_ids
+                .iter()
+                .filter_map(|doc_id| self.ops.get(doc_id))
+                .flat_map(|ops| ops.iter())
+        })
+    }
+}
+
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
 pub struct Keyhive<
@@ -644,7 +678,7 @@ impl<
     pub async fn events_for_agent(
         &self,
         agent: &Agent<S, T, L>,
-    ) -> Result<HashMap<Digest<Event<S, T, L>>, Event<S, T, L>>, CgkaError> {
+    ) -> HashMap<Digest<Event<S, T, L>>, Event<S, T, L>> {
         let mut ops: HashMap<_, _> = self
             .membership_ops_for_agent(agent)
             .await
@@ -659,41 +693,47 @@ impl<
             }
         }
 
-        for cgka_op in self.cgka_ops_reachable_by_agent(agent).await?.into_iter() {
+        for cgka_op in self.cgka_ops_reachable_by_agent(agent).await {
             let op = Event::<S, T, L>::from(cgka_op);
             ops.insert(Digest::hash(&op), op);
         }
 
-        Ok(ops)
+        ops
     }
 
     #[instrument(skip_all)]
     pub async fn static_events_for_agent(
         &self,
         agent: &Agent<S, T, L>,
-    ) -> Result<HashMap<Digest<StaticEvent<T>>, StaticEvent<T>>, CgkaError> {
-        Ok(self
-            .events_for_agent(agent)
-            .await?
+    ) -> HashMap<Digest<StaticEvent<T>>, StaticEvent<T>> {
+        self.events_for_agent(agent)
+            .await
             .into_iter()
             .map(|(k, v)| (k.coerce(), v.into()))
-            .collect())
+            .collect()
     }
 
     #[instrument(skip_all)]
     pub async fn cgka_ops_reachable_by_agent(
         &self,
         agent: &Agent<S, T, L>,
-    ) -> Result<Vec<Arc<Signed<CgkaOperation>>>, CgkaError> {
+    ) -> Vec<Arc<Signed<CgkaOperation>>> {
         let mut ops = Vec::new();
         let reachable = { self.docs_reachable_by_agent(agent).await };
-        for (_doc_id, ability) in reachable {
-            let epochs = { ability.doc.lock().await.cgka_ops()? };
+        for (doc_id, ability) in reachable {
+            let epochs = match ability.doc.lock().await.cgka_ops() {
+                Ok(epochs) => epochs,
+                Err(CgkaError::NotInitialized) => continue,
+                Err(e) => {
+                    tracing::warn!(?doc_id, ?e, "skipping doc. cgka_ops failed");
+                    continue;
+                }
+            };
             for epoch in &epochs {
                 ops.extend(epoch.iter().cloned());
             }
         }
-        Ok(ops)
+        ops
     }
 
     #[instrument(skip_all)]
@@ -1098,6 +1138,51 @@ impl<
         }
 
         AllReachablePrekeyOps { ops, index }
+    }
+
+    /// Compute CGKA ops for all agents in a single pass.
+    ///
+    /// Iterates each document once, collects its CGKA ops, and
+    /// uses `transitive_members` to build the agent index.
+    /// Documents without an initialized CGKA are skipped.
+    #[instrument(skip_all)]
+    pub async fn cgka_ops_for_all_agents(&self) -> AllCgkaOps {
+        let mut ops: HashMap<Identifier, Vec<Arc<Signed<CgkaOperation>>>> = HashMap::new();
+        let mut index: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
+
+        let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
+        for doc in &docs {
+            let (doc_id, doc_ops, transitive) = {
+                let locked = doc.lock().await;
+                let doc_id = locked.doc_id();
+
+                let epochs = match locked.cgka_ops() {
+                    Ok(epochs) => epochs,
+                    Err(CgkaError::NotInitialized) => continue,
+                    Err(e) => {
+                        tracing::warn!(?doc_id, ?e, "skipping doc. cgka_ops failed");
+                        continue;
+                    }
+                };
+
+                let doc_ops: Vec<_> = epochs.iter().flat_map(|e| e.iter().cloned()).collect();
+
+                if doc_ops.is_empty() {
+                    continue;
+                }
+
+                (doc_id, doc_ops, locked.transitive_members().await)
+            };
+
+            let source_id: Identifier = doc_id.into();
+            for agent_id in transitive.keys() {
+                index.entry(*agent_id).or_default().insert(source_id);
+            }
+
+            ops.insert(source_id, doc_ops);
+        }
+
+        AllCgkaOps { ops, index }
     }
 
     #[instrument(skip_all)]
@@ -2761,10 +2846,7 @@ mod tests {
         assert!(left_membered.contains_key(&left_doc.lock().await.doc_id().into()));
         assert!(!left_membered.contains_key(&left_group.lock().await.group_id().into())); // NOTE *not* included because Public is not a member
 
-        let left_to_mid_ops = left
-            .events_for_agent(&Public.individual().into())
-            .await
-            .unwrap();
+        let left_to_mid_ops = left.events_for_agent(&Public.individual().into()).await;
         assert_eq!(left_to_mid_ops.len(), 14);
 
         middle.ingest_event_table(left_to_mid_ops).await.unwrap();
@@ -2808,10 +2890,7 @@ mod tests {
             2
         );
 
-        let mid_to_right_ops = middle
-            .events_for_agent(&Public.individual().into())
-            .await
-            .unwrap();
+        let mid_to_right_ops = middle.events_for_agent(&Public.individual().into()).await;
         assert_eq!(mid_to_right_ops.len(), 21);
 
         right.ingest_event_table(mid_to_right_ops).await.unwrap();
@@ -2854,14 +2933,12 @@ mod tests {
             middle
                 .events_for_agent(&Public.individual().into())
                 .await
-                .unwrap()
                 .iter()
                 .collect::<Vec<_>>()
                 .sort_by_key(|(k, _v)| **k),
             right
                 .events_for_agent(&Public.individual().into())
                 .await
-                .unwrap()
                 .iter()
                 .collect::<Vec<_>>()
                 .sort_by_key(|(k, _v)| **k),
@@ -2876,10 +2953,7 @@ mod tests {
             .unwrap();
 
         // Check transitivity
-        let transitive_right_to_mid_ops = right
-            .events_for_agent(&Public.individual().into())
-            .await
-            .unwrap();
+        let transitive_right_to_mid_ops = right.events_for_agent(&Public.individual().into()).await;
         assert_eq!(transitive_right_to_mid_ops.len(), 23);
 
         middle
@@ -2991,8 +3065,7 @@ mod tests {
         // Send keyhive events from hive1 to hive2
         let events_for_hive2_from_hive1 = hive1
             .events_for_agent(&Agent::Individual(hive2_on_hive1_id, hive2_on_hive1.dupe()))
-            .await
-            .unwrap();
+            .await;
         hive2
             .ingest_event_table(events_for_hive2_from_hive1)
             .await
@@ -3042,8 +3115,7 @@ mod tests {
         // Now receive alices events
         let events = alice
             .events_for_agent(&Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()))
-            .await
-            .unwrap();
+            .await;
 
         // ensure that we are able to process the add op
         bob.ingest_event_table(events).await.unwrap();
@@ -3073,8 +3145,7 @@ mod tests {
 
         let events = charlie
             .events_for_agent(&Agent::Individual(bob_on_charlie_id, bob_on_charlie.dupe()))
-            .await
-            .unwrap();
+            .await;
 
         bob.ingest_event_table(events).await.unwrap();
     }
@@ -3531,6 +3602,211 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cgka_ops_for_all_agents_matches_per_agent() {
+        use crate::crypto::digest::Digest;
+
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let bob = make_keyhive().await;
+        let carol = make_keyhive().await;
+        let dave = make_keyhive().await;
+        let eve = make_keyhive().await;
+
+        // Register all on alice
+        let bob_add_op = bob.expand_prekeys().await.unwrap();
+        let bob_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(bob_add_op))));
+        assert!(alice.register_individual(bob_indie.clone()).await);
+        let bob_id = bob_indie.lock().await.id();
+
+        let carol_add_op = carol.expand_prekeys().await.unwrap();
+        let carol_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(carol_add_op))));
+        assert!(alice.register_individual(carol_indie.clone()).await);
+        let carol_id = carol_indie.lock().await.id();
+
+        let dave_add_op = dave.expand_prekeys().await.unwrap();
+        let dave_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(dave_add_op))));
+        assert!(alice.register_individual(dave_indie.clone()).await);
+        let dave_id = dave_indie.lock().await.id();
+
+        let eve_add_op = eve.expand_prekeys().await.unwrap();
+        let eve_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(eve_add_op))));
+        assert!(alice.register_individual(eve_indie.clone()).await);
+        let eve_id = eve_indie.lock().await.id();
+
+        // doc1: bob and carol are direct members
+        // generate_doc creates initial CGKA ops; each add_member creates a CGKA Add op
+        let doc1 = alice
+            .generate_doc(vec![], nonempty![[0u8; 32]])
+            .await
+            .unwrap();
+        let doc1_id = doc1.lock().await.doc_id();
+        alice
+            .add_member(
+                Agent::Individual(bob_id, bob_indie.dupe()),
+                &Membered::Document(doc1_id, doc1.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+        alice
+            .add_member(
+                Agent::Individual(carol_id, carol_indie.dupe()),
+                &Membered::Document(doc1_id, doc1.dupe()),
+                Access::Edit,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Sanity: doc1 should have CGKA ops from generate + 2 adds
+        let doc1_ops = alice.cgka_ops_for_doc(&doc1_id).await.unwrap().unwrap();
+        assert!(
+            doc1_ops.len() >= 3,
+            "doc1 should have at least 3 CGKA ops (generate + 2 adds), got {}",
+            doc1_ops.len()
+        );
+
+        // group: carol and dave
+        let group = alice.generate_group(vec![]).await.unwrap();
+        let group_id = group.lock().await.group_id();
+        alice
+            .add_member(
+                Agent::Individual(carol_id, carol_indie.dupe()),
+                &Membered::Group(group_id, group.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+        alice
+            .add_member(
+                Agent::Individual(dave_id, dave_indie.dupe()),
+                &Membered::Group(group_id, group.dupe()),
+                Access::Edit,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // doc2: group is a member (so carol and dave reach doc2 transitively)
+        let doc2 = alice
+            .generate_doc(vec![], nonempty![[1u8; 32]])
+            .await
+            .unwrap();
+        let doc2_id = doc2.lock().await.doc_id();
+        alice
+            .add_member(
+                Agent::Group(group_id, group.dupe()),
+                &Membered::Document(doc2_id, doc2.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // eve: registered but not a member of any doc
+
+        // --- Revoke bob from doc1 ---
+        // After revocation, bob should no longer see doc1 CGKA ops (and has
+        // no other docs), so both methods should agree he has zero.
+        alice
+            .revoke_member(
+                bob_id.into(),
+                false,
+                &Membered::Document(doc1_id, doc1.dupe()),
+            )
+            .await
+            .unwrap();
+
+        // Get the all-agents result
+        let all_results = alice.cgka_ops_for_all_agents().await;
+
+        // Helper to collect flattened CGKA digests from the all-agents result
+        let all_digests_for = |agent_id: &Identifier| -> Vec<_> {
+            let mut digests: Vec<_> = all_results
+                .ops_for_agent(agent_id)
+                .map(|ops| ops.map(|op| Digest::hash(op.as_ref())).collect())
+                .unwrap_or_default();
+            digests.sort();
+            digests
+        };
+
+        // Helper macro to get sorted per-agent CGKA digests
+        macro_rules! per_agent_digests {
+            ($agent:expr) => {{
+                let ops = alice.cgka_ops_reachable_by_agent(&$agent).await;
+                let mut digests: Vec<_> = ops.iter().map(|op| Digest::hash(op.as_ref())).collect();
+                digests.sort();
+                digests
+            }};
+        }
+
+        // Eve: registered but not on any doc and should not appear
+        let eve_identifier: Identifier = eve_id.into();
+        assert!(
+            !all_results.index.contains_key(&eve_identifier),
+            "eve should not be in all_results since she is not a member of any doc"
+        );
+        let eve_per_agent = per_agent_digests!(Agent::Individual(eve_id, eve_indie.dupe()));
+        assert!(
+            eve_per_agent.is_empty(),
+            "eve per-agent should also be empty"
+        );
+
+        // Bob: revoked from doc1, no other docs and should have zero CGKA ops
+        let bob_identifier: Identifier = bob_id.into();
+        let bob_all = all_digests_for(&bob_identifier);
+        let bob_per_agent = per_agent_digests!(Agent::Individual(bob_id, bob_indie.dupe()));
+        assert_eq!(
+            bob_all, bob_per_agent,
+            "revoked bob should match (both empty)"
+        );
+        assert!(bob_all.is_empty(), "revoked bob should have no CGKA ops");
+
+        // Carol: on doc1 directly + doc2 via group and should see ops from both
+        let carol_identifier: Identifier = carol_id.into();
+        let carol_all = all_digests_for(&carol_identifier);
+        let carol_per_agent = per_agent_digests!(Agent::Individual(carol_id, carol_indie.dupe()));
+        assert_eq!(
+            carol_all, carol_per_agent,
+            "CGKA op digests should match for carol (multi-doc)"
+        );
+        // Carol should have ops from both doc1 and doc2
+        let carol_doc_ids = &all_results.index[&carol_identifier];
+        assert!(
+            carol_doc_ids.contains(&doc1_id.into()) && carol_doc_ids.contains(&doc2_id.into()),
+            "carol should reach both doc1 and doc2"
+        );
+
+        // Dave: only on doc2 via group
+        let dave_identifier: Identifier = dave_id.into();
+        let dave_all = all_digests_for(&dave_identifier);
+        let dave_per_agent = per_agent_digests!(Agent::Individual(dave_id, dave_indie.dupe()));
+        assert_eq!(
+            dave_all, dave_per_agent,
+            "CGKA op digests should match for dave (group-transitive)"
+        );
+        let dave_doc_ids = &all_results.index[&dave_identifier];
+        assert_eq!(dave_doc_ids.len(), 1, "dave should only reach doc2");
+        assert!(
+            dave_doc_ids.contains(&doc2_id.into()),
+            "dave should reach doc2"
+        );
+
+        // Active agent (alice): should see all docs she owns
+        let active_agent: Agent<_, _, _> = alice.active().lock().await.clone().into();
+        let active_id: Identifier = active_agent.id();
+        let active_all = all_digests_for(&active_id);
+        let active_per_agent = per_agent_digests!(active_agent);
+        assert_eq!(
+            active_all, active_per_agent,
+            "CGKA op digests should match for active agent"
+        );
     }
 
     #[tokio::test]
