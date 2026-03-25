@@ -4,7 +4,7 @@
 //! [`TreeId`](beekem::id::TreeId)) at the API boundary.
 
 use crate::{
-    principal::{document::id::DocumentId, individual::id::IndividualId},
+    principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
     transact::{fork::Fork, merge::Merge},
 };
 use beekem::{
@@ -27,7 +27,7 @@ use keyhive_crypto::{
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     hash::{Hash, Hasher},
     sync::Arc,
 };
@@ -223,5 +223,39 @@ impl Cgka {
         update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
         self.0.secret(pcs_key_hash, update_op_hash)
+    }
+}
+
+/// CGKA ops for all agents, with shared storage.
+///
+/// CGKA ops are stored per document. Each agent has an index pointing to the
+/// documents whose CGKA ops it can reach (via `transitive_members`).
+#[derive(Debug)]
+pub struct AllCgkaOps {
+    /// CGKA ops per doc, keyed by doc Identifier.
+    pub ops: HashMap<Identifier, Vec<Arc<Signed<CgkaOperation>>>>,
+
+    /// For each agent: the set of doc identifiers whose ops are reachable.
+    pub index: HashMap<Identifier, HashSet<Identifier>>,
+}
+
+impl AllCgkaOps {
+    /// Returns the set of agent identifiers that have reachable CGKA ops.
+    pub fn agents(&self) -> impl Iterator<Item = &Identifier> {
+        self.index.keys()
+    }
+
+    /// Returns an iterator over all reachable CGKA ops for the given agent
+    /// (flattened across all documents), or `None` if the agent is not in the index.
+    pub fn ops_for_agent(
+        &self,
+        agent_id: &Identifier,
+    ) -> Option<impl Iterator<Item = &Arc<Signed<CgkaOperation>>>> {
+        self.index.get(agent_id).map(|doc_ids| {
+            doc_ids
+                .iter()
+                .filter_map(|doc_id| self.ops.get(doc_id))
+                .flat_map(|ops| ops.iter())
+        })
     }
 }

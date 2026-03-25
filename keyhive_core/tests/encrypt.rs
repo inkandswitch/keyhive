@@ -76,7 +76,7 @@ async fn test_encrypt_to_added_member() -> TestResult {
     // Sync everything to bob
     let alice_events = alice
         .static_events_for_agent(&bob.active().lock().await.clone().into())
-        .await?;
+        .await;
     bob.ingest_unsorted_static_events(alice_events.into_values().collect())
         .await;
 
@@ -186,7 +186,7 @@ async fn test_decrypt_after_fork_and_merge() {
         .await
         .clone()
         .into_iter()
-        .chain(alice.events_for_agent(&indie).await.unwrap().into_values())
+        .chain(alice.events_for_agent(&indie).await.into_values())
         .map(StaticEvent::from)
         .collect::<Vec<_>>();
 

@@ -26,7 +26,7 @@ use crate::{
     listener::{membership::MembershipListener, no_listener::NoListener},
     store::{delegation::DelegationStore, revocation::RevocationStore},
 };
-use beekem::{error::CgkaError, operation::CgkaOperation};
+use beekem::error::CgkaError;
 use derivative::Derivative;
 use derive_more::Debug;
 use derive_where::derive_where;
@@ -416,6 +416,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         Ok(digest)
     }
 
+    /// NOTE: Callers must propagate CGKA adds to docs that contain this group.
+    /// `Keyhive::add_member` handles this; calling this method directly will
+    /// skip that propagation.
     #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip_all)]
     pub async fn add_member(
@@ -438,6 +441,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             .await
     }
 
+    /// Add a member to this group with manual content.
+    ///
+    /// NOTE: This does not add the added member's individuals to the
+    /// CGKAs of documents that contain this group. Callers are responsible for
+    /// propagating CGKA adds to affected docs (see `Keyhive::add_member`).
     pub(crate) async fn add_member_with_manual_content(
         &mut self,
         member_to_add: Agent<S, T, L>,
@@ -476,50 +484,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         let _digest = self.receive_delegation(rc.dupe()).await?;
         self.listener.on_delegation(&rc).await;
 
-        let cgka_ops = if rc.payload.can.is_reader() {
-            self.add_cgka_member(rc.dupe(), signer).await?
-        } else {
-            Vec::new()
-        };
-
         Ok(AddMemberUpdate {
-            cgka_ops,
+            cgka_ops: Vec::new(),
             delegation: rc,
         })
     }
 
-    #[tracing::instrument(skip_all)]
-    pub(crate) async fn add_cgka_member(
-        &mut self,
-        delegation: Arc<Signed<Delegation<S, T, L>>>,
-        signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
-        let mut cgka_ops = Vec::new();
-        let docs: Vec<Arc<Mutex<Document<S, T, L>>>> = self
-            .transitive_members()
-            .await
-            .values()
-            .filter_map(|(agent, _)| {
-                if let Agent::Document(_, doc) = agent {
-                    Some(doc.dupe())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        for doc in docs {
-            for op in doc
-                .lock()
-                .await
-                .add_cgka_member(&delegation, signer)
-                .await?
-            {
-                cgka_ops.push(op);
-            }
-        }
-        Ok(cgka_ops)
-    }
-
+    /// Revoke a member from this group.
+    ///
+    /// NOTE: This does not remove the revoked member's individuals from the
+    /// CGKAs of documents that contain this group. Callers are responsible for
+    /// propagating CGKA removals to affected docs (see `Keyhive::revoke_member`).
     #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip_all)]
     pub async fn revoke_member(
@@ -630,38 +605,6 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
         }
 
         let mut cgka_ops = Vec::new();
-        let (individuals, docs): (
-            Vec<Arc<Mutex<Individual>>>,
-            Vec<Arc<Mutex<Document<S, T, L>>>>,
-        ) = self.transitive_members().await.values().fold(
-            (vec![], vec![]),
-            |(mut indies, mut docs), (agent, _)| {
-                match agent {
-                    Agent::Individual(_, individual) => {
-                        indies.push(individual.dupe());
-                    }
-                    Agent::Document(_, doc) => {
-                        docs.push(doc.dupe());
-                    }
-                    _ => (),
-                }
-
-                (indies, docs)
-            },
-        );
-
-        for indie in individuals {
-            let id = {
-                let locked_indie = indie.lock().await;
-                locked_indie.id()
-            };
-            for doc in &docs {
-                let mut locked_doc = doc.lock().await;
-                if let Some(op) = locked_doc.remove_cgka_member(id, signer).await? {
-                    cgka_ops.push(op);
-                }
-            }
-        }
 
         let mut redelegations = vec![];
         if retain_all_other_members {
@@ -673,7 +616,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
 
                 if let Some(proof) = &dlg.payload.proof {
                     if proof.payload.delegate.id() == member_to_remove {
-                        let AddMemberUpdate { delegation, .. } = self
+                        let update = self
                             .add_member_with_manual_content(
                                 dlg.payload.delegate.dupe(),
                                 dlg.payload.can,
@@ -682,7 +625,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
                             )
                             .await?;
 
-                        redelegations.push(delegation);
+                        cgka_ops.extend(update.cgka_ops);
+                        redelegations.push(update.delegation);
                     }
                 }
             }

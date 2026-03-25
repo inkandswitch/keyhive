@@ -56,7 +56,7 @@ async fn generate_events(n_peers: usize, n_public_docs: usize) -> Vec<StaticEven
     let active = alice.active().lock().await;
     let alice_active = Agent::Active(active.id(), alice.active().dupe());
     drop(active);
-    let events_map = alice.static_events_for_agent(&alice_active).await.unwrap();
+    let events_map = alice.static_events_for_agent(&alice_active).await;
     events_map.into_values().collect()
 }
 

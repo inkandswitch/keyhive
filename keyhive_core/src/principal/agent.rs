@@ -73,10 +73,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
 
     pub async fn individual_ids(&self) -> HashSet<IndividualId> {
         let mut ids = HashSet::new();
-
+        let mut seen = HashSet::new();
         let mut stack: Vec<Self> = vec![self.dupe()];
 
         while let Some(node) = stack.pop() {
+            if !seen.insert(node.id()) {
+                continue;
+            }
             match node {
                 Agent::Active(a_id, _) => {
                     ids.insert(a_id);
@@ -111,9 +114,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
         doc_id: DocumentId,
     ) -> HashMap<IndividualId, ShareKey> {
         let mut result = HashMap::new();
+        let mut seen = HashSet::new();
         let mut stack: Vec<Self> = vec![self.dupe()];
 
         while let Some(agent) = stack.pop() {
+            if !seen.insert(agent.id()) {
+                continue;
+            }
             match agent {
                 Agent::Active(_, a) => {
                     let (id, prekey) = {

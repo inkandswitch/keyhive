@@ -250,24 +250,29 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             // transitive document members of the group, but not to the group itself
             // (because the group might not be a document), so we add the member to
             // the group here and add any extra resulting cgka ops to the update.
-            let cgka_ops_for_this_doc = self.add_cgka_member(&update.delegation, signer).await?;
-            update.cgka_ops.extend(cgka_ops_for_this_doc.into_iter());
+            let prekeys = update
+                .delegation
+                .payload
+                .delegate
+                .pick_individual_prekeys(self.doc_id())
+                .await;
+            let cgka_ops_for_this_doc =
+                self.add_cgka_members_from_prekeys(&prekeys, signer).await?;
+            update.cgka_ops.extend(cgka_ops_for_this_doc);
         }
         Ok(update)
     }
 
+    /// Add individuals to this document's [`Cgka`] from pre-computed prekeys.
+    ///
+    /// Prekeys must be computed before locking the document to avoid
+    /// deadlocks when the delegate is itself a document.
     #[instrument(skip_all)]
-    pub(crate) async fn add_cgka_member(
+    pub(crate) async fn add_cgka_members_from_prekeys(
         &mut self,
-        delegation: &Signed<Delegation<S, T, L>>,
+        prekeys: &HashMap<IndividualId, ShareKey>,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
-        let prekeys = delegation
-            .payload
-            .delegate
-            .pick_individual_prekeys(self.doc_id())
-            .await;
-
         let mut acc = Vec::new();
         for (id, prekey) in prekeys.iter() {
             if let Some(op) = self.cgka_mut()?.add(*id, *prekey, signer).await? {
@@ -285,6 +290,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         signer: &S,
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
+        // Collect individual IDs from the member being revoked before the
+        // group revocation removes them from the members map.
+        let mut ids_to_remove = HashSet::new();
+        for d in self.group.members.get(&member_id).into_iter().flatten() {
+            ids_to_remove.extend(d.payload().delegate.individual_ids().await);
+        }
+
         let RevokeMemberUpdate {
             revocations,
             redelegations,
@@ -299,16 +311,13 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             )
             .await?;
 
-        // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
-        // FIXME: We need to check if this has revoked the last member in our group?
-        let mut ids_to_remove = Vec::new();
-        let mut ops = cgka_ops;
-        if let Some(delegations) = self.group.members.get(&member_id) {
-            for d in delegations {
-                ids_to_remove.extend(d.payload().delegate.individual_ids().await.iter())
-            }
-        }
+        // After revocation, check which individuals are still reachable via
+        // remaining members. Only remove those that are no longer reachable.
+        let still_reachable = self.group.individual_ids().await;
+        ids_to_remove.retain(|id| !still_reachable.contains(id));
 
+        // FIXME: We need to check if this has revoked the last member in our group.
+        let mut ops = cgka_ops;
         for id in ids_to_remove {
             if let Some(op) = self.cgka_mut()?.remove(id, signer).await? {
                 ops.push(op);
