@@ -13,7 +13,7 @@ rust-version.workspace = true
 blake3 = { version = "1.5", default-features = false }
 chacha20poly1305 = { workspace = true }
 ed25519-dalek = { version = "2.1", default-features = false, features = ["rand_core", "serde"] }
-keyhive_crypto = { path = "../keyhive_crypto", default-features = false }
+keyhive_crypto = { version = "0.1.0", path = "../keyhive_crypto", default-features = false }
 nonempty = { workspace = true }
 rand = { version = "0.8.5", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
