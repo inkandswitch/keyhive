@@ -17,7 +17,7 @@ There are several diagrams below. We use the following graphical conventions:
 flowchart
     subgraph Legend
         doc(("Document"))
-        capRW>"Write to Document"]
+        capRW>"Edit Document"]
         capRR>"Read from Document"]
 
         alice(("Alice"))
@@ -39,7 +39,7 @@ flowchart
 
 ## Variants
 
-Pull, Read, Mutate, Manage.
+Relay, Read, Edit, Admin.
 
 # FAQ
 

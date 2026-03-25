@@ -6,7 +6,7 @@
 
 # Abstract
 
-Synchronizing the operations for a single document involves finding which ops are not present on each replica. This naturally extends to _collections_ of documents. This introduces a new concern: how to efficiently track _which documents_ to sync, given that either peer may not be aware of the existence of all documents. This further interacts with [Pull Control], which provides a clean mechanism for determining which documents are available to a peer.
+Synchronizing the operations for a single document involves finding which ops are not present on each replica. This naturally extends to _collections_ of documents. This introduces a new concern: how to efficiently track _which documents_ to sync, given that either peer may not be aware of the existence of all documents. This further interacts with [Relay Control], which provides a clean mechanism for determining which documents are available to a peer.
 
 # Language
 
@@ -14,7 +14,7 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 
 # Discovery
 
-Collection sync proceeds from a specific replica's public key to the Document IDs (also public keys) that they have Pull Access to. This proceeds via traversal of the directed graph in reverse (from delegate to delegator), and collecting all reachable nodes.
+Collection sync proceeds from a specific replica's public key to the Document IDs (also public keys) that they have Relay access to. This proceeds via traversal of the directed graph in reverse (from delegate to delegator), and collecting all reachable nodes.
 
 ```mermaid
 flowchart
