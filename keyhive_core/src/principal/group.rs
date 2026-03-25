@@ -600,36 +600,26 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Group<S, T, L> 
             self.listener.on_revocation(r).await
         }
 
+        // Collect sub-docs reachable through this group
         let mut cgka_ops = Vec::new();
-        let (individuals, docs): (
-            Vec<Arc<Mutex<Individual>>>,
-            Vec<Arc<Mutex<Document<S, T, L>>>>,
-        ) = self.transitive_members().await.values().fold(
-            (vec![], vec![]),
-            |(mut indies, mut docs), (agent, _)| {
-                match agent {
-                    Agent::Individual(_, individual) => {
-                        indies.push(individual.dupe());
-                    }
-                    Agent::Document(_, doc) => {
-                        docs.push(doc.dupe());
-                    }
-                    _ => (),
-                }
+        let docs: Vec<Arc<Mutex<Document<S, T, L>>>> = self
+            .transitive_members()
+            .await
+            .values()
+            .filter_map(|(agent, _)| match agent {
+                Agent::Document(_, doc) => Some(doc.dupe()),
+                _ => None,
+            })
+            .collect();
 
-                (indies, docs)
-            },
-        );
-
-        for indie in individuals {
-            let id = {
-                let locked_indie = indie.lock().await;
-                locked_indie.id()
-            };
-            for doc in &docs {
-                let mut locked_doc = doc.lock().await;
-                if let Some(op) = locked_doc.remove_cgka_member(id, signer).await? {
-                    cgka_ops.push(op);
+        // Remove the revoked member's individuals from each sub-doc's CGKA
+        for dlg in &all_to_revoke {
+            for id in dlg.payload().delegate.individual_ids().await {
+                for doc in &docs {
+                    let mut locked_doc = doc.lock().await;
+                    if let Some(op) = locked_doc.remove_cgka_member(id, signer).await? {
+                        cgka_ops.push(op);
+                    }
                 }
             }
         }
