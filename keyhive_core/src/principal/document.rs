@@ -281,6 +281,15 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
         signer: &S,
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
+        // Collect individual IDs to remove from CGKA before the group revocation
+        // removes them from the members map.
+        let mut ids_to_remove = Vec::new();
+        if let Some(delegations) = self.group.members.get(&member_id) {
+            for d in delegations {
+                ids_to_remove.extend(d.payload().delegate.individual_ids().await.iter())
+            }
+        }
+
         let RevokeMemberUpdate {
             revocations,
             redelegations,
@@ -295,16 +304,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Document<S, T, 
             )
             .await?;
 
-        // FIXME: Convert revocations into CgkaOperations by calling remove on Cgka.
-        // FIXME: We need to check if this has revoked the last member in our group?
-        let mut ids_to_remove = Vec::new();
         let mut ops = cgka_ops;
-        if let Some(delegations) = self.group.members.get(&member_id) {
-            for d in delegations {
-                ids_to_remove.extend(d.payload().delegate.individual_ids().await.iter())
-            }
-        }
-
         for id in ids_to_remove {
             if let Some(op) = self.cgka_mut()?.remove(id, signer).await? {
                 ops.push(op);
