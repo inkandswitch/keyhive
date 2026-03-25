@@ -45,7 +45,7 @@ async fn generate_events(n_peers: usize, n_public_docs: usize) -> Vec<StaticEven
                 .add_member(
                     Agent::Individual(peer_id, peer_on_alice.dupe()),
                     &Membered::Document(doc_id, doc.dupe()),
-                    Access::Write,
+                    Access::Edit,
                     &[],
                 )
                 .await
