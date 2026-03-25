@@ -544,10 +544,7 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = importPrekeySecrets)]
-    pub async fn import_prekey_secrets(
-        &mut self,
-        bytes: &[u8],
-    ) -> Result<(), JsSerializationError> {
+    pub async fn import_prekey_secrets(&self, bytes: &[u8]) -> Result<(), JsSerializationError> {
         init_span!("JsKeyhive::import_prekey_secrets");
         self.0
             .import_prekey_secrets(bytes)
