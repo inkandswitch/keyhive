@@ -53,7 +53,7 @@ prettytable-rs = { version = "0.10.0", optional = true }
 
 [dev-dependencies]
 beekem = { version = "0.1.0", path = "../beekem", features = ["arbitrary"] }
-keyhive_core = { version = "0.3.0", path = ".", features = ["test_utils", "debug_events"] }
+keyhive_core = { path = ".", features = ["test_utils", "debug_events"] }
 keyhive_crypto = { version = "0.1.0", path = "../keyhive_crypto", features = ["arbitrary"] }
 test-utils = { path = "../test-utils" }
 
