@@ -52,7 +52,7 @@ fn reverse_topsort_via_toggle(bencher: divan::Bencher, prior_toggles: usize) {
 
         // Build up history of prior toggles
         for _ in 0..prior_toggles {
-            kh.add_member(public_agent.clone(), &membered_doc, Access::Write, &[])
+            kh.add_member(public_agent.clone(), &membered_doc, Access::Edit, &[])
                 .await
                 .expect("add_member should succeed");
             kh.revoke_member(public_id, true, &membered_doc)
@@ -65,7 +65,7 @@ fn reverse_topsort_via_toggle(bencher: divan::Bencher, prior_toggles: usize) {
 
     bencher.bench_local(|| {
         rt.block_on(async {
-            kh.add_member(public_agent.clone(), &membered_doc, Access::Write, &[])
+            kh.add_member(public_agent.clone(), &membered_doc, Access::Edit, &[])
                 .await
                 .expect("add_member should succeed");
             kh.revoke_member(public_id, true, &membered_doc)

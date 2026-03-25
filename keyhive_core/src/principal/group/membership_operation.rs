@@ -1137,7 +1137,7 @@ mod tests {
                 alice_signer
                     .try_sign_sync(Delegation {
                         delegate: bob.into(),
-                        can: Access::Write,
+                        can: Access::Edit,
                         proof: Some(root_dlg.dupe()),
                         after_content: BTreeMap::new(),
                         after_revocations: vec![],
@@ -1150,7 +1150,7 @@ mod tests {
                 alice_signer
                     .try_sign_sync(Delegation {
                         delegate: carol.into(),
-                        can: Access::Write,
+                        can: Access::Edit,
                         proof: Some(root_dlg.dupe()),
                         after_content: BTreeMap::new(),
                         after_revocations: vec![],
@@ -1304,7 +1304,7 @@ mod tests {
 
             let d_bob = Arc::new(alice_signer.try_sign_sync(Delegation {
                 delegate: bob.into(),
-                can: Access::Write,
+                can: Access::Edit,
                 proof: Some(root_dlg.dupe()),
                 after_content: BTreeMap::new(),
                 after_revocations: vec![],
@@ -1312,7 +1312,7 @@ mod tests {
 
             let d_carol = Arc::new(alice_signer.try_sign_sync(Delegation {
                 delegate: carol.into(),
-                can: Access::Write,
+                can: Access::Edit,
                 proof: Some(root_dlg.dupe()),
                 after_content: BTreeMap::new(),
                 after_revocations: vec![],
@@ -1507,7 +1507,7 @@ mod tests {
 
             let d_bob = Arc::new(alice_signer.try_sign_sync(Delegation {
                 delegate: bob.into(),
-                can: Access::Write,
+                can: Access::Edit,
                 proof: Some(root_dlg.dupe()),
                 after_content: BTreeMap::new(),
                 after_revocations: vec![],
@@ -1515,7 +1515,7 @@ mod tests {
 
             let d_carol = Arc::new(alice_signer.try_sign_sync(Delegation {
                 delegate: carol.into(),
-                can: Access::Write,
+                can: Access::Edit,
                 proof: Some(root_dlg.dupe()),
                 after_content: BTreeMap::new(),
                 after_revocations: vec![],
@@ -1523,7 +1523,7 @@ mod tests {
 
             let d_dan = Arc::new(bob_signer.try_sign_sync(Delegation {
                 delegate: dan.into(),
-                can: Access::Pull,
+                can: Access::Relay,
                 proof: Some(d_bob.dupe()),
                 after_content: BTreeMap::new(),
                 after_revocations: vec![],
@@ -1843,7 +1843,7 @@ mod tests {
                 // Downstream of bob
                 let d_eve = Arc::new(bob_signer.try_sign_sync(Delegation {
                     delegate: eve.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(d_bob.dupe()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -1852,7 +1852,7 @@ mod tests {
                 // Downstream of carol
                 let d_frank = Arc::new(carol_signer.try_sign_sync(Delegation {
                     delegate: frank.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(d_carol.dupe()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -1861,7 +1861,7 @@ mod tests {
                 // Unrelated delegation + revocation target
                 let d_grace = Arc::new(alice_signer.try_sign_sync(Delegation {
                     delegate: grace.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(root_dlg.dupe()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -2014,7 +2014,7 @@ mod tests {
                 // Downstream delegations from cycle members
                 let d_eve = Arc::new(bob_signer.try_sign_sync(Delegation {
                     delegate: eve.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(d_bob.dupe()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -2022,7 +2022,7 @@ mod tests {
 
                 let d_frank = Arc::new(carol_signer.try_sign_sync(Delegation {
                     delegate: frank.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(d_carol.dupe()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -2030,7 +2030,7 @@ mod tests {
 
                 let d_ivan = Arc::new(dave_signer.try_sign_sync(Delegation {
                     delegate: ivan.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(d_dave.dupe()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -2039,7 +2039,7 @@ mod tests {
                 // Unrelated delegation + revocation
                 let d_grace = Arc::new(alice_signer.try_sign_sync(Delegation {
                     delegate: grace.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(root_dlg.dupe()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -2211,7 +2211,7 @@ mod tests {
                 // Downstream from each cycle member
                 let d_eve = Arc::new(bob_signer.try_sign_sync(Delegation {
                     delegate: eve.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(d_bob.dupe()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -2219,7 +2219,7 @@ mod tests {
 
                 let d_ivan = Arc::new(carol_signer.try_sign_sync(Delegation {
                     delegate: ivan.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(d_carol.dupe()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -2227,7 +2227,7 @@ mod tests {
 
                 let d_judy = Arc::new(dave_signer.try_sign_sync(Delegation {
                     delegate: judy.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(d_dave.dupe()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -2235,7 +2235,7 @@ mod tests {
 
                 let d_karl = Arc::new(frank_signer.try_sign_sync(Delegation {
                     delegate: karl.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(d_frank.dupe()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
@@ -2244,7 +2244,7 @@ mod tests {
                 // Unrelated delegation + revocation
                 let d_grace = Arc::new(alice_signer.try_sign_sync(Delegation {
                     delegate: grace.into(),
-                    can: Access::Write,
+                    can: Access::Edit,
                     proof: Some(root_dlg.dupe()),
                     after_content: BTreeMap::new(),
                     after_revocations: vec![],
