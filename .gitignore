@@ -29,3 +29,4 @@ node_modules
 dist
 CLAUDE.md
 keyhive_wasm/keyhive-keyhive-0.0.0-*
+keyhive_wasm/e2e/server/pkg/
