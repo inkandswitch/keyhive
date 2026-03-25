@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "outDir": "pkg-slim",
+    "target": "esnext",
+    "module": "esnext",
+    "declaration": true,
+    "moduleResolution": "bundler"
+  },
+  "files": ["pkg-slim/index.ts"]
+}
