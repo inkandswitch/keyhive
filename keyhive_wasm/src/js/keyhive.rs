@@ -378,9 +378,9 @@ impl JsKeyhive {
     ) -> Result<js_sys::Map, JsSerializationError> {
         init_span!("JsKeyhive::events_for_agent");
 
-        // TODO: Get membership and prekey events only (CGKA ops are temporarily not shared)
         let membership_ops = self.0.membership_ops_for_agent(&agent.0).await;
         let reachable_prekey_ops = self.0.reachable_prekey_ops_for_agent(&agent.0).await;
+        let cgka_ops = self.0.cgka_ops_reachable_by_agent(&agent.0).await;
 
         let map = js_sys::Map::new();
 
@@ -389,7 +389,7 @@ impl JsKeyhive {
             let hash = js_sys::Uint8Array::from(digest.as_slice());
             let event: Event<JsSigner, JsChangeId, JsEventHandler> = op.into();
             let static_event = StaticEvent::from(event);
-            let bytes = bincode::serialize(&static_event).map_err(JsSerializationError::from)?;
+            let bytes = bincode::serialize(&static_event)?;
             let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
             map.set(&hash.into(), &js_bytes.into());
         }
@@ -402,11 +402,21 @@ impl JsKeyhive {
                 let digest = Digest::hash(&event);
                 let hash = js_sys::Uint8Array::from(digest.as_slice());
                 let static_event = StaticEvent::from(event);
-                let bytes =
-                    bincode::serialize(&static_event).map_err(JsSerializationError::from)?;
+                let bytes = bincode::serialize(&static_event)?;
                 let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
                 map.set(&hash.into(), &js_bytes.into());
             }
+        }
+
+        // Add CGKA operations as serialized bytes
+        for cgka_op in cgka_ops {
+            let event: Event<JsSigner, JsChangeId, JsEventHandler> = Event::from(cgka_op);
+            let digest = Digest::hash(&event);
+            let hash = js_sys::Uint8Array::from(digest.as_slice());
+            let static_event = StaticEvent::from(event);
+            let bytes = bincode::serialize(&static_event)?;
+            let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
+            map.set(&hash.into(), &js_bytes.into());
         }
 
         Ok(map)
@@ -419,6 +429,7 @@ impl JsKeyhive {
 
         let membership_ops = self.0.membership_ops_for_agent(&agent.0).await;
         let reachable_prekey_ops = self.0.reachable_prekey_ops_for_agent(&agent.0).await;
+        let cgka_ops = self.0.cgka_ops_reachable_by_agent(&agent.0).await;
 
         let arr = js_sys::Array::new();
 
@@ -439,17 +450,26 @@ impl JsKeyhive {
             }
         }
 
+        // Add CGKA operation hashes
+        for cgka_op in cgka_ops {
+            let event: Event<JsSigner, JsChangeId, JsEventHandler> = Event::from(cgka_op);
+            let digest = Digest::hash(&event);
+            let hash = js_sys::Uint8Array::from(digest.as_slice());
+            arr.push(&hash.into());
+        }
+
         arr
     }
 
     /// Returns all agent events with deduplicated storage and two-tier indirection
-    /// for both membership and prekey ops.
+    /// for membership, prekey, and CGKA ops.
     #[wasm_bindgen(js_name = allAgentEvents)]
     pub async fn all_agent_events(&self) -> Result<JsAllAgentEvents, JsSerializationError> {
         init_span!("JsKeyhive::all_agent_events");
 
         let all_membership = self.0.membership_ops_for_all_agents().await;
         let all_prekey = self.0.reachable_prekey_ops_for_all_agents().await;
+        let all_cgka = self.0.cgka_ops_for_all_agents().await;
 
         // Deduplicated events map: hash bytes -> serialized event bytes.
         // Tracks which digests have already been serialized to avoid redundant
@@ -468,8 +488,7 @@ impl JsKeyhive {
                 if serialized_hashes.insert(hash_bytes) {
                     let event: Event<JsSigner, JsChangeId, JsEventHandler> = op.clone().into();
                     let static_event = StaticEvent::from(event);
-                    let bytes =
-                        bincode::serialize(&static_event).map_err(JsSerializationError::from)?;
+                    let bytes = bincode::serialize(&static_event)?;
                     let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
                     events_map.set(&hash.clone().into(), &js_bytes.into());
                 }
@@ -504,8 +523,7 @@ impl JsKeyhive {
                 let hash = js_sys::Uint8Array::from(digest.as_slice());
                 if serialized_hashes.insert(hash_bytes) {
                     let static_event = StaticEvent::from(event);
-                    let bytes =
-                        bincode::serialize(&static_event).map_err(JsSerializationError::from)?;
+                    let bytes = bincode::serialize(&static_event)?;
                     let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
                     events_map.set(&hash.clone().into(), &js_bytes.into());
                 }
@@ -527,12 +545,49 @@ impl JsKeyhive {
             agent_prekey_sources_map.set(&agent_id_bytes.into(), &source_ids.into());
         }
 
+        // Build CGKA sources: one per document, shared across agents.
+        // Also serialize CGKA events into the deduplicated events map.
+        let cgka_sources_map = js_sys::Map::new();
+        for (doc_id, cgka_ops) in &all_cgka.ops {
+            let source_hashes = js_sys::Array::new();
+            for cgka_op in cgka_ops {
+                let event: Event<JsSigner, JsChangeId, JsEventHandler> =
+                    Event::from(cgka_op.dupe());
+                let digest = Digest::hash(&event);
+                let hash_bytes = digest.as_slice().to_vec();
+                let hash = js_sys::Uint8Array::from(digest.as_slice());
+                if serialized_hashes.insert(hash_bytes) {
+                    let static_event = StaticEvent::from(event);
+                    let bytes = bincode::serialize(&static_event)?;
+                    let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
+                    events_map.set(&hash.clone().into(), &js_bytes.into());
+                }
+                source_hashes.push(&hash.into());
+            }
+            let id_bytes = js_sys::Uint8Array::from(doc_id.as_bytes().as_slice());
+            cgka_sources_map.set(&id_bytes.into(), &source_hashes.into());
+        }
+
+        // Build agentCgkaSources: agent -> array of doc identifier Uint8Arrays
+        let agent_cgka_sources_map = js_sys::Map::new();
+        for (agent_id, doc_ids) in &all_cgka.index {
+            let source_ids = js_sys::Array::new();
+            for doc_id in doc_ids {
+                let id_bytes = js_sys::Uint8Array::from(doc_id.as_bytes().as_slice());
+                source_ids.push(&id_bytes.into());
+            }
+            let agent_id_bytes = js_sys::Uint8Array::from(agent_id.as_bytes().as_slice());
+            agent_cgka_sources_map.set(&agent_id_bytes.into(), &source_ids.into());
+        }
+
         Ok(JsAllAgentEvents::new(
             events_map,
             membership_sources_map,
             agent_membership_sources_map,
             prekey_sources_map,
             agent_prekey_sources_map,
+            cgka_sources_map,
+            agent_cgka_sources_map,
         ))
     }
 
@@ -665,8 +720,7 @@ impl JsKeyhive {
         for i in 0..events_bytes_array.length() {
             let js_value = events_bytes_array.get(i);
             let event_bytes = js_sys::Uint8Array::from(js_value).to_vec();
-            let static_event: StaticEvent<JsChangeId> =
-                bincode::deserialize(&event_bytes).map_err(JsSerializationError::from)?;
+            let static_event: StaticEvent<JsChangeId> = bincode::deserialize(&event_bytes)?;
             static_event_hash_to_bytes.insert(Digest::hash(&static_event), event_bytes);
             static_events.push(static_event);
         }
