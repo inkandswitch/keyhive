@@ -3465,7 +3465,7 @@ mod tests {
             .add_member(
                 Agent::Individual(carol_id, carol_indie.dupe()),
                 &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Write,
+                Access::Edit,
                 &[],
             )
             .await
@@ -3503,7 +3503,7 @@ mod tests {
             .add_member(
                 Agent::Individual(eve_id, eve_indie.dupe()),
                 &Membered::Group(group_id, group.dupe()),
-                Access::Write,
+                Access::Edit,
                 &[],
             )
             .await
@@ -3670,7 +3670,7 @@ mod tests {
             .add_member(
                 Agent::Individual(carol_id, carol_indie.dupe()),
                 &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Write,
+                Access::Edit,
                 &[],
             )
             .await
@@ -3692,7 +3692,7 @@ mod tests {
             .add_member(
                 Agent::Individual(carol_id, carol_indie.dupe()),
                 &Membered::Group(group_id, group.dupe()),
-                Access::Write,
+                Access::Edit,
                 &[],
             )
             .await

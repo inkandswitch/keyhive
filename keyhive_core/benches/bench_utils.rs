@@ -83,7 +83,7 @@ pub async fn setup_scenario(n_peers: usize, prekey_rotations_per_peer: usize) ->
             .add_member(
                 Agent::Individual(*peer_id, peer_on_alice.dupe()),
                 &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Write,
+                Access::Edit,
                 &[],
             )
             .await
@@ -117,7 +117,7 @@ pub async fn setup_scenario(n_peers: usize, prekey_rotations_per_peer: usize) ->
             .add_member(
                 Agent::Individual(*peer_id, peer_on_alice.dupe()),
                 &Membered::Group(group_id, group.dupe()),
-                Access::Write,
+                Access::Edit,
                 &[],
             )
             .await
