@@ -9,7 +9,7 @@ use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef,
     share_key::{ShareKey, ShareSecretKey},
-    signer::{memory::MemorySigner, sync_signer::SyncSigner},
+    signer::{memory::MemorySigner},
     verifiable::Verifiable,
 };
 use std::{collections::BTreeMap, sync::Arc};

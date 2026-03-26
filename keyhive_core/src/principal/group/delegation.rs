@@ -13,6 +13,7 @@ use crate::{
 };
 use derive_where::derive_where;
 use dupe::Dupe;
+use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
@@ -27,21 +28,27 @@ use thiserror::Error;
 
 #[derive_where(Debug, Clone, PartialEq; T)]
 pub struct Delegation<
-    S: AsyncSigner,
+    F: FutureForm,
+    S: AsyncSigner<F>,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<F, S, T> = NoListener,
 > {
-    pub(crate) delegate: Agent<S, T, L>,
+    pub(crate) delegate: Agent<F, S, T, L>,
     pub(crate) can: Access,
 
-    pub(crate) proof: Option<Arc<Signed<Delegation<S, T, L>>>>,
-    pub(crate) after_revocations: Vec<Arc<Signed<Revocation<S, T, L>>>>,
+    pub(crate) proof: Option<Arc<Signed<Delegation<F, S, T, L>>>>,
+    pub(crate) after_revocations: Vec<Arc<Signed<Revocation<F, S, T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Eq for Delegation<S, T, L> {}
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Eq
+    for Delegation<F, S, T, L>
+{
+}
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    Delegation<F, S, T, L>
+{
     pub fn subject_id(&self, issuer: AgentId) -> Identifier {
         if let Some(proof) = &self.proof {
             proof.subject_id()
@@ -50,7 +57,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         }
     }
 
-    pub fn delegate(&self) -> &Agent<S, T, L> {
+    pub fn delegate(&self) -> &Agent<F, S, T, L> {
         &self.delegate
     }
 
@@ -59,16 +66,16 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn proof(&self) -> Option<&Arc<Signed<Delegation<S, T, L>>>> {
+    pub fn proof(&self) -> Option<&Arc<Signed<Delegation<F, S, T, L>>>> {
         self.proof.as_ref()
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn after_revocations(&self) -> &[Arc<Signed<Revocation<S, T, L>>>] {
+    pub fn after_revocations(&self) -> &[Arc<Signed<Revocation<F, S, T, L>>>] {
         &self.after_revocations
     }
 
-    pub fn after(&self) -> Dependencies<'_, S, T, L> {
+    pub fn after(&self) -> Dependencies<'_, F, S, T, L> {
         let AfterAuth {
             optional_delegation,
             revocations,
@@ -83,7 +90,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         }
     }
 
-    pub fn after_auth(&self) -> AfterAuth<'_, S, T, L> {
+    pub fn after_auth(&self) -> AfterAuth<'_, F, S, T, L> {
         AfterAuth {
             optional_delegation: self.proof.dupe(),
             revocations: &self.after_revocations,
@@ -94,7 +101,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         self.proof.is_none()
     }
 
-    pub fn proof_lineage(&self) -> Vec<Arc<Signed<Delegation<S, T, L>>>> {
+    pub fn proof_lineage(&self) -> Vec<Arc<Signed<Delegation<F, S, T, L>>>> {
         let mut lineage = vec![];
         let mut head = self;
 
@@ -106,7 +113,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         lineage
     }
 
-    pub fn is_descendant_of(&self, maybe_ancestor: &Signed<Delegation<S, T, L>>) -> bool {
+    pub fn is_descendant_of(&self, maybe_ancestor: &Signed<Delegation<F, S, T, L>>) -> bool {
         let mut head = self;
 
         while let Some(proof) = &head.proof {
@@ -120,7 +127,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
         false
     }
 
-    pub fn is_ancestor_of(&self, maybe_descendant: &Signed<Delegation<S, T, L>>) -> bool {
+    pub fn is_ancestor_of(&self, maybe_descendant: &Signed<Delegation<F, S, T, L>>) -> bool {
         let mut head = maybe_descendant.payload();
 
         while let Some(proof) = &head.proof {
@@ -135,7 +142,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Delegation<S, T
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for Delegation<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Serialize
+    for Delegation<F, S, T, L>
+{
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticDelegation::from(self.clone()).serialize(serializer)
     }
@@ -173,10 +182,10 @@ impl<'a, T: ContentRef + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Delegation<S, T, L>>
-    for StaticDelegation<T>
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    From<Delegation<F, S, T, L>> for StaticDelegation<T>
 {
-    fn from(delegation: Delegation<S, T, L>) -> Self {
+    fn from(delegation: Delegation<F, S, T, L>) -> Self {
         Self {
             can: delegation.can,
             proof: delegation.proof.map(|p| p.digest().coerce()),
@@ -194,15 +203,16 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Delegation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AfterAuth<
     'a,
-    S: AsyncSigner,
+    F: FutureForm,
+    S: AsyncSigner<F>,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<F, S, T> = NoListener,
 > {
     #[allow(clippy::type_complexity)]
-    pub(crate) optional_delegation: Option<Arc<Signed<Delegation<S, T, L>>>>,
+    pub(crate) optional_delegation: Option<Arc<Signed<Delegation<F, S, T, L>>>>,
 
     #[allow(clippy::type_complexity)]
-    pub(crate) revocations: &'a [Arc<Signed<Revocation<S, T, L>>>],
+    pub(crate) revocations: &'a [Arc<Signed<Revocation<F, S, T, L>>>],
 }
 
 /// Errors that can occur when using an active agent.

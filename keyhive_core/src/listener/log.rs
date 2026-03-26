@@ -10,6 +10,7 @@ use beekem::operation::CgkaOperation;
 use derive_more::{From, Into};
 use derive_where::derive_where;
 use dupe::Dupe;
+use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
@@ -19,21 +20,21 @@ use tracing::instrument;
 
 #[derive(From, Into)]
 #[derive_where(Debug; T)]
-pub struct Log<S: AsyncSigner, T: ContentRef = [u8; 32]>(
-    #[allow(clippy::type_complexity)] pub Arc<Mutex<Vec<Event<S, T, Log<S, T>>>>>,
+pub struct Log<F: FutureForm, S: AsyncSigner<F>, T: ContentRef = [u8; 32]>(
+    #[allow(clippy::type_complexity)] pub Arc<Mutex<Vec<Event<S, T, Log<F, S, T>>>>>,
 );
 
-impl<S: AsyncSigner, T: ContentRef> Log<S, T> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef> Log<F, S, T> {
     pub fn new() -> Self {
         Self(Arc::new(Mutex::new(Vec::new())))
     }
 
-    pub async fn push(&self, event: Event<S, T, Self>) {
+    pub async fn push(&self, event: Event<F, S, T, Self>) {
         let mut locked = self.0.lock().await;
         locked.push(event)
     }
 
-    pub async fn pop(&self) -> Option<Event<S, T, Self>> {
+    pub async fn pop(&self) -> Option<Event<F, S, T, Self>> {
         let mut locked = self.0.lock().await;
         locked.pop()
     }
@@ -54,25 +55,25 @@ impl<S: AsyncSigner, T: ContentRef> Log<S, T> {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Clone for Log<S, T> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef> Clone for Log<F, S, T> {
     fn clone(&self) -> Self {
         Self(self.0.dupe())
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Dupe for Log<S, T> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef> Dupe for Log<F, S, T> {
     fn dupe(&self) -> Self {
         self.clone()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> Default for Log<S, T> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef> Default for Log<F, S, T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> PrekeyListener for Log<S, T> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef> PrekeyListener for Log<F, S, T> {
     #[instrument(skip(self))]
     async fn on_prekeys_expanded(&self, new_prekey: &Arc<Signed<AddKeyOp>>) {
         self.push(Event::PrekeysExpanded(new_prekey.dupe())).await
@@ -84,19 +85,19 @@ impl<S: AsyncSigner, T: ContentRef> PrekeyListener for Log<S, T> {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for Log<S, T> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef> MembershipListener<S, T> for Log<F, S, T> {
     #[instrument(skip(self))]
-    async fn on_delegation(&self, data: &Arc<Signed<Delegation<S, T, Self>>>) {
+    async fn on_delegation(&self, data: &Arc<Signed<Delegation<F, S, T, Self>>>) {
         self.push(Event::Delegated(data.dupe())).await
     }
 
     #[instrument(skip(self))]
-    async fn on_revocation(&self, data: &Arc<Signed<Revocation<S, T, Self>>>) {
+    async fn on_revocation(&self, data: &Arc<Signed<Revocation<F, S, T, Self>>>) {
         self.push(Event::Revoked(data.dupe())).await
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef> CgkaListener for Log<S, T> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef> CgkaListener for Log<F, S, T> {
     #[instrument(skip(self))]
     async fn on_cgka_op(&self, data: &Arc<Signed<CgkaOperation>>) {
         self.push(Event::CgkaOperation(data.dupe())).await

@@ -28,6 +28,7 @@ use crate::{
 };
 use derivative::Derivative;
 use dupe::Dupe;
+use future_form::FutureForm;
 use futures::{lock::Mutex, prelude::*};
 use keyhive_crypto::{
     content::reference::ContentRef,
@@ -43,7 +44,12 @@ use thiserror::Error;
 /// The current user agent (which can sign and encrypt).
 #[derive(Clone, Derivative)]
 #[derivative(Debug)]
-pub struct Active<S: AsyncSigner, T: ContentRef = [u8; 32], L: PrekeyListener = NoListener> {
+pub struct Active<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef = [u8; 32],
+    L: PrekeyListener<F> = NoListener,
+> {
     /// The signing key of the active agent.
     #[derivative(Debug = "ignore")]
     pub(crate) signer: S,
@@ -63,7 +69,7 @@ pub struct Active<S: AsyncSigner, T: ContentRef = [u8; 32], L: PrekeyListener = 
     pub(crate) _phantom: PhantomData<T>,
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Active<F, S, T, L> {
     /// Generate a new active agent.
     ///
     /// # Arguments
@@ -318,20 +324,22 @@ impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Active<S, T, L> {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> std::fmt::Display for Active<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> std::fmt::Display
+    for Active<F, S, T, L>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.id(), f)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: PrekeyListener> Verifiable for Active<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Verifiable for Active<F, S, T, L> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.signer.verifying_key()
     }
 }
 
-impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Fork for Active<S, T, L> {
-    type Forked = Active<S, T, Log<S, T>>;
+impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<F>> Fork for Active<F, S, T, L> {
+    type Forked = Active<S, T, Log<F, S, T>>;
 
     fn fork(&self) -> Self::Forked {
         Active {
@@ -345,7 +353,9 @@ impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> Fork for Active<S
     }
 }
 
-impl<S: AsyncSigner + Clone, T: ContentRef, L: PrekeyListener> MergeAsync for Active<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<F>> MergeAsync
+    for Active<F, S, T, L>
+{
     async fn merge_async(&self, fork: Self::AsyncForked) {
         let forked_individual = { fork.individual.lock().await.clone() };
         let forked_prekey_pairs = { fork.prekey_pairs.lock().await.clone() };

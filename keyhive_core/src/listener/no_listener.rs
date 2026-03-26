@@ -8,6 +8,7 @@ use crate::principal::{
 use beekem::operation::CgkaOperation;
 use derive_more::derive::Debug;
 use dupe::Dupe;
+use future_form::{future_form, FutureForm, Local, Sendable};
 use keyhive_crypto::{
     content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
 };
@@ -20,16 +21,37 @@ use std::sync::Arc;
 #[derive(Debug, Default, Clone, Dupe, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoListener;
 
-impl PrekeyListener for NoListener {
-    async fn on_prekeys_expanded(&self, _e: &Arc<Signed<AddKeyOp>>) {}
-    async fn on_prekey_rotated(&self, _e: &Arc<Signed<RotateKeyOp>>) {}
+#[future_form(Sendable, Local)]
+impl<F: FutureForm> PrekeyListener<F> for NoListener {
+    fn on_prekeys_expanded<'a>(&'a self, _e: &'a Arc<Signed<AddKeyOp>>) -> F::Future<'a, ()> {
+        F::ready(())
+    }
+
+    fn on_prekey_rotated<'a>(&'a self, _e: &'a Arc<Signed<RotateKeyOp>>) -> F::Future<'a, ()> {
+        F::ready(())
+    }
 }
 
-impl<S: AsyncSigner, T: ContentRef> MembershipListener<S, T> for NoListener {
-    async fn on_delegation(&self, _data: &Arc<Signed<Delegation<S, T, NoListener>>>) {}
-    async fn on_revocation(&self, _data: &Arc<Signed<Revocation<S, T, NoListener>>>) {}
+#[future_form(Sendable, Local)]
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef> MembershipListener<F, S, T> for NoListener {
+    fn on_delegation<'a>(
+        &'a self,
+        _data: &'a Arc<Signed<Delegation<F, S, T, NoListener>>>,
+    ) -> F::Future<'a, ()> {
+        F::ready(())
+    }
+
+    fn on_revocation<'a>(
+        &'a self,
+        _data: &'a Arc<Signed<Revocation<F, S, T, NoListener>>>,
+    ) -> F::Future<'a, ()> {
+        F::ready(())
+    }
 }
 
-impl CgkaListener for NoListener {
-    async fn on_cgka_op(&self, _data: &Arc<Signed<CgkaOperation>>) {}
+#[future_form(Sendable, Local)]
+impl<F: FutureForm> CgkaListener<F> for NoListener {
+    fn on_cgka_op<'a>(&'a self, _data: &'a Arc<Signed<CgkaOperation>>) -> F::Future<'a, ()> {
+        F::ready(())
+    }
 }

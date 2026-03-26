@@ -162,8 +162,7 @@ mod tests {
     use super::*;
     use crate::principal::individual::op::rotate_key::RotateKeyOp;
     use dupe::Dupe;
-    use keyhive_crypto::signer::sync_signer::SyncSigner;
-
+    
     #[test]
     fn test_rebuild() {
         /*
