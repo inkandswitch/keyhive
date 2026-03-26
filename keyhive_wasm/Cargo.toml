@@ -23,6 +23,7 @@ base64-simd = "0.8.0"
 bincode = { workspace = true }
 derive_more = { workspace = true }
 dupe = { workspace = true }
+future_form = { workspace = true }
 ed25519-dalek = { workspace = true }
 futures = { workspace = true }
 nonempty = { workspace = true }

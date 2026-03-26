@@ -153,10 +153,7 @@ impl<T: Serialize + Debug> Signed<T> {
     /// # Examples
     ///
     /// ```
-    /// # use keyhive_crypto::{
-    /// #     signed::Signed,
-    /// #     signer::{memory::MemorySigner, sync_signer::SyncSigner},
-    /// # };
+    /// # use keyhive_crypto::signer::memory::MemorySigner;
     /// #
     /// let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
     /// let signed = signer.try_sign_sync("Hello, world!").unwrap();
@@ -331,10 +328,7 @@ impl From<ed25519_dalek::SignatureError> for SigningError {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        digest::Digest,
-        signer::{memory::MemorySigner, sync_signer::SyncSigner},
-    };
+    use crate::{digest::Digest, signer::memory::MemorySigner};
     use alloc::string::ToString;
     use rand::rngs::OsRng;
 

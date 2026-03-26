@@ -35,6 +35,7 @@ derive_more = { version = "1.0", features = [
 ] }
 dupe = "0.9.0"
 ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
+future_form = "0.3.1"
 futures = "0.3.31"
 nonempty = { version = "0.10.0", features = ["serialize"] }
 rand = "0.8.5"
