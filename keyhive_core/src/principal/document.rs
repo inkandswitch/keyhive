@@ -513,14 +513,16 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
         let mut acc = CausalDecryptionState::new();
 
-        let entrypoint_envelope: Envelope<T, Vec<u8>> =
-            bincode::deserialize(raw_entrypoint.as_slice()).map_err(|e| CausalDecryptionError {
-                progress: acc.clone(),
-                cannot: HashMap::from_iter([(
-                    encrypted_content.content_ref.clone(),
-                    ErrorReason::DeserializationFailed(e.into()),
-                )]),
-            })?;
+        let entrypoint_envelope: Envelope<T, Vec<u8>> = bincode::deserialize(
+            raw_entrypoint.as_slice(),
+        )
+        .map_err(|e| CausalDecryptionError::<T, P, C> {
+            progress: acc.clone(),
+            cannot: HashMap::from_iter([(
+                encrypted_content.content_ref.clone(),
+                ErrorReason::DeserializationFailed(e.into()),
+            )]),
+        })?;
 
         let mut to_decrypt: Vec<(Arc<EncryptedContent<P, T>>, SymmetricKey)> = vec![];
         for (digest, symm_key) in entrypoint_envelope.ancestors.iter() {

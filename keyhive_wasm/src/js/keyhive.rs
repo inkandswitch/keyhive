@@ -51,12 +51,12 @@ use rand::rngs::OsRng;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
+type InnerKeyhive =
+    Keyhive<Local, JsSigner, JsChangeId, Vec<u8>, JsCiphertextStore, JsEventHandler, OsRng>;
+
 #[wasm_bindgen(js_name = Keyhive)]
 #[derive(Debug, From, Into)]
-pub struct JsKeyhive(
-    pub(crate) 
-        Keyhive<Local, JsSigner, JsChangeId, Vec<u8>, JsCiphertextStore, JsEventHandler, OsRng>,
-);
+pub struct JsKeyhive(pub(crate) InnerKeyhive);
 
 #[wasm_bindgen(js_class = Keyhive)]
 impl JsKeyhive {
