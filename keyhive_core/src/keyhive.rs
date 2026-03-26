@@ -21,14 +21,18 @@ use crate::{
             delegation::{Delegation, StaticDelegation},
             error::AddError,
             id::GroupId,
-            membership_operation::{MembershipOperation, StaticMembershipOperation},
+            membership_operation::{
+                bfs_extend_from_revocation, bfs_membership_ops, collect_membership_heads,
+                AllMembershipOps, MembershipOperation, MembershipOpMap,
+                StaticMembershipOperation,
+            },
             revocation::{Revocation, StaticRevocation},
             Group, IdOrIndividual, RevokeMemberError,
         },
         identifier::Identifier,
         individual::{
             id::IndividualId,
-            op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
+            op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, AllReachablePrekeyOps, KeyOp},
             Individual, ReceivePrekeyOpError,
         },
         membered::{id::MemberedId, Membered},
@@ -70,95 +74,6 @@ use std::{
 };
 use thiserror::Error;
 use tracing::instrument;
-
-type MembershipOpMap<S, T, L> =
-    HashMap<Digest<MembershipOperation<S, T, L>>, MembershipOperation<S, T, L>>;
-
-type MembershipOpEntry<S, T, L> = (
-    Digest<MembershipOperation<S, T, L>>,
-    MembershipOperation<S, T, L>,
-);
-
-/// Reachable prekey ops for all agents, with shared storage.
-///
-/// Instead of duplicating topsorted key ops across agents, the ops are stored
-/// once in `ops` and each agent has an index into that shared map.
-#[derive(Debug)]
-pub struct AllReachablePrekeyOps {
-    /// Topsorted key ops per identifier (agent, group, or doc), computed once.
-    pub ops: HashMap<Identifier, Vec<Arc<KeyOp>>>,
-
-    /// For each agent: the set of identifiers whose ops in `ops` are reachable.
-    pub index: HashMap<Identifier, HashSet<Identifier>>,
-}
-
-impl AllReachablePrekeyOps {
-    /// Returns the set of agent identifiers that have reachable ops.
-    pub fn agents(&self) -> impl Iterator<Item = &Identifier> {
-        self.index.keys()
-    }
-
-    /// Returns an iterator over all reachable [`KeyOp`]s for the given agent
-    /// (flattened across all source identifiers), or `None` if the agent is not
-    /// in the index.
-    pub fn ops_for_agent(
-        &self,
-        agent_id: &Identifier,
-    ) -> Option<impl Iterator<Item = &Arc<KeyOp>>> {
-        self.index.get(agent_id).map(|ids| {
-            ids.iter()
-                .filter_map(|id| self.ops.get(id))
-                .flat_map(|ops| ops.iter())
-        })
-    }
-}
-
-/// Membership ops for all agents, with shared storage.
-///
-/// Instead of computing BFS per agent (which repeats work for agents sharing
-/// groups/docs), the BFS is computed once per source (group, doc, or agent)
-/// and each agent has an index into the shared source sets.
-#[derive_where(Debug; T)]
-pub struct AllMembershipOps<
-    S: AsyncSigner,
-    T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
-> {
-    /// Membership ops per source (group, doc, or agent), computed once.
-    pub ops: HashMap<Identifier, MembershipOpMap<S, T, L>>,
-
-    /// For each agent: the set of source identifiers whose ops are reachable.
-    pub index: HashMap<Identifier, HashSet<Identifier>>,
-}
-
-#[allow(clippy::type_complexity)]
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> AllMembershipOps<S, T, L> {
-    /// Returns the set of agent identifiers that have reachable ops.
-    pub fn agents(&self) -> impl Iterator<Item = &Identifier> {
-        self.index.keys()
-    }
-
-    /// Returns an iterator over all reachable membership ops for the given agent
-    /// (flattened across all source identifiers), or `None` if the agent is not
-    /// in the index. May contain duplicates if sources share sub-chains.
-    pub fn ops_for_agent(
-        &self,
-        agent_id: &Identifier,
-    ) -> Option<
-        impl Iterator<
-            Item = (
-                &Digest<MembershipOperation<S, T, L>>,
-                &MembershipOperation<S, T, L>,
-            ),
-        >,
-    > {
-        self.index.get(agent_id).map(|ids| {
-            ids.iter()
-                .filter_map(|id| self.ops.get(id))
-                .flat_map(|ops| ops.iter())
-        })
-    }
-}
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
@@ -906,7 +821,7 @@ impl<
                 let locked = group.lock().await;
                 (
                     locked.group_id(),
-                    Self::collect_membership_heads(
+                    collect_membership_heads(
                         locked.delegation_heads(),
                         locked.revocation_heads(),
                     ),
@@ -914,7 +829,7 @@ impl<
                 )
             };
             let source_id: Identifier = group_id.into();
-            ops.insert(source_id, Self::bfs_membership_ops(heads).await);
+            ops.insert(source_id, bfs_membership_ops(heads).await);
 
             for agent_id in transitive.keys() {
                 index.entry(*agent_id).or_default().insert(source_id);
@@ -928,7 +843,7 @@ impl<
                 let locked = doc.lock().await;
                 (
                     locked.doc_id(),
-                    Self::collect_membership_heads(
+                    collect_membership_heads(
                         locked.delegation_heads(),
                         locked.revocation_heads(),
                     ),
@@ -936,7 +851,7 @@ impl<
                 )
             };
             let source_id: Identifier = doc_id.into();
-            ops.insert(source_id, Self::bfs_membership_ops(heads).await);
+            ops.insert(source_id, bfs_membership_ops(heads).await);
 
             for agent_id in transitive.keys() {
                 index.entry(*agent_id).or_default().insert(source_id);
@@ -960,7 +875,7 @@ impl<
                         Digest::hash(rev.as_ref()).coerce();
                     if visited.insert(hash) {
                         agent_ops.entry(hash).or_insert_with(|| rev.dupe().into());
-                        Self::bfs_extend_from_revocation(rev, agent_ops, &mut visited).await;
+                        bfs_extend_from_revocation(rev, agent_ops, &mut visited).await;
                     }
                 }
                 if !agent_ops.is_empty() {
@@ -970,105 +885,6 @@ impl<
         }
 
         AllMembershipOps { ops, index }
-    }
-
-    /// Collect BFS starting heads from delegation/revocation stores.
-    /// This should be cheap (Arc clones + digest copies).
-    fn collect_membership_heads(
-        dlg_heads: &DelegationStore<S, T, L>,
-        rev_heads: &RevocationStore<S, T, L>,
-    ) -> Vec<MembershipOpEntry<S, T, L>> {
-        let mut heads = Vec::with_capacity(dlg_heads.len() + rev_heads.len());
-        for (hash, dlg_head) in dlg_heads.iter() {
-            heads.push((hash.coerce(), dlg_head.dupe().into()));
-        }
-        for (hash, rev_head) in rev_heads.iter() {
-            heads.push((hash.coerce(), rev_head.dupe().into()));
-        }
-        heads
-    }
-
-    /// Push BFS edges from a [`MembershipOperation`] onto the heads queue.
-    ///
-    /// When `follow_group_heads` is true, delegation edges into groups also
-    /// enqueue the group's own delegation heads (used during full BFS but not
-    /// when extending from a single revocation).
-    async fn push_membership_edges(
-        op: &MembershipOperation<S, T, L>,
-        heads: &mut Vec<MembershipOpEntry<S, T, L>>,
-        visited: &HashSet<Digest<MembershipOperation<S, T, L>>>,
-        follow_group_heads: bool,
-    ) {
-        match op {
-            MembershipOperation::Delegation(dlg) => {
-                if let Some(proof) = &dlg.payload.proof {
-                    heads.push((Digest::hash(proof.as_ref()).coerce(), proof.dupe().into()));
-                }
-                for rev in dlg.payload.after_revocations.iter() {
-                    heads.push((Digest::hash(rev.as_ref()).coerce(), rev.dupe().into()));
-                }
-                if follow_group_heads {
-                    if let Agent::Group(_group_id, group) = &dlg.payload.delegate {
-                        for dlg in group.lock().await.delegation_heads().values() {
-                            let dlg_hash = Digest::hash(dlg.as_ref()).coerce();
-                            if !visited.contains(&dlg_hash) {
-                                heads.push((dlg_hash, dlg.dupe().into()));
-                            }
-                        }
-                    }
-                }
-            }
-            MembershipOperation::Revocation(rev) => {
-                if let Some(proof) = &rev.payload.proof {
-                    heads.push((Digest::hash(proof.as_ref()).coerce(), proof.dupe().into()));
-                }
-                let r = rev.payload.revoke.dupe();
-                heads.push((Digest::hash(r.as_ref()).coerce(), r.into()));
-            }
-        }
-    }
-
-    /// BFS from delegation/revocation heads, collecting all reachable membership ops.
-    async fn bfs_membership_ops(
-        mut heads: Vec<MembershipOpEntry<S, T, L>>,
-    ) -> MembershipOpMap<S, T, L> {
-        let mut ops = HashMap::new();
-        let mut visited: HashSet<Digest<MembershipOperation<S, T, L>>> = HashSet::new();
-
-        while let Some((hash, op)) = heads.pop() {
-            if visited.contains(&hash) {
-                continue;
-            }
-            visited.insert(hash);
-            Self::push_membership_edges(&op, &mut heads, &visited, true).await;
-            ops.insert(hash, op);
-        }
-
-        ops
-    }
-
-    /// Follow a revocation's proof and revoke chains, adding new ops.
-    async fn bfs_extend_from_revocation(
-        rev: &Arc<Signed<Revocation<S, T, L>>>,
-        all_ops: &mut MembershipOpMap<S, T, L>,
-        visited: &mut HashSet<Digest<MembershipOperation<S, T, L>>>,
-    ) {
-        let mut heads: Vec<MembershipOpEntry<S, T, L>> = Vec::new();
-
-        if let Some(proof) = &rev.payload.proof {
-            heads.push((Digest::hash(proof.as_ref()).coerce(), proof.dupe().into()));
-        }
-        let r = rev.payload.revoke.dupe();
-        heads.push((Digest::hash(r.as_ref()).coerce(), r.into()));
-
-        while let Some((hash, op)) = heads.pop() {
-            if visited.contains(&hash) {
-                continue;
-            }
-            visited.insert(hash);
-            Self::push_membership_edges(&op, &mut heads, visited, false).await;
-            all_ops.entry(hash).or_insert(op);
-        }
     }
 
     #[instrument(skip_all)]
