@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::{
     delegation::{Delegation, StaticDelegation},
     dependencies::Dependencies,
@@ -6,7 +8,7 @@ use super::{
 use crate::{
     crypto::signed_ext::SignedSubjectId,
     listener::{membership::MembershipListener, no_listener::NoListener},
-    principal::{document::id::DocumentId, identifier::Identifier},
+    principal::{agent::Agent, document::id::DocumentId, identifier::Identifier},
     reversed::Reversed,
     store::{delegation::DelegationStore, revocation::RevocationStore},
     util::{content_addressed_map::CaMap, topsort::Topsort},
@@ -474,6 +476,171 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Membership
                 StaticMembershipOperation::Revocation(Arc::unwrap_or_clone(r).map(Into::into))
             }
         }
+    }
+}
+
+pub type MembershipOpMap<S, T, L> =
+    HashMap<Digest<MembershipOperation<S, T, L>>, MembershipOperation<S, T, L>>;
+
+pub type MembershipOpEntry<S, T, L> = (
+    Digest<MembershipOperation<S, T, L>>,
+    MembershipOperation<S, T, L>,
+);
+
+/// Membership ops for all agents, with shared storage.
+///
+/// Instead of computing BFS per agent (which repeats work for agents sharing
+/// groups/docs), the BFS is computed once per source (group, doc, or agent)
+/// and each agent has an index into the shared source sets.
+#[derive_where(Debug; T)]
+pub struct AllMembershipOps<
+    S: AsyncSigner,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<S, T> = NoListener,
+> {
+    /// Membership ops per source (group, doc, or agent), computed once.
+    pub ops: HashMap<Identifier, MembershipOpMap<S, T, L>>,
+
+    /// For each agent: the set of source identifiers whose ops are reachable.
+    pub index: HashMap<Identifier, HashSet<Identifier>>,
+}
+
+#[allow(clippy::type_complexity)]
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> AllMembershipOps<S, T, L> {
+    /// Returns the set of agent identifiers that have reachable ops.
+    pub fn agents(&self) -> impl Iterator<Item = &Identifier> {
+        self.index.keys()
+    }
+
+    /// Returns an iterator over all reachable membership ops for the given agent
+    /// (flattened across all source identifiers), or `None` if the agent is not
+    /// in the index. May contain duplicates if sources share sub-chains.
+    pub fn ops_for_agent(
+        &self,
+        agent_id: &Identifier,
+    ) -> Option<
+        impl Iterator<
+            Item = (
+                &Digest<MembershipOperation<S, T, L>>,
+                &MembershipOperation<S, T, L>,
+            ),
+        >,
+    > {
+        self.index.get(agent_id).map(|ids| {
+            ids.iter()
+                .filter_map(|id| self.ops.get(id))
+                .flat_map(|ops| ops.iter())
+        })
+    }
+}
+
+/// Build the initial BFS frontier from a group's or doc's delegation and
+/// revocation head stores. Cheap (Arc clones + digest copies).
+pub fn collect_membership_heads<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>(
+    dlg_heads: &DelegationStore<S, T, L>,
+    rev_heads: &RevocationStore<S, T, L>,
+) -> Vec<MembershipOpEntry<S, T, L>> {
+    let mut heads = Vec::with_capacity(dlg_heads.len() + rev_heads.len());
+    for (hash, dlg_head) in dlg_heads.iter() {
+        heads.push((hash.coerce(), dlg_head.dupe().into()));
+    }
+    for (hash, rev_head) in rev_heads.iter() {
+        heads.push((hash.coerce(), rev_head.dupe().into()));
+    }
+    heads
+}
+
+/// Enqueue BFS edges from a single [`MembershipOperation`].
+///
+/// For delegations, follows the proof chain and any `after_revocations`.
+/// When `follow_group_heads` is true, also enqueues the group delegate's
+/// own delegation heads (used during full BFS but not when extending from
+/// a single revocation).
+///
+/// For revocations, follows the proof and revoke chains.
+async fn push_membership_edges<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>(
+    op: &MembershipOperation<S, T, L>,
+    heads: &mut Vec<MembershipOpEntry<S, T, L>>,
+    visited: &HashSet<Digest<MembershipOperation<S, T, L>>>,
+    follow_group_heads: bool,
+) {
+    match op {
+        MembershipOperation::Delegation(dlg) => {
+            if let Some(proof) = &dlg.payload.proof {
+                heads.push((Digest::hash(proof.as_ref()).coerce(), proof.dupe().into()));
+            }
+            for rev in dlg.payload.after_revocations.iter() {
+                heads.push((Digest::hash(rev.as_ref()).coerce(), rev.dupe().into()));
+            }
+            if follow_group_heads {
+                if let Agent::Group(_group_id, group) = &dlg.payload.delegate {
+                    for dlg in group.lock().await.delegation_heads().values() {
+                        let dlg_hash = Digest::hash(dlg.as_ref()).coerce();
+                        if !visited.contains(&dlg_hash) {
+                            heads.push((dlg_hash, dlg.dupe().into()));
+                        }
+                    }
+                }
+            }
+        }
+        MembershipOperation::Revocation(rev) => {
+            if let Some(proof) = &rev.payload.proof {
+                heads.push((Digest::hash(proof.as_ref()).coerce(), proof.dupe().into()));
+            }
+            let r = rev.payload.revoke.dupe();
+            heads.push((Digest::hash(r.as_ref()).coerce(), r.into()));
+        }
+    }
+}
+
+/// Walk all [`MembershipOperation`]s reachable from the given heads via BFS,
+/// following proof chains, revoke chains, and (for delegations to groups) the
+/// group's own delegation heads. Returns a map keyed by digest.
+pub async fn bfs_membership_ops<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>(
+    mut heads: Vec<MembershipOpEntry<S, T, L>>,
+) -> MembershipOpMap<S, T, L> {
+    let mut ops = HashMap::new();
+    let mut visited: HashSet<Digest<MembershipOperation<S, T, L>>> = HashSet::new();
+
+    while let Some((hash, op)) = heads.pop() {
+        if visited.contains(&hash) {
+            continue;
+        }
+        visited.insert(hash);
+        push_membership_edges(&op, &mut heads, &visited, true).await;
+        ops.insert(hash, op);
+    }
+
+    ops
+}
+
+/// Extend an existing [`MembershipOpMap`] by following a single revocation's
+/// proof and revoke chains. Skips already-visited digests so it can be called
+/// incrementally for each agent-specific revocation.
+pub async fn bfs_extend_from_revocation<
+    S: AsyncSigner,
+    T: ContentRef,
+    L: MembershipListener<S, T>,
+>(
+    rev: &Arc<Signed<Revocation<S, T, L>>>,
+    all_ops: &mut MembershipOpMap<S, T, L>,
+    visited: &mut HashSet<Digest<MembershipOperation<S, T, L>>>,
+) {
+    let mut heads: Vec<MembershipOpEntry<S, T, L>> = Vec::new();
+
+    if let Some(proof) = &rev.payload.proof {
+        heads.push((Digest::hash(proof.as_ref()).coerce(), proof.dupe().into()));
+    }
+    let r = rev.payload.revoke.dupe();
+    heads.push((Digest::hash(r.as_ref()).coerce(), r.into()));
+
+    while let Some((hash, op)) = heads.pop() {
+        if visited.contains(&hash) {
+            continue;
+        }
+        visited.insert(hash);
+        push_membership_edges(&op, &mut heads, visited, false).await;
+        all_ops.entry(hash).or_insert(op);
     }
 }
 

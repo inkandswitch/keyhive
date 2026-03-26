@@ -76,7 +76,6 @@ fn ingest_unsorted_static_events(
     (n_peers, n_public_docs): (usize, usize),
 ) {
     let rt = tokio::runtime::Runtime::new().unwrap();
-
     let events = rt.block_on(generate_events(n_peers, n_public_docs));
     let event_count = events.len();
 

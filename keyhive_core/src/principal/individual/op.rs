@@ -4,6 +4,7 @@ pub mod add_key;
 pub mod rotate_key;
 
 use self::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
+use crate::{principal::identifier::Identifier, util::content_addressed_map::CaMap};
 use derive_more::{From, TryInto};
 use dupe::Dupe;
 use keyhive_crypto::{
@@ -33,23 +34,20 @@ pub enum KeyOp {
 }
 
 impl KeyOp {
-    #[allow(clippy::mutable_key_type)]
-    pub fn topsort(key_ops: HashSet<KeyOp>) -> Vec<KeyOp> {
-        let mut heads: Vec<KeyOp> = vec![];
-        let mut rotate_key_ops: HashMap<ShareKey, HashSet<KeyOp>> = HashMap::new();
+    pub fn topsort(key_ops: &CaMap<KeyOp>) -> Vec<Arc<KeyOp>> {
+        let mut heads: Vec<Arc<KeyOp>> = vec![];
+        let mut rotate_key_ops: HashMap<ShareKey, Vec<Arc<KeyOp>>> = HashMap::new();
 
-        for key_op in key_ops.iter() {
-            match key_op {
+        for key_op in key_ops.values() {
+            match key_op.as_ref() {
                 KeyOp::Add(_add) => {
                     heads.push(key_op.dupe());
                 }
                 KeyOp::Rotate(rot) => {
                     rotate_key_ops
                         .entry(rot.payload.old)
-                        .and_modify(|set| {
-                            set.insert(key_op.dupe());
-                        })
-                        .or_insert(HashSet::from_iter([key_op.dupe()]));
+                        .or_default()
+                        .push(key_op.dupe());
                 }
             }
         }
@@ -104,5 +102,39 @@ impl Verifiable for KeyOp {
             KeyOp::Add(add) => add.verifying_key(),
             KeyOp::Rotate(rot) => rot.verifying_key(),
         }
+    }
+}
+
+/// Reachable prekey ops for all agents, with shared storage.
+///
+/// Instead of duplicating topsorted key ops across agents, the ops are stored
+/// once in `ops` and each agent has an index into that shared map.
+#[derive(Debug)]
+pub struct AllReachablePrekeyOps {
+    /// Topsorted key ops per identifier (agent, group, or doc), computed once.
+    pub ops: HashMap<Identifier, Vec<Arc<KeyOp>>>,
+
+    /// For each agent: the set of identifiers whose ops in `ops` are reachable.
+    pub index: HashMap<Identifier, HashSet<Identifier>>,
+}
+
+impl AllReachablePrekeyOps {
+    /// Returns the set of agent identifiers that have reachable ops.
+    pub fn agents(&self) -> impl Iterator<Item = &Identifier> {
+        self.index.keys()
+    }
+
+    /// Returns an iterator over all reachable [`KeyOp`]s for the given agent
+    /// (flattened across all source identifiers), or `None` if the agent is not
+    /// in the index.
+    pub fn ops_for_agent(
+        &self,
+        agent_id: &Identifier,
+    ) -> Option<impl Iterator<Item = &Arc<KeyOp>>> {
+        self.index.get(agent_id).map(|ids| {
+            ids.iter()
+                .filter_map(|id| self.ops.get(id))
+                .flat_map(|ops| ops.iter())
+        })
     }
 }
