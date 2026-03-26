@@ -232,8 +232,7 @@ fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
 mod tests {
     use super::*;
     use crate::principal::individual::op::add_key::AddKeyOp;
-    use keyhive_crypto::signer::sync_signer::SyncSigner;
-
+    
     #[test]
     fn test_to_bytes() {
         test_utils::init_logging();

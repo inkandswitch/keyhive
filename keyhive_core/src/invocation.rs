@@ -4,6 +4,7 @@ use crate::{
     principal::group::delegation::{Delegation, StaticDelegation},
 };
 use derive_where::derive_where;
+use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
 };
@@ -13,7 +14,8 @@ use std::sync::Arc;
 #[derive(Debug, PartialEq, Eq, Hash)]
 #[derive_where(Clone; T)]
 pub struct Invocation<
-    S: AsyncSigner,
+    F: FutureForm,
+    S: AsyncSigner<F>,
     C: ContentRef = [u8; 32],
     L: MembershipListener<S, C> = NoListener,
     T: Clone = C,
@@ -22,7 +24,7 @@ pub struct Invocation<
     pub(crate) proof: Option<Arc<Signed<Delegation<S, C, L>>>>,
 }
 
-impl<S: AsyncSigner, C: ContentRef, L: MembershipListener<S, C>, T: Clone + Serialize> Serialize
+impl<F: FutureForm, S: AsyncSigner<F>, C: ContentRef, L: MembershipListener<S, C>, T: Clone + Serialize> Serialize
     for Invocation<S, C, L, T>
 {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
@@ -36,7 +38,7 @@ pub struct StaticInvocation<C: ContentRef, T: Clone> {
     pub(crate) proof: Option<Digest<Signed<StaticDelegation<C>>>>,
 }
 
-impl<S: AsyncSigner, C: ContentRef, L: MembershipListener<S, C>, T: Clone>
+impl<F: FutureForm, S: AsyncSigner<F>, C: ContentRef, L: MembershipListener<S, C>, T: Clone>
     From<Invocation<S, C, L, T>> for StaticInvocation<C, T>
 {
     fn from(invocation: Invocation<S, C, L, T>) -> Self {

@@ -2,6 +2,7 @@
 
 use super::{cgka::CgkaListener, prekey::PrekeyListener};
 use crate::principal::group::{delegation::Delegation, revocation::Revocation};
+use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
 };
@@ -11,21 +12,23 @@ use std::sync::Arc;
 ///
 /// This can be helpful for logging, live streaming of changes, gossip, and so on.
 ///
-/// If you don't want this feature, you can use the default listener: [`NoListener`][super::no_listener::NoListener].
-///
-/// <div class="warning">
-///
-/// Note that we assume single-threaded async.
-///
-/// </div>
+/// If you don't want this feature, you can use the default listener:
+/// [`NoListener`][super::no_listener::NoListener].
 ///
 /// [`Group`]: crate::principal::group::Group
 /// [`Document`]: crate::principal::document::Document
-#[allow(async_fn_in_trait)]
-pub trait MembershipListener<S: AsyncSigner, T: ContentRef>: PrekeyListener + CgkaListener {
+pub trait MembershipListener<F: FutureForm, S: AsyncSigner<F>, T: ContentRef>:
+    PrekeyListener<F> + CgkaListener<F>
+{
     /// React to new [`Delegation`]s.
-    async fn on_delegation(&self, data: &Arc<Signed<Delegation<S, T, Self>>>);
+    fn on_delegation<'a>(
+        &'a self,
+        data: &'a Arc<Signed<Delegation<F, S, T, Self>>>,
+    ) -> F::Future<'a, ()>;
 
     /// React to new [`Revocation`]s.
-    async fn on_revocation(&self, data: &Arc<Signed<Revocation<S, T, Self>>>);
+    fn on_revocation<'a>(
+        &'a self,
+        data: &'a Arc<Signed<Revocation<F, S, T, Self>>>,
+    ) -> F::Future<'a, ()>;
 }

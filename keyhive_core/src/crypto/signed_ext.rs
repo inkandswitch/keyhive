@@ -10,6 +10,7 @@ use crate::{
         identifier::Identifier,
     },
 };
+use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
     verifiable::Verifiable,
@@ -35,8 +36,8 @@ pub trait SignedSubjectId {
     fn subject_id(&self) -> Identifier;
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> SignedSubjectId
-    for Signed<Delegation<S, T, L>>
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    SignedSubjectId for Signed<Delegation<F, S, T, L>>
 {
     fn subject_id(&self) -> Identifier {
         let mut head = self;
@@ -49,8 +50,8 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> SignedSubjectId
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> SignedSubjectId
-    for Signed<Revocation<S, T, L>>
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    SignedSubjectId for Signed<Revocation<F, S, T, L>>
 {
     fn subject_id(&self) -> Identifier {
         self.payload.subject_id()

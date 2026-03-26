@@ -17,6 +17,7 @@ use derive_more::{From, TryInto};
 use derive_where::derive_where;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
+use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef, share_key::ShareKey, signer::async_signer::AsyncSigner,
@@ -33,14 +34,21 @@ use std::{
 /// This type is very lightweight to clone, since it only contains immutable references to the actual agents.
 #[derive_where(Clone, Debug; T)]
 #[derive(From, TryInto, Derivative)]
-pub enum Agent<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
-    Active(IndividualId, Arc<Mutex<Active<S, T, L>>>),
+pub enum Agent<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<F, S, T> = NoListener,
+> {
+    Active(IndividualId, Arc<Mutex<Active<F, S, T, L>>>),
     Individual(IndividualId, Arc<Mutex<Individual>>),
-    Group(GroupId, Arc<Mutex<Group<S, T, L>>>),
-    Document(DocumentId, Arc<Mutex<Document<S, T, L>>>),
+    Group(GroupId, Arc<Mutex<Group<F, S, T, L>>>),
+    Document(DocumentId, Arc<Mutex<Document<F, S, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq for Agent<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> PartialEq
+    for Agent<F, S, T, L>
+{
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Agent::Active(a, _), Agent::Active(b, _)) => a == b,
@@ -52,7 +60,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq for A
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    Agent<F, S, T, L>
+{
     pub fn id(&self) -> Identifier {
         match self {
             Agent::Active(id, _) => (*id).into(),
@@ -182,34 +192,34 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Agent<S, T, L> 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Active<S, T, L>>
-    for Agent<S, T, L>
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    From<Active<F, S, T, L>> for Agent<F, S, T, L>
 {
-    fn from(a: Active<S, T, L>) -> Self {
+    fn from(a: Active<F, S, T, L>) -> Self {
         Agent::Active(a.id(), Arc::new(Mutex::new(a)))
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Individual>
-    for Agent<S, T, L>
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    From<Individual> for Agent<F, S, T, L>
 {
     fn from(i: Individual) -> Self {
         Agent::Individual(i.id(), Arc::new(Mutex::new(i)))
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Group<S, T, L>>
-    for Agent<S, T, L>
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    From<Group<F, S, T, L>> for Agent<F, S, T, L>
 {
-    fn from(g: Group<S, T, L>) -> Self {
+    fn from(g: Group<F, S, T, L>) -> Self {
         Agent::Group(g.group_id(), Arc::new(Mutex::new(g)))
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Membered<S, T, L>>
-    for Agent<S, T, L>
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    From<Membered<F, S, T, L>> for Agent<F, S, T, L>
 {
-    fn from(m: Membered<S, T, L>) -> Self {
+    fn from(m: Membered<F, S, T, L>) -> Self {
         match m {
             Membered::Group(id, g) => Agent::Group(id, g),
             Membered::Document(id, d) => Agent::Document(id, d),
@@ -217,26 +227,32 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Membered<S
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Document<S, T, L>>
-    for Agent<S, T, L>
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    From<Document<F, S, T, L>> for Agent<F, S, T, L>
 {
-    fn from(d: Document<S, T, L>) -> Self {
+    fn from(d: Document<F, S, T, L>) -> Self {
         Agent::Document(d.doc_id(), Arc::new(Mutex::new(d)))
     }
 }
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Verifiable for Agent<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Verifiable
+    for Agent<F, S, T, L>
+{
     fn verifying_key(&self) -> VerifyingKey {
         self.id().verifying_key()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for Agent<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Dupe
+    for Agent<F, S, T, L>
+{
     fn dupe(&self) -> Self {
         self.clone()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Display for Agent<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Display
+    for Agent<F, S, T, L>
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Agent::Active(id, _) => write!(f, "Active({id})"),
