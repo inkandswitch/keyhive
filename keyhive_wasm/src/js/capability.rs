@@ -3,9 +3,9 @@ use super::{
     signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use dupe::Dupe;
+use future_form::Local;
 use keyhive_core::principal::{agent::Agent, group::delegation::Delegation};
 use keyhive_crypto::signed::Signed;
-use future_form::Local;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 

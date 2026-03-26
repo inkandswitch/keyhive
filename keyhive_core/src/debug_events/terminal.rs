@@ -1,4 +1,3 @@
-use future_form::Local;
 use prettytable::{color, format, row, Attr, Cell, Table};
 
 use super::{CgkaOperationDetails, DebugEventDetails, DebugEventTable};

@@ -3,8 +3,8 @@ use super::{
     signer::JsSigner,
 };
 use dupe::Dupe;
-use keyhive_core::{access::Access, principal::agent::Agent};
 use future_form::Local;
+use keyhive_core::{access::Access, principal::agent::Agent};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]

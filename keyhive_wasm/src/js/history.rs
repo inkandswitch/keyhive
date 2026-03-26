@@ -4,21 +4,23 @@ use super::{
     signed_revocation::JsSignedRevocation, signer::JsSigner,
 };
 use dupe::Dupe;
+use future_form::Local;
 use futures::lock::Mutex;
 use keyhive_core::principal::{
     document::id::DocumentId,
     group::{delegation::Delegation, dependencies::Dependencies, revocation::Revocation},
 };
 use keyhive_crypto::signed::Signed;
-use future_form::Local;
 use std::{collections::BTreeMap, sync::Arc};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = History)]
 #[derive(Debug, Clone)]
 pub struct JsHistory {
-    pub(crate) delegations: Vec<Arc<Signed<Delegation<Local, JsSigner, JsChangeId, JsEventHandler>>>>,
-    pub(crate) revocations: Vec<Arc<Signed<Revocation<Local, JsSigner, JsChangeId, JsEventHandler>>>>,
+    pub(crate) delegations:
+        Vec<Arc<Signed<Delegation<Local, JsSigner, JsChangeId, JsEventHandler>>>>,
+    pub(crate) revocations:
+        Vec<Arc<Signed<Revocation<Local, JsSigner, JsChangeId, JsEventHandler>>>>,
     pub(crate) content: BTreeMap<DocumentId, Vec<JsChangeId>>,
 }
 
