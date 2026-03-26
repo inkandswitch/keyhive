@@ -1,119 +1,47 @@
-//! Synchronous signer trait.
+//! Low-level synchronous signer primitives.
+//!
+//! The [`SyncSigner`] trait has been removed. Synchronous signing
+//! convenience methods are now concrete methods on
+//! [`MemorySigner`](crate::signer::memory::MemorySigner). All
+//! signers implement [`AsyncSigner<F>`](crate::signer::async_signer::AsyncSigner)
+//! directly.
+//!
+//! This module retains [`SyncSignerBasic`] (used by
+//! [`EphemeralSigner`](crate::signer::ephemeral::EphemeralSigner))
+//! and the [`try_sign_basic`] helper.
 
-use super::async_signer::AsyncSigner;
-use crate::{signed::SigningError, verifiable::Verifiable};
+use crate::{signed::SigningError, signer::async_signer::AsyncSigner};
 use ed25519_dalek::Signer;
+use future_form::{future_form, FutureForm, Local, Sendable};
 use tracing::instrument;
 #[cfg(feature = "std")]
 use {
     crate::{hex::ToHexString, signed::Signed},
-    alloc::vec::Vec,
     serde::Serialize,
     tracing::info,
 };
 
-/// Synchronous signer trait. This is the primary sync signer API.
+/// Implement [`AsyncSigner<F>`] for the raw `ed25519_dalek::SigningKey`.
 ///
-/// This trait is primarily used for the [`MemorySigner`],
-/// but any synchronous signer can implement this trait.
-///
-/// [`MemorySigner`]: crate::signer::memory::MemorySigner
-pub trait SyncSigner: Verifiable {
-    /// Sign a byte slice synchronously.
-    ///
-    /// # Arguments
-    ///
-    /// * `payload_bytes` - The raw payload bytes to sign.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use keyhive_crypto::{
-    ///     signed::Signed,
-    ///     signer::{
-    ///         memory::MemorySigner,
-    ///         sync_signer::SyncSigner
-    ///     }
-    /// };
-    ///
-    /// let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
-    /// let sig = signer.try_sign_bytes_sync(b"hello world");
-    /// assert!(sig.is_ok());
-    /// ```
-    fn try_sign_bytes_sync(
-        &self,
-        payload_bytes: &[u8],
-    ) -> Result<ed25519_dalek::Signature, SigningError>;
-
-    /// Sign a serializable payload synchronously.
-    ///
-    /// This helper automatically serializes using [`bincode`], signs the resulting bytes,
-    /// and wraps the result in [`Signed`].
-    ///
-    /// Requires the `std` feature.
-    ///
-    /// # Arguments
-    ///
-    /// * `payload` - The payload to serialize and sign.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use keyhive_crypto::{
-    ///     signed::Signed,
-    ///     signer::{
-    ///         memory::MemorySigner,
-    ///         sync_signer::SyncSigner
-    ///     }
-    /// };
-    ///
-    /// let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
-    ///
-    /// let payload: Vec<u8> = vec![0, 1, 2];
-    /// let sig = signer.try_sign_sync(payload.clone());
-    ///
-    /// assert!(sig.is_ok());
-    /// assert_eq!(*sig.unwrap().payload(), payload);
-    /// ```
-    #[cfg(feature = "std")]
-    fn try_sign_sync<T: Serialize + core::fmt::Debug>(
-        &self,
-        payload: T,
-    ) -> Result<Signed<T>, SigningError> {
-        let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
-        let signature = self.try_sign_bytes_sync(payload_bytes.as_slice())?;
-        let signed = Signed::new(payload, self.verifying_key(), signature);
-        Ok(signed)
+/// Synchronous signing wrapped in [`F::ready`].
+#[future_form(Sendable, Local)]
+impl<F: FutureForm> AsyncSigner<F> for ed25519_dalek::SigningKey {
+    fn try_sign_bytes_async<'a>(
+        &'a self,
+        payload_bytes: &'a [u8],
+    ) -> F::Future<'a, Result<ed25519_dalek::Signature, SigningError>> {
+        F::ready(
+            self.try_sign(payload_bytes)
+                .map_err(SigningError::SigningFailed),
+        )
     }
 }
 
-impl SyncSigner for ed25519_dalek::SigningKey {
-    #[instrument(skip(self))]
-    fn try_sign_bytes_sync(
-        &self,
-        payload_bytes: &[u8],
-    ) -> Result<ed25519_dalek::Signature, SigningError> {
-        self.try_sign(payload_bytes)
-            .map_err(SigningError::SigningFailed)
-    }
-}
-
-impl<T: SyncSigner> AsyncSigner for T {
-    #[instrument(skip_all)]
-    async fn try_sign_bytes_async(
-        &self,
-        payload_bytes: &[u8],
-    ) -> Result<ed25519_dalek::Signature, SigningError> {
-        self.try_sign_bytes_sync(payload_bytes)
-    }
-}
-
-/// Low-level variant of [`SyncSigner`].
+/// Low-level variant of the (now-removed) `SyncSigner`.
 ///
-/// This is less constrained, and lower-level, than [`SyncSigner`].
-///
-/// If you aren't passing something to [`EphemeralSigner`],
-/// you more likely want [`SyncSigner`].
+/// This is less constrained and lower-level. It is used by
+/// [`EphemeralSigner`](crate::signer::ephemeral::EphemeralSigner)
+/// which takes a `Box<dyn SyncSignerBasic>`.
 pub trait SyncSignerBasic {
     /// Sign a byte slice synchronously.
     ///
@@ -138,13 +66,14 @@ pub trait SyncSignerBasic {
     ) -> Result<ed25519_dalek::Signature, SigningError>;
 }
 
-impl<T: SyncSigner> SyncSignerBasic for T {
+impl SyncSignerBasic for ed25519_dalek::SigningKey {
     #[instrument(skip(self))]
     fn try_sign_bytes_sync_basic(
         &self,
         payload_bytes: &[u8],
     ) -> Result<ed25519_dalek::Signature, SigningError> {
-        T::try_sign_bytes_sync(self, payload_bytes)
+        self.try_sign(payload_bytes)
+            .map_err(SigningError::SigningFailed)
     }
 }
 

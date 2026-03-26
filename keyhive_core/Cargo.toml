@@ -39,10 +39,10 @@ derivative = "2.2"
 derive_more = { workspace = true }
 derive-where = "1.2"
 dupe = { workspace = true }
+future_form = { workspace = true }
 futures = { workspace = true }
 nonempty = { workspace = true }
 tracing = { workspace = true }
-trait-variant = "0.1.2"
 
 # Testing
 proptest = { version = "1.5", optional = true }
@@ -79,7 +79,6 @@ tracing-subscriber = { version = "0.3.19", features = ["ansi", "env-filter"] }
 default = []
 debug_events = ["prettytable-rs"]
 mermaid_docs = ["aquamarine"]
-sendable = []
 test_utils = ["beekem/test_utils", "proptest", "proptest-derive"]
 
 [[bench]]

@@ -1,12 +1,13 @@
 //! In-memory signer.
 
-use super::sync_signer::SyncSigner;
-use crate::{signed::SigningError, verifiable::Verifiable};
+use super::sync_signer::SyncSignerBasic;
+use crate::{signed::SigningError, signer::async_signer::AsyncSigner, verifiable::Verifiable};
 use core::hash::Hash;
-#[cfg(feature = "std")]
-use dupe::Dupe;
 use ed25519_dalek::Signer;
+use future_form::{future_form, FutureForm, Local, Sendable};
 use tracing::instrument;
+#[cfg(feature = "std")]
+use {crate::signed::Signed, alloc::vec::Vec, dupe::Dupe, serde::Serialize};
 
 /// An in-memory signer.
 ///
@@ -48,16 +49,55 @@ impl MemorySigner {
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         Self(ed25519_dalek::SigningKey::generate(csprng))
     }
-}
 
-impl SyncSigner for MemorySigner {
-    fn try_sign_bytes_sync(
+    /// Sign a byte slice synchronously.
+    ///
+    /// Convenience method for tests and contexts where async is
+    /// unnecessary. The same operation is available via
+    /// [`AsyncSigner::try_sign_bytes_async`] (which wraps this with
+    /// [`FutureForm::ready`]).
+    pub fn try_sign_bytes_sync(
         &self,
         payload_bytes: &[u8],
     ) -> Result<ed25519_dalek::Signature, SigningError> {
         self.0
             .try_sign(payload_bytes)
             .map_err(SigningError::SigningFailed)
+    }
+
+    /// Sign a serializable payload synchronously.
+    ///
+    /// Convenience method for tests. Serializes with [`bincode`],
+    /// signs the bytes, and wraps in [`Signed`].
+    #[cfg(feature = "std")]
+    pub fn try_sign_sync<T: Serialize + core::fmt::Debug>(
+        &self,
+        payload: T,
+    ) -> Result<Signed<T>, SigningError> {
+        let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
+        let signature = self.try_sign_bytes_sync(payload_bytes.as_slice())?;
+        let signed = Signed::new(payload, self.verifying_key(), signature);
+        Ok(signed)
+    }
+}
+
+#[future_form(Sendable, Local)]
+impl<F: FutureForm> AsyncSigner<F> for MemorySigner {
+    fn try_sign_bytes_async<'a>(
+        &'a self,
+        payload_bytes: &'a [u8],
+    ) -> F::Future<'a, Result<ed25519_dalek::Signature, SigningError>> {
+        F::ready(self.try_sign_bytes_sync(payload_bytes))
+    }
+}
+
+impl SyncSignerBasic for MemorySigner {
+    #[instrument(skip(self))]
+    fn try_sign_bytes_sync_basic(
+        &self,
+        payload_bytes: &[u8],
+    ) -> Result<ed25519_dalek::Signature, SigningError> {
+        self.try_sign_bytes_sync(payload_bytes)
     }
 }
 
