@@ -41,20 +41,6 @@ pub trait ForkAsync {
     fn fork_async(&self) -> impl Future<Output = Self::AsyncForked>;
 }
 
-/// A [`Send`]able version of [`Fork`].
-pub trait ForkSend {
-    /// The forked variant of the data structure.
-    ///
-    /// This is helpful for situations like wanting a different listener,
-    /// or to unwrap from containers like `Arc<Mutex<T>>`.
-    type SendableForked;
-
-    /// Asynchonously fork the data structure.
-    ///
-    /// This variant is helpful when forking a type like `tokio::sync::Mutex`.
-    fn fork_sendable(&self) -> impl Future<Output = Self::SendableForked> + Send;
-}
-
 impl<T: Hash + Eq + Clone> Fork for HashSet<T> {
     type Forked = Self;
 
@@ -93,22 +79,5 @@ impl<T: ForkAsync> ForkAsync for Arc<Mutex<T>> {
     async fn fork_async(&self) -> Self::AsyncForked {
         let locked = self.lock().await;
         locked.fork_async().await
-    }
-}
-
-impl<T: Fork<Forked = U> + Send + Sync, U: Send + Sync> ForkSend for T {
-    type SendableForked = T::Forked;
-
-    async fn fork_sendable(&self) -> Self::SendableForked {
-        self.fork()
-    }
-}
-
-impl<T: ForkSend + Send> ForkSend for Arc<Mutex<T>> {
-    type SendableForked = T::SendableForked;
-
-    async fn fork_sendable(&self) -> Self::SendableForked {
-        let locked = self.lock().await;
-        locked.fork_sendable().await
     }
 }
