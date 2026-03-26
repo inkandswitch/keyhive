@@ -7,11 +7,12 @@ use super::{
 use derive_more::{From, Into};
 use dupe::Dupe;
 use keyhive_core::event::{static_event::StaticEvent, Event};
+use future_form::Local;
 use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, Hash, From, Into)]
 #[wasm_bindgen(js_name = Event)]
-pub struct JsEvent(pub(crate) Event<JsSigner, JsChangeId, JsEventHandler>);
+pub struct JsEvent(pub(crate) Event<Local, JsSigner, JsChangeId, JsEventHandler>);
 
 #[wasm_bindgen(js_class = Event)]
 impl JsEvent {

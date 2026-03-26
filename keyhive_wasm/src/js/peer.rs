@@ -4,12 +4,13 @@ use super::{
 };
 use dupe::Dupe;
 use keyhive_core::principal::peer::Peer;
+use future_form::Local;
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
 #[wasm_bindgen(js_name = Peer)]
 #[derive(Debug, Clone, Dupe)]
-pub struct JsPeer(pub(crate) Peer<JsSigner, JsChangeId, JsEventHandler>);
+pub struct JsPeer(pub(crate) Peer<Local, JsSigner, JsChangeId, JsEventHandler>);
 
 #[wasm_refgen(js_ref = JsPeerRef)]
 #[wasm_bindgen(js_class = Peer)]
