@@ -35,7 +35,7 @@ pub enum Event<
     F: FutureForm,
     S: AsyncSigner<F>,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<F, S, T> = NoListener,
 > {
     /// Prekeys were expanded.
     PrekeysExpanded(Arc<Signed<AddKeyOp>>),
@@ -168,12 +168,10 @@ mod tests {
         store::ciphertext::memory::MemoryCiphertextStore,
     };
     use beekem::id::{MemberId, TreeId};
+    use future_form::Local;
     use futures::lock::Mutex;
     use keyhive_crypto::{
-        share_key::ShareKey,
-        signer::{memory::MemorySigner},
-        siv::Siv,
-        symmetric_key::SymmetricKey,
+        share_key::ShareKey, signer::memory::MemorySigner, siv::Siv, symmetric_key::SymmetricKey,
         verifiable::Verifiable,
     };
     use rand::rngs::OsRng;
@@ -220,8 +218,8 @@ mod tests {
         let hash2 = Digest::hash(&cgka_op_2);
         let hash3 = Digest::hash(&cgka_op_3);
 
-        let indie = Individual::generate(&signer, &mut csprng).await?;
-        let events: Vec<Event<MemorySigner, [u8; 32], NoListener>> = vec![
+        let indie = Individual::generate::<Local, _, _>(&signer, &mut csprng).await?;
+        let events: Vec<Event<Local, MemorySigner, [u8; 32], NoListener>> = vec![
             Event::CgkaOperation(Arc::new(cgka_op_1)),
             Event::CgkaOperation(Arc::new(cgka_op_2)),
             Event::PrekeysExpanded(Arc::new(

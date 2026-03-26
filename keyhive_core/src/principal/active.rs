@@ -15,7 +15,9 @@ use super::{
 };
 use crate::{
     access::Access,
-    listener::{log::Log, no_listener::NoListener, prekey::PrekeyListener},
+    listener::{
+        log::Log, membership::MembershipListener, no_listener::NoListener, prekey::PrekeyListener,
+    },
     principal::{
         agent::id::AgentId,
         group::delegation::{Delegation, DelegationError},
@@ -34,7 +36,7 @@ use keyhive_crypto::{
     content::reference::ContentRef,
     share_key::{ShareKey, ShareSecretKey},
     signed::{Signed, SigningError},
-    signer::async_signer::AsyncSigner,
+    signer::{async_signer, async_signer::AsyncSigner},
     verifiable::Verifiable,
 };
 use serde::Serialize;
@@ -42,7 +44,7 @@ use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
-#[derive(Clone, Derivative)]
+#[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Active<
     F: FutureForm,
@@ -66,7 +68,7 @@ pub struct Active<
     #[derivative(Debug = "ignore", PartialEq = "ignore")]
     pub(crate) listener: L,
 
-    pub(crate) _phantom: PhantomData<T>,
+    pub(crate) _phantom: PhantomData<(F, T)>,
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Active<F, S, T, L> {
@@ -85,8 +87,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         let init_sk = ShareSecretKey::generate(csprng);
         let init_pk = init_sk.share_key();
         let init_op = Arc::new(
-            signer
-                .try_sign_async(AddKeyOp { share_key: init_pk })
+            async_signer::try_sign_async::<F, _, _>(&signer, AddKeyOp { share_key: init_pk })
                 .await?,
         )
         .into();
@@ -105,9 +106,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
             .try_fold(vec![], |mut acc, pk| async move {
                 acc.push(
                     Arc::new(
-                        borrowed_signer
-                            .try_sign_async(AddKeyOp { share_key: *pk })
-                            .await?,
+                        async_signer::try_sign_async::<F, _, _>(
+                            borrowed_signer,
+                            AddKeyOp { share_key: *pk },
+                        )
+                        .await?,
                     )
                     .into(),
                 );
@@ -184,10 +187,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         let new_public = new_secret.share_key();
 
         let rot_op = Arc::new(
-            self.try_sign_async(RotateKeyOp {
-                old: old_prekey,
-                new: new_public,
-            })
+            async_signer::try_sign_async::<F, _, _>(
+                &self.signer,
+                RotateKeyOp {
+                    old: old_prekey,
+                    new: new_public,
+                },
+            )
             .await?,
         );
 
@@ -225,11 +231,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         let new_public = new_secret.share_key();
 
         let op = Arc::new(
-            self.signer
-                .try_sign_async(AddKeyOp {
+            async_signer::try_sign_async::<F, _, _>(
+                &self.signer,
+                AddKeyOp {
                     share_key: new_public,
-                })
-                .await?,
+                },
+            )
+            .await?,
         );
 
         {
@@ -259,15 +267,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         &self,
         payload: U,
     ) -> Result<Signed<U>, SigningError> {
-        self.signer.try_sign_async(payload).await
+        async_signer::try_sign_async::<F, _, _>(&self.signer, payload).await
     }
 
     /// Encrypt a payload for a member of some [`Group`] or [`Document`].
-    pub async fn get_capability(
+    pub async fn get_capability<M: MembershipListener<F, S, T>>(
         &self,
-        subject: Membered<S, T>,
+        subject: Membered<F, S, T, M>,
         min: Access,
-    ) -> Option<Arc<Signed<Delegation<S, T>>>> {
+    ) -> Option<Arc<Signed<Delegation<F, S, T, M>>>> {
         subject
             .get_capability(&self.id().into())
             .await
@@ -324,6 +332,21 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     }
 }
 
+impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<F> + Clone> Clone
+    for Active<F, S, T, L>
+{
+    fn clone(&self) -> Self {
+        Self {
+            signer: self.signer.clone(),
+            prekey_pairs: self.prekey_pairs.clone(),
+            id: self.id,
+            individual: self.individual.clone(),
+            listener: self.listener.clone(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> std::fmt::Display
     for Active<F, S, T, L>
 {
@@ -332,14 +355,20 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> std:
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Verifiable for Active<F, S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Verifiable
+    for Active<F, S, T, L>
+{
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.signer.verifying_key()
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<F>> Fork for Active<F, S, T, L> {
-    type Forked = Active<S, T, Log<F, S, T>>;
+impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<F>> Fork
+    for Active<F, S, T, L>
+where
+    Log<F, S, T>: MembershipListener<F, S, T>,
+{
+    type Forked = Active<F, S, T, Log<F, S, T>>;
 
     fn fork(&self) -> Self::Forked {
         Active {
@@ -355,6 +384,8 @@ impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<
 
 impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<F>> MergeAsync
     for Active<F, S, T, L>
+where
+    Log<F, S, T>: MembershipListener<F, S, T>,
 {
     async fn merge_async(&self, fork: Self::AsyncForked) {
         let forked_individual = { fork.individual.lock().await.clone() };
@@ -406,6 +437,7 @@ pub enum ActiveDelegationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use future_form::Local;
     use keyhive_crypto::signer::memory::MemorySigner;
 
     #[tokio::test]
@@ -414,8 +446,10 @@ mod tests {
 
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let active: Active<_, [u8; 32], _> =
-            Active::generate(signer, NoListener, csprng).await.unwrap();
+        let active: Active<Local, _, [u8; 32], _> =
+            Active::<Local, _, _, _>::generate(signer, NoListener, csprng)
+                .await
+                .unwrap();
         let message = "hello world".as_bytes();
         let signed = active.try_sign_async(message).await.unwrap();
 
@@ -428,14 +462,18 @@ mod tests {
 
         let csprng = &mut rand::thread_rng();
         let signer1 = MemorySigner::generate(csprng);
-        let active1: Active<_, [u8; 32], _> =
-            Active::generate(signer1, NoListener, csprng).await.unwrap();
+        let active1: Active<Local, _, [u8; 32], _> =
+            Active::<Local, _, _, _>::generate(signer1, NoListener, csprng)
+                .await
+                .unwrap();
 
         let exported = active1.export_prekey_secrets().await.unwrap();
 
         let signer2 = MemorySigner::generate(csprng);
-        let active2: Active<_, [u8; 32], _> =
-            Active::generate(signer2, NoListener, csprng).await.unwrap();
+        let active2: Active<Local, _, [u8; 32], _> =
+            Active::<Local, _, _, _>::generate(signer2, NoListener, csprng)
+                .await
+                .unwrap();
 
         let original_pairs: BTreeMap<ShareKey, ShareSecretKey> =
             active2.prekey_pairs.lock().await.clone();
@@ -469,8 +507,10 @@ mod tests {
 
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(csprng);
-        let active: Active<_, [u8; 32], _> =
-            Active::generate(signer, NoListener, csprng).await.unwrap();
+        let active: Active<Local, _, [u8; 32], _> =
+            Active::<Local, _, _, _>::generate(signer, NoListener, csprng)
+                .await
+                .unwrap();
 
         let result = active.import_prekey_secrets(b"not valid bincode").await;
         assert!(result.is_err());

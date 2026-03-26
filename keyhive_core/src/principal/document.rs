@@ -229,7 +229,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         can: Access,
         signer: &S,
         other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>],
-    ) -> Result<AddMemberUpdate<S, T, L>, AddMemberError> {
+    ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
         let mut after_content: BTreeMap<_, _> =
             join_all(other_relevant_docs.iter().map(|doc| async {
                 let locked = doc.lock().await;
@@ -288,7 +288,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         retain_all_other_members: bool,
         signer: &S,
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<RevokeMemberUpdate<S, T, L>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<F, S, T, L>, RevokeMemberError> {
         let RevokeMemberUpdate {
             revocations,
             redelegations,
@@ -555,7 +555,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         listener: L,
     ) -> Result<Self, MissingIndividualError> {
         Ok(Document {
-            group: Group::<S, T, L>::dummy_from_archive(
+            group: Group::<F, S, T, L>::dummy_from_archive(
                 archive.group,
                 delegations,
                 revocations,
@@ -616,7 +616,7 @@ pub struct RevokeMemberUpdate<
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    RevokeMemberUpdate<S, T, L>
+    RevokeMemberUpdate<F, S, T, L>
 {
     #[allow(clippy::type_complexity)]
     pub fn revocations(&self) -> &[Arc<Signed<Revocation<F, S, T, L>>>] {
@@ -635,7 +635,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Default
-    for RevokeMemberUpdate<S, T, L>
+    for RevokeMemberUpdate<F, S, T, L>
 {
     fn default() -> Self {
         Self {
@@ -723,22 +723,27 @@ pub enum DecryptError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum TryFromDocumentArchiveError<S: AsyncSigner<F>, T: ContentRef> {
+pub enum TryFromDocumentArchiveError<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T> = NoListener,
+> {
     #[error("Cannot find individual: {0}")]
     MissingIndividual(IndividualId),
 
     #[error("Cannot find delegation: {0}")]
-    MissingDelegation(Digest<Signed<Delegation<S, T>>>),
+    MissingDelegation(Digest<Signed<Delegation<F, S, T, L>>>),
 
     #[error("Cannot find revocation: {0}")]
-    MissingRevocation(Digest<Signed<Revocation<S, T>>>),
+    MissingRevocation(Digest<Signed<Revocation<F, S, T, L>>>),
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef>
-    From<MissingDependency<Digest<Signed<Delegation<S, T>>>>>
-    for TryFromDocumentArchiveError<S, T>
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    From<MissingDependency<Digest<Signed<Delegation<F, S, T, L>>>>>
+    for TryFromDocumentArchiveError<F, S, T, L>
 {
-    fn from(e: MissingDependency<Digest<Signed<Delegation<S, T>>>>) -> Self {
+    fn from(e: MissingDependency<Digest<Signed<Delegation<F, S, T, L>>>>) -> Self {
         TryFromDocumentArchiveError::MissingDelegation(e.0)
     }
 }

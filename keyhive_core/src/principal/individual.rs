@@ -23,6 +23,8 @@ use thiserror::Error;
 use tracing::instrument;
 
 #[cfg(any(feature = "test_utils", test))]
+use future_form::FutureForm;
+#[cfg(any(feature = "test_utils", test))]
 use keyhive_crypto::{signed::SigningError, signer::async_signer::AsyncSigner};
 
 #[cfg(any(feature = "test_utils", test))]
@@ -75,12 +77,12 @@ impl Individual {
 
     #[cfg(any(feature = "test_utils", test))]
     #[instrument(skip_all)]
-    pub async fn generate<R: rand::CryptoRng + rand::RngCore, S: AsyncSigner>(
+    pub async fn generate<F: FutureForm, R: rand::CryptoRng + rand::RngCore, S: AsyncSigner<F>>(
         signer: &S,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
         let prekey_state =
-            PrekeyState::generate(signer, NonZeroUsize::new(8).unwrap(), csprng).await?;
+            PrekeyState::generate::<F, _, _>(signer, NonZeroUsize::new(8).unwrap(), csprng).await?;
 
         Ok(Self {
             id: IndividualId(signer.verifying_key().into()),
@@ -232,12 +234,14 @@ fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
 mod tests {
     use super::*;
     use crate::principal::individual::op::add_key::AddKeyOp;
-    
+    use future_form::Local;
+    use keyhive_crypto::signer::memory::MemorySigner;
+
     #[test]
     fn test_to_bytes() {
         test_utils::init_logging();
         let mut csprng = rand::thread_rng();
-        let sk = ed25519_dalek::SigningKey::generate(&mut csprng);
+        let sk = MemorySigner::generate(&mut csprng);
         let op = sk.try_sign_sync(AddKeyOp::generate(&mut csprng)).unwrap();
         let individual: Individual = Individual::new(Arc::new(op).into());
         assert_eq!(individual.id.to_bytes(), sk.verifying_key().to_bytes());
