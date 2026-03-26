@@ -9,7 +9,7 @@ use crate::{
     principal::{document::id::DocumentId, identifier::Identifier},
     reversed::Reversed,
     store::{delegation::DelegationStore, revocation::RevocationStore},
-    util::content_addressed_map::CaMap,
+    util::{content_addressed_map::CaMap, topsort::Topsort},
 };
 use derive_more::{From, Into};
 use derive_where::derive_where;
@@ -20,12 +20,10 @@ use keyhive_crypto::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     hash::Hash,
     sync::Arc,
 };
-use topological_sort::TopologicalSort;
 use tracing::instrument;
 
 #[derive_where(Debug, Clone, Eq; T)]
@@ -62,6 +60,24 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialEq
             (MembershipOperation::Revocation(r1), MembershipOperation::Revocation(r2)) => r1 == r2,
             _ => false,
         }
+    }
+}
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> PartialOrd
+    for MembershipOperation<S, T, L>
+{
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Ord
+    for MembershipOperation<S, T, L>
+{
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.signature()
+            .to_bytes()
+            .cmp(&other.signature().to_bytes())
     }
 }
 
@@ -184,7 +200,15 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
 
     /// Returns operations in reverse topological order (i.e., dependencies come
     /// later).
-    #[allow(clippy::type_complexity)] // Clippy doens't like the returned pair
+    ///
+    /// Collects all reachable ops from heads via `after_auth()`,
+    /// builds a topological sort from direct child→parent edges, and
+    /// drains frontier by frontier. Concurrent revocations are forced
+    /// into separate frontiers ordered by `(distance_to_root, digest)`
+    /// so that [`Group::rebuild`] processes them sequentially with
+    /// correct cascade semantics. Lower distance = closer to root =
+    /// more senior authority = wins the tie-break.
+    #[allow(clippy::type_complexity)] // Clippy doesn't like the returned pair
     #[instrument(skip_all)]
     pub fn reverse_topsort(
         delegation_heads: &DelegationStore<S, T, L>,
@@ -194,12 +218,11 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
         MembershipOperation<S, T, L>,
     )> {
         // NOTE: BTreeMap to get deterministic order
-        let mut ops_with_ancestors: BTreeMap<
+        let mut all_ops: BTreeMap<
             Digest<MembershipOperation<S, T, L>>,
             (
                 MembershipOperation<S, T, L>,
-                CaMap<MembershipOperation<S, T, L>>,
-                usize,
+                Vec<Digest<MembershipOperation<S, T, L>>>,
             ),
         > = BTreeMap::new();
 
@@ -218,157 +241,181 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> MembershipOpera
             }
         }
 
-        let mut leftovers: HashMap<Key, MembershipOperation<S, T, L>> = HashMap::new();
+        // revoked delegation signature -> revocation digest
+        let mut revoked_dependencies: HashMap<Key, Digest<MembershipOperation<S, T, L>>> =
+            HashMap::new();
+
         let mut explore: Vec<MembershipOperation<S, T, L>> = vec![];
 
         for dlg in delegation_heads.values() {
-            let op: MembershipOperation<S, T, L> = dlg.dupe().into();
-            leftovers.insert(op.signature().into(), op.clone());
-            explore.push(op);
+            explore.push(dlg.dupe().into());
         }
 
         for rev in revocation_heads.values() {
-            let op: MembershipOperation<S, T, L> = rev.dupe().into();
-            leftovers.insert(op.signature().into(), op.clone());
-            explore.push(op);
+            explore.push(rev.dupe().into());
         }
 
-        // {being revoked => revocation}
-        let mut revoked_dependencies: HashMap<
-            Key,
-            (
-                Digest<MembershipOperation<S, T, L>>,
-                MembershipOperation<S, T, L>,
-            ),
-        > = HashMap::new();
-
+        // Collect all reachable ops from heads, storing parent digests alongside.
         while let Some(op) = explore.pop() {
             let digest = op.digest();
-            if ops_with_ancestors.contains_key(&digest) {
+            if all_ops.contains_key(&digest) {
                 continue;
             }
 
-            let (ancestors, longest_path) = op.ancestors();
-
-            for ancestor in ancestors.values() {
-                explore.push(ancestor.as_ref().dupe());
+            let parents = op.after_auth();
+            for parent in &parents {
+                explore.push(parent.clone());
             }
+
+            let parent_digests: Vec<_> = parents.iter().map(|p| p.digest()).collect();
 
             if let MembershipOperation::Revocation(r) = &op {
-                revoked_dependencies
-                    .insert((*r.payload.revoke.signature()).into(), (digest, op.dupe()));
+                revoked_dependencies.insert((*r.payload.revoke.signature()).into(), digest);
             }
 
-            ops_with_ancestors.insert(digest, (op, ancestors, longest_path));
+            all_ops.insert(digest, (op, parent_digests));
         }
 
-        let mut adjacencies: TopologicalSort<(
-            Digest<MembershipOperation<S, T, L>>,
-            &MembershipOperation<S, T, L>,
-        )> = topological_sort::TopologicalSort::new();
+        // distance_to_root(node) = 1 + max(distance_to_root(p) for p in parents)
+        // Root nodes (no parents in all_ops) have distance_to_root = 1.
+        //
+        // Computed via recursive DFS with memoization — each node is
+        // visited at most once. The graph is a DAG (no cycles in
+        // after_auth edges), so recursion terminates.
+        //
+        // Lower distance = closer to root = more senior authority.
+        // An attacker cannot reduce their distance by creating puppet
+        // delegations — those only increase depth.
+        fn compute_distance<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>(
+            digest: &Digest<MembershipOperation<S, T, L>>,
+            all_ops: &BTreeMap<
+                Digest<MembershipOperation<S, T, L>>,
+                (
+                    MembershipOperation<S, T, L>,
+                    Vec<Digest<MembershipOperation<S, T, L>>>,
+                ),
+            >,
+            memo: &mut HashMap<Digest<MembershipOperation<S, T, L>>, usize>,
+        ) -> usize {
+            if let Some(&dist) = memo.get(digest) {
+                return dist;
+            }
+            let dist = all_ops
+                .get(digest)
+                .map(|(_, parents)| {
+                    parents
+                        .iter()
+                        .filter(|pd| all_ops.contains_key(pd))
+                        .map(|pd| compute_distance(pd, all_ops, memo))
+                        .max()
+                        .unwrap_or(0)
+                        + 1
+                })
+                .unwrap_or(1);
+            memo.insert(*digest, dist);
+            dist
+        }
 
-        for (digest, (op, op_ancestors, longest_path)) in ops_with_ancestors.iter() {
+        let mut distance_to_root: HashMap<Digest<MembershipOperation<S, T, L>>, usize> =
+            HashMap::new();
+        for digest in all_ops.keys() {
+            compute_distance(digest, &all_ops, &mut distance_to_root);
+        }
+
+        type TsKey<'a, S, T, L> = (
+            Digest<MembershipOperation<S, T, L>>,
+            &'a MembershipOperation<S, T, L>,
+        );
+
+        let mut adjacencies: Topsort<TsKey<'_, S, T, L>> = Topsort::new();
+
+        let mut successors_of: HashMap<
+            Digest<MembershipOperation<S, T, L>>,
+            Vec<Digest<MembershipOperation<S, T, L>>>,
+        > = HashMap::new();
+
+        for (digest, (op, parent_digests)) in all_ops.iter() {
+            adjacencies.add_node((*digest, op));
+
+            for parent_digest in parent_digests {
+                if let Some((parent_op, _)) = all_ops.get(parent_digest) {
+                    adjacencies.add_dependency((*digest, op), (*parent_digest, parent_op));
+                    successors_of
+                        .entry(*digest)
+                        .or_default()
+                        .push(*parent_digest);
+                }
+            }
+
             if let MembershipOperation::Delegation(d) = op {
                 if let Some(proof) = &d.payload.proof {
-                    if let Some((revoked_digest, revoked_op)) =
-                        revoked_dependencies.get(&Key(proof.signature))
-                    {
-                        adjacencies.add_dependency((*digest, op), (*revoked_digest, revoked_op));
-                    }
-                }
-            }
-
-            #[allow(clippy::mutable_key_type)]
-            let ancestor_set: HashSet<&MembershipOperation<S, T, L>> =
-                op_ancestors.values().map(|op| op.as_ref()).collect();
-
-            for (other_digest, other_op) in op_ancestors.iter() {
-                let (_, other_ancestors, other_longest_path) = ops_with_ancestors
-                    .get(other_digest)
-                    .expect("values that we just put there to be there");
-
-                #[allow(clippy::mutable_key_type)]
-                let other_ancestor_set: HashSet<&MembershipOperation<S, T, L>> =
-                    other_ancestors.values().map(|op| op.as_ref()).collect();
-
-                if other_ancestor_set.contains(op) || ancestor_set.is_subset(&other_ancestor_set) {
-                    leftovers.remove(&Key(other_op.signature()));
-                    adjacencies.add_dependency((*other_digest, other_op.as_ref()), (*digest, op));
-                    continue;
-                }
-
-                if ancestor_set.contains(other_op.as_ref())
-                    || ancestor_set.is_superset(&other_ancestor_set)
-                {
-                    leftovers.remove(&Key(op.signature()));
-                    adjacencies.add_dependency((*digest, op), (*other_digest, other_op.as_ref()));
-                    continue;
-                }
-
-                // NOTE for concurrent case:
-                // if both are revocations then do extra checks to force order
-                // in order to ensure no revocation cycles
-                if op.is_revocation() && other_op.is_revocation() {
-                    match longest_path.cmp(other_longest_path) {
-                        Ordering::Less => {
-                            leftovers.remove(&Key(op.signature()));
+                    if let Some(revoked_digest) = revoked_dependencies.get(&Key(proof.signature)) {
+                        if let Some((revoked_op, _)) = all_ops.get(revoked_digest) {
                             adjacencies
-                                .add_dependency((*digest, op), (*other_digest, other_op.as_ref()));
+                                .add_dependency((*digest, op), (*revoked_digest, revoked_op));
+                            successors_of
+                                .entry(*digest)
+                                .or_default()
+                                .push(*revoked_digest);
                         }
-                        Ordering::Greater => {
-                            leftovers.remove(&Key(other_op.signature()));
-                            adjacencies
-                                .add_dependency((*other_digest, other_op.as_ref()), (*digest, op));
-                        }
-                        Ordering::Equal => match other_digest.cmp(digest) {
-                            Ordering::Less => {
-                                leftovers.remove(&Key(op.signature()));
-                                adjacencies.add_dependency(
-                                    (*digest, op),
-                                    (*other_digest, other_op.as_ref()),
-                                );
-                            }
-                            Ordering::Greater => {
-                                leftovers.remove(&Key(other_op.signature()));
-                                adjacencies.add_dependency(
-                                    (*other_digest, other_op.as_ref()),
-                                    (*digest, op),
-                                );
-                            }
-                            Ordering::Equal => {
-                                debug_assert!(false, "should not need to compare to self")
-                            }
-                        },
                     }
-                    continue;
                 }
             }
         }
-
-        let mut history: Vec<(
-            Digest<MembershipOperation<S, T, L>>,
-            MembershipOperation<S, T, L>,
-        )> = leftovers
-            .values()
-            .map(|op| (op.digest(), op.clone()))
-            .collect();
-
-        history.sort_by_key(|(digest, _)| *digest);
 
         let mut dependencies = vec![];
 
         while !adjacencies.is_empty() {
-            let mut latest = adjacencies.pop_all();
+            let batch = adjacencies.pop_frontier();
+            if batch.is_empty() {
+                break; // cycle guard
+            }
 
-            // NOTE sort all concurrent heads by hash for more determinism
-            latest.sort_by_key(|(digest, _)| *digest);
+            let (mut revocations, mut others): (Vec<_>, Vec<_>) =
+                batch.into_iter().partition(|(_, op)| op.is_revocation());
 
-            for (digest, op) in latest.into_iter() {
-                dependencies.push((digest, op.clone()));
+            others.sort_by_key(|(d, _)| *d);
+            for (digest, op) in &others {
+                dependencies.push((*digest, (*op).clone()));
+            }
+
+            if revocations.len() <= 1 {
+                for (digest, op) in &revocations {
+                    dependencies.push((*digest, (*op).clone()));
+                }
+            } else {
+                revocations.sort_by(|(d1, _), (d2, _)| {
+                    let dist1 = distance_to_root.get(d1).copied().unwrap_or(1);
+                    let dist2 = distance_to_root.get(d2).copied().unwrap_or(1);
+                    dist1.cmp(&dist2).then_with(|| d1.cmp(d2))
+                });
+
+                let (first_digest, first_op) = revocations[0];
+                dependencies.push((first_digest, first_op.clone()));
+
+                let remaining = &revocations[1..];
+                for window in remaining.windows(2) {
+                    let before = window[0];
+                    let after = window[1];
+                    adjacencies.add_dependency(after, before);
+                }
+                if remaining.len() == 1 {
+                    adjacencies.add_node(remaining[0]);
+                }
+
+                for &(rev_digest, rev_op) in remaining {
+                    if let Some(succs) = successors_of.get(&rev_digest) {
+                        for succ_digest in succs {
+                            if let Some((succ_op, _)) = all_ops.get(succ_digest) {
+                                adjacencies
+                                    .add_dependency((rev_digest, rev_op), (*succ_digest, succ_op));
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        dependencies.extend(history);
         Reversed(dependencies)
     }
 }
@@ -442,6 +489,7 @@ mod tests {
     use futures::lock::Mutex;
     use keyhive_crypto::signer::{memory::MemorySigner, sync_signer::SyncSigner};
     use std::sync::{Arc, LazyLock};
+    use testresult::TestResult;
 
     // FIXME
     // FIXME these should probbaly use `lazy_static!`
@@ -879,10 +927,12 @@ mod tests {
                 .position(|(_, op)| op == &alice_to_bob.dupe().into())
                 .unwrap();
 
-            let ad_idx = sorted
+            // alice_to_dan has no causal relationship with the other
+            // ops — just verify it exists in the output.
+            sorted
                 .iter()
                 .position(|(_, op)| op == &alice_to_dan.dupe().into())
-                .unwrap();
+                .expect("alice_to_dan should be in output");
 
             let bc_idx = sorted
                 .iter()
@@ -890,7 +940,6 @@ mod tests {
                 .unwrap();
 
             assert!(ab_idx < bc_idx);
-            assert!(ad_idx < ab_idx);
         }
 
         #[tokio::test]
@@ -1053,6 +1102,1228 @@ mod tests {
             assert!(pos_carol > pos_rev_carol);
             assert!(pos_carol > pos_rev_dan);
             assert!(pos_dan > pos_rev_dan);
+        }
+
+        /// Two concurrent revocations that revoke each other's proofs.
+        #[tokio::test]
+        async fn test_concurrent_revocations_deterministic_order() {
+            test_utils::init_logging();
+            let csprng = &mut rand::thread_rng();
+
+            let group_signer = MemorySigner::generate(csprng);
+            let alice_signer = MemorySigner::generate(csprng);
+            let bob_signer = MemorySigner::generate(csprng);
+            let carol_signer = MemorySigner::generate(csprng);
+
+            let alice = Individual::generate(&alice_signer, csprng).await.unwrap();
+            let bob = Individual::generate(&bob_signer, csprng).await.unwrap();
+            let carol = Individual::generate(&carol_signer, csprng).await.unwrap();
+
+            // group -> alice
+            let root_dlg: Arc<Signed<Delegation<MemorySigner, String>>> = Arc::new(
+                group_signer
+                    .try_sign_sync(Delegation {
+                        delegate: alice.into(),
+                        can: Access::Admin,
+                        proof: None,
+                        after_content: BTreeMap::new(),
+                        after_revocations: vec![],
+                    })
+                    .unwrap(),
+            );
+
+            // alice -> bob
+            let d_bob = Arc::new(
+                alice_signer
+                    .try_sign_sync(Delegation {
+                        delegate: bob.into(),
+                        can: Access::Edit,
+                        proof: Some(root_dlg.dupe()),
+                        after_content: BTreeMap::new(),
+                        after_revocations: vec![],
+                    })
+                    .unwrap(),
+            );
+
+            // alice -> carol
+            let d_carol = Arc::new(
+                alice_signer
+                    .try_sign_sync(Delegation {
+                        delegate: carol.into(),
+                        can: Access::Edit,
+                        proof: Some(root_dlg.dupe()),
+                        after_content: BTreeMap::new(),
+                        after_revocations: vec![],
+                    })
+                    .unwrap(),
+            );
+
+            // bob revokes carol's delegation
+            let r1 = Arc::new(
+                bob_signer
+                    .try_sign_sync(Revocation {
+                        revoke: d_carol.dupe(),
+                        proof: Some(d_bob.dupe()),
+                        after_content: BTreeMap::new(),
+                    })
+                    .unwrap(),
+            );
+
+            // carol revokes bob's delegation
+            let r2 = Arc::new(
+                carol_signer
+                    .try_sign_sync(Revocation {
+                        revoke: d_bob.dupe(),
+                        proof: Some(d_carol.dupe()),
+                        after_content: BTreeMap::new(),
+                    })
+                    .unwrap(),
+            );
+
+            let r1_op: MembershipOperation<MemorySigner, String> = r1.dupe().into();
+            let r2_op: MembershipOperation<MemorySigner, String> = r2.dupe().into();
+
+            // Both revocations as heads
+            let dlg_heads = DelegationStore::new();
+            let rev_heads = RevocationStore::from_iter_direct([r1.dupe(), r2.dupe()]);
+
+            let observed = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
+
+            // Should contain all 5 ops
+            assert_eq!(observed.len(), 5);
+
+            let pos_r1 = observed.iter().position(|(_, op)| *op == r1_op).unwrap();
+            let pos_r2 = observed.iter().position(|(_, op)| *op == r2_op).unwrap();
+
+            // Both revocations should come before their dependencies
+            let root_op: MembershipOperation<MemorySigner, String> = root_dlg.into();
+            let d_bob_op: MembershipOperation<MemorySigner, String> = d_bob.into();
+            let d_carol_op: MembershipOperation<MemorySigner, String> = d_carol.into();
+
+            let pos_root = observed.iter().position(|(_, op)| *op == root_op).unwrap();
+            let pos_d_bob = observed.iter().position(|(_, op)| *op == d_bob_op).unwrap();
+            let pos_d_carol = observed
+                .iter()
+                .position(|(_, op)| *op == d_carol_op)
+                .unwrap();
+
+            // higher index is processed first (popped first)
+            // Dependencies should be at higher indices
+            assert!(pos_root > pos_d_bob);
+            assert!(pos_root > pos_d_carol);
+            assert!(pos_d_bob > pos_r1);
+            assert!(pos_d_carol > pos_r2);
+
+            // The two revocations should have a deterministic relative order.
+            // Run the topsort again with reversed input order to verify stability.
+            let observed2 = MembershipOperation::reverse_topsort(
+                &DelegationStore::new(),
+                &RevocationStore::from_iter_direct([r2.dupe(), r1.dupe()]),
+            );
+
+            let pos_r1_2 = observed2.iter().position(|(_, op)| *op == r1_op).unwrap();
+            let pos_r2_2 = observed2.iter().position(|(_, op)| *op == r2_op).unwrap();
+
+            // Same relative order regardless of input order
+            assert_eq!(pos_r1 < pos_r2, pos_r1_2 < pos_r2_2);
+        }
+
+        /// An isolated root delegation (no parents and not referenced by anything)
+        /// should appear in leftovers.
+        #[tokio::test]
+        async fn test_isolated_root_in_leftovers() {
+            test_utils::init_logging();
+            let csprng = &mut rand::thread_rng();
+
+            let alice_dlg = add_alice(csprng).await;
+            let bob_dlg = add_bob(csprng).await;
+
+            let dlg_heads = DelegationStore::from_iter_direct([alice_dlg.dupe(), bob_dlg.dupe()]);
+            let rev_heads = RevocationStore::new();
+
+            let observed = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
+            assert_eq!(observed.len(), 2);
+
+            let group_signer2 = MemorySigner::generate(csprng);
+            let dan_signer = MemorySigner::generate(csprng);
+            let dan = Individual::generate(&dan_signer, csprng).await.unwrap();
+
+            let isolated_dlg: Arc<Signed<Delegation<MemorySigner, String>>> = Arc::new(
+                group_signer2
+                    .try_sign_sync(Delegation {
+                        delegate: dan.into(),
+                        can: Access::Admin,
+                        proof: None,
+                        after_content: BTreeMap::new(),
+                        after_revocations: vec![],
+                    })
+                    .unwrap(),
+            );
+
+            // Two unrelated root delegations. Both are isolated
+            let dlg_heads2 =
+                DelegationStore::from_iter_direct([alice_dlg.dupe(), isolated_dlg.dupe()]);
+
+            let observed2 =
+                MembershipOperation::reverse_topsort(&dlg_heads2, &RevocationStore::new());
+            assert_eq!(observed2.len(), 2);
+
+            // Both should be present
+            let alice_op: MembershipOperation<MemorySigner, String> = alice_dlg.into();
+            let isolated_op: MembershipOperation<MemorySigner, String> = isolated_dlg.into();
+            assert!(observed2.iter().any(|(_, op)| *op == alice_op));
+            assert!(observed2.iter().any(|(_, op)| *op == isolated_op));
+        }
+
+        /// Three-way concurrent revocation: Alice, Bob, Carol each
+        /// revoke the next person's delegation. All three should
+        /// appear in separate topsort levels, ordered by delegation
+        /// chain length.
+        #[tokio::test]
+        async fn test_three_concurrent_revocations() -> TestResult {
+            test_utils::init_logging();
+            let csprng = &mut rand::thread_rng();
+
+            let group_signer = MemorySigner::generate(csprng);
+            let alice_signer = MemorySigner::generate(csprng);
+            let bob_signer = MemorySigner::generate(csprng);
+            let carol_signer = MemorySigner::generate(csprng);
+
+            let alice = Individual::generate(&alice_signer, csprng).await?;
+            let bob = Individual::generate(&bob_signer, csprng).await?;
+            let carol = Individual::generate(&carol_signer, csprng).await?;
+
+            let root_dlg: Arc<Signed<Delegation<MemorySigner, String>>> =
+                Arc::new(group_signer.try_sign_sync(Delegation {
+                    delegate: alice.into(),
+                    can: Access::Admin,
+                    proof: None,
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+            let d_bob = Arc::new(alice_signer.try_sign_sync(Delegation {
+                delegate: bob.into(),
+                can: Access::Edit,
+                proof: Some(root_dlg.dupe()),
+                after_content: BTreeMap::new(),
+                after_revocations: vec![],
+            })?);
+
+            let d_carol = Arc::new(alice_signer.try_sign_sync(Delegation {
+                delegate: carol.into(),
+                can: Access::Edit,
+                proof: Some(root_dlg.dupe()),
+                after_content: BTreeMap::new(),
+                after_revocations: vec![],
+            })?);
+
+            let r_ab = Arc::new(alice_signer.try_sign_sync(Revocation {
+                revoke: d_bob.dupe(),
+                proof: Some(root_dlg.dupe()),
+                after_content: BTreeMap::new(),
+            })?);
+
+            let r_bc = Arc::new(bob_signer.try_sign_sync(Revocation {
+                revoke: d_carol.dupe(),
+                proof: Some(d_bob.dupe()),
+                after_content: BTreeMap::new(),
+            })?);
+
+            let r_ca = Arc::new(carol_signer.try_sign_sync(Revocation {
+                revoke: d_bob.dupe(),
+                proof: Some(d_carol.dupe()),
+                after_content: BTreeMap::new(),
+            })?);
+
+            let r_ab_op: MembershipOperation<MemorySigner, String> = r_ab.dupe().into();
+            let r_bc_op: MembershipOperation<MemorySigner, String> = r_bc.dupe().into();
+            let r_ca_op: MembershipOperation<MemorySigner, String> = r_ca.dupe().into();
+
+            let rev_heads =
+                RevocationStore::from_iter_direct([r_ab.dupe(), r_bc.dupe(), r_ca.dupe()]);
+            let observed =
+                MembershipOperation::reverse_topsort(&DelegationStore::new(), &rev_heads);
+
+            assert!(observed.iter().any(|(_, op)| *op == r_ab_op));
+            assert!(observed.iter().any(|(_, op)| *op == r_bc_op));
+            assert!(observed.iter().any(|(_, op)| *op == r_ca_op));
+
+            let rev_heads2 =
+                RevocationStore::from_iter_direct([r_ca.dupe(), r_ab.dupe(), r_bc.dupe()]);
+            let observed2 =
+                MembershipOperation::reverse_topsort(&DelegationStore::new(), &rev_heads2);
+            assert_eq!(observed.len(), observed2.len());
+            for (i, ((d1, op1), (d2, op2))) in observed.iter().zip(observed2.iter()).enumerate() {
+                assert_eq!(d1, d2, "digest mismatch at position {i}");
+                assert_eq!(op1, op2, "op mismatch at position {i}");
+            }
+
+            Ok(())
+        }
+
+        /// Concurrent revocations with different delegation chain
+        /// lengths must be ordered by chain length (shorter first in
+        /// drain, meaning shorter chain's revocation is at a lower
+        /// index in the Reversed vec).
+        ///
+        /// ```text
+        ///           group
+        ///             |
+        ///          root_dlg (-> alice)
+        ///           /    \
+        ///      d_bob     d_carol
+        ///                    \
+        ///                   d_dave
+        ///
+        ///  r_short: alice revokes d_bob  (proof: root_dlg)
+        ///           distance_to_root = max(dist(d_bob), dist(root_dlg)) + 1
+        ///                            = max(2, 1) + 1 = 3
+        ///  r_long:  carol revokes d_bob  (proof: d_dave)
+        ///           distance_to_root = max(dist(d_bob), dist(d_dave)) + 1
+        ///                            = max(2, 3) + 1 = 4
+        /// ```
+        ///
+        /// Both revocations target d_bob but `r_long` goes through a
+        /// deeper proof chain (d_dave at depth 3 vs root_dlg at
+        /// depth 1), giving it a greater distance to root.
+        #[tokio::test]
+        async fn test_concurrent_revocations_ordered_by_chain_length() -> TestResult {
+            test_utils::init_logging();
+            let csprng = &mut rand::thread_rng();
+
+            let group_signer = MemorySigner::generate(csprng);
+            let alice_signer = MemorySigner::generate(csprng);
+            let bob_signer = MemorySigner::generate(csprng);
+            let carol_signer = MemorySigner::generate(csprng);
+            let dave_signer = MemorySigner::generate(csprng);
+
+            let alice = Individual::generate(&alice_signer, csprng).await?;
+            let bob = Individual::generate(&bob_signer, csprng).await?;
+            let carol = Individual::generate(&carol_signer, csprng).await?;
+            let dave = Individual::generate(&dave_signer, csprng).await?;
+
+            let root_dlg: Arc<Signed<Delegation<MemorySigner, String>>> =
+                Arc::new(group_signer.try_sign_sync(Delegation {
+                    delegate: alice.into(),
+                    can: Access::Admin,
+                    proof: None,
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+            let d_bob = Arc::new(alice_signer.try_sign_sync(Delegation {
+                delegate: bob.into(),
+                can: Access::Admin,
+                proof: Some(root_dlg.dupe()),
+                after_content: BTreeMap::new(),
+                after_revocations: vec![],
+            })?);
+
+            let d_carol = Arc::new(alice_signer.try_sign_sync(Delegation {
+                delegate: carol.into(),
+                can: Access::Admin,
+                proof: Some(root_dlg.dupe()),
+                after_content: BTreeMap::new(),
+                after_revocations: vec![],
+            })?);
+
+            // carol -> dave (chain length 3)
+            let d_dave = Arc::new(carol_signer.try_sign_sync(Delegation {
+                delegate: dave.into(),
+                can: Access::Admin,
+                proof: Some(d_carol.dupe()),
+                after_content: BTreeMap::new(),
+                after_revocations: vec![],
+            })?);
+
+            // Alice revokes d_bob (proof: root_dlg → distance_to_root 3)
+            let r_short = Arc::new(alice_signer.try_sign_sync(Revocation {
+                revoke: d_bob.dupe(),
+                proof: Some(root_dlg.dupe()),
+                after_content: BTreeMap::new(),
+            })?);
+
+            // Dave revokes d_bob (proof: d_dave → distance_to_root 4)
+            let r_long = Arc::new(dave_signer.try_sign_sync(Revocation {
+                revoke: d_bob.dupe(),
+                proof: Some(d_dave.dupe()),
+                after_content: BTreeMap::new(),
+            })?);
+
+            let r_short_op: MembershipOperation<MemorySigner, String> = r_short.dupe().into();
+            let r_long_op: MembershipOperation<MemorySigner, String> = r_long.dupe().into();
+
+            let rev_heads = RevocationStore::from_iter_direct([r_short.dupe(), r_long.dupe()]);
+            let observed =
+                MembershipOperation::reverse_topsort(&DelegationStore::new(), &rev_heads);
+
+            let pos_short = observed
+                .iter()
+                .position(|(_, op)| *op == r_short_op)
+                .expect("short-chain revocation should be in output");
+            let pos_long = observed
+                .iter()
+                .position(|(_, op)| *op == r_long_op)
+                .expect("long-chain revocation should be in output");
+
+            // Shorter distance_to_root → sorted first → emitted first →
+            // lower index in the Reversed vec.
+            assert!(
+                pos_short < pos_long,
+                "short-chain revocation (pos {pos_short}) should come before \
+                 long-chain revocation (pos {pos_long}) in the Reversed vec"
+            );
+
+            Ok(())
+        }
+
+        /// Property: reverse_topsort output is stable regardless of
+        /// the insertion order of delegation and revocation heads.
+        #[tokio::test]
+        async fn test_reverse_topsort_stability_under_input_permutation() -> TestResult {
+            test_utils::init_logging();
+            let csprng = &mut rand::thread_rng();
+
+            let group_signer = MemorySigner::generate(csprng);
+            let alice_signer = MemorySigner::generate(csprng);
+            let bob_signer = MemorySigner::generate(csprng);
+            let carol_signer = MemorySigner::generate(csprng);
+            let dan_signer = MemorySigner::generate(csprng);
+
+            let alice = Individual::generate(&alice_signer, csprng).await?;
+            let bob = Individual::generate(&bob_signer, csprng).await?;
+            let carol = Individual::generate(&carol_signer, csprng).await?;
+            let dan = Individual::generate(&dan_signer, csprng).await?;
+
+            let root_dlg: Arc<Signed<Delegation<MemorySigner, String>>> =
+                Arc::new(group_signer.try_sign_sync(Delegation {
+                    delegate: alice.into(),
+                    can: Access::Admin,
+                    proof: None,
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+            let d_bob = Arc::new(alice_signer.try_sign_sync(Delegation {
+                delegate: bob.into(),
+                can: Access::Edit,
+                proof: Some(root_dlg.dupe()),
+                after_content: BTreeMap::new(),
+                after_revocations: vec![],
+            })?);
+
+            let d_carol = Arc::new(alice_signer.try_sign_sync(Delegation {
+                delegate: carol.into(),
+                can: Access::Edit,
+                proof: Some(root_dlg.dupe()),
+                after_content: BTreeMap::new(),
+                after_revocations: vec![],
+            })?);
+
+            let d_dan = Arc::new(bob_signer.try_sign_sync(Delegation {
+                delegate: dan.into(),
+                can: Access::Relay,
+                proof: Some(d_bob.dupe()),
+                after_content: BTreeMap::new(),
+                after_revocations: vec![],
+            })?);
+
+            // Bob revokes Carol
+            let r1 = Arc::new(bob_signer.try_sign_sync(Revocation {
+                revoke: d_carol.dupe(),
+                proof: Some(d_bob.dupe()),
+                after_content: BTreeMap::new(),
+            })?);
+
+            // Carol revokes Bob
+            let r2 = Arc::new(carol_signer.try_sign_sync(Revocation {
+                revoke: d_bob.dupe(),
+                proof: Some(d_carol.dupe()),
+                after_content: BTreeMap::new(),
+            })?);
+
+            // Permutation 1: heads in one order
+            let dlg_heads_1 = DelegationStore::from_iter_direct([d_dan.dupe()]);
+            let rev_heads_1 = RevocationStore::from_iter_direct([r1.dupe(), r2.dupe()]);
+            let result_1 = MembershipOperation::reverse_topsort(&dlg_heads_1, &rev_heads_1);
+
+            // Permutation 2: reversed revocation head order
+            let dlg_heads_2 = DelegationStore::from_iter_direct([d_dan.dupe()]);
+            let rev_heads_2 = RevocationStore::from_iter_direct([r2.dupe(), r1.dupe()]);
+            let result_2 = MembershipOperation::reverse_topsort(&dlg_heads_2, &rev_heads_2);
+
+            assert_eq!(result_1.len(), result_2.len(), "different number of ops");
+            for (i, ((d1, op1), (d2, op2))) in result_1.iter().zip(result_2.iter()).enumerate() {
+                assert_eq!(d1, d2, "digest mismatch at position {i}");
+                assert_eq!(op1, op2, "op mismatch at position {i}");
+            }
+
+            Ok(())
+        }
+
+        /// Property: every op in the Reversed output has all its
+        /// after_auth parents at higher indices (processed first by
+        /// rebuild via pop).
+        #[tokio::test]
+        async fn test_causal_ordering_invariant() {
+            test_utils::init_logging();
+            let csprng = &mut rand::thread_rng();
+
+            // Use the full fixture graph from the module-level diagram.
+            // The add_* helpers are called for side effects (building
+            // the parent chain); only dan and erin heads are used.
+            let _alice_dlg = add_alice(csprng).await;
+            let _bob_dlg = add_bob(csprng).await;
+            let _carol_dlg = add_carol(csprng).await;
+            let dan_dlg = add_dan(csprng).await;
+            let erin_dlg = add_erin(csprng).await;
+            let remove_carol_rev = remove_carol(csprng).await;
+            let remove_dan_rev = remove_dan(csprng).await;
+
+            let dlg_heads = DelegationStore::from_iter_direct([dan_dlg.dupe(), erin_dlg.dupe()]);
+            let rev_heads =
+                RevocationStore::from_iter_direct([remove_carol_rev.dupe(), remove_dan_rev.dupe()]);
+            let observed = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
+
+            // Build a position map: digest -> index in Reversed vec
+            let pos: std::collections::HashMap<_, _> = observed
+                .iter()
+                .enumerate()
+                .map(|(i, (d, _))| (*d, i))
+                .collect();
+
+            // For every op, all its after_auth() parents must be at
+            // higher indices (they're popped first by rebuild).
+            for (digest, op) in observed.iter() {
+                let my_pos = pos[digest];
+                for parent in op.after_auth() {
+                    let parent_digest = parent.digest();
+                    if let Some(&parent_pos) = pos.get(&parent_digest) {
+                        assert!(
+                            parent_pos > my_pos,
+                            "op at pos {my_pos} (digest {digest:?}) has parent at pos \
+                             {parent_pos} (digest {parent_digest:?}), but parent should \
+                             be at a higher index"
+                        );
+                    }
+                }
+            }
+        }
+
+        /// Deep chain of alternating delegate/revoke cycles: ensure
+        /// the topsort terminates and produces the right number of ops.
+        #[tokio::test]
+        async fn test_deep_delegate_revoke_chain() -> TestResult {
+            test_utils::init_logging();
+            let csprng = &mut rand::thread_rng();
+
+            let group_signer = MemorySigner::generate(csprng);
+            let alice_signer = MemorySigner::generate(csprng);
+            let bob_signer = MemorySigner::generate(csprng);
+
+            let alice = Individual::generate(&alice_signer, csprng).await?;
+            let bob = Individual::generate(&bob_signer, csprng).await?;
+
+            let root_dlg: Arc<Signed<Delegation<MemorySigner, String>>> =
+                Arc::new(group_signer.try_sign_sync(Delegation {
+                    delegate: alice.clone().into(),
+                    can: Access::Admin,
+                    proof: None,
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+            let depth = 10;
+            let mut all_dlgs = vec![root_dlg.dupe()];
+            let mut all_revs: Vec<Arc<Signed<Revocation<MemorySigner, String>>>> = vec![];
+            let mut current_proof = root_dlg.dupe();
+
+            for i in 0..depth {
+                // Alternate delegating to bob and alice
+                let (signer, delegate) = if i % 2 == 0 {
+                    (&alice_signer, bob.clone().into())
+                } else {
+                    (&bob_signer, alice.clone().into())
+                };
+
+                let dlg = Arc::new(signer.try_sign_sync(Delegation {
+                    delegate,
+                    can: Access::Admin,
+                    proof: Some(current_proof.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: all_revs.last().map_or(vec![], |r| vec![r.dupe()]),
+                })?);
+
+                // Revoke previous delegation (if any)
+                if i > 0 {
+                    let rev = Arc::new(signer.try_sign_sync(Revocation {
+                        revoke: all_dlgs.last().expect("non-empty dlg list").dupe(),
+                        proof: Some(current_proof.dupe()),
+                        after_content: BTreeMap::new(),
+                    })?);
+                    all_revs.push(rev);
+                }
+
+                current_proof = dlg.dupe();
+                all_dlgs.push(dlg);
+            }
+
+            let expected_ops = all_dlgs.len() + all_revs.len();
+
+            let dlg_heads = DelegationStore::from_iter_direct([all_dlgs
+                .last()
+                .expect("non-empty dlg list")
+                .dupe()]);
+            let rev_heads = if all_revs.is_empty() {
+                RevocationStore::new()
+            } else {
+                RevocationStore::from_iter_direct([all_revs
+                    .last()
+                    .expect("non-empty rev list")
+                    .dupe()])
+            };
+            let observed = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
+
+            assert_eq!(
+                observed.len(),
+                expected_ops,
+                "expected {expected_ops} ops for depth {depth}, got {}",
+                observed.len()
+            );
+
+            // Verify causal ordering
+            let pos: std::collections::HashMap<_, _> = observed
+                .iter()
+                .enumerate()
+                .map(|(i, (d, _))| (*d, i))
+                .collect();
+
+            for (digest, op) in observed.iter() {
+                for parent in op.after_auth() {
+                    let parent_digest = parent.digest();
+                    if let Some(&parent_pos) = pos.get(&parent_digest) {
+                        assert!(
+                            parent_pos > pos[digest],
+                            "causal ordering violated at depth chain"
+                        );
+                    }
+                }
+            }
+
+            Ok(())
+        }
+
+        /// Exhaustive revocation cycle permutation tests.
+        ///
+        /// For each cycle size (2, 3, 4), we construct a delegation
+        /// graph with mutual revocations forming the cycle plus
+        /// downstream delegations, bystanders, and an unrelated
+        /// revocation. We then run `reverse_topsort` with every
+        /// permutation of the revocation heads and assert the
+        /// output is identical regardless of insertion order.
+        mod revocation_cycles {
+            use super::*;
+
+            fn permutations<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
+                if items.len() <= 1 {
+                    return vec![items.to_vec()];
+                }
+                let mut result = vec![];
+                for (i, item) in items.iter().enumerate() {
+                    let mut rest = items.to_vec();
+                    rest.remove(i);
+                    for mut perm in permutations(&rest) {
+                        perm.insert(0, item.clone());
+                        result.push(perm);
+                    }
+                }
+                result
+            }
+
+            /// Assert two Reversed outputs are identical element-by-element.
+            #[allow(clippy::type_complexity)]
+            fn assert_same_output<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>(
+                label: &str,
+                expected: &Reversed<(
+                    Digest<MembershipOperation<S, T, L>>,
+                    MembershipOperation<S, T, L>,
+                )>,
+                actual: &Reversed<(
+                    Digest<MembershipOperation<S, T, L>>,
+                    MembershipOperation<S, T, L>,
+                )>,
+            ) {
+                assert_eq!(
+                    expected.len(),
+                    actual.len(),
+                    "{label}: length mismatch ({} vs {})",
+                    expected.len(),
+                    actual.len(),
+                );
+                for (i, ((d1, op1), (d2, op2))) in expected.iter().zip(actual.iter()).enumerate() {
+                    assert_eq!(d1, d2, "{label}: digest mismatch at position {i}");
+                    assert_eq!(op1, op2, "{label}: op mismatch at position {i}");
+                }
+            }
+
+            /// 2-cycle: A revokes B, B revokes A.
+            ///
+            /// Cycle members also have downstream delegations (bob
+            /// delegates to eve, carol delegates to frank) and there
+            /// is an unrelated revocation (alice revokes d_grace)
+            /// that should be unaffected by cycle-breaking.
+            ///
+            /// ```text
+            ///                   group
+            ///                     |
+            ///                 root_dlg (-> alice, Admin)
+            ///              /    |      \        \
+            ///         d_bob  d_carol  d_grace  d_heidi (bystander)
+            ///          |       |
+            ///        d_eve   d_frank
+            ///
+            ///  Cycle revocations:
+            ///    r_ab: bob   revokes d_carol (proof: d_bob)
+            ///    r_ba: carol revokes d_bob   (proof: d_carol)
+            ///
+            ///  Unrelated revocation:
+            ///    r_grace: alice revokes d_grace (proof: root_dlg)
+            /// ```
+            ///
+            /// Exhaustively tests all 2! = 2 permutations of cycle
+            /// revocation head insertion order (unrelated heads fixed).
+            #[tokio::test]
+            async fn test_2_cycle_all_permutations() -> TestResult {
+                test_utils::init_logging();
+                let csprng = &mut rand::thread_rng();
+
+                let group_signer = MemorySigner::generate(csprng);
+                let alice_signer = MemorySigner::generate(csprng);
+                let bob_signer = MemorySigner::generate(csprng);
+                let carol_signer = MemorySigner::generate(csprng);
+                let eve_signer = MemorySigner::generate(csprng);
+                let frank_signer = MemorySigner::generate(csprng);
+                let grace_signer = MemorySigner::generate(csprng);
+                let heidi_signer = MemorySigner::generate(csprng);
+
+                let alice = Individual::generate(&alice_signer, csprng).await?;
+                let bob = Individual::generate(&bob_signer, csprng).await?;
+                let carol = Individual::generate(&carol_signer, csprng).await?;
+                let eve = Individual::generate(&eve_signer, csprng).await?;
+                let frank = Individual::generate(&frank_signer, csprng).await?;
+                let grace = Individual::generate(&grace_signer, csprng).await?;
+                let heidi = Individual::generate(&heidi_signer, csprng).await?;
+
+                let root_dlg: Arc<Signed<Delegation<MemorySigner, String>>> =
+                    Arc::new(group_signer.try_sign_sync(Delegation {
+                        delegate: alice.into(),
+                        can: Access::Admin,
+                        proof: None,
+                        after_content: BTreeMap::new(),
+                        after_revocations: vec![],
+                    })?);
+
+                let d_bob = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: bob.into(),
+                    can: Access::Admin,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                let d_carol = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: carol.into(),
+                    can: Access::Admin,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                // Downstream of bob
+                let d_eve = Arc::new(bob_signer.try_sign_sync(Delegation {
+                    delegate: eve.into(),
+                    can: Access::Edit,
+                    proof: Some(d_bob.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                // Downstream of carol
+                let d_frank = Arc::new(carol_signer.try_sign_sync(Delegation {
+                    delegate: frank.into(),
+                    can: Access::Edit,
+                    proof: Some(d_carol.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                // Unrelated delegation + revocation target
+                let d_grace = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: grace.into(),
+                    can: Access::Edit,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                // Bystander with no involvement
+                let d_heidi = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: heidi.into(),
+                    can: Access::Read,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                // Cycle: bob <-> carol
+                let r_ab = Arc::new(bob_signer.try_sign_sync(Revocation {
+                    revoke: d_carol.dupe(),
+                    proof: Some(d_bob.dupe()),
+                    after_content: BTreeMap::new(),
+                })?);
+
+                let r_ba = Arc::new(carol_signer.try_sign_sync(Revocation {
+                    revoke: d_bob.dupe(),
+                    proof: Some(d_carol.dupe()),
+                    after_content: BTreeMap::new(),
+                })?);
+
+                // Unrelated revocation
+                let r_grace = Arc::new(alice_signer.try_sign_sync(Revocation {
+                    revoke: d_grace.dupe(),
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                })?);
+
+                let cycle_revs = [r_ab.dupe(), r_ba.dupe()];
+                let dlg_heads = DelegationStore::from_iter_direct([
+                    d_eve.dupe(),
+                    d_frank.dupe(),
+                    d_heidi.dupe(),
+                ]);
+
+                let perms = permutations(&cycle_revs);
+
+                let reference = MembershipOperation::reverse_topsort(
+                    &dlg_heads,
+                    &RevocationStore::from_iter_direct(
+                        perms[0]
+                            .iter()
+                            .map(|r| r.dupe())
+                            .chain(std::iter::once(r_grace.dupe())),
+                    ),
+                );
+
+                for (pi, perm) in perms.iter().enumerate() {
+                    let rev_heads = RevocationStore::from_iter_direct(
+                        perm.iter()
+                            .map(|r| r.dupe())
+                            .chain(std::iter::once(r_grace.dupe())),
+                    );
+                    let result = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
+                    assert_same_output(&format!("2-cycle permutation {pi}"), &reference, &result);
+                }
+
+                Ok(())
+            }
+
+            /// 3-cycle: A revokes B, B revokes C, C revokes A.
+            ///
+            /// Cycle members have downstream delegations and there is
+            /// an unrelated revocation outside the cycle.
+            ///
+            /// ```text
+            ///                    group
+            ///                      |
+            ///                  root_dlg (-> alice, Admin)
+            ///           /      |       |      \          \
+            ///      d_bob   d_carol  d_dave  d_grace    d_heidi
+            ///        |        |       |
+            ///     d_eve    d_frank  d_ivan
+            ///
+            ///  Cycle revocations:
+            ///    r_ab: bob   revokes d_carol (proof: d_bob)
+            ///    r_bc: carol revokes d_dave  (proof: d_carol)
+            ///    r_ca: dave  revokes d_bob   (proof: d_dave)
+            ///
+            ///  Unrelated revocation:
+            ///    r_grace: alice revokes d_grace (proof: root_dlg)
+            /// ```
+            ///
+            /// Exhaustively tests all 3! = 6 permutations.
+            #[tokio::test]
+            async fn test_3_cycle_all_permutations() -> TestResult {
+                test_utils::init_logging();
+                let csprng = &mut rand::thread_rng();
+
+                let group_signer = MemorySigner::generate(csprng);
+                let alice_signer = MemorySigner::generate(csprng);
+                let bob_signer = MemorySigner::generate(csprng);
+                let carol_signer = MemorySigner::generate(csprng);
+                let dave_signer = MemorySigner::generate(csprng);
+                let eve_signer = MemorySigner::generate(csprng);
+                let frank_signer = MemorySigner::generate(csprng);
+                let grace_signer = MemorySigner::generate(csprng);
+                let heidi_signer = MemorySigner::generate(csprng);
+                let ivan_signer = MemorySigner::generate(csprng);
+
+                let alice = Individual::generate(&alice_signer, csprng).await?;
+                let bob = Individual::generate(&bob_signer, csprng).await?;
+                let carol = Individual::generate(&carol_signer, csprng).await?;
+                let dave = Individual::generate(&dave_signer, csprng).await?;
+                let eve = Individual::generate(&eve_signer, csprng).await?;
+                let frank = Individual::generate(&frank_signer, csprng).await?;
+                let grace = Individual::generate(&grace_signer, csprng).await?;
+                let heidi = Individual::generate(&heidi_signer, csprng).await?;
+                let ivan = Individual::generate(&ivan_signer, csprng).await?;
+
+                let root_dlg: Arc<Signed<Delegation<MemorySigner, String>>> =
+                    Arc::new(group_signer.try_sign_sync(Delegation {
+                        delegate: alice.into(),
+                        can: Access::Admin,
+                        proof: None,
+                        after_content: BTreeMap::new(),
+                        after_revocations: vec![],
+                    })?);
+
+                let d_bob = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: bob.into(),
+                    can: Access::Admin,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                let d_carol = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: carol.into(),
+                    can: Access::Admin,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                let d_dave = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: dave.into(),
+                    can: Access::Admin,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                // Downstream delegations from cycle members
+                let d_eve = Arc::new(bob_signer.try_sign_sync(Delegation {
+                    delegate: eve.into(),
+                    can: Access::Edit,
+                    proof: Some(d_bob.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                let d_frank = Arc::new(carol_signer.try_sign_sync(Delegation {
+                    delegate: frank.into(),
+                    can: Access::Edit,
+                    proof: Some(d_carol.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                let d_ivan = Arc::new(dave_signer.try_sign_sync(Delegation {
+                    delegate: ivan.into(),
+                    can: Access::Edit,
+                    proof: Some(d_dave.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                // Unrelated delegation + revocation
+                let d_grace = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: grace.into(),
+                    can: Access::Edit,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                let d_heidi = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: heidi.into(),
+                    can: Access::Read,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                // Cycle revocations
+                let r_ab = Arc::new(bob_signer.try_sign_sync(Revocation {
+                    revoke: d_carol.dupe(),
+                    proof: Some(d_bob.dupe()),
+                    after_content: BTreeMap::new(),
+                })?);
+
+                let r_bc = Arc::new(carol_signer.try_sign_sync(Revocation {
+                    revoke: d_dave.dupe(),
+                    proof: Some(d_carol.dupe()),
+                    after_content: BTreeMap::new(),
+                })?);
+
+                let r_ca = Arc::new(dave_signer.try_sign_sync(Revocation {
+                    revoke: d_bob.dupe(),
+                    proof: Some(d_dave.dupe()),
+                    after_content: BTreeMap::new(),
+                })?);
+
+                // Unrelated revocation
+                let r_grace = Arc::new(alice_signer.try_sign_sync(Revocation {
+                    revoke: d_grace.dupe(),
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                })?);
+
+                let cycle_revs = [r_ab.dupe(), r_bc.dupe(), r_ca.dupe()];
+                let dlg_heads = DelegationStore::from_iter_direct([
+                    d_eve.dupe(),
+                    d_frank.dupe(),
+                    d_ivan.dupe(),
+                    d_heidi.dupe(),
+                ]);
+
+                let perms = permutations(&cycle_revs);
+                assert_eq!(perms.len(), 6, "expected 3! = 6 permutations");
+
+                let reference = MembershipOperation::reverse_topsort(
+                    &dlg_heads,
+                    &RevocationStore::from_iter_direct(
+                        perms[0]
+                            .iter()
+                            .map(|r| r.dupe())
+                            .chain(std::iter::once(r_grace.dupe())),
+                    ),
+                );
+
+                for (pi, perm) in perms.iter().enumerate() {
+                    let rev_heads = RevocationStore::from_iter_direct(
+                        perm.iter()
+                            .map(|r| r.dupe())
+                            .chain(std::iter::once(r_grace.dupe())),
+                    );
+                    let result = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
+                    assert_same_output(&format!("3-cycle permutation {pi}"), &reference, &result);
+                }
+
+                Ok(())
+            }
+
+            /// 4-cycle: A→B→C→D→A, with downstream delegations from
+            /// each cycle member and an unrelated revocation.
+            ///
+            /// ```text
+            ///                        group
+            ///                          |
+            ///                      root_dlg (-> alice, Admin)
+            ///            /      |       |       |      \       \
+            ///       d_bob   d_carol  d_dave  d_frank  d_grace d_heidi
+            ///         |        |       |       |
+            ///       d_eve   d_ivan  d_judy  d_karl
+            ///
+            ///  Cycle revocations:
+            ///    r_ab: bob   revokes d_carol (proof: d_bob)
+            ///    r_bc: carol revokes d_dave  (proof: d_carol)
+            ///    r_cd: dave  revokes d_frank (proof: d_dave)
+            ///    r_da: frank revokes d_bob   (proof: d_frank)
+            ///
+            ///  Unrelated revocation:
+            ///    r_grace: alice revokes d_grace (proof: root_dlg)
+            /// ```
+            ///
+            /// Exhaustively tests all 4! = 24 permutations.
+            #[tokio::test]
+            async fn test_4_cycle_all_permutations() -> TestResult {
+                test_utils::init_logging();
+                let csprng = &mut rand::thread_rng();
+
+                let group_signer = MemorySigner::generate(csprng);
+                let alice_signer = MemorySigner::generate(csprng);
+                let bob_signer = MemorySigner::generate(csprng);
+                let carol_signer = MemorySigner::generate(csprng);
+                let dave_signer = MemorySigner::generate(csprng);
+                let eve_signer = MemorySigner::generate(csprng);
+                let frank_signer = MemorySigner::generate(csprng);
+                let grace_signer = MemorySigner::generate(csprng);
+                let heidi_signer = MemorySigner::generate(csprng);
+                let ivan_signer = MemorySigner::generate(csprng);
+                let judy_signer = MemorySigner::generate(csprng);
+                let karl_signer = MemorySigner::generate(csprng);
+
+                let alice = Individual::generate(&alice_signer, csprng).await?;
+                let bob = Individual::generate(&bob_signer, csprng).await?;
+                let carol = Individual::generate(&carol_signer, csprng).await?;
+                let dave = Individual::generate(&dave_signer, csprng).await?;
+                let eve = Individual::generate(&eve_signer, csprng).await?;
+                let frank = Individual::generate(&frank_signer, csprng).await?;
+                let grace = Individual::generate(&grace_signer, csprng).await?;
+                let heidi = Individual::generate(&heidi_signer, csprng).await?;
+                let ivan = Individual::generate(&ivan_signer, csprng).await?;
+                let judy = Individual::generate(&judy_signer, csprng).await?;
+                let karl = Individual::generate(&karl_signer, csprng).await?;
+
+                let root_dlg: Arc<Signed<Delegation<MemorySigner, String>>> =
+                    Arc::new(group_signer.try_sign_sync(Delegation {
+                        delegate: alice.into(),
+                        can: Access::Admin,
+                        proof: None,
+                        after_content: BTreeMap::new(),
+                        after_revocations: vec![],
+                    })?);
+
+                // Cycle members
+                let d_bob = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: bob.into(),
+                    can: Access::Admin,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                let d_carol = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: carol.into(),
+                    can: Access::Admin,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                let d_dave = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: dave.into(),
+                    can: Access::Admin,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                let d_frank = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: frank.into(),
+                    can: Access::Admin,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                // Downstream from each cycle member
+                let d_eve = Arc::new(bob_signer.try_sign_sync(Delegation {
+                    delegate: eve.into(),
+                    can: Access::Edit,
+                    proof: Some(d_bob.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                let d_ivan = Arc::new(carol_signer.try_sign_sync(Delegation {
+                    delegate: ivan.into(),
+                    can: Access::Edit,
+                    proof: Some(d_carol.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                let d_judy = Arc::new(dave_signer.try_sign_sync(Delegation {
+                    delegate: judy.into(),
+                    can: Access::Edit,
+                    proof: Some(d_dave.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                let d_karl = Arc::new(frank_signer.try_sign_sync(Delegation {
+                    delegate: karl.into(),
+                    can: Access::Edit,
+                    proof: Some(d_frank.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                // Unrelated delegation + revocation
+                let d_grace = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: grace.into(),
+                    can: Access::Edit,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                let d_heidi = Arc::new(alice_signer.try_sign_sync(Delegation {
+                    delegate: heidi.into(),
+                    can: Access::Read,
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                    after_revocations: vec![],
+                })?);
+
+                // Cycle revocations
+                let r_ab = Arc::new(bob_signer.try_sign_sync(Revocation {
+                    revoke: d_carol.dupe(),
+                    proof: Some(d_bob.dupe()),
+                    after_content: BTreeMap::new(),
+                })?);
+
+                let r_bc = Arc::new(carol_signer.try_sign_sync(Revocation {
+                    revoke: d_dave.dupe(),
+                    proof: Some(d_carol.dupe()),
+                    after_content: BTreeMap::new(),
+                })?);
+
+                let r_cd = Arc::new(dave_signer.try_sign_sync(Revocation {
+                    revoke: d_frank.dupe(),
+                    proof: Some(d_dave.dupe()),
+                    after_content: BTreeMap::new(),
+                })?);
+
+                let r_da = Arc::new(frank_signer.try_sign_sync(Revocation {
+                    revoke: d_bob.dupe(),
+                    proof: Some(d_frank.dupe()),
+                    after_content: BTreeMap::new(),
+                })?);
+
+                // Unrelated revocation
+                let r_grace = Arc::new(alice_signer.try_sign_sync(Revocation {
+                    revoke: d_grace.dupe(),
+                    proof: Some(root_dlg.dupe()),
+                    after_content: BTreeMap::new(),
+                })?);
+
+                let cycle_revs = [r_ab.dupe(), r_bc.dupe(), r_cd.dupe(), r_da.dupe()];
+                let dlg_heads = DelegationStore::from_iter_direct([
+                    d_eve.dupe(),
+                    d_ivan.dupe(),
+                    d_judy.dupe(),
+                    d_karl.dupe(),
+                    d_heidi.dupe(),
+                ]);
+
+                let perms = permutations(&cycle_revs);
+                assert_eq!(perms.len(), 24, "expected 4! = 24 permutations");
+
+                let reference = MembershipOperation::reverse_topsort(
+                    &dlg_heads,
+                    &RevocationStore::from_iter_direct(
+                        perms[0]
+                            .iter()
+                            .map(|r| r.dupe())
+                            .chain(std::iter::once(r_grace.dupe())),
+                    ),
+                );
+
+                for (pi, perm) in perms.iter().enumerate() {
+                    let rev_heads = RevocationStore::from_iter_direct(
+                        perm.iter()
+                            .map(|r| r.dupe())
+                            .chain(std::iter::once(r_grace.dupe())),
+                    );
+                    let result = MembershipOperation::reverse_topsort(&dlg_heads, &rev_heads);
+                    assert_same_output(&format!("4-cycle permutation {pi}"), &reference, &result);
+                }
+
+                Ok(())
+            }
         }
     }
 }

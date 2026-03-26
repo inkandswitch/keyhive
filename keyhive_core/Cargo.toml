@@ -41,7 +41,6 @@ derive-where = "1.2"
 dupe = { workspace = true }
 futures = { workspace = true }
 nonempty = { workspace = true }
-topological-sort = "0.2"
 tracing = { workspace = true }
 trait-variant = "0.1.2"
 
@@ -100,6 +99,11 @@ required-features = ["test_utils"]
 
 [[bench]]
 name = "bench_ingest_unsorted_static_events"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "bench_reverse_topsort"
 harness = false
 required-features = ["test_utils"]
 
