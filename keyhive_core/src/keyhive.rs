@@ -23,8 +23,7 @@ use crate::{
             id::GroupId,
             membership_operation::{
                 bfs_extend_from_revocation, bfs_membership_ops, collect_membership_heads,
-                AllMembershipOps, MembershipOperation, MembershipOpMap,
-                StaticMembershipOperation,
+                AllMembershipOps, MembershipOpMap, MembershipOperation, StaticMembershipOperation,
             },
             revocation::{Revocation, StaticRevocation},
             Group, IdOrIndividual, RevokeMemberError,
@@ -821,10 +820,7 @@ impl<
                 let locked = group.lock().await;
                 (
                     locked.group_id(),
-                    collect_membership_heads(
-                        locked.delegation_heads(),
-                        locked.revocation_heads(),
-                    ),
+                    collect_membership_heads(locked.delegation_heads(), locked.revocation_heads()),
                     locked.transitive_members().await,
                 )
             };
@@ -843,10 +839,7 @@ impl<
                 let locked = doc.lock().await;
                 (
                     locked.doc_id(),
-                    collect_membership_heads(
-                        locked.delegation_heads(),
-                        locked.revocation_heads(),
-                    ),
+                    collect_membership_heads(locked.delegation_heads(), locked.revocation_heads()),
                     locked.transitive_members().await,
                 )
             };
@@ -3172,7 +3165,7 @@ mod tests {
     /// Test that reachable_prekey_ops_for_all_agents matches
     /// reachable_prekey_ops_for_agent for each agent.
     #[tokio::test]
-    async fn test_reachable_prekey_ops_for_all_agents_matches_per_agent() {
+    async fn test_reachable_prekey_ops_for_all_agents_matches_per_agent() -> TestResult {
         use crate::crypto::digest::Digest;
 
         test_utils::init_logging();
@@ -3185,88 +3178,55 @@ mod tests {
 
         // Register all individuals on alice, with varying numbers of prekey rotations
         // so that op counts differ across agents.
-        let bob_add_op = bob.expand_prekeys().await.unwrap();
-        let bob_rot1 = bob
-            .rotate_prekey(bob_add_op.payload.share_key)
-            .await
-            .unwrap();
-        let bob_rot2 = bob.rotate_prekey(bob_rot1.payload.new).await.unwrap();
+        let bob_add_op = bob.expand_prekeys().await?;
+        let bob_rot1 = bob.rotate_prekey(bob_add_op.payload.share_key).await?;
+        let bob_rot2 = bob.rotate_prekey(bob_rot1.payload.new).await?;
         let mut bob_individual = Individual::new(KeyOp::Add(bob_add_op));
-        bob_individual
-            .receive_prekey_op(KeyOp::Rotate(bob_rot1))
-            .unwrap();
-        bob_individual
-            .receive_prekey_op(KeyOp::Rotate(bob_rot2))
-            .unwrap();
+        bob_individual.receive_prekey_op(KeyOp::Rotate(bob_rot1))?;
+        bob_individual.receive_prekey_op(KeyOp::Rotate(bob_rot2))?;
         let bob_indie = Arc::new(Mutex::new(bob_individual));
         assert!(alice.register_individual(bob_indie.clone()).await);
         let bob_id = bob_indie.lock().await.id();
 
-        let carol_add_op = carol.expand_prekeys().await.unwrap();
-        let carol_rot1 = carol
-            .rotate_prekey(carol_add_op.payload.share_key)
-            .await
-            .unwrap();
+        let carol_add_op = carol.expand_prekeys().await?;
+        let carol_rot1 = carol.rotate_prekey(carol_add_op.payload.share_key).await?;
         let mut carol_individual = Individual::new(KeyOp::Add(carol_add_op));
-        carol_individual
-            .receive_prekey_op(KeyOp::Rotate(carol_rot1))
-            .unwrap();
+        carol_individual.receive_prekey_op(KeyOp::Rotate(carol_rot1))?;
         let carol_indie = Arc::new(Mutex::new(carol_individual));
         assert!(alice.register_individual(carol_indie.clone()).await);
         let carol_id = carol_indie.lock().await.id();
 
-        let dan_add_op = dan.expand_prekeys().await.unwrap();
+        let dan_add_op = dan.expand_prekeys().await?;
         let dan_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(dan_add_op))));
         assert!(alice.register_individual(dan_indie.clone()).await);
         let dan_id = dan_indie.lock().await.id();
 
-        let eve_add_op = eve.expand_prekeys().await.unwrap();
-        let eve_rot1 = eve
-            .rotate_prekey(eve_add_op.payload.share_key)
-            .await
-            .unwrap();
-        let eve_rot2 = eve.rotate_prekey(eve_rot1.payload.new).await.unwrap();
-        let eve_rot3 = eve.rotate_prekey(eve_rot2.payload.new).await.unwrap();
+        let eve_add_op = eve.expand_prekeys().await?;
+        let eve_rot1 = eve.rotate_prekey(eve_add_op.payload.share_key).await?;
+        let eve_rot2 = eve.rotate_prekey(eve_rot1.payload.new).await?;
+        let eve_rot3 = eve.rotate_prekey(eve_rot2.payload.new).await?;
         let mut eve_individual = Individual::new(KeyOp::Add(eve_add_op));
-        eve_individual
-            .receive_prekey_op(KeyOp::Rotate(eve_rot1))
-            .unwrap();
-        eve_individual
-            .receive_prekey_op(KeyOp::Rotate(eve_rot2))
-            .unwrap();
-        eve_individual
-            .receive_prekey_op(KeyOp::Rotate(eve_rot3))
-            .unwrap();
+        eve_individual.receive_prekey_op(KeyOp::Rotate(eve_rot1))?;
+        eve_individual.receive_prekey_op(KeyOp::Rotate(eve_rot2))?;
+        eve_individual.receive_prekey_op(KeyOp::Rotate(eve_rot3))?;
         let eve_indie = Arc::new(Mutex::new(eve_individual));
         assert!(alice.register_individual(eve_indie.clone()).await);
         let eve_id = eve_indie.lock().await.id();
 
         // Frank: registered but not added to any doc or group, with extra ops
         let frank = make_keyhive().await;
-        let frank_add_op = frank.expand_prekeys().await.unwrap();
-        let frank_rot1 = frank
-            .rotate_prekey(frank_add_op.payload.share_key)
-            .await
-            .unwrap();
-        let frank_rot2 = frank.rotate_prekey(frank_rot1.payload.new).await.unwrap();
+        let frank_add_op = frank.expand_prekeys().await?;
+        let frank_rot1 = frank.rotate_prekey(frank_add_op.payload.share_key).await?;
+        let frank_rot2 = frank.rotate_prekey(frank_rot1.payload.new).await?;
         let frank_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(frank_add_op))));
         assert!(alice.register_individual(frank_indie.clone()).await);
         let frank_id = frank_indie.lock().await.id();
         // Receive additional prekey ops after registration
-        alice
-            .receive_prekey_op(&KeyOp::Rotate(frank_rot1))
-            .await
-            .unwrap();
-        alice
-            .receive_prekey_op(&KeyOp::Rotate(frank_rot2))
-            .await
-            .unwrap();
+        alice.receive_prekey_op(&KeyOp::Rotate(frank_rot1)).await?;
+        alice.receive_prekey_op(&KeyOp::Rotate(frank_rot2)).await?;
 
         // Create doc1 with bob (3 ops) and carol (2 ops)
-        let doc1 = alice
-            .generate_doc(vec![], nonempty![[0u8; 32]])
-            .await
-            .unwrap();
+        let doc1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc1_id = doc1.lock().await.doc_id();
         alice
             .add_member(
@@ -3275,8 +3235,7 @@ mod tests {
                 Access::Read,
                 &[],
             )
-            .await
-            .unwrap();
+            .await?;
         alice
             .add_member(
                 Agent::Individual(carol_id, carol_indie.dupe()),
@@ -3284,14 +3243,10 @@ mod tests {
                 Access::Edit,
                 &[],
             )
-            .await
-            .unwrap();
+            .await?;
 
         // Create doc2 with dan (1 op)
-        let doc2 = alice
-            .generate_doc(vec![], nonempty![[1u8; 32]])
-            .await
-            .unwrap();
+        let doc2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         let doc2_id = doc2.lock().await.doc_id();
         alice
             .add_member(
@@ -3300,11 +3255,10 @@ mod tests {
                 Access::Read,
                 &[],
             )
-            .await
-            .unwrap();
+            .await?;
 
         // Create a group with carol (2 ops) and eve (4 ops), then add group to doc2
-        let group = alice.generate_group(vec![]).await.unwrap();
+        let group = alice.generate_group(vec![]).await?;
         let group_id = group.lock().await.group_id();
         alice
             .add_member(
@@ -3313,8 +3267,7 @@ mod tests {
                 Access::Read,
                 &[],
             )
-            .await
-            .unwrap();
+            .await?;
         alice
             .add_member(
                 Agent::Individual(eve_id, eve_indie.dupe()),
@@ -3322,8 +3275,7 @@ mod tests {
                 Access::Edit,
                 &[],
             )
-            .await
-            .unwrap();
+            .await?;
         alice
             .add_member(
                 Agent::Group(group_id, group.dupe()),
@@ -3331,8 +3283,7 @@ mod tests {
                 Access::Read,
                 &[],
             )
-            .await
-            .unwrap();
+            .await?;
 
         // Get the all-agents result
         let all_results = alice.reachable_prekey_ops_for_all_agents().await;
@@ -3434,10 +3385,12 @@ mod tests {
                 );
             }
         }
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_membership_ops_for_all_agents_matches_per_agent() {
+    async fn test_membership_ops_for_all_agents_matches_per_agent() -> TestResult {
         test_utils::init_logging();
 
         let alice = make_keyhive().await;
@@ -3447,31 +3400,28 @@ mod tests {
         let eve = make_keyhive().await;
 
         // Register all on alice
-        let bob_add_op = bob.expand_prekeys().await.unwrap();
+        let bob_add_op = bob.expand_prekeys().await?;
         let bob_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(bob_add_op))));
         assert!(alice.register_individual(bob_indie.clone()).await);
         let bob_id = bob_indie.lock().await.id();
 
-        let carol_add_op = carol.expand_prekeys().await.unwrap();
+        let carol_add_op = carol.expand_prekeys().await?;
         let carol_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(carol_add_op))));
         assert!(alice.register_individual(carol_indie.clone()).await);
         let carol_id = carol_indie.lock().await.id();
 
-        let dave_add_op = dave.expand_prekeys().await.unwrap();
+        let dave_add_op = dave.expand_prekeys().await?;
         let dave_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(dave_add_op))));
         assert!(alice.register_individual(dave_indie.clone()).await);
         let dave_id = dave_indie.lock().await.id();
 
-        let eve_add_op = eve.expand_prekeys().await.unwrap();
+        let eve_add_op = eve.expand_prekeys().await?;
         let eve_indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(eve_add_op))));
         assert!(alice.register_individual(eve_indie.clone()).await);
         let eve_id = eve_indie.lock().await.id();
 
         // doc1: bob and carol are direct members
-        let doc1 = alice
-            .generate_doc(vec![], nonempty![[0u8; 32]])
-            .await
-            .unwrap();
+        let doc1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc1_id = doc1.lock().await.doc_id();
         alice
             .add_member(
@@ -3480,8 +3430,7 @@ mod tests {
                 Access::Read,
                 &[],
             )
-            .await
-            .unwrap();
+            .await?;
         alice
             .add_member(
                 Agent::Individual(carol_id, carol_indie.dupe()),
@@ -3489,11 +3438,10 @@ mod tests {
                 Access::Edit,
                 &[],
             )
-            .await
-            .unwrap();
+            .await?;
 
         // group: bob and carol
-        let group = alice.generate_group(vec![]).await.unwrap();
+        let group = alice.generate_group(vec![]).await?;
         let group_id = group.lock().await.group_id();
         alice
             .add_member(
@@ -3502,8 +3450,7 @@ mod tests {
                 Access::Read,
                 &[],
             )
-            .await
-            .unwrap();
+            .await?;
         alice
             .add_member(
                 Agent::Individual(carol_id, carol_indie.dupe()),
@@ -3511,14 +3458,10 @@ mod tests {
                 Access::Edit,
                 &[],
             )
-            .await
-            .unwrap();
+            .await?;
 
         // doc2: group is a member (so bob and carol are transitive members)
-        let doc2 = alice
-            .generate_doc(vec![], nonempty![[1u8; 32]])
-            .await
-            .unwrap();
+        let doc2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         let doc2_id = doc2.lock().await.doc_id();
         alice
             .add_member(
@@ -3527,8 +3470,7 @@ mod tests {
                 Access::Read,
                 &[],
             )
-            .await
-            .unwrap();
+            .await?;
 
         // dave: only on doc1 directly (not in any group)
         alice
@@ -3538,8 +3480,7 @@ mod tests {
                 Access::Read,
                 &[],
             )
-            .await
-            .unwrap();
+            .await?;
 
         // eve: registered but not a member of anything (verified below)
 
@@ -3550,8 +3491,7 @@ mod tests {
                 false,
                 &Membered::Document(doc1_id, doc1.dupe()),
             )
-            .await
-            .unwrap();
+            .await?;
 
         // Get the all-agents result
         let all_results = alice.membership_ops_for_all_agents().await;
@@ -3589,6 +3529,8 @@ mod tests {
                 id
             );
         }
+
+        Ok(())
     }
 
     #[tokio::test]

@@ -13,8 +13,10 @@ use keyhive_crypto::{
     verifiable::Verifiable,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 /// Operations for updating prekeys.
 ///

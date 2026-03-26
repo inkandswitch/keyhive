@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::{
     delegation::{Delegation, StaticDelegation},
     dependencies::Dependencies,
@@ -534,11 +536,7 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> AllMembershipOp
 
 /// Build the initial BFS frontier from a group's or doc's delegation and
 /// revocation head stores. Cheap (Arc clones + digest copies).
-pub fn collect_membership_heads<
-    S: AsyncSigner,
-    T: ContentRef,
-    L: MembershipListener<S, T>,
->(
+pub fn collect_membership_heads<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>(
     dlg_heads: &DelegationStore<S, T, L>,
     rev_heads: &RevocationStore<S, T, L>,
 ) -> Vec<MembershipOpEntry<S, T, L>> {
@@ -560,11 +558,7 @@ pub fn collect_membership_heads<
 /// a single revocation).
 ///
 /// For revocations, follows the proof and revoke chains.
-async fn push_membership_edges<
-    S: AsyncSigner,
-    T: ContentRef,
-    L: MembershipListener<S, T>,
->(
+async fn push_membership_edges<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>(
     op: &MembershipOperation<S, T, L>,
     heads: &mut Vec<MembershipOpEntry<S, T, L>>,
     visited: &HashSet<Digest<MembershipOperation<S, T, L>>>,
@@ -602,11 +596,7 @@ async fn push_membership_edges<
 /// Walk all [`MembershipOperation`]s reachable from the given heads via BFS,
 /// following proof chains, revoke chains, and (for delegations to groups) the
 /// group's own delegation heads. Returns a map keyed by digest.
-pub async fn bfs_membership_ops<
-    S: AsyncSigner,
-    T: ContentRef,
-    L: MembershipListener<S, T>,
->(
+pub async fn bfs_membership_ops<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>>(
     mut heads: Vec<MembershipOpEntry<S, T, L>>,
 ) -> MembershipOpMap<S, T, L> {
     let mut ops = HashMap::new();
