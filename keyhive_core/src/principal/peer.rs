@@ -25,7 +25,7 @@ pub enum Peer<
     F: FutureForm,
     S: AsyncSigner<F>,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<S, T> = NoListener,
+    L: MembershipListener<F, S, T> = NoListener,
 > {
     Individual(IndividualId, Arc<Mutex<Individual>>),
     Group(GroupId, Arc<Mutex<Group<F, S, T, L>>>),

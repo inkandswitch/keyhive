@@ -1,3 +1,4 @@
+use future_form::Local;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -17,7 +18,7 @@ fn main() {
     divan::main();
 }
 
-type BenchAgent = Agent<MemorySigner, [u8; 32], NoListener>;
+type BenchAgent = Agent<Local, MemorySigner, [u8; 32], NoListener>;
 
 /// Number of extra prekey expand+ rotate cycles per peer.
 ///
@@ -42,7 +43,8 @@ fn reachable_prekey_ops_for_agent(
         let alice = make_simple_keyhive().await.unwrap();
 
         let public_indie = Public.individual();
-        let public_peer = Peer::Individual(public_indie.id(), Arc::new(Mutex::new(public_indie)));
+        let public_peer: Peer<Local, _, _, _> =
+            Peer::Individual(public_indie.id(), Arc::new(Mutex::new(public_indie)));
 
         let mut docs = Vec::with_capacity(n_public_docs);
         for i in 0..n_public_docs {

@@ -3,6 +3,7 @@
 //! cargo bench --bench bench_toggling_delegate_revoke --features test_utils
 
 use dupe::Dupe;
+use future_form::Local;
 use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
@@ -32,9 +33,14 @@ fn toggle_delegate_revoke(bencher: divan::Bencher, prior_toggles: usize) {
         let sk = MemorySigner::generate(&mut csprng);
         let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new()));
 
-        let kh = Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::rngs::OsRng)
-            .await
-            .expect("keyhive generation should succeed");
+        let kh = Keyhive::<Local, _, _, _, _, _, _>::generate(
+            sk.clone(),
+            store.clone(),
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await
+        .expect("keyhive generation should succeed");
 
         kh.register_individual(Arc::new(Mutex::new(Public.individual())))
             .await;
@@ -45,9 +51,9 @@ fn toggle_delegate_revoke(bencher: divan::Bencher, prior_toggles: usize) {
             .expect("doc generation should succeed");
 
         let doc_id = doc.lock().await.doc_id();
-        let membered_doc = Membered::Document(doc_id, doc.dupe());
+        let membered_doc: Membered<Local, _, _, _> = Membered::Document(doc_id, doc.dupe());
 
-        let public_agent: Agent<MemorySigner> = Public.individual().into();
+        let public_agent: Agent<Local, MemorySigner> = Public.individual().into();
         let public_id = Public.id();
 
         // Build up history of prior toggles

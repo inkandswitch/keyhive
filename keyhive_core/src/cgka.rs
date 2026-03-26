@@ -15,6 +15,7 @@ use beekem::{
     operation::{CgkaEpoch, CgkaOperation},
     pcs_key::{ApplicationSecret, PcsKey},
 };
+use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
@@ -56,7 +57,7 @@ impl Hash for Cgka {
 }
 
 impl Cgka {
-    pub async fn new<S: AsyncSigner>(
+    pub async fn new<F: FutureForm, S: AsyncSigner<F>>(
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
@@ -114,7 +115,8 @@ impl Cgka {
     }
 
     pub async fn new_app_secret_for<
-        S: AsyncSigner,
+        F: FutureForm,
+        S: AsyncSigner<F>,
         T: ContentRef,
         R: rand::CryptoRng + rand::RngCore,
     >(
@@ -141,7 +143,7 @@ impl Cgka {
         self.0.has_pcs_key()
     }
 
-    pub async fn add<S: AsyncSigner>(
+    pub async fn add<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: IndividualId,
         pk: ShareKey,
@@ -150,7 +152,7 @@ impl Cgka {
         self.0.add(MemberId(id.verifying_key()), pk, signer).await
     }
 
-    pub async fn add_multiple<S: AsyncSigner>(
+    pub async fn add_multiple<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         members: NonEmpty<(IndividualId, ShareKey)>,
         signer: &S,
@@ -159,7 +161,7 @@ impl Cgka {
         self.0.add_multiple(converted, signer).await
     }
 
-    pub async fn remove<S: AsyncSigner>(
+    pub async fn remove<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: IndividualId,
         signer: &S,
@@ -167,7 +169,7 @@ impl Cgka {
         self.0.remove(MemberId(id.verifying_key()), signer).await
     }
 
-    pub async fn update<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
+    pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         new_pk: ShareKey,
         new_sk: ShareSecretKey,
