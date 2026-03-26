@@ -6,8 +6,8 @@ use super::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
-use keyhive_core::event::{static_event::StaticEvent, Event};
 use future_form::Local;
+use keyhive_core::event::{static_event::StaticEvent, Event};
 use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, Hash, From, Into)]

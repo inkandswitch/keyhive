@@ -14,6 +14,7 @@ use self::{
     revocation::Revocation,
     state::GroupState,
 };
+
 use super::{
     agent::{id::AgentId, Agent},
     document::{id::DocumentId, AddMemberUpdate, Document, RevokeMemberUpdate},
@@ -21,19 +22,29 @@ use super::{
     individual::{id::IndividualId, Individual},
     membered::Membered,
 };
+
 use crate::{
     access::Access,
     listener::{membership::MembershipListener, no_listener::NoListener},
     store::{delegation::DelegationStore, revocation::RevocationStore},
 };
+
 use beekem::{error::CgkaError, operation::CgkaOperation};
+
 use derivative::Derivative;
+
 use derive_more::Debug;
+
 use derive_where::derive_where;
+
 use dupe::{Dupe, IterDupedExt};
-use future_form::{FutureForm, Local};
+
+use future_form::FutureForm;
+
 use futures::{lock::Mutex, stream::FuturesUnordered, StreamExt};
+
 use id::GroupId;
+
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
@@ -47,22 +58,32 @@ use keyhive_crypto::{
     },
     verifiable::Verifiable,
 };
+
 use nonempty::{nonempty, NonEmpty};
+
 use serde::{Deserialize, Serialize};
+
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     hash::{Hash, Hasher},
     sync::Arc,
 };
+
 use thiserror::Error;
 
 /// A collection of agents with no associated content.
+
 ///
+
 /// Groups are stateful agents. It is possible the delegate control over them,
+
 /// and they can be delegated to. This produces transitives lines of authority
+
 /// through the network of [`Agent`]s.
+
 #[derive(Clone, Derivative)]
 #[derive_where(Debug; T)]
+
 pub struct Group<
     F: FutureForm,
     S: AsyncSigner<F>,
@@ -70,18 +91,14 @@ pub struct Group<
     L: MembershipListener<F, S, T> = NoListener,
 > {
     pub(crate) id_or_indie: IdOrIndividual,
-
     /// The current view of members of a group.
     #[allow(clippy::type_complexity)]
     pub(crate) members: HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
-
     /// Current view of revocations
     #[allow(clippy::type_complexity)]
     pub(crate) active_revocations: HashMap<[u8; 64], Arc<Signed<Revocation<F, S, T, L>>>>,
-
     /// The `Group`'s underlying (causal) delegation state.
     pub(crate) state: GroupState<F, S, T, L>,
-
     #[derive_where(skip)]
     pub(crate) listener: L,
 }
@@ -105,11 +122,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             active_revocations: HashMap::new(),
             listener,
         };
-
         group.rebuild().await;
         group
     }
-
     #[tracing::instrument(skip_all)]
     pub async fn from_individual(
         individual: Individual,
@@ -129,7 +144,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         group.rebuild().await;
         group
     }
-
     /// Generate a new `Group` with a unique [`Identifier`] and the given `parents`.
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
         parents: NonEmpty<Agent<F, S, T, L>>,
@@ -151,10 +165,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     listener,
                 )
             });
-
         group_result.await
     }
-
     #[tracing::instrument(skip_all)]
     pub(crate) async fn generate_after_content(
         signer: Box<dyn SyncSignerBasic>,
@@ -168,10 +180,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let id = verifier.into();
         let group_id = GroupId(id);
         let mut delegation_heads = DelegationStore::new();
-
         {
             let async_listener = Arc::new(&listener);
-
             let mut futs = FuturesUnordered::new();
             for parent in parents.iter() {
                 let dlg = try_sign_basic(
@@ -185,55 +195,44 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                         after_content: after_content.clone(),
                     },
                 )?;
-
                 let rc = Arc::new(dlg);
                 delegations.lock().await.insert(rc.dupe());
                 delegation_heads.insert(rc.dupe());
-
                 let listen = async_listener.dupe();
                 futs.push(async move {
                     listen.on_delegation(&rc).await;
                     Ok::<(), SigningError>(())
                 });
             }
-
             while let Some(res) = futs.next().await {
                 res?;
             }
         }
-
         let mut group = Group {
             id_or_indie: IdOrIndividual::GroupId(group_id),
             members: HashMap::new(),
             active_revocations: HashMap::new(),
             state: GroupState {
                 id: group_id,
-
                 delegation_heads,
                 delegations,
-
                 revocation_heads: RevocationStore::new(),
                 revocations,
             },
             listener,
         };
-
         group.rebuild().await;
         Ok(group)
     }
-
     pub fn id(&self) -> Identifier {
         self.group_id().into()
     }
-
     pub fn group_id(&self) -> GroupId {
         self.state.group_id()
     }
-
     pub fn agent_id(&self) -> AgentId {
         self.group_id().into()
     }
-
     pub async fn individual_ids(&self) -> HashSet<IndividualId> {
         let mut ids = HashSet::new();
         for delegations in self.members.values() {
@@ -242,7 +241,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         }
         ids
     }
-
     pub async fn pick_individual_prekeys(
         &self,
         doc_id: DocumentId,
@@ -253,12 +251,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         }
         prekeys
     }
-
     #[allow(clippy::type_complexity)]
     pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>> {
         &self.members
     }
-
     #[tracing::instrument(skip(self), fields(group_id = %self.group_id()))]
     pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
         struct GroupAccess<
@@ -271,26 +267,20 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             agent_access: Access,
             parent_access: Access,
         }
-
         let mut explore: Vec<GroupAccess<F, S, T, L>> = vec![];
         let mut seen: HashSet<([u8; 64], Access)> = HashSet::new();
-
         for member in self.members.keys() {
             let dlg = self
                 .get_capability(member)
                 .expect("members have capabilities by defintion");
-
             seen.insert((dlg.signature.to_bytes(), Access::Admin));
-
             explore.push(GroupAccess {
                 agent: dlg.payload.delegate.clone(),
                 agent_access: dlg.payload.can,
                 parent_access: Access::Admin,
             });
         }
-
         let mut caps: HashMap<Identifier, (Agent<F, S, T, L>, Access)> = HashMap::new();
-
         while let Some(GroupAccess {
             agent: member,
             agent_access: access,
@@ -301,15 +291,12 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             if id == self.id() {
                 continue;
             }
-
             let best_access = *caps
                 .get(&id)
                 .map(|(_, existing_access)| existing_access.max(&access))
                 .unwrap_or(&access);
-
             let current_path_access = access.min(parent_access);
             caps.insert(member.id(), (member.dupe(), current_path_access));
-
             if let Some(membered) = match member {
                 Agent::Group(id, inner_group) => Some(Membered::Group(id, inner_group.dupe())),
                 Agent::Document(id, doc) => Some(Membered::Document(id, doc.dupe())),
@@ -320,14 +307,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                         .get_capability(mem_id)
                         .await
                         .expect("members have capabilities by defintion");
-
                     caps.insert(*mem_id, (dlg.payload.delegate.dupe(), best_access));
-
                     'inner: for sub_dlg in dlgs.iter() {
                         if !seen.insert((sub_dlg.signature.to_bytes(), dlg.payload.can)) {
                             continue 'inner;
                         }
-
                         explore.push(GroupAccess {
                             agent: sub_dlg.payload.delegate.dupe(),
                             agent_access: sub_dlg.payload.can,
@@ -337,26 +321,21 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 }
             }
         }
-
         caps
     }
-
     /// Returns agents whose delegations were revoked and who have no remaining
     /// active delegation in this group. Each entry includes the agent and the
     /// access level of the (now-revoked) delegation.
     pub fn revoked_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
         let mut revoked: HashMap<Identifier, (Agent<F, S, T, L>, Access)> = HashMap::new();
-
         for r in self.active_revocations.values() {
             let delegate = &r.payload.revoke.payload.delegate;
             let id = delegate.id();
             let access = r.payload.revoke.payload.can;
-
             // Skip if agent still has an active delegation
             if self.members.contains_key(&id) {
                 continue;
             }
-
             revoked
                 .entry(id)
                 .and_modify(|(_, existing)| {
@@ -366,18 +345,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 })
                 .or_insert_with(|| (delegate.clone(), access));
         }
-
         revoked
     }
-
     pub fn delegation_heads(&self) -> &DelegationStore<F, S, T, L> {
         &self.state.delegation_heads
     }
-
     pub fn revocation_heads(&self) -> &RevocationStore<F, S, T, L> {
         &self.state.revocation_heads
     }
-
     #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip_all)]
     pub fn get_capability(
@@ -390,7 +365,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
         })
     }
-
     #[tracing::instrument(skip_all)]
     pub async fn get_agent_revocations(
         &self,
@@ -404,7 +378,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             .map(|set| set.into_iter().collect())
             .unwrap_or_default()
     }
-
     #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip_all)]
     pub async fn receive_delegation(
@@ -416,7 +389,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.rebuild().await;
         Ok(digest)
     }
-
     #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip(self), fields(group_id = %self.group_id()))]
     pub async fn receive_revocation(
@@ -428,7 +400,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.rebuild().await;
         Ok(digest)
     }
-
     #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip_all)]
     pub async fn add_member(
@@ -446,11 +417,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 locked.content_heads.iter().cloned().collect::<Vec<_>>(),
             );
         }
-
         self.add_member_with_manual_content(member_to_add, can, signer, after_content)
             .await
     }
-
     pub(crate) async fn add_member_with_manual_content(
         &mut self,
         member_to_add: Agent<F, S, T, L>,
@@ -464,17 +433,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             let p = self
                 .get_capability(&signer.verifying_key().into())
                 .ok_or(AddGroupMemberError::NoProof)?;
-
             if can > p.payload.can {
                 return Err(AddGroupMemberError::AccessEscalation {
                     wanted: can,
                     have: p.payload().can,
                 });
             }
-
             Some(p.dupe())
         };
-
         let delegation = async_signer::try_sign_async::<F, _, _>(
             signer,
             Delegation {
@@ -486,23 +452,19 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             },
         )
         .await?;
-
         let rc = Arc::new(delegation);
         let _digest = self.receive_delegation(rc.dupe()).await?;
         self.listener.on_delegation(&rc).await;
-
         let cgka_ops = if rc.payload.can.is_reader() {
             self.add_cgka_member(rc.dupe(), signer).await?
         } else {
             Vec::new()
         };
-
         Ok(AddMemberUpdate {
             cgka_ops,
             delegation: rc,
         })
     }
-
     #[tracing::instrument(skip_all)]
     pub(crate) async fn add_cgka_member(
         &mut self,
@@ -534,7 +496,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         }
         Ok(cgka_ops)
     }
-
     #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip_all)]
     pub async fn revoke_member(
@@ -547,18 +508,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let vk = signer.verifying_key();
         let mut revocations = vec![];
         let og_dlgs: Vec<_> = self.members.values().flatten().cloned().collect();
-
         let all_to_revoke: Vec<Arc<Signed<Delegation<F, S, T, L>>>> = self
             .members()
             .get(&member_to_remove)
             .map(|ne| Vec::<_>::from(ne.clone())) // Semi-inexpensive because `Vec<Arc<_>>`
             .unwrap_or_default();
-
         if all_to_revoke.is_empty() {
             self.members.remove(&member_to_remove);
             return Ok(RevokeMemberUpdate::default());
         }
-
         if vk == self.verifying_key() {
             // In the (unlikely) case that the group signing key still exists and is doing the revocation.
             // Arguably this could be made impossible, but it would likely be surprising behaviour.
@@ -572,7 +530,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         } else {
             for to_revoke in all_to_revoke.iter() {
                 let mut found = false;
-
                 if let Some(member_dlgs) = self.members.get(&vk.into()) {
                     // "Double up" if you're an admin in case you get concurrently demoted.
                     // We include the admin proofs as well since those could also get revoked.
@@ -580,7 +537,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                         if mem_dlg.payload.delegate.id() != member_to_remove {
                             continue;
                         }
-
                         if mem_dlg.payload().can == Access::Admin {
                             // Use your awesome & terrible admin powers!
                             //
@@ -601,7 +557,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                         }
                     }
                 }
-
                 if to_revoke.issuer == vk {
                     let r = self
                         .build_revocation(
@@ -633,17 +588,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                         }
                     }
                 }
-
                 if !found {
                     return Err(RevokeMemberError::NoProof);
                 }
             }
         }
-
         for r in revocations.iter() {
             self.listener.on_revocation(r).await
         }
-
         let mut cgka_ops = Vec::new();
         let (individuals, docs): (
             Vec<Arc<Mutex<Individual>>>,
@@ -660,11 +612,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     }
                     _ => (),
                 }
-
                 (indies, docs)
             },
         );
-
         for indie in individuals {
             let id = {
                 let locked_indie = indie.lock().await;
@@ -677,7 +627,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 }
             }
         }
-
         let mut redelegations = vec![];
         if retain_all_other_members {
             for dlg in og_dlgs.iter() {
@@ -685,7 +634,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     // Don't retain if they've delegated to themself
                     continue;
                 }
-
                 if let Some(proof) = &dlg.payload.proof {
                     if proof.payload.delegate.id() == member_to_remove {
                         let AddMemberUpdate { delegation, .. } = self
@@ -696,20 +644,17 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                                 after_content.clone(),
                             )
                             .await?;
-
                         redelegations.push(delegation);
                     }
                 }
             }
         }
-
         Ok(RevokeMemberUpdate {
             cgka_ops,
             revocations,
             redelegations,
         })
     }
-
     async fn build_revocation(
         &mut self,
         signer: &S,
@@ -726,28 +671,22 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             },
         )
         .await?;
-
         Ok(Arc::new(revocation))
     }
-
     #[tracing::instrument(skip_all)]
     pub async fn rebuild(&mut self) {
         self.members.clear();
         self.active_revocations.clear();
-
         #[allow(clippy::type_complexity)]
         let mut dlgs_in_play: HashMap<[u8; 64], Arc<Signed<Delegation<F, S, T, L>>>> =
             HashMap::new();
         let mut revoked_dlgs: HashSet<[u8; 64]> = HashSet::new();
-
         // {dlg_dep => Set<dlgs that depend on it>}
         let mut reverse_dlg_dep_map: HashMap<[u8; 64], HashSet<[u8; 64]>> = HashMap::new();
-
         let mut ops = MembershipOperation::reverse_topsort(
             &self.state.delegation_heads,
             &self.state.revocation_heads,
         );
-
         while let Some((_, op)) = ops.pop() {
             match op {
                 MembershipOperation::Delegation(d) => {
@@ -759,7 +698,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                                 set.insert(d.signature.to_bytes());
                             })
                             .or_insert_with(|| HashSet::from_iter([d.signature.to_bytes()]));
-
                         // If the proof was directly revoked, then check if they've been
                         // re-added some other way. Since `rebuild` recurses,
                         // we only need to check one level.
@@ -781,13 +719,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                         debug_assert!(false, "Delegation without valid root proof");
                         continue;
                     }
-
                     if revoked_dlgs.contains(&d.signature.to_bytes()) {
                         continue;
                     }
-
                     dlgs_in_play.insert(d.signature.to_bytes(), d.dupe());
-
                     if let Some(mut_dlgs) = self.members.get_mut(&d.payload.delegate.id()) {
                         mut_dlgs.push(d.dupe());
                     } else {
@@ -813,32 +748,25 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                         debug_assert!(false, "Revocation without valid root proof");
                         continue;
                     }
-
                     self.active_revocations
                         .insert(r.signature.to_bytes(), r.dupe());
-
                     // { Agent => delegation to drop }
                     let mut to_drop: Vec<(Identifier, [u8; 64])> = vec![];
-
                     let mut next_to_revoke = vec![r.payload.revoke.signature.to_bytes()];
                     while let Some(sig_to_revoke) = next_to_revoke.pop() {
                         revoked_dlgs.insert(sig_to_revoke);
-
                         if let Some(dlg) = dlgs_in_play.remove(&sig_to_revoke) {
                             to_drop.push((dlg.payload.delegate.id(), sig_to_revoke));
                         }
-
                         if let Some(dlg_sigs_to_revoke) = reverse_dlg_dep_map.get(&sig_to_revoke) {
                             for dlg_sig in dlg_sigs_to_revoke.iter() {
                                 revoked_dlgs.insert(*dlg_sig);
-
                                 if let Some(dep_dlg) = dlgs_in_play.remove(dlg_sig) {
                                     next_to_revoke.push(dep_dlg.signature.to_bytes());
                                 }
                             }
                         }
                     }
-
                     for (id, sig) in to_drop {
                         let remaining = self
                             .members
@@ -850,7 +778,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                                     .collect()
                             })
                             .unwrap_or_default();
-
                         if let Some(dlgs) = NonEmpty::from_vec(remaining) {
                             self.members.insert(id, dlgs);
                         } else {
@@ -861,7 +788,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             }
         }
     }
-
     pub(crate) fn dummy_from_archive(
         archive: GroupArchive<T>,
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
@@ -876,7 +802,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             listener,
         }
     }
-
     #[tracing::instrument(skip_all)]
     pub fn into_archive(&self) -> GroupArchive<T> {
         GroupArchive {
@@ -918,12 +843,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+
 pub enum IdOrIndividual {
     GroupId(GroupId),
     Individual(Individual),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+
 pub struct GroupArchive<T: ContentRef> {
     pub(crate) id_or_indie: IdOrIndividual,
     pub(crate) members: HashMap<Identifier, NonEmpty<Digest<Signed<StaticDelegation<T>>>>>,
@@ -931,50 +858,46 @@ pub struct GroupArchive<T: ContentRef> {
 }
 
 #[derive(Debug, Error)]
+
 pub enum AddGroupMemberError {
     #[error(transparent)]
     SigningError(#[from] SigningError),
-
     #[error("No proof found")]
     NoProof,
-
     #[error("Access escalation. Wanted {wanted}, only have {have}.")]
     AccessEscalation { wanted: Access, have: Access },
-
     #[error(transparent)]
     AddError(#[from] error::AddError),
-
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
 }
 
 #[derive(Debug, Error)]
+
 pub enum RevokeMemberError {
     #[error(transparent)]
     AddError(#[from] error::AddError),
-
     #[error("Proof missing to authorize revocation")]
     NoProof,
-
     #[error(transparent)]
     SigningError(#[from] SigningError),
-
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
-
     #[error("Redelagation error")]
     RedelegationError(#[from] AddGroupMemberError),
 }
 
 #[cfg(test)]
+
 mod tests {
+
     use super::{delegation::Delegation, *};
     use crate::principal::active::Active;
+    use future_form::Local;
     use keyhive_crypto::signer::memory::MemorySigner;
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
     use rand::rngs::OsRng;
-
     async fn setup_user<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
     ) -> Active<Local, MemorySigner, T> {
@@ -983,7 +906,6 @@ mod tests {
             .await
             .unwrap()
     }
-
     async fn setup_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         alice: Arc<Mutex<Active<Local, MemorySigner, T>>>,
         bob: Arc<Mutex<Active<Local, MemorySigner, T>>>,
@@ -1011,14 +933,11 @@ mod tests {
                  └──────│  Group 3  │──────┘
                         │           │
                         └───────────┘ */
-
         let alice_agent: Agent<Local, MemorySigner, T, _> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
         let bob_agent = Agent::Active(bob.lock().await.id(), bob.dupe());
-
         let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
         let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
-
         let g0 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![alice_agent.dupe()],
@@ -1031,7 +950,6 @@ mod tests {
             .unwrap(),
         ));
         let g0_gid = g0.lock().await.group_id();
-
         let g1 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![alice_agent, Agent::Group(g0_gid, g0.clone())],
@@ -1043,7 +961,6 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         let g2 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![
@@ -1058,7 +975,6 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         let g3 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![
@@ -1073,10 +989,8 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         [g0, g1, g2, g3]
     }
-
     async fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         alice: Arc<Mutex<Active<Local, MemorySigner, T>>>,
         bob: Arc<Mutex<Active<Local, MemorySigner, T>>>,
@@ -1084,7 +998,6 @@ mod tests {
     ) -> [Arc<Mutex<Group<Local, MemorySigner, T>>>; 10] {
         let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
         let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
-
         let group0 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![Agent::Active(alice.lock().await.id(), alice.dupe())],
@@ -1096,7 +1009,6 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         let group1 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![Agent::Active(bob.lock().await.id(), bob.dupe())],
@@ -1108,7 +1020,6 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         let group2 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![Agent::Group(group1.lock().await.group_id(), group1.clone())],
@@ -1120,7 +1031,6 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         let group3 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![Agent::Group(group2.lock().await.group_id(), group2.clone())],
@@ -1132,7 +1042,6 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         let group4 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![Agent::Group(group3.lock().await.group_id(), group3.clone())],
@@ -1144,7 +1053,6 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         let group5 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![Agent::Group(group4.lock().await.group_id(), group4.clone())],
@@ -1156,7 +1064,6 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         let group6 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![Agent::Group(group5.lock().await.group_id(), group5.clone())],
@@ -1168,7 +1075,6 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         let group7 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![Agent::Group(group6.lock().await.group_id(), group6.clone())],
@@ -1180,7 +1086,6 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         let group8 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![Agent::Group(group7.lock().await.group_id(), group7.clone())],
@@ -1192,7 +1097,6 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         let group9 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![Agent::Group(group8.lock().await.group_id(), group8.clone())],
@@ -1204,19 +1108,16 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         let (alice_id, alice_signer) = {
             let locked_alice = alice.lock().await;
             (locked_alice.id(), locked_alice.signer.clone())
         };
-
         {
             let mut locked_group0 = group0.lock().await;
             let proof = locked_group0
                 .get_capability(&alice_id.into())
                 .unwrap()
                 .dupe();
-
             locked_group0
                 .receive_delegation(Arc::new(
                     async_signer::try_sign_async::<Local, _, _>(
@@ -1235,51 +1136,47 @@ mod tests {
                 .await
                 .unwrap();
         }
-
         [
             group0, group1, group2, group3, group4, group5, group6, group7, group8, group9,
         ]
     }
-
     #[tokio::test]
     async fn test_transitive_self() {
         test_utils::init_logging();
         let mut csprng = OsRng;
-
-        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let alice = Arc::new(Mutex::<Active<Local, MemorySigner, String>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let alice_agent: Agent<Local, MemorySigner, String> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
-
-        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-
+        let bob = Arc::new(Mutex::<Active<Local, MemorySigner, String>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let [g0, ..]: [Arc<Mutex<Group<Local, MemorySigner, String>>>; 4] =
             setup_groups(alice.dupe(), bob, Arc::new(Mutex::new(csprng))).await;
         let g0_mems = g0.lock().await.transitive_members().await;
-
         let expected = HashMap::from_iter([(
             alice_id,
             (Agent::Active(alice_id.into(), alice.dupe()), Access::Admin),
         )]);
-
         assert_eq!(g0_mems, expected);
     }
-
     #[tokio::test]
     async fn test_transitive_one() {
         test_utils::init_logging();
         let mut csprng = OsRng;
-
-        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let alice = Arc::new(Mutex::<Active<Local, MemorySigner, String>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let alice_agent: Agent<Local, MemorySigner, String> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
-
-        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-
+        let bob = Arc::new(Mutex::<Active<Local, MemorySigner, String>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let [g0, g1, ..] = setup_groups(alice.dupe(), bob, Arc::new(Mutex::new(csprng))).await;
         let g1_mems = g1.lock().await.transitive_members().await;
-
         let group0_id = { g0.lock().await.id() };
         let group0_gid = { g0.lock().await.group_id() };
         assert_eq!(
@@ -1296,55 +1193,51 @@ mod tests {
             ])
         );
     }
-
     #[tokio::test]
     async fn test_transitive_two() {
         test_utils::init_logging();
         let mut csprng = OsRng;
-
-        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let alice = Arc::new(Mutex::<Active<Local, MemorySigner, String>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let alice_agent: Agent<Local, MemorySigner, String> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
-
-        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let bob = Arc::new(Mutex::<Active<Local, MemorySigner, String>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let bob_agent: Agent<Local, MemorySigner, String> =
             Agent::Active(bob.lock().await.id(), bob.dupe());
         let bob_id = bob_agent.id();
-
         let [g0, _g1, g2, _g3]: [Arc<Mutex<Group<Local, MemorySigner, String>>>; 4] =
             setup_groups(alice.dupe(), bob.dupe(), Arc::new(Mutex::new(csprng))).await;
         let g2_mems = g2.lock().await.transitive_members().await;
-
         let g0_id = { g0.lock().await.id() };
-
         assert_eq!(g2_mems.len(), 3);
         assert!(g2_mems.contains_key(&alice_id));
         assert!(g2_mems.contains_key(&bob_id));
         assert!(g2_mems.contains_key(&g0_id));
     }
-
     #[tokio::test]
     async fn test_transitive_three() {
         test_utils::init_logging();
         let mut csprng = OsRng;
-
-        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let alice = Arc::new(Mutex::<Active<Local, MemorySigner, String>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let alice_id = { alice.lock().await.id() };
         let alice_agent: Agent<Local, MemorySigner, String> = Agent::Active(alice_id, alice.dupe());
         let alice_id = alice_agent.id();
-
-        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let bob = Arc::new(Mutex::<Active<Local, MemorySigner, String>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let bob_agent: Agent<Local, MemorySigner, String> =
             Agent::Active(bob.lock().await.id(), bob.dupe());
         let bob_id = bob_agent.id();
-
         let [g0, g1, g2, g3]: [Arc<Mutex<Group<Local, MemorySigner, String>>>; 4] =
             setup_groups(alice.dupe(), bob.dupe(), Arc::new(Mutex::new(csprng))).await;
         let g3_mems = g3.lock().await.transitive_members().await;
-
         assert_eq!(g3_mems.len(), 5);
-
         assert_eq!(
             g3_mems.keys().collect::<std::collections::HashSet<_>>(),
             HashSet::from_iter([
@@ -1356,27 +1249,26 @@ mod tests {
             ])
         );
     }
-
     #[tokio::test]
     async fn test_transitive_cycles() {
         test_utils::init_logging();
         let mut csprng = OsRng;
-
-        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let alice = Arc::new(Mutex::<Active<Local, MemorySigner, String>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let alice_agent: Agent<Local, MemorySigner, String> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
-
-        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let bob = Arc::new(Mutex::<Active<Local, MemorySigner, String>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let bob_agent: Agent<Local, MemorySigner, String> =
             Agent::Active(bob.lock().await.id(), bob.dupe());
         let bob_id = bob_agent.id();
-
         let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]: [Arc<
             Mutex<Group<Local, MemorySigner, String>>,
         >; 10] = setup_cyclic_groups(alice.dupe(), bob.dupe(), Arc::new(Mutex::new(csprng))).await;
         let g0_mems = g0.lock().await.transitive_members().await;
-
         assert_eq!(g0_mems.len(), 11);
         assert!(g0_mems.contains_key(&alice_id));
         assert!(g0_mems.contains_key(&bob_id));
@@ -1390,41 +1282,38 @@ mod tests {
         assert!(g0_mems.contains_key(&g8.lock().await.id()));
         assert!(g0_mems.contains_key(&g9.lock().await.id()));
     }
-
     #[tokio::test]
     async fn test_add_member() {
         test_utils::init_logging();
         let mut csprng = OsRng;
-
-        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let alice = Arc::new(Mutex::<Active<Local, MemorySigner>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let alice_agent: Agent<Local, MemorySigner> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
-
-        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let bob = Arc::new(Mutex::<Active<Local, MemorySigner>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let bob_agent: Agent<Local, MemorySigner> =
             Agent::Active(bob.lock().await.id(), bob.dupe());
-
-        let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let carol = Arc::new(Mutex::<Active<Local, MemorySigner>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let carol_agent: Agent<Local, MemorySigner> =
             Agent::Active(carol.lock().await.id(), carol.dupe());
-
         let signer = MemorySigner::generate(&mut csprng);
         let active = Arc::new(Mutex::new(
             Active::<Local, _, _, _>::generate(signer, NoListener, &mut csprng)
                 .await
                 .unwrap(),
         ));
-
         let (active_id, active_signer) = {
             let locked_active = active.lock().await;
             (locked_active.id(), locked_active.signer.clone())
         };
-
         let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
         let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
-
         let arc_csprng = Arc::new(Mutex::new(csprng));
-
         let g0 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![Agent::Active(active_id, active.dupe())],
@@ -1436,9 +1325,7 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         let group0_agent = Agent::Group(g0.lock().await.group_id(), g0.dupe());
-
         let g1 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![alice_agent.dupe(), bob_agent.dupe(), group0_agent],
@@ -1450,9 +1337,7 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         let group1_agent = Agent::Group(g1.lock().await.group_id(), g1.dupe());
-
         let g2 = Arc::new(Mutex::new(
             Group::<Local, _, _, _>::generate(
                 nonempty![group1_agent],
@@ -1464,13 +1349,11 @@ mod tests {
             .await
             .unwrap(),
         ));
-
         g0.lock()
             .await
             .add_member(carol_agent.dupe(), Access::Edit, &active_signer, &[])
             .await
             .unwrap();
-
         // FIXME trasnitive add
         // g2.borrow_mut()
         //     .add_member(
@@ -1480,53 +1363,41 @@ mod tests {
         //         &[],
         //     )
         //     .unwrap();
-
         let g0_mems = g0.lock().await.transitive_members().await;
-
         assert_eq!(g0_mems.len(), 2);
-
         assert_eq!(
             g0_mems.get(&active_id.into()),
             Some(&(active.lock().await.clone().into(), Access::Admin))
         );
-
         assert_eq!(
             g0_mems.get(&carol_agent.id()),
             Some(&(carol.lock().await.clone().into(), Access::Edit)) // NOTE: non-admin!
         );
-
         let g2_mems = g2.lock().await.transitive_members().await;
-
         assert_eq!(
             g2_mems.get(&alice_agent.id()),
             Some(&(alice.lock().await.clone().into(), Access::Admin))
         );
-
         assert_eq!(
             g2_mems.get(&bob_agent.id()),
             Some(&(bob.lock().await.clone().into(), Access::Admin))
         );
-
         assert_eq!(
             g2_mems.get(&carol_agent.id()),
             Some(&(carol.lock().await.clone().into(), Access::Edit)) // NOTE: non-admin!
         );
-
         let g0_id = { g0.lock().await.id() };
         assert_eq!(
             g2_mems.get(&g0_id),
             Some(&(g0.lock().await.clone().into(), Access::Admin))
         );
-
         let g1_id = { g1.lock().await.id() };
         assert_eq!(
             g2_mems.get(&g1_id),
             Some(&(g1.lock().await.clone().into(), Access::Admin))
         );
-
         assert_eq!(g2_mems.len(), 6);
     }
-
     #[tokio::test]
     async fn test_revoke_member() {
         // ┌─────────┐
@@ -1552,46 +1423,43 @@ mod tests {
         // ┌─────────┐                  ▼                     ║
         // │   Dan   ├ ─ ─ ─ ─ ─ ─ ─ ─ ─○─────────────────────x─ ─ ─ ─ ─ ─ ▶
         // └─────────┘
-
         test_utils::init_logging();
         let mut csprng = OsRng;
-
-        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let alice = Arc::new(Mutex::<Active<Local, MemorySigner>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let alice_agent: Agent<Local, MemorySigner> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
-
-        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let bob = Arc::new(Mutex::<Active<Local, MemorySigner>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let bob_agent: Agent<Local, MemorySigner> =
             Agent::Active(bob.lock().await.id(), bob.dupe());
-
-        let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let carol = Arc::new(Mutex::<Active<Local, MemorySigner>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let carol_agent: Agent<Local, MemorySigner> =
             Agent::Active(carol.lock().await.id(), carol.dupe());
-
-        let dan = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let dan = Arc::new(Mutex::<Active<Local, MemorySigner>>::new(
+            setup_user(&mut csprng).await,
+        ));
         let dan_agent: Agent<Local, MemorySigner> =
             Agent::Active(dan.lock().await.id(), dan.dupe());
-
         let (alice_id, alice_signer) = {
             let locked_alice = alice.lock().await;
             (locked_alice.id(), locked_alice.signer.clone())
         };
-
         let (bob_id, bob_signer) = {
             let locked_bob = bob.lock().await;
             (locked_bob.id(), locked_bob.signer.clone())
         };
-
         let (carol_id, carol_signer) = {
             let locked_carol = carol.lock().await;
             (locked_carol.id(), locked_carol.signer.clone())
         };
-
         let dan_id = dan.lock().await.id().into();
-
         let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
         let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
-
         let mut g1 = Group::<Local, _, _, _>::generate(
             nonempty![alice_agent.dupe()],
             dlg_store.dupe(),
@@ -1601,70 +1469,56 @@ mod tests {
         )
         .await
         .unwrap();
-
         let _alice_adds_bob = g1
             .add_member(bob_agent.dupe(), Access::Edit, &alice_signer, &[])
             .await
             .unwrap();
-
         let _bob_adds_carol = g1
             .add_member(carol_agent.dupe(), Access::Read, &bob_signer, &[])
             .await
             .unwrap();
-
         assert!(g1.members().contains_key(&alice_id.into()));
         assert!(g1.members().contains_key(&bob_id.into()));
         assert!(g1.members().contains_key(&carol_id.into()));
         assert!(!g1.members().contains_key(&dan_id));
-
         let _carol_adds_dan = g1
             .add_member(dan_agent.dupe(), Access::Read, &carol_signer, &[])
             .await
             .unwrap();
-
         assert!(g1.members.contains_key(&alice_id.into()));
         assert!(g1.members.contains_key(&bob_id.into()));
         assert!(g1.members.contains_key(&carol_id.into()));
         assert!(g1.members.contains_key(&dan_id));
         assert_eq!(g1.members.len(), 4);
-
         let _alice_revokes_bob = g1
             .revoke_member(bob_id.into(), true, &alice_signer, &BTreeMap::new())
             .await
             .unwrap();
-
         let bob_id = bob.lock().await.id();
         let carol_id = carol.lock().await.id();
         let dan_id = dan.lock().await.id();
-
         // Bob kicked out
         assert!(!g1.members.contains_key(&bob_id.into()));
         // Retained Carol & Dan
         assert!(g1.members.contains_key(&carol_id.into()));
         assert!(g1.members.contains_key(&dan_id.into()));
-
         let _bob_to_carol = g1
             .add_member(bob_agent.dupe(), Access::Read, &carol_signer, &[])
             .await
             .unwrap();
-
         assert!(g1.members.contains_key(&bob_id.into()));
         assert!(g1.members.contains_key(&carol_id.into()));
         assert!(g1.members.contains_key(&dan_id.into()));
-
         let _alice_revokes_carol = g1
             .revoke_member(carol_id.into(), false, &alice_signer, &BTreeMap::new())
             .await
             .unwrap();
-
         // Dropped Carol, which also kicks out can becuase `retain_all: false`
         assert!(!g1.members.contains_key(&carol_id.into()));
         // FIXME assert!(!g1.members.contains_key(&dan.borrow().id().into()));
-
         g1.revoke_member(alice_id.into(), false, &alice_signer, &BTreeMap::new())
             .await
             .unwrap();
-
         assert!(!g1.members.contains_key(&alice_id.into()));
         assert!(!g1.members.contains_key(&carol_id.into()));
         assert!(!g1.members.contains_key(&dan_id.into()));

@@ -3,8 +3,8 @@ use super::{
     signer::JsSigner,
 };
 use dupe::Dupe;
-use keyhive_core::principal::peer::Peer;
 use future_form::Local;
+use keyhive_core::principal::peer::Peer;
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 

@@ -4,8 +4,8 @@ use super::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
-use keyhive_core::principal::group::revocation::Revocation;
 use future_form::Local;
+use keyhive_core::principal::group::revocation::Revocation;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Revocation)]

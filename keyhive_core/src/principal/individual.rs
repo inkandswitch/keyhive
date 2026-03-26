@@ -234,7 +234,6 @@ fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
 mod tests {
     use super::*;
     use crate::principal::individual::op::add_key::AddKeyOp;
-    use future_form::Local;
     use keyhive_crypto::signer::memory::MemorySigner;
 
     #[test]

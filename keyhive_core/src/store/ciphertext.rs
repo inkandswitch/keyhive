@@ -14,7 +14,6 @@ use std::{
     collections::{HashMap, HashSet},
     convert::Infallible,
     fmt::{Debug, Display},
-    future::Future,
     sync::Arc,
 };
 use thiserror::Error;
@@ -37,52 +36,20 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     type GetCiphertextError: Debug + Display;
     type MarkDecryptedError: Debug + Display;
 
-    // FIXME make this into Local vs Sendable with future
-    // TODO make this into a macro, or maybe use their macro and switch at the call site?
-    #[cfg(feature = "sendable")]
-    fn get_ciphertext(
+    #[allow(async_fn_in_trait)]
+    async fn get_ciphertext(
         &self,
         id: &Cr,
-    ) -> impl Future<Output = Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>
-           + Send;
+    ) -> Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>;
 
-    #[cfg(not(feature = "sendable"))]
-    fn get_ciphertext(
-        &self,
-        id: &Cr,
-    ) -> impl Future<Output = Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
-
-    //////////
-
-    #[cfg(feature = "sendable")]
-    fn get_ciphertexts_by_pcs_update(
-        &self,
-        pcs_udpate: &Digest<Signed<CgkaOperation>>,
-    ) -> impl Future<Output = Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> + Send;
-
-    #[cfg(feature = "sendable")]
-    fn get_ciphertexts_by_pcs_update(
-        &self,
-        pcs_udpate: &Digest<Signed<CgkaOperation>>,
-    ) -> impl Future<Output = Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> + Send;
-
-    #[cfg(not(feature = "sendable"))]
-    fn get_ciphertext_by_pcs_update(
+    #[allow(async_fn_in_trait)]
+    async fn get_ciphertext_by_pcs_update(
         &self,
         pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> impl Future<Output = Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
+    ) -> Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>;
 
-    //////////
-
-    #[cfg(feature = "sendable")]
-    fn mark_decrypted(
-        &self,
-        id: &Cr,
-    ) -> impl Future<Output = Result<(), Self::MarkDecryptedError>> + Send;
-
-    #[cfg(not(feature = "sendable"))]
-    fn mark_decrypted(&self, id: &Cr)
-        -> impl Future<Output = Result<(), Self::MarkDecryptedError>>;
+    #[allow(async_fn_in_trait)]
+    async fn mark_decrypted(&self, id: &Cr) -> Result<(), Self::MarkDecryptedError>;
 
     #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
     /// Recursively decrypts a set of causally-related ciphertexts.
@@ -156,7 +123,6 @@ pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
     ///
     /// It is normal for this to stop decryption if it encounters an already-decrypted
     /// ciphertext. There is no reason to decrypt it again if you already have the plaintext.
-    #[allow(async_fn_in_trait)]
     #[instrument(skip(self, to_decrypt), fields(ciphertext_heads_count = %to_decrypt.len()))]
     async fn try_causal_decrypt(
         &self,

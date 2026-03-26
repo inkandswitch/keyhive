@@ -3,9 +3,9 @@ use super::{
     signer::JsSigner,
 };
 use dupe::Dupe;
+use future_form::Local;
 use keyhive_core::principal::group::revocation::Revocation;
 use keyhive_crypto::{signed::Signed, verifiable::Verifiable};
-use future_form::Local;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
@@ -37,13 +37,17 @@ impl JsSignedRevocation {
     }
 }
 
-impl From<Arc<Signed<Revocation<Local, JsSigner, JsChangeId, JsEventHandler>>>> for JsSignedRevocation {
+impl From<Arc<Signed<Revocation<Local, JsSigner, JsChangeId, JsEventHandler>>>>
+    for JsSignedRevocation
+{
     fn from(signed: Arc<Signed<Revocation<Local, JsSigner, JsChangeId, JsEventHandler>>>) -> Self {
         Self(signed)
     }
 }
 
-impl From<JsSignedRevocation> for Arc<Signed<Revocation<Local, JsSigner, JsChangeId, JsEventHandler>>> {
+impl From<JsSignedRevocation>
+    for Arc<Signed<Revocation<Local, JsSigner, JsChangeId, JsEventHandler>>>
+{
     fn from(js_signed: JsSignedRevocation) -> Self {
         js_signed.0
     }
