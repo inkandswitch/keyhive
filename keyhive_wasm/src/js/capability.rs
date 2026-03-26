@@ -5,14 +5,15 @@ use super::{
 use dupe::Dupe;
 use keyhive_core::principal::{agent::Agent, group::delegation::Delegation};
 use keyhive_crypto::signed::Signed;
+use future_form::Local;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 #[derive(Debug, Clone, Dupe)]
 pub struct Capability {
-    pub(crate) who: Agent<JsSigner, JsChangeId, JsEventHandler>,
-    pub(crate) proof: Arc<Signed<Delegation<JsSigner, JsChangeId, JsEventHandler>>>,
+    pub(crate) who: Agent<Local, JsSigner, JsChangeId, JsEventHandler>,
+    pub(crate) proof: Arc<Signed<Delegation<Local, JsSigner, JsChangeId, JsEventHandler>>>,
 }
 
 #[wasm_bindgen]
