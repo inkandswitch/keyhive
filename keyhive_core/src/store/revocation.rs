@@ -117,7 +117,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[allow(clippy::type_complexity)]
     pub fn all_agent_revocations(
         &self,
-    ) -> impl Iterator<Item = (&AgentId, &HashSet<Arc<Signed<Revocation<S, T, L>>>>)> {
+    ) -> impl Iterator<Item = (&AgentId, &HashSet<Arc<Signed<Revocation<F, S, T, L>>>>)> {
         self.agent_to_revocations.iter()
     }
 

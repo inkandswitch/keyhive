@@ -805,8 +805,8 @@ impl<
     /// does a single BFS from its delegation/revocation heads, and maps the
     /// results to all transitive members. Ops are stored per source (group,
     /// doc, or agent) and each agent's index points to the sources it can reach.
-    pub async fn membership_ops_for_all_agents(&self) -> AllMembershipOps<S, T, L> {
-        let mut ops: HashMap<Identifier, MembershipOpMap<S, T, L>> = HashMap::new();
+    pub async fn membership_ops_for_all_agents(&self) -> AllMembershipOps<F, S, T, L> {
+        let mut ops: HashMap<Identifier, MembershipOpMap<F, S, T, L>> = HashMap::new();
         let mut index: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
 
         // Phase 1: For each group, collect heads (while holding lock), then BFS
@@ -864,10 +864,10 @@ impl<
             for (agent_id, agent_revs) in revocations.all_agent_revocations() {
                 let identifier: Identifier = (*agent_id).into();
                 let agent_ops = ops.entry(identifier).or_default();
-                let mut visited: HashSet<Digest<MembershipOperation<S, T, L>>> =
+                let mut visited: HashSet<Digest<MembershipOperation<F, S, T, L>>> =
                     agent_ops.keys().copied().collect();
                 for rev in agent_revs {
-                    let hash: Digest<MembershipOperation<S, T, L>> =
+                    let hash: Digest<MembershipOperation<F, S, T, L>> =
                         Digest::hash(rev.as_ref()).coerce();
                     if visited.insert(hash) {
                         agent_ops.entry(hash).or_insert_with(|| rev.dupe().into());
@@ -990,14 +990,14 @@ impl<
         };
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
 
-        type TransitiveMembers<S, T, L> = HashMap<Identifier, (Agent<S, T, L>, Access)>;
+        type TransitiveMembers<F, S, T, L> = HashMap<Identifier, (Agent<F, S, T, L>, Access)>;
 
         // For each group: (group_id, group_arc, transitive_members)
         #[allow(clippy::type_complexity)]
         let mut group_data: Vec<(
             GroupId,
-            Arc<Mutex<Group<S, T, L>>>,
-            TransitiveMembers<S, T, L>,
+            Arc<Mutex<Group<F, S, T, L>>>,
+            TransitiveMembers<F, S, T, L>,
         )> = Vec::with_capacity(groups.len());
         for group in groups {
             let (group_id, transitive) = {
@@ -1011,8 +1011,8 @@ impl<
         #[allow(clippy::type_complexity)]
         let mut doc_data: Vec<(
             DocumentId,
-            Arc<Mutex<Document<S, T, L>>>,
-            TransitiveMembers<S, T, L>,
+            Arc<Mutex<Document<F, S, T, L>>>,
+            TransitiveMembers<F, S, T, L>,
         )> = Vec::with_capacity(docs.len());
         for doc in docs {
             let (doc_id, transitive) = {
@@ -2532,14 +2532,14 @@ pub enum ReceiveEventError<
 mod tests {
     use super::*;
     use crate::{access::Access, principal::public::Public, transact::transact_async};
-    use future_form::Local;
+    use future_form::Sendable;
     use keyhive_crypto::signer::memory::MemorySigner;
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
     use testresult::TestResult;
 
     async fn make_keyhive() -> Keyhive<
-        Local,
+        Sendable,
         MemorySigner,
         [u8; 32],
         Vec<u8>,
@@ -2548,7 +2548,7 @@ mod tests {
     > {
         let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
         let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
-        Keyhive::<Local, _, _, _, _, _, _>::generate(
+        Keyhive::<Sendable, _, _, _, _, _, _>::generate(
             sk,
             Arc::new(Mutex::new(store)),
             NoListener,
@@ -2566,7 +2566,7 @@ mod tests {
 
         let sk = MemorySigner::generate(&mut csprng);
         let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], String>::new()));
-        let hive = Keyhive::<Local, _, _, _, _, _, _>::generate(
+        let hive = Keyhive::<Sendable, _, _, _, _, _, _>::generate(
             sk.clone(),
             store.clone(),
             NoListener,
@@ -2576,9 +2576,9 @@ mod tests {
 
         let indie_sk = MemorySigner::generate(&mut csprng);
         let indie = Arc::new(Mutex::new(
-            Individual::generate::<Local, _, _>(&indie_sk, &mut csprng).await?,
+            Individual::generate::<Sendable, _, _>(&indie_sk, &mut csprng).await?,
         ));
-        let indie_peer: Peer<Local, _, _, _> =
+        let indie_peer: Peer<Sendable, _, _, _> =
             Peer::Individual(indie.lock().await.id(), indie.dupe());
 
         hive.register_individual(indie.dupe()).await;
@@ -2608,7 +2608,7 @@ mod tests {
         assert_eq!(archive.docs.len(), 1);
         assert_eq!(archive.topsorted_ops.len(), 4);
 
-        let hive_from_archive = Keyhive::<Local, _, _, _, _, _, _>::try_from_archive(
+        let hive_from_archive = Keyhive::<Sendable, _, _, _, _, _, _>::try_from_archive(
             &archive,
             sk,
             store,
@@ -2651,7 +2651,7 @@ mod tests {
         let mut csprng = rand::rngs::OsRng;
         let sk = MemorySigner::generate(&mut csprng);
         let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], String>::new()));
-        let kh = Keyhive::<Local, _, _, _, _, _, _>::generate(
+        let kh = Keyhive::<Sendable, _, _, _, _, _, _>::generate(
             sk.clone(),
             store.clone(),
             NoListener,
@@ -2661,12 +2661,12 @@ mod tests {
 
         let indie_sk = MemorySigner::generate(&mut csprng);
         let indie = Arc::new(Mutex::new(
-            Individual::generate::<Local, _, _>(&indie_sk, &mut csprng).await?,
+            Individual::generate::<Sendable, _, _>(&indie_sk, &mut csprng).await?,
         ));
         kh.register_individual(indie.dupe()).await;
         let doc = kh.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         let doc_id = DocumentId(doc.lock().await.id());
-        let membered_doc: Membered<Local, _, _, _> = Membered::Document(doc_id, doc.dupe());
+        let membered_doc: Membered<Sendable, _, _, _> = Membered::Document(doc_id, doc.dupe());
 
         // Delegate to an individual and then revoke
         let indie_id = indie.lock().await.id();
@@ -2678,7 +2678,7 @@ mod tests {
 
         // Create an archive and try to load it into a fresh Keyhive
         let archive = kh.into_archive().await;
-        let kh2 = Keyhive::<Local, _, _, _, _, _, _>::try_from_archive(
+        let kh2 = Keyhive::<Sendable, _, _, _, _, _, _>::try_from_archive(
             &archive,
             sk,
             Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], String>::new())),
@@ -2958,7 +2958,7 @@ mod tests {
             .await
             .unwrap();
         let member = Public.individual().into();
-        let membered: Membered<Local, _, _, _> =
+        let membered: Membered<Sendable, _, _, _> =
             Membered::Document(doc.lock().await.doc_id(), doc.dupe());
         let dlg = keyhive
             .add_member(member, &membered, Access::Read, &[])
@@ -3588,7 +3588,7 @@ mod tests {
         test_utils::init_logging();
 
         let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
-        let hive = Keyhive::<Local, _, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
+        let hive = Keyhive::<Sendable, _, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
             sk,
             Arc::new(Mutex::new(MemoryCiphertextStore::new())),
             NoListener,
@@ -3598,13 +3598,13 @@ mod tests {
 
         let trunk = Arc::new(Mutex::new(hive));
 
-        let alice_indie = Individual::generate::<Local, _, _>(
+        let alice_indie = Individual::generate::<Sendable, _, _>(
             &MemorySigner::generate(&mut rand::rngs::OsRng),
             &mut rand::rngs::OsRng,
         )
         .await?;
 
-        let alice: Peer<Local, MemorySigner, [u8; 32], NoListener> =
+        let alice: Peer<Sendable, MemorySigner, [u8; 32], NoListener> =
             Peer::Individual(alice_indie.id(), Arc::new(Mutex::new(alice_indie)));
 
         {
@@ -3633,7 +3633,7 @@ mod tests {
 
         let tx = transact_async(
             &trunk,
-            |fork: Keyhive<Local, _, _, _, _, Log<Local, _, [u8; 32]>, _>| async move {
+            |fork: Keyhive<Sendable, _, _, _, _, Log<Sendable, _, [u8; 32]>, _>| async move {
                 // Depending on when the async runs
                 let init_dlg_count = fork.delegations.lock().await.len();
                 assert!(init_dlg_count >= 4);
@@ -3651,14 +3651,14 @@ mod tests {
                 fork.expand_prekeys().await.unwrap(); // 1 event (prekey)
                 assert_eq!(fork.active.lock().await.prekey_pairs.lock().await.len(), 8);
 
-                let bob_indie = Individual::generate::<Local, _, _>(
+                let bob_indie = Individual::generate::<Sendable, _, _>(
                     &MemorySigner::generate(&mut rand::rngs::OsRng),
                     &mut rand::rngs::OsRng,
                 )
                 .await
                 .unwrap();
 
-                let bob: Peer<Local, MemorySigner, [u8; 32], Log<Local, MemorySigner>> =
+                let bob: Peer<Sendable, MemorySigner, [u8; 32], Log<Sendable, MemorySigner>> =
                     Peer::Individual(bob_indie.id(), Arc::new(Mutex::new(bob_indie)));
 
                 fork.generate_group(vec![bob.dupe()]).await.unwrap(); // 2 events (dlgs)

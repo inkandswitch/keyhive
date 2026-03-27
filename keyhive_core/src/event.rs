@@ -168,7 +168,7 @@ mod tests {
         store::ciphertext::memory::MemoryCiphertextStore,
     };
     use beekem::id::{MemberId, TreeId};
-    use future_form::Local;
+    use future_form::Sendable;
     use futures::lock::Mutex;
     use keyhive_crypto::{
         share_key::ShareKey, signer::memory::MemorySigner, siv::Siv, symmetric_key::SymmetricKey,
@@ -218,8 +218,8 @@ mod tests {
         let hash2 = Digest::hash(&cgka_op_2);
         let hash3 = Digest::hash(&cgka_op_3);
 
-        let indie = Individual::generate::<Local, _, _>(&signer, &mut csprng).await?;
-        let events: Vec<Event<Local, MemorySigner, [u8; 32], NoListener>> = vec![
+        let indie = Individual::generate::<Sendable, _, _>(&signer, &mut csprng).await?;
+        let events: Vec<Event<Sendable, MemorySigner, [u8; 32], NoListener>> = vec![
             Event::CgkaOperation(Arc::new(cgka_op_1)),
             Event::CgkaOperation(Arc::new(cgka_op_2)),
             Event::PrekeysExpanded(Arc::new(

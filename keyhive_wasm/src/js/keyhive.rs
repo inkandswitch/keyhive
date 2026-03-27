@@ -468,7 +468,8 @@ impl JsKeyhive {
                 let hash_bytes = digest.as_slice().to_vec();
                 let hash = js_sys::Uint8Array::from(digest.as_slice());
                 if serialized_hashes.insert(hash_bytes) {
-                    let event: Event<JsSigner, JsChangeId, JsEventHandler> = op.clone().into();
+                    let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
+                        op.clone().into();
                     let static_event = StaticEvent::from(event);
                     let bytes =
                         bincode::serialize(&static_event).map_err(JsSerializationError::from)?;
@@ -499,7 +500,7 @@ impl JsKeyhive {
         for (identifier, ops_vec) in &all_prekey.ops {
             let source_hashes = js_sys::Array::new();
             for key_op in ops_vec {
-                let event: Event<JsSigner, JsChangeId, JsEventHandler> =
+                let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
                     Event::from(key_op.as_ref().dupe());
                 let digest = Digest::hash(&event);
                 let hash_bytes = digest.as_slice().to_vec();
