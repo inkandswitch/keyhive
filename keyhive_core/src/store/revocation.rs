@@ -52,6 +52,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     /// Retrieve a [`Revocation`] by its [`Digest`].
+    #[allow(clippy::type_complexity)]
     pub fn get(
         &self,
         key: &Digest<Signed<Revocation<F, S, T, L>>>,
@@ -85,7 +86,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     /// Remove a [`Revocation`] by its [`Digest`].
-    #[allow(clippy::mutable_key_type)]
+    #[allow(clippy::mutable_key_type, clippy::type_complexity)]
     pub fn remove_by_hash(
         &mut self,
         hash: &Digest<Signed<Revocation<F, S, T, L>>>,

@@ -11,6 +11,7 @@ use keyhive_crypto::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+#[allow(clippy::type_complexity)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 #[derive_where(Clone; T)]
 pub struct Invocation<

@@ -58,7 +58,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 {
     #[allow(clippy::type_complexity)]
     #[instrument(level = "debug", skip(ciphertext_store))]
-    pub async fn now_decryptable<P, C: CiphertextStore<T, P>>(
+    pub async fn now_decryptable<P, C: CiphertextStore<F, T, P>>(
         new_events: &[Event<F, S, T, L>],
         ciphertext_store: &C,
     ) -> Result<HashMap<DocumentId, Vec<Arc<EncryptedContent<P, T>>>>, C::GetCiphertextError> {
