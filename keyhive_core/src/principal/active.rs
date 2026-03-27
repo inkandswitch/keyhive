@@ -437,7 +437,7 @@ pub enum ActiveDelegationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use future_form::Local;
+    use future_form::Sendable;
     use keyhive_crypto::signer::memory::MemorySigner;
 
     #[tokio::test]
@@ -446,8 +446,8 @@ mod tests {
 
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let active: Active<Local, _, [u8; 32], _> =
-            Active::<Local, _, _, _>::generate(signer, NoListener, csprng)
+        let active: Active<Sendable, _, [u8; 32], _> =
+            Active::<Sendable, _, _, _>::generate(signer, NoListener, csprng)
                 .await
                 .unwrap();
         let message = "hello world".as_bytes();
@@ -462,16 +462,16 @@ mod tests {
 
         let csprng = &mut rand::thread_rng();
         let signer1 = MemorySigner::generate(csprng);
-        let active1: Active<Local, _, [u8; 32], _> =
-            Active::<Local, _, _, _>::generate(signer1, NoListener, csprng)
+        let active1: Active<Sendable, _, [u8; 32], _> =
+            Active::<Sendable, _, _, _>::generate(signer1, NoListener, csprng)
                 .await
                 .unwrap();
 
         let exported = active1.export_prekey_secrets().await.unwrap();
 
         let signer2 = MemorySigner::generate(csprng);
-        let active2: Active<Local, _, [u8; 32], _> =
-            Active::<Local, _, _, _>::generate(signer2, NoListener, csprng)
+        let active2: Active<Sendable, _, [u8; 32], _> =
+            Active::<Sendable, _, _, _>::generate(signer2, NoListener, csprng)
                 .await
                 .unwrap();
 
@@ -507,8 +507,8 @@ mod tests {
 
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(csprng);
-        let active: Active<Local, _, [u8; 32], _> =
-            Active::<Local, _, _, _>::generate(signer, NoListener, csprng)
+        let active: Active<Sendable, _, [u8; 32], _> =
+            Active::<Sendable, _, _, _>::generate(signer, NoListener, csprng)
                 .await
                 .unwrap();
 

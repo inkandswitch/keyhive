@@ -2,13 +2,13 @@ use crate::{
     keyhive::Keyhive, listener::no_listener::NoListener,
     store::ciphertext::memory::MemoryCiphertextStore,
 };
-use future_form::Local;
+use future_form::Sendable;
 use keyhive_crypto::{signed::SigningError, signer::memory::MemorySigner};
 use rand::rngs::OsRng;
 
 pub async fn make_simple_keyhive() -> Result<
     Keyhive<
-        Local,
+        Sendable,
         MemorySigner,
         [u8; 32],
         Vec<u8>,
@@ -20,7 +20,7 @@ pub async fn make_simple_keyhive() -> Result<
 > {
     let mut csprng = OsRng;
     let sk = MemorySigner::generate(&mut csprng);
-    Keyhive::<Local, _, _, _, _, _, _>::generate(
+    Keyhive::<Sendable, _, _, _, _, _, _>::generate(
         sk,
         MemoryCiphertextStore::new(),
         NoListener,
