@@ -20,7 +20,10 @@ use crate::{
         identifier::Identifier,
     },
     store::{
-        ciphertext::{CausalDecryptionError, CausalDecryptionState, CiphertextStore, ErrorReason},
+        ciphertext::{
+            CausalDecryptionError, CausalDecryptionState, CiphertextStore, CiphertextStoreExt,
+            ErrorReason,
+        },
         delegation::DelegationStore,
         revocation::RevocationStore,
     },
@@ -499,13 +502,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
     #[instrument(skip_all)]
     pub async fn try_causal_decrypt_content<
-        C: CiphertextStore<T, P>,
+        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P>,
         P: for<'de> Deserialize<'de> + Serialize + Clone,
     >(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
         store: C,
-    ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<T, P, C>>
+    ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<F, T, P, C>>
     where
         T: for<'de> Deserialize<'de>,
     {
@@ -516,7 +519,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let entrypoint_envelope: Envelope<T, Vec<u8>> = bincode::deserialize(
             raw_entrypoint.as_slice(),
         )
-        .map_err(|e| CausalDecryptionError::<T, P, C> {
+        .map_err(|e| CausalDecryptionError::<F, T, P, C> {
             progress: acc.clone(),
             cannot: HashMap::from_iter([(
                 encrypted_content.content_ref.clone(),
@@ -682,9 +685,9 @@ pub enum GenerateDocError {
 }
 
 #[derive(Debug, Error)]
-pub enum DocCausalDecryptionError<T: ContentRef, P, C: CiphertextStore<T, P>> {
+pub enum DocCausalDecryptionError<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>> {
     #[error(transparent)]
-    CausalDecryptionError(#[from] CausalDecryptionError<T, P, C>),
+    CausalDecryptionError(#[from] CausalDecryptionError<F, T, P, C>),
 
     #[error("{0}")]
     GetCiphertextError(C::GetCiphertextError),

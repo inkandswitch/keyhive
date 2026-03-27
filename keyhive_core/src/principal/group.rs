@@ -74,14 +74,10 @@ use thiserror::Error;
 /// A collection of agents with no associated content.
 ///
 /// Groups are stateful agents. It is possible the delegate control over them,
-
 /// and they can be delegated to. This produces transitives lines of authority
-
 /// through the network of [`Agent`]s.
-
 #[derive(Clone, Derivative)]
 #[derive_where(Debug; T)]
-
 pub struct Group<
     F: FutureForm,
     S: AsyncSigner<F>,

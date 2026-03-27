@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use super::{base64::Base64, change_id::JsChangeId};
 use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
+use future_form::{FutureForm, Local};
 use keyhive_core::{
     crypto::digest::Digest,
     store::ciphertext::{memory::MemoryCiphertextStore, CiphertextStore},
@@ -34,7 +35,7 @@ impl JsCiphertextStore {
     }
 }
 
-impl CiphertextStore<JsChangeId, Vec<u8>> for JsCiphertextStore {
+impl CiphertextStore<Local, JsChangeId, Vec<u8>> for JsCiphertextStore {
     #[cfg(feature = "web-sys")]
     type GetCiphertextError = JsGetCiphertextError;
     type MarkDecryptedError = JsRemoveCiphertextError;
@@ -42,90 +43,105 @@ impl CiphertextStore<JsChangeId, Vec<u8>> for JsCiphertextStore {
     #[cfg(not(feature = "web-sys"))]
     type GetCiphertextError = std::convert::Infallible;
 
-    async fn get_ciphertext(
-        &self,
-        id: &JsChangeId,
-    ) -> Result<Option<Arc<EncryptedContent<Vec<u8>, JsChangeId>>>, Self::GetCiphertextError> {
-        match self.inner {
-            JsCiphertextStoreInner::Memory(ref mem_store) => {
-                Ok(mem_store.get_by_content_ref(id).await)
-            }
-
-            #[cfg(feature = "web-sys")]
-            JsCiphertextStoreInner::WebStorage(ref store) => {
-                if let Some(b64) = store
-                    .get_item(id.to_base64().as_str())
-                    .map_err(JsWebStorageError::RetrievalError)?
-                {
-                    let bytes = Base64(b64).into_vec().map_err(|e| {
-                        JsGetCiphertextError(JsWebStorageError::ConvertFromBase64Error(e))
-                    })?;
-                    let encrypted = bincode::deserialize(&bytes)
-                        .map_err(JsWebStorageError::DeserailizationError)?;
-
-                    Ok(Some(encrypted))
-                } else {
-                    Ok(None)
+    fn get_ciphertext<'a>(
+        &'a self,
+        id: &'a JsChangeId,
+    ) -> <Local as FutureForm>::Future<
+        'a,
+        Result<Option<Arc<EncryptedContent<Vec<u8>, JsChangeId>>>, Self::GetCiphertextError>,
+    > {
+        Local::from_future(async move {
+            match self.inner {
+                JsCiphertextStoreInner::Memory(ref mem_store) => {
+                    Ok(mem_store.get_by_content_ref(id).await)
                 }
-            }
-        }
-    }
 
-    async fn get_ciphertext_by_pcs_update(
-        &self,
-        pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<Vec<Arc<EncryptedContent<Vec<u8>, JsChangeId>>>, Self::GetCiphertextError> {
-        match self.inner {
-            JsCiphertextStoreInner::Memory(ref mem_store) => {
-                Ok(mem_store.get_by_pcs_update(pcs_update).await)
-            }
-
-            // TODO add index
-            #[cfg(feature = "web-sys")]
-            JsCiphertextStoreInner::WebStorage(ref store) => {
-                let mut acc = Vec::new();
-
-                let size = store.length().map_err(JsWebStorageError::CannotStoreSize)?;
-                for i in 0..size {
-                    let key = store
-                        .key(i)
+                #[cfg(feature = "web-sys")]
+                JsCiphertextStoreInner::WebStorage(ref store) => {
+                    if let Some(b64) = store
+                        .get_item(id.to_base64().as_str())
                         .map_err(JsWebStorageError::RetrievalError)?
-                        .ok_or_else(|| JsWebStorageError::ValueNotFoundForKey(i))?;
-
-                    let b64 = store
-                        .get_item(&key)
-                        .map_err(JsWebStorageError::RetrievalError)?;
-
-                    if let Some(b64) = b64 {
+                    {
                         let bytes = Base64(b64).into_vec().map_err(|e| {
                             JsGetCiphertextError(JsWebStorageError::ConvertFromBase64Error(e))
                         })?;
                         let encrypted = bincode::deserialize(&bytes)
                             .map_err(JsWebStorageError::DeserailizationError)?;
 
-                        acc.push(encrypted);
+                        Ok(Some(encrypted))
+                    } else {
+                        Ok(None)
                     }
                 }
-
-                Ok(acc)
             }
-        }
+        })
     }
 
-    async fn mark_decrypted(&self, id: &JsChangeId) -> Result<(), Self::MarkDecryptedError> {
-        match self.inner {
-            JsCiphertextStoreInner::Memory(ref store) => {
-                store.remove_all(id).await;
-            }
-            #[cfg(feature = "web-sys")]
-            JsCiphertextStoreInner::WebStorage(ref store) => {
-                store
-                    .remove_item(id.to_base64().as_str())
-                    .map_err(JsRemoveCiphertextError)?;
-            }
-        };
+    fn get_ciphertext_by_pcs_update<'a>(
+        &'a self,
+        pcs_update: &'a Digest<Signed<CgkaOperation>>,
+    ) -> <Local as FutureForm>::Future<
+        'a,
+        Result<Vec<Arc<EncryptedContent<Vec<u8>, JsChangeId>>>, Self::GetCiphertextError>,
+    > {
+        Local::from_future(async move {
+            match self.inner {
+                JsCiphertextStoreInner::Memory(ref mem_store) => {
+                    Ok(mem_store.get_by_pcs_update(pcs_update).await)
+                }
 
-        Ok(())
+                // TODO add index
+                #[cfg(feature = "web-sys")]
+                JsCiphertextStoreInner::WebStorage(ref store) => {
+                    let mut acc = Vec::new();
+
+                    let size = store.length().map_err(JsWebStorageError::CannotStoreSize)?;
+                    for i in 0..size {
+                        let key = store
+                            .key(i)
+                            .map_err(JsWebStorageError::RetrievalError)?
+                            .ok_or_else(|| JsWebStorageError::ValueNotFoundForKey(i))?;
+
+                        let b64 = store
+                            .get_item(&key)
+                            .map_err(JsWebStorageError::RetrievalError)?;
+
+                        if let Some(b64) = b64 {
+                            let bytes = Base64(b64).into_vec().map_err(|e| {
+                                JsGetCiphertextError(JsWebStorageError::ConvertFromBase64Error(e))
+                            })?;
+                            let encrypted = bincode::deserialize(&bytes)
+                                .map_err(JsWebStorageError::DeserailizationError)?;
+
+                            acc.push(encrypted);
+                        }
+                    }
+
+                    Ok(acc)
+                }
+            }
+        })
+    }
+
+    fn mark_decrypted<'a>(
+        &'a self,
+        id: &'a JsChangeId,
+    ) -> <Local as FutureForm>::Future<'a, Result<(), Self::MarkDecryptedError>> {
+        Local::from_future(async move {
+            match self.inner {
+                JsCiphertextStoreInner::Memory(ref store) => {
+                    store.remove_all(id).await;
+                }
+                #[cfg(feature = "web-sys")]
+                JsCiphertextStoreInner::WebStorage(ref store) => {
+                    store
+                        .remove_item(id.to_base64().as_str())
+                        .map_err(JsRemoveCiphertextError)?;
+                }
+            };
+
+            Ok(())
+        })
     }
 }
 

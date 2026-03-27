@@ -40,7 +40,10 @@ use crate::{
     },
     stats::Stats,
     store::{
-        ciphertext::{memory::MemoryCiphertextStore, CausalDecryptionState, CiphertextStore},
+        ciphertext::{
+            memory::MemoryCiphertextStore, CausalDecryptionState, CiphertextStore,
+            CiphertextStoreExt,
+        },
         delegation::DelegationStore,
         revocation::RevocationStore,
     },
@@ -82,7 +85,7 @@ pub struct Keyhive<
     S: AsyncSigner<F> + Clone,
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
-    C: CiphertextStore<T, P> + Clone = MemoryCiphertextStore<T, P>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone = MemoryCiphertextStore<T, P>,
     L: MembershipListener<F, S, T> = NoListener,
     R: rand::CryptoRng = rand::rngs::OsRng,
 > {
@@ -129,7 +132,7 @@ impl<
         S: AsyncSigner<F> + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
+        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Keyhive<F, S, T, P, C, L, R>
@@ -529,7 +532,7 @@ impl<
         &self,
         doc: Arc<Mutex<Document<F, S, T, L>>>,
         encrypted: &EncryptedContent<P, T>,
-    ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<T, P, C>>
+    ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<F, T, P, C>>
     where
         T: for<'de> Deserialize<'de>,
         P: Serialize + Clone,
@@ -562,6 +565,7 @@ impl<
     }
 
     #[instrument(skip_all)]
+    #[allow(clippy::type_complexity)]
     pub async fn reachable_members(
         &self,
         membered: Membered<F, S, T, L>,
@@ -597,6 +601,7 @@ impl<
         caps
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn membered_reachable_by_agent(
         &self,
@@ -1181,6 +1186,7 @@ impl<
         None
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn static_event_to_event(
         &self,
@@ -1209,6 +1215,7 @@ impl<
         }
     }
 
+    #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     async fn static_delegation_to_delegation(
         &self,
@@ -2210,7 +2217,7 @@ impl<
         S: AsyncSigner<F> + Clone,
         T: ContentRef + Debug,
         P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
+        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Debug for Keyhive<F, S, T, P, C, L, R>
@@ -2234,7 +2241,7 @@ impl<
         S: AsyncSigner<F> + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
-        C: CiphertextStore<T, P> + Clone,
+        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > ForkAsync for Keyhive<F, S, T, P, C, L, R>
@@ -2263,7 +2270,7 @@ impl<
         S: AsyncSigner<F> + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
-        C: CiphertextStore<T, P> + Clone,
+        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, S, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
     > MergeAsync for Arc<Mutex<Keyhive<F, S, T, P, C, L, R>>>
@@ -2315,7 +2322,7 @@ impl<
         S: AsyncSigner<F> + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
+        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Verifiable for Keyhive<F, S, T, P, C, L, R>
