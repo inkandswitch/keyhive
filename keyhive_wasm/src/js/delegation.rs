@@ -4,13 +4,14 @@ use super::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
+use future_form::Local;
 use keyhive_core::principal::group::delegation::{Delegation, DelegationError};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Delegation)]
 #[derive(Debug, Clone, From, Into)]
-pub struct JsDelegation(pub(crate) Delegation<JsSigner, JsChangeId, JsEventHandler>);
+pub struct JsDelegation(pub(crate) Delegation<Local, JsSigner, JsChangeId, JsEventHandler>);
 
 #[wasm_bindgen(js_class = Delegation)]
 impl JsDelegation {

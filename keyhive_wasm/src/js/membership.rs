@@ -3,13 +3,14 @@ use super::{
     signer::JsSigner,
 };
 use dupe::Dupe;
+use future_form::Local;
 use keyhive_core::{access::Access, principal::agent::Agent};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 #[derive(Debug, Clone, Dupe)]
 pub struct Membership {
-    pub(crate) who: Agent<JsSigner, JsChangeId, JsEventHandler>,
+    pub(crate) who: Agent<Local, JsSigner, JsChangeId, JsEventHandler>,
     pub(crate) can: Access,
 }
 

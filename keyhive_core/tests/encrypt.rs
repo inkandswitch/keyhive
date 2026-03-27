@@ -1,3 +1,4 @@
+use future_form::Local;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -18,13 +19,14 @@ use testresult::TestResult;
 #[allow(clippy::type_complexity)]
 struct NewKeyhive {
     signer: MemorySigner,
-    log: Log<MemorySigner>,
+    log: Log<Local, MemorySigner>,
     keyhive: Keyhive<
+        Local,
         MemorySigner,
         [u8; 32],
         Vec<u8>,
         MemoryCiphertextStore<[u8; 32], Vec<u8>>,
-        Log<MemorySigner>,
+        Log<Local, MemorySigner>,
         rand::rngs::ThreadRng,
     >,
 }
@@ -32,10 +34,15 @@ struct NewKeyhive {
 async fn make_keyhive() -> NewKeyhive {
     let sk = MemorySigner::generate(&mut rand::thread_rng());
     let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
-    let log = Log::new();
-    let keyhive = Keyhive::generate(sk.clone(), store, log.clone(), rand::thread_rng())
-        .await
-        .unwrap();
+    let log = Log::<Local, _, _>::new();
+    let keyhive = Keyhive::<Local, _, _, _, _, _, _>::generate(
+        sk.clone(),
+        store,
+        log.clone(),
+        rand::thread_rng(),
+    )
+    .await
+    .unwrap();
     NewKeyhive {
         signer: sk,
         log,
@@ -115,7 +122,7 @@ async fn test_decrypt_after_to_from_archive() {
         .await
         .unwrap();
 
-    let alice = Keyhive::try_from_archive(
+    let alice = Keyhive::<Local, _, _, _, _, _, _>::try_from_archive(
         &archive,
         sk,
         MemoryCiphertextStore::new(),
@@ -195,11 +202,11 @@ async fn test_decrypt_after_fork_and_merge() {
     }
 
     let reloaded = {
-        let keyhive = Keyhive::try_from_archive(
+        let keyhive = Keyhive::<Local, _, _, _, _, _, _>::try_from_archive(
             &archive1,
             sk.clone(),
             MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
-            Log::new(),
+            Log::<Local, _, _>::new(),
             Arc::new(Mutex::new(OsRng)),
         )
         .await

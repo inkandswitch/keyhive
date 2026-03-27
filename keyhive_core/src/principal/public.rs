@@ -5,11 +5,12 @@ use super::{
 };
 use crate::listener::prekey::PrekeyListener;
 use dupe::Dupe;
+use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef,
     share_key::{ShareKey, ShareSecretKey},
-    signer::{memory::MemorySigner, sync_signer::SyncSigner},
+    signer::memory::MemorySigner,
     verifiable::Verifiable,
 };
 use std::{collections::BTreeMap, sync::Arc};
@@ -63,10 +64,13 @@ impl Public {
         }
     }
 
-    pub fn active<T: ContentRef, L: PrekeyListener>(
+    pub fn active<F: FutureForm, T: ContentRef, L: PrekeyListener<F>>(
         &self,
         listener: L,
-    ) -> Active<MemorySigner, T, L> {
+    ) -> Active<F, MemorySigner, T, L>
+    where
+        MemorySigner: keyhive_crypto::signer::async_signer::AsyncSigner<F>,
+    {
         Active {
             id: self.signer().verifying_key().into(),
             signer: self.signer(),

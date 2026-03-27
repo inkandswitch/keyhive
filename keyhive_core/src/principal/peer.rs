@@ -8,6 +8,7 @@ use super::{
 use crate::listener::{membership::MembershipListener, no_listener::NoListener};
 use derive_more::{From, TryInto};
 use dupe::Dupe;
+use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef, share_key::ShareKey, signer::async_signer::AsyncSigner,
@@ -20,13 +21,20 @@ use thiserror::Error;
 
 /// An [`Agent`] minus the current user.
 #[derive(Debug, From, TryInto)]
-pub enum Peer<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
+pub enum Peer<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<F, S, T> = NoListener,
+> {
     Individual(IndividualId, Arc<Mutex<Individual>>),
-    Group(GroupId, Arc<Mutex<Group<S, T, L>>>),
-    Document(DocumentId, Arc<Mutex<Document<S, T, L>>>),
+    Group(GroupId, Arc<Mutex<Group<F, S, T, L>>>),
+    Document(DocumentId, Arc<Mutex<Document<F, S, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Peer<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    Peer<F, S, T, L>
+{
     pub fn id(&self) -> Identifier {
         match self {
             Peer::Individual(id, _) => (*id).into(),
@@ -67,13 +75,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Peer<S, T, L> {
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for Peer<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Dupe
+    for Peer<F, S, T, L>
+{
     fn dupe(&self) -> Self {
         self.clone()
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Peer<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Clone
+    for Peer<F, S, T, L>
+{
     fn clone(&self) -> Self {
         match self {
             Peer::Individual(id, i) => Peer::Individual(*id, i.dupe()),
@@ -83,10 +95,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Peer<
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Peer<S, T, L>>
-    for Agent<S, T, L>
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    From<Peer<F, S, T, L>> for Agent<F, S, T, L>
 {
-    fn from(peer: Peer<S, T, L>) -> Self {
+    fn from(peer: Peer<F, S, T, L>) -> Self {
         match peer {
             Peer::Individual(id, individual) => Agent::Individual(id, individual),
             Peer::Group(id, group) => Agent::Group(id, group),
@@ -95,12 +107,12 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Peer<S, T,
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> TryFrom<Agent<S, T, L>>
-    for Peer<S, T, L>
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    TryFrom<Agent<F, S, T, L>> for Peer<F, S, T, L>
 {
     type Error = ActiveUserIsNotAPeer;
 
-    fn try_from(agent: Agent<S, T, L>) -> Result<Self, Self::Error> {
+    fn try_from(agent: Agent<F, S, T, L>) -> Result<Self, Self::Error> {
         match agent {
             Agent::Individual(id, individual) => Ok(Peer::Individual(id, individual)),
             Agent::Group(id, group) => Ok(Peer::Group(id, group)),

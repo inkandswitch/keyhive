@@ -23,12 +23,13 @@ use crate::{
 };
 use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
 use core::hash::{Hash, Hasher};
+use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
     signed::Signed,
-    signer::async_signer::AsyncSigner,
+    signer::async_signer::{self, AsyncSigner},
     siv::Siv,
     symmetric_key::SymmetricKey,
 };
@@ -89,14 +90,14 @@ impl Hash for Cgka {
 }
 
 impl Cgka {
-    pub async fn new<S: AsyncSigner>(
+    pub async fn new<F: FutureForm, S: AsyncSigner<F>>(
         doc_id: TreeId,
         owner_id: MemberId,
         owner_pk: ShareKey,
         signer: &S,
     ) -> Result<Self, CgkaError> {
         let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk);
-        let signed_op = signer.try_sign_async(init_add_op).await?;
+        let signed_op = async_signer::try_sign_async::<F, _, _>(signer, init_add_op).await?;
         Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op)
     }
 
@@ -154,7 +155,8 @@ impl Cgka {
     /// perform a leaf key rotation.
     #[instrument(skip_all)]
     pub async fn new_app_secret_for<
-        S: AsyncSigner,
+        F: FutureForm,
+        S: AsyncSigner<F>,
         T: ContentRef,
         R: rand::CryptoRng + rand::RngCore,
     >(
@@ -170,7 +172,7 @@ impl Cgka {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
             let (pcs_key, update_op) = self
-                .update(new_share_key, new_share_secret_key, signer, csprng)
+                .update::<F, S, R>(new_share_key, new_share_secret_key, signer, csprng)
                 .await?;
             self.insert_pcs_key(&pcs_key, Digest::hash(&update_op));
             op = Some(update_op);
@@ -224,7 +226,7 @@ impl Cgka {
 
     /// Add member to group.
     #[instrument(skip_all)]
-    pub async fn add<S: AsyncSigner>(
+    pub async fn add<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: MemberId,
         pk: ShareKey,
@@ -248,27 +250,27 @@ impl Cgka {
             doc_id: self.doc_id,
         };
 
-        let signed_op = signer.try_sign_async(op).await?;
+        let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
         self.ops_graph.add_local_op(&signed_op);
         Ok(Some(signed_op))
     }
 
     /// Add multiple members to group.
-    pub async fn add_multiple<S: AsyncSigner>(
+    pub async fn add_multiple<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         members: NonEmpty<(MemberId, ShareKey)>,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut ops = Vec::new();
         for m in members {
-            ops.push(self.add(m.0, m.1, signer).await?);
+            ops.push(self.add::<F, S>(m.0, m.1, signer).await?);
         }
         Ok(ops.into_iter().flatten().collect())
     }
 
     /// Remove member from group.
     #[instrument(skip_all)]
-    pub async fn remove<S: AsyncSigner>(
+    pub async fn remove<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: MemberId,
         signer: &S,
@@ -291,7 +293,7 @@ impl Cgka {
             predecessors,
             doc_id: self.doc_id,
         };
-        let signed_op = signer.try_sign_async(op).await?;
+        let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
         self.ops_graph.add_local_op(&signed_op);
         Ok(Some(signed_op))
     }
@@ -299,7 +301,7 @@ impl Cgka {
     /// Update leaf key pair for this Identifier.
     /// This also triggers a tree path update for that leaf.
     #[instrument(skip_all)]
-    pub async fn update<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
+    pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         new_pk: ShareKey,
         new_sk: ShareSecretKey,
@@ -322,7 +324,7 @@ impl Cgka {
                 doc_id: self.doc_id,
             };
 
-            let signed_op = signer.try_sign_async(op).await?;
+            let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
             self.ops_graph.add_local_op(&signed_op);
             self.insert_pcs_key(&pcs_key, Digest::hash(&signed_op));
             Ok((pcs_key, signed_op))

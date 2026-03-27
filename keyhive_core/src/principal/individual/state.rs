@@ -3,11 +3,12 @@ use crate::{
     transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
+use future_form::FutureForm;
 use futures::{prelude::*, stream::FuturesUnordered};
 use keyhive_crypto::{
     share_key::{ShareKey, ShareSecretKey},
     signed::{SigningError, VerificationError},
-    signer::async_signer::AsyncSigner,
+    signer::{async_signer, async_signer::AsyncSigner},
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
@@ -71,7 +72,7 @@ impl PrekeyState {
     /// # Errors
     ///
     /// Returns a [`SigningError`] if the operation could not be signed.
-    pub async fn generate<S: AsyncSigner, R: rand::CryptoRng + rand::RngCore>(
+    pub async fn generate<F: FutureForm, S: AsyncSigner<F>, R: rand::CryptoRng + rand::RngCore>(
         signer: &S,
         size: NonZeroUsize,
         csprng: &mut R,
@@ -79,11 +80,13 @@ impl PrekeyState {
         let mut futs = FuturesUnordered::new();
         for sk in (0..size.into()).map(|_| ShareSecretKey::generate(csprng)) {
             futs.push(async move {
-                signer
-                    .try_sign_async(AddKeyOp {
+                async_signer::try_sign_async::<F, _, _>(
+                    signer,
+                    AddKeyOp {
                         share_key: sk.share_key(),
-                    })
-                    .await
+                    },
+                )
+                .await
             });
         }
 
@@ -162,7 +165,7 @@ mod tests {
     use super::*;
     use crate::principal::individual::op::rotate_key::RotateKeyOp;
     use dupe::Dupe;
-    use keyhive_crypto::signer::sync_signer::SyncSigner;
+    use keyhive_crypto::signer::memory::MemorySigner;
 
     #[test]
     fn test_rebuild() {
@@ -191,7 +194,7 @@ mod tests {
         test_utils::init_logging();
 
         let mut rando = rand::rngs::OsRng;
-        let signer = ed25519_dalek::SigningKey::generate(&mut rando);
+        let signer = MemorySigner::generate(&mut rando);
 
         let share_key_1 = ShareKey::generate(&mut rando);
         let share_key_2 = ShareKey::generate(&mut rando);

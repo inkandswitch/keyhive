@@ -4,12 +4,13 @@ use super::{
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
+use future_form::Local;
 use keyhive_core::principal::group::revocation::Revocation;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Revocation)]
 #[derive(Debug, Clone, From, Into)]
-pub struct JsRevocation(pub(crate) Revocation<JsSigner, JsChangeId, JsEventHandler>);
+pub struct JsRevocation(pub(crate) Revocation<Local, JsSigner, JsChangeId, JsEventHandler>);
 
 #[wasm_bindgen(js_class = Revocation)]
 impl JsRevocation {

@@ -19,6 +19,7 @@ use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
 use derive_more::{From, TryInto};
 use derive_where::derive_where;
 use dupe::Dupe;
+use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef, digest::Digest, signed::Signed,
     signer::async_signer::AsyncSigner,
@@ -30,7 +31,12 @@ use tracing::instrument;
 /// Top-level event variants.
 #[derive(PartialEq, Eq, From, TryInto)]
 #[derive_where(Debug, Hash; T)]
-pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S, T> = NoListener> {
+pub enum Event<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<F, S, T> = NoListener,
+> {
     /// Prekeys were expanded.
     PrekeysExpanded(Arc<Signed<AddKeyOp>>),
 
@@ -41,17 +47,19 @@ pub enum Event<S: AsyncSigner, T: ContentRef = [u8; 32], L: MembershipListener<S
     CgkaOperation(Arc<Signed<CgkaOperation>>),
 
     /// A delegation was created.
-    Delegated(Arc<Signed<Delegation<S, T, L>>>),
+    Delegated(Arc<Signed<Delegation<F, S, T, L>>>),
 
     /// A delegation was revoked.
-    Revoked(Arc<Signed<Revocation<S, T, L>>>),
+    Revoked(Arc<Signed<Revocation<F, S, T, L>>>),
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    Event<F, S, T, L>
+{
     #[allow(clippy::type_complexity)]
     #[instrument(level = "debug", skip(ciphertext_store))]
-    pub async fn now_decryptable<P, C: CiphertextStore<T, P>>(
-        new_events: &[Event<S, T, L>],
+    pub async fn now_decryptable<P, C: CiphertextStore<F, T, P>>(
+        new_events: &[Event<F, S, T, L>],
         ciphertext_store: &C,
     ) -> Result<HashMap<DocumentId, Vec<Arc<EncryptedContent<P, T>>>>, C::GetCiphertextError> {
         let mut acc: HashMap<DocumentId, Vec<Arc<EncryptedContent<P, T>>>> = HashMap::new();
@@ -72,7 +80,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Event<S, T, L> 
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<KeyOp> for Event<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> From<KeyOp>
+    for Event<F, S, T, L>
+{
     fn from(key_op: KeyOp) -> Self {
         match key_op {
             KeyOp::Add(add) => Event::PrekeysExpanded(add),
@@ -81,10 +91,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<KeyOp> for
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<MembershipOperation<S, T, L>>
-    for Event<S, T, L>
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    From<MembershipOperation<F, S, T, L>> for Event<F, S, T, L>
 {
-    fn from(op: MembershipOperation<S, T, L>) -> Self {
+    fn from(op: MembershipOperation<F, S, T, L>) -> Self {
         match op {
             MembershipOperation::Delegation(d) => Event::Delegated(d),
             MembershipOperation::Revocation(r) => Event::Revoked(r),
@@ -92,10 +102,10 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Membership
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Event<S, T, L>>
-    for StaticEvent<T>
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    From<Event<F, S, T, L>> for StaticEvent<T>
 {
-    fn from(op: Event<S, T, L>) -> Self {
+    fn from(op: Event<F, S, T, L>) -> Self {
         match op {
             Event::Delegated(d) => StaticEvent::Delegated(Arc::unwrap_or_clone(d).map(Into::into)),
             Event::Revoked(r) => StaticEvent::Revoked(Arc::unwrap_or_clone(r).map(Into::into)),
@@ -114,13 +124,17 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> From<Event<S, T
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Serialize for Event<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Serialize
+    for Event<F, S, T, L>
+{
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticEvent::from(self.clone()).serialize(serializer)
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Event<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Clone
+    for Event<F, S, T, L>
+{
     fn clone(&self) -> Self {
         match self {
             Event::Delegated(d) => Event::Delegated(Arc::clone(d)),
@@ -134,7 +148,9 @@ impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Clone for Event
     }
 }
 
-impl<S: AsyncSigner, T: ContentRef, L: MembershipListener<S, T>> Dupe for Event<S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Dupe
+    for Event<F, S, T, L>
+{
     fn dupe(&self) -> Self {
         self.clone()
     }
@@ -152,12 +168,10 @@ mod tests {
         store::ciphertext::memory::MemoryCiphertextStore,
     };
     use beekem::id::{MemberId, TreeId};
+    use future_form::Sendable;
     use futures::lock::Mutex;
     use keyhive_crypto::{
-        share_key::ShareKey,
-        signer::{memory::MemorySigner, sync_signer::SyncSigner},
-        siv::Siv,
-        symmetric_key::SymmetricKey,
+        share_key::ShareKey, signer::memory::MemorySigner, siv::Siv, symmetric_key::SymmetricKey,
         verifiable::Verifiable,
     };
     use rand::rngs::OsRng;
@@ -204,8 +218,8 @@ mod tests {
         let hash2 = Digest::hash(&cgka_op_2);
         let hash3 = Digest::hash(&cgka_op_3);
 
-        let indie = Individual::generate(&signer, &mut csprng).await?;
-        let events: Vec<Event<MemorySigner, [u8; 32], NoListener>> = vec![
+        let indie = Individual::generate::<Sendable, _, _>(&signer, &mut csprng).await?;
+        let events: Vec<Event<Sendable, MemorySigner, [u8; 32], NoListener>> = vec![
             Event::CgkaOperation(Arc::new(cgka_op_1)),
             Event::CgkaOperation(Arc::new(cgka_op_2)),
             Event::PrekeysExpanded(Arc::new(

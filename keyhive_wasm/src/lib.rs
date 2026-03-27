@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 pub(crate) mod macros;
 
 pub mod js;
