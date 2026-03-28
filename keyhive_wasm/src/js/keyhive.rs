@@ -10,6 +10,7 @@ use crate::{
     macros::init_span,
 };
 
+use super::secret_key_store::JsSecretKeyStore;
 use super::{
     access::JsAccess,
     add_member_error::JsAddMemberError,
@@ -53,8 +54,16 @@ use rand::rngs::OsRng;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-type InnerKeyhive =
-    Keyhive<Local, JsSigner, JsChangeId, Vec<u8>, JsCiphertextStore, JsEventHandler, OsRng>;
+type InnerKeyhive = Keyhive<
+    Local,
+    JsSigner,
+    JsSecretKeyStore,
+    JsChangeId,
+    Vec<u8>,
+    JsCiphertextStore,
+    JsEventHandler,
+    OsRng,
+>;
 
 #[wasm_bindgen(js_name = Keyhive)]
 #[derive(Debug, From, Into)]
@@ -391,7 +400,8 @@ impl JsKeyhive {
         // Add membership operations as serialized bytes
         for (digest, op) in membership_ops {
             let hash = js_sys::Uint8Array::from(digest.as_slice());
-            let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> = op.into();
+            let event: Event<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler> =
+                op.into();
             let static_event = StaticEvent::from(event);
             let bytes = bincode::serialize(&static_event)?;
             let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
@@ -401,7 +411,7 @@ impl JsKeyhive {
         // Add prekey operations as serialized bytes
         for key_ops in reachable_prekey_ops.values() {
             for key_op in key_ops.iter() {
-                let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
+                let event: Event<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler> =
                     Event::from(key_op.as_ref().dupe());
                 let digest = Digest::hash(&event);
                 let hash = js_sys::Uint8Array::from(digest.as_slice());
@@ -446,7 +456,7 @@ impl JsKeyhive {
         // Add prekey operation hashes
         for key_ops in reachable_prekey_ops.values() {
             for key_op in key_ops.iter() {
-                let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
+                let event: Event<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler> =
                     Event::from(key_op.as_ref().dupe());
                 let digest = Digest::hash(&event);
                 let hash = js_sys::Uint8Array::from(digest.as_slice());
@@ -490,8 +500,13 @@ impl JsKeyhive {
                 let hash_bytes = digest.as_slice().to_vec();
                 let hash = js_sys::Uint8Array::from(digest.as_slice());
                 if serialized_hashes.insert(hash_bytes) {
-                    let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
-                        op.clone().into();
+                    let event: Event<
+                        Local,
+                        JsSigner,
+                        JsSecretKeyStore,
+                        JsChangeId,
+                        JsEventHandler,
+                    > = op.clone().into();
                     let static_event = StaticEvent::from(event);
                     let bytes = bincode::serialize(&static_event)?;
                     let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
@@ -526,7 +541,7 @@ impl JsKeyhive {
         for (identifier, ops_vec) in &all_prekey.ops {
             let source_hashes = js_sys::Array::new();
             for key_op in ops_vec {
-                let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
+                let event: Event<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler> =
                     Event::from(key_op.as_ref().dupe());
                 let digest = Digest::hash(&event);
                 let hash_bytes = digest.as_slice().to_vec();
@@ -588,7 +603,8 @@ impl JsKeyhive {
         let map = js_sys::Map::new();
         for (digest, op) in membership_ops {
             let hash = js_sys::Uint8Array::from(digest.as_slice());
-            let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> = op.into();
+            let event: Event<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler> =
+                op.into();
             let js_event = JsEvent::from(event);
             map.set(&hash.into(), &JsValue::from(js_event));
         }
@@ -803,7 +819,7 @@ impl From<JsDecryptError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct JsReceiveStaticEventError(
-    #[from] ReceiveStaticEventError<Local, JsSigner, JsChangeId, JsEventHandler>,
+    #[from] ReceiveStaticEventError<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>,
 );
 
 impl From<JsReceiveStaticEventError> for JsValue {

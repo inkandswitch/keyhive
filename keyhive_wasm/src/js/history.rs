@@ -1,3 +1,4 @@
+use super::secret_key_store::JsSecretKeyStore;
 use super::{
     change_id::JsChangeId, doc_content_refs::DocContentRefs, document_id::JsDocumentId,
     event_handler::JsEventHandler, signed_delegation::JsSignedDelegation,
@@ -18,9 +19,9 @@ use wasm_bindgen::prelude::*;
 #[derive(Debug, Clone)]
 pub struct JsHistory {
     pub(crate) delegations:
-        Vec<Arc<Signed<Delegation<Local, JsSigner, JsChangeId, JsEventHandler>>>>,
+        Vec<Arc<Signed<Delegation<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>>>>,
     pub(crate) revocations:
-        Vec<Arc<Signed<Revocation<Local, JsSigner, JsChangeId, JsEventHandler>>>>,
+        Vec<Arc<Signed<Revocation<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>>>>,
     pub(crate) content: BTreeMap<DocumentId, Vec<JsChangeId>>,
 }
 
@@ -52,8 +53,12 @@ impl JsHistory {
     }
 }
 
-impl From<Dependencies<'_, Local, JsSigner, JsChangeId, JsEventHandler>> for JsHistory {
-    fn from(deps: Dependencies<Local, JsSigner, JsChangeId, JsEventHandler>) -> Self {
+impl From<Dependencies<'_, Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>>
+    for JsHistory
+{
+    fn from(
+        deps: Dependencies<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>,
+    ) -> Self {
         Self {
             delegations: deps.delegations,
             revocations: deps.revocations,

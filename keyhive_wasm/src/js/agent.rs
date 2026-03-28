@@ -1,3 +1,4 @@
+use super::secret_key_store::JsSecretKeyStore;
 use super::{
     archive::JsSerializationError, change_id::JsChangeId, event_handler::JsEventHandler,
     identifier::JsIdentifier, signer::JsSigner,
@@ -14,7 +15,7 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Agent)]
 #[derive(Debug, Clone, From, Into, Deref, Display)]
-pub struct JsAgent(pub(crate) Agent<Local, JsSigner, JsChangeId, JsEventHandler>);
+pub struct JsAgent(pub(crate) Agent<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>);
 
 #[wasm_bindgen(js_class = Agent)]
 impl JsAgent {
@@ -57,7 +58,7 @@ impl JsAgent {
         let key_ops = self.0.key_ops().await;
         let map = js_sys::Map::new();
         for key_op in key_ops.values() {
-            let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
+            let event: Event<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler> =
                 Event::from(key_op.as_ref().dupe());
             let digest = Digest::hash(&event);
             let hash = js_sys::Uint8Array::from(digest.as_slice());
@@ -75,7 +76,7 @@ impl JsAgent {
         let key_ops = self.0.key_ops().await;
         let mut arr = Vec::new();
         for key_op in key_ops.values() {
-            let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
+            let event: Event<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler> =
                 Event::from(key_op.as_ref().dupe());
             let digest = Digest::hash(&event);
             let hash = digest.as_slice();

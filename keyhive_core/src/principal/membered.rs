@@ -9,6 +9,7 @@ use super::{
     },
     identifier::Identifier,
 };
+use crate::store::secret_key::SecretKeyStore;
 use crate::{
     access::Access,
     crypto::digest::Digest,
@@ -34,20 +35,26 @@ use std::{
 pub enum Membered<
     F: FutureForm,
     S: AsyncSigner<F>,
+    K: SecretKeyStore<F>,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<F, S, T> = NoListener,
+    L: MembershipListener<F, S, K, T> = NoListener,
 > {
-    Group(GroupId, Arc<Mutex<Group<F, S, T, L>>>),
-    Document(DocumentId, Arc<Mutex<Document<F, S, T, L>>>),
+    Group(GroupId, Arc<Mutex<Group<F, S, K, T, L>>>),
+    Document(DocumentId, Arc<Mutex<Document<F, S, K, T, L>>>),
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    Membered<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Membered<F, S, K, T, L>
 {
     pub async fn get_capability(
         &self,
         agent_id: &Identifier,
-    ) -> Option<Arc<Signed<Delegation<F, S, T, L>>>> {
+    ) -> Option<Arc<Signed<Delegation<F, S, K, T, L>>>> {
         match self {
             Membered::Group(_, group) => {
                 let locked = group.lock().await;
@@ -74,14 +81,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         }
     }
 
-    pub async fn delegation_heads(&self) -> DelegationStore<F, S, T, L> {
+    pub async fn delegation_heads(&self) -> DelegationStore<F, S, K, T, L> {
         match self {
             Membered::Group(_, group) => group.lock().await.delegation_heads().clone(),
             Membered::Document(_, document) => document.lock().await.delegation_heads().clone(),
         }
     }
 
-    pub async fn revocation_heads(&self) -> RevocationStore<F, S, T, L> {
+    pub async fn revocation_heads(&self) -> RevocationStore<F, S, K, T, L> {
         match self {
             Membered::Group(_, group) => group.lock().await.revocation_heads().clone(),
             Membered::Document(_, document) => document.lock().await.revocation_heads().clone(),
@@ -91,7 +98,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[allow(clippy::type_complexity)]
     pub async fn members(
         &self,
-    ) -> HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>> {
+    ) -> HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, K, T, L>>>>> {
         match self {
             Membered::Group(_, group) => group.lock().await.members().clone(),
             Membered::Document(_, document) => document.lock().await.members().clone(),
@@ -101,11 +108,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &self,
-        member_to_add: Agent<F, S, T, L>,
+        member_to_add: Agent<F, S, K, T, L>,
         can: Access,
         signer: &S,
-        other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>],
-    ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
+        other_relevant_docs: &[Arc<Mutex<Document<F, S, K, T, L>>>],
+    ) -> Result<AddMemberUpdate<F, S, K, T, L>, AddMemberError> {
         match self {
             Membered::Group(_, group) => Ok(group
                 .lock()
@@ -129,7 +136,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         retain_all_other_members: bool,
         signer: &S,
         relevant_docs: &mut BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<RevokeMemberUpdate<F, S, T, L>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<F, S, K, T, L>, RevokeMemberError> {
         match self {
             Membered::Group(_, group) => {
                 group
@@ -150,8 +157,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
     pub async fn get_agent_revocations(
         &self,
-        agent: &Agent<F, S, T, L>,
-    ) -> Vec<Arc<Signed<Revocation<F, S, T, L>>>> {
+        agent: &Agent<F, S, K, T, L>,
+    ) -> Vec<Arc<Signed<Revocation<F, S, K, T, L>>>> {
         match self {
             Membered::Group(_, group) => group.lock().await.get_agent_revocations(agent).await,
             Membered::Document(_, document) => {
@@ -163,8 +170,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[allow(clippy::type_complexity)]
     pub async fn receive_delegation(
         &self,
-        delegation: Arc<Signed<Delegation<F, S, T, L>>>,
-    ) -> Result<Digest<Signed<Delegation<F, S, T, L>>>, AddError> {
+        delegation: Arc<Signed<Delegation<F, S, K, T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<F, S, K, T, L>>>, AddError> {
         match self {
             Membered::Group(_, group) => {
                 Ok(group.lock().await.receive_delegation(delegation).await?)
@@ -176,24 +183,39 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    From<Group<F, S, T, L>> for Membered<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > From<Group<F, S, K, T, L>> for Membered<F, S, K, T, L>
 {
-    fn from(group: Group<F, S, T, L>) -> Self {
+    fn from(group: Group<F, S, K, T, L>) -> Self {
         Membered::Group(group.group_id(), Arc::new(Mutex::new(group)))
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    From<Document<F, S, T, L>> for Membered<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > From<Document<F, S, K, T, L>> for Membered<F, S, K, T, L>
 {
-    fn from(document: Document<F, S, T, L>) -> Self {
+    fn from(document: Document<F, S, K, T, L>) -> Self {
         Membered::Document(document.doc_id(), Arc::new(Mutex::new(document)))
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Verifiable
-    for Membered<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Verifiable for Membered<F, S, K, T, L>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.agent_id().verifying_key()

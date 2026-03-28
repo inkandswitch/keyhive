@@ -1,3 +1,4 @@
+use super::secret_key_store::JsSecretKeyStore;
 use super::{change_id::JsChangeId, event::JsEvent, signer::JsSigner};
 use beekem::operation::CgkaOperation;
 use derive_more::{From, Into};
@@ -41,17 +42,17 @@ impl PrekeyListener<Local> for JsEventHandler {
     }
 }
 
-impl MembershipListener<Local, JsSigner, JsChangeId> for JsEventHandler {
+impl MembershipListener<Local, JsSigner, JsSecretKeyStore, JsChangeId> for JsEventHandler {
     fn on_delegation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Delegation<Local, JsSigner, JsChangeId, Self>>>,
+        data: &'a Arc<Signed<Delegation<Local, JsSigner, JsSecretKeyStore, JsChangeId, Self>>>,
     ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::Delegated(data.dupe()).into()) })
     }
 
     fn on_revocation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Revocation<Local, JsSigner, JsChangeId, Self>>>,
+        data: &'a Arc<Signed<Revocation<Local, JsSigner, JsSecretKeyStore, JsChangeId, Self>>>,
     ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::Revoked(data.dupe()).into()) })
     }

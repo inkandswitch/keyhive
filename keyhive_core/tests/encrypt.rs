@@ -9,7 +9,7 @@ use keyhive_core::{
     keyhive::Keyhive,
     listener::{log::Log, no_listener::NoListener},
     principal::{agent::Agent, membered::Membered},
-    store::ciphertext::memory::MemoryCiphertextStore,
+    store::{ciphertext::memory::MemoryCiphertextStore, secret_key::memory::MemorySecretKeyStore},
 };
 use keyhive_crypto::signer::memory::MemorySigner;
 use nonempty::nonempty;
@@ -19,15 +19,16 @@ use testresult::TestResult;
 #[allow(clippy::type_complexity)]
 struct NewKeyhive {
     signer: MemorySigner,
-    log: Log<Local, MemorySigner>,
+    log: Log<Local, MemorySigner, MemorySecretKeyStore>,
     keyhive: Keyhive<
         Local,
         MemorySigner,
+        MemorySecretKeyStore,
         [u8; 32],
         Vec<u8>,
         MemoryCiphertextStore<[u8; 32], Vec<u8>>,
-        Log<Local, MemorySigner>,
-        rand::rngs::ThreadRng,
+        Log<Local, MemorySigner, MemorySecretKeyStore>,
+        OsRng,
     >,
 }
 
@@ -35,14 +36,10 @@ async fn make_keyhive() -> NewKeyhive {
     let sk = MemorySigner::generate(&mut rand::thread_rng());
     let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
     let log = Log::<Local, _, _>::new();
-    let keyhive = Keyhive::<Local, _, _, _, _, _, _>::generate(
-        sk.clone(),
-        store,
-        log.clone(),
-        rand::thread_rng(),
-    )
-    .await
-    .unwrap();
+    let keyhive =
+        Keyhive::<Local, _, _, _, _, _, _, _>::generate(sk.clone(), store, log.clone(), OsRng)
+            .await
+            .unwrap();
     NewKeyhive {
         signer: sk,
         log,
@@ -122,7 +119,7 @@ async fn test_decrypt_after_to_from_archive() {
         .await
         .unwrap();
 
-    let alice = Keyhive::<Local, _, _, _, _, _, _>::try_from_archive(
+    let alice = Keyhive::<Local, _, MemorySecretKeyStore, _, _, _, _, _>::try_from_archive(
         &archive,
         sk,
         MemoryCiphertextStore::new(),
@@ -202,7 +199,7 @@ async fn test_decrypt_after_fork_and_merge() {
     }
 
     let reloaded = {
-        let keyhive = Keyhive::<Local, _, _, _, _, _, _>::try_from_archive(
+        let keyhive = Keyhive::<Local, _, MemorySecretKeyStore, _, _, _, _, _>::try_from_archive(
             &archive1,
             sk.clone(),
             MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),

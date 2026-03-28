@@ -2,6 +2,7 @@ pub mod archive;
 
 use self::archive::GroupStateArchive;
 use super::{delegation::Delegation, error::AddError, id::GroupId, revocation::Revocation};
+use crate::store::secret_key::SecretKeyStore;
 use crate::{
     access::Access,
     crypto::signed_ext::SignedSubjectId,
@@ -27,27 +28,33 @@ use std::{cmp::Ordering, collections::BTreeMap, sync::Arc};
 pub struct GroupState<
     F: FutureForm,
     S: AsyncSigner<F>,
+    K: SecretKeyStore<F>,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<F, S, T> = NoListener,
+    L: MembershipListener<F, S, K, T> = NoListener,
 > {
     pub(crate) id: GroupId,
 
     #[derive_where(skip)]
-    pub(crate) delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
-    pub(crate) delegation_heads: DelegationStore<F, S, T, L>,
+    pub(crate) delegations: Arc<Mutex<DelegationStore<F, S, K, T, L>>>,
+    pub(crate) delegation_heads: DelegationStore<F, S, K, T, L>,
 
     #[derive_where(skip)]
-    pub(crate) revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
-    pub(crate) revocation_heads: RevocationStore<F, S, T, L>,
+    pub(crate) revocations: Arc<Mutex<RevocationStore<F, S, K, T, L>>>,
+    pub(crate) revocation_heads: RevocationStore<F, S, K, T, L>,
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    GroupState<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > GroupState<F, S, K, T, L>
 {
     pub async fn new(
-        delegation_head: Arc<Signed<Delegation<F, S, T, L>>>,
-        delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
-        revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
+        delegation_head: Arc<Signed<Delegation<F, S, K, T, L>>>,
+        delegations: Arc<Mutex<DelegationStore<F, S, K, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<F, S, K, T, L>>>,
     ) -> Self {
         let id = GroupId(delegation_head.verifying_key().into());
         let mut heads = vec![delegation_head.dupe()];
@@ -89,9 +96,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(
-        parents: Vec<Agent<F, S, T, L>>,
-        delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
-        revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
+        parents: Vec<Agent<F, S, K, T, L>>,
+        delegations: Arc<Mutex<DelegationStore<F, S, K, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<F, S, K, T, L>>>,
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let signer = MemorySigner::generate(csprng);
@@ -130,19 +137,19 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.id
     }
 
-    pub fn delegation_heads(&self) -> &DelegationStore<F, S, T, L> {
+    pub fn delegation_heads(&self) -> &DelegationStore<F, S, K, T, L> {
         &self.delegation_heads
     }
 
-    pub fn revocation_heads(&self) -> &RevocationStore<F, S, T, L> {
+    pub fn revocation_heads(&self) -> &RevocationStore<F, S, K, T, L> {
         &self.revocation_heads
     }
 
     #[allow(clippy::type_complexity)]
     pub async fn add_delegation(
         &mut self,
-        delegation: Arc<Signed<Delegation<F, S, T, L>>>,
-    ) -> Result<Digest<Signed<Delegation<F, S, T, L>>>, AddError> {
+        delegation: Arc<Signed<Delegation<F, S, K, T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<F, S, K, T, L>>>, AddError> {
         if delegation.subject_id() != Identifier::from(self.id) {
             return Err(AddError::InvalidSubject(Box::new(delegation.subject_id())));
         }
@@ -192,8 +199,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[allow(clippy::type_complexity)]
     pub async fn add_revocation(
         &mut self,
-        revocation: Arc<Signed<Revocation<F, S, T, L>>>,
-    ) -> Result<Digest<Signed<Revocation<F, S, T, L>>>, AddError> {
+        revocation: Arc<Signed<Revocation<F, S, K, T, L>>>,
+    ) -> Result<Digest<Signed<Revocation<F, S, K, T, L>>>, AddError> {
         if revocation.subject_id() != Identifier::from(self.id) {
             return Err(AddError::InvalidSubject(Box::new(revocation.subject_id())));
         }
@@ -235,8 +242,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
     pub async fn delegations_for(
         &self,
-        agent: Agent<F, S, T, L>,
-    ) -> Vec<Arc<Signed<Delegation<F, S, T, L>>>> {
+        agent: Agent<F, S, K, T, L>,
+    ) -> Vec<Arc<Signed<Delegation<F, S, K, T, L>>>> {
         let mut dlgs = Vec::new();
         for delegation in self.delegations.lock().await.values() {
             if agent == delegation.payload().delegate {
@@ -248,8 +255,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
     pub(crate) fn dummy_from_archive(
         archive: GroupStateArchive<T>,
-        delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
-        revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
+        delegations: Arc<Mutex<DelegationStore<F, S, K, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<F, S, K, T, L>>>,
     ) -> Self {
         Self {
             id: archive.id,
@@ -271,8 +278,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Verifiable
-    for GroupState<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Verifiable for GroupState<F, S, K, T, L>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.id.0.verifying_key()

@@ -2,6 +2,7 @@ use crate::{
     crypto::{digest::Digest, signed_ext::SignedSubjectId},
     event::Event,
     listener::membership::MembershipListener,
+    store::secret_key::SecretKeyStore,
 };
 use future_form::FutureForm;
 use keyhive_crypto::signer::async_signer::AsyncSigner;
@@ -86,12 +87,16 @@ pub enum CgkaOperationDetails {
 
 impl DebugEventTable {
     /// Create a new debug event table from a vector of events.
-    pub fn from_events<F, S, T, L>(events: Vec<Event<F, S, T, L>>, nicknames: Nicknames) -> Self
+    pub fn from_events<F, S, K, T, L>(
+        events: Vec<Event<F, S, K, T, L>>,
+        nicknames: Nicknames,
+    ) -> Self
     where
         F: FutureForm,
         S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-        L: MembershipListener<F, S, T>,
+        L: MembershipListener<F, S, K, T>,
     {
         if events.is_empty() {
             return Self {
@@ -125,16 +130,17 @@ impl DebugEventTable {
 
 impl DebugEventRow {
     /// Create a new debug event row from an event.
-    pub fn from_event<F, S, T, L>(
+    pub fn from_event<F, S, K, T, L>(
         idx: usize,
-        event: &Event<F, S, T, L>,
+        event: &Event<F, S, K, T, L>,
         nicknames: &Nicknames,
     ) -> Self
     where
         F: FutureForm,
         S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
         T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-        L: MembershipListener<F, S, T>,
+        L: MembershipListener<F, S, K, T>,
     {
         match event {
             Event::PrekeysExpanded(signed) => {

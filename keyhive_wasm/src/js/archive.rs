@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::{
     change_id::JsChangeId, ciphertext_store::JsCiphertextStore, event_handler::JsEventHandler,
-    keyhive::JsKeyhive, signer::JsSigner,
+    keyhive::JsKeyhive, secret_key_store::JsSecretKeyStore, signer::JsSigner,
 };
 use derive_more::{Display, From, Into};
 use future_form::Local;
@@ -57,12 +57,16 @@ impl JsArchive {
 }
 
 #[derive(Debug, Display, Error)]
-pub struct JsTryFromArchiveError(TryFromArchiveError<Local, JsSigner, JsChangeId, JsEventHandler>);
+pub struct JsTryFromArchiveError(
+    TryFromArchiveError<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>,
+);
 
-impl From<TryFromArchiveError<Local, JsSigner, JsChangeId, JsEventHandler>>
+impl From<TryFromArchiveError<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>>
     for JsTryFromArchiveError
 {
-    fn from(err: TryFromArchiveError<Local, JsSigner, JsChangeId, JsEventHandler>) -> Self {
+    fn from(
+        err: TryFromArchiveError<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>,
+    ) -> Self {
         JsTryFromArchiveError(err)
     }
 }

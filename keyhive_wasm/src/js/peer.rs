@@ -1,3 +1,4 @@
+use super::secret_key_store::JsSecretKeyStore;
 use super::{
     change_id::JsChangeId, event_handler::JsEventHandler, identifier::JsIdentifier,
     signer::JsSigner,
@@ -10,7 +11,7 @@ use wasm_refgen::wasm_refgen;
 
 #[wasm_bindgen(js_name = Peer)]
 #[derive(Debug, Clone, Dupe)]
-pub struct JsPeer(pub(crate) Peer<Local, JsSigner, JsChangeId, JsEventHandler>);
+pub struct JsPeer(pub(crate) Peer<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>);
 
 #[wasm_refgen(js_ref = JsPeerRef)]
 #[wasm_bindgen(js_class = Peer)]

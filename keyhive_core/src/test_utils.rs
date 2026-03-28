@@ -1,6 +1,7 @@
 use crate::{
-    keyhive::Keyhive, listener::no_listener::NoListener,
-    store::ciphertext::memory::MemoryCiphertextStore,
+    keyhive::Keyhive,
+    listener::no_listener::NoListener,
+    store::{ciphertext::memory::MemoryCiphertextStore, secret_key::memory::MemorySecretKeyStore},
 };
 use future_form::Sendable;
 use keyhive_crypto::{signed::SigningError, signer::memory::MemorySigner};
@@ -10,6 +11,7 @@ pub async fn make_simple_keyhive() -> Result<
     Keyhive<
         Sendable,
         MemorySigner,
+        MemorySecretKeyStore,
         [u8; 32],
         Vec<u8>,
         MemoryCiphertextStore<[u8; 32], Vec<u8>>,
@@ -20,7 +22,7 @@ pub async fn make_simple_keyhive() -> Result<
 > {
     let mut csprng = OsRng;
     let sk = MemorySigner::generate(&mut csprng);
-    Keyhive::<Sendable, _, _, _, _, _, _>::generate(
+    Keyhive::<Sendable, _, _, _, _, _, _, _>::generate(
         sk,
         MemoryCiphertextStore::new(),
         NoListener,

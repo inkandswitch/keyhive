@@ -6,6 +6,7 @@ use super::{
     individual::{id::IndividualId, Individual},
 };
 use crate::listener::{membership::MembershipListener, no_listener::NoListener};
+use crate::store::secret_key::SecretKeyStore;
 use derive_more::{From, TryInto};
 use dupe::Dupe;
 use future_form::FutureForm;
@@ -24,16 +25,22 @@ use thiserror::Error;
 pub enum Peer<
     F: FutureForm,
     S: AsyncSigner<F>,
+    K: SecretKeyStore<F>,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<F, S, T> = NoListener,
+    L: MembershipListener<F, S, K, T> = NoListener,
 > {
     Individual(IndividualId, Arc<Mutex<Individual>>),
-    Group(GroupId, Arc<Mutex<Group<F, S, T, L>>>),
-    Document(DocumentId, Arc<Mutex<Document<F, S, T, L>>>),
+    Group(GroupId, Arc<Mutex<Group<F, S, K, T, L>>>),
+    Document(DocumentId, Arc<Mutex<Document<F, S, K, T, L>>>),
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    Peer<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Peer<F, S, K, T, L>
 {
     pub fn id(&self) -> Identifier {
         match self {
@@ -75,16 +82,26 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Dupe
-    for Peer<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Dupe for Peer<F, S, K, T, L>
 {
     fn dupe(&self) -> Self {
         self.clone()
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Clone
-    for Peer<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Clone for Peer<F, S, K, T, L>
 {
     fn clone(&self) -> Self {
         match self {
@@ -95,10 +112,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    From<Peer<F, S, T, L>> for Agent<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > From<Peer<F, S, K, T, L>> for Agent<F, S, K, T, L>
 {
-    fn from(peer: Peer<F, S, T, L>) -> Self {
+    fn from(peer: Peer<F, S, K, T, L>) -> Self {
         match peer {
             Peer::Individual(id, individual) => Agent::Individual(id, individual),
             Peer::Group(id, group) => Agent::Group(id, group),
@@ -107,12 +129,17 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    TryFrom<Agent<F, S, T, L>> for Peer<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > TryFrom<Agent<F, S, K, T, L>> for Peer<F, S, K, T, L>
 {
     type Error = ActiveUserIsNotAPeer;
 
-    fn try_from(agent: Agent<F, S, T, L>) -> Result<Self, Self::Error> {
+    fn try_from(agent: Agent<F, S, K, T, L>) -> Result<Self, Self::Error> {
         match agent {
             Agent::Individual(id, individual) => Ok(Peer::Individual(id, individual)),
             Agent::Group(id, group) => Ok(Peer::Group(id, group)),

@@ -1,3 +1,4 @@
+use super::secret_key_store::JsSecretKeyStore;
 use super::{
     access::JsAccess, agent::JsAgent, change_id::JsChangeId, event_handler::JsEventHandler,
     history::JsHistory, signed_delegation::JsSignedDelegation, signer::JsSigner,
@@ -11,7 +12,9 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Delegation)]
 #[derive(Debug, Clone, From, Into)]
-pub struct JsDelegation(pub(crate) Delegation<Local, JsSigner, JsChangeId, JsEventHandler>);
+pub struct JsDelegation(
+    pub(crate) Delegation<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>,
+);
 
 #[wasm_bindgen(js_class = Delegation)]
 impl JsDelegation {

@@ -1,3 +1,4 @@
+use super::secret_key_store::JsSecretKeyStore;
 use super::{
     change_id::JsChangeId, delegation::JsDelegation, event_handler::JsEventHandler,
     signer::JsSigner,
@@ -13,7 +14,8 @@ use wasm_bindgen::prelude::*;
 #[derive(Debug, Clone, Dupe, From, Into)]
 #[wasm_bindgen(js_name = SignedDelegation)]
 pub struct JsSignedDelegation(
-    pub(crate) Arc<Signed<Delegation<Local, JsSigner, JsChangeId, JsEventHandler>>>,
+    pub(crate) 
+        Arc<Signed<Delegation<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>>>,
 );
 
 #[wasm_bindgen(js_class = SignedDelegation)]

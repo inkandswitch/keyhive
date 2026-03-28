@@ -1,3 +1,4 @@
+use super::secret_key_store::JsSecretKeyStore;
 use super::{change_id::JsChangeId, event_handler::JsEventHandler, signer::JsSigner};
 use derive_more::{From, Into};
 use future_form::Local;
@@ -8,5 +9,7 @@ use wasm_bindgen::prelude::*;
 #[derive(Debug, Clone, From, Into)]
 #[wasm_bindgen(js_name = SignedInvocation)]
 pub struct JsSignedInvocation(
-    pub(crate) Signed<Invocation<Local, JsSigner, JsChangeId, JsEventHandler, JsChangeId>>,
+    pub(crate)  Signed<
+        Invocation<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler, JsChangeId>,
+    >,
 );
