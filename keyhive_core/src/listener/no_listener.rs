@@ -5,6 +5,7 @@ use crate::principal::{
     group::{delegation::Delegation, revocation::Revocation},
     individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
 };
+use crate::store::secret_key::SecretKeyStore;
 use beekem::operation::CgkaOperation;
 use derive_more::derive::Debug;
 use dupe::Dupe;
@@ -33,17 +34,19 @@ impl<F: FutureForm> PrekeyListener<F> for NoListener {
 }
 
 #[future_form(Sendable, Local)]
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef> MembershipListener<F, S, T> for NoListener {
+impl<F: FutureForm, S: AsyncSigner<F>, K: SecretKeyStore<F>, T: ContentRef>
+    MembershipListener<F, S, K, T> for NoListener
+{
     fn on_delegation<'a>(
         &'a self,
-        _data: &'a Arc<Signed<Delegation<F, S, T, NoListener>>>,
+        _data: &'a Arc<Signed<Delegation<F, S, K, T, NoListener>>>,
     ) -> F::Future<'a, ()> {
         F::ready(())
     }
 
     fn on_revocation<'a>(
         &'a self,
-        _data: &'a Arc<Signed<Revocation<F, S, T, NoListener>>>,
+        _data: &'a Arc<Signed<Revocation<F, S, K, T, NoListener>>>,
     ) -> F::Future<'a, ()> {
         F::ready(())
     }

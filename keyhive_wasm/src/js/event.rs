@@ -1,5 +1,6 @@
 use crate::js::archive::JsSerializationError;
 
+use super::secret_key_store::JsSecretKeyStore;
 use super::{
     change_id::JsChangeId, event_handler::JsEventHandler, signed_delegation::JsSignedDelegation,
     signed_revocation::JsSignedRevocation, signer::JsSigner,
@@ -12,7 +13,7 @@ use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, Hash, From, Into)]
 #[wasm_bindgen(js_name = Event)]
-pub struct JsEvent(pub(crate) Event<Local, JsSigner, JsChangeId, JsEventHandler>);
+pub struct JsEvent(pub(crate) Event<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>);
 
 #[wasm_bindgen(js_class = Event)]
 impl JsEvent {

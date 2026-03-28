@@ -30,6 +30,7 @@ pub mod membership;
 pub mod peer;
 pub mod revocation;
 pub mod revoke_member_error;
+pub mod secret_key_store;
 pub mod share_key;
 pub mod signed;
 pub mod signed_cgka_operation;

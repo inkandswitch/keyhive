@@ -1,5 +1,6 @@
 //! [`Delegation`] storage.
 
+use crate::store::secret_key::SecretKeyStore;
 use crate::{
     crypto::digest::Digest,
     listener::{membership::MembershipListener, no_listener::NoListener},
@@ -20,14 +21,20 @@ use std::sync::Arc;
 pub struct DelegationStore<
     F: FutureForm,
     S: AsyncSigner<F>,
+    K: SecretKeyStore<F>,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<F, S, T> = NoListener,
+    L: MembershipListener<F, S, K, T> = NoListener,
 > {
-    delegations: CaMap<Signed<Delegation<F, S, T, L>>>,
+    delegations: CaMap<Signed<Delegation<F, S, K, T, L>>>,
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    DelegationStore<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > DelegationStore<F, S, K, T, L>
 {
     /// Create a new delegation store.
     pub fn new() -> Self {
@@ -47,34 +54,34 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     /// Retrieve a [`Delegation`] by its [`Digest`].
     pub fn get(
         &self,
-        key: &Digest<Signed<Delegation<F, S, T, L>>>,
-    ) -> Option<Arc<Signed<Delegation<F, S, T, L>>>> {
+        key: &Digest<Signed<Delegation<F, S, K, T, L>>>,
+    ) -> Option<Arc<Signed<Delegation<F, S, K, T, L>>>> {
         self.delegations.get(key).cloned()
     }
 
     /// Check if a [`Digest`] is present in the store.
-    pub fn contains_key(&self, key: &Digest<Signed<Delegation<F, S, T, L>>>) -> bool {
+    pub fn contains_key(&self, key: &Digest<Signed<Delegation<F, S, K, T, L>>>) -> bool {
         self.delegations.contains_key(key)
     }
 
     /// Check if a [`Delegation`] is present in the store.
-    pub fn contains_value(&self, value: &Signed<Delegation<F, S, T, L>>) -> bool {
+    pub fn contains_value(&self, value: &Signed<Delegation<F, S, K, T, L>>) -> bool {
         self.delegations.contains_value(value)
     }
 
     /// Insert a [`Delegation`] into the store.
     pub fn insert(
         &mut self,
-        delegation: Arc<Signed<Delegation<F, S, T, L>>>,
-    ) -> Digest<Signed<Delegation<F, S, T, L>>> {
+        delegation: Arc<Signed<Delegation<F, S, K, T, L>>>,
+    ) -> Digest<Signed<Delegation<F, S, K, T, L>>> {
         self.delegations.insert(delegation)
     }
 
     /// Remove a [`Delegation`] by its [`Digest`].
     pub fn remove_by_hash(
         &mut self,
-        hash: &Digest<Signed<Delegation<F, S, T, L>>>,
-    ) -> Option<Arc<Signed<Delegation<F, S, T, L>>>> {
+        hash: &Digest<Signed<Delegation<F, S, K, T, L>>>,
+    ) -> Option<Arc<Signed<Delegation<F, S, K, T, L>>>> {
         self.delegations.remove_by_hash(hash)
     }
 
@@ -84,8 +91,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &self,
     ) -> std::collections::hash_map::Values<
         '_,
-        Digest<Signed<Delegation<F, S, T, L>>>,
-        Arc<Signed<Delegation<F, S, T, L>>>,
+        Digest<Signed<Delegation<F, S, K, T, L>>>,
+        Arc<Signed<Delegation<F, S, K, T, L>>>,
     > {
         self.delegations.values()
     }
@@ -96,8 +103,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &self,
     ) -> std::collections::hash_map::Keys<
         '_,
-        Digest<Signed<Delegation<F, S, T, L>>>,
-        Arc<Signed<Delegation<F, S, T, L>>>,
+        Digest<Signed<Delegation<F, S, K, T, L>>>,
+        Arc<Signed<Delegation<F, S, K, T, L>>>,
     > {
         self.delegations.keys()
     }
@@ -108,8 +115,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &self,
     ) -> impl Iterator<
         Item = (
-            &Digest<Signed<Delegation<F, S, T, L>>>,
-            &Arc<Signed<Delegation<F, S, T, L>>>,
+            &Digest<Signed<Delegation<F, S, K, T, L>>>,
+            &Arc<Signed<Delegation<F, S, K, T, L>>>,
         ),
     > {
         self.delegations.iter()
@@ -117,7 +124,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
     /// Create a [`DelegationStore`] from an iterator of [`Delegation`]s.
     pub fn from_iter_direct(
-        iter: impl IntoIterator<Item = Arc<Signed<Delegation<F, S, T, L>>>>,
+        iter: impl IntoIterator<Item = Arc<Signed<Delegation<F, S, K, T, L>>>>,
     ) -> Self {
         let mut store = Self::new();
         for delegation in iter {

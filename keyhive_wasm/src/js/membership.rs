@@ -1,3 +1,4 @@
+use super::secret_key_store::JsSecretKeyStore;
 use super::{
     access::JsAccess, agent::JsAgent, change_id::JsChangeId, event_handler::JsEventHandler,
     signer::JsSigner,
@@ -10,7 +11,7 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 #[derive(Debug, Clone, Dupe)]
 pub struct Membership {
-    pub(crate) who: Agent<Local, JsSigner, JsChangeId, JsEventHandler>,
+    pub(crate) who: Agent<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>,
     pub(crate) can: Access,
 }
 

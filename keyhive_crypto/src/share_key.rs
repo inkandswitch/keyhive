@@ -110,6 +110,11 @@ impl ShareSecretKey {
         self.0
     }
 
+    /// Construct from raw bytes.
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     pub fn as_slice(&self) -> &[u8] {
         &self.0
     }

@@ -3,6 +3,7 @@
 pub mod static_event;
 
 use self::static_event::StaticEvent;
+use crate::store::secret_key::SecretKeyStore;
 use crate::{
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
@@ -34,8 +35,9 @@ use tracing::instrument;
 pub enum Event<
     F: FutureForm,
     S: AsyncSigner<F>,
+    K: SecretKeyStore<F>,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<F, S, T> = NoListener,
+    L: MembershipListener<F, S, K, T> = NoListener,
 > {
     /// Prekeys were expanded.
     PrekeysExpanded(Arc<Signed<AddKeyOp>>),
@@ -47,19 +49,24 @@ pub enum Event<
     CgkaOperation(Arc<Signed<CgkaOperation>>),
 
     /// A delegation was created.
-    Delegated(Arc<Signed<Delegation<F, S, T, L>>>),
+    Delegated(Arc<Signed<Delegation<F, S, K, T, L>>>),
 
     /// A delegation was revoked.
-    Revoked(Arc<Signed<Revocation<F, S, T, L>>>),
+    Revoked(Arc<Signed<Revocation<F, S, K, T, L>>>),
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    Event<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Event<F, S, K, T, L>
 {
     #[allow(clippy::type_complexity)]
     #[instrument(level = "debug", skip(ciphertext_store))]
-    pub async fn now_decryptable<P, C: CiphertextStore<T, P>>(
-        new_events: &[Event<F, S, T, L>],
+    pub async fn now_decryptable<P, C: CiphertextStore<F, T, P>>(
+        new_events: &[Event<F, S, K, T, L>],
         ciphertext_store: &C,
     ) -> Result<HashMap<DocumentId, Vec<Arc<EncryptedContent<P, T>>>>, C::GetCiphertextError> {
         let mut acc: HashMap<DocumentId, Vec<Arc<EncryptedContent<P, T>>>> = HashMap::new();
@@ -80,8 +87,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> From<KeyOp>
-    for Event<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > From<KeyOp> for Event<F, S, K, T, L>
 {
     fn from(key_op: KeyOp) -> Self {
         match key_op {
@@ -91,10 +103,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    From<MembershipOperation<F, S, T, L>> for Event<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > From<MembershipOperation<F, S, K, T, L>> for Event<F, S, K, T, L>
 {
-    fn from(op: MembershipOperation<F, S, T, L>) -> Self {
+    fn from(op: MembershipOperation<F, S, K, T, L>) -> Self {
         match op {
             MembershipOperation::Delegation(d) => Event::Delegated(d),
             MembershipOperation::Revocation(r) => Event::Revoked(r),
@@ -102,10 +119,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    From<Event<F, S, T, L>> for StaticEvent<T>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > From<Event<F, S, K, T, L>> for StaticEvent<T>
 {
-    fn from(op: Event<F, S, T, L>) -> Self {
+    fn from(op: Event<F, S, K, T, L>) -> Self {
         match op {
             Event::Delegated(d) => StaticEvent::Delegated(Arc::unwrap_or_clone(d).map(Into::into)),
             Event::Revoked(r) => StaticEvent::Revoked(Arc::unwrap_or_clone(r).map(Into::into)),
@@ -124,16 +146,26 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Serialize
-    for Event<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Serialize for Event<F, S, K, T, L>
 {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticEvent::from(self.clone()).serialize(serializer)
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Clone
-    for Event<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Clone for Event<F, S, K, T, L>
 {
     fn clone(&self) -> Self {
         match self {
@@ -148,8 +180,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Dupe
-    for Event<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Dupe for Event<F, S, K, T, L>
 {
     fn dupe(&self) -> Self {
         self.clone()
@@ -165,7 +202,9 @@ mod tests {
             agent::Agent,
             individual::{id::IndividualId, Individual},
         },
-        store::ciphertext::memory::MemoryCiphertextStore,
+        store::{
+            ciphertext::memory::MemoryCiphertextStore, secret_key::memory::MemorySecretKeyStore,
+        },
     };
     use beekem::id::{MemberId, TreeId};
     use future_form::Sendable;
@@ -219,7 +258,7 @@ mod tests {
         let hash3 = Digest::hash(&cgka_op_3);
 
         let indie = Individual::generate::<Sendable, _, _>(&signer, &mut csprng).await?;
-        let events: Vec<Event<Sendable, MemorySigner, [u8; 32], NoListener>> = vec![
+        let events: Vec<Event<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>> = vec![
             Event::CgkaOperation(Arc::new(cgka_op_1)),
             Event::CgkaOperation(Arc::new(cgka_op_2)),
             Event::PrekeysExpanded(Arc::new(

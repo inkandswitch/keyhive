@@ -15,10 +15,11 @@ use super::{CgkaOperationDetails, DebugEventDetails, DebugEventTable};
 /// ```
 /// use future_form::Local;
 /// use keyhive_core::event::Event;
+/// use keyhive_core::store::secret_key::memory::MemorySecretKeyStore;
 /// use keyhive_crypto::signer::memory::MemorySigner;
 /// use keyhive_core::debug_events::{DebugEventTable, Nicknames, terminal::print_event_table};
 ///
-/// let events: Vec<Event<Local, MemorySigner>> = vec![];
+/// let events: Vec<Event<Local, MemorySigner, MemorySecretKeyStore>> = vec![];
 /// let table = DebugEventTable::from_events(events, Nicknames::default());
 ///
 /// // Print a table of events

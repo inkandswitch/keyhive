@@ -13,6 +13,7 @@ use super::{
         Individual,
     },
 };
+use crate::store::secret_key::SecretKeyStore;
 use crate::{
     access::Access,
     listener::{
@@ -49,6 +50,7 @@ use thiserror::Error;
 pub struct Active<
     F: FutureForm,
     S: AsyncSigner<F>,
+    K: SecretKeyStore<F>,
     T: ContentRef = [u8; 32],
     L: PrekeyListener<F> = NoListener,
 > {
@@ -68,10 +70,17 @@ pub struct Active<
     #[derivative(Debug = "ignore", PartialEq = "ignore")]
     pub(crate) listener: L,
 
-    pub(crate) _phantom: PhantomData<(F, T)>,
+    pub(crate) _phantom: PhantomData<(F, K, T)>,
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Active<F, S, T, L> {
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: PrekeyListener<F>,
+    > Active<F, S, K, T, L>
+{
     /// Generate a new active agent.
     ///
     /// # Arguments
@@ -271,11 +280,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     }
 
     /// Encrypt a payload for a member of some [`Group`] or [`Document`].
-    pub async fn get_capability<M: MembershipListener<F, S, T>>(
+    pub async fn get_capability<M: MembershipListener<F, S, K, T>>(
         &self,
-        subject: Membered<F, S, T, M>,
+        subject: Membered<F, S, K, T, M>,
         min: Access,
-    ) -> Option<Arc<Signed<Delegation<F, S, T, M>>>> {
+    ) -> Option<Arc<Signed<Delegation<F, S, K, T, M>>>> {
         subject
             .get_capability(&self.id().into())
             .await
@@ -332,8 +341,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<F> + Clone> Clone
-    for Active<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F> + Clone,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: PrekeyListener<F> + Clone,
+    > Clone for Active<F, S, K, T, L>
 {
     fn clone(&self) -> Self {
         Self {
@@ -347,28 +361,43 @@ impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> std::fmt::Display
-    for Active<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: PrekeyListener<F>,
+    > std::fmt::Display for Active<F, S, K, T, L>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.id(), f)
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Verifiable
-    for Active<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: PrekeyListener<F>,
+    > Verifiable for Active<F, S, K, T, L>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.signer.verifying_key()
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<F>> Fork
-    for Active<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F> + Clone,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: PrekeyListener<F>,
+    > Fork for Active<F, S, K, T, L>
 where
-    Log<F, S, T>: MembershipListener<F, S, T>,
+    Log<F, S, K, T>: MembershipListener<F, S, K, T>,
 {
-    type Forked = Active<F, S, T, Log<F, S, T>>;
+    type Forked = Active<F, S, K, T, Log<F, S, K, T>>;
 
     fn fork(&self) -> Self::Forked {
         Active {
@@ -382,10 +411,15 @@ where
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<F>> MergeAsync
-    for Active<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F> + Clone,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: PrekeyListener<F>,
+    > MergeAsync for Active<F, S, K, T, L>
 where
-    Log<F, S, T>: MembershipListener<F, S, T>,
+    Log<F, S, K, T>: MembershipListener<F, S, K, T>,
 {
     async fn merge_async(&self, fork: Self::AsyncForked) {
         let forked_individual = { fork.individual.lock().await.clone() };
@@ -437,6 +471,7 @@ pub enum ActiveDelegationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::secret_key::memory::MemorySecretKeyStore;
     use future_form::Sendable;
     use keyhive_crypto::signer::memory::MemorySigner;
 
@@ -446,8 +481,8 @@ mod tests {
 
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let active: Active<Sendable, _, [u8; 32], _> =
-            Active::<Sendable, _, _, _>::generate(signer, NoListener, csprng)
+        let active: Active<Sendable, _, MemorySecretKeyStore, [u8; 32], _> =
+            Active::<Sendable, _, _, _, _>::generate(signer, NoListener, csprng)
                 .await
                 .unwrap();
         let message = "hello world".as_bytes();
@@ -462,16 +497,16 @@ mod tests {
 
         let csprng = &mut rand::thread_rng();
         let signer1 = MemorySigner::generate(csprng);
-        let active1: Active<Sendable, _, [u8; 32], _> =
-            Active::<Sendable, _, _, _>::generate(signer1, NoListener, csprng)
+        let active1: Active<Sendable, _, MemorySecretKeyStore, [u8; 32], _> =
+            Active::<Sendable, _, _, _, _>::generate(signer1, NoListener, csprng)
                 .await
                 .unwrap();
 
         let exported = active1.export_prekey_secrets().await.unwrap();
 
         let signer2 = MemorySigner::generate(csprng);
-        let active2: Active<Sendable, _, [u8; 32], _> =
-            Active::<Sendable, _, _, _>::generate(signer2, NoListener, csprng)
+        let active2: Active<Sendable, _, MemorySecretKeyStore, [u8; 32], _> =
+            Active::<Sendable, _, _, _, _>::generate(signer2, NoListener, csprng)
                 .await
                 .unwrap();
 
@@ -507,8 +542,8 @@ mod tests {
 
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(csprng);
-        let active: Active<Sendable, _, [u8; 32], _> =
-            Active::<Sendable, _, _, _>::generate(signer, NoListener, csprng)
+        let active: Active<Sendable, _, MemorySecretKeyStore, [u8; 32], _> =
+            Active::<Sendable, _, _, _, _>::generate(signer, NoListener, csprng)
                 .await
                 .unwrap();
 

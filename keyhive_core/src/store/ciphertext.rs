@@ -7,6 +7,7 @@ use crate::crypto::{digest::Digest, envelope::Envelope};
 use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
 use derive_where::derive_where;
 use dupe::Dupe;
+use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use keyhive_crypto::{content::reference::ContentRef, signed::Signed, symmetric_key::SymmetricKey};
 use serde::{Deserialize, Serialize};
@@ -17,191 +18,159 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-use tracing::instrument;
 
 /// An async storage interface for ciphertexts.
 ///
-/// There are `!Send` and `Send` variants of this trait:
-/// if you need `Send`, enable the `sendable` feature.
+/// The `F: FutureForm` parameter determines whether returned futures
+/// are `Send` ([`Sendable`](future_form::Sendable)) or `!Send`
+/// ([`Local`](future_form::Local)).
 ///
 /// This includes functionality for "causal decryption":
 /// the ability to decrypt a set of causally-related ciphertexts.
-/// See [`try_causal_decrypt`][CiphertextStore::try_causal_decrypt] for more information.
+/// See [`try_causal_decrypt`][CiphertextStoreExt::try_causal_decrypt]
+/// for more information.
 ///
-/// The `get_ciphertext` method generally fails on items that have already been decrypted.
-/// This is generally accomplished by either removing the decrypted values from the store,
-/// or — more commonly — by tracking which values have been decrypted and simply not
+/// The `get_ciphertext` method generally fails on items that have
+/// already been decrypted. This is generally accomplished by either
+/// removing the decrypted values from the store, or — more commonly
+/// — by tracking which values have been decrypted and simply not
 /// hitting the backing store on requests for those IDs.
-pub trait CiphertextStore<Cr: ContentRef, T>: Sized {
+pub trait CiphertextStore<F: FutureForm, Cr: ContentRef, T>: Sized {
     type GetCiphertextError: Debug + Display;
     type MarkDecryptedError: Debug + Display;
 
-    #[allow(async_fn_in_trait)]
-    async fn get_ciphertext(
-        &self,
-        id: &Cr,
-    ) -> Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>;
+    fn get_ciphertext<'a>(
+        &'a self,
+        id: &'a Cr,
+    ) -> F::Future<'a, Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
 
-    #[allow(async_fn_in_trait)]
-    async fn get_ciphertext_by_pcs_update(
-        &self,
-        pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>;
+    fn get_ciphertext_by_pcs_update<'a>(
+        &'a self,
+        pcs_update: &'a Digest<Signed<CgkaOperation>>,
+    ) -> F::Future<'a, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
 
-    #[allow(async_fn_in_trait)]
-    async fn mark_decrypted(&self, id: &Cr) -> Result<(), Self::MarkDecryptedError>;
+    fn mark_decrypted<'a>(
+        &'a self,
+        id: &'a Cr,
+    ) -> F::Future<'a, Result<(), Self::MarkDecryptedError>>;
+}
 
-    #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
+/// Extension providing [`try_causal_decrypt`] for all
+/// [`CiphertextStore`] implementations.
+///
+/// [`try_causal_decrypt`]: CiphertextStoreExt::try_causal_decrypt
+pub trait CiphertextStoreExt<F: FutureForm, Cr: ContentRef, T>: CiphertextStore<F, Cr, T> {
     /// Recursively decrypts a set of causally-related ciphertexts.
     ///
-    /// Consider the following causally encrypted graph:
+    /// By passing in the entrypoint, further keys are discovered,
+    /// and can be pulled out of the store, which contain more keys
+    /// and references, and so on.
     ///
-    /// ```mermaid
-    /// flowchart
-    ///     subgraph genesis["oUz 🔓"]
-    ///       a[New Doc]
-    ///     end
-    ///
-    ///     subgraph block1["g6z 🔓"]
-    ///       op1[Op 1]
-    ///
-    ///       subgraph block1ancestors[Ancestors]
-    ///         subgraph block1ancestor1[Ancestor 1]
-    ///           pointer1_1["Pointer #️⃣"]
-    ///           key1_1["Key 🔑"]
-    ///         end
-    ///       end
-    ///     end
-    ///
-    ///     pointer1_1 --> genesis
-    ///
-    ///     subgraph block2["Xa2 🔓"]
-    ///         op2[Op 2]
-    ///         op3[Op 3]
-    ///         op4[Op 4]
-    ///
-    ///       subgraph block2ancestors[Ancestors]
-    ///         subgraph block2ancestor1[Ancestor 1]
-    ///           pointer2_1["Pointer #️⃣"]
-    ///           key2_1["Key 🔑"]
-    ///         end
-    ///       end
-    ///     end
-    ///
-    ///     pointer2_1 --> genesis
-    ///
-    ///     subgraph block3["e9j 🔓"]
-    ///       op5[Op 5]
-    ///       op6[Op 6]
-    ///
-    ///       subgraph block3ancestors[Ancestors]
-    ///         subgraph block3ancestor1[Ancestor 1]
-    ///           pointer3_1["Pointer #️⃣"]
-    ///           key3_1["Key 🔑"]
-    ///         end
-    ///
-    ///         subgraph block3ancestor2[Ancestor 2]
-    ///           pointer3_2["Pointer #️⃣"]
-    ///           key3_2["Key 🔑"]
-    ///         end
-    ///       end
-    ///     end
-    ///
-    ///     pointer3_1 --> block1
-    ///     pointer3_2 --> block2
-    ///
-    ///     subgraph head[Read Capabilty]
-    ///       pointer_head["Pointer #️⃣"]
-    ///       key_head["Key 🔑"]
-    ///     end
-    ///
-    ///     pointer_head --> block3
-    /// ```
-    ///
-    /// By passing in the entrypoint, futher keys are discovered, and can be pulled out
-    /// the store, which contain more keys and references, and so on.
-    ///
-    /// It is normal for this to stop decryption if it encounters an already-decrypted
-    /// ciphertext. There is no reason to decrypt it again if you already have the plaintext.
-    #[instrument(skip(self, to_decrypt), fields(ciphertext_heads_count = %to_decrypt.len()))]
-    async fn try_causal_decrypt(
-        &self,
-        to_decrypt: &mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
-    ) -> Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<Cr, T, Self>>
+    /// It is normal for this to stop decryption if it encounters an
+    /// already-decrypted ciphertext.
+    fn try_causal_decrypt<'a>(
+        &'a self,
+        to_decrypt: &'a mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
+    ) -> F::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<F, Cr, T, Self>>>
+    where
+        Cr: for<'de> Deserialize<'de>,
+        T: Clone + Serialize + for<'de> Deserialize<'de>;
+}
+
+#[future_form(
+    Sendable where
+        S: Send + Sync,
+        Cr: Send + Sync,
+        T: Send + Sync,
+        S::GetCiphertextError: Send,
+        S::MarkDecryptedError: Send,
+    Local
+)]
+impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextStoreExt<F, Cr, T>
+    for S
+{
+    fn try_causal_decrypt<'a>(
+        &'a self,
+        to_decrypt: &'a mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
+    ) -> F::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<F, Cr, T, Self>>>
     where
         Cr: for<'de> Deserialize<'de>,
         T: Clone + Serialize + for<'de> Deserialize<'de>,
     {
-        let mut progress = CausalDecryptionState::new();
-        let mut cannot: HashMap<Cr, ErrorReason<Cr, T, Self>> = HashMap::new();
-        let mut seen = HashSet::new();
+        F::from_future(async move {
+            let mut progress = CausalDecryptionState::new();
+            let mut cannot: HashMap<Cr, ErrorReason<F, Cr, T, Self>> = HashMap::new();
+            let mut seen = HashSet::new();
 
-        while let Some((ciphertext, key)) = to_decrypt.pop() {
-            if !seen.insert(ciphertext.content_ref.clone()) {
-                continue;
-            }
-
-            progress.keys.insert(ciphertext.content_ref.clone(), key);
-            let content_ref = ciphertext.content_ref.clone();
-
-            match ciphertext.try_decrypt(key) {
-                Err(_) => {
-                    seen.remove(&content_ref);
-                    cannot.insert(content_ref.clone(), ErrorReason::DecryptionFailed(key));
+            while let Some((ciphertext, key)) = to_decrypt.pop() {
+                if !seen.insert(ciphertext.content_ref.clone()) {
                     continue;
                 }
-                Ok(decrypted) => {
-                    let result: Result<Envelope<Cr, T>, _> =
-                        bincode::deserialize(decrypted.as_slice());
-                    match result {
-                        Err(e) => {
-                            seen.remove(&content_ref);
-                            cannot.insert(
-                                content_ref.clone(),
-                                ErrorReason::DeserializationFailed(Box::new(e)),
-                            );
-                            continue;
-                        }
-                        Ok(envelope) => {
-                            for (ancestor_ref, ancestor_key) in envelope.ancestors.iter() {
-                                match self.get_ciphertext(ancestor_ref).await {
-                                    Err(e) => {
-                                        seen.remove(&content_ref);
-                                        cannot.insert(
-                                            content_ref.clone(),
-                                            ErrorReason::GetCiphertextError(e),
-                                        );
-                                        continue;
-                                    }
-                                    Ok(None) => {
-                                        progress.next.insert(ancestor_ref.clone(), *ancestor_key);
-                                    }
-                                    Ok(Some(ancestor)) => {
-                                        to_decrypt.push((ancestor.dupe(), *ancestor_key));
+
+                progress.keys.insert(ciphertext.content_ref.clone(), key);
+                let content_ref = ciphertext.content_ref.clone();
+
+                match ciphertext.try_decrypt(key) {
+                    Err(_) => {
+                        seen.remove(&content_ref);
+                        cannot.insert(content_ref.clone(), ErrorReason::DecryptionFailed(key));
+                        continue;
+                    }
+                    Ok(decrypted) => {
+                        let result: Result<Envelope<Cr, T>, _> =
+                            bincode::deserialize(decrypted.as_slice());
+                        match result {
+                            Err(e) => {
+                                seen.remove(&content_ref);
+                                cannot.insert(
+                                    content_ref.clone(),
+                                    ErrorReason::DeserializationFailed(Box::new(e)),
+                                );
+                                continue;
+                            }
+                            Ok(envelope) => {
+                                for (ancestor_ref, ancestor_key) in envelope.ancestors.iter() {
+                                    match self.get_ciphertext(ancestor_ref).await {
+                                        Err(e) => {
+                                            seen.remove(&content_ref);
+                                            cannot.insert(
+                                                content_ref.clone(),
+                                                ErrorReason::GetCiphertextError(e),
+                                            );
+                                            continue;
+                                        }
+                                        Ok(None) => {
+                                            progress
+                                                .next
+                                                .insert(ancestor_ref.clone(), *ancestor_key);
+                                        }
+                                        Ok(Some(ancestor)) => {
+                                            to_decrypt.push((ancestor.dupe(), *ancestor_key));
+                                        }
                                     }
                                 }
-                            }
 
-                            progress
-                                .complete
-                                .push((ciphertext.content_ref.clone(), envelope.plaintext));
+                                progress
+                                    .complete
+                                    .push((ciphertext.content_ref.clone(), envelope.plaintext));
+                            }
                         }
                     }
                 }
             }
-        }
 
-        for id in progress.complete.iter().map(|(id, _)| id) {
-            if let Err(e) = self.mark_decrypted(id).await {
-                cannot.insert(id.clone(), ErrorReason::MarkDecryptedError(e));
-            };
-        }
+            for id in progress.complete.iter().map(|(id, _)| id) {
+                if let Err(e) = self.mark_decrypted(id).await {
+                    cannot.insert(id.clone(), ErrorReason::MarkDecryptedError(e));
+                };
+            }
 
-        if cannot.is_empty() {
-            Ok(progress)
-        } else {
-            Err(CausalDecryptionError { cannot, progress })
-        }
+            if cannot.is_empty() {
+                Ok(progress)
+            } else {
+                Err(CausalDecryptionError { cannot, progress })
+            }
+        })
     }
 }
 
@@ -222,59 +191,128 @@ impl<T, Cr: ContentRef> CausalDecryptionState<Cr, T> {
     }
 }
 
-impl<Cr: ContentRef, T, C: CiphertextStore<Cr, T>> CiphertextStore<Cr, T> for Arc<Mutex<C>> {
+impl<
+        Cr: ContentRef + Send + Sync + 'static,
+        T: Send + Sync + 'static,
+        C: CiphertextStore<Sendable, Cr, T> + Send + Sync + 'static,
+    > CiphertextStore<Sendable, Cr, T> for Arc<Mutex<C>>
+where
+    C::GetCiphertextError: Send,
+    C::MarkDecryptedError: Send,
+{
     type GetCiphertextError = C::GetCiphertextError;
     type MarkDecryptedError = C::MarkDecryptedError;
 
-    #[instrument(level = "debug", skip(self))]
-    async fn get_ciphertext(
-        &self,
-        cr: &Cr,
-    ) -> Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError> {
-        let locked = self.lock().await;
-        locked.get_ciphertext(cr).await
+    fn get_ciphertext<'a>(
+        &'a self,
+        cr: &'a Cr,
+    ) -> <Sendable as FutureForm>::Future<
+        'a,
+        Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>,
+    > {
+        Sendable::from_future(async move {
+            let locked = self.lock().await;
+            locked.get_ciphertext(cr).await
+        })
     }
 
-    #[instrument(level = "debug", skip(self))]
-    async fn get_ciphertext_by_pcs_update(
-        &self,
-        pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError> {
-        let locked = self.lock().await;
-        locked.get_ciphertext_by_pcs_update(pcs_update).await
+    fn get_ciphertext_by_pcs_update<'a>(
+        &'a self,
+        pcs_update: &'a Digest<Signed<CgkaOperation>>,
+    ) -> <Sendable as FutureForm>::Future<
+        'a,
+        Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>,
+    > {
+        Sendable::from_future(async move {
+            let locked = self.lock().await;
+            locked.get_ciphertext_by_pcs_update(pcs_update).await
+        })
     }
 
-    #[instrument(level = "debug", skip(self))]
-    async fn mark_decrypted(&self, content_ref: &Cr) -> Result<(), Self::MarkDecryptedError> {
-        let locked = self.lock().await;
-        locked.mark_decrypted(content_ref).await
+    fn mark_decrypted<'a>(
+        &'a self,
+        content_ref: &'a Cr,
+    ) -> <Sendable as FutureForm>::Future<'a, Result<(), Self::MarkDecryptedError>> {
+        Sendable::from_future(async move {
+            let locked = self.lock().await;
+            locked.mark_decrypted(content_ref).await
+        })
     }
 }
 
-impl<T: Clone, Cr: ContentRef> CiphertextStore<Cr, T> for MemoryCiphertextStore<Cr, T> {
+// Local variant for Arc<Mutex<C>>
+impl<Cr: ContentRef + 'static, T: 'static, C: CiphertextStore<Local, Cr, T> + 'static>
+    CiphertextStore<Local, Cr, T> for Arc<Mutex<C>>
+{
+    type GetCiphertextError = C::GetCiphertextError;
+    type MarkDecryptedError = C::MarkDecryptedError;
+
+    fn get_ciphertext<'a>(
+        &'a self,
+        cr: &'a Cr,
+    ) -> <Local as FutureForm>::Future<
+        'a,
+        Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>,
+    > {
+        Local::from_future(async move {
+            let locked = self.lock().await;
+            locked.get_ciphertext(cr).await
+        })
+    }
+
+    fn get_ciphertext_by_pcs_update<'a>(
+        &'a self,
+        pcs_update: &'a Digest<Signed<CgkaOperation>>,
+    ) -> <Local as FutureForm>::Future<
+        'a,
+        Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>,
+    > {
+        Local::from_future(async move {
+            let locked = self.lock().await;
+            locked.get_ciphertext_by_pcs_update(pcs_update).await
+        })
+    }
+
+    fn mark_decrypted<'a>(
+        &'a self,
+        content_ref: &'a Cr,
+    ) -> <Local as FutureForm>::Future<'a, Result<(), Self::MarkDecryptedError>> {
+        Local::from_future(async move {
+            let locked = self.lock().await;
+            locked.mark_decrypted(content_ref).await
+        })
+    }
+}
+
+#[future_form(
+    Sendable where Cr: Send + Sync + 'static, T: Send + Sync + 'static,
+    Local
+)]
+impl<F: FutureForm, T: Clone, Cr: ContentRef> CiphertextStore<F, Cr, T>
+    for MemoryCiphertextStore<Cr, T>
+{
     type GetCiphertextError = Infallible;
     type MarkDecryptedError = Infallible;
 
-    #[instrument(level = "debug", skip(self))]
-    async fn get_ciphertext(
-        &self,
-        cr: &Cr,
-    ) -> Result<Option<Arc<EncryptedContent<T, Cr>>>, Infallible> {
-        Ok(self.get_by_content_ref(cr).await)
+    fn get_ciphertext<'a>(
+        &'a self,
+        cr: &'a Cr,
+    ) -> F::Future<'a, Result<Option<Arc<EncryptedContent<T, Cr>>>, Infallible>> {
+        F::from_future(async move { Ok(self.get_by_content_ref(cr).await) })
     }
 
-    #[instrument(level = "debug", skip(self))]
-    async fn get_ciphertext_by_pcs_update(
-        &self,
-        pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<Vec<Arc<EncryptedContent<T, Cr>>>, Infallible> {
-        Ok(self.get_by_pcs_update(pcs_update).await)
+    fn get_ciphertext_by_pcs_update<'a>(
+        &'a self,
+        pcs_update: &'a Digest<Signed<CgkaOperation>>,
+    ) -> F::Future<'a, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Infallible>> {
+        F::from_future(async move { Ok(self.get_by_pcs_update(pcs_update).await) })
     }
 
-    #[instrument(level = "debug", skip(self))]
-    async fn mark_decrypted(&self, content_ref: &Cr) -> Result<(), Infallible> {
-        self.remove_all(content_ref).await;
-        Ok(())
+    fn mark_decrypted<'a>(&'a self, content_ref: &'a Cr) -> F::Future<'a, Result<(), Infallible>> {
+        F::from_future(async move {
+            self.remove_all(content_ref).await;
+            Ok(())
+        })
     }
 }
 
@@ -284,13 +322,13 @@ pub trait Isomorphic<T> {
 }
 
 #[derive(Debug, Error)]
-pub struct CausalDecryptionError<Cr: ContentRef, T, S: CiphertextStore<Cr, T>> {
-    pub cannot: HashMap<Cr, ErrorReason<Cr, T, S>>,
+pub struct CausalDecryptionError<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> {
+    pub cannot: HashMap<Cr, ErrorReason<F, Cr, T, S>>,
     pub progress: CausalDecryptionState<Cr, T>,
 }
 
-impl<Cr: ContentRef + Debug, T: Debug, S: CiphertextStore<Cr, T>> Display
-    for CausalDecryptionError<Cr, T, S>
+impl<F: FutureForm, Cr: ContentRef + Debug, T: Debug, S: CiphertextStore<F, Cr, T>> Display
+    for CausalDecryptionError<F, Cr, T, S>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let x = self.cannot.iter().collect::<Vec<_>>();
@@ -300,7 +338,7 @@ impl<Cr: ContentRef + Debug, T: Debug, S: CiphertextStore<Cr, T>> Display
 
 #[derive(Error)]
 #[derive_where(Debug)]
-pub enum ErrorReason<Cr: ContentRef, T, S: CiphertextStore<Cr, T>> {
+pub enum ErrorReason<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> {
     #[error("GetCiphertextError: {0}")]
     GetCiphertextError(S::GetCiphertextError),
 
@@ -401,8 +439,14 @@ mod tests {
         store.insert(one.dupe()).await;
         store.insert(two.dupe()).await;
 
-        assert_eq!(store.get_ciphertext(&one_ref).await, Ok(Some(one)));
-        assert_eq!(store.get_ciphertext(&two_ref).await, Ok(Some(two)));
+        assert_eq!(
+            CiphertextStore::<Sendable, _, _>::get_ciphertext(&store, &one_ref).await,
+            Ok(Some(one))
+        );
+        assert_eq!(
+            CiphertextStore::<Sendable, _, _>::get_ciphertext(&store, &two_ref).await,
+            Ok(Some(two))
+        );
 
         Ok(())
     }
@@ -465,9 +509,11 @@ mod tests {
         store.insert(right.clone()).await;
         store.insert(head.clone()).await;
 
-        let observed = store
-            .try_causal_decrypt(&mut vec![(head.clone(), head_key)])
-            .await?;
+        let observed = CiphertextStoreExt::<Sendable, _, _>::try_causal_decrypt(
+            &store,
+            &mut vec![(head.clone(), head_key)],
+        )
+        .await?;
 
         assert_eq!(observed.complete.len(), 4);
         assert!(observed
@@ -575,12 +621,11 @@ mod tests {
         store.insert(head2.clone()).await;
         store.insert(head3.clone()).await;
 
-        let observed = store
-            .try_causal_decrypt(&mut vec![
-                (head2.clone(), head2_key),
-                (head3.clone(), head3_key),
-            ])
-            .await?;
+        let observed = CiphertextStoreExt::<Sendable, _, _>::try_causal_decrypt(
+            &store,
+            &mut vec![(head2.clone(), head2_key), (head3.clone(), head3_key)],
+        )
+        .await?;
 
         // Doesn't have the unused head
         assert!(!observed
@@ -713,12 +758,11 @@ mod tests {
         store.insert(head2.clone()).await;
         store.insert(head3.clone()).await;
 
-        let observed = store
-            .try_causal_decrypt(&mut vec![
-                (head2.clone(), head2_key),
-                (head3.clone(), head3_key),
-            ])
-            .await?;
+        let observed = CiphertextStoreExt::<Sendable, _, _>::try_causal_decrypt(
+            &store,
+            &mut vec![(head2.clone(), head2_key), (head3.clone(), head3_key)],
+        )
+        .await?;
 
         // Doesn't have the unused head
         assert!(!observed

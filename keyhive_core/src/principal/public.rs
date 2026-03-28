@@ -3,7 +3,7 @@ use super::{
     identifier::Identifier,
     individual::{op::add_key::AddKeyOp, state::PrekeyState, Individual},
 };
-use crate::listener::prekey::PrekeyListener;
+use crate::{listener::prekey::PrekeyListener, store::secret_key::SecretKeyStore};
 use dupe::Dupe;
 use future_form::FutureForm;
 use futures::lock::Mutex;
@@ -64,10 +64,10 @@ impl Public {
         }
     }
 
-    pub fn active<F: FutureForm, T: ContentRef, L: PrekeyListener<F>>(
+    pub fn active<F: FutureForm, K: SecretKeyStore<F>, T: ContentRef, L: PrekeyListener<F>>(
         &self,
         listener: L,
-    ) -> Active<F, MemorySigner, T, L>
+    ) -> Active<F, MemorySigner, K, T, L>
     where
         MemorySigner: keyhive_crypto::signer::async_signer::AsyncSigner<F>,
     {

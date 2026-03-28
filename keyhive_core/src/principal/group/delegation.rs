@@ -2,6 +2,7 @@ use super::{
     dependencies::Dependencies,
     revocation::{Revocation, StaticRevocation},
 };
+use crate::store::secret_key::SecretKeyStore;
 use crate::{
     access::Access,
     listener::{membership::MembershipListener, no_listener::NoListener},
@@ -30,24 +31,35 @@ use thiserror::Error;
 pub struct Delegation<
     F: FutureForm,
     S: AsyncSigner<F>,
+    K: SecretKeyStore<F>,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<F, S, T> = NoListener,
+    L: MembershipListener<F, S, K, T> = NoListener,
 > {
-    pub(crate) delegate: Agent<F, S, T, L>,
+    pub(crate) delegate: Agent<F, S, K, T, L>,
     pub(crate) can: Access,
 
-    pub(crate) proof: Option<Arc<Signed<Delegation<F, S, T, L>>>>,
-    pub(crate) after_revocations: Vec<Arc<Signed<Revocation<F, S, T, L>>>>,
+    pub(crate) proof: Option<Arc<Signed<Delegation<F, S, K, T, L>>>>,
+    pub(crate) after_revocations: Vec<Arc<Signed<Revocation<F, S, K, T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Eq
-    for Delegation<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Eq for Delegation<F, S, K, T, L>
 {
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    Delegation<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Delegation<F, S, K, T, L>
 {
     pub fn subject_id(&self, issuer: AgentId) -> Identifier {
         if let Some(proof) = &self.proof {
@@ -57,7 +69,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         }
     }
 
-    pub fn delegate(&self) -> &Agent<F, S, T, L> {
+    pub fn delegate(&self) -> &Agent<F, S, K, T, L> {
         &self.delegate
     }
 
@@ -66,16 +78,16 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn proof(&self) -> Option<&Arc<Signed<Delegation<F, S, T, L>>>> {
+    pub fn proof(&self) -> Option<&Arc<Signed<Delegation<F, S, K, T, L>>>> {
         self.proof.as_ref()
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn after_revocations(&self) -> &[Arc<Signed<Revocation<F, S, T, L>>>] {
+    pub fn after_revocations(&self) -> &[Arc<Signed<Revocation<F, S, K, T, L>>>] {
         &self.after_revocations
     }
 
-    pub fn after(&self) -> Dependencies<'_, F, S, T, L> {
+    pub fn after(&self) -> Dependencies<'_, F, S, K, T, L> {
         let AfterAuth {
             optional_delegation,
             revocations,
@@ -90,7 +102,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         }
     }
 
-    pub fn after_auth(&self) -> AfterAuth<'_, F, S, T, L> {
+    pub fn after_auth(&self) -> AfterAuth<'_, F, S, K, T, L> {
         AfterAuth {
             optional_delegation: self.proof.dupe(),
             revocations: &self.after_revocations,
@@ -101,7 +113,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.proof.is_none()
     }
 
-    pub fn proof_lineage(&self) -> Vec<Arc<Signed<Delegation<F, S, T, L>>>> {
+    pub fn proof_lineage(&self) -> Vec<Arc<Signed<Delegation<F, S, K, T, L>>>> {
         let mut lineage = vec![];
         let mut head = self;
 
@@ -113,7 +125,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         lineage
     }
 
-    pub fn is_descendant_of(&self, maybe_ancestor: &Signed<Delegation<F, S, T, L>>) -> bool {
+    pub fn is_descendant_of(&self, maybe_ancestor: &Signed<Delegation<F, S, K, T, L>>) -> bool {
         let mut head = self;
 
         while let Some(proof) = &head.proof {
@@ -127,7 +139,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         false
     }
 
-    pub fn is_ancestor_of(&self, maybe_descendant: &Signed<Delegation<F, S, T, L>>) -> bool {
+    pub fn is_ancestor_of(&self, maybe_descendant: &Signed<Delegation<F, S, K, T, L>>) -> bool {
         let mut head = maybe_descendant.payload();
 
         while let Some(proof) = &head.proof {
@@ -142,8 +154,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Serialize
-    for Delegation<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Serialize for Delegation<F, S, K, T, L>
 {
     fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticDelegation::from(self.clone()).serialize(serializer)
@@ -182,10 +199,15 @@ impl<'a, T: ContentRef + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    From<Delegation<F, S, T, L>> for StaticDelegation<T>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > From<Delegation<F, S, K, T, L>> for StaticDelegation<T>
 {
-    fn from(delegation: Delegation<F, S, T, L>) -> Self {
+    fn from(delegation: Delegation<F, S, K, T, L>) -> Self {
         Self {
             can: delegation.can,
             proof: delegation.proof.map(|p| p.digest().coerce()),
@@ -205,14 +227,15 @@ pub struct AfterAuth<
     'a,
     F: FutureForm,
     S: AsyncSigner<F>,
+    K: SecretKeyStore<F>,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<F, S, T> = NoListener,
+    L: MembershipListener<F, S, K, T> = NoListener,
 > {
     #[allow(clippy::type_complexity)]
-    pub(crate) optional_delegation: Option<Arc<Signed<Delegation<F, S, T, L>>>>,
+    pub(crate) optional_delegation: Option<Arc<Signed<Delegation<F, S, K, T, L>>>>,
 
     #[allow(clippy::type_complexity)]
-    pub(crate) revocations: &'a [Arc<Signed<Revocation<F, S, T, L>>>],
+    pub(crate) revocations: &'a [Arc<Signed<Revocation<F, S, K, T, L>>>],
 }
 
 /// Errors that can occur when using an active agent.
