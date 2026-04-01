@@ -3,7 +3,7 @@
 //! cargo bench --bench bench_ingest --features test_utils
 
 use dupe::Dupe;
-use future_form::Local;
+use future_form::Sendable;
 use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
@@ -22,7 +22,7 @@ async fn generate_events(n_peers: usize, n_public_docs: usize) -> Vec<StaticEven
     let alice = make_simple_keyhive().await.unwrap();
 
     let public_indie = Public.individual();
-    let public_peer: Peer<Local, _, _, _> =
+    let public_peer: Peer<Sendable, _, _, _> =
         Peer::Individual(public_indie.id(), Arc::new(Mutex::new(public_indie)));
 
     let mut docs = Vec::with_capacity(n_public_docs);
