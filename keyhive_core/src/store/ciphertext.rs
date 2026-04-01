@@ -27,7 +27,7 @@ use thiserror::Error;
 ///
 /// This includes functionality for "causal decryption":
 /// the ability to decrypt a set of causally-related ciphertexts.
-/// See [`try_causal_decrypt`][CiphertextStore::try_causal_decrypt] for more information.
+/// See [`try_causal_decrypt`][CiphertextStoreExt::try_causal_decrypt] for more information.
 ///
 /// The `get_ciphertext` method generally fails on items that have already been decrypted.
 /// This is generally accomplished by either removing the decrypted values from the store,
@@ -193,7 +193,7 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                                 seen.remove(&content_ref);
                                 cannot.insert(
                                     content_ref.clone(),
-                                    ErrorReason::DeserializationFailed(Box::new(e)),
+                                    ErrorReason::DeserializationFailed(e),
                                 );
                                 continue;
                             }
@@ -360,7 +360,7 @@ pub enum ErrorReason<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr,
     MarkDecryptedError(S::MarkDecryptedError),
 
     #[error(transparent)]
-    DeserializationFailed(#[from] Box<bincode::Error>),
+    DeserializationFailed(#[from] bincode::Error),
 
     #[error("Decryption failed")]
     DecryptionFailed(SymmetricKey),

@@ -532,7 +532,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             progress: acc.clone(),
             cannot: HashMap::from_iter([(
                 encrypted_content.content_ref.clone(),
-                ErrorReason::DeserializationFailed(e.into()),
+                ErrorReason::DeserializationFailed(e),
             )]),
         })?;
 
