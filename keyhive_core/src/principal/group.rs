@@ -31,9 +31,9 @@ use derivative::Derivative;
 use derive_more::Debug;
 use derive_where::derive_where;
 use dupe::{Dupe, IterDupedExt};
+use future_form::FutureForm;
 use futures::{lock::Mutex, stream::FuturesUnordered, StreamExt};
 use id::GroupId;
-use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
@@ -62,8 +62,12 @@ use thiserror::Error;
 /// through the network of [`Agent`]s.
 #[derive(Clone, Derivative)]
 #[derive_where(Debug; T)]
-pub struct Group<S: AsyncSigner<F>, T: ContentRef = [u8; 32], L: MembershipListener<F, S, T> = NoListener>
-{
+pub struct Group<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef = [u8; 32],
+    L: MembershipListener<F, S, T> = NoListener,
+> {
     pub(crate) id_or_indie: IdOrIndividual,
 
     /// The current view of members of a group.
@@ -81,7 +85,9 @@ pub struct Group<S: AsyncSigner<F>, T: ContentRef = [u8; 32], L: MembershipListe
     pub(crate) listener: L,
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Group<F, S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    Group<F, S, T, L>
+{
     #[tracing::instrument(skip_all)]
     pub async fn new(
         group_id: GroupId,
@@ -254,13 +260,18 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
     #[tracing::instrument(skip(self), fields(group_id = %self.group_id()))]
     pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
-        struct GroupAccess<Z: AsyncSigner<F>, U: ContentRef, M: MembershipListener<Z, U>> {
-            agent: Agent<Z, U, M>,
+        struct GroupAccess<
+            G: FutureForm,
+            Z: AsyncSigner<G>,
+            U: ContentRef,
+            M: MembershipListener<G, Z, U>,
+        > {
+            agent: Agent<G, Z, U, M>,
             agent_access: Access,
             parent_access: Access,
         }
 
-        let mut explore: Vec<GroupAccess<S, T, L>> = vec![];
+        let mut explore: Vec<GroupAccess<F, S, T, L>> = vec![];
         let mut seen: HashSet<([u8; 64], Access)> = HashSet::new();
 
         for member in self.members.keys() {
@@ -471,15 +482,17 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             Some(p.dupe())
         };
 
-        let delegation = signer
-            .try_sign_async(Delegation {
+        let delegation = keyhive_crypto::signer::async_signer::try_sign_async::<F, _, _>(
+            signer,
+            Delegation {
                 delegate: member_to_add,
                 can,
                 proof,
                 after_revocations: self.state.revocation_heads.values().duped().collect(),
                 after_content,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         let rc = Arc::new(delegation);
         let _digest = self.receive_delegation(rc.dupe()).await?;
@@ -647,13 +660,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         proof: Option<Arc<Signed<Delegation<F, S, T, L>>>>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<Arc<Signed<Revocation<F, S, T, L>>>, SigningError> {
-        let revocation = signer
-            .try_sign_async(Revocation {
+        let revocation = keyhive_crypto::signer::async_signer::try_sign_async::<F, _, _>(
+            signer,
+            Revocation {
                 revoke,
                 proof,
                 after_content,
-            })
-            .await?;
+            },
+        )
+        .await?;
 
         Ok(Arc::new(revocation))
     }
@@ -664,7 +679,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.active_revocations.clear();
 
         #[allow(clippy::type_complexity)]
-        let mut dlgs_in_play: HashMap<[u8; 64], Arc<Signed<Delegation<F, S, T, L>>>> = HashMap::new();
+        let mut dlgs_in_play: HashMap<[u8; 64], Arc<Signed<Delegation<F, S, T, L>>>> =
+            HashMap::new();
         let mut revoked_dlgs: HashSet<[u8; 64]> = HashSet::new();
 
         // {dlg_dep => Set<dlgs that depend on it>}
@@ -826,7 +842,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Hash for Group<F, S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Hash
+    for Group<F, S, T, L>
+{
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id_or_indie.hash(state);
         self.members.iter().collect::<BTreeMap<_, _>>().hash(state);
@@ -834,7 +852,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Verifiable for Group<F, S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Verifiable
+    for Group<F, S, T, L>
+{
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.state.verifying_key()
     }
@@ -893,6 +913,7 @@ pub enum RevokeMemberError {
 mod tests {
     use super::{delegation::Delegation, *};
     use crate::principal::active::Active;
+    use future_form::Sendable;
     use keyhive_crypto::signer::memory::MemorySigner;
     use nonempty::nonempty;
     use pretty_assertions::assert_eq;
@@ -900,16 +921,16 @@ mod tests {
 
     async fn setup_user<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Active<MemorySigner, T> {
+    ) -> Active<Sendable, MemorySigner, T> {
         let sk = MemorySigner::generate(csprng);
         Active::generate(sk, NoListener, csprng).await.unwrap()
     }
 
     async fn setup_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        alice: Arc<Mutex<Active<MemorySigner, T>>>,
-        bob: Arc<Mutex<Active<MemorySigner, T>>>,
+        alice: Arc<Mutex<Active<Sendable, MemorySigner, T>>>,
+        bob: Arc<Mutex<Active<Sendable, MemorySigner, T>>>,
         csprng: Arc<Mutex<R>>,
-    ) -> [Arc<Mutex<Group<MemorySigner, T>>>; 4] {
+    ) -> [Arc<Mutex<Group<Sendable, MemorySigner, T>>>; 4] {
         /*              ┌───────────┐        ┌───────────┐
                         │           │        │           │
         ╔══════════════▶│   Alice   │        │    Bob    │
@@ -933,7 +954,7 @@ mod tests {
                         │           │
                         └───────────┘ */
 
-        let alice_agent: Agent<MemorySigner, T, _> =
+        let alice_agent: Agent<Sendable, MemorySigner, T, _> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
         let bob_agent = Agent::Active(bob.lock().await.id(), bob.dupe());
 
@@ -999,10 +1020,10 @@ mod tests {
     }
 
     async fn setup_cyclic_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
-        alice: Arc<Mutex<Active<MemorySigner, T>>>,
-        bob: Arc<Mutex<Active<MemorySigner, T>>>,
+        alice: Arc<Mutex<Active<Sendable, MemorySigner, T>>>,
+        bob: Arc<Mutex<Active<Sendable, MemorySigner, T>>>,
         csprng: Arc<Mutex<R>>,
-    ) -> [Arc<Mutex<Group<MemorySigner, T>>>; 10] {
+    ) -> [Arc<Mutex<Group<Sendable, MemorySigner, T>>>; 10] {
         let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
         let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
 
@@ -1140,16 +1161,18 @@ mod tests {
 
             locked_group0
                 .receive_delegation(Arc::new(
-                    alice_signer
-                        .try_sign_async(Delegation {
+                    keyhive_crypto::signer::async_signer::try_sign_async::<Sendable, _, _>(
+                        &alice_signer,
+                        Delegation {
                             delegate: Agent::Group(group9.lock().await.group_id(), group9.dupe()),
                             can: Access::Admin,
                             proof: Some(proof),
                             after_revocations: vec![],
                             after_content: BTreeMap::new(),
-                        })
-                        .await
-                        .unwrap(),
+                        },
+                    )
+                    .await
+                    .unwrap(),
                 ))
                 .await
                 .unwrap();
@@ -1166,13 +1189,13 @@ mod tests {
         let mut csprng = OsRng;
 
         let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-        let alice_agent: Agent<MemorySigner, String> =
+        let alice_agent: Agent<Sendable, MemorySigner, String> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
 
         let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
 
-        let [g0, ..]: [Arc<Mutex<Group<MemorySigner, String>>>; 4] =
+        let [g0, ..]: [Arc<Mutex<Group<Sendable, MemorySigner, String>>>; 4] =
             setup_groups(alice.dupe(), bob, Arc::new(Mutex::new(csprng))).await;
         let g0_mems = g0.lock().await.transitive_members().await;
 
@@ -1190,7 +1213,7 @@ mod tests {
         let mut csprng = OsRng;
 
         let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-        let alice_agent: Agent<MemorySigner, String> =
+        let alice_agent: Agent<Sendable, MemorySigner, String> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
 
@@ -1222,16 +1245,16 @@ mod tests {
         let mut csprng = OsRng;
 
         let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-        let alice_agent: Agent<MemorySigner, String> =
+        let alice_agent: Agent<Sendable, MemorySigner, String> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
 
         let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-        let bob_agent: Agent<MemorySigner, String> =
+        let bob_agent: Agent<Sendable, MemorySigner, String> =
             Agent::Active(bob.lock().await.id(), bob.dupe());
         let bob_id = bob_agent.id();
 
-        let [g0, _g1, g2, _g3]: [Arc<Mutex<Group<MemorySigner, String>>>; 4] =
+        let [g0, _g1, g2, _g3]: [Arc<Mutex<Group<Sendable, MemorySigner, String>>>; 4] =
             setup_groups(alice.dupe(), bob.dupe(), Arc::new(Mutex::new(csprng))).await;
         let g2_mems = g2.lock().await.transitive_members().await;
 
@@ -1250,15 +1273,16 @@ mod tests {
 
         let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let alice_id = { alice.lock().await.id() };
-        let alice_agent: Agent<MemorySigner, String> = Agent::Active(alice_id, alice.dupe());
+        let alice_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(alice_id, alice.dupe());
         let alice_id = alice_agent.id();
 
         let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-        let bob_agent: Agent<MemorySigner, String> =
+        let bob_agent: Agent<Sendable, MemorySigner, String> =
             Agent::Active(bob.lock().await.id(), bob.dupe());
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, g3]: [Arc<Mutex<Group<MemorySigner, String>>>; 4] =
+        let [g0, g1, g2, g3]: [Arc<Mutex<Group<Sendable, MemorySigner, String>>>; 4] =
             setup_groups(alice.dupe(), bob.dupe(), Arc::new(Mutex::new(csprng))).await;
         let g3_mems = g3.lock().await.transitive_members().await;
 
@@ -1282,17 +1306,18 @@ mod tests {
         let mut csprng = OsRng;
 
         let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-        let alice_agent: Agent<MemorySigner, String> =
+        let alice_agent: Agent<Sendable, MemorySigner, String> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
         let alice_id = alice_agent.id();
 
         let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-        let bob_agent: Agent<MemorySigner, String> =
+        let bob_agent: Agent<Sendable, MemorySigner, String> =
             Agent::Active(bob.lock().await.id(), bob.dupe());
         let bob_id = bob_agent.id();
 
-        let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]: [Arc<Mutex<Group<MemorySigner, String>>>;
-            10] = setup_cyclic_groups(alice.dupe(), bob.dupe(), Arc::new(Mutex::new(csprng))).await;
+        let [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]: [Arc<
+            Mutex<Group<Sendable, MemorySigner, String>>,
+        >; 10] = setup_cyclic_groups(alice.dupe(), bob.dupe(), Arc::new(Mutex::new(csprng))).await;
         let g0_mems = g0.lock().await.transitive_members().await;
 
         assert_eq!(g0_mems.len(), 11);
@@ -1315,13 +1340,16 @@ mod tests {
         let mut csprng = OsRng;
 
         let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-        let alice_agent: Agent<MemorySigner> = Agent::Active(alice.lock().await.id(), alice.dupe());
+        let alice_agent: Agent<Sendable, MemorySigner> =
+            Agent::Active(alice.lock().await.id(), alice.dupe());
 
         let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-        let bob_agent: Agent<MemorySigner> = Agent::Active(bob.lock().await.id(), bob.dupe());
+        let bob_agent: Agent<Sendable, MemorySigner> =
+            Agent::Active(bob.lock().await.id(), bob.dupe());
 
         let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-        let carol_agent: Agent<MemorySigner> = Agent::Active(carol.lock().await.id(), carol.dupe());
+        let carol_agent: Agent<Sendable, MemorySigner> =
+            Agent::Active(carol.lock().await.id(), carol.dupe());
 
         let signer = MemorySigner::generate(&mut csprng);
         let active = Arc::new(Mutex::new(
@@ -1472,16 +1500,20 @@ mod tests {
         let mut csprng = OsRng;
 
         let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-        let alice_agent: Agent<MemorySigner> = Agent::Active(alice.lock().await.id(), alice.dupe());
+        let alice_agent: Agent<Sendable, MemorySigner> =
+            Agent::Active(alice.lock().await.id(), alice.dupe());
 
         let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-        let bob_agent: Agent<MemorySigner> = Agent::Active(bob.lock().await.id(), bob.dupe());
+        let bob_agent: Agent<Sendable, MemorySigner> =
+            Agent::Active(bob.lock().await.id(), bob.dupe());
 
         let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-        let carol_agent: Agent<MemorySigner> = Agent::Active(carol.lock().await.id(), carol.dupe());
+        let carol_agent: Agent<Sendable, MemorySigner> =
+            Agent::Active(carol.lock().await.id(), carol.dupe());
 
         let dan = Arc::new(Mutex::new(setup_user(&mut csprng).await));
-        let dan_agent: Agent<MemorySigner> = Agent::Active(dan.lock().await.id(), dan.dupe());
+        let dan_agent: Agent<Sendable, MemorySigner> =
+            Agent::Active(dan.lock().await.id(), dan.dupe());
 
         let (alice_id, alice_signer) = {
             let locked_alice = alice.lock().await;

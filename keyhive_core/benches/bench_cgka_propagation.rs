@@ -3,6 +3,7 @@
 mod bench_utils;
 
 use dupe::Dupe;
+use future_form::Sendable;
 use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
@@ -18,8 +19,8 @@ fn main() {
     divan::main();
 }
 
-type BenchMembered = Membered<MemorySigner, [u8; 32], NoListener>;
-type BenchAgent = Agent<MemorySigner, [u8; 32], NoListener>;
+type BenchMembered = Membered<Sendable, MemorySigner, [u8; 32], NoListener>;
+type BenchAgent = Agent<Sendable, MemorySigner, [u8; 32], NoListener>;
 
 /// Create a fresh peer keyhive, exchange contact cards with alice, and return
 /// the peer's agent as seen by alice.

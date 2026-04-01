@@ -38,9 +38,9 @@ use derivative::Derivative;
 use derive_where::derive_where;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
+use future_form::FutureForm;
 use futures::{future::join_all, lock::Mutex};
 use id::DocumentId;
-use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
@@ -63,6 +63,7 @@ use tracing::instrument;
 #[derive(Clone, Derivative)]
 #[derive_where(Debug; T)]
 pub struct Document<
+    F: FutureForm,
     S: AsyncSigner<F>,
     T: ContentRef = [u8; 32],
     L: MembershipListener<F, S, T> = NoListener,
@@ -75,7 +76,9 @@ pub struct Document<
     cgka: Option<Cgka>,
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Document<F, S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    Document<F, S, T, L>
+{
     // FIXME: We need a signing key for initializing Cgka and we need to share
     // the init add op.
     // NOTE doesn't register into the top-level Keyhive context
@@ -566,7 +569,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         listener: L,
     ) -> Result<Self, MissingIndividualError> {
         Ok(Document {
-            group: Group::<S, T, L>::dummy_from_archive(
+            group: Group::<F, S, T, L>::dummy_from_archive(
                 archive.group,
                 delegations,
                 revocations,
@@ -580,13 +583,17 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Verifiable for Document<F, S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Verifiable
+    for Document<F, S, T, L>
+{
     fn verifying_key(&self) -> VerifyingKey {
         self.group.verifying_key()
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Hash for Document<F, S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Hash
+    for Document<F, S, T, L>
+{
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.group.hash(state);
         crate::util::hasher::hash_set(&self.content_heads, state);
@@ -597,6 +604,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddMemberUpdate<
+    F: FutureForm,
     S: AsyncSigner<F>,
     T: ContentRef = [u8; 32],
     L: MembershipListener<F, S, T> = NoListener,
@@ -611,6 +619,7 @@ pub struct MissingIndividualError(pub Box<IndividualId>);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RevokeMemberUpdate<
+    F: FutureForm,
     S: AsyncSigner<F>,
     T: ContentRef = [u8; 32],
     L: MembershipListener<F, S, T> = NoListener,
@@ -620,7 +629,9 @@ pub struct RevokeMemberUpdate<
     pub(crate) cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> RevokeMemberUpdate<F, S, T, L> {
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    RevokeMemberUpdate<F, S, T, L>
+{
     #[allow(clippy::type_complexity)]
     pub fn revocations(&self) -> &[Arc<Signed<Revocation<F, S, T, L>>>] {
         &self.revocations
@@ -725,22 +736,29 @@ pub enum DecryptError {
     IoErrorOnSivBuild(#[from] std::io::Error),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum TryFromDocumentArchiveError<S: AsyncSigner<F>, T: ContentRef> {
+#[derive(Error)]
+#[derive_where(Debug, Clone, PartialEq, Eq; T)]
+pub enum TryFromDocumentArchiveError<F: FutureForm, S: AsyncSigner<F>, T: ContentRef>
+where
+    NoListener: MembershipListener<F, S, T>,
+{
     #[error("Cannot find individual: {0}")]
     MissingIndividual(IndividualId),
 
     #[error("Cannot find delegation: {0}")]
-    MissingDelegation(Digest<Signed<Delegation<S, T>>>),
+    MissingDelegation(Digest<Signed<Delegation<F, S, T>>>),
 
     #[error("Cannot find revocation: {0}")]
-    MissingRevocation(Digest<Signed<Revocation<S, T>>>),
+    MissingRevocation(Digest<Signed<Revocation<F, S, T>>>),
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef> From<MissingDependency<Digest<Signed<Delegation<S, T>>>>>
-    for TryFromDocumentArchiveError<S, T>
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef>
+    From<MissingDependency<Digest<Signed<Delegation<F, S, T>>>>>
+    for TryFromDocumentArchiveError<F, S, T>
+where
+    NoListener: MembershipListener<F, S, T>,
 {
-    fn from(e: MissingDependency<Digest<Signed<Delegation<S, T>>>>) -> Self {
+    fn from(e: MissingDependency<Digest<Signed<Delegation<F, S, T>>>>) -> Self {
         TryFromDocumentArchiveError::MissingDelegation(e.0)
     }
 }

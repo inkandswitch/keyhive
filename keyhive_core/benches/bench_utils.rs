@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use dupe::Dupe;
+use future_form::Sendable;
 use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
@@ -16,6 +17,7 @@ use keyhive_crypto::signer::memory::MemorySigner;
 use nonempty::nonempty;
 
 pub type BenchKeyhive = Keyhive<
+    Sendable,
     MemorySigner,
     [u8; 32],
     Vec<u8>,
@@ -23,7 +25,7 @@ pub type BenchKeyhive = Keyhive<
     NoListener,
     rand::rngs::OsRng,
 >;
-pub type BenchAgent = Agent<MemorySigner, [u8; 32], NoListener>;
+pub type BenchAgent = Agent<Sendable, MemorySigner, [u8; 32], NoListener>;
 
 pub struct Scenario {
     pub keyhive: BenchKeyhive,
