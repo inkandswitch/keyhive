@@ -390,16 +390,6 @@ mod tests {
         CiphertextStore::<Sendable, Cr, T>::get_ciphertext(store, id).await
     }
 
-    async fn get_ct_by_pcs<
-        Cr: ContentRef + Send + Sync + 'static,
-        T: Clone + Send + Sync + 'static,
-    >(
-        store: &MemoryCiphertextStore<Cr, T>,
-        pcs_update: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<Vec<Arc<EncryptedContent<T, Cr>>>, Infallible> {
-        CiphertextStore::<Sendable, Cr, T>::get_ciphertext_by_pcs_update(store, pcs_update).await
-    }
-
     fn setup(
         plaintext: String,
         cref: [u8; 32],
