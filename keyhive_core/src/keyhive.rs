@@ -63,7 +63,7 @@ use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
-    share_key::ShareKey,
+    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
     signed::{Signed, SigningError, VerificationError},
     signer::async_signer::AsyncSigner,
     verifiable::Verifiable,
@@ -143,6 +143,8 @@ impl<
         L: MembershipListener<F, S, K, T>,
         R: rand::CryptoRng + rand::RngCore,
     > Keyhive<F, S, K, T, P, C, L, R>
+where
+    ShareSecretKey: AsyncSecretKey<F>,
 {
     #[instrument(skip_all)]
     pub fn id(&self) -> IndividualId {
@@ -654,7 +656,7 @@ impl<
         doc: Arc<Mutex<Document<F, S, K, T, L>>>,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
-        doc.lock().await.try_decrypt_content(encrypted)
+        doc.lock().await.try_decrypt_content(encrypted).await
     }
 
     pub async fn try_causal_decrypt_content(
@@ -1778,7 +1780,7 @@ impl<
                 return Ok(());
             }
         }
-        if doc.lock().await.merge_cgka_op(signed_op.clone())? {
+        if doc.lock().await.merge_cgka_op(signed_op.clone()).await? {
             self.event_listener.on_cgka_op(&signed_op).await;
         }
         Ok(())
@@ -2452,6 +2454,7 @@ impl<
     > ForkAsync for Keyhive<F, S, K, T, P, C, L, R>
 where
     Log<F, S, K, T>: MembershipListener<F, S, K, T>,
+    ShareSecretKey: AsyncSecretKey<F>,
 {
     type AsyncForked = Keyhive<F, S, K, T, P, C, Log<F, S, K, T>, R>;
 
@@ -2483,6 +2486,7 @@ impl<
     > MergeAsync for Arc<Mutex<Keyhive<F, S, K, T, P, C, L, R>>>
 where
     Log<F, S, K, T>: MembershipListener<F, S, K, T>,
+    ShareSecretKey: AsyncSecretKey<F>,
 {
     async fn merge_async(&self, fork: Self::AsyncForked) {
         let forked_active = { fork.active.lock().await.clone() };

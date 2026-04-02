@@ -37,7 +37,7 @@ use id::GroupId;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
-    share_key::ShareKey,
+    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
     signed::{Signed, SigningError},
     signer::{
         async_signer::AsyncSigner,
@@ -93,6 +93,29 @@ impl<
         T: ContentRef,
         L: MembershipListener<F, S, K, T>,
     > Group<F, S, K, T, L>
+{
+    pub fn id(&self) -> Identifier {
+        self.group_id().into()
+    }
+
+    pub fn group_id(&self) -> GroupId {
+        self.state.group_id()
+    }
+
+    pub fn agent_id(&self) -> AgentId {
+        self.group_id().into()
+    }
+}
+
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Group<F, S, K, T, L>
+where
+    ShareSecretKey: AsyncSecretKey<F>,
 {
     #[tracing::instrument(skip_all)]
     pub async fn new(
@@ -225,18 +248,6 @@ impl<
 
         group.rebuild().await;
         Ok(group)
-    }
-
-    pub fn id(&self) -> Identifier {
-        self.group_id().into()
-    }
-
-    pub fn group_id(&self) -> GroupId {
-        self.state.group_id()
-    }
-
-    pub fn agent_id(&self) -> AgentId {
-        self.group_id().into()
     }
 
     pub async fn individual_ids(&self) -> HashSet<IndividualId> {

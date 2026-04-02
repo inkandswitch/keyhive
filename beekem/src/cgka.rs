@@ -27,7 +27,7 @@ use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
     signed::Signed,
     signer::async_signer::{self, AsyncSigner},
     siv::Siv,
@@ -166,7 +166,10 @@ impl Cgka {
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
+    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         let mut op = None;
         let current_pcs_key = if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
@@ -203,7 +206,10 @@ impl Cgka {
     pub async fn decryption_key_for<F: FutureForm, T, Cr: ContentRef>(
         &mut self,
         encrypted: &EncryptedContent<T, Cr>,
-    ) -> Result<SymmetricKey, CgkaError> {
+    ) -> Result<SymmetricKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         let pcs_key = self
             .pcs_key_from_hashes::<F>(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)
             .await?;
@@ -232,7 +238,10 @@ impl Cgka {
         id: MemberId,
         pk: ShareKey,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         if self.tree.contains_id(&id) {
             return Ok(None);
         }
@@ -261,7 +270,10 @@ impl Cgka {
         &mut self,
         members: NonEmpty<(MemberId, ShareKey)>,
         signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         let mut ops = Vec::new();
         for m in members {
             ops.push(self.add::<F, S>(m.0, m.1, signer).await?);
@@ -275,7 +287,10 @@ impl Cgka {
         &mut self,
         id: MemberId,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         if !self.tree.contains_id(&id) {
             return Ok(None);
         }
@@ -308,7 +323,10 @@ impl Cgka {
         new_sk: ShareSecretKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
+    ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         if self.should_replay() {
             self.replay_ops_graph::<F>().await?;
         }
@@ -350,7 +368,10 @@ impl Cgka {
     pub async fn merge_concurrent_operation<F: FutureForm>(
         &mut self,
         op: Arc<Signed<CgkaOperation>>,
-    ) -> Result<bool, CgkaError> {
+    ) -> Result<bool, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
             return Ok(false);
         }
@@ -456,7 +477,10 @@ impl Cgka {
     }
 
     /// Decrypt tree secret to derive [`PcsKey`].
-    async fn pcs_key_from_tree_root<F: FutureForm>(&mut self) -> Result<PcsKey, CgkaError> {
+    async fn pcs_key_from_tree_root<F: FutureForm>(&mut self) -> Result<PcsKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         let key = self
             .tree
             .decrypt_tree_secret::<F>(self.owner_id, &mut self.owner_sks)
@@ -473,7 +497,10 @@ impl Cgka {
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<PcsKey, CgkaError> {
+    ) -> Result<PcsKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         if let Some(pcs_key) = self.pcs_keys.get(pcs_key_hash) {
             Ok(*pcs_key.clone())
         } else {
@@ -492,7 +519,10 @@ impl Cgka {
     async fn derive_pcs_key_for_op<F: FutureForm>(
         &mut self,
         op_hash: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<PcsKey, CgkaError> {
+    ) -> Result<PcsKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         if !self.ops_graph.contains_op_hash(op_hash) {
             return Err(CgkaError::UnknownPcsKey);
         }
@@ -510,7 +540,10 @@ impl Cgka {
 
     /// Replay all ops in our graph in a deterministic order.
     #[instrument(skip_all)]
-    async fn replay_ops_graph<F: FutureForm>(&mut self) -> Result<(), CgkaError> {
+    async fn replay_ops_graph<F: FutureForm>(&mut self) -> Result<(), CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         let ordered_ops = self.ops_graph.topsort_graph()?;
         let rebuilt_cgka = self.rebuild_cgka::<F>(ordered_ops).await?;
         self.update_cgka_from(&rebuilt_cgka);
@@ -523,7 +556,10 @@ impl Cgka {
     async fn rebuild_cgka<F: FutureForm>(
         &mut self,
         epochs: NonEmpty<CgkaEpoch>,
-    ) -> Result<Cgka, CgkaError> {
+    ) -> Result<Cgka, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         let mut rebuilt_cgka = Cgka::new_from_init_add(
             self.doc_id,
             self.original_member.0,
@@ -545,7 +581,10 @@ impl Cgka {
     async fn rebuild_pcs_key<F: FutureForm>(
         &mut self,
         epochs: NonEmpty<CgkaEpoch>,
-    ) -> Result<PcsKey, CgkaError> {
+    ) -> Result<PcsKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         debug_assert!(matches!(
             epochs.last()[0].payload,
             CgkaOperation::Update { .. }
@@ -596,7 +635,10 @@ impl Fork for Cgka {
 }
 
 impl Cgka {
-    pub async fn merge_fork<F: FutureForm>(&mut self, fork: Self) {
+    pub async fn merge_fork<F: FutureForm>(&mut self, fork: Self)
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.owner_sks.merge(fork.owner_sks);
         self.ops_graph.merge(fork.ops_graph);
         self.pcs_keys.merge(fork.pcs_keys);
@@ -608,7 +650,10 @@ impl Cgka {
 
 #[cfg(feature = "test_utils")]
 impl Cgka {
-    pub async fn secret_from_root<F: FutureForm>(&mut self) -> Result<PcsKey, CgkaError> {
+    pub async fn secret_from_root<F: FutureForm>(&mut self) -> Result<PcsKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.pcs_key_from_tree_root::<F>().await
     }
 
@@ -616,7 +661,10 @@ impl Cgka {
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<PcsKey, CgkaError> {
+    ) -> Result<PcsKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.pcs_key_from_hashes::<F>(pcs_key_hash, update_op_hash)
             .await
     }

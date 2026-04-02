@@ -6,7 +6,7 @@
 use crate::{
     principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
     store::secret_key::SecretKeyStore,
-    transact::{fork::Fork, merge::Merge},
+    transact::fork::Fork,
 };
 use beekem::{
     encrypted::EncryptedContent,
@@ -20,7 +20,7 @@ use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
     signed::Signed,
     signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
@@ -127,7 +127,10 @@ impl Cgka {
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
+    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.0
             .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
             .await
@@ -136,7 +139,10 @@ impl Cgka {
     pub async fn decryption_key_for<F: FutureForm, T, Cr: ContentRef>(
         &mut self,
         encrypted: &EncryptedContent<T, Cr>,
-    ) -> Result<SymmetricKey, CgkaError> {
+    ) -> Result<SymmetricKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.0.decryption_key_for::<F, T, Cr>(encrypted).await
     }
 
@@ -149,7 +155,10 @@ impl Cgka {
         id: IndividualId,
         pk: ShareKey,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.0.add(MemberId(id.verifying_key()), pk, signer).await
     }
 
@@ -157,7 +166,10 @@ impl Cgka {
         &mut self,
         members: NonEmpty<(IndividualId, ShareKey)>,
         signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         let converted = members.map(|(id, pk)| (MemberId(id.verifying_key()), pk));
         self.0.add_multiple(converted, signer).await
     }
@@ -166,7 +178,10 @@ impl Cgka {
         &mut self,
         id: IndividualId,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.0.remove(MemberId(id.verifying_key()), signer).await
     }
 
@@ -176,7 +191,10 @@ impl Cgka {
         new_sk: ShareSecretKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
+    ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.0.update(new_pk, new_sk, signer, csprng).await
     }
 
@@ -187,7 +205,10 @@ impl Cgka {
     pub async fn merge_concurrent_operation<F: FutureForm>(
         &mut self,
         op: Arc<Signed<CgkaOperation>>,
-    ) -> Result<bool, CgkaError> {
+    ) -> Result<bool, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.0.merge_concurrent_operation::<F>(op).await
     }
 
@@ -221,14 +242,20 @@ impl Fork for Cgka {
 }
 
 impl Cgka {
-    pub async fn merge_fork<F: FutureForm>(&mut self, fork: Self) {
+    pub async fn merge_fork<F: FutureForm>(&mut self, fork: Self)
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.0.merge_fork::<F>(fork.0).await;
     }
 }
 
 #[cfg(feature = "test_utils")]
 impl Cgka {
-    pub async fn secret_from_root<F: FutureForm>(&mut self) -> Result<PcsKey, CgkaError> {
+    pub async fn secret_from_root<F: FutureForm>(&mut self) -> Result<PcsKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.0.secret_from_root::<F>().await
     }
 
@@ -236,7 +263,10 @@ impl Cgka {
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<PcsKey, CgkaError> {
+    ) -> Result<PcsKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.0.secret::<F>(pcs_key_hash, update_op_hash).await
     }
 }

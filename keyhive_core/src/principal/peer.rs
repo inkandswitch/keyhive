@@ -14,7 +14,9 @@ use dupe::Dupe;
 use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_crypto::{
-    content::reference::ContentRef, share_key::ShareKey, signer::async_signer::AsyncSigner,
+    content::reference::ContentRef,
+    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
+    signer::async_signer::AsyncSigner,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -59,7 +61,18 @@ impl<
             Peer::Document(id, _) => (*id).into(),
         }
     }
+}
 
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Peer<F, S, K, T, L>
+where
+    ShareSecretKey: AsyncSecretKey<F>,
+{
     pub async fn individual_ids(&self) -> HashSet<IndividualId> {
         match self {
             Peer::Individual(id, _) => HashSet::from_iter([*id]),

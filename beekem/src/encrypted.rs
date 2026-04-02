@@ -1,7 +1,7 @@
 //! Ciphertext with public metadata.
 
 use crate::{error::CgkaError, operation::CgkaOperation, pcs_key::PcsKey};
-use alloc::vec::Vec;
+use alloc::{string::ToString, vec::Vec};
 use core::marker::PhantomData;
 use future_form::FutureForm;
 use keyhive_crypto::{
@@ -103,7 +103,10 @@ impl<T> EncryptedSecret<T> {
     pub async fn try_encrypter_decrypt<F: FutureForm>(
         &self,
         encrypter_secret_key: &ShareSecretKey,
-    ) -> Result<Vec<u8>, CgkaError> {
+    ) -> Result<Vec<u8>, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         let mut buf: Vec<u8> = self.ciphertext.clone();
         let key = AsyncSecretKey::<F>::derive_symmetric_key(encrypter_secret_key, &self.paired_pk)
             .await
@@ -141,7 +144,10 @@ pub async fn encrypt_secret<F: FutureForm>(
     secret: ShareSecretKey,
     sk: &ShareSecretKey,
     paired_pk: &ShareKey,
-) -> Result<EncryptedSecret<ShareSecretKey>, CgkaError> {
+) -> Result<EncryptedSecret<ShareSecretKey>, CgkaError>
+where
+    ShareSecretKey: AsyncSecretKey<F>,
+{
     let key = AsyncSecretKey::<F>::derive_symmetric_key(sk, paired_pk)
         .await
         .map_err(|_| CgkaError::Decryption("ECDH failed".into()))?;

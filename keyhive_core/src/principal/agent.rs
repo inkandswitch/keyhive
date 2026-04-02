@@ -21,7 +21,9 @@ use ed25519_dalek::VerifyingKey;
 use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_crypto::{
-    content::reference::ContentRef, share_key::ShareKey, signer::async_signer::AsyncSigner,
+    content::reference::ContentRef,
+    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
+    signer::async_signer::AsyncSigner,
     verifiable::Verifiable,
 };
 use std::{
@@ -92,7 +94,18 @@ impl<
             Agent::Document(id, _) => (*id).into(),
         }
     }
+}
 
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Agent<F, S, K, T, L>
+where
+    ShareSecretKey: AsyncSecretKey<F>,
+{
     pub async fn individual_ids(&self) -> HashSet<IndividualId> {
         let mut ids = HashSet::new();
         let mut seen = HashSet::new();
@@ -266,6 +279,8 @@ impl<
         T: ContentRef,
         L: MembershipListener<F, S, K, T>,
     > From<Document<F, S, K, T, L>> for Agent<F, S, K, T, L>
+where
+    ShareSecretKey: AsyncSecretKey<F>,
 {
     fn from(d: Document<F, S, K, T, L>) -> Self {
         Agent::Document(d.doc_id(), Arc::new(Mutex::new(d)))

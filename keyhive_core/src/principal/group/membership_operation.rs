@@ -18,8 +18,12 @@ use derive_where::derive_where;
 use dupe::Dupe;
 use future_form::FutureForm;
 use keyhive_crypto::{
-    content::reference::ContentRef, digest::Digest, signed::Signed,
-    signer::async_signer::AsyncSigner, verifiable::Verifiable,
+    content::reference::ContentRef,
+    digest::Digest,
+    share_key::{AsyncSecretKey, ShareSecretKey},
+    signed::Signed,
+    signer::async_signer::AsyncSigner,
+    verifiable::Verifiable,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -650,7 +654,9 @@ async fn push_membership_edges<
     heads: &mut Vec<MembershipOpEntry<F, S, K, T, L>>,
     visited: &HashSet<Digest<MembershipOperation<F, S, K, T, L>>>,
     follow_group_heads: bool,
-) {
+) where
+    ShareSecretKey: AsyncSecretKey<F>,
+{
     match op {
         MembershipOperation::Delegation(dlg) => {
             if let Some(proof) = &dlg.payload.proof {
@@ -691,7 +697,10 @@ pub async fn bfs_membership_ops<
     L: MembershipListener<F, S, K, T>,
 >(
     mut heads: Vec<MembershipOpEntry<F, S, K, T, L>>,
-) -> MembershipOpMap<F, S, K, T, L> {
+) -> MembershipOpMap<F, S, K, T, L>
+where
+    ShareSecretKey: AsyncSecretKey<F>,
+{
     let mut ops = HashMap::new();
     let mut visited: HashSet<Digest<MembershipOperation<F, S, K, T, L>>> = HashSet::new();
 
@@ -720,7 +729,9 @@ pub async fn bfs_extend_from_revocation<
     rev: &Arc<Signed<Revocation<F, S, K, T, L>>>,
     all_ops: &mut MembershipOpMap<F, S, K, T, L>,
     visited: &mut HashSet<Digest<MembershipOperation<F, S, K, T, L>>>,
-) {
+) where
+    ShareSecretKey: AsyncSecretKey<F>,
+{
     let mut heads: Vec<MembershipOpEntry<F, S, K, T, L>> = Vec::new();
 
     if let Some(proof) = &rev.payload.proof {

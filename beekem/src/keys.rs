@@ -37,7 +37,10 @@ impl ShareKeyMap {
         &self,
         encrypter_pk: ShareKey,
         encrypted: &EncryptedSecret<ShareSecretKey>,
-    ) -> Result<Vec<u8>, CgkaError> {
+    ) -> Result<Vec<u8>, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         let sk = self
             .get(&encrypted.paired_pk)
             .ok_or(CgkaError::SecretKeyNotFound)?;

@@ -77,7 +77,10 @@ impl SecretStore {
         child_node_key: &NodeKey,
         child_sks: &mut ShareKeyMap,
         seen_idxs: &[TreeNodeIndex],
-    ) -> Result<ShareSecretKey, CgkaError> {
+    ) -> Result<ShareSecretKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         if self.has_conflict() {
             return Err(CgkaError::UnexpectedKeyConflict);
         }
@@ -124,7 +127,10 @@ impl SecretStoreVersion {
         child_node_key: &NodeKey,
         child_sks: &mut ShareKeyMap,
         seen_idxs: &[TreeNodeIndex],
-    ) -> Result<ShareSecretKey, CgkaError> {
+    ) -> Result<ShareSecretKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         let is_encrypter = child_node_key.contains_key(&self.encrypter_pk);
         let mut lookup_idx = seen_idxs.last().ok_or(CgkaError::EncryptedSecretNotFound)?;
         if !self.sk.contains_key(lookup_idx) {

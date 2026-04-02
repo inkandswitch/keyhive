@@ -45,7 +45,7 @@ use id::DocumentId;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
     signed::{Signed, SigningError},
     signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
     symmetric_key::SymmetricKey,
@@ -86,25 +86,6 @@ impl<
         L: MembershipListener<F, S, K, T>,
     > Document<F, S, K, T, L>
 {
-    // FIXME: We need a signing key for initializing Cgka and we need to share
-    // the init add op.
-    // NOTE doesn't register into the top-level Keyhive context
-    #[instrument(skip_all)]
-    pub async fn from_group(
-        group: Group<F, S, K, T, L>,
-        content_heads: NonEmpty<T>,
-    ) -> Result<Self, CgkaError> {
-        let mut doc = Document {
-            cgka: None,
-            group,
-            content_heads: content_heads.iter().cloned().collect(),
-            content_state: Default::default(),
-            known_decryption_keys: HashMap::new(),
-        };
-        doc.rebuild().await;
-        Ok(doc)
-    }
-
     pub fn id(&self) -> Identifier {
         self.group.id()
     }
@@ -129,6 +110,36 @@ impl<
             Some(cgka) => Ok(cgka),
             None => Err(CgkaError::NotInitialized),
         }
+    }
+}
+
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Document<F, S, K, T, L>
+where
+    ShareSecretKey: AsyncSecretKey<F>,
+{
+    // FIXME: We need a signing key for initializing Cgka and we need to share
+    // the init add op.
+    // NOTE doesn't register into the top-level Keyhive context
+    #[instrument(skip_all)]
+    pub async fn from_group(
+        group: Group<F, S, K, T, L>,
+        content_heads: NonEmpty<T>,
+    ) -> Result<Self, CgkaError> {
+        let mut doc = Document {
+            cgka: None,
+            group,
+            content_heads: content_heads.iter().cloned().collect(),
+            content_state: Default::default(),
+            known_decryption_keys: HashMap::new(),
+        };
+        doc.rebuild().await;
+        Ok(doc)
     }
 
     #[allow(clippy::type_complexity)]
@@ -453,7 +464,7 @@ impl<
             .with_new_owner(IndividualId::from(added_id), owner_sks)?;
         new_cgka.sync_keys_to_store::<F, K>(secret_store).await;
         self.cgka = Some(new_cgka);
-        self.merge_cgka_op(op)
+        self.merge_cgka_op(op).await
     }
 
     pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
@@ -563,7 +574,7 @@ impl<
     where
         T: for<'de> Deserialize<'de>,
     {
-        let raw_entrypoint = self.try_decrypt_content(encrypted_content)?;
+        let raw_entrypoint = self.try_decrypt_content(encrypted_content).await?;
 
         let mut acc = CausalDecryptionState::new();
 

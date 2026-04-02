@@ -20,7 +20,10 @@ use future_form::FutureForm;
 use futures::lock::Mutex;
 use id::MemberedId;
 use keyhive_crypto::{
-    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
+    content::reference::ContentRef,
+    share_key::{AsyncSecretKey, ShareSecretKey},
+    signed::Signed,
+    signer::async_signer::AsyncSigner,
     verifiable::Verifiable,
 };
 use nonempty::NonEmpty;
@@ -50,6 +53,31 @@ impl<
         L: MembershipListener<F, S, K, T>,
     > Membered<F, S, K, T, L>
 {
+    pub fn agent_id(&self) -> AgentId {
+        match self {
+            Membered::Group(g_id, _) => (*g_id).into(),
+            Membered::Document(doc_id, _) => (*doc_id).into(),
+        }
+    }
+
+    pub fn membered_id(&self) -> MemberedId {
+        match self {
+            Membered::Group(id, _) => MemberedId::GroupId(*id),
+            Membered::Document(id, _) => MemberedId::DocumentId(*id),
+        }
+    }
+}
+
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Membered<F, S, K, T, L>
+where
+    ShareSecretKey: AsyncSecretKey<F>,
+{
     pub async fn get_capability(
         &self,
         agent_id: &Identifier,
@@ -63,20 +91,6 @@ impl<
                 let locked = doc.lock().await;
                 locked.get_capability(agent_id).duped()
             }
-        }
-    }
-
-    pub fn agent_id(&self) -> AgentId {
-        match self {
-            Membered::Group(g_id, _) => (*g_id).into(),
-            Membered::Document(doc_id, _) => (*doc_id).into(),
-        }
-    }
-
-    pub fn membered_id(&self) -> MemberedId {
-        match self {
-            Membered::Group(id, _) => MemberedId::GroupId(*id),
-            Membered::Document(id, _) => MemberedId::DocumentId(*id),
         }
     }
 

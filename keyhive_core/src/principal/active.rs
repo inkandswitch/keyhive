@@ -35,7 +35,7 @@ use future_form::FutureForm;
 use futures::{lock::Mutex, prelude::*};
 use keyhive_crypto::{
     content::reference::ContentRef,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
     signed::{Signed, SigningError},
     signer::{async_signer, async_signer::AsyncSigner},
     verifiable::Verifiable,
@@ -300,7 +300,10 @@ impl<
         &self,
         subject: Membered<F, S, K, T, M>,
         min: Access,
-    ) -> Option<Arc<Signed<Delegation<F, S, K, T, M>>>> {
+    ) -> Option<Arc<Signed<Delegation<F, S, K, T, M>>>>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         subject
             .get_capability(&self.id().into())
             .await

@@ -204,7 +204,10 @@ impl BeeKem {
         &self,
         owner_id: MemberId,
         owner_sks: &mut ShareKeyMap,
-    ) -> Result<ShareSecretKey, CgkaError> {
+    ) -> Result<ShareSecretKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         let leaf_idx = *self.leaf_index_for_id(owner_id)?;
         if !self.has_root_key() {
             return Err(CgkaError::NoRootKey);
@@ -275,7 +278,10 @@ impl BeeKem {
         pk: ShareKey,
         sks: &mut ShareKeyMap,
         csprng: &mut R,
-    ) -> Result<Option<(PcsKey, PathChange)>, CgkaError> {
+    ) -> Result<Option<(PcsKey, PathChange)>, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         let leaf_idx = *self.leaf_index_for_id(id)?;
         debug_assert!(self.id_for_leaf(leaf_idx).unwrap() == id);
         let mut new_path = PathChange {
@@ -395,7 +401,10 @@ impl BeeKem {
         child_node_key: &NodeKey,
         seen_idxs: &[TreeNodeIndex],
         child_sks: &mut ShareKeyMap,
-    ) -> Result<Option<ShareSecretKey>, CgkaError> {
+    ) -> Result<Option<ShareSecretKey>, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         debug_assert!(!self.is_root(child_idx));
         let parent_idx = treemath::parent(child_idx);
         let Some(parent) = self.inner_node(parent_idx) else {
@@ -427,7 +436,10 @@ impl BeeKem {
         new_parent_pk: ShareKey,
         new_parent_sk: &ShareSecretKey,
         csprng: &mut R,
-    ) -> Result<(), CgkaError> {
+    ) -> Result<(), CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         debug_assert!(!self.is_root(child_idx));
         let parent_idx = treemath::parent(child_idx);
         let secret_store = self
@@ -461,7 +473,10 @@ impl BeeKem {
         new_parent_pk: ShareKey,
         new_parent_sk: &ShareSecretKey,
         csprng: &mut R,
-    ) -> Result<SecretStore, CgkaError> {
+    ) -> Result<SecretStore, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         debug_assert!(!self.is_root(child_idx));
         let sibling_idx = treemath::sibling(child_idx);
         let mut secret_map = BTreeMap::new();
@@ -507,7 +522,10 @@ impl BeeKem {
     async fn async_ratchet_n_forward<F: FutureForm>(
         mut sk: ShareSecretKey,
         n: usize,
-    ) -> Result<ShareSecretKey, CgkaError> {
+    ) -> Result<ShareSecretKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         for _ in 0..n {
             sk = AsyncSecretKey::<F>::ratchet_forward(&sk)
                 .await
