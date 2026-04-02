@@ -5,6 +5,7 @@
 
 use crate::{
     principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
+    store::secret_key::SecretKeyStore,
     transact::{fork::Fork, merge::Merge},
 };
 use beekem::{
@@ -132,11 +133,11 @@ impl Cgka {
             .await
     }
 
-    pub fn decryption_key_for<T, Cr: ContentRef>(
+    pub async fn decryption_key_for<F: FutureForm, T, Cr: ContentRef>(
         &mut self,
         encrypted: &EncryptedContent<T, Cr>,
     ) -> Result<SymmetricKey, CgkaError> {
-        self.0.decryption_key_for(encrypted)
+        self.0.decryption_key_for::<F, T, Cr>(encrypted).await
     }
 
     pub fn has_pcs_key(&self) -> bool {
@@ -183,11 +184,11 @@ impl Cgka {
         self.0.group_size()
     }
 
-    pub fn merge_concurrent_operation(
+    pub async fn merge_concurrent_operation<F: FutureForm>(
         &mut self,
         op: Arc<Signed<CgkaOperation>>,
     ) -> Result<bool, CgkaError> {
-        self.0.merge_concurrent_operation(op)
+        self.0.merge_concurrent_operation::<F>(op).await
     }
 
     pub fn ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
@@ -196,6 +197,18 @@ impl Cgka {
 
     pub fn contains_predecessors(&self, preds: &HashSet<Digest<Signed<CgkaOperation>>>) -> bool {
         self.0.contains_predecessors(preds)
+    }
+
+    /// Persist all owner secret keys to the durable store.
+    ///
+    /// Call after any CGKA operation that may generate new keys
+    /// (`update`, `add`, `remove`, `new_app_secret_for`, `with_new_owner`).
+    pub async fn sync_keys_to_store<F: FutureForm, K: SecretKeyStore<F>>(&self, store: &mut K) {
+        for (pk, sk) in self.0.owner_sks.iter() {
+            if !store.contains_secret_key(pk).await.unwrap_or(false) {
+                store.import_raw_secret_key(*sk).await.ok();
+            }
+        }
     }
 }
 
@@ -207,24 +220,24 @@ impl Fork for Cgka {
     }
 }
 
-impl Merge for Cgka {
-    fn merge(&mut self, fork: Self::Forked) {
-        beekem::transact::Merge::merge(&mut self.0, fork.0);
+impl Cgka {
+    pub async fn merge_fork<F: FutureForm>(&mut self, fork: Self) {
+        self.0.merge_fork::<F>(fork.0).await;
     }
 }
 
 #[cfg(feature = "test_utils")]
 impl Cgka {
-    pub fn secret_from_root(&mut self) -> Result<PcsKey, CgkaError> {
-        self.0.secret_from_root()
+    pub async fn secret_from_root<F: FutureForm>(&mut self) -> Result<PcsKey, CgkaError> {
+        self.0.secret_from_root::<F>().await
     }
 
-    pub fn secret(
+    pub async fn secret<F: FutureForm>(
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
-        self.0.secret(pcs_key_hash, update_op_hash)
+        self.0.secret::<F>(pcs_key_hash, update_op_hash).await
     }
 }
 

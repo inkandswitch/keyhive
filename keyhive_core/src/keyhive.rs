@@ -630,6 +630,7 @@ impl<
         let signer = { self.active.lock().await.signer.clone() };
         let result = {
             let mut locked_csprng = self.csprng.lock().await;
+            let mut locked_store = self.secret_store.lock().await;
             doc.lock()
                 .await
                 .try_encrypt_content(
@@ -637,6 +638,7 @@ impl<
                     content,
                     pred_refs,
                     &signer,
+                    &mut *locked_store,
                     &mut *locked_csprng,
                 )
                 .await?
@@ -1749,7 +1751,12 @@ impl<
                 if doc
                     .lock()
                     .await
-                    .merge_cgka_invite_op(signed_op.clone(), &sk)?
+                    .merge_cgka_invite_op(
+                        signed_op.clone(),
+                        &sk,
+                        &mut *self.secret_store.lock().await,
+                    )
+                    .await?
                 {
                     self.event_listener.on_cgka_op(&signed_op).await;
                 };
@@ -1759,7 +1766,12 @@ impl<
                 if doc
                     .lock()
                     .await
-                    .merge_cgka_invite_op(signed_op.clone(), &sk)?
+                    .merge_cgka_invite_op(
+                        signed_op.clone(),
+                        &sk,
+                        &mut *self.secret_store.lock().await,
+                    )
+                    .await?
                 {
                     self.event_listener.on_cgka_op(&signed_op).await;
                 }

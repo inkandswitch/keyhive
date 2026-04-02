@@ -3,10 +3,11 @@
 use crate::{error::CgkaError, operation::CgkaOperation, pcs_key::PcsKey};
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
     signed::Signed,
     siv::Siv,
     symmetric_key::SymmetricKey,
@@ -99,13 +100,16 @@ impl<T> EncryptedSecret<T> {
 
     /// Decrypt the secret using the encrypter's secret key.
     #[instrument(skip(self))]
-    pub fn try_encrypter_decrypt(
+    pub async fn try_encrypter_decrypt<F: FutureForm>(
         &self,
         encrypter_secret_key: &ShareSecretKey,
-    ) -> Result<Vec<u8>, chacha20poly1305::Error> {
+    ) -> Result<Vec<u8>, CgkaError> {
         let mut buf: Vec<u8> = self.ciphertext.clone();
-        let key = encrypter_secret_key.derive_symmetric_key(&self.paired_pk);
-        key.try_decrypt(self.nonce, &mut buf)?;
+        let key = AsyncSecretKey::<F>::derive_symmetric_key(encrypter_secret_key, &self.paired_pk)
+            .await
+            .map_err(|_| CgkaError::Decryption("ECDH failed".into()))?;
+        key.try_decrypt(self.nonce, &mut buf)
+            .map_err(|e| CgkaError::Decryption(e.to_string()))?;
         Ok(buf)
     }
 }
@@ -132,13 +136,15 @@ impl<T: core::hash::Hash, Cr: ContentRef> core::hash::Hash for EncryptedContent<
 }
 
 /// Encrypt a secret key for a tree node, paired with the given public key.
-pub fn encrypt_secret(
+pub async fn encrypt_secret<F: FutureForm>(
     doc_id: &[u8],
     secret: ShareSecretKey,
     sk: &ShareSecretKey,
     paired_pk: &ShareKey,
 ) -> Result<EncryptedSecret<ShareSecretKey>, CgkaError> {
-    let key = sk.derive_symmetric_key(paired_pk);
+    let key = AsyncSecretKey::<F>::derive_symmetric_key(sk, paired_pk)
+        .await
+        .map_err(|_| CgkaError::Decryption("ECDH failed".into()))?;
     let mut ciphertext: Vec<u8> = (&secret).into();
     let nonce = Siv::new(&key, &ciphertext, doc_id);
     key.try_encrypt(nonce, &mut ciphertext)

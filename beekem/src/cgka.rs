@@ -178,7 +178,7 @@ impl Cgka {
             op = Some(update_op);
             pcs_key
         } else {
-            self.pcs_key_from_tree_root()?
+            self.pcs_key_from_tree_root::<F>().await?
         };
         let pcs_key_hash = Digest::hash(&current_pcs_key);
         let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id.as_bytes());
@@ -200,12 +200,13 @@ impl Cgka {
     /// We must first derive a [`PcsKey`] for the encrypted data's associated
     /// hashes. Then we use that [`PcsKey`] to derive an [`ApplicationSecret`].
     #[instrument(skip_all)]
-    pub fn decryption_key_for<T, Cr: ContentRef>(
+    pub async fn decryption_key_for<F: FutureForm, T, Cr: ContentRef>(
         &mut self,
         encrypted: &EncryptedContent<T, Cr>,
     ) -> Result<SymmetricKey, CgkaError> {
-        let pcs_key =
-            self.pcs_key_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)?;
+        let pcs_key = self
+            .pcs_key_from_hashes::<F>(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)
+            .await?;
         if !self.pcs_keys.contains_key(&encrypted.pcs_key_hash) {
             self.insert_pcs_key(&pcs_key, encrypted.pcs_update_op_hash);
         }
@@ -236,7 +237,7 @@ impl Cgka {
             return Ok(None);
         }
         if self.should_replay() {
-            self.replay_ops_graph()?;
+            self.replay_ops_graph::<F>().await?;
         }
         let leaf_index = self.tree.push_leaf(id, pk.into());
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
@@ -279,7 +280,7 @@ impl Cgka {
             return Ok(None);
         }
         if self.should_replay() {
-            self.replay_ops_graph()?;
+            self.replay_ops_graph::<F>().await?;
         }
         if self.group_size() == 1 {
             return Err(CgkaError::RemoveLastMember);
@@ -309,12 +310,13 @@ impl Cgka {
         csprng: &mut R,
     ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
         if self.should_replay() {
-            self.replay_ops_graph()?;
+            self.replay_ops_graph::<F>().await?;
         }
         self.owner_sks.insert(new_pk, new_sk);
-        let maybe_key_and_path =
-            self.tree
-                .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
+        let maybe_key_and_path = self
+            .tree
+            .encrypt_path::<F, R>(self.owner_id, new_pk, &mut self.owner_sks, csprng)
+            .await?;
         if let Some((pcs_key, new_path)) = maybe_key_and_path {
             let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
             let op = CgkaOperation::Update {
@@ -345,7 +347,7 @@ impl Cgka {
     /// membership changes and we receive a concurrent update, we can apply it
     /// immediately.
     #[instrument(skip_all)]
-    pub fn merge_concurrent_operation(
+    pub async fn merge_concurrent_operation<F: FutureForm>(
         &mut self,
         op: Arc<Signed<CgkaOperation>>,
     ) -> Result<bool, CgkaError> {
@@ -371,7 +373,7 @@ impl Cgka {
             }
         } else {
             if self.should_replay() {
-                self.replay_ops_graph()?;
+                self.replay_ops_graph::<F>().await?;
             }
             self.apply_operation(op)?;
         }
@@ -454,10 +456,11 @@ impl Cgka {
     }
 
     /// Decrypt tree secret to derive [`PcsKey`].
-    fn pcs_key_from_tree_root(&mut self) -> Result<PcsKey, CgkaError> {
+    async fn pcs_key_from_tree_root<F: FutureForm>(&mut self) -> Result<PcsKey, CgkaError> {
         let key = self
             .tree
-            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)?;
+            .decrypt_tree_secret::<F>(self.owner_id, &mut self.owner_sks)
+            .await?;
         Ok(PcsKey::new(key))
     }
 
@@ -466,7 +469,7 @@ impl Cgka {
     /// If we have not seen this [`PcsKey`] before, we'll need to rebuild
     /// the tree state for its corresponding update operation.
     #[instrument(skip_all)]
-    fn pcs_key_from_hashes(
+    async fn pcs_key_from_hashes<F: FutureForm>(
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
@@ -475,18 +478,18 @@ impl Cgka {
             Ok(*pcs_key.clone())
         } else {
             if self.has_pcs_key() {
-                let pcs_key = self.pcs_key_from_tree_root()?;
+                let pcs_key = self.pcs_key_from_tree_root::<F>().await?;
                 if &Digest::hash(&pcs_key) == pcs_key_hash {
                     return Ok(pcs_key);
                 }
             }
-            self.derive_pcs_key_for_op(update_op_hash)
+            self.derive_pcs_key_for_op::<F>(update_op_hash).await
         }
     }
 
     /// Derive [`PcsKey`] for this operation hash.
     #[instrument(skip_all)]
-    fn derive_pcs_key_for_op(
+    async fn derive_pcs_key_for_op<F: FutureForm>(
         &mut self,
         op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
@@ -496,7 +499,7 @@ impl Cgka {
         let mut heads = Set::new();
         heads.insert(*op_hash);
         let ops = self.ops_graph.topsort_for_heads(&heads)?;
-        self.rebuild_pcs_key(ops)
+        self.rebuild_pcs_key::<F>(ops).await
     }
 
     /// Whether we have unresolved concurrency that requires a replay to resolve.
@@ -507,9 +510,9 @@ impl Cgka {
 
     /// Replay all ops in our graph in a deterministic order.
     #[instrument(skip_all)]
-    fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
+    async fn replay_ops_graph<F: FutureForm>(&mut self) -> Result<(), CgkaError> {
         let ordered_ops = self.ops_graph.topsort_graph()?;
-        let rebuilt_cgka = self.rebuild_cgka(ordered_ops)?;
+        let rebuilt_cgka = self.rebuild_cgka::<F>(ordered_ops).await?;
         self.update_cgka_from(&rebuilt_cgka);
         self.pending_ops_for_structural_change = false;
         Ok(())
@@ -517,7 +520,10 @@ impl Cgka {
 
     /// Build a new [`Cgka`] for the provided non-empty list of [`CgkaEpoch`]s.
     #[instrument(skip_all)]
-    fn rebuild_cgka(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<Cgka, CgkaError> {
+    async fn rebuild_cgka<F: FutureForm>(
+        &mut self,
+        epochs: NonEmpty<CgkaEpoch>,
+    ) -> Result<Cgka, CgkaError> {
         let mut rebuilt_cgka = Cgka::new_from_init_add(
             self.doc_id,
             self.original_member.0,
@@ -527,7 +533,7 @@ impl Cgka {
         .with_new_owner(self.owner_id, self.owner_sks.clone())?;
         rebuilt_cgka.apply_epochs(&epochs)?;
         if rebuilt_cgka.has_pcs_key() {
-            let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
+            let pcs_key = rebuilt_cgka.pcs_key_from_tree_root::<F>().await?;
             rebuilt_cgka.insert_pcs_key(&pcs_key, Digest::hash(&epochs.last()[0]));
         }
         Ok(rebuilt_cgka)
@@ -536,7 +542,10 @@ impl Cgka {
     /// Derive a [`PcsKey`] by rebuilding a [`Cgka`] from the provided non-empty
     /// list of [`CgkaEpoch`]s.
     #[instrument(skip_all)]
-    fn rebuild_pcs_key(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<PcsKey, CgkaError> {
+    async fn rebuild_pcs_key<F: FutureForm>(
+        &mut self,
+        epochs: NonEmpty<CgkaEpoch>,
+    ) -> Result<PcsKey, CgkaError> {
         debug_assert!(matches!(
             epochs.last()[0].payload,
             CgkaOperation::Update { .. }
@@ -549,7 +558,7 @@ impl Cgka {
         )?
         .with_new_owner(self.owner_id, self.owner_sks.clone())?;
         rebuilt_cgka.apply_epochs(&epochs)?;
-        let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
+        let pcs_key = rebuilt_cgka.pcs_key_from_tree_root::<F>().await?;
         self.insert_pcs_key(&pcs_key, Digest::hash(&epochs.last()[0]));
         Ok(pcs_key)
     }
@@ -586,27 +595,29 @@ impl Fork for Cgka {
     }
 }
 
-impl Merge for Cgka {
-    fn merge(&mut self, fork: Self::Forked) {
+impl Cgka {
+    pub async fn merge_fork<F: FutureForm>(&mut self, fork: Self) {
         self.owner_sks.merge(fork.owner_sks);
         self.ops_graph.merge(fork.ops_graph);
         self.pcs_keys.merge(fork.pcs_keys);
-        self.replay_ops_graph()
+        self.replay_ops_graph::<F>()
+            .await
             .expect("two valid graphs should always merge causal consistency");
     }
 }
 
 #[cfg(feature = "test_utils")]
 impl Cgka {
-    pub fn secret_from_root(&mut self) -> Result<PcsKey, CgkaError> {
-        self.pcs_key_from_tree_root()
+    pub async fn secret_from_root<F: FutureForm>(&mut self) -> Result<PcsKey, CgkaError> {
+        self.pcs_key_from_tree_root::<F>().await
     }
 
-    pub fn secret(
+    pub async fn secret<F: FutureForm>(
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
-        self.pcs_key_from_hashes(pcs_key_hash, update_op_hash)
+        self.pcs_key_from_hashes::<F>(pcs_key_hash, update_op_hash)
+            .await
     }
 }

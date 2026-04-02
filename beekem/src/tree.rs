@@ -10,7 +10,8 @@ use crate::{
     treemath,
 };
 use alloc::{collections::BTreeMap, vec, vec::Vec};
-use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
+use future_form::FutureForm;
+use keyhive_crypto::share_key::{AsyncSecretKey, ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use treemath::{InnerNodeIndex, LeafNodeIndex, TreeNodeIndex, TreeSize};
@@ -199,7 +200,7 @@ impl BeeKem {
     /// encrypted for any of these descendents (in cases like a blank node or
     /// conflicting keys on a node on the path).
     #[instrument(skip_all, fields(doc_id, epochs))]
-    pub fn decrypt_tree_secret(
+    pub async fn decrypt_tree_secret<F: FutureForm>(
         &self,
         owner_id: MemberId,
         owner_sks: &mut ShareKeyMap,
@@ -216,9 +217,9 @@ impl BeeKem {
             let NodeKey::ShareKey(pk) = leaf.pk else {
                 return Err(CgkaError::ShareKeyNotFound);
             };
-            let secret = owner_sks.get(&pk).ok_or(CgkaError::ShareKeyNotFound)?;
-            return Ok(secret
-                .ratchet_n_forward(treemath::direct_path(leaf_idx.into(), self.tree_size).len()));
+            let secret = *owner_sks.get(&pk).ok_or(CgkaError::ShareKeyNotFound)?;
+            let n = treemath::direct_path(leaf_idx.into(), self.tree_size).len();
+            return Self::async_ratchet_n_forward::<F>(secret, n).await;
         }
         let lca_with_encrypter = treemath::lowest_common_ancestor(
             leaf_idx,
@@ -227,28 +228,24 @@ impl BeeKem {
         );
         let mut child_idx: TreeNodeIndex = leaf_idx.into();
         let mut seen_idxs = vec![child_idx];
-        // We will return this at the end once we've decrypted the root secret.
         let mut maybe_last_secret_decrypted = None;
         let mut child_node_key = leaf.pk.clone();
         let mut parent_idx: TreeNodeIndex = treemath::parent(child_idx).into();
         while !self.is_root(child_idx) {
-            // Find the next non-blank, non-conflict parent
             while self.should_skip_for_resolution(parent_idx) {
                 child_idx = parent_idx;
                 parent_idx = treemath::parent(child_idx).into();
             }
             debug_assert!(!self.is_root(child_idx));
-            maybe_last_secret_decrypted =
-                self.maybe_decrypt_parent_key(child_idx, &child_node_key, &seen_idxs, owner_sks)?;
+            maybe_last_secret_decrypted = self
+                .maybe_decrypt_parent_key::<F>(child_idx, &child_node_key, &seen_idxs, owner_sks)
+                .await?;
             let Some(ref secret) = maybe_last_secret_decrypted else {
                 panic!("Non-blank, non-conflict parent should have a secret we can decrypt");
             };
-            // If we have reached the intersection of our path with the encrypter's
-            // path, then we can ratchet this parent secret forward for each of the
-            // remaining nodes in the path and return early.
             if parent_idx == TreeNodeIndex::Inner(lca_with_encrypter) {
-                return Ok(secret
-                    .ratchet_n_forward(treemath::direct_path(parent_idx, self.tree_size).len()));
+                let n = treemath::direct_path(parent_idx, self.tree_size).len();
+                return Self::async_ratchet_n_forward::<F>(*secret, n).await;
             }
             seen_idxs.push(parent_idx);
             child_idx = parent_idx;
@@ -272,7 +269,7 @@ impl BeeKem {
     /// pair but encrypt the secret by doing Diffie Hellman with a different key pair
     /// generated just for that purpose. The secret store for that parent will then
     /// only have an entry for you.
-    pub fn encrypt_path<R: rand::CryptoRng + rand::RngCore>(
+    pub async fn encrypt_path<F: FutureForm, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         id: MemberId,
         pk: ShareKey,
@@ -290,10 +287,6 @@ impl BeeKem {
         };
         self.insert_leaf_at(leaf_idx, id, NodeKey::ShareKey(pk));
         let mut child_idx: TreeNodeIndex = leaf_idx.into();
-        // An encrypter will always have a single public key at each node as it
-        // encrypts up its path. At its leaf, it will have written the latest public
-        // key at the start. And as it moves up the path, it will generate a new public
-        // key for each ancestor up to the root.
         let mut child_pk = pk;
         let mut child_sk = *sks.get(&pk).ok_or(CgkaError::SecretKeyNotFound)?;
         let mut parent_idx = treemath::parent(child_idx);
@@ -301,16 +294,19 @@ impl BeeKem {
             if let Some(store) = self.inner_node(parent_idx) {
                 new_path.removed_keys.append(&mut store.node_key().keys());
             }
-            let new_parent_sk = child_sk.ratchet_forward();
-            let new_parent_pk = new_parent_sk.share_key();
-            self.encrypt_key_for_parent(
+            let new_parent_sk = AsyncSecretKey::<F>::ratchet_forward(&child_sk)
+                .await
+                .map_err(|e| CgkaError::Decryption(alloc::format!("ratchet failed: {e}")))?;
+            let new_parent_pk = AsyncSecretKey::<F>::to_share_key(&new_parent_sk);
+            self.encrypt_key_for_parent::<F, R>(
                 child_idx,
                 child_pk,
                 &child_sk,
                 new_parent_pk,
                 &new_parent_sk,
                 csprng,
-            )?;
+            )
+            .await?;
             new_path.path.push((
                 parent_idx.u32(),
                 self.inner_node(parent_idx)
@@ -393,7 +389,7 @@ impl BeeKem {
     /// Returns the secret if there is a single parent public key.
     /// In either case, adds any public key/decrypted secret key pairs
     /// it encounters to the [`ShareKeyMap`].
-    fn maybe_decrypt_parent_key(
+    async fn maybe_decrypt_parent_key<F: FutureForm>(
         &self,
         child_idx: TreeNodeIndex,
         child_node_key: &NodeKey,
@@ -412,7 +408,9 @@ impl BeeKem {
                 if child_sks.contains_key(&parent_pk) {
                     return Ok(child_sks.get(&parent_pk).cloned());
                 }
-                let secret = parent.decrypt_secret(child_node_key, child_sks, seen_idxs)?;
+                let secret = parent
+                    .decrypt_secret::<F>(child_node_key, child_sks, seen_idxs)
+                    .await?;
                 child_sks.insert(parent_pk, secret);
                 Some(secret)
             }
@@ -421,7 +419,7 @@ impl BeeKem {
     }
 
     /// Encrypt new secret for parent node.
-    fn encrypt_key_for_parent<R: rand::CryptoRng + rand::RngCore>(
+    async fn encrypt_key_for_parent<F: FutureForm, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         child_idx: TreeNodeIndex,
         child_pk: ShareKey,
@@ -432,14 +430,16 @@ impl BeeKem {
     ) -> Result<(), CgkaError> {
         debug_assert!(!self.is_root(child_idx));
         let parent_idx = treemath::parent(child_idx);
-        let secret_store = self.encrypt_new_secret_store_for_parent(
-            child_idx,
-            child_pk,
-            child_sk,
-            new_parent_pk,
-            new_parent_sk,
-            csprng,
-        )?;
+        let secret_store = self
+            .encrypt_new_secret_store_for_parent::<F, R>(
+                child_idx,
+                child_pk,
+                child_sk,
+                new_parent_pk,
+                new_parent_sk,
+                csprng,
+            )
+            .await?;
         self.insert_inner_node_at(parent_idx, secret_store);
         Ok(())
     }
@@ -450,7 +450,10 @@ impl BeeKem {
     /// node's resolution. These are then stored in the new [`SecretStore`], indexed
     /// by the tree index for each member of that resolution.
     #[allow(clippy::type_complexity)]
-    fn encrypt_new_secret_store_for_parent<R: rand::CryptoRng + rand::RngCore>(
+    async fn encrypt_new_secret_store_for_parent<
+        F: FutureForm,
+        R: rand::CryptoRng + rand::RngCore,
+    >(
         &self,
         child_idx: TreeNodeIndex,
         child_pk: ShareKey,
@@ -465,33 +468,30 @@ impl BeeKem {
         let mut sibling_resolution = Vec::new();
         self.append_resolution(sibling_idx, &mut sibling_resolution);
         if sibling_resolution.is_empty() {
-            // Normally you use a DH shared key to encrypt/decrypt the next node up,
-            // but if there's a blank sibling subtree, then you generate a key pair
-            // just to do DH with when encrypting the new parent secret.
             let paired_sk = ShareSecretKey::generate(csprng);
             let paired_pk = paired_sk.share_key();
-            let encrypted_sk = crate::encrypted::encrypt_secret(
+            let encrypted_sk = crate::encrypted::encrypt_secret::<F>(
                 self.doc_id.as_bytes(),
                 *new_parent_sk,
                 child_sk,
                 &paired_pk,
-            )?;
+            )
+            .await?;
             secret_map.insert(child_idx, encrypted_sk);
         } else {
-            // Encrypt the secret for every node in the sibling resolution, using
-            // a new DH shared secret to do the encryption for each node.
             let mut used_paired_sibling = false;
             for idx in sibling_resolution {
                 let next_pk = match self.node_key_for_index(idx)? {
                     NodeKey::ShareKey(share_key) => share_key,
                     _ => panic!("Sibling resolution nodes should have exactly one ShareKey"),
                 };
-                let encrypted_sk = crate::encrypted::encrypt_secret(
+                let encrypted_sk = crate::encrypted::encrypt_secret::<F>(
                     self.doc_id.as_bytes(),
                     *new_parent_sk,
                     child_sk,
                     &next_pk,
-                )?;
+                )
+                .await?;
                 if !used_paired_sibling {
                     secret_map.insert(child_idx, encrypted_sk.clone());
                     used_paired_sibling = true;
@@ -501,6 +501,19 @@ impl BeeKem {
         };
 
         Ok(SecretStore::new(new_parent_pk, child_pk, secret_map))
+    }
+
+    /// Ratchet a secret key forward `n` times through [`AsyncSecretKey`].
+    async fn async_ratchet_n_forward<F: FutureForm>(
+        mut sk: ShareSecretKey,
+        n: usize,
+    ) -> Result<ShareSecretKey, CgkaError> {
+        for _ in 0..n {
+            sk = AsyncSecretKey::<F>::ratchet_forward(&sk)
+                .await
+                .map_err(|e| CgkaError::Decryption(alloc::format!("ratchet failed: {e}")))?;
+        }
+        Ok(sk)
     }
 
     fn node_key_for_index(&self, idx: TreeNodeIndex) -> Result<NodeKey, CgkaError> {

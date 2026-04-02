@@ -9,7 +9,8 @@ use crate::{
 };
 use alloc::{collections::BTreeMap, string::ToString, vec, vec::Vec};
 use core::cmp::Ordering;
-use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
+use future_form::FutureForm;
+use keyhive_crypto::share_key::{AsyncSecretKey, ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -71,7 +72,7 @@ impl SecretStore {
         }
     }
 
-    pub fn decrypt_secret(
+    pub async fn decrypt_secret<F: FutureForm>(
         &self,
         child_node_key: &NodeKey,
         child_sks: &mut ShareKeyMap,
@@ -80,7 +81,9 @@ impl SecretStore {
         if self.has_conflict() {
             return Err(CgkaError::UnexpectedKeyConflict);
         }
-        self.versions[0].decrypt_secret(child_node_key, child_sks, seen_idxs)
+        self.versions[0]
+            .decrypt_secret::<F>(child_node_key, child_sks, seen_idxs)
+            .await
     }
 
     pub fn merge(&mut self, other: &SecretStore, removed_keys: &Set<ShareKey>) {
@@ -116,7 +119,7 @@ pub struct SecretStoreVersion {
 }
 
 impl SecretStoreVersion {
-    pub fn decrypt_secret(
+    pub async fn decrypt_secret<F: FutureForm>(
         &self,
         child_node_key: &NodeKey,
         child_sks: &mut ShareKeyMap,
@@ -148,10 +151,13 @@ impl SecretStoreVersion {
                 .ok_or(CgkaError::SecretKeyNotFound)?;
 
             encrypted
-                .try_encrypter_decrypt(secret_key)
+                .try_encrypter_decrypt::<F>(secret_key)
+                .await
                 .map_err(|e| CgkaError::Decryption(e.to_string()))?
         } else {
-            child_sks.try_decrypt_encryption(self.encrypter_pk, encrypted)?
+            child_sks
+                .try_decrypt_encryption::<F>(self.encrypter_pk, encrypted)
+                .await?
         };
 
         let arr: [u8; 32] = decrypted.try_into().map_err(|_| CgkaError::Conversion)?;
