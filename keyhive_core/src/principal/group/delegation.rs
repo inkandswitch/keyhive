@@ -2,7 +2,6 @@ use super::{
     dependencies::Dependencies,
     revocation::{Revocation, StaticRevocation},
 };
-use crate::store::secret_key::SecretKeyStore;
 use crate::{
     access::Access,
     listener::{membership::MembershipListener, no_listener::NoListener},
@@ -11,6 +10,7 @@ use crate::{
         document::id::DocumentId,
         identifier::Identifier,
     },
+    store::secret_key::SecretKeyStore,
 };
 use derive_where::derive_where;
 use dupe::Dupe;

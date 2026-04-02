@@ -1,9 +1,9 @@
 use crate::js::membered::JsMembered;
 
-use super::secret_key_store::JsSecretKeyStore;
 use super::{
     agent::JsAgent, capability::Capability, change_id::JsChangeId, event_handler::JsEventHandler,
-    group_id::JsGroupId, identifier::JsIdentifier, peer::JsPeer, signer::JsSigner,
+    group_id::JsGroupId, identifier::JsIdentifier, peer::JsPeer,
+    secret_key_store::JsSecretKeyStore, signer::JsSigner,
 };
 use derive_more::{From, Into};
 use dupe::Dupe;

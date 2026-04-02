@@ -1,5 +1,7 @@
-use super::secret_key_store::JsSecretKeyStore;
-use super::{change_id::JsChangeId, event_handler::JsEventHandler, signer::JsSigner};
+use super::{
+    change_id::JsChangeId, event_handler::JsEventHandler, secret_key_store::JsSecretKeyStore,
+    signer::JsSigner,
+};
 use derive_more::{From, Into};
 use future_form::Local;
 use keyhive_core::invocation::Invocation;

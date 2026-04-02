@@ -3,13 +3,13 @@
 //! These traits exist because [`Signed`] is defined in [`keyhive_crypto`],
 //! so keyhive_core cannot add inherent methods to it directly (orphan rule).
 
-use crate::store::secret_key::SecretKeyStore;
 use crate::{
     listener::membership::MembershipListener,
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
         identifier::Identifier,
     },
+    store::secret_key::SecretKeyStore,
 };
 use future_form::FutureForm;
 use keyhive_crypto::{

@@ -1,7 +1,7 @@
-use super::secret_key_store::JsSecretKeyStore;
 use super::{
     change_id::JsChangeId, event_handler::JsEventHandler, history::JsHistory,
-    identifier::JsIdentifier, signed_delegation::JsSignedDelegation, signer::JsSigner,
+    identifier::JsIdentifier, secret_key_store::JsSecretKeyStore,
+    signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use derive_more::{From, Into};
 use dupe::Dupe;

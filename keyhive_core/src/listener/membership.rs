@@ -1,8 +1,10 @@
 //! Trait for listening to membership change events.
 
 use super::{cgka::CgkaListener, prekey::PrekeyListener};
-use crate::principal::group::{delegation::Delegation, revocation::Revocation};
-use crate::store::secret_key::SecretKeyStore;
+use crate::{
+    principal::group::{delegation::Delegation, revocation::Revocation},
+    store::secret_key::SecretKeyStore,
+};
 use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,

@@ -2,11 +2,11 @@ use super::{
     delegation::{Delegation, StaticDelegation},
     dependencies::Dependencies,
 };
-use crate::store::secret_key::SecretKeyStore;
 use crate::{
     crypto::signed_ext::SignedSubjectId,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::id::AgentId, document::id::DocumentId, identifier::Identifier},
+    store::secret_key::SecretKeyStore,
 };
 use derive_where::derive_where;
 use dupe::Dupe;

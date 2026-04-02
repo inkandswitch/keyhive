@@ -9,12 +9,11 @@ use super::{
     },
     identifier::Identifier,
 };
-use crate::store::secret_key::SecretKeyStore;
 use crate::{
     access::Access,
     crypto::digest::Digest,
     listener::{membership::MembershipListener, no_listener::NoListener},
-    store::{delegation::DelegationStore, revocation::RevocationStore},
+    store::{delegation::DelegationStore, revocation::RevocationStore, secret_key::SecretKeyStore},
 };
 use dupe::{Dupe, OptionDupedExt};
 use future_form::FutureForm;

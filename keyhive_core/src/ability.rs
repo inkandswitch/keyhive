@@ -1,10 +1,10 @@
 //! Helpers for working with [`Document`] access capabilties.
 
-use crate::store::secret_key::SecretKeyStore;
 use crate::{
     access::Access,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::document::Document,
+    store::secret_key::SecretKeyStore,
 };
 use derive_where::derive_where;
 use dupe::Dupe;

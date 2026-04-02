@@ -1,5 +1,6 @@
-use super::secret_key_store::JsSecretKeyStore;
-use super::{change_id::JsChangeId, event::JsEvent, signer::JsSigner};
+use super::{
+    change_id::JsChangeId, event::JsEvent, secret_key_store::JsSecretKeyStore, signer::JsSigner,
+};
 use beekem::operation::CgkaOperation;
 use derive_more::{From, Into};
 use dupe::Dupe;

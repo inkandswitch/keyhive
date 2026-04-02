@@ -5,8 +5,10 @@ use super::{
     identifier::Identifier,
     individual::{id::IndividualId, Individual},
 };
-use crate::listener::{membership::MembershipListener, no_listener::NoListener};
-use crate::store::secret_key::SecretKeyStore;
+use crate::{
+    listener::{membership::MembershipListener, no_listener::NoListener},
+    store::secret_key::SecretKeyStore,
+};
 use derive_more::{From, TryInto};
 use dupe::Dupe;
 use future_form::FutureForm;

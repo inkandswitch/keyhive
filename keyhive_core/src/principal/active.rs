@@ -13,7 +13,6 @@ use super::{
         Individual,
     },
 };
-use crate::store::secret_key::SecretKeyStore;
 use crate::{
     access::Access,
     listener::{
@@ -24,6 +23,7 @@ use crate::{
         group::delegation::{Delegation, DelegationError},
         membered::Membered,
     },
+    store::secret_key::SecretKeyStore,
     transact::{
         fork::Fork,
         merge::{Merge, MergeAsync},

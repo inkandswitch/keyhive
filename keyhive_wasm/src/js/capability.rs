@@ -1,7 +1,6 @@
-use super::secret_key_store::JsSecretKeyStore;
 use super::{
     access::JsAccess, agent::JsAgent, change_id::JsChangeId, event_handler::JsEventHandler,
-    signed_delegation::JsSignedDelegation, signer::JsSigner,
+    secret_key_store::JsSecretKeyStore, signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use dupe::Dupe;
 use future_form::Local;

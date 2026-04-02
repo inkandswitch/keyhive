@@ -1,11 +1,11 @@
 use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener};
-use crate::store::secret_key::SecretKeyStore;
 use crate::{
     event::Event,
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
+    store::secret_key::SecretKeyStore,
 };
 use beekem::operation::CgkaOperation;
 use dupe::Dupe;

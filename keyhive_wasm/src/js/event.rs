@@ -1,9 +1,8 @@
 use crate::js::archive::JsSerializationError;
 
-use super::secret_key_store::JsSecretKeyStore;
 use super::{
-    change_id::JsChangeId, event_handler::JsEventHandler, signed_delegation::JsSignedDelegation,
-    signed_revocation::JsSignedRevocation, signer::JsSigner,
+    change_id::JsChangeId, event_handler::JsEventHandler, secret_key_store::JsSecretKeyStore,
+    signed_delegation::JsSignedDelegation, signed_revocation::JsSignedRevocation, signer::JsSigner,
 };
 use derive_more::{From, Into};
 use dupe::Dupe;

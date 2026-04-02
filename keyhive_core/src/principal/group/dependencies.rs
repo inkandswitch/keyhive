@@ -1,8 +1,8 @@
 use super::{delegation::Delegation, revocation::Revocation};
-use crate::store::secret_key::SecretKeyStore;
 use crate::{
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::document::id::DocumentId,
+    store::secret_key::SecretKeyStore,
 };
 use future_form::FutureForm;
 use keyhive_crypto::{

@@ -1,10 +1,10 @@
 //! [`Revocation`] storage.
 
-use crate::store::secret_key::SecretKeyStore;
 use crate::{
     crypto::digest::Digest,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::id::AgentId, group::revocation::Revocation},
+    store::secret_key::SecretKeyStore,
     util::content_addressed_map::CaMap,
 };
 use derive_where::derive_where;

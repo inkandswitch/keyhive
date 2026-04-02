@@ -10,7 +10,6 @@ use crate::{
     macros::init_span,
 };
 
-use super::secret_key_store::JsSecretKeyStore;
 use super::{
     access::JsAccess,
     add_member_error::JsAddMemberError,
@@ -31,6 +30,7 @@ use super::{
     membered::JsMembered,
     peer::{JsPeer, JsPeerRef},
     revoke_member_error::JsRevokeMemberError,
+    secret_key_store::JsSecretKeyStore,
     share_key::JsShareKey,
     signed::JsSigned,
     signed_delegation::JsSignedDelegation,
@@ -424,7 +424,8 @@ impl JsKeyhive {
 
         // Add CGKA operations as serialized bytes
         for cgka_op in cgka_ops {
-            let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> = Event::from(cgka_op);
+            let event: Event<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler> =
+                Event::from(cgka_op);
             let digest = Digest::hash(&event);
             let hash = js_sys::Uint8Array::from(digest.as_slice());
             let static_event = StaticEvent::from(event);
@@ -466,7 +467,8 @@ impl JsKeyhive {
 
         // Add CGKA operation hashes
         for cgka_op in cgka_ops {
-            let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> = Event::from(cgka_op);
+            let event: Event<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler> =
+                Event::from(cgka_op);
             let digest = Digest::hash(&event);
             let hash = js_sys::Uint8Array::from(digest.as_slice());
             arr.push(&hash.into());
@@ -566,7 +568,7 @@ impl JsKeyhive {
         for (doc_id, cgka_ops) in &all_cgka.ops {
             let source_hashes = js_sys::Array::new();
             for cgka_op in cgka_ops {
-                let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
+                let event: Event<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler> =
                     Event::from(cgka_op.dupe());
                 let digest = Digest::hash(&event);
                 let hash_bytes = digest.as_slice().to_vec();

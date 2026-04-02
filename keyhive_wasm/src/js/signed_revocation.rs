@@ -1,7 +1,6 @@
-use super::secret_key_store::JsSecretKeyStore;
 use super::{
     change_id::JsChangeId, event_handler::JsEventHandler, revocation::JsRevocation,
-    signer::JsSigner,
+    secret_key_store::JsSecretKeyStore, signer::JsSigner,
 };
 use dupe::Dupe;
 use future_form::Local;
@@ -10,12 +9,12 @@ use keyhive_crypto::{signed::Signed, verifiable::Verifiable};
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
+type InnerSignedRevocation =
+    Arc<Signed<Revocation<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>>>;
+
 #[wasm_bindgen(js_name = SignedRevocation)]
 #[derive(Debug, Dupe, Clone)]
-pub struct JsSignedRevocation(
-    pub(crate) 
-        Arc<Signed<Revocation<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>>>,
-);
+pub struct JsSignedRevocation(pub(crate) InnerSignedRevocation);
 
 #[wasm_bindgen(js_class = SignedRevocation)]
 impl JsSignedRevocation {

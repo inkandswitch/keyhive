@@ -10,7 +10,7 @@ use keyhive_core::{
     principal::{
         agent::Agent, individual::op::KeyOp, membered::Membered, peer::Peer, public::Public,
     },
-    store::ciphertext::memory::MemoryCiphertextStore,
+    store::{ciphertext::memory::MemoryCiphertextStore, secret_key::memory::MemorySecretKeyStore},
     test_utils::make_simple_keyhive,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
@@ -19,13 +19,14 @@ use nonempty::nonempty;
 pub type BenchKeyhive = Keyhive<
     Sendable,
     MemorySigner,
+    MemorySecretKeyStore,
     [u8; 32],
     Vec<u8>,
     MemoryCiphertextStore<[u8; 32], Vec<u8>>,
     NoListener,
     rand::rngs::OsRng,
 >;
-pub type BenchAgent = Agent<Sendable, MemorySigner, [u8; 32], NoListener>;
+pub type BenchAgent = Agent<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>;
 
 pub struct Scenario {
     pub keyhive: BenchKeyhive,

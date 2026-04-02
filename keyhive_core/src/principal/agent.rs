@@ -8,9 +8,9 @@ use super::{
     individual::{id::IndividualId, op::KeyOp, Individual},
     membered::Membered,
 };
-use crate::store::secret_key::SecretKeyStore;
 use crate::{
     listener::{membership::MembershipListener, no_listener::NoListener},
+    store::secret_key::SecretKeyStore,
     util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;

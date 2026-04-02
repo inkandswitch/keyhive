@@ -2,13 +2,12 @@ pub mod archive;
 
 use self::archive::GroupStateArchive;
 use super::{delegation::Delegation, error::AddError, id::GroupId, revocation::Revocation};
-use crate::store::secret_key::SecretKeyStore;
 use crate::{
     access::Access,
     crypto::signed_ext::SignedSubjectId,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::Agent, group::delegation::DelegationError, identifier::Identifier},
-    store::{delegation::DelegationStore, revocation::RevocationStore},
+    store::{delegation::DelegationStore, revocation::RevocationStore, secret_key::SecretKeyStore},
 };
 use derive_where::derive_where;
 use dupe::Dupe;

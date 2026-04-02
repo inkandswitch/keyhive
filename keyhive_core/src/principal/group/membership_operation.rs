@@ -5,13 +5,12 @@ use super::{
     dependencies::Dependencies,
     revocation::{Revocation, StaticRevocation},
 };
-use crate::store::secret_key::SecretKeyStore;
 use crate::{
     crypto::signed_ext::SignedSubjectId,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{agent::Agent, document::id::DocumentId, identifier::Identifier},
     reversed::Reversed,
-    store::{delegation::DelegationStore, revocation::RevocationStore},
+    store::{delegation::DelegationStore, revocation::RevocationStore, secret_key::SecretKeyStore},
     util::{content_addressed_map::CaMap, topsort::Topsort},
 };
 use derive_more::{From, Into};

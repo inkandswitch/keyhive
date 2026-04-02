@@ -1,9 +1,8 @@
 use crate::js::{document_id::JsDocumentId, membered::JsMembered};
 
-use super::secret_key_store::JsSecretKeyStore;
 use super::{
     agent::JsAgent, change_id::JsChangeId, event_handler::JsEventHandler, identifier::JsIdentifier,
-    peer::JsPeer, signer::JsSigner,
+    peer::JsPeer, secret_key_store::JsSecretKeyStore, signer::JsSigner,
 };
 use dupe::Dupe;
 use future_form::Local;

@@ -1,7 +1,6 @@
-use super::secret_key_store::JsSecretKeyStore;
 use super::{
     archive::JsSerializationError, change_id::JsChangeId, event_handler::JsEventHandler,
-    identifier::JsIdentifier, signer::JsSigner,
+    identifier::JsIdentifier, secret_key_store::JsSecretKeyStore, signer::JsSigner,
 };
 use derive_more::{Deref, Display, From, Into};
 use dupe::Dupe;
