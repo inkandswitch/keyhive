@@ -43,9 +43,15 @@ fn reverse_topsort_via_toggle(bencher: divan::Bencher, prior_toggles: usize) {
             _,
             NoListener,
             _,
-        > = Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::rngs::OsRng)
-            .await
-            .expect("keyhive generation should succeed");
+        > = Keyhive::generate(
+            sk.clone(),
+            MemorySecretKeyStore::new(),
+            store.clone(),
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await
+        .expect("keyhive generation should succeed");
 
         kh.register_individual(Arc::new(Mutex::new(Public.individual())))
             .await;

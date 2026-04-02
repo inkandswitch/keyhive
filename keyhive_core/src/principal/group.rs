@@ -942,7 +942,9 @@ mod tests {
         csprng: &mut R,
     ) -> Active<Sendable, MemorySigner, MemorySecretKeyStore, T> {
         let sk = MemorySigner::generate(csprng);
-        Active::generate(sk, NoListener, csprng).await.unwrap()
+        Active::generate(sk, &mut MemorySecretKeyStore::new(), NoListener, csprng)
+            .await
+            .unwrap()
     }
 
     async fn setup_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
@@ -1374,9 +1376,14 @@ mod tests {
 
         let signer = MemorySigner::generate(&mut csprng);
         let active = Arc::new(Mutex::new(
-            Active::generate(signer, NoListener, &mut csprng)
-                .await
-                .unwrap(),
+            Active::generate(
+                signer,
+                &mut MemorySecretKeyStore::new(),
+                NoListener,
+                &mut csprng,
+            )
+            .await
+            .unwrap(),
         ));
 
         let (active_id, active_signer) = {

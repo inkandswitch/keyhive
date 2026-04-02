@@ -163,6 +163,7 @@ impl<
     }
 
     #[instrument(skip_all)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
         parents: NonEmpty<Agent<F, S, K, T, L>>,
         initial_content_heads: NonEmpty<T>,
@@ -170,6 +171,7 @@ impl<
         revocations: Arc<Mutex<RevocationStore<F, S, K, T, L>>>,
         listener: L,
         signer: &S,
+        secret_store: &mut K,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Self, GenerateDocError> {
         let mut locked_csprng = csprng.lock().await;
@@ -194,6 +196,10 @@ impl<
         let doc_id = DocumentId(group.id());
         let owner_share_secret_key = ShareSecretKey::generate(&mut *locked_csprng);
         let owner_share_key = owner_share_secret_key.share_key();
+        secret_store
+            .import_raw_secret_key(owner_share_secret_key)
+            .await
+            .ok();
         let group_members = group.pick_individual_prekeys(doc_id).await;
         let other_members: Vec<(IndividualId, ShareKey)> = group_members
             .iter()
@@ -449,10 +455,15 @@ impl<
     pub async fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         signer: &S,
+        secret_store: &mut K,
         csprng: &mut R,
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
+        secret_store
+            .import_raw_secret_key(new_share_secret_key)
+            .await
+            .ok();
         let (_, op) = self
             .cgka_mut()
             .map_err(EncryptError::UnableToPcsUpdate)?

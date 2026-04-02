@@ -124,6 +124,9 @@ pub struct Keyhive<
     /// Storage for ciphertexts that cannot yet be decrypted.
     ciphertext_store: C,
 
+    /// Pluggable storage for X25519 secret keys.
+    secret_store: Arc<Mutex<K>>,
+
     /// Cryptographically secure (pseudo)random number generator.
     csprng: Arc<Mutex<R>>,
 
@@ -154,12 +157,19 @@ impl<
     #[instrument(skip_all)]
     pub async fn generate(
         signer: S,
+        mut secret_store: K,
         ciphertext_store: C,
         event_listener: L,
         mut csprng: R,
-    ) -> Result<Self, SigningError> {
+    ) -> Result<Self, GenerateError<K, F>> {
         let verifying_key = signer.verifying_key();
-        let inner_active = Active::generate(signer, event_listener.clone(), &mut csprng).await?;
+        let inner_active = Active::generate(
+            signer,
+            &mut secret_store,
+            event_listener.clone(),
+            &mut csprng,
+        )
+        .await?;
         let active_id = inner_active.id();
 
         Ok(Self {
@@ -177,6 +187,7 @@ impl<
             delegations: Arc::new(Mutex::new(DelegationStore::new())),
             revocations: Arc::new(Mutex::new(RevocationStore::new())),
             pending_events: Arc::new(Mutex::new(Vec::new())),
+            secret_store: Arc::new(Mutex::new(secret_store)),
             ciphertext_store,
             event_listener,
             csprng: Arc::new(Mutex::new(csprng)),
@@ -267,6 +278,7 @@ impl<
             self.revocations.dupe(),
             self.event_listener.clone(),
             &signer,
+            &mut *self.secret_store.lock().await,
             self.csprng.dupe(),
         )
         .await?;
@@ -288,11 +300,12 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn contact_card(&self) -> Result<ContactCard, SigningError> {
+        let mut store = self.secret_store.lock().await;
         let rot_key_op = self
             .active
             .lock()
             .await
-            .generate_private_prekey(self.csprng.dupe())
+            .generate_private_prekey(&mut *store, self.csprng.dupe())
             .await?;
 
         Ok(ContactCard(KeyOp::Rotate(rot_key_op)))
@@ -343,20 +356,27 @@ impl<
         &self,
         prekey: ShareKey,
     ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
+        let mut store = self.secret_store.lock().await;
         self.active
             .lock()
             .await
-            .rotate_prekey(prekey, self.csprng.dupe())
+            .rotate_prekey(prekey, &mut *store, self.csprng.dupe())
             .await
     }
 
     #[instrument(skip_all)]
     pub async fn expand_prekeys(&self) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
+        let mut store = self.secret_store.lock().await;
         self.active
             .lock()
             .await
-            .expand_prekeys(self.csprng.dupe())
+            .expand_prekeys(&mut *store, self.csprng.dupe())
             .await
+    }
+
+    /// Get a reference to the secret key store.
+    pub fn secret_store(&self) -> &Arc<Mutex<K>> {
+        &self.secret_store
     }
 
     #[instrument(skip_all)]
@@ -657,9 +677,10 @@ impl<
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
         let signer = { self.active.lock().await.signer.clone() };
         let mut locked_csprng = self.csprng.lock().await;
+        let mut locked_store = self.secret_store.lock().await;
         doc.lock()
             .await
-            .pcs_update(&signer, &mut *locked_csprng)
+            .pcs_update(&signer, &mut *locked_store, &mut *locked_csprng)
             .await
     }
 
@@ -1833,7 +1854,12 @@ impl<
 
     /// Import prekey secrets from a previously exported blob, extending the existing set.
     pub async fn import_prekey_secrets(&self, bytes: &[u8]) -> Result<(), bincode::Error> {
-        self.active.lock().await.import_prekey_secrets(bytes).await
+        let mut store = self.secret_store.lock().await;
+        self.active
+            .lock()
+            .await
+            .import_prekey_secrets(bytes, &mut *store)
+            .await
     }
 
     #[instrument(skip_all)]
@@ -1899,6 +1925,7 @@ impl<
     pub async fn try_from_archive(
         archive: &Archive<T>,
         signer: S,
+        secret_store: K,
         ciphertext_store: C,
         listener: L,
         csprng: Arc<Mutex<R>>,
@@ -2140,6 +2167,7 @@ impl<
             delegations,
             revocations,
             pending_events: Arc::new(Mutex::new(pending_events)),
+            secret_store: Arc::new(Mutex::new(secret_store)),
             csprng,
             ciphertext_store,
             event_listener: listener,
@@ -2403,7 +2431,7 @@ impl<
 impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
-        K: SecretKeyStore<F>,
+        K: SecretKeyStore<F> + Default,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
@@ -2421,6 +2449,7 @@ where
         Keyhive::try_from_archive(
             &self.into_archive().await,
             signer,
+            K::default(),
             self.ciphertext_store.clone(),
             Log::new(),
             self.csprng.clone(),
@@ -2433,7 +2462,7 @@ where
 impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
-        K: SecretKeyStore<F>,
+        K: SecretKeyStore<F> + Default,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
@@ -2628,6 +2657,15 @@ impl<
     }
 }
 
+#[derive(Debug, Error)]
+pub enum GenerateError<K: SecretKeyStore<F>, F: FutureForm = future_form::Sendable> {
+    #[error(transparent)]
+    SigningError(#[from] SigningError),
+
+    #[error("Secret key store error: {0}")]
+    SecretKeyStoreError(K::ImportError),
+}
+
 #[derive(Clone, PartialEq, Eq, Error)]
 #[derive_where(Debug)]
 pub enum TryFromArchiveError<
@@ -2751,6 +2789,7 @@ mod tests {
         let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
         Keyhive::generate(
             sk,
+            MemorySecretKeyStore::new(),
             Arc::new(Mutex::new(store)),
             NoListener,
             rand::rngs::OsRng,
@@ -2831,7 +2870,14 @@ mod tests {
             _,
             NoListener,
             _,
-        > = Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::rngs::OsRng).await?;
+        > = Keyhive::generate(
+            sk.clone(),
+            MemorySecretKeyStore::new(),
+            store.clone(),
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await?;
 
         let indie_sk = MemorySigner::generate(&mut csprng);
         let indie = Arc::new(Mutex::new(
@@ -2878,6 +2924,7 @@ mod tests {
         > = Keyhive::try_from_archive(
             &archive,
             sk,
+            MemorySecretKeyStore::new(),
             store,
             NoListener,
             Arc::new(Mutex::new(rand::rngs::OsRng)),
@@ -2927,7 +2974,14 @@ mod tests {
             _,
             NoListener,
             _,
-        > = Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::rngs::OsRng).await?;
+        > = Keyhive::generate(
+            sk.clone(),
+            MemorySecretKeyStore::new(),
+            store.clone(),
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await?;
 
         let indie_sk = MemorySigner::generate(&mut csprng);
         let indie = Arc::new(Mutex::new(
@@ -2960,6 +3014,7 @@ mod tests {
         > = Keyhive::try_from_archive(
             &archive,
             sk,
+            MemorySecretKeyStore::new(),
             Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], String>::new())),
             NoListener,
             Arc::new(Mutex::new(rand::rngs::OsRng)),
@@ -5422,6 +5477,7 @@ mod tests {
         let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
         let hive = Keyhive::<Sendable, _, MemorySecretKeyStore, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
             sk,
+            MemorySecretKeyStore::new(),
             Arc::new(Mutex::new(MemoryCiphertextStore::new())),
             NoListener,
             rand::rngs::OsRng,

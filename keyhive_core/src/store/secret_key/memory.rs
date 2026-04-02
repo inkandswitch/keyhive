@@ -143,4 +143,174 @@ mod tests {
             .unwrap();
         assert_eq!(result, None);
     }
+
+    /// Verify that keys generated during `Active::generate` are
+    /// stored in the `SecretKeyStore`.
+    #[tokio::test]
+    async fn test_active_generate_stores_keys() {
+        use crate::{listener::no_listener::NoListener, principal::active::Active};
+        use keyhive_crypto::signer::memory::MemorySigner;
+
+        let mut store = MemorySecretKeyStore::new();
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let _active =
+            Active::<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>::generate(
+                signer,
+                &mut store,
+                NoListener,
+                &mut rand::thread_rng(),
+            )
+            .await
+            .unwrap();
+
+        // Active::generate creates 7 prekeys (1 initial + 6 additional)
+        assert_eq!(store.len(), 7, "all 7 prekeys should be in the store");
+    }
+
+    /// Verify that keys generated during `Active::expand_prekeys`
+    /// are stored in the `SecretKeyStore`.
+    #[tokio::test]
+    async fn test_expand_prekeys_stores_key() {
+        use crate::{listener::no_listener::NoListener, principal::active::Active};
+        use keyhive_crypto::signer::memory::MemorySigner;
+
+        let mut store = MemorySecretKeyStore::new();
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let mut active =
+            Active::<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>::generate(
+                signer,
+                &mut store,
+                NoListener,
+                &mut rand::thread_rng(),
+            )
+            .await
+            .unwrap();
+
+        let before = store.len();
+        let _op = active
+            .expand_prekeys(
+                &mut store,
+                futures::lock::Mutex::new(rand::thread_rng()).into(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.len(),
+            before + 1,
+            "expand_prekeys should add one key to the store"
+        );
+    }
+
+    /// Verify that keys generated during `Active::rotate_prekey`
+    /// are stored in the `SecretKeyStore`.
+    #[tokio::test]
+    async fn test_rotate_prekey_stores_key() {
+        use crate::{listener::no_listener::NoListener, principal::active::Active};
+        use keyhive_crypto::signer::memory::MemorySigner;
+
+        let mut store = MemorySecretKeyStore::new();
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let mut active =
+            Active::<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>::generate(
+                signer,
+                &mut store,
+                NoListener,
+                &mut rand::thread_rng(),
+            )
+            .await
+            .unwrap();
+
+        let before = store.len();
+        let old_pk = *active.prekey_pairs.lock().await.keys().next().unwrap();
+        let _op = active
+            .rotate_prekey(
+                old_pk,
+                &mut store,
+                futures::lock::Mutex::new(rand::thread_rng()).into(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.len(),
+            before + 1,
+            "rotate_prekey should add the new key to the store"
+        );
+    }
+
+    /// Verify that `Keyhive::generate` populates the secret store.
+    #[tokio::test]
+    async fn test_keyhive_generate_populates_store() {
+        use crate::{
+            keyhive::Keyhive, listener::no_listener::NoListener,
+            store::ciphertext::memory::MemoryCiphertextStore,
+        };
+        use keyhive_crypto::signer::memory::MemorySigner;
+
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let store = MemorySecretKeyStore::new();
+        let ciphertext_store: MemoryCiphertextStore<[u8; 32], Vec<u8>> =
+            MemoryCiphertextStore::new();
+        let keyhive = Keyhive::<Sendable, _, _, _, _, _, _, _>::generate(
+            signer,
+            store,
+            ciphertext_store,
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await
+        .unwrap();
+
+        let locked_store = keyhive.secret_store().lock().await;
+        assert_eq!(
+            locked_store.len(),
+            7,
+            "keyhive should have 7 prekeys in the store"
+        );
+    }
+
+    /// Verify that `import_prekey_secrets` stores keys in the store.
+    #[tokio::test]
+    async fn test_import_prekey_secrets_stores_in_store() {
+        use crate::{listener::no_listener::NoListener, principal::active::Active};
+        use keyhive_crypto::signer::memory::MemorySigner;
+
+        let mut store1 = MemorySecretKeyStore::new();
+        let signer1 = MemorySigner::generate(&mut rand::thread_rng());
+        let active1 =
+            Active::<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>::generate(
+                signer1,
+                &mut store1,
+                NoListener,
+                &mut rand::thread_rng(),
+            )
+            .await
+            .unwrap();
+
+        let exported = active1.export_prekey_secrets().await.unwrap();
+
+        let mut store2 = MemorySecretKeyStore::new();
+        let signer2 = MemorySigner::generate(&mut rand::thread_rng());
+        let active2 =
+            Active::<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>::generate(
+                signer2,
+                &mut store2,
+                NoListener,
+                &mut rand::thread_rng(),
+            )
+            .await
+            .unwrap();
+
+        let before = store2.len();
+        active2
+            .import_prekey_secrets(&exported, &mut store2)
+            .await
+            .unwrap();
+
+        assert!(
+            store2.len() > before,
+            "imported keys should be added to the store"
+        );
+    }
 }

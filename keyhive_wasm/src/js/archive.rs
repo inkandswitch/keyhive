@@ -43,9 +43,14 @@ impl JsArchive {
         signer: &JsSigner,
         event_handler: &js_sys::Function,
     ) -> Result<JsKeyhive, JsTryFromArchiveError> {
+        let secret_store = JsSecretKeyStore::load()
+            .await
+            .expect("failed to load secret key store from IndexedDB");
+
         Ok(Keyhive::try_from_archive(
             &self.0,
             signer.clone(),
+            secret_store,
             ciphertext_store,
             event_handler.clone().into(),
             Arc::new(Mutex::new(OsRng)),

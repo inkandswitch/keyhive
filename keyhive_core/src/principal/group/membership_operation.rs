@@ -1130,7 +1130,10 @@ mod tests {
             let alice_sk = fixture(&ALICE_SIGNER).clone();
             let alice = Arc::new(Mutex::new(
                 Active::<Sendable, _, MemorySecretKeyStore, [u8; 32], _>::generate(
-                    alice_sk, NoListener, csprng,
+                    alice_sk,
+                    &mut MemorySecretKeyStore::new(),
+                    NoListener,
+                    csprng,
                 )
                 .await
                 .unwrap(),
@@ -1139,7 +1142,10 @@ mod tests {
             let bob_sk = fixture(&BOB_SIGNER).clone();
             let bob = Arc::new(Mutex::new(
                 Active::<Sendable, _, MemorySecretKeyStore, [u8; 32], _>::generate(
-                    bob_sk, NoListener, csprng,
+                    bob_sk,
+                    &mut MemorySecretKeyStore::new(),
+                    NoListener,
+                    csprng,
                 )
                 .await
                 .unwrap(),
@@ -1148,7 +1154,10 @@ mod tests {
             let carol_sk = fixture(&CAROL_SIGNER).clone();
             let carol = Arc::new(Mutex::new(
                 Active::<Sendable, _, MemorySecretKeyStore, [u8; 32], _>::generate(
-                    carol_sk, NoListener, csprng,
+                    carol_sk,
+                    &mut MemorySecretKeyStore::new(),
+                    NoListener,
+                    csprng,
                 )
                 .await
                 .unwrap(),
@@ -1157,7 +1166,10 @@ mod tests {
             let dan_sk = fixture(&DAN_SIGNER).clone();
             let dan = Arc::new(Mutex::new(
                 Active::<Sendable, _, MemorySecretKeyStore, [u8; 32], _>::generate(
-                    dan_sk, NoListener, csprng,
+                    dan_sk,
+                    &mut MemorySecretKeyStore::new(),
+                    NoListener,
+                    csprng,
                 )
                 .await
                 .unwrap(),

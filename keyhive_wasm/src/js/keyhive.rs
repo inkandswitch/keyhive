@@ -76,17 +76,23 @@ impl JsKeyhive {
         signer: &JsSigner,
         ciphertext_store: &JsCiphertextStore,
         event_handler: &js_sys::Function,
-    ) -> Result<JsKeyhive, JsSigningError> {
+    ) -> Result<JsKeyhive, JsError> {
         init_span!("JsKeyhive::init");
         tracing::info!("JsKeyhive::init");
+        let secret_store = JsSecretKeyStore::load()
+            .await
+            .map_err(|e| JsError::new(&e.to_string()))?;
+
         Ok(JsKeyhive(
             Keyhive::generate(
                 signer.clone(),
+                secret_store,
                 ciphertext_store.clone(),
                 JsEventHandler(event_handler.clone()),
                 OsRng,
             )
-            .await?,
+            .await
+            .map_err(|e| JsError::new(&e.to_string()))?,
         ))
     }
 

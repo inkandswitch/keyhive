@@ -90,6 +90,7 @@ impl<
     /// * `csprng` - The cryptographically secure random number generator.
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
         signer: S,
+        secret_store: &mut K,
         listener: L,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
@@ -102,13 +103,18 @@ impl<
         .into();
 
         let mut prekey_state = PrekeyState::new(init_op);
-        let prekey_pairs =
-            (0..6).try_fold(BTreeMap::from_iter([(init_pk, init_sk)]), |mut acc, _| {
-                let sk = ShareSecretKey::generate(csprng);
-                let pk = sk.share_key();
-                acc.insert(pk, sk);
-                Ok::<_, SigningError>(acc)
-            })?;
+        let mut prekey_pairs = BTreeMap::from_iter([(init_pk, init_sk)]);
+
+        // Store the initial key
+        secret_store.import_raw_secret_key(init_sk).await.ok();
+
+        // Generate additional prekeys
+        for _ in 0..6 {
+            let sk = ShareSecretKey::generate(csprng);
+            let pk = sk.share_key();
+            prekey_pairs.insert(pk, sk);
+            secret_store.import_raw_secret_key(sk).await.ok();
+        }
 
         let borrowed_signer = &signer;
         let ops = stream::iter(prekey_pairs.keys().map(Ok::<_, SigningError>))
@@ -165,6 +171,7 @@ impl<
     /// Create a [`ShareKey`] that is not broadcast via the prekey state.
     pub async fn generate_private_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
+        secret_store: &mut K,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
         let share_key = {
@@ -172,8 +179,11 @@ impl<
             let locked = self.individual.lock().await;
             locked.pick_prekey(DocumentId(self.id().into())).dupe()
         };
-        let contact_key = self.rotate_prekey(share_key, csprng.dupe()).await?;
-        self.rotate_prekey(contact_key.payload.new, csprng).await?;
+        let contact_key = self
+            .rotate_prekey(share_key, secret_store, csprng.dupe())
+            .await?;
+        self.rotate_prekey(contact_key.payload.new, secret_store, csprng)
+            .await?;
         Ok(contact_key)
     }
 
@@ -187,6 +197,7 @@ impl<
     pub async fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old_prekey: ShareKey,
+        secret_store: &mut K,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
         let new_secret = {
@@ -206,6 +217,8 @@ impl<
             .await?,
         );
 
+        // Store in both the legacy prekey_pairs and the durable store
+        secret_store.import_raw_secret_key(new_secret).await.ok();
         {
             self.prekey_pairs
                 .lock()
@@ -231,6 +244,7 @@ impl<
     /// Add a new prekey, expanding the number of currently available prekeys.
     pub async fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
+        secret_store: &mut K,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
         let new_secret = {
@@ -260,6 +274,8 @@ impl<
             locked_individual.prekeys.insert(new_public);
         }
 
+        // Store in both the legacy prekey_pairs and the durable store
+        secret_store.import_raw_secret_key(new_secret).await.ok();
         {
             self.prekey_pairs
                 .lock()
@@ -309,8 +325,18 @@ impl<
     }
 
     /// Import prekey secrets from an opaque blob, extending the existing set.
-    pub async fn import_prekey_secrets(&self, bytes: &[u8]) -> Result<(), bincode::Error> {
+    ///
+    /// Keys are stored in both the legacy `prekey_pairs` map and the
+    /// durable [`SecretKeyStore`].
+    pub async fn import_prekey_secrets(
+        &self,
+        bytes: &[u8],
+        secret_store: &mut K,
+    ) -> Result<(), bincode::Error> {
         let imported: BTreeMap<ShareKey, ShareSecretKey> = bincode::deserialize(bytes)?;
+        for &sk in imported.values() {
+            secret_store.import_raw_secret_key(sk).await.ok();
+        }
         let mut pairs = self.prekey_pairs.lock().await;
         pairs.extend(imported);
         Ok(())
@@ -482,9 +508,14 @@ mod tests {
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let active: Active<Sendable, _, MemorySecretKeyStore, [u8; 32], _> =
-            Active::<Sendable, _, _, _, _>::generate(signer, NoListener, csprng)
-                .await
-                .unwrap();
+            Active::<Sendable, _, _, _, _>::generate(
+                signer,
+                &mut MemorySecretKeyStore::new(),
+                NoListener,
+                csprng,
+            )
+            .await
+            .unwrap();
         let message = "hello world".as_bytes();
         let signed = active.try_sign_async(message).await.unwrap();
 
@@ -498,22 +529,35 @@ mod tests {
         let csprng = &mut rand::thread_rng();
         let signer1 = MemorySigner::generate(csprng);
         let active1: Active<Sendable, _, MemorySecretKeyStore, [u8; 32], _> =
-            Active::<Sendable, _, _, _, _>::generate(signer1, NoListener, csprng)
-                .await
-                .unwrap();
+            Active::<Sendable, _, _, _, _>::generate(
+                signer1,
+                &mut MemorySecretKeyStore::new(),
+                NoListener,
+                csprng,
+            )
+            .await
+            .unwrap();
 
         let exported = active1.export_prekey_secrets().await.unwrap();
 
         let signer2 = MemorySigner::generate(csprng);
         let active2: Active<Sendable, _, MemorySecretKeyStore, [u8; 32], _> =
-            Active::<Sendable, _, _, _, _>::generate(signer2, NoListener, csprng)
-                .await
-                .unwrap();
+            Active::<Sendable, _, _, _, _>::generate(
+                signer2,
+                &mut MemorySecretKeyStore::new(),
+                NoListener,
+                csprng,
+            )
+            .await
+            .unwrap();
 
         let original_pairs: BTreeMap<ShareKey, ShareSecretKey> =
             active2.prekey_pairs.lock().await.clone();
 
-        active2.import_prekey_secrets(&exported).await.unwrap();
+        active2
+            .import_prekey_secrets(&exported, &mut MemorySecretKeyStore::new())
+            .await
+            .unwrap();
 
         let merged_pairs = active2.prekey_pairs.lock().await;
         let exported_pairs: BTreeMap<ShareKey, ShareSecretKey> =
@@ -543,11 +587,18 @@ mod tests {
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(csprng);
         let active: Active<Sendable, _, MemorySecretKeyStore, [u8; 32], _> =
-            Active::<Sendable, _, _, _, _>::generate(signer, NoListener, csprng)
-                .await
-                .unwrap();
+            Active::<Sendable, _, _, _, _>::generate(
+                signer,
+                &mut MemorySecretKeyStore::new(),
+                NoListener,
+                csprng,
+            )
+            .await
+            .unwrap();
 
-        let result = active.import_prekey_secrets(b"not valid bincode").await;
+        let result = active
+            .import_prekey_secrets(b"not valid bincode", &mut MemorySecretKeyStore::new())
+            .await;
         assert!(result.is_err());
     }
 }
