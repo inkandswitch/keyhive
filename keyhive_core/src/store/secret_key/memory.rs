@@ -7,7 +7,6 @@ use super::SecretKeyStore;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
-use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, convert::Infallible, sync::Arc};
 
 /// In-memory secret key store backed by a `BTreeMap` with interior
