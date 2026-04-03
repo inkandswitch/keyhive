@@ -60,8 +60,11 @@ pub trait SecretKeyStore<F: FutureForm>: Sized {
     ///
     /// If a key with the same public key already exists, it is
     /// overwritten.
+    ///
+    /// Interior mutability is used — callers pass `&self`, and the
+    /// store handles synchronization internally.
     fn import_secret_key<'a>(
-        &'a mut self,
+        &'a self,
         secret_key: Self::SecretKey,
     ) -> F::Future<'a, Result<ShareKey, Self::ImportError>>;
 
@@ -70,7 +73,7 @@ pub trait SecretKeyStore<F: FutureForm>: Sized {
     /// This is separate from [`import_secret_key`] because external
     /// stores may need to convert raw bytes into an opaque handle.
     fn import_raw_secret_key<'a>(
-        &'a mut self,
+        &'a self,
         raw: ShareSecretKey,
     ) -> F::Future<'a, Result<Self::SecretKey, Self::ImportError>>;
 
@@ -79,7 +82,7 @@ pub trait SecretKeyStore<F: FutureForm>: Sized {
     /// Returns the secret key handle. The corresponding public key
     /// can be obtained via [`AsyncSecretKey::to_share_key`].
     fn generate_secret_key<'a>(
-        &'a mut self,
+        &'a self,
     ) -> F::Future<'a, Result<Self::SecretKey, Self::GenerateError>>;
 
     /// Check if a secret key for the given public key exists.

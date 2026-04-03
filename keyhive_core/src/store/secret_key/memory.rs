@@ -5,45 +5,37 @@
 
 use super::SecretKeyStore;
 use future_form::{future_form, FutureForm, Local, Sendable};
+use futures::lock::Mutex;
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, convert::Infallible};
 
-/// In-memory secret key store backed by a `BTreeMap`.
+/// In-memory secret key store backed by a `BTreeMap` with interior
+/// mutability via [`futures::lock::Mutex`].
 ///
 /// This is the default store for development and testing.
 /// For production use with durable keys, implement
 /// [`SecretKeyStore`] for your storage backend.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Default)]
 pub struct MemorySecretKeyStore {
-    keys: BTreeMap<ShareKey, ShareSecretKey>,
+    keys: Mutex<BTreeMap<ShareKey, ShareSecretKey>>,
 }
 
 impl MemorySecretKeyStore {
     pub fn new() -> Self {
         Self {
-            keys: BTreeMap::new(),
+            keys: Mutex::new(BTreeMap::new()),
         }
     }
 
     /// Number of keys in the store.
-    pub fn len(&self) -> usize {
-        self.keys.len()
+    pub async fn len(&self) -> usize {
+        self.keys.lock().await.len()
     }
 
     /// Whether the store is empty.
-    pub fn is_empty(&self) -> bool {
-        self.keys.is_empty()
-    }
-
-    /// Iterate over all (public, secret) key pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (&ShareKey, &ShareSecretKey)> {
-        self.keys.iter()
-    }
-
-    /// Extend the store with key pairs from another source.
-    pub fn extend(&mut self, other: impl IntoIterator<Item = (ShareKey, ShareSecretKey)>) {
-        self.keys.extend(other);
+    pub async fn is_empty(&self) -> bool {
+        self.keys.lock().await.is_empty()
     }
 }
 
@@ -58,39 +50,45 @@ impl<F: FutureForm> SecretKeyStore<F> for MemorySecretKeyStore {
         &'a self,
         public_key: &'a ShareKey,
     ) -> F::Future<'a, Result<Option<ShareSecretKey>, Infallible>> {
-        F::ready(Ok(self.keys.get(public_key).copied()))
+        F::from_future(async move { Ok(self.keys.lock().await.get(public_key).copied()) })
     }
 
     fn import_secret_key<'a>(
-        &'a mut self,
+        &'a self,
         secret_key: ShareSecretKey,
     ) -> F::Future<'a, Result<ShareKey, Infallible>> {
-        let pk = secret_key.share_key();
-        self.keys.insert(pk, secret_key);
-        F::ready(Ok(pk))
+        F::from_future(async move {
+            let pk = secret_key.share_key();
+            self.keys.lock().await.insert(pk, secret_key);
+            Ok(pk)
+        })
     }
 
     fn import_raw_secret_key<'a>(
-        &'a mut self,
+        &'a self,
         raw: ShareSecretKey,
     ) -> F::Future<'a, Result<ShareSecretKey, Infallible>> {
-        let pk = raw.share_key();
-        self.keys.insert(pk, raw);
-        F::ready(Ok(raw))
+        F::from_future(async move {
+            let pk = raw.share_key();
+            self.keys.lock().await.insert(pk, raw);
+            Ok(raw)
+        })
     }
 
-    fn generate_secret_key<'a>(&'a mut self) -> F::Future<'a, Result<ShareSecretKey, Infallible>> {
-        let sk = ShareSecretKey::generate(&mut rand::thread_rng());
-        let pk = sk.share_key();
-        self.keys.insert(pk, sk);
-        F::ready(Ok(sk))
+    fn generate_secret_key<'a>(&'a self) -> F::Future<'a, Result<ShareSecretKey, Infallible>> {
+        F::from_future(async move {
+            let sk = ShareSecretKey::generate(&mut rand::thread_rng());
+            let pk = sk.share_key();
+            self.keys.lock().await.insert(pk, sk);
+            Ok(sk)
+        })
     }
 
     fn contains_secret_key<'a>(
         &'a self,
         public_key: &'a ShareKey,
     ) -> F::Future<'a, Result<bool, Infallible>> {
-        F::ready(Ok(self.keys.contains_key(public_key)))
+        F::from_future(async move { Ok(self.keys.lock().await.contains_key(public_key)) })
     }
 }
 
