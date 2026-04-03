@@ -41,7 +41,7 @@ extern "C" {
 #[wasm_bindgen(js_name = SecretKeyStore)]
 #[derive(Debug, Clone)]
 pub struct JsSecretKeyStore {
-    cache: BTreeMap<ShareKey, ShareSecretKey>,
+    cache: std::sync::Arc<futures::lock::Mutex<BTreeMap<ShareKey, ShareSecretKey>>>,
     /// Whether to persist mutations to IndexedDB.
     persistent: bool,
 }
@@ -54,7 +54,7 @@ impl JsSecretKeyStore {
     #[wasm_bindgen]
     pub fn memory() -> Self {
         Self {
-            cache: BTreeMap::new(),
+            cache: std::sync::Arc::new(futures::lock::Mutex::new(BTreeMap::new())),
             persistent: false,
         }
     }
@@ -89,7 +89,7 @@ impl JsSecretKeyStore {
         }
 
         Ok(Self {
-            cache,
+            cache: std::sync::Arc::new(futures::lock::Mutex::new(cache)),
             persistent: true,
         })
     }
@@ -124,54 +124,54 @@ impl SecretKeyStore<Local> for JsSecretKeyStore {
     type ImportError = JsSecretKeyStoreError;
     type GenerateError = JsSecretKeyStoreError;
 
-    fn get_secret_key<'a>(
-        &'a self,
-        public_key: &'a ShareKey,
-    ) -> <Local as FutureForm>::Future<'a, Result<Option<ShareSecretKey>, Self::GetError>> {
-        Local::ready(Ok(self.cache.get(public_key).copied()))
+    fn get_secret_key(
+        &self,
+        public_key: &ShareKey,
+    ) -> <Local as FutureForm>::Future<'_, Result<Option<ShareSecretKey>, Self::GetError>> {
+        Local::from_future(async move { Ok(self.cache.lock().await.get(public_key).copied()) })
     }
 
-    fn import_secret_key<'a>(
-        &'a mut self,
+    fn import_secret_key(
+        &self,
         secret_key: ShareSecretKey,
-    ) -> <Local as FutureForm>::Future<'a, Result<ShareKey, Self::ImportError>> {
-        let pk = secret_key.share_key();
-        self.cache.insert(pk, secret_key);
+    ) -> <Local as FutureForm>::Future<'_, Result<ShareKey, Self::ImportError>> {
         Local::from_future(async move {
+            let pk = secret_key.share_key();
+            self.cache.lock().await.insert(pk, secret_key);
             self.maybe_persist(&pk, &secret_key).await?;
             Ok(pk)
         })
     }
 
-    fn import_raw_secret_key<'a>(
-        &'a mut self,
+    fn import_raw_secret_key(
+        &self,
         raw: ShareSecretKey,
-    ) -> <Local as FutureForm>::Future<'a, Result<ShareSecretKey, Self::ImportError>> {
-        let pk = raw.share_key();
-        self.cache.insert(pk, raw);
+    ) -> <Local as FutureForm>::Future<'_, Result<ShareSecretKey, Self::ImportError>> {
         Local::from_future(async move {
+            let pk = raw.share_key();
+            self.cache.lock().await.insert(pk, raw);
             self.maybe_persist(&pk, &raw).await?;
             Ok(raw)
         })
     }
 
-    fn generate_secret_key<'a>(
-        &'a mut self,
-    ) -> <Local as FutureForm>::Future<'a, Result<ShareSecretKey, Self::GenerateError>> {
-        let sk = ShareSecretKey::generate(&mut rand::thread_rng());
-        let pk = sk.share_key();
-        self.cache.insert(pk, sk);
+    fn generate_secret_key(
+        &self,
+    ) -> <Local as FutureForm>::Future<'_, Result<ShareSecretKey, Self::GenerateError>> {
         Local::from_future(async move {
+            let sk = ShareSecretKey::generate(&mut rand::thread_rng());
+            let pk = sk.share_key();
+            self.cache.lock().await.insert(pk, sk);
             self.maybe_persist(&pk, &sk).await?;
             Ok(sk)
         })
     }
 
-    fn contains_secret_key<'a>(
-        &'a self,
-        public_key: &'a ShareKey,
-    ) -> <Local as FutureForm>::Future<'a, Result<bool, Self::GetError>> {
-        Local::ready(Ok(self.cache.contains_key(public_key)))
+    fn contains_secret_key(
+        &self,
+        public_key: &ShareKey,
+    ) -> <Local as FutureForm>::Future<'_, Result<bool, Self::GetError>> {
+        Local::from_future(async move { Ok(self.cache.lock().await.contains_key(public_key)) })
     }
 }
 

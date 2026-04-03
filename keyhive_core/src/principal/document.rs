@@ -182,7 +182,7 @@ where
         revocations: Arc<Mutex<RevocationStore<F, S, K, T, L>>>,
         listener: L,
         signer: &S,
-        secret_store: &mut K,
+        secret_store: &K,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Self, GenerateDocError> {
         let mut locked_csprng = csprng.lock().await;
@@ -262,7 +262,7 @@ where
         member_to_add: Agent<F, S, K, T, L>,
         can: Access,
         signer: &S,
-        secret_store: &mut K,
+        secret_store: &K,
         other_relevant_docs: &[Arc<Mutex<Document<F, S, K, T, L>>>],
     ) -> Result<AddMemberUpdate<F, S, K, T, L>, AddMemberError> {
         let mut after_content: BTreeMap<_, _> =
@@ -312,7 +312,7 @@ where
         &mut self,
         prekeys: &HashMap<IndividualId, ShareKey>,
         signer: &S,
-        secret_store: &mut K,
+        secret_store: &K,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut acc = Vec::new();
         for (id, prekey) in prekeys.iter() {
@@ -379,7 +379,7 @@ where
         &mut self,
         id: IndividualId,
         signer: &S,
-        secret_store: &mut K,
+        secret_store: &K,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         let result = self.cgka_mut()?.remove(id, signer).await?;
         if let Ok(cgka) = self.cgka() {
@@ -452,7 +452,7 @@ where
         &mut self,
         op: Arc<Signed<CgkaOperation>>,
         sk: &ShareSecretKey,
-        secret_store: &mut K,
+        secret_store: &K,
     ) -> Result<bool, CgkaError> {
         let CgkaOperation::Add {
             added_id,
@@ -490,7 +490,7 @@ where
     pub async fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         signer: &S,
-        secret_store: &mut K,
+        secret_store: &K,
         csprng: &mut R,
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
@@ -523,7 +523,7 @@ where
         content: &[u8],
         pred_refs: &Vec<T>,
         signer: &S,
-        secret_store: &mut K,
+        secret_store: &K,
         csprng: &mut R,
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptError> {
         let (app_secret, maybe_update_op) = self

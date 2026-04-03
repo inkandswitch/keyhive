@@ -8,23 +8,25 @@ use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, convert::Infallible};
+use std::{collections::BTreeMap, convert::Infallible, sync::Arc};
 
 /// In-memory secret key store backed by a `BTreeMap` with interior
 /// mutability via [`futures::lock::Mutex`].
 ///
+/// Cloning produces a handle to the same shared key set.
+///
 /// This is the default store for development and testing.
 /// For production use with durable keys, implement
 /// [`SecretKeyStore`] for your storage backend.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct MemorySecretKeyStore {
-    keys: Mutex<BTreeMap<ShareKey, ShareSecretKey>>,
+    keys: Arc<Mutex<BTreeMap<ShareKey, ShareSecretKey>>>,
 }
 
 impl MemorySecretKeyStore {
     pub fn new() -> Self {
         Self {
-            keys: Mutex::new(BTreeMap::new()),
+            keys: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -99,13 +101,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_and_retrieve() {
-        let mut store = MemorySecretKeyStore::new();
-        assert!(store.is_empty());
+        let store = MemorySecretKeyStore::new();
+        assert!(store.is_empty().await);
 
-        let sk = SecretKeyStore::<Sendable>::generate_secret_key(&mut store)
+        let sk = SecretKeyStore::<Sendable>::generate_secret_key(&store)
             .await
             .unwrap();
-        assert_eq!(store.len(), 1);
+        assert_eq!(store.len().await, 1);
 
         let pk = sk.share_key();
         let retrieved = SecretKeyStore::<Sendable>::get_secret_key(&store, &pk)
@@ -116,11 +118,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_import_raw() {
-        let mut store = MemorySecretKeyStore::new();
+        let store = MemorySecretKeyStore::new();
         let sk = ShareSecretKey::generate(&mut rand::thread_rng());
         let pk = sk.share_key();
 
-        let imported = SecretKeyStore::<Sendable>::import_raw_secret_key(&mut store, sk)
+        let imported = SecretKeyStore::<Sendable>::import_raw_secret_key(&store, sk)
             .await
             .unwrap();
         assert_eq!(imported, sk);
@@ -149,12 +151,12 @@ mod tests {
         use crate::{listener::no_listener::NoListener, principal::active::Active};
         use keyhive_crypto::signer::memory::MemorySigner;
 
-        let mut store = MemorySecretKeyStore::new();
+        let store = MemorySecretKeyStore::new();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let _active =
             Active::<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>::generate(
                 signer,
-                &mut store,
+                &store,
                 NoListener,
                 &mut rand::thread_rng(),
             )
@@ -162,7 +164,7 @@ mod tests {
             .unwrap();
 
         // Active::generate creates 7 prekeys (1 initial + 6 additional)
-        assert_eq!(store.len(), 7, "all 7 prekeys should be in the store");
+        assert_eq!(store.len().await, 7, "all 7 prekeys should be in the store");
     }
 
     /// Verify that keys generated during `Active::expand_prekeys`
@@ -172,29 +174,26 @@ mod tests {
         use crate::{listener::no_listener::NoListener, principal::active::Active};
         use keyhive_crypto::signer::memory::MemorySigner;
 
-        let mut store = MemorySecretKeyStore::new();
+        let store = MemorySecretKeyStore::new();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let mut active =
             Active::<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>::generate(
                 signer,
-                &mut store,
+                &store,
                 NoListener,
                 &mut rand::thread_rng(),
             )
             .await
             .unwrap();
 
-        let before = store.len();
+        let before = store.len().await;
         let _op = active
-            .expand_prekeys(
-                &mut store,
-                futures::lock::Mutex::new(rand::thread_rng()).into(),
-            )
+            .expand_prekeys(&store, futures::lock::Mutex::new(rand::thread_rng()).into())
             .await
             .unwrap();
 
         assert_eq!(
-            store.len(),
+            store.len().await,
             before + 1,
             "expand_prekeys should add one key to the store"
         );
@@ -207,31 +206,31 @@ mod tests {
         use crate::{listener::no_listener::NoListener, principal::active::Active};
         use keyhive_crypto::signer::memory::MemorySigner;
 
-        let mut store = MemorySecretKeyStore::new();
+        let store = MemorySecretKeyStore::new();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let mut active =
             Active::<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>::generate(
                 signer,
-                &mut store,
+                &store,
                 NoListener,
                 &mut rand::thread_rng(),
             )
             .await
             .unwrap();
 
-        let before = store.len();
+        let before = store.len().await;
         let old_pk = *active.prekey_pairs.lock().await.keys().next().unwrap();
         let _op = active
             .rotate_prekey(
                 old_pk,
-                &mut store,
+                &store,
                 futures::lock::Mutex::new(rand::thread_rng()).into(),
             )
             .await
             .unwrap();
 
         assert_eq!(
-            store.len(),
+            store.len().await,
             before + 1,
             "rotate_prekey should add the new key to the store"
         );
@@ -260,9 +259,8 @@ mod tests {
         .await
         .unwrap();
 
-        let locked_store = keyhive.secret_store().lock().await;
         assert_eq!(
-            locked_store.len(),
+            keyhive.secret_store().len().await,
             7,
             "keyhive should have 7 prekeys in the store"
         );
@@ -274,12 +272,12 @@ mod tests {
         use crate::{listener::no_listener::NoListener, principal::active::Active};
         use keyhive_crypto::signer::memory::MemorySigner;
 
-        let mut store1 = MemorySecretKeyStore::new();
+        let store1 = MemorySecretKeyStore::new();
         let signer1 = MemorySigner::generate(&mut rand::thread_rng());
         let active1 =
             Active::<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>::generate(
                 signer1,
-                &mut store1,
+                &store1,
                 NoListener,
                 &mut rand::thread_rng(),
             )
@@ -288,26 +286,26 @@ mod tests {
 
         let exported = active1.export_prekey_secrets().await.unwrap();
 
-        let mut store2 = MemorySecretKeyStore::new();
+        let store2 = MemorySecretKeyStore::new();
         let signer2 = MemorySigner::generate(&mut rand::thread_rng());
         let active2 =
             Active::<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>::generate(
                 signer2,
-                &mut store2,
+                &store2,
                 NoListener,
                 &mut rand::thread_rng(),
             )
             .await
             .unwrap();
 
-        let before = store2.len();
+        let before = store2.len().await;
         active2
-            .import_prekey_secrets(&exported, &mut store2)
+            .import_prekey_secrets(&exported, &store2)
             .await
             .unwrap();
 
         assert!(
-            store2.len() > before,
+            store2.len().await > before,
             "imported keys should be added to the store"
         );
     }
@@ -343,12 +341,12 @@ mod tests {
             .await
             .unwrap();
 
-        let keys_after_doc = keyhive.secret_store().lock().await.len();
+        let keys_after_doc = keyhive.secret_store().len().await;
 
         // Perform a PCS update — this generates new tree keys
         keyhive.force_pcs_update(doc.clone()).await.unwrap();
 
-        let keys_after_pcs = keyhive.secret_store().lock().await.len();
+        let keys_after_pcs = keyhive.secret_store().len().await;
         assert!(
             keys_after_pcs > keys_after_doc,
             "pcs_update should add tree-ratcheted keys to the store (before={keys_after_doc}, after={keys_after_pcs})"

@@ -224,7 +224,7 @@ impl Cgka {
     ///
     /// Call after any CGKA operation that may generate new keys
     /// (`update`, `add`, `remove`, `new_app_secret_for`, `with_new_owner`).
-    pub async fn sync_keys_to_store<F: FutureForm, K: SecretKeyStore<F>>(&self, store: &mut K) {
+    pub async fn sync_keys_to_store<F: FutureForm, K: SecretKeyStore<F>>(&self, store: &K) {
         for (pk, sk) in self.0.owner_sks.iter() {
             let already_stored = match store.contains_secret_key(pk).await {
                 Ok(exists) => exists,

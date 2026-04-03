@@ -124,7 +124,7 @@ where
         member_to_add: Agent<F, S, K, T, L>,
         can: Access,
         signer: &S,
-        secret_store: &mut K,
+        secret_store: &K,
         other_relevant_docs: &[Arc<Mutex<Document<F, S, K, T, L>>>],
     ) -> Result<AddMemberUpdate<F, S, K, T, L>, AddMemberError> {
         match self {

@@ -85,7 +85,7 @@ use tracing::instrument;
 pub struct Keyhive<
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
-    K: SecretKeyStore<F>,
+    K: SecretKeyStore<F> + Clone,
     T: ContentRef = [u8; 32],
     P: for<'de> Deserialize<'de> = Vec<u8>,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone = MemoryCiphertextStore<T, P>,
@@ -125,7 +125,7 @@ pub struct Keyhive<
     ciphertext_store: C,
 
     /// Pluggable storage for X25519 secret keys.
-    secret_store: Arc<Mutex<K>>,
+    secret_store: K,
 
     /// Cryptographically secure (pseudo)random number generator.
     csprng: Arc<Mutex<R>>,
@@ -136,7 +136,7 @@ pub struct Keyhive<
 impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
-        K: SecretKeyStore<F>,
+        K: SecretKeyStore<F> + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
@@ -159,19 +159,14 @@ where
     #[instrument(skip_all)]
     pub async fn generate(
         signer: S,
-        mut secret_store: K,
+        secret_store: K,
         ciphertext_store: C,
         event_listener: L,
         mut csprng: R,
     ) -> Result<Self, GenerateError> {
         let verifying_key = signer.verifying_key();
-        let inner_active = Active::generate(
-            signer,
-            &mut secret_store,
-            event_listener.clone(),
-            &mut csprng,
-        )
-        .await?;
+        let inner_active =
+            Active::generate(signer, &secret_store, event_listener.clone(), &mut csprng).await?;
         let active_id = inner_active.id();
 
         Ok(Self {
@@ -189,7 +184,7 @@ where
             delegations: Arc::new(Mutex::new(DelegationStore::new())),
             revocations: Arc::new(Mutex::new(RevocationStore::new())),
             pending_events: Arc::new(Mutex::new(Vec::new())),
-            secret_store: Arc::new(Mutex::new(secret_store)),
+            secret_store,
             ciphertext_store,
             event_listener,
             csprng: Arc::new(Mutex::new(csprng)),
@@ -280,7 +275,7 @@ where
             self.revocations.dupe(),
             self.event_listener.clone(),
             &signer,
-            &mut *self.secret_store.lock().await,
+            &self.secret_store,
             self.csprng.dupe(),
         )
         .await?;
@@ -302,12 +297,11 @@ where
 
     #[instrument(skip_all)]
     pub async fn contact_card(&self) -> Result<ContactCard, SigningError> {
-        let mut store = self.secret_store.lock().await;
         let rot_key_op = self
             .active
             .lock()
             .await
-            .generate_private_prekey(&mut *store, self.csprng.dupe())
+            .generate_private_prekey(&self.secret_store, self.csprng.dupe())
             .await?;
 
         Ok(ContactCard(KeyOp::Rotate(rot_key_op)))
@@ -358,26 +352,24 @@ where
         &self,
         prekey: ShareKey,
     ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
-        let mut store = self.secret_store.lock().await;
         self.active
             .lock()
             .await
-            .rotate_prekey(prekey, &mut *store, self.csprng.dupe())
+            .rotate_prekey(prekey, &self.secret_store, self.csprng.dupe())
             .await
     }
 
     #[instrument(skip_all)]
     pub async fn expand_prekeys(&self) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
-        let mut store = self.secret_store.lock().await;
         self.active
             .lock()
             .await
-            .expand_prekeys(&mut *store, self.csprng.dupe())
+            .expand_prekeys(&self.secret_store, self.csprng.dupe())
             .await
     }
 
     /// Get a reference to the secret key store.
-    pub fn secret_store(&self) -> &Arc<Mutex<K>> {
+    pub fn secret_store(&self) -> &K {
         &self.secret_store
     }
 
@@ -518,9 +510,8 @@ where
                             .pick_individual_prekeys(doc_id)
                             .await;
                         let mut locked_doc = doc.lock().await;
-                        let mut locked_store = self.secret_store.lock().await;
                         let ops = locked_doc
-                            .add_cgka_members_from_prekeys(&prekeys, &signer, &mut *locked_store)
+                            .add_cgka_members_from_prekeys(&prekeys, &signer, &self.secret_store)
                             .await?;
                         update.cgka_ops.extend(ops);
                     }
@@ -530,13 +521,12 @@ where
             }
             Membered::Document(_, doc) => {
                 let mut locked = doc.lock().await;
-                let mut locked_store = self.secret_store.lock().await;
                 locked
                     .add_member(
                         to_add,
                         can,
                         &signer,
-                        &mut *locked_store,
+                        &self.secret_store,
                         other_relevant_docs,
                     )
                     .await
@@ -619,7 +609,7 @@ where
                             continue;
                         }
                         if let Ok(Some(op)) = locked_doc
-                            .remove_cgka_member(id, &signer, &mut *self.secret_store.lock().await)
+                            .remove_cgka_member(id, &signer, &self.secret_store)
                             .await
                         {
                             update.cgka_ops.push(op);
@@ -643,7 +633,6 @@ where
         let signer = { self.active.lock().await.signer.clone() };
         let result = {
             let mut locked_csprng = self.csprng.lock().await;
-            let mut locked_store = self.secret_store.lock().await;
             doc.lock()
                 .await
                 .try_encrypt_content(
@@ -651,7 +640,7 @@ where
                     content,
                     pred_refs,
                     &signer,
-                    &mut *locked_store,
+                    &self.secret_store,
                     &mut *locked_csprng,
                 )
                 .await?
@@ -692,10 +681,9 @@ where
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
         let signer = { self.active.lock().await.signer.clone() };
         let mut locked_csprng = self.csprng.lock().await;
-        let mut locked_store = self.secret_store.lock().await;
         doc.lock()
             .await
-            .pcs_update(&signer, &mut *locked_store, &mut *locked_csprng)
+            .pcs_update(&signer, &self.secret_store, &mut *locked_csprng)
             .await
     }
 
@@ -1764,11 +1752,7 @@ where
                 if doc
                     .lock()
                     .await
-                    .merge_cgka_invite_op(
-                        signed_op.clone(),
-                        &sk,
-                        &mut *self.secret_store.lock().await,
-                    )
+                    .merge_cgka_invite_op(signed_op.clone(), &sk, &self.secret_store)
                     .await?
                 {
                     self.event_listener.on_cgka_op(&signed_op).await;
@@ -1779,11 +1763,7 @@ where
                 if doc
                     .lock()
                     .await
-                    .merge_cgka_invite_op(
-                        signed_op.clone(),
-                        &sk,
-                        &mut *self.secret_store.lock().await,
-                    )
+                    .merge_cgka_invite_op(signed_op.clone(), &sk, &self.secret_store)
                     .await?
                 {
                     self.event_listener.on_cgka_op(&signed_op).await;
@@ -1879,11 +1859,10 @@ where
 
     /// Import prekey secrets from a previously exported blob, extending the existing set.
     pub async fn import_prekey_secrets(&self, bytes: &[u8]) -> Result<(), bincode::Error> {
-        let mut store = self.secret_store.lock().await;
         self.active
             .lock()
             .await
-            .import_prekey_secrets(bytes, &mut *store)
+            .import_prekey_secrets(bytes, &self.secret_store)
             .await
     }
 
@@ -2184,7 +2163,6 @@ where
         }
 
         // Sync all archived prekey pairs to the durable store
-        let mut secret_store = secret_store;
         for sk in archive.active.prekey_pairs.values() {
             if let Err(e) = secret_store.import_raw_secret_key(*sk).await {
                 tracing::warn!(error = ?e, "failed to persist archived prekey to durable store");
@@ -2211,7 +2189,7 @@ where
             delegations,
             revocations,
             pending_events: Arc::new(Mutex::new(pending_events)),
-            secret_store: Arc::new(Mutex::new(secret_store)),
+            secret_store,
             csprng,
             ciphertext_store,
             event_listener: listener,
@@ -2230,13 +2208,11 @@ where
             let locked_active = self.active.lock().await;
             {
                 // Sync archived prekey pairs to the durable store
-                let mut locked_store = self.secret_store.lock().await;
                 for sk in archive.active.prekey_pairs.values() {
-                    if let Err(e) = locked_store.import_raw_secret_key(*sk).await {
+                    if let Err(e) = self.secret_store.import_raw_secret_key(*sk).await {
                         tracing::warn!(error = ?e, "failed to persist archived prekey to durable store");
                     }
                 }
-                drop(locked_store);
 
                 locked_active
                     .prekey_pairs
@@ -2459,7 +2435,7 @@ where
 impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
-        K: SecretKeyStore<F>,
+        K: SecretKeyStore<F> + Clone,
         T: ContentRef + Debug,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
@@ -2484,7 +2460,7 @@ impl<
 impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
-        K: SecretKeyStore<F> + Default,
+        K: SecretKeyStore<F> + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
@@ -2503,7 +2479,7 @@ where
         Keyhive::try_from_archive(
             &self.into_archive().await,
             signer,
-            K::default(),
+            self.secret_store.clone(),
             self.ciphertext_store.clone(),
             Log::new(),
             self.csprng.clone(),
@@ -2516,7 +2492,7 @@ where
 impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
-        K: SecretKeyStore<F> + Default,
+        K: SecretKeyStore<F> + Clone,
         T: ContentRef + Clone,
         P: for<'de> Deserialize<'de> + Clone,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
@@ -2570,7 +2546,7 @@ where
 impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
-        K: SecretKeyStore<F>,
+        K: SecretKeyStore<F> + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
