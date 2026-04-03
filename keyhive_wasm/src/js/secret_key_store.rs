@@ -124,17 +124,17 @@ impl SecretKeyStore<Local> for JsSecretKeyStore {
     type ImportError = JsSecretKeyStoreError;
     type GenerateError = JsSecretKeyStoreError;
 
-    fn get_secret_key(
-        &self,
-        public_key: &ShareKey,
-    ) -> <Local as FutureForm>::Future<'_, Result<Option<ShareSecretKey>, Self::GetError>> {
+    fn get_secret_key<'a>(
+        &'a self,
+        public_key: &'a ShareKey,
+    ) -> <Local as FutureForm>::Future<'a, Result<Option<ShareSecretKey>, Self::GetError>> {
         Local::from_future(async move { Ok(self.cache.lock().await.get(public_key).copied()) })
     }
 
-    fn import_secret_key(
-        &self,
+    fn import_secret_key<'a>(
+        &'a self,
         secret_key: ShareSecretKey,
-    ) -> <Local as FutureForm>::Future<'_, Result<ShareKey, Self::ImportError>> {
+    ) -> <Local as FutureForm>::Future<'a, Result<ShareKey, Self::ImportError>> {
         Local::from_future(async move {
             let pk = secret_key.share_key();
             self.cache.lock().await.insert(pk, secret_key);
@@ -143,10 +143,10 @@ impl SecretKeyStore<Local> for JsSecretKeyStore {
         })
     }
 
-    fn import_raw_secret_key(
-        &self,
+    fn import_raw_secret_key<'a>(
+        &'a self,
         raw: ShareSecretKey,
-    ) -> <Local as FutureForm>::Future<'_, Result<ShareSecretKey, Self::ImportError>> {
+    ) -> <Local as FutureForm>::Future<'a, Result<ShareSecretKey, Self::ImportError>> {
         Local::from_future(async move {
             let pk = raw.share_key();
             self.cache.lock().await.insert(pk, raw);
@@ -155,9 +155,9 @@ impl SecretKeyStore<Local> for JsSecretKeyStore {
         })
     }
 
-    fn generate_secret_key(
-        &self,
-    ) -> <Local as FutureForm>::Future<'_, Result<ShareSecretKey, Self::GenerateError>> {
+    fn generate_secret_key<'a>(
+        &'a self,
+    ) -> <Local as FutureForm>::Future<'a, Result<ShareSecretKey, Self::GenerateError>> {
         Local::from_future(async move {
             let sk = ShareSecretKey::generate(&mut rand::thread_rng());
             let pk = sk.share_key();
@@ -167,10 +167,10 @@ impl SecretKeyStore<Local> for JsSecretKeyStore {
         })
     }
 
-    fn contains_secret_key(
-        &self,
-        public_key: &ShareKey,
-    ) -> <Local as FutureForm>::Future<'_, Result<bool, Self::GetError>> {
+    fn contains_secret_key<'a>(
+        &'a self,
+        public_key: &'a ShareKey,
+    ) -> <Local as FutureForm>::Future<'a, Result<bool, Self::GetError>> {
         Local::from_future(async move { Ok(self.cache.lock().await.contains_key(public_key)) })
     }
 }
