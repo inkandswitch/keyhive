@@ -39,14 +39,11 @@ impl JsArchive {
     #[wasm_bindgen(js_name = tryToKeyhive)]
     pub async fn try_to_keyhive(
         &self,
+        secret_store: JsSecretKeyStore,
         ciphertext_store: JsCiphertextStore,
         signer: &JsSigner,
         event_handler: &js_sys::Function,
     ) -> Result<JsKeyhive, JsTryFromArchiveError> {
-        let secret_store = JsSecretKeyStore::load()
-            .await
-            .expect("failed to load secret key store from IndexedDB");
-
         Ok(Keyhive::try_from_archive(
             &self.0,
             signer.clone(),

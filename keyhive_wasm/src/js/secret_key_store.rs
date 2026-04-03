@@ -1,9 +1,9 @@
-//! IndexedDB-backed secret key store for Wasm.
+//! Pluggable secret key store for Wasm.
 //!
-//! Stores X25519 secret key bytes in IndexedDB for durability across
-//! page reloads, with an in-memory `BTreeMap` cache for fast lookups.
-//! Keys are loaded from IndexedDB on construction and written back
-//! on every mutation.
+//! Provides two backends:
+//! - [`JsSecretKeyStore::memory()`] — in-memory only (for Node.js tests)
+//! - [`JsSecretKeyStore::load_from_indexed_db()`] — IndexedDB-backed with
+//!   in-memory cache (for browsers)
 
 use future_form::{FutureForm, Local};
 use keyhive_core::store::secret_key::SecretKeyStore;
@@ -20,56 +20,60 @@ extern "C" {
 
     #[wasm_bindgen(catch)]
     async fn idb_store_key(public_key_hex: &str, secret_key_bytes: &[u8]) -> Result<(), JsValue>;
-
 }
 
-/// IndexedDB-backed secret key store.
+/// Secret key store for Wasm.
 ///
-/// Maintains an in-memory cache (`BTreeMap`) synchronized with
-/// IndexedDB for persistence across page reloads. All ECDH
-/// operations happen in-process using `x25519_dalek` (compiled
-/// to Wasm).
+/// Two backends are available:
+/// - [`memory()`](JsSecretKeyStore::memory) — in-memory only, no persistence.
+///   Use for Node.js tests or environments without IndexedDB.
+/// - [`load_from_indexed_db()`](JsSecretKeyStore::load_from_indexed_db) —
+///   IndexedDB-backed with in-memory cache. Keys persist across page reloads.
 ///
 /// # Security
 ///
-/// Secret key bytes are stored in cleartext in IndexedDB. Any
-/// same-origin JavaScript can read them. For stronger protection,
+/// The IndexedDB backend stores raw secret key bytes in cleartext.
+/// Any same-origin JavaScript can read them. For stronger protection,
 /// a future implementation should use WebCrypto `SubtleCrypto`
 /// with non-extractable X25519 `CryptoKey` handles — the
-/// [`AsyncSecretKey`] trait's return types are designed to
-/// support this (see [`AsyncSecretKey::ratchet_forward`] which
-/// returns raw [`ShareSecretKey`] bytes from the KDF output,
-/// keeping the original leaf key non-extractable).
+/// [`AsyncSecretKey`](keyhive_crypto::share_key::AsyncSecretKey)
+/// trait's return types are designed to support this.
+#[wasm_bindgen(js_name = SecretKeyStore)]
 #[derive(Debug, Clone)]
 pub struct JsSecretKeyStore {
     cache: BTreeMap<ShareKey, ShareSecretKey>,
+    /// Whether to persist mutations to IndexedDB.
+    persistent: bool,
 }
 
+#[wasm_bindgen(js_class = SecretKeyStore)]
 impl JsSecretKeyStore {
-    /// Create a new empty store (call [`load`] to hydrate from IndexedDB).
-    pub fn new() -> Self {
+    /// Create an in-memory-only store (no IndexedDB persistence).
+    ///
+    /// Use for Node.js tests or environments without IndexedDB.
+    #[wasm_bindgen]
+    pub fn memory() -> Self {
         Self {
             cache: BTreeMap::new(),
+            persistent: false,
         }
     }
 
-    /// Load all keys from IndexedDB into the in-memory cache.
+    /// Load keys from IndexedDB and create a persistent store.
     ///
-    /// Call this once on startup before using the store.
-    pub async fn load() -> Result<Self, JsSecretKeyStoreError> {
+    /// Keys are cached in memory for fast lookups and written
+    /// back to IndexedDB on every mutation.
+    #[wasm_bindgen(js_name = loadFromIndexedDB)]
+    pub async fn load_from_indexed_db() -> Result<JsSecretKeyStore, JsError> {
         let js_entries = idb_load_all_keys()
             .await
-            .map_err(JsSecretKeyStoreError::IdbError)?;
+            .map_err(|e| JsError::new(&format!("IndexedDB load failed: {e:?}")))?;
 
         let mut cache = BTreeMap::new();
 
-        // js_entries is an array of [hex_public_key, Uint8Array_secret_key]
         let entries = js_sys::Array::from(&js_entries);
         for i in 0..entries.length() {
             let pair = js_sys::Array::from(&entries.get(i));
-            let _pk_hex = pair.get(0).as_string().ok_or_else(|| {
-                JsSecretKeyStoreError::ParseError("public key not a string".into())
-            })?;
             let sk_array = js_sys::Uint8Array::new(&pair.get(1));
             let sk_bytes: Vec<u8> = sk_array.to_vec();
 
@@ -84,25 +88,33 @@ impl JsSecretKeyStore {
             cache.insert(pk, sk);
         }
 
-        Ok(Self { cache })
+        Ok(Self {
+            cache,
+            persistent: true,
+        })
     }
+}
 
-    /// Persist a key to IndexedDB.
-    async fn persist(
+impl JsSecretKeyStore {
+    /// Persist a key to IndexedDB (no-op if not persistent).
+    async fn maybe_persist(
         &self,
         pk: &ShareKey,
         sk: &ShareSecretKey,
     ) -> Result<(), JsSecretKeyStoreError> {
-        let pk_hex = to_hex(pk.as_bytes());
-        idb_store_key(&pk_hex, &sk.to_bytes())
-            .await
-            .map_err(JsSecretKeyStoreError::IdbError)
+        if self.persistent {
+            let pk_hex = to_hex(pk.as_bytes());
+            idb_store_key(&pk_hex, &sk.to_bytes())
+                .await
+                .map_err(JsSecretKeyStoreError::IdbError)?;
+        }
+        Ok(())
     }
 }
 
 impl Default for JsSecretKeyStore {
     fn default() -> Self {
-        Self::new()
+        Self::memory()
     }
 }
 
@@ -116,7 +128,6 @@ impl SecretKeyStore<Local> for JsSecretKeyStore {
         &'a self,
         public_key: &'a ShareKey,
     ) -> <Local as FutureForm>::Future<'a, Result<Option<ShareSecretKey>, Self::GetError>> {
-        // Fast path: check in-memory cache (no IDB round-trip)
         Local::ready(Ok(self.cache.get(public_key).copied()))
     }
 
@@ -127,7 +138,7 @@ impl SecretKeyStore<Local> for JsSecretKeyStore {
         let pk = secret_key.share_key();
         self.cache.insert(pk, secret_key);
         Local::from_future(async move {
-            self.persist(&pk, &secret_key).await?;
+            self.maybe_persist(&pk, &secret_key).await?;
             Ok(pk)
         })
     }
@@ -139,7 +150,7 @@ impl SecretKeyStore<Local> for JsSecretKeyStore {
         let pk = raw.share_key();
         self.cache.insert(pk, raw);
         Local::from_future(async move {
-            self.persist(&pk, &raw).await?;
+            self.maybe_persist(&pk, &raw).await?;
             Ok(raw)
         })
     }
@@ -151,7 +162,7 @@ impl SecretKeyStore<Local> for JsSecretKeyStore {
         let pk = sk.share_key();
         self.cache.insert(pk, sk);
         Local::from_future(async move {
-            self.persist(&pk, &sk).await?;
+            self.maybe_persist(&pk, &sk).await?;
             Ok(sk)
         })
     }
