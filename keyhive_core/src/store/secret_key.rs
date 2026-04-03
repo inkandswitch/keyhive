@@ -19,9 +19,22 @@ use std::fmt::{Debug, Display};
 /// futures are `Send` or `!Send`.
 ///
 /// The `SecretKey` associated type is the handle to a stored key.
-/// For in-memory stores this is [`ShareSecretKey`] directly. For
-/// external stores (KMS, WebCrypto) it may be an opaque handle
-/// that implements [`AsyncSecretKey`] for ECDH operations.
+/// For in-memory stores this is [`ShareSecretKey`] directly
+/// (cleartext bytes in process memory). For external stores (KMS,
+/// WebCrypto) it may be an opaque non-extractable handle that
+/// implements [`AsyncSecretKey`] for ECDH operations without
+/// exposing the raw key material.
+///
+/// # Security
+///
+/// The built-in implementations ([`MemorySecretKeyStore`] and
+/// `JsSecretKeyStore`) store raw secret key bytes. For
+/// `JsSecretKeyStore`, this means cleartext bytes in IndexedDB
+/// (readable by same-origin JS). For stronger protection,
+/// implement this trait backed by WebCrypto non-extractable
+/// `CryptoKey` handles or a hardware security module.
+///
+/// [`MemorySecretKeyStore`]: memory::MemorySecretKeyStore
 pub trait SecretKeyStore<F: FutureForm>: Sized {
     /// The secret key handle type.
     type SecretKey: AsyncSecretKey<F>;

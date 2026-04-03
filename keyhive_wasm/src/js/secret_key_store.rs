@@ -29,6 +29,17 @@ extern "C" {
 /// IndexedDB for persistence across page reloads. All ECDH
 /// operations happen in-process using `x25519_dalek` (compiled
 /// to Wasm).
+///
+/// # Security
+///
+/// Secret key bytes are stored in cleartext in IndexedDB. Any
+/// same-origin JavaScript can read them. For stronger protection,
+/// a future implementation should use WebCrypto `SubtleCrypto`
+/// with non-extractable X25519 `CryptoKey` handles — the
+/// [`AsyncSecretKey`] trait's return types are designed to
+/// support this (see [`AsyncSecretKey::ratchet_forward`] which
+/// returns raw [`ShareSecretKey`] bytes from the KDF output,
+/// keeping the original leaf key non-extractable).
 #[derive(Debug, Clone)]
 pub struct JsSecretKeyStore {
     cache: BTreeMap<ShareKey, ShareSecretKey>,

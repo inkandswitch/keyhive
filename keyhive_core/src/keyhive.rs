@@ -163,7 +163,7 @@ where
         ciphertext_store: C,
         event_listener: L,
         mut csprng: R,
-    ) -> Result<Self, GenerateError<K, F>> {
+    ) -> Result<Self, GenerateError> {
         let verifying_key = signer.verifying_key();
         let inner_active = Active::generate(
             signer,
@@ -2712,13 +2712,11 @@ impl<
     }
 }
 
+/// Error during [`Keyhive::generate`].
 #[derive(Debug, Error)]
-pub enum GenerateError<K: SecretKeyStore<F>, F: FutureForm = future_form::Sendable> {
+pub enum GenerateError {
     #[error(transparent)]
     SigningError(#[from] SigningError),
-
-    #[error("Secret key store error: {0}")]
-    SecretKeyStoreError(K::ImportError),
 }
 
 #[derive(Clone, PartialEq, Eq, Error)]

@@ -18,7 +18,7 @@ pub async fn make_simple_keyhive() -> Result<
         NoListener,
         OsRng,
     >,
-    GenerateError<MemorySecretKeyStore, Sendable>,
+    GenerateError,
 > {
     let mut csprng = OsRng;
     let sk = MemorySigner::generate(&mut csprng);
