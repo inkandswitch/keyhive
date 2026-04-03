@@ -118,12 +118,13 @@ where
         }
     }
 
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     pub async fn add_member(
         &self,
         member_to_add: Agent<F, S, K, T, L>,
         can: Access,
         signer: &S,
+        secret_store: &mut K,
         other_relevant_docs: &[Arc<Mutex<Document<F, S, K, T, L>>>],
     ) -> Result<AddMemberUpdate<F, S, K, T, L>, AddMemberError> {
         match self {
@@ -136,7 +137,13 @@ where
                 document
                     .lock()
                     .await
-                    .add_member(member_to_add, can, signer, other_relevant_docs)
+                    .add_member(
+                        member_to_add,
+                        can,
+                        signer,
+                        secret_store,
+                        other_relevant_docs,
+                    )
                     .await
             }
         }

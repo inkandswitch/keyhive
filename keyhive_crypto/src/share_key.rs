@@ -143,6 +143,7 @@ impl ShareSecretKey {
         Self::derive_from_bytes(bytes.as_slice())
     }
 
+    #[deprecated(note = "Use `AsyncSecretKey::ratchet_forward` in a loop instead")]
     pub fn ratchet_n_forward(&self, n: usize) -> Self {
         (0..n).fold(*self, |acc, _| acc.ratchet_forward())
     }

@@ -106,14 +106,18 @@ impl<
         let mut prekey_pairs = BTreeMap::from_iter([(init_pk, init_sk)]);
 
         // Store the initial key
-        secret_store.import_raw_secret_key(init_sk).await.ok();
+        if let Err(e) = secret_store.import_raw_secret_key(init_sk).await {
+            tracing::warn!(error = ?e, "failed to persist secret key to durable store");
+        }
 
         // Generate additional prekeys
         for _ in 0..6 {
             let sk = ShareSecretKey::generate(csprng);
             let pk = sk.share_key();
             prekey_pairs.insert(pk, sk);
-            secret_store.import_raw_secret_key(sk).await.ok();
+            if let Err(e) = secret_store.import_raw_secret_key(sk).await {
+                tracing::warn!(error = ?e, "failed to persist secret key to durable store");
+            }
         }
 
         let borrowed_signer = &signer;
@@ -218,7 +222,9 @@ impl<
         );
 
         // Store in both the legacy prekey_pairs and the durable store
-        secret_store.import_raw_secret_key(new_secret).await.ok();
+        if let Err(e) = secret_store.import_raw_secret_key(new_secret).await {
+            tracing::warn!(error = ?e, "failed to persist secret key to durable store");
+        }
         {
             self.prekey_pairs
                 .lock()
@@ -275,7 +281,9 @@ impl<
         }
 
         // Store in both the legacy prekey_pairs and the durable store
-        secret_store.import_raw_secret_key(new_secret).await.ok();
+        if let Err(e) = secret_store.import_raw_secret_key(new_secret).await {
+            tracing::warn!(error = ?e, "failed to persist secret key to durable store");
+        }
         {
             self.prekey_pairs
                 .lock()
@@ -338,7 +346,9 @@ impl<
     ) -> Result<(), bincode::Error> {
         let imported: BTreeMap<ShareKey, ShareSecretKey> = bincode::deserialize(bytes)?;
         for &sk in imported.values() {
-            secret_store.import_raw_secret_key(sk).await.ok();
+            if let Err(e) = secret_store.import_raw_secret_key(sk).await {
+                tracing::warn!(error = ?e, "failed to persist secret key to durable store");
+            }
         }
         let mut pairs = self.prekey_pairs.lock().await;
         pairs.extend(imported);

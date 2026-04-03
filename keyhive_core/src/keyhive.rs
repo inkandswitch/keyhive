@@ -518,8 +518,9 @@ where
                             .pick_individual_prekeys(doc_id)
                             .await;
                         let mut locked_doc = doc.lock().await;
+                        let mut locked_store = self.secret_store.lock().await;
                         let ops = locked_doc
-                            .add_cgka_members_from_prekeys(&prekeys, &signer)
+                            .add_cgka_members_from_prekeys(&prekeys, &signer, &mut *locked_store)
                             .await?;
                         update.cgka_ops.extend(ops);
                     }
@@ -529,8 +530,15 @@ where
             }
             Membered::Document(_, doc) => {
                 let mut locked = doc.lock().await;
+                let mut locked_store = self.secret_store.lock().await;
                 locked
-                    .add_member(to_add, can, &signer, other_relevant_docs)
+                    .add_member(
+                        to_add,
+                        can,
+                        &signer,
+                        &mut *locked_store,
+                        other_relevant_docs,
+                    )
                     .await
             }
         }
@@ -610,7 +618,10 @@ where
                         if still_reachable.contains(&id) {
                             continue;
                         }
-                        if let Ok(Some(op)) = locked_doc.remove_cgka_member(id, &signer).await {
+                        if let Ok(Some(op)) = locked_doc
+                            .remove_cgka_member(id, &signer, &mut *self.secret_store.lock().await)
+                            .await
+                        {
                             update.cgka_ops.push(op);
                         }
                     }
@@ -2172,6 +2183,25 @@ where
             pending_events.push(Arc::new(event.clone()));
         }
 
+        // Sync all archived prekey pairs to the durable store
+        let mut secret_store = secret_store;
+        for sk in archive.active.prekey_pairs.values() {
+            if let Err(e) = secret_store.import_raw_secret_key(*sk).await {
+                tracing::warn!(error = ?e, "failed to persist archived prekey to durable store");
+            }
+        }
+
+        // Sync all CGKA owner keys from archived documents
+        for (_doc_id, doc_archive) in archive.docs.iter() {
+            if let Some(ref cgka_data) = doc_archive.cgka {
+                for (_, sk) in cgka_data.owner_sks().iter() {
+                    if let Err(e) = secret_store.import_raw_secret_key(*sk).await {
+                        tracing::warn!(error = ?e, "failed to persist archived CGKA key to durable store");
+                    }
+                }
+            }
+        }
+
         Ok(Self {
             verifying_key: archive.active.individual.verifying_key(),
             active,
@@ -2199,6 +2229,15 @@ where
         {
             let locked_active = self.active.lock().await;
             {
+                // Sync archived prekey pairs to the durable store
+                let mut locked_store = self.secret_store.lock().await;
+                for sk in archive.active.prekey_pairs.values() {
+                    if let Err(e) = locked_store.import_raw_secret_key(*sk).await {
+                        tracing::warn!(error = ?e, "failed to persist archived prekey to durable store");
+                    }
+                }
+                drop(locked_store);
+
                 locked_active
                     .prekey_pairs
                     .lock()

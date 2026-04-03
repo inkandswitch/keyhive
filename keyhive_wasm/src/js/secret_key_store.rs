@@ -21,8 +21,6 @@ extern "C" {
     #[wasm_bindgen(catch)]
     async fn idb_store_key(public_key_hex: &str, secret_key_bytes: &[u8]) -> Result<(), JsValue>;
 
-    #[wasm_bindgen(catch)]
-    async fn idb_has_key(public_key_hex: &str) -> Result<JsValue, JsValue>;
 }
 
 /// IndexedDB-backed secret key store.

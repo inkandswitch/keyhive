@@ -226,8 +226,17 @@ impl Cgka {
     /// (`update`, `add`, `remove`, `new_app_secret_for`, `with_new_owner`).
     pub async fn sync_keys_to_store<F: FutureForm, K: SecretKeyStore<F>>(&self, store: &mut K) {
         for (pk, sk) in self.0.owner_sks.iter() {
-            if !store.contains_secret_key(pk).await.unwrap_or(false) {
-                store.import_raw_secret_key(*sk).await.ok();
+            let already_stored = match store.contains_secret_key(pk).await {
+                Ok(exists) => exists,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to check durable store for secret key");
+                    false
+                }
+            };
+            if !already_stored {
+                if let Err(e) = store.import_raw_secret_key(*sk).await {
+                    tracing::warn!(error = ?e, "failed to persist secret key to durable store");
+                }
             }
         }
     }

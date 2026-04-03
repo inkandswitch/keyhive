@@ -313,4 +313,47 @@ mod tests {
             "imported keys should be added to the store"
         );
     }
+
+    /// Verify that CGKA tree-ratcheted keys from `pcs_update` are
+    /// synced to the durable store.
+    #[tokio::test]
+    async fn test_pcs_update_syncs_cgka_keys_to_store() {
+        use crate::{
+            keyhive::Keyhive, listener::no_listener::NoListener,
+            store::ciphertext::memory::MemoryCiphertextStore,
+        };
+        use keyhive_crypto::signer::memory::MemorySigner;
+        use nonempty::nonempty;
+
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let store = MemorySecretKeyStore::new();
+        let ciphertext_store: MemoryCiphertextStore<[u8; 32], Vec<u8>> =
+            MemoryCiphertextStore::new();
+        let keyhive = Keyhive::<Sendable, _, _, _, _, _, _, _>::generate(
+            signer,
+            store,
+            ciphertext_store,
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await
+        .unwrap();
+
+        // Create a document
+        let doc = keyhive
+            .generate_doc(vec![], nonempty![[0u8; 32]])
+            .await
+            .unwrap();
+
+        let keys_after_doc = keyhive.secret_store().lock().await.len();
+
+        // Perform a PCS update — this generates new tree keys
+        keyhive.force_pcs_update(doc.clone()).await.unwrap();
+
+        let keys_after_pcs = keyhive.secret_store().lock().await.len();
+        assert!(
+            keys_after_pcs > keys_after_doc,
+            "pcs_update should add tree-ratcheted keys to the store (before={keys_after_doc}, after={keys_after_pcs})"
+        );
+    }
 }

@@ -207,10 +207,12 @@ where
         let doc_id = DocumentId(group.id());
         let owner_share_secret_key = ShareSecretKey::generate(&mut *locked_csprng);
         let owner_share_key = owner_share_secret_key.share_key();
-        secret_store
+        if let Err(e) = secret_store
             .import_raw_secret_key(owner_share_secret_key)
             .await
-            .ok();
+        {
+            tracing::warn!(error = ?e, "failed to persist CGKA owner key to durable store");
+        }
         let group_members = group.pick_individual_prekeys(doc_id).await;
         let other_members: Vec<(IndividualId, ShareKey)> = group_members
             .iter()
@@ -260,6 +262,7 @@ where
         member_to_add: Agent<F, S, K, T, L>,
         can: Access,
         signer: &S,
+        secret_store: &mut K,
         other_relevant_docs: &[Arc<Mutex<Document<F, S, K, T, L>>>],
     ) -> Result<AddMemberUpdate<F, S, K, T, L>, AddMemberError> {
         let mut after_content: BTreeMap<_, _> =
@@ -292,8 +295,9 @@ where
                 .delegate
                 .pick_individual_prekeys(self.doc_id())
                 .await;
-            let cgka_ops_for_this_doc =
-                self.add_cgka_members_from_prekeys(&prekeys, signer).await?;
+            let cgka_ops_for_this_doc = self
+                .add_cgka_members_from_prekeys(&prekeys, signer, secret_store)
+                .await?;
             update.cgka_ops.extend(cgka_ops_for_this_doc);
         }
         Ok(update)
@@ -308,12 +312,16 @@ where
         &mut self,
         prekeys: &HashMap<IndividualId, ShareKey>,
         signer: &S,
+        secret_store: &mut K,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut acc = Vec::new();
         for (id, prekey) in prekeys.iter() {
             if let Some(op) = self.cgka_mut()?.add(*id, *prekey, signer).await? {
                 acc.push(op);
             }
+        }
+        if let Ok(cgka) = self.cgka() {
+            cgka.sync_keys_to_store::<F, K>(secret_store).await;
         }
         Ok(acc)
     }
@@ -371,8 +379,13 @@ where
         &mut self,
         id: IndividualId,
         signer: &S,
+        secret_store: &mut K,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        self.cgka_mut()?.remove(id, signer).await
+        let result = self.cgka_mut()?.remove(id, signer).await?;
+        if let Ok(cgka) = self.cgka() {
+            cgka.sync_keys_to_store::<F, K>(secret_store).await;
+        }
+        Ok(result)
     }
 
     pub async fn get_agent_revocations(
@@ -458,7 +471,9 @@ where
         }
         let mut owner_sks = self.cgka()?.owner_sks().clone();
         owner_sks.insert(pk, *sk);
-        secret_store.import_raw_secret_key(*sk).await.ok();
+        if let Err(e) = secret_store.import_raw_secret_key(*sk).await {
+            tracing::warn!(error = ?e, "failed to persist secret key to durable store");
+        }
         let new_cgka = self
             .cgka()?
             .with_new_owner(IndividualId::from(added_id), owner_sks)?;
@@ -480,10 +495,12 @@ where
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
-        secret_store
+        if let Err(e) = secret_store
             .import_raw_secret_key(new_share_secret_key)
             .await
-            .ok();
+        {
+            tracing::warn!(error = ?e, "failed to persist PCS update key to durable store");
+        }
         let (_, op) = self
             .cgka_mut()
             .map_err(EncryptError::UnableToPcsUpdate)?

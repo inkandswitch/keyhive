@@ -7,7 +7,13 @@ const DB_NAME = "keyhive_keys";
 const DB_VERSION = 1;
 const STORE_NAME = "secret_keys";
 
+/** @type {IDBDatabase | null} */
+let cachedDb = null;
+
 function openDb() {
+  if (cachedDb) {
+    return Promise.resolve(cachedDb);
+  }
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
 
@@ -18,7 +24,13 @@ function openDb() {
       }
     };
 
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      cachedDb = request.result;
+      // Clear cache if the connection is closed unexpectedly
+      cachedDb.onclose = () => { cachedDb = null; };
+      cachedDb.onerror = () => { cachedDb = null; };
+      resolve(cachedDb);
+    };
     request.onerror = () => reject(request.error);
   });
 }
@@ -71,18 +83,4 @@ export async function idb_store_key(public_key_hex, secret_key_bytes) {
   });
 }
 
-/**
- * Check if a key exists in IndexedDB.
- * @param {string} public_key_hex - Hex-encoded public key
- * @returns {Promise<boolean>}
- */
-export async function idb_has_key(public_key_hex) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readonly");
-    const store = tx.objectStore(STORE_NAME);
-    const request = store.getKey(public_key_hex);
-    request.onsuccess = () => resolve(request.result !== undefined);
-    tx.onerror = () => reject(tx.error);
-  });
-}
+
