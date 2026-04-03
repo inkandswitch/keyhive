@@ -21,13 +21,14 @@ const getTestContactCard = () => `
 test.describe("Keyhive", async () => {
   test("constructor", async ({ page }) => {
     const out = await page.evaluate(async () => {
-      const { Keyhive, Signer, CiphertextStore } = window.keyhive;
+      const { Keyhive, Signer, SecretKeyStore, CiphertextStore } = window.keyhive;
       const store = CiphertextStore.newInMemory();
       return {
         keyhive: await Keyhive.init(
-          await Signer.generate(),
-          store,
-          console.log,
+            await Signer.generate(),
+            SecretKeyStore.memory(),
+            store,
+            console.log,
         ),
       };
     });
@@ -37,11 +38,11 @@ test.describe("Keyhive", async () => {
 
   test("id", async ({ page }) => {
     const out = await page.evaluate(async () => {
-      const { Keyhive, Signer, CiphertextStore } = window.keyhive;
+      const { Keyhive, Signer, SecretKeyStore, CiphertextStore } = window.keyhive;
       const sk = await Signer.generate();
       const vk = sk.verifyingKey;
       const store = CiphertextStore.newInMemory();
-      const keyhive = await Keyhive.init(sk, store, console.log);
+      const keyhive = await Keyhive.init(sk, SecretKeyStore.memory(), store, console.log);
       return { id: keyhive.id.bytes, vk };
     });
 
@@ -50,11 +51,11 @@ test.describe("Keyhive", async () => {
 
   test.describe("idString", async () => {
     const scenario = async () => {
-      const { Keyhive, Signer, CiphertextStore } = window.keyhive;
+      const { Keyhive, Signer, SecretKeyStore, CiphertextStore } = window.keyhive;
       const key = await Signer.generate();
       const vKey = key.verifyingKey;
       const store = CiphertextStore.newInMemory();
-      const keyhive = await Keyhive.init(key, store, console.log);
+      const keyhive = await Keyhive.init(key, SecretKeyStore.memory(), store, console.log);
       return { idString: keyhive.idString, vKey };
     };
 
@@ -71,7 +72,7 @@ test.describe("Keyhive", async () => {
 
   test.describe("generateGroup", async () => {
     const scenario = async () => {
-      const { Keyhive, Signer, CiphertextStore } = window.keyhive;
+      const { Keyhive, Signer, SecretKeyStore, CiphertextStore } = window.keyhive;
       const store = CiphertextStore.newInMemory();
       const keyhive = await Keyhive.init(
         await Signer.generate(),
@@ -118,7 +119,7 @@ test.describe("Keyhive", async () => {
 
       const signer = await Signer.generate();
       const ciphertextStore = CiphertextStore.newInMemory();
-      const kh = await Keyhive.init(signer, ciphertextStore, () => {});
+      const kh = await Keyhive.init(signer, SecretKeyStore.memory(), ciphertextStore, () => {});
       const changeId = new ChangeId(new Uint8Array([1, 2, 3]));
 
       const g1 = await kh.generateGroup([]);
@@ -139,6 +140,7 @@ test.describe("Keyhive", async () => {
       const newStore = CiphertextStore.newInMemory();
       const archive2 = new Archive(archiveBytes);
       const roundTrip = await archive2.tryToKeyhive(
+        SecretKeyStore.memory(),
         newStore,
         signer
       );
@@ -169,7 +171,7 @@ test.describe("Keyhive", async () => {
 
   test.describe("event listener", async () => {
     const scenario = async () => {
-      const { Keyhive, Signer, CiphertextStore } = window.keyhive;
+      const { Keyhive, Signer, SecretKeyStore, CiphertextStore } = window.keyhive;
       const events = [];
       const ciphertextStore = CiphertextStore.newInMemory();
       const keyhive = await Keyhive.init(
@@ -200,7 +202,7 @@ test.describe("Keyhive", async () => {
         // Create first keyhive and a document
         const signer1 = await Signer.generate();
         const store1 = CiphertextStore.newInMemory();
-        const kh1 = await Keyhive.init(signer1, store1, () => {});
+        const kh1 = await Keyhive.init(signer1, SecretKeyStore.memory(), store1, () => {});
 
         const changeId = new ChangeId(new Uint8Array([1, 2, 3]));
         await kh1.generateDocument([], changeId, []);
@@ -214,7 +216,7 @@ test.describe("Keyhive", async () => {
         // Create second keyhive with different identity
         const signer2 = await Signer.generate();
         const store2 = CiphertextStore.newInMemory();
-        const kh2 = await Keyhive.init(signer2, store2, () => {});
+        const kh2 = await Keyhive.init(signer2, SecretKeyStore.memory(), store2, () => {});
         const kh2Id = kh2.idString;
 
         // Try to ingest the archive into the second keyhive
@@ -250,7 +252,7 @@ test.describe("Keyhive", async () => {
 
         const signer = await Signer.generate();
         const store = CiphertextStore.newInMemory();
-        const kh = await Keyhive.init(signer, store, () => {});
+        const kh = await Keyhive.init(signer, SecretKeyStore.memory(), store, () => {});
         const changeId = new ChangeId(new Uint8Array([1, 2, 3]));
         const doc = await kh.generateDocument([], changeId, []);
 

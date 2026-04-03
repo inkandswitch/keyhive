@@ -5,7 +5,8 @@
 
 use crate::{
     principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
-    transact::{fork::Fork, merge::Merge},
+    store::secret_key::SecretKeyStore,
+    transact::fork::Fork,
 };
 use beekem::{
     encrypted::EncryptedContent,
@@ -19,7 +20,7 @@ use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
     signed::Signed,
     signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
@@ -126,17 +127,23 @@ impl Cgka {
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
+    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.0
             .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
             .await
     }
 
-    pub fn decryption_key_for<T, Cr: ContentRef>(
+    pub async fn decryption_key_for<F: FutureForm, T, Cr: ContentRef>(
         &mut self,
         encrypted: &EncryptedContent<T, Cr>,
-    ) -> Result<SymmetricKey, CgkaError> {
-        self.0.decryption_key_for(encrypted)
+    ) -> Result<SymmetricKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
+        self.0.decryption_key_for::<F, T, Cr>(encrypted).await
     }
 
     pub fn has_pcs_key(&self) -> bool {
@@ -148,7 +155,10 @@ impl Cgka {
         id: IndividualId,
         pk: ShareKey,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.0.add(MemberId(id.verifying_key()), pk, signer).await
     }
 
@@ -156,7 +166,10 @@ impl Cgka {
         &mut self,
         members: NonEmpty<(IndividualId, ShareKey)>,
         signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         let converted = members.map(|(id, pk)| (MemberId(id.verifying_key()), pk));
         self.0.add_multiple(converted, signer).await
     }
@@ -165,7 +178,10 @@ impl Cgka {
         &mut self,
         id: IndividualId,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.0.remove(MemberId(id.verifying_key()), signer).await
     }
 
@@ -175,7 +191,10 @@ impl Cgka {
         new_sk: ShareSecretKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
+    ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         self.0.update(new_pk, new_sk, signer, csprng).await
     }
 
@@ -183,11 +202,14 @@ impl Cgka {
         self.0.group_size()
     }
 
-    pub fn merge_concurrent_operation(
+    pub async fn merge_concurrent_operation<F: FutureForm>(
         &mut self,
         op: Arc<Signed<CgkaOperation>>,
-    ) -> Result<bool, CgkaError> {
-        self.0.merge_concurrent_operation(op)
+    ) -> Result<bool, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
+        self.0.merge_concurrent_operation::<F>(op).await
     }
 
     pub fn ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
@@ -196,6 +218,27 @@ impl Cgka {
 
     pub fn contains_predecessors(&self, preds: &HashSet<Digest<Signed<CgkaOperation>>>) -> bool {
         self.0.contains_predecessors(preds)
+    }
+
+    /// Persist all owner secret keys to the durable store.
+    ///
+    /// Call after any CGKA operation that may generate new keys
+    /// (`update`, `add`, `remove`, `new_app_secret_for`, `with_new_owner`).
+    pub async fn sync_keys_to_store<F: FutureForm, K: SecretKeyStore<F>>(&self, store: &K) {
+        for (pk, sk) in self.0.owner_sks.iter() {
+            let already_stored = match store.contains_secret_key(pk).await {
+                Ok(exists) => exists,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to check durable store for secret key");
+                    false
+                }
+            };
+            if !already_stored {
+                if let Err(e) = store.import_raw_secret_key(*sk).await {
+                    tracing::warn!(error = ?e, "failed to persist secret key to durable store");
+                }
+            }
+        }
     }
 }
 
@@ -207,24 +250,33 @@ impl Fork for Cgka {
     }
 }
 
-impl Merge for Cgka {
-    fn merge(&mut self, fork: Self::Forked) {
-        beekem::transact::Merge::merge(&mut self.0, fork.0);
+impl Cgka {
+    pub async fn merge_fork<F: FutureForm>(&mut self, fork: Self)
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
+        self.0.merge_fork::<F>(fork.0).await;
     }
 }
 
 #[cfg(feature = "test_utils")]
 impl Cgka {
-    pub fn secret_from_root(&mut self) -> Result<PcsKey, CgkaError> {
-        self.0.secret_from_root()
+    pub async fn secret_from_root<F: FutureForm>(&mut self) -> Result<PcsKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
+        self.0.secret_from_root::<F>().await
     }
 
-    pub fn secret(
+    pub async fn secret<F: FutureForm>(
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
         update_op_hash: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<PcsKey, CgkaError> {
-        self.0.secret(pcs_key_hash, update_op_hash)
+    ) -> Result<PcsKey, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
+        self.0.secret::<F>(pcs_key_hash, update_op_hash).await
     }
 }
 

@@ -1,6 +1,6 @@
 use super::{
     access::JsAccess, agent::JsAgent, change_id::JsChangeId, event_handler::JsEventHandler,
-    signed_delegation::JsSignedDelegation, signer::JsSigner,
+    secret_key_store::JsSecretKeyStore, signed_delegation::JsSignedDelegation, signer::JsSigner,
 };
 use dupe::Dupe;
 use future_form::Local;
@@ -12,8 +12,9 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 #[derive(Debug, Clone, Dupe)]
 pub struct Capability {
-    pub(crate) who: Agent<Local, JsSigner, JsChangeId, JsEventHandler>,
-    pub(crate) proof: Arc<Signed<Delegation<Local, JsSigner, JsChangeId, JsEventHandler>>>,
+    pub(crate) who: Agent<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>,
+    pub(crate) proof:
+        Arc<Signed<Delegation<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>>>,
 }
 
 #[wasm_bindgen]

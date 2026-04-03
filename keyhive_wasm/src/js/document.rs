@@ -2,7 +2,7 @@ use crate::js::{document_id::JsDocumentId, membered::JsMembered};
 
 use super::{
     agent::JsAgent, change_id::JsChangeId, event_handler::JsEventHandler, identifier::JsIdentifier,
-    peer::JsPeer, signer::JsSigner,
+    peer::JsPeer, secret_key_store::JsSecretKeyStore, signer::JsSigner,
 };
 use dupe::Dupe;
 use future_form::Local;
@@ -21,7 +21,8 @@ use wasm_refgen::wasm_refgen;
 #[derive(Debug, Clone, Dupe)]
 pub struct JsDocument {
     pub(crate) doc_id: DocumentId,
-    pub(crate) inner: Arc<Mutex<Document<Local, JsSigner, JsChangeId, JsEventHandler>>>,
+    pub(crate) inner:
+        Arc<Mutex<Document<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>>>,
 }
 
 #[wasm_refgen(js_ref = JsDocumentRef)]

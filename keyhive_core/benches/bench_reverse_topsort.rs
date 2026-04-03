@@ -13,7 +13,7 @@ use keyhive_core::{
     keyhive::Keyhive,
     listener::no_listener::NoListener,
     principal::{agent::Agent, membered::Membered, public::Public},
-    store::ciphertext::memory::MemoryCiphertextStore,
+    store::{ciphertext::memory::MemoryCiphertextStore, secret_key::memory::MemorySecretKeyStore},
 };
 use keyhive_crypto::signer::memory::MemorySigner;
 use nonempty::nonempty;
@@ -34,10 +34,24 @@ fn reverse_topsort_via_toggle(bencher: divan::Bencher, prior_toggles: usize) {
         let sk = MemorySigner::generate(&mut csprng);
         let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new()));
 
-        let kh: Keyhive<Sendable, MemorySigner, [u8; 32], Vec<u8>, _, NoListener, _> =
-            Keyhive::generate(sk.clone(), store.clone(), NoListener, rand::rngs::OsRng)
-                .await
-                .expect("keyhive generation should succeed");
+        let kh: Keyhive<
+            Sendable,
+            MemorySigner,
+            MemorySecretKeyStore,
+            [u8; 32],
+            Vec<u8>,
+            _,
+            NoListener,
+            _,
+        > = Keyhive::generate(
+            sk.clone(),
+            MemorySecretKeyStore::new(),
+            store.clone(),
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await
+        .expect("keyhive generation should succeed");
 
         kh.register_individual(Arc::new(Mutex::new(Public.individual())))
             .await;
@@ -49,7 +63,8 @@ fn reverse_topsort_via_toggle(bencher: divan::Bencher, prior_toggles: usize) {
 
         let doc_id = doc.lock().await.doc_id();
         let membered_doc = Membered::Document(doc_id, doc.dupe());
-        let public_agent: Agent<Sendable, MemorySigner> = Public.individual().into();
+        let public_agent: Agent<Sendable, MemorySigner, MemorySecretKeyStore> =
+            Public.individual().into();
         let public_id = Public.id();
 
         // Build up history of prior toggles

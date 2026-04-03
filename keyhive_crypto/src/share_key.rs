@@ -7,6 +7,7 @@ use alloc::vec::Vec;
 use core::fmt;
 #[cfg(feature = "std")]
 use dupe::Dupe;
+use future_form::{future_form, FutureForm, Local, Sendable};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -109,6 +110,11 @@ impl ShareSecretKey {
         self.0
     }
 
+    /// Construct from raw bytes.
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     pub fn as_slice(&self) -> &[u8] {
         &self.0
     }
@@ -137,12 +143,84 @@ impl ShareSecretKey {
         Self::derive_from_bytes(bytes.as_slice())
     }
 
+    #[deprecated(note = "Use `AsyncSecretKey::ratchet_forward` in a loop instead")]
     pub fn ratchet_n_forward(&self, n: usize) -> Self {
         (0..n).fold(*self, |acc, _| acc.ratchet_forward())
     }
 
     pub fn force_from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
+    }
+}
+
+/// Abstraction over secret key operations for ECDH.
+///
+/// This trait enables opaque secret key handles (e.g., WebCrypto
+/// `CryptoKey`, HSM handles) where the raw key material may not
+/// be extractable. The default [`ShareSecretKey`] implementation
+/// performs ECDH in-process using `x25519_dalek`.
+///
+/// The `F: FutureForm` parameter determines whether operations
+/// return `Send` or `!Send` futures.
+pub trait AsyncSecretKey<F: FutureForm>: Clone {
+    type EcdhError: core::fmt::Debug + core::fmt::Display;
+
+    /// Get the corresponding public key.
+    fn to_share_key(&self) -> ShareKey;
+
+    /// Perform ECDH and derive a symmetric key.
+    fn derive_symmetric_key<'a>(
+        &'a self,
+        other: &'a ShareKey,
+    ) -> F::Future<'a, Result<SymmetricKey, Self::EcdhError>>;
+
+    /// Derive a new secret key via ECDH (for tree ratcheting).
+    ///
+    /// Returns raw [`ShareSecretKey`] bytes — the output of the KDF,
+    /// not the original opaque handle. This enables non-extractable
+    /// leaf keys: the leaf `CryptoKey` handle performs the ECDH, but
+    /// the _derived_ parent key is raw bytes that the tree can
+    /// encrypt and store normally.
+    fn derive_new_secret_key<'a>(
+        &'a self,
+        other: &'a ShareKey,
+    ) -> F::Future<'a, Result<ShareSecretKey, Self::EcdhError>>;
+
+    /// Ratchet the key forward (KDF from own bytes).
+    ///
+    /// Returns raw [`ShareSecretKey`] bytes — the KDF output, not
+    /// another opaque handle. See [`derive_new_secret_key`] for
+    /// rationale.
+    ///
+    /// [`derive_new_secret_key`]: AsyncSecretKey::derive_new_secret_key
+    fn ratchet_forward<'a>(&'a self) -> F::Future<'a, Result<ShareSecretKey, Self::EcdhError>>;
+}
+
+/// In-process implementation: ECDH via `x25519_dalek`, infallible.
+#[future_form(Sendable, Local)]
+impl<F: FutureForm> AsyncSecretKey<F> for ShareSecretKey {
+    type EcdhError = core::convert::Infallible;
+
+    fn to_share_key(&self) -> ShareKey {
+        self.share_key()
+    }
+
+    fn derive_symmetric_key<'a>(
+        &'a self,
+        other: &'a ShareKey,
+    ) -> F::Future<'a, Result<SymmetricKey, Self::EcdhError>> {
+        F::ready(Ok(ShareSecretKey::derive_symmetric_key(self, other)))
+    }
+
+    fn derive_new_secret_key<'a>(
+        &'a self,
+        other: &'a ShareKey,
+    ) -> F::Future<'a, Result<ShareSecretKey, Self::EcdhError>> {
+        F::ready(Ok(ShareSecretKey::derive_new_secret_key(self, other)))
+    }
+
+    fn ratchet_forward<'a>(&'a self) -> F::Future<'a, Result<ShareSecretKey, Self::EcdhError>> {
+        F::ready(Ok(ShareSecretKey::ratchet_forward(self)))
     }
 }
 

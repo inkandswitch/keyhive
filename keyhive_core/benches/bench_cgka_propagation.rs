@@ -9,6 +9,7 @@ use keyhive_core::{
     access::Access,
     listener::no_listener::NoListener,
     principal::{agent::Agent, membered::Membered, peer::Peer, public::Public},
+    store::secret_key::memory::MemorySecretKeyStore,
     test_utils::make_simple_keyhive,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
@@ -19,8 +20,8 @@ fn main() {
     divan::main();
 }
 
-type BenchMembered = Membered<Sendable, MemorySigner, [u8; 32], NoListener>;
-type BenchAgent = Agent<Sendable, MemorySigner, [u8; 32], NoListener>;
+type BenchMembered = Membered<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>;
+type BenchAgent = Agent<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>;
 
 /// Create a fresh peer keyhive, exchange contact cards with alice, and return
 /// the peer's agent as seen by alice.

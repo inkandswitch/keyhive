@@ -10,7 +10,7 @@ use keyhive_core::{
     keyhive::Keyhive,
     listener::no_listener::NoListener,
     principal::{agent::Agent, membered::Membered, public::Public},
-    store::ciphertext::memory::MemoryCiphertextStore,
+    store::{ciphertext::memory::MemoryCiphertextStore, secret_key::memory::MemorySecretKeyStore},
 };
 use keyhive_crypto::signer::memory::MemorySigner;
 use nonempty::nonempty;
@@ -33,8 +33,9 @@ fn toggle_delegate_revoke(bencher: divan::Bencher, prior_toggles: usize) {
         let sk = MemorySigner::generate(&mut csprng);
         let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new()));
 
-        let kh = Keyhive::<Local, _, _, _, _, _, _>::generate(
+        let kh = Keyhive::<Local, _, _, _, _, _, _, _>::generate(
             sk.clone(),
+            MemorySecretKeyStore::new(),
             store.clone(),
             NoListener,
             rand::rngs::OsRng,
@@ -53,7 +54,8 @@ fn toggle_delegate_revoke(bencher: divan::Bencher, prior_toggles: usize) {
         let doc_id = doc.lock().await.doc_id();
         let membered_doc: Membered<Local, _, _, _> = Membered::Document(doc_id, doc.dupe());
 
-        let public_agent: Agent<Local, MemorySigner> = Public.individual().into();
+        let public_agent: Agent<Local, MemorySigner, MemorySecretKeyStore> =
+            Public.individual().into();
         let public_id = Public.id();
 
         // Build up history of prior toggles

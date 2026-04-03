@@ -9,6 +9,7 @@ use keyhive_core::{
     principal::{
         agent::Agent, individual::op::KeyOp, membered::Membered, peer::Peer, public::Public,
     },
+    store::secret_key::memory::MemorySecretKeyStore,
     test_utils::make_simple_keyhive,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
@@ -18,7 +19,7 @@ fn main() {
     divan::main();
 }
 
-type BenchAgent = Agent<Sendable, MemorySigner, [u8; 32], NoListener>;
+type BenchAgent = Agent<Sendable, MemorySigner, MemorySecretKeyStore, [u8; 32], NoListener>;
 
 /// Number of extra prekey expand+ rotate cycles per peer.
 ///

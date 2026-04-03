@@ -6,7 +6,8 @@ use crate::{
     transact::{Fork, Merge},
 };
 use alloc::{collections::BTreeMap, string::ToString, vec, vec::Vec};
-use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
+use future_form::FutureForm;
+use keyhive_crypto::share_key::{AsyncSecretKey, ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
 
 /// A [`ShareKeyMap`] stores the secret keys for all of the public keys
@@ -32,15 +33,20 @@ impl ShareKeyMap {
         self.0.contains_key(pk)
     }
 
-    pub fn try_decrypt_encryption(
+    pub async fn try_decrypt_encryption<F: FutureForm>(
         &self,
         encrypter_pk: ShareKey,
         encrypted: &EncryptedSecret<ShareSecretKey>,
-    ) -> Result<Vec<u8>, CgkaError> {
+    ) -> Result<Vec<u8>, CgkaError>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         let sk = self
             .get(&encrypted.paired_pk)
             .ok_or(CgkaError::SecretKeyNotFound)?;
-        let key = sk.derive_symmetric_key(&encrypter_pk);
+        let key = AsyncSecretKey::<F>::derive_symmetric_key(sk, &encrypter_pk)
+            .await
+            .map_err(|_| CgkaError::Decryption("ECDH failed".to_string()))?;
         let mut buf = encrypted.ciphertext.clone();
         key.try_decrypt(encrypted.nonce, &mut buf)
             .map_err(|e| CgkaError::Decryption(e.to_string()))?;
@@ -49,6 +55,11 @@ impl ShareKeyMap {
 
     pub fn extend(&mut self, other: &ShareKeyMap) {
         self.0.extend(other.0.iter());
+    }
+
+    /// Iterate over all (public_key, secret_key) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&ShareKey, &ShareSecretKey)> {
+        self.0.iter()
     }
 }
 

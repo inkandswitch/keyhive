@@ -2,7 +2,8 @@ use crate::js::membered::JsMembered;
 
 use super::{
     agent::JsAgent, capability::Capability, change_id::JsChangeId, event_handler::JsEventHandler,
-    group_id::JsGroupId, identifier::JsIdentifier, peer::JsPeer, signer::JsSigner,
+    group_id::JsGroupId, identifier::JsIdentifier, peer::JsPeer,
+    secret_key_store::JsSecretKeyStore, signer::JsSigner,
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
@@ -22,7 +23,8 @@ use wasm_refgen::wasm_refgen;
 #[derive(Debug, Clone, Dupe, Into, From)]
 pub struct JsGroup {
     pub(crate) group_id: GroupId,
-    pub(crate) inner: Arc<Mutex<Group<Local, JsSigner, JsChangeId, JsEventHandler>>>,
+    pub(crate) inner:
+        Arc<Mutex<Group<Local, JsSigner, JsSecretKeyStore, JsChangeId, JsEventHandler>>>,
 }
 
 #[wasm_refgen(js_ref = JsGroupRef)]

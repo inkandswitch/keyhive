@@ -23,6 +23,7 @@ use crate::{
         group::delegation::{Delegation, DelegationError},
         membered::Membered,
     },
+    store::secret_key::SecretKeyStore,
     transact::{
         fork::Fork,
         merge::{Merge, MergeAsync},
@@ -34,7 +35,7 @@ use future_form::FutureForm;
 use futures::{lock::Mutex, prelude::*};
 use keyhive_crypto::{
     content::reference::ContentRef,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
     signed::{Signed, SigningError},
     signer::{async_signer, async_signer::AsyncSigner},
     verifiable::Verifiable,
@@ -49,6 +50,7 @@ use thiserror::Error;
 pub struct Active<
     F: FutureForm,
     S: AsyncSigner<F>,
+    K: SecretKeyStore<F>,
     T: ContentRef = [u8; 32],
     L: PrekeyListener<F> = NoListener,
 > {
@@ -68,10 +70,17 @@ pub struct Active<
     #[derivative(Debug = "ignore", PartialEq = "ignore")]
     pub(crate) listener: L,
 
-    pub(crate) _phantom: PhantomData<(F, T)>,
+    pub(crate) _phantom: PhantomData<(F, K, T)>,
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Active<F, S, T, L> {
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: PrekeyListener<F>,
+    > Active<F, S, K, T, L>
+{
     /// Generate a new active agent.
     ///
     /// # Arguments
@@ -81,6 +90,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     /// * `csprng` - The cryptographically secure random number generator.
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
         signer: S,
+        secret_store: &K,
         listener: L,
         csprng: &mut R,
     ) -> Result<Self, SigningError> {
@@ -93,13 +103,22 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         .into();
 
         let mut prekey_state = PrekeyState::new(init_op);
-        let prekey_pairs =
-            (0..6).try_fold(BTreeMap::from_iter([(init_pk, init_sk)]), |mut acc, _| {
-                let sk = ShareSecretKey::generate(csprng);
-                let pk = sk.share_key();
-                acc.insert(pk, sk);
-                Ok::<_, SigningError>(acc)
-            })?;
+        let mut prekey_pairs = BTreeMap::from_iter([(init_pk, init_sk)]);
+
+        // Store the initial key
+        if let Err(e) = secret_store.import_raw_secret_key(init_sk).await {
+            tracing::warn!(error = ?e, "failed to persist secret key to durable store");
+        }
+
+        // Generate additional prekeys
+        for _ in 0..6 {
+            let sk = ShareSecretKey::generate(csprng);
+            let pk = sk.share_key();
+            prekey_pairs.insert(pk, sk);
+            if let Err(e) = secret_store.import_raw_secret_key(sk).await {
+                tracing::warn!(error = ?e, "failed to persist secret key to durable store");
+            }
+        }
 
         let borrowed_signer = &signer;
         let ops = stream::iter(prekey_pairs.keys().map(Ok::<_, SigningError>))
@@ -156,6 +175,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     /// Create a [`ShareKey`] that is not broadcast via the prekey state.
     pub async fn generate_private_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
+        secret_store: &K,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
         let share_key = {
@@ -163,8 +183,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
             let locked = self.individual.lock().await;
             locked.pick_prekey(DocumentId(self.id().into())).dupe()
         };
-        let contact_key = self.rotate_prekey(share_key, csprng.dupe()).await?;
-        self.rotate_prekey(contact_key.payload.new, csprng).await?;
+        let contact_key = self
+            .rotate_prekey(share_key, secret_store, csprng.dupe())
+            .await?;
+        self.rotate_prekey(contact_key.payload.new, secret_store, csprng)
+            .await?;
         Ok(contact_key)
     }
 
@@ -178,6 +201,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     pub async fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         old_prekey: ShareKey,
+        secret_store: &K,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
         let new_secret = {
@@ -197,6 +221,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
             .await?,
         );
 
+        // Store in both the legacy prekey_pairs and the durable store
+        if let Err(e) = secret_store.import_raw_secret_key(new_secret).await {
+            tracing::warn!(error = ?e, "failed to persist secret key to durable store");
+        }
         {
             self.prekey_pairs
                 .lock()
@@ -222,6 +250,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     /// Add a new prekey, expanding the number of currently available prekeys.
     pub async fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
+        secret_store: &K,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
         let new_secret = {
@@ -251,6 +280,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
             locked_individual.prekeys.insert(new_public);
         }
 
+        // Store in both the legacy prekey_pairs and the durable store
+        if let Err(e) = secret_store.import_raw_secret_key(new_secret).await {
+            tracing::warn!(error = ?e, "failed to persist secret key to durable store");
+        }
         {
             self.prekey_pairs
                 .lock()
@@ -271,11 +304,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     }
 
     /// Encrypt a payload for a member of some [`Group`] or [`Document`].
-    pub async fn get_capability<M: MembershipListener<F, S, T>>(
+    pub async fn get_capability<M: MembershipListener<F, S, K, T>>(
         &self,
-        subject: Membered<F, S, T, M>,
+        subject: Membered<F, S, K, T, M>,
         min: Access,
-    ) -> Option<Arc<Signed<Delegation<F, S, T, M>>>> {
+    ) -> Option<Arc<Signed<Delegation<F, S, K, T, M>>>>
+    where
+        ShareSecretKey: AsyncSecretKey<F>,
+    {
         subject
             .get_capability(&self.id().into())
             .await
@@ -300,8 +336,20 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     }
 
     /// Import prekey secrets from an opaque blob, extending the existing set.
-    pub async fn import_prekey_secrets(&self, bytes: &[u8]) -> Result<(), bincode::Error> {
+    ///
+    /// Keys are stored in both the legacy `prekey_pairs` map and the
+    /// durable [`SecretKeyStore`].
+    pub async fn import_prekey_secrets(
+        &self,
+        bytes: &[u8],
+        secret_store: &K,
+    ) -> Result<(), bincode::Error> {
         let imported: BTreeMap<ShareKey, ShareSecretKey> = bincode::deserialize(bytes)?;
+        for &sk in imported.values() {
+            if let Err(e) = secret_store.import_raw_secret_key(sk).await {
+                tracing::warn!(error = ?e, "failed to persist secret key to durable store");
+            }
+        }
         let mut pairs = self.prekey_pairs.lock().await;
         pairs.extend(imported);
         Ok(())
@@ -332,8 +380,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<F> + Clone> Clone
-    for Active<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F> + Clone,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: PrekeyListener<F> + Clone,
+    > Clone for Active<F, S, K, T, L>
 {
     fn clone(&self) -> Self {
         Self {
@@ -347,28 +400,43 @@ impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> std::fmt::Display
-    for Active<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: PrekeyListener<F>,
+    > std::fmt::Display for Active<F, S, K, T, L>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.id(), f)
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Verifiable
-    for Active<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: PrekeyListener<F>,
+    > Verifiable for Active<F, S, K, T, L>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.signer.verifying_key()
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<F>> Fork
-    for Active<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F> + Clone,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: PrekeyListener<F>,
+    > Fork for Active<F, S, K, T, L>
 where
-    Log<F, S, T>: MembershipListener<F, S, T>,
+    Log<F, S, K, T>: MembershipListener<F, S, K, T>,
 {
-    type Forked = Active<F, S, T, Log<F, S, T>>;
+    type Forked = Active<F, S, K, T, Log<F, S, K, T>>;
 
     fn fork(&self) -> Self::Forked {
         Active {
@@ -382,10 +450,15 @@ where
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<F>> MergeAsync
-    for Active<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F> + Clone,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: PrekeyListener<F>,
+    > MergeAsync for Active<F, S, K, T, L>
 where
-    Log<F, S, T>: MembershipListener<F, S, T>,
+    Log<F, S, K, T>: MembershipListener<F, S, K, T>,
 {
     async fn merge_async(&self, fork: Self::AsyncForked) {
         let forked_individual = { fork.individual.lock().await.clone() };
@@ -437,6 +510,7 @@ pub enum ActiveDelegationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::secret_key::memory::MemorySecretKeyStore;
     use future_form::Sendable;
     use keyhive_crypto::signer::memory::MemorySigner;
 
@@ -446,10 +520,15 @@ mod tests {
 
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let active: Active<Sendable, _, [u8; 32], _> =
-            Active::<Sendable, _, _, _>::generate(signer, NoListener, csprng)
-                .await
-                .unwrap();
+        let active: Active<Sendable, _, MemorySecretKeyStore, [u8; 32], _> =
+            Active::<Sendable, _, _, _, _>::generate(
+                signer,
+                &MemorySecretKeyStore::new(),
+                NoListener,
+                csprng,
+            )
+            .await
+            .unwrap();
         let message = "hello world".as_bytes();
         let signed = active.try_sign_async(message).await.unwrap();
 
@@ -462,23 +541,36 @@ mod tests {
 
         let csprng = &mut rand::thread_rng();
         let signer1 = MemorySigner::generate(csprng);
-        let active1: Active<Sendable, _, [u8; 32], _> =
-            Active::<Sendable, _, _, _>::generate(signer1, NoListener, csprng)
-                .await
-                .unwrap();
+        let active1: Active<Sendable, _, MemorySecretKeyStore, [u8; 32], _> =
+            Active::<Sendable, _, _, _, _>::generate(
+                signer1,
+                &MemorySecretKeyStore::new(),
+                NoListener,
+                csprng,
+            )
+            .await
+            .unwrap();
 
         let exported = active1.export_prekey_secrets().await.unwrap();
 
         let signer2 = MemorySigner::generate(csprng);
-        let active2: Active<Sendable, _, [u8; 32], _> =
-            Active::<Sendable, _, _, _>::generate(signer2, NoListener, csprng)
-                .await
-                .unwrap();
+        let active2: Active<Sendable, _, MemorySecretKeyStore, [u8; 32], _> =
+            Active::<Sendable, _, _, _, _>::generate(
+                signer2,
+                &MemorySecretKeyStore::new(),
+                NoListener,
+                csprng,
+            )
+            .await
+            .unwrap();
 
         let original_pairs: BTreeMap<ShareKey, ShareSecretKey> =
             active2.prekey_pairs.lock().await.clone();
 
-        active2.import_prekey_secrets(&exported).await.unwrap();
+        active2
+            .import_prekey_secrets(&exported, &MemorySecretKeyStore::new())
+            .await
+            .unwrap();
 
         let merged_pairs = active2.prekey_pairs.lock().await;
         let exported_pairs: BTreeMap<ShareKey, ShareSecretKey> =
@@ -507,12 +599,19 @@ mod tests {
 
         let csprng = &mut rand::thread_rng();
         let signer = MemorySigner::generate(csprng);
-        let active: Active<Sendable, _, [u8; 32], _> =
-            Active::<Sendable, _, _, _>::generate(signer, NoListener, csprng)
-                .await
-                .unwrap();
+        let active: Active<Sendable, _, MemorySecretKeyStore, [u8; 32], _> =
+            Active::<Sendable, _, _, _, _>::generate(
+                signer,
+                &MemorySecretKeyStore::new(),
+                NoListener,
+                csprng,
+            )
+            .await
+            .unwrap();
 
-        let result = active.import_prekey_secrets(b"not valid bincode").await;
+        let result = active
+            .import_prekey_secrets(b"not valid bincode", &MemorySecretKeyStore::new())
+            .await;
         assert!(result.is_err());
     }
 }

@@ -9,6 +9,7 @@ use crate::{
         group::{delegation::Delegation, revocation::Revocation},
         identifier::Identifier,
     },
+    store::secret_key::SecretKeyStore,
 };
 use future_form::FutureForm;
 use keyhive_crypto::{
@@ -36,8 +37,13 @@ pub trait SignedSubjectId {
     fn subject_id(&self) -> Identifier;
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    SignedSubjectId for Signed<Delegation<F, S, T, L>>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > SignedSubjectId for Signed<Delegation<F, S, K, T, L>>
 {
     fn subject_id(&self) -> Identifier {
         let mut head = self;
@@ -50,8 +56,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    SignedSubjectId for Signed<Revocation<F, S, T, L>>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > SignedSubjectId for Signed<Revocation<F, S, K, T, L>>
 {
     fn subject_id(&self) -> Identifier {
         self.payload.subject_id()

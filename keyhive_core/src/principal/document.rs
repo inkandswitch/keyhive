@@ -26,6 +26,7 @@ use crate::{
         },
         delegation::DelegationStore,
         revocation::RevocationStore,
+        secret_key::SecretKeyStore,
     },
 };
 use beekem::{
@@ -44,7 +45,7 @@ use id::DocumentId;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::{AsyncSecretKey, ShareKey, ShareSecretKey},
     signed::{Signed, SigningError},
     signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
     symmetric_key::SymmetricKey,
@@ -65,10 +66,11 @@ use tracing::instrument;
 pub struct Document<
     F: FutureForm,
     S: AsyncSigner<F>,
+    K: SecretKeyStore<F>,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<F, S, T> = NoListener,
+    L: MembershipListener<F, S, K, T> = NoListener,
 > {
-    pub(crate) group: Group<F, S, T, L>,
+    pub(crate) group: Group<F, S, K, T, L>,
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
 
@@ -76,28 +78,14 @@ pub struct Document<
     cgka: Option<Cgka>,
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    Document<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Document<F, S, K, T, L>
 {
-    // FIXME: We need a signing key for initializing Cgka and we need to share
-    // the init add op.
-    // NOTE doesn't register into the top-level Keyhive context
-    #[instrument(skip_all)]
-    pub async fn from_group(
-        group: Group<F, S, T, L>,
-        content_heads: NonEmpty<T>,
-    ) -> Result<Self, CgkaError> {
-        let mut doc = Document {
-            cgka: None,
-            group,
-            content_heads: content_heads.iter().cloned().collect(),
-            content_state: Default::default(),
-            known_decryption_keys: HashMap::new(),
-        };
-        doc.rebuild().await;
-        Ok(doc)
-    }
-
     pub fn id(&self) -> Identifier {
         self.group.id()
     }
@@ -123,25 +111,57 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             None => Err(CgkaError::NotInitialized),
         }
     }
+}
+
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Document<F, S, K, T, L>
+where
+    ShareSecretKey: AsyncSecretKey<F>,
+{
+    // FIXME: We need a signing key for initializing Cgka and we need to share
+    // the init add op.
+    // NOTE doesn't register into the top-level Keyhive context
+    #[instrument(skip_all)]
+    pub async fn from_group(
+        group: Group<F, S, K, T, L>,
+        content_heads: NonEmpty<T>,
+    ) -> Result<Self, CgkaError> {
+        let mut doc = Document {
+            cgka: None,
+            group,
+            content_heads: content_heads.iter().cloned().collect(),
+            content_state: Default::default(),
+            known_decryption_keys: HashMap::new(),
+        };
+        doc.rebuild().await;
+        Ok(doc)
+    }
 
     #[allow(clippy::type_complexity)]
-    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>> {
+    pub fn members(
+        &self,
+    ) -> &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, K, T, L>>>>> {
         self.group.members()
     }
 
-    pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
+    pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<F, S, K, T, L>, Access)> {
         self.group.transitive_members().await
     }
 
-    pub fn revoked_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
+    pub fn revoked_members(&self) -> HashMap<Identifier, (Agent<F, S, K, T, L>, Access)> {
         self.group.revoked_members()
     }
 
-    pub fn delegation_heads(&self) -> &DelegationStore<F, S, T, L> {
+    pub fn delegation_heads(&self) -> &DelegationStore<F, S, K, T, L> {
         self.group.delegation_heads()
     }
 
-    pub fn revocation_heads(&self) -> &RevocationStore<F, S, T, L> {
+    pub fn revocation_heads(&self) -> &RevocationStore<F, S, K, T, L> {
         self.group.revocation_heads()
     }
 
@@ -149,18 +169,20 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub fn get_capability(
         &self,
         member_id: &Identifier,
-    ) -> Option<&Arc<Signed<Delegation<F, S, T, L>>>> {
+    ) -> Option<&Arc<Signed<Delegation<F, S, K, T, L>>>> {
         self.group.get_capability(member_id)
     }
 
     #[instrument(skip_all)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
-        parents: NonEmpty<Agent<F, S, T, L>>,
+        parents: NonEmpty<Agent<F, S, K, T, L>>,
         initial_content_heads: NonEmpty<T>,
-        delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
-        revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
+        delegations: Arc<Mutex<DelegationStore<F, S, K, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<F, S, K, T, L>>>,
         listener: L,
         signer: &S,
+        secret_store: &K,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Self, GenerateDocError> {
         let mut locked_csprng = csprng.lock().await;
@@ -185,6 +207,12 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let doc_id = DocumentId(group.id());
         let owner_share_secret_key = ShareSecretKey::generate(&mut *locked_csprng);
         let owner_share_key = owner_share_secret_key.share_key();
+        if let Err(e) = secret_store
+            .import_raw_secret_key(owner_share_secret_key)
+            .await
+        {
+            tracing::warn!(error = ?e, "failed to persist CGKA owner key to durable store");
+        }
         let group_members = group.pick_individual_prekeys(doc_id).await;
         let other_members: Vec<(IndividualId, ShareKey)> = group_members
             .iter()
@@ -210,6 +238,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             )
             .await?;
 
+        // Persist any new keys generated by the CGKA tree operations
+        cgka.sync_keys_to_store::<F, K>(secret_store).await;
+
         ops.push(update_op);
         for op in ops {
             group.listener.on_cgka_op(&Arc::new(op)).await;
@@ -228,11 +259,12 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[instrument(skip_all)]
     pub async fn add_member(
         &mut self,
-        member_to_add: Agent<F, S, T, L>,
+        member_to_add: Agent<F, S, K, T, L>,
         can: Access,
         signer: &S,
-        other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>],
-    ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
+        secret_store: &K,
+        other_relevant_docs: &[Arc<Mutex<Document<F, S, K, T, L>>>],
+    ) -> Result<AddMemberUpdate<F, S, K, T, L>, AddMemberError> {
         let mut after_content: BTreeMap<_, _> =
             join_all(other_relevant_docs.iter().map(|doc| async {
                 let locked = doc.lock().await;
@@ -263,8 +295,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 .delegate
                 .pick_individual_prekeys(self.doc_id())
                 .await;
-            let cgka_ops_for_this_doc =
-                self.add_cgka_members_from_prekeys(&prekeys, signer).await?;
+            let cgka_ops_for_this_doc = self
+                .add_cgka_members_from_prekeys(&prekeys, signer, secret_store)
+                .await?;
             update.cgka_ops.extend(cgka_ops_for_this_doc);
         }
         Ok(update)
@@ -279,12 +312,16 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &mut self,
         prekeys: &HashMap<IndividualId, ShareKey>,
         signer: &S,
+        secret_store: &K,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut acc = Vec::new();
         for (id, prekey) in prekeys.iter() {
             if let Some(op) = self.cgka_mut()?.add(*id, *prekey, signer).await? {
                 acc.push(op);
             }
+        }
+        if let Ok(cgka) = self.cgka() {
+            cgka.sync_keys_to_store::<F, K>(secret_store).await;
         }
         Ok(acc)
     }
@@ -296,7 +333,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         retain_all_other_members: bool,
         signer: &S,
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<RevokeMemberUpdate<F, S, T, L>, RevokeMemberError> {
+    ) -> Result<RevokeMemberUpdate<F, S, K, T, L>, RevokeMemberError> {
         // Collect individual IDs from the member being revoked before the
         // group revocation removes them from the members map.
         let mut ids_to_remove = HashSet::new();
@@ -342,14 +379,19 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &mut self,
         id: IndividualId,
         signer: &S,
+        secret_store: &K,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        self.cgka_mut()?.remove(id, signer).await
+        let result = self.cgka_mut()?.remove(id, signer).await?;
+        if let Ok(cgka) = self.cgka() {
+            cgka.sync_keys_to_store::<F, K>(secret_store).await;
+        }
+        Ok(result)
     }
 
     pub async fn get_agent_revocations(
         &self,
-        agent: &Agent<F, S, T, L>,
-    ) -> Vec<Arc<Signed<Revocation<F, S, T, L>>>> {
+        agent: &Agent<F, S, K, T, L>,
+    ) -> Vec<Arc<Signed<Revocation<F, S, K, T, L>>>> {
         self.group.get_agent_revocations(agent).await
     }
 
@@ -361,22 +403,25 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[allow(clippy::type_complexity)]
     pub async fn receive_delegation(
         &mut self,
-        delegation: Arc<Signed<Delegation<F, S, T, L>>>,
-    ) -> Result<Digest<Signed<Delegation<F, S, T, L>>>, AddError> {
+        delegation: Arc<Signed<Delegation<F, S, K, T, L>>>,
+    ) -> Result<Digest<Signed<Delegation<F, S, K, T, L>>>, AddError> {
         self.group.receive_delegation(delegation).await
     }
 
     pub async fn receive_revocation(
         &mut self,
-        revocation: Arc<Signed<Revocation<F, S, T, L>>>,
-    ) -> Result<Digest<Signed<Revocation<F, S, T, L>>>, AddError> {
+        revocation: Arc<Signed<Revocation<F, S, K, T, L>>>,
+    ) -> Result<Digest<Signed<Revocation<F, S, K, T, L>>>, AddError> {
         self.group.receive_revocation(revocation).await
     }
 
     /// Merges [`CgkaOperation`]. Returns `Ok(true)` if merge is successful.
-    pub fn merge_cgka_op(&mut self, op: Arc<Signed<CgkaOperation>>) -> Result<bool, CgkaError> {
+    pub async fn merge_cgka_op(
+        &mut self,
+        op: Arc<Signed<CgkaOperation>>,
+    ) -> Result<bool, CgkaError> {
         match &mut self.cgka {
-            Some(cgka) => return cgka.merge_concurrent_operation(op),
+            Some(cgka) => return cgka.merge_concurrent_operation::<F>(op).await,
             None => match op.payload.clone() {
                 CgkaOperation::Add {
                     added_id,
@@ -403,10 +448,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     /// Merges invite [`CgkaOperation`]. Returns `Ok(true)` if the merge is
     /// successful.
     #[instrument(skip_all)]
-    pub fn merge_cgka_invite_op(
+    pub async fn merge_cgka_invite_op(
         &mut self,
         op: Arc<Signed<CgkaOperation>>,
         sk: &ShareSecretKey,
+        secret_store: &K,
     ) -> Result<bool, CgkaError> {
         let CgkaOperation::Add {
             added_id,
@@ -425,11 +471,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         }
         let mut owner_sks = self.cgka()?.owner_sks().clone();
         owner_sks.insert(pk, *sk);
-        self.cgka = Some(
-            self.cgka()?
-                .with_new_owner(IndividualId::from(added_id), owner_sks)?,
-        );
-        self.merge_cgka_op(op)
+        if let Err(e) = secret_store.import_raw_secret_key(*sk).await {
+            tracing::warn!(error = ?e, "failed to persist secret key to durable store");
+        }
+        let new_cgka = self
+            .cgka()?
+            .with_new_owner(IndividualId::from(added_id), owner_sks)?;
+        new_cgka.sync_keys_to_store::<F, K>(secret_store).await;
+        self.cgka = Some(new_cgka);
+        self.merge_cgka_op(op).await
     }
 
     pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
@@ -440,16 +490,29 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub async fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         signer: &S,
+        secret_store: &K,
         csprng: &mut R,
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
+        if let Err(e) = secret_store
+            .import_raw_secret_key(new_share_secret_key)
+            .await
+        {
+            tracing::warn!(error = ?e, "failed to persist PCS update key to durable store");
+        }
         let (_, op) = self
             .cgka_mut()
             .map_err(EncryptError::UnableToPcsUpdate)?
             .update(new_share_key, new_share_secret_key, signer, csprng)
             .await
             .map_err(EncryptError::UnableToPcsUpdate)?;
+
+        // Persist any new keys generated by tree ratcheting
+        if let Ok(cgka) = self.cgka() {
+            cgka.sync_keys_to_store::<F, K>(secret_store).await;
+        }
+
         Ok(op)
     }
 
@@ -460,6 +523,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         content: &[u8],
         pred_refs: &Vec<T>,
         signer: &S,
+        secret_store: &K,
         csprng: &mut R,
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptError> {
         let (app_secret, maybe_update_op) = self
@@ -468,6 +532,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
             .await
             .map_err(EncryptError::FailedToMakeAppSecret)?;
+
+        // Persist any new keys from the CGKA tree update
+        if let Ok(cgka) = self.cgka() {
+            cgka.sync_keys_to_store::<F, K>(secret_store).await;
+        }
 
         self.known_decryption_keys
             .insert(content_ref.clone(), app_secret.key());
@@ -481,14 +550,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     #[instrument(skip_all)]
-    pub fn try_decrypt_content<P: for<'de> Deserialize<'de>>(
+    pub async fn try_decrypt_content<P: for<'de> Deserialize<'de>>(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
         let decrypt_key = self
             .cgka_mut()
             .map_err(|_| DecryptError::KeyNotFound)?
-            .decryption_key_for(encrypted_content)
+            .decryption_key_for::<F, P, T>(encrypted_content)
+            .await
             .map_err(|_| DecryptError::KeyNotFound)?;
 
         let mut plaintext = encrypted_content.ciphertext.clone();
@@ -521,7 +591,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     where
         T: for<'de> Deserialize<'de>,
     {
-        let raw_entrypoint = self.try_decrypt_content(encrypted_content)?;
+        let raw_entrypoint = self.try_decrypt_content(encrypted_content).await?;
 
         let mut acc = CausalDecryptionState::new();
 
@@ -564,12 +634,12 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
     pub(crate) fn dummy_from_archive(
         archive: DocumentArchive<T>,
-        delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
-        revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
+        delegations: Arc<Mutex<DelegationStore<F, S, K, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<F, S, K, T, L>>>,
         listener: L,
     ) -> Result<Self, MissingIndividualError> {
         Ok(Document {
-            group: Group::<F, S, T, L>::dummy_from_archive(
+            group: Group::<F, S, K, T, L>::dummy_from_archive(
                 archive.group,
                 delegations,
                 revocations,
@@ -583,16 +653,26 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Verifiable
-    for Document<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Verifiable for Document<F, S, K, T, L>
 {
     fn verifying_key(&self) -> VerifyingKey {
         self.group.verifying_key()
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Hash
-    for Document<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Hash for Document<F, S, K, T, L>
 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.group.hash(state);
@@ -606,10 +686,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 pub struct AddMemberUpdate<
     F: FutureForm,
     S: AsyncSigner<F>,
+    K: SecretKeyStore<F>,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<F, S, T> = NoListener,
+    L: MembershipListener<F, S, K, T> = NoListener,
 > {
-    pub delegation: Arc<Signed<Delegation<F, S, T, L>>>,
+    pub delegation: Arc<Signed<Delegation<F, S, K, T, L>>>,
     pub cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
@@ -621,24 +702,30 @@ pub struct MissingIndividualError(pub Box<IndividualId>);
 pub struct RevokeMemberUpdate<
     F: FutureForm,
     S: AsyncSigner<F>,
+    K: SecretKeyStore<F>,
     T: ContentRef = [u8; 32],
-    L: MembershipListener<F, S, T> = NoListener,
+    L: MembershipListener<F, S, K, T> = NoListener,
 > {
-    pub(crate) revocations: Vec<Arc<Signed<Revocation<F, S, T, L>>>>,
-    pub(crate) redelegations: Vec<Arc<Signed<Delegation<F, S, T, L>>>>,
+    pub(crate) revocations: Vec<Arc<Signed<Revocation<F, S, K, T, L>>>>,
+    pub(crate) redelegations: Vec<Arc<Signed<Delegation<F, S, K, T, L>>>>,
     pub(crate) cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    RevokeMemberUpdate<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > RevokeMemberUpdate<F, S, K, T, L>
 {
     #[allow(clippy::type_complexity)]
-    pub fn revocations(&self) -> &[Arc<Signed<Revocation<F, S, T, L>>>] {
+    pub fn revocations(&self) -> &[Arc<Signed<Revocation<F, S, K, T, L>>>] {
         &self.revocations
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn redelegations(&self) -> &[Arc<Signed<Delegation<F, S, T, L>>>] {
+    pub fn redelegations(&self) -> &[Arc<Signed<Delegation<F, S, K, T, L>>>] {
         &self.redelegations
     }
 
@@ -648,8 +735,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Default
-    for RevokeMemberUpdate<F, S, T, L>
+impl<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        K: SecretKeyStore<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, K, T>,
+    > Default for RevokeMemberUpdate<F, S, K, T, L>
 {
     fn default() -> Self {
         Self {
@@ -738,27 +830,31 @@ pub enum DecryptError {
 
 #[derive(Error)]
 #[derive_where(Debug, Clone, PartialEq, Eq; T)]
-pub enum TryFromDocumentArchiveError<F: FutureForm, S: AsyncSigner<F>, T: ContentRef>
-where
-    NoListener: MembershipListener<F, S, T>,
+pub enum TryFromDocumentArchiveError<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    K: SecretKeyStore<F>,
+    T: ContentRef,
+> where
+    NoListener: MembershipListener<F, S, K, T>,
 {
     #[error("Cannot find individual: {0}")]
     MissingIndividual(IndividualId),
 
     #[error("Cannot find delegation: {0}")]
-    MissingDelegation(Digest<Signed<Delegation<F, S, T>>>),
+    MissingDelegation(Digest<Signed<Delegation<F, S, K, T>>>),
 
     #[error("Cannot find revocation: {0}")]
-    MissingRevocation(Digest<Signed<Revocation<F, S, T>>>),
+    MissingRevocation(Digest<Signed<Revocation<F, S, K, T>>>),
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef>
-    From<MissingDependency<Digest<Signed<Delegation<F, S, T>>>>>
-    for TryFromDocumentArchiveError<F, S, T>
+impl<F: FutureForm, S: AsyncSigner<F>, K: SecretKeyStore<F>, T: ContentRef>
+    From<MissingDependency<Digest<Signed<Delegation<F, S, K, T>>>>>
+    for TryFromDocumentArchiveError<F, S, K, T>
 where
-    NoListener: MembershipListener<F, S, T>,
+    NoListener: MembershipListener<F, S, K, T>,
 {
-    fn from(e: MissingDependency<Digest<Signed<Delegation<F, S, T>>>>) -> Self {
+    fn from(e: MissingDependency<Digest<Signed<Delegation<F, S, K, T>>>>) -> Self {
         TryFromDocumentArchiveError::MissingDelegation(e.0)
     }
 }
