@@ -6,9 +6,10 @@
 //!   in-memory cache (for browsers)
 
 use future_form::{FutureForm, Local};
+use futures::lock::Mutex;
 use keyhive_core::store::secret_key::SecretKeyStore;
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -41,7 +42,7 @@ extern "C" {
 #[wasm_bindgen(js_name = SecretKeyStore)]
 #[derive(Debug, Clone)]
 pub struct JsSecretKeyStore {
-    cache: std::sync::Arc<futures::lock::Mutex<BTreeMap<ShareKey, ShareSecretKey>>>,
+    cache: Arc<Mutex<BTreeMap<ShareKey, ShareSecretKey>>>,
     /// Whether to persist mutations to IndexedDB.
     persistent: bool,
 }
@@ -54,7 +55,7 @@ impl JsSecretKeyStore {
     #[wasm_bindgen]
     pub fn memory() -> Self {
         Self {
-            cache: std::sync::Arc::new(futures::lock::Mutex::new(BTreeMap::new())),
+            cache: Arc::new(Mutex::new(BTreeMap::new())),
             persistent: false,
         }
     }
@@ -89,7 +90,7 @@ impl JsSecretKeyStore {
         }
 
         Ok(Self {
-            cache: std::sync::Arc::new(futures::lock::Mutex::new(cache)),
+            cache: Arc::new(Mutex::new(cache)),
             persistent: true,
         })
     }
