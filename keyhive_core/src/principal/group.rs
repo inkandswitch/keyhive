@@ -467,19 +467,52 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddGroupMemberError> {
         let proof = if self.verifying_key() == signer.verifying_key() {
             None
-        } else {
-            let p = self
-                .get_capability(&signer.verifying_key().into())
-                .ok_or(AddGroupMemberError::NoProof)?;
-
+        } else if let Some(p) = self.get_capability(&signer.verifying_key().into()) {
+            // Signer is a direct member of this group.
             if can > p.payload.can {
                 return Err(AddGroupMemberError::AccessEscalation {
                     wanted: can,
                     have: p.payload().can,
                 });
             }
-
             Some(p.dupe())
+        } else {
+            // Check transitive membership through the group graph.
+            // Single pass: find which direct member provides a sufficient
+            // transitive path for the signer.
+            let signer_id = Identifier::from(signer.verifying_key());
+            let mut best_proof = None;
+            let mut best_access: Option<Access> = None;
+
+            for (member_id, _) in self.members.iter() {
+                let dlg = self
+                    .get_capability(member_id)
+                    .expect("members have capabilities by definition");
+
+                if let Some(m) = dlg.payload.delegate.as_membered() {
+                    let sub_members = m.transitive_members().await;
+                    if let Some((_, sub_access)) = sub_members.get(&signer_id) {
+                        if *sub_access >= can {
+                            best_proof = Some(dlg.dupe());
+                            break;
+                        }
+                        if best_access.is_none_or(|a| *sub_access > a) {
+                            best_access = Some(*sub_access);
+                        }
+                    }
+                }
+            }
+
+            if let Some(proof) = best_proof {
+                Some(proof)
+            } else if let Some(access) = best_access {
+                return Err(AddGroupMemberError::AccessEscalation {
+                    wanted: can,
+                    have: access,
+                });
+            } else {
+                return Err(AddGroupMemberError::NoProof);
+            }
         };
 
         let delegation = keyhive_crypto::signer::async_signer::try_sign_async::<F, _, _>(
@@ -604,6 +637,36 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                             revocations.push(r.dupe());
                             self.receive_revocation(r).await?;
                             break;
+                        }
+                    }
+                }
+
+                if !found {
+                    // Check transitive membership through the group graph.
+                    let signer_id = Identifier::from(vk);
+                    for (mid, _) in self.members.iter() {
+                        let dlg = self
+                            .get_capability(mid)
+                            .expect("members have capabilities by definition");
+
+                        if let Some(m) = dlg.payload.delegate.as_membered() {
+                            let sub_members = m.transitive_members().await;
+                            if let Some((_, sub_access)) = sub_members.get(&signer_id) {
+                                if *sub_access >= to_revoke.payload.can {
+                                    let r = self
+                                        .build_revocation(
+                                            signer,
+                                            to_revoke.dupe(),
+                                            Some(dlg.dupe()),
+                                            after_content.clone(),
+                                        )
+                                        .await?;
+                                    revocations.push(r.dupe());
+                                    self.receive_revocation(r).await?;
+                                    found = true;
+                                    break;
+                                }
+                            }
                         }
                     }
                 }

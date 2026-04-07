@@ -20,7 +20,7 @@ use keyhive_crypto::{
     signer::{async_signer::AsyncSigner, memory::MemorySigner},
     verifiable::Verifiable,
 };
-use std::{cmp::Ordering, collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone)]
 #[derive_where(Debug, Hash; T)]
@@ -151,23 +151,36 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             return Err(AddError::InvalidProofChain);
         }
 
-        delegation.payload.proof_lineage().iter().try_fold(
-            delegation.as_ref(),
-            |head, proof| {
-                if delegation.payload.can > proof.payload.can {
-                    return Err(AddError::Escelation {
-                        claimed: delegation.payload.can,
-                        proof: proof.payload.can,
-                    });
-                }
+        // Validate the proof chain. Each link must satisfy:
+        // 1. The delegation's access doesn't exceed the proof's access.
+        // 2. Either the signer matches the proof's delegate (direct chain),
+        //    or the signer is a transitive member of the proof's delegate
+        //    (transitive chain through a group/doc intermediary).
+        let lineage = delegation.payload.proof_lineage();
+        let heads = std::iter::once(delegation.as_ref()).chain(lineage.iter().map(|p| p.as_ref()));
+        for (head, proof) in heads.zip(lineage.iter()) {
+            if delegation.payload.can > proof.payload.can {
+                return Err(AddError::Escelation {
+                    claimed: delegation.payload.can,
+                    proof: proof.payload.can,
+                });
+            }
 
-                if head.verifying_key() != proof.payload.delegate.verifying_key() {
+            if head.verifying_key() != proof.payload.delegate.verifying_key() {
+                // The signer doesn't directly match the proof's delegate.
+                // Check transitive membership through a group/doc intermediary.
+                let head_id = Identifier::from(head.verifying_key());
+                if !is_transitive_member_of(
+                    &proof.payload.delegate,
+                    head_id,
+                    delegation.payload.can,
+                )
+                .await
+                {
                     return Err(AddError::InvalidProofChain);
                 }
-
-                Ok(proof.as_ref())
-            },
-        )?;
+            }
+        }
 
         for (head_digest, head) in self.delegation_heads.clone().iter() {
             if !delegation.payload.is_ancestor_of(head) {
@@ -202,27 +215,44 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             if revocation.payload.revoke != *proof
                 && !revocation.payload.revoke.payload.is_descendant_of(proof)
             {
-                return Err(AddError::InvalidProofChain);
+                // The revoked delegation is not a descendant of the proof.
+                // Check if the revoker has transitive access through the
+                // proof's delegate (a group/doc intermediary).
+                let revoker_id = Identifier::from(revocation.issuer);
+                if !is_transitive_member_of(
+                    &proof.payload.delegate,
+                    revoker_id,
+                    revocation.payload.revoke.payload.can,
+                )
+                .await
+                {
+                    return Err(AddError::InvalidProofChain);
+                }
             }
 
-            proof
-                .payload
-                .proof_lineage()
-                .iter()
-                .try_fold(proof.as_ref(), |head, next_proof| {
-                    if proof.payload.can.cmp(&next_proof.payload.can) == Ordering::Greater {
-                        return Err(AddError::Escelation {
-                            claimed: proof.payload.can,
-                            proof: next_proof.payload.can,
-                        });
-                    }
+            let lineage = proof.payload.proof_lineage();
+            let heads = std::iter::once(proof.as_ref()).chain(lineage.iter().map(|p| p.as_ref()));
+            for (head, next_proof) in heads.zip(lineage.iter()) {
+                if proof.payload.can > next_proof.payload.can {
+                    return Err(AddError::Escelation {
+                        claimed: proof.payload.can,
+                        proof: next_proof.payload.can,
+                    });
+                }
 
-                    if head.verifying_key() != next_proof.payload.delegate.verifying_key() {
+                if head.verifying_key() != next_proof.payload.delegate.verifying_key() {
+                    let head_id = Identifier::from(head.verifying_key());
+                    if !is_transitive_member_of(
+                        &next_proof.payload.delegate,
+                        head_id,
+                        proof.payload.can,
+                    )
+                    .await
+                    {
                         return Err(AddError::InvalidProofChain);
                     }
-
-                    Ok(proof.as_ref())
-                })?;
+                }
+            }
         } else if revocation.issuer != self.verifying_key() {
             return Err(AddError::InvalidProofChain);
         }
@@ -277,4 +307,24 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.id.0.verifying_key()
     }
+}
+
+async fn is_transitive_member_of<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
+    delegate: &Agent<F, S, T, L>,
+    member_id: Identifier,
+    min_access: Access,
+) -> bool {
+    let Some(m) = delegate.as_membered() else {
+        return false;
+    };
+    m.transitive_members()
+        .await
+        .get(&member_id)
+        .map(|(_, access)| *access >= min_access)
+        .unwrap_or(false)
 }

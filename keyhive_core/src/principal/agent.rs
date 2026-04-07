@@ -170,6 +170,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         result
     }
 
+    pub fn as_membered(&self) -> Option<Membered<F, S, T, L>> {
+        match self {
+            Agent::Group(id, g) => Some(Membered::Group(*id, g.dupe())),
+            Agent::Document(id, d) => Some(Membered::Document(*id, d.dupe())),
+            _ => None,
+        }
+    }
+
     pub async fn key_ops(&self) -> CaMap<KeyOp> {
         match self {
             Agent::Active(_, a) => a.lock().await.individual.lock().await.prekey_ops().clone(),

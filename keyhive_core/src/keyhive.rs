@@ -187,6 +187,15 @@ impl<
         &self.active
     }
 
+    /// Inject events into the pending set. For testing only.
+    #[cfg(any(test, feature = "test_utils"))]
+    pub async fn inject_pending_events(&self, events: Vec<StaticEvent<T>>) {
+        let mut pending = self.pending_events.lock().await;
+        for event in events {
+            pending.push(Arc::new(event));
+        }
+    }
+
     /// Get the [`Individual`] for the current Keyhive user.
     ///
     /// This is what you would share with a peer for them to

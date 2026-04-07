@@ -98,6 +98,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         }
     }
 
+    pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
+        match self {
+            Membered::Group(_, group) => group.lock().await.transitive_members().await,
+            Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
+        }
+    }
+
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &self,
