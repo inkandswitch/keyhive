@@ -467,19 +467,57 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddGroupMemberError> {
         let proof = if self.verifying_key() == signer.verifying_key() {
             None
-        } else {
-            let p = self
-                .get_capability(&signer.verifying_key().into())
-                .ok_or(AddGroupMemberError::NoProof)?;
-
+        } else if let Some(p) = self.get_capability(&signer.verifying_key().into()) {
+            // Signer is a direct member of this group.
             if can > p.payload.can {
                 return Err(AddGroupMemberError::AccessEscalation {
                     wanted: can,
                     have: p.payload().can,
                 });
             }
-
             Some(p.dupe())
+        } else {
+            // Check transitive membership through the group graph.
+            let signer_id = Identifier::from(signer.verifying_key());
+            let transitive = self.transitive_members().await;
+            let (_, transitive_access) = transitive
+                .get(&signer_id)
+                .ok_or(AddGroupMemberError::NoProof)?;
+
+            if can > *transitive_access {
+                return Err(AddGroupMemberError::AccessEscalation {
+                    wanted: can,
+                    have: *transitive_access,
+                });
+            }
+
+            // Find the direct member (group or doc) through which the signer
+            // has transitive access, and use its delegation as proof.
+            let mut transitive_proof = None;
+            for (member_id, _dlgs) in self.members.iter() {
+                let dlg = self
+                    .get_capability(member_id)
+                    .expect("members have capabilities by definition");
+
+                // Only groups and documents can provide transitive membership.
+                let membered = match &dlg.payload.delegate {
+                    Agent::Group(id, g) => Some(Membered::Group(*id, g.dupe())),
+                    Agent::Document(id, d) => Some(Membered::Document(*id, d.dupe())),
+                    _ => None,
+                };
+
+                if let Some(m) = membered {
+                    let sub_members = m.transitive_members().await;
+                    if let Some((_, sub_access)) = sub_members.get(&signer_id) {
+                        if *sub_access >= can {
+                            transitive_proof = Some(dlg.dupe());
+                            break;
+                        }
+                    }
+                }
+            }
+
+            Some(transitive_proof.ok_or(AddGroupMemberError::NoProof)?)
         };
 
         let delegation = keyhive_crypto::signer::async_signer::try_sign_async::<F, _, _>(

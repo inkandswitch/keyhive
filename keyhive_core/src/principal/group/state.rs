@@ -151,23 +151,58 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             return Err(AddError::InvalidProofChain);
         }
 
-        delegation.payload.proof_lineage().iter().try_fold(
-            delegation.as_ref(),
-            |head, proof| {
-                if delegation.payload.can > proof.payload.can {
-                    return Err(AddError::Escelation {
-                        claimed: delegation.payload.can,
-                        proof: proof.payload.can,
-                    });
-                }
+        // Validate the proof chain. Each link must satisfy:
+        // 1. The delegation's access doesn't exceed the proof's access.
+        // 2. Either the signer matches the proof's delegate (direct chain),
+        //    OR the signer is a transitive member of the proof's delegate
+        //    (transitive chain through a group/doc intermediary).
+        let lineage = delegation.payload.proof_lineage();
+        for (i, proof) in lineage.iter().enumerate() {
+            let head: &Signed<Delegation<F, S, T, L>> = if i == 0 {
+                delegation.as_ref()
+            } else {
+                lineage[i - 1].as_ref()
+            };
 
-                if head.verifying_key() != proof.payload.delegate.verifying_key() {
+            if delegation.payload.can > proof.payload.can {
+                return Err(AddError::Escelation {
+                    claimed: delegation.payload.can,
+                    proof: proof.payload.can,
+                });
+            }
+
+            if head.verifying_key() != proof.payload.delegate.verifying_key() {
+                // The signer doesn't directly match the proof's delegate.
+                // Check if the signer has transitive membership through the
+                // proof's delegate (which must be a group or document).
+                let head_id = Identifier::from(head.verifying_key());
+                let is_transitive_member = match &proof.payload.delegate {
+                    Agent::Group(_, group) => {
+                        let locked = group.lock().await;
+                        locked
+                            .transitive_members()
+                            .await
+                            .get(&head_id)
+                            .map(|(_, access)| *access >= delegation.payload.can)
+                            .unwrap_or(false)
+                    }
+                    Agent::Document(_, doc) => {
+                        let locked = doc.lock().await;
+                        locked
+                            .transitive_members()
+                            .await
+                            .get(&head_id)
+                            .map(|(_, access)| *access >= delegation.payload.can)
+                            .unwrap_or(false)
+                    }
+                    _ => false,
+                };
+
+                if !is_transitive_member {
                     return Err(AddError::InvalidProofChain);
                 }
-
-                Ok(proof.as_ref())
-            },
-        )?;
+            }
+        }
 
         for (head_digest, head) in self.delegation_heads.clone().iter() {
             if !delegation.payload.is_ancestor_of(head) {
