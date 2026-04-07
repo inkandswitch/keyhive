@@ -1,8 +1,8 @@
 use crate::js::{document_id::JsDocumentId, membered::JsMembered};
 
 use super::{
-    agent::JsAgent, change_id::JsChangeId, event_handler::JsEventHandler, identifier::JsIdentifier,
-    peer::JsPeer, signer::JsSigner,
+    agent::JsAgent, capability::Capability, change_id::JsChangeId, event_handler::JsEventHandler,
+    identifier::JsIdentifier, peer::JsPeer, signer::JsSigner,
 };
 use dupe::Dupe;
 use future_form::Local;
@@ -51,5 +51,26 @@ impl JsDocument {
     #[wasm_bindgen(js_name = toMembered)]
     pub fn to_membered(&self) -> JsMembered {
         JsMembered(Membered::Document(self.doc_id, self.inner.dupe()))
+    }
+
+    #[wasm_bindgen]
+    pub async fn members(&self) -> Vec<Capability> {
+        self.inner
+            .lock()
+            .await
+            .members()
+            .values()
+            .map(|dlgs| {
+                let best = dlgs
+                    .iter()
+                    .max_by_key(|dlg| dlg.payload().can())
+                    .expect("should have at least one member");
+
+                Capability {
+                    who: dlgs.iter().next().unwrap().payload().delegate().clone(),
+                    proof: best.clone(),
+                }
+            })
+            .collect()
     }
 }
