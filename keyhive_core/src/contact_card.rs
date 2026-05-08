@@ -7,7 +7,7 @@ use keyhive_crypto::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, From, Into, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, From, Into, Hash, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct ContactCard(pub(crate) KeyOp);
 
