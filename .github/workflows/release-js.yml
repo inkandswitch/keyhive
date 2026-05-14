@@ -19,12 +19,12 @@ jobs:
       # Setup .npmrc file to publish to npm
       - uses: actions/setup-node@v4
         with:
-          node-version: "22.x"
+          node-version: "20.x"
           registry-url: "https://registry.npmjs.org"
       - uses: pnpm/action-setup@v4
         with:
           run_install: false
-          version: "latest"
+          version: "10"
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - name: Build package
