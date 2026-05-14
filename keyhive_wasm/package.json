@@ -43,6 +43,9 @@
       "types": "./pkg-slim/keyhive_wasm_bg.wasm.base64.d.ts"
     }
   },
+  "pnpm": {
+    "onlyBuiltDependencies": []
+  },
   "devDependencies": {
     "@playwright/test": "^1.55.0",
     "@types/node": "^22.17.2",
