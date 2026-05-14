@@ -1,6 +1,6 @@
 {
   "name": "@keyhive/keyhive",
-  "version": "0.0.0-alpha.57",
+  "version": "0.0.0-alpha.57f",
   "description": "",
   "main": "pkg/keyhive_wasm.js",
   "scripts": {
@@ -56,10 +56,5 @@
     "webpack": "^5.101.3",
     "webpack-cli": "^5.1.4",
     "webpack-dev-server": "^5.2.2"
-  },
-  "pnpm": {
-    "overrides": {
-      "esbuild@<=0.24.2": ">=0.25.0"
-    }
   }
 }
