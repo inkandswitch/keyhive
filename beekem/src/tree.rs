@@ -134,7 +134,7 @@ impl BeeKem {
             self.blank_leaf_and_path(leaf_idx);
             self.next_leaf_idx = leaf_idx;
         }
-        leaves_to_sort.sort_by(|a, b| a.id.cmp(&b.id));
+        leaves_to_sort.sort_by_key(|a| a.id);
         for leaf in leaves_to_sort {
             self.push_leaf(leaf.id, leaf.pk.clone());
         }
