@@ -14,6 +14,17 @@ impl JsEncrypted {
         self.0.ciphertext.clone()
     }
 
+    pub fn serialize(&self) -> Result<Vec<u8>, JsValue> {
+        bincode::serialize(&self.0).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    #[wasm_bindgen(js_name = fromBytes)]
+    pub fn from_bytes(bytes: &[u8]) -> Result<JsEncrypted, JsValue> {
+        let encrypted: EncryptedContent<Vec<u8>, JsChangeId> =
+            bincode::deserialize(bytes).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(JsEncrypted(encrypted))
+    }
+
     #[wasm_bindgen(getter)]
     pub fn ciphertext(&self) -> Vec<u8> {
         self.0.ciphertext.clone()
