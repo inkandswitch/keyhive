@@ -8,7 +8,7 @@ use keyhive_core::{
     event::static_event::StaticEvent,
     keyhive::Keyhive,
     listener::{log::Log, no_listener::NoListener},
-    principal::{agent::Agent, membered::Membered},
+    principal::{agent::Agent, membered::Membered, peer::Peer},
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
@@ -229,4 +229,128 @@ async fn test_decrypt_after_fork_and_merge() {
         .unwrap();
 
     assert_eq!(decrypted, init_content);
+}
+
+#[tokio::test]
+async fn test_encrypt_decrypt_via_group_transitive_access() -> TestResult {
+    // Scenario:
+    // Alice creates a doc and a group.
+    // Alice gives the group Edit access to the doc.
+    // Alice adds A and B with Edit access to the group.
+    // A encrypts content to the doc, B decrypts it.
+    //
+    // ┌─────────────────────┐
+    // │        Alice        │  (owner)
+    // └─────────────────────┘
+    //            │
+    //            ▼
+    // ┌─────────────────────┐
+    // │        Group        │  ← A and B are Edit members
+    // └─────────────────────┘
+    //            │ Edit
+    //            ▼
+    // ┌─────────────────────┐
+    // │         Doc         │  ← A encrypts, B decrypts
+    // └─────────────────────┘
+    test_utils::init_logging();
+
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+    let NewKeyhive {
+        keyhive: peer_a, ..
+    } = make_keyhive().await;
+    let NewKeyhive {
+        keyhive: peer_b, ..
+    } = make_keyhive().await;
+
+    let init_content = "hello from peer A".as_bytes().to_vec();
+    let init_hash = blake3::hash(&init_content);
+
+    // Alice creates group and doc (group controls the doc)
+    let group = alice.generate_group(vec![]).await?;
+    let group_id = { group.lock().await.group_id() };
+
+    let doc = alice
+        .generate_doc(
+            vec![Peer::Group(group_id, group.dupe())],
+            nonempty![init_hash.into()],
+        )
+        .await?;
+    let doc_id = { doc.lock().await.doc_id() };
+
+    // Register A and B on Alice, add both to the group with Edit access
+    let indie_a = {
+        peer_a
+            .active()
+            .lock()
+            .await
+            .individual()
+            .lock()
+            .await
+            .clone()
+    };
+    let indie_b = {
+        peer_b
+            .active()
+            .lock()
+            .await
+            .individual()
+            .lock()
+            .await
+            .clone()
+    };
+
+    alice
+        .add_member(
+            Agent::Individual(indie_a.id(), Arc::new(Mutex::new(indie_a.clone()))),
+            &Membered::Group(group_id, group.dupe()),
+            Access::Edit,
+            &[],
+        )
+        .await?;
+    alice
+        .add_member(
+            Agent::Individual(indie_b.id(), Arc::new(Mutex::new(indie_b.clone()))),
+            &Membered::Group(group_id, group.dupe()),
+            Access::Edit,
+            &[],
+        )
+        .await?;
+
+    // Sync Alice's events to A
+    let events_for_a = alice
+        .static_events_for_agent(&peer_a.active().lock().await.clone().into())
+        .await;
+    peer_a
+        .ingest_unsorted_static_events(events_for_a.into_values().collect())
+        .await;
+
+    // A encrypts content
+    let doc_on_a = peer_a.get_document(doc_id).await.unwrap();
+    let encrypted = peer_a
+        .try_encrypt_content(doc_on_a.clone(), &init_hash.into(), &vec![], &init_content)
+        .await?;
+
+    // Sync Alice's events + A's events to B
+    let events_for_b = alice
+        .static_events_for_agent(&peer_b.active().lock().await.clone().into())
+        .await;
+    peer_b
+        .ingest_unsorted_static_events(events_for_b.into_values().collect())
+        .await;
+
+    let a_events_for_b = peer_a
+        .static_events_for_agent(&peer_b.active().lock().await.clone().into())
+        .await;
+    peer_b
+        .ingest_unsorted_static_events(a_events_for_b.into_values().collect())
+        .await;
+
+    // B decrypts
+    let doc_on_b = peer_b.get_document(doc_id).await.unwrap();
+    let decrypted = peer_b
+        .try_decrypt_content(doc_on_b.clone(), encrypted.encrypted_content())
+        .await?;
+    assert_eq!(decrypted, init_content);
+
+    Ok(())
 }
