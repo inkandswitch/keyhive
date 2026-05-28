@@ -137,7 +137,7 @@ impl JsKeyhive {
     pub async fn generate_doc(
         &self,
         coparents: Vec<JsPeerRef>,
-        initial_content_ref_head: JsChangeId,
+        initial_content_ref_head: &JsChangeId,
         more_initial_content_refs: Vec<JsChangeIdRef>,
     ) -> Result<JsDocument, JsGenerateDocError> {
         init_span!("JsKeyhive::generate_doc");
@@ -174,8 +174,8 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = tryEncrypt)]
     pub async fn try_encrypt(
         &self,
-        doc: JsDocument,
-        content_ref: JsChangeId,
+        doc: &JsDocument,
+        content_ref: &JsChangeId,
         js_pred_refs: Vec<JsChangeIdRef>,
         content: &[u8],
     ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
@@ -187,7 +187,7 @@ impl JsKeyhive {
 
         Ok(self
             .0
-            .try_encrypt_content(doc.inner, &content_ref, &pred_refs, content)
+            .try_encrypt_content(doc.inner.dupe(), content_ref, &pred_refs, content)
             .await?
             .into())
     }
@@ -245,7 +245,12 @@ impl JsKeyhive {
 
         let res = self
             .0
-            .add_member(to_add.0.dupe(), &membered.0, **access, other_docs.as_slice())
+            .add_member(
+                to_add.0.dupe(),
+                &membered.0,
+                **access,
+                other_docs.as_slice(),
+            )
             .await?;
 
         Ok(res.delegation.into())
@@ -300,7 +305,7 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = rotatePrekey)]
-    pub async fn rotate_prekey(&self, prekey: JsShareKey) -> Result<JsShareKey, JsSigningError> {
+    pub async fn rotate_prekey(&self, prekey: &JsShareKey) -> Result<JsShareKey, JsSigningError> {
         init_span!("JsKeyhive::rotate_prekey");
         let op = self.0.rotate_prekey(prekey.0).await?;
         Ok(JsShareKey(op.payload().new))
@@ -865,12 +870,13 @@ mod tests {
         async fn test_encrypt_decrypt() -> Result<(), Box<dyn Error>> {
             let mut bh = setup().await;
             bh.expand_prekeys().await.unwrap();
-            let doc = bh.generate_doc(vec![], vec![0].into(), vec![]).await?;
+            let change_id = JsChangeId::new(vec![0]);
+            let doc = bh.generate_doc(vec![], &change_id, vec![]).await?;
             let content = vec![1, 2, 3, 4];
             let pred_refs = vec![JsChangeId::new(vec![10, 11, 12]).into()];
             let content_ref = JsChangeId::new(vec![13, 14, 15]);
             let encrypted = bh
-                .try_encrypt(doc.clone(), content_ref.clone(), pred_refs, &content)
+                .try_encrypt(&doc, &content_ref, pred_refs, &content)
                 .await?;
             let decrypted = bh.try_decrypt(&doc, &encrypted.encrypted_content()).await?;
             assert_eq!(content, decrypted);
@@ -879,7 +885,7 @@ mod tests {
             let content_ref_2 = JsChangeId::new(vec![16, 17, 18]);
             let pred_refs_2 = vec![content_ref.into()];
             let encrypted_2 = bh
-                .try_encrypt(doc.clone(), content_ref_2, pred_refs_2, &content_2)
+                .try_encrypt(&doc, &content_ref_2, pred_refs_2, &content_2)
                 .await?;
             let decrypted_2 = bh
                 .try_decrypt(&doc, &encrypted_2.encrypted_content())
