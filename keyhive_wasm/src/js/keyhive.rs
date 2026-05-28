@@ -232,7 +232,7 @@ impl JsKeyhive {
         &self,
         to_add: &JsAgent,
         membered: &JsMembered,
-        access: JsAccess,
+        access: &JsAccess,
         other_relevant_docs: Vec<JsDocumentRef>,
     ) -> Result<JsSignedDelegation, JsAddMemberError> {
         init_span!("JsKeyhive::add_member");
@@ -245,7 +245,7 @@ impl JsKeyhive {
 
         let res = self
             .0
-            .add_member(to_add.0.dupe(), &membered.0, *access, other_docs.as_slice())
+            .add_member(to_add.0.dupe(), &membered.0, **access, other_docs.as_slice())
             .await?;
 
         Ok(res.delegation.into())
