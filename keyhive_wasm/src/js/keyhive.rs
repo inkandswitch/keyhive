@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use keyhive_core::principal::identifier::Identifier;
 
@@ -19,9 +19,11 @@ use super::{
     change_id::{JsChangeId, JsChangeIdRef},
     ciphertext_store::JsCiphertextStore,
     contact_card::JsContactCard,
+    decrypted_keyed::JsDecryptedKeyed,
     document::{JsDocument, JsDocumentRef},
     encrypted::JsEncrypted,
     encrypted_content_with_update::JsEncryptedContentWithUpdate,
+    encrypted_keyed::JsEncryptedKeyed,
     event_handler::JsEventHandler,
     generate_doc_error::JsGenerateDocError,
     group::JsGroup,
@@ -109,7 +111,9 @@ impl JsKeyhive {
             .as_slice()
             .iter()
             .fold("0x".to_string(), |mut acc, byte| {
-                acc.push_str(&format!("{:x}", byte));
+                // Zero-pad each byte to two hex digits so bytes < 0x10 keep
+                // their leading zero.
+                acc.push_str(&format!("{:02x}", byte));
                 acc
             })
     }
@@ -192,6 +196,32 @@ impl JsKeyhive {
             .into())
     }
 
+    /// Encrypt content and also return the application secret key it was
+    /// encrypted under.
+    #[wasm_bindgen(js_name = tryEncryptKeyed)]
+    pub async fn try_encrypt_keyed(
+        &self,
+        doc: &JsDocument,
+        content_ref: &JsChangeId,
+        js_pred_refs: Vec<JsChangeIdRef>,
+        content: &[u8],
+    ) -> Result<JsEncryptedKeyed, JsEncryptError> {
+        init_span!("JsKeyhive::try_encrypt_keyed");
+        let pred_refs: Vec<JsChangeId> = js_pred_refs
+            .into_iter()
+            .map(|js_ref| JsChangeId::from_js_ref(&js_ref))
+            .collect();
+
+        let (inner, key) = self
+            .0
+            .try_encrypt_content_keyed(doc.inner.dupe(), content_ref, &pred_refs, content)
+            .await?;
+        Ok(JsEncryptedKeyed {
+            inner,
+            application_secret: key.as_slice().to_vec(),
+        })
+    }
+
     // NOTE: this is with a fresh doc secret
     #[wasm_bindgen(js_name = tryEncryptArchive)]
     pub async fn try_encrypt_archive(
@@ -225,6 +255,21 @@ impl JsKeyhive {
             .0
             .try_decrypt_content(doc.inner.dupe(), &encrypted.0)
             .await?)
+    }
+
+    /// Decrypt content and also return the 32-byte application secret key used.
+    #[wasm_bindgen(js_name = tryDecryptKeyed)]
+    pub async fn try_decrypt_keyed(
+        &self,
+        doc: &JsDocument,
+        encrypted: &JsEncrypted,
+    ) -> Result<JsDecryptedKeyed, JsDecryptError> {
+        init_span!("JsKeyhive::try_decrypt_keyed");
+        let (plaintext, key) = self
+            .0
+            .try_decrypt_content_keyed(doc.inner.dupe(), &encrypted.0)
+            .await?;
+        Ok(JsDecryptedKeyed::new(plaintext, key.as_slice().to_vec()))
     }
 
     #[wasm_bindgen(js_name = addMember)]
@@ -294,14 +339,29 @@ impl JsKeyhive {
         acc
     }
 
+    /// Force a PCS key rotation and return the new leaf secret, serialized as a
+    /// one-entry `BTreeMap<ShareKey, ShareSecretKey>` (the exact format
+    /// `importPrekeySecrets` accepts).
     #[wasm_bindgen(js_name = forcePcsUpdate)]
-    pub async fn force_pcs_update(&self, doc: &JsDocument) -> Result<(), JsEncryptError> {
+    pub async fn force_pcs_update(&self, doc: &JsDocument) -> Result<Box<[u8]>, JsValue> {
         init_span!("JsKeyhive::force_pcs_update");
-        self.0
+        let (_op, new_share_key, new_share_secret_key) = self
+            .0
             .force_pcs_update(doc.inner.dupe())
             .await
-            .map_err(EncryptContentError::from)?;
-        Ok(())
+            .map_err(EncryptContentError::from)
+            .map_err(JsEncryptError::from)?;
+        let map = BTreeMap::from([(new_share_key, new_share_secret_key)]);
+        let bytes = bincode::serialize(&map).map_err(JsSerializationError::from)?;
+        Ok(bytes.into_boxed_slice())
+    }
+
+    #[wasm_bindgen(js_name = tryPcsKeyHash)]
+    pub async fn try_pcs_key_hash(&self, doc: &JsDocument) -> Option<Vec<u8>> {
+        self.0
+            .try_pcs_key_hash(doc.inner.dupe())
+            .await
+            .map(|d| d.as_slice().to_vec())
     }
 
     #[wasm_bindgen(js_name = rotatePrekey)]
@@ -694,6 +754,7 @@ impl JsKeyhive {
         self.0
             .import_prekey_secrets(bytes)
             .await
+            .map(|_| ())
             .map_err(JsSerializationError::from)
     }
 
@@ -880,7 +941,9 @@ mod tests {
                 .await?;
             let decrypted = bh.try_decrypt(&doc, &encrypted.encrypted_content()).await?;
             assert_eq!(content, decrypted);
-            bh.force_pcs_update(&doc).await?;
+            bh.force_pcs_update(&doc)
+                .await
+                .map_err(|e| format!("{e:?}"))?;
             let content_2 = vec![5, 6, 7, 8, 9];
             let content_ref_2 = JsChangeId::new(vec![16, 17, 18]);
             let pred_refs_2 = vec![content_ref.into()];

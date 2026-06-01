@@ -15,7 +15,7 @@ use crate::{
     encrypted::EncryptedContent,
     error::CgkaError,
     id::{MemberId, TreeId},
-    keys::ShareKeyMap,
+    keys::{NodeKey, ShareKeyMap},
     operation::{CgkaEpoch, CgkaOperation, CgkaOperationGraph},
     pcs_key::{ApplicationSecret, PcsKey},
     transact::{Fork, Merge},
@@ -154,6 +154,7 @@ impl Cgka {
     /// If the tree does not currently contain a root key, then we must first
     /// perform a leaf key rotation.
     #[instrument(skip_all)]
+    #[allow(clippy::type_complexity)]
     pub async fn new_app_secret_for<
         F: FutureForm,
         S: AsyncSigner<F>,
@@ -178,7 +179,16 @@ impl Cgka {
             op = Some(update_op);
             pcs_key
         } else {
-            self.pcs_key_from_tree_root()?
+            let pcs_key = self.pcs_key_from_tree_root()?;
+            let pcs_hash = Digest::hash(&pcs_key);
+            if !self.pcs_keys.contains_key(&pcs_hash) {
+                // `has_pcs_key()` above guarantees a single head.
+                debug_assert!(self.ops_graph.has_single_head());
+                if let Some(head) = self.ops_graph.cgka_op_heads.iter().next() {
+                    self.insert_pcs_key(&pcs_key, *head);
+                }
+            }
+            pcs_key
         };
         let pcs_key_hash = Digest::hash(&current_pcs_key);
         let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id.as_bytes());
@@ -189,7 +199,7 @@ impl Cgka {
                 &Digest::hash(pred_refs),
                 self.pcs_key_ops
                     .get(&pcs_key_hash)
-                    .expect("PcsKey hash should be present becuase we derived it above"),
+                    .expect("PcsKey hash should be present because we derived it above"),
             ),
             op,
         ))
@@ -300,6 +310,8 @@ impl Cgka {
 
     /// Update leaf key pair for this Identifier.
     /// This also triggers a tree path update for that leaf.
+    /// If the owner is not in the tree but Public is, falls back to
+    /// encrypting from Public's leaf using Public's well-known keys.
     #[instrument(skip_all)]
     pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
@@ -311,14 +323,28 @@ impl Cgka {
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
-        self.owner_sks.insert(new_pk, new_sk);
+        let (update_id, update_pk, update_sk) = if self.tree.contains_id(&self.owner_id) {
+            (self.owner_id, new_pk, new_sk)
+        } else {
+            let public_id = MemberId::public();
+            let NodeKey::ShareKey(pk) = self
+                .tree
+                .node_key_for_id(public_id)
+                .map_err(|_| CgkaError::IdentifierNotFound)?
+            else {
+                return Err(CgkaError::ShareKeyNotFound);
+            };
+            let sk = *self.owner_sks.get(&pk).ok_or(CgkaError::ShareKeyNotFound)?;
+            (public_id, pk, sk)
+        };
+        self.owner_sks.insert(update_pk, update_sk);
         let maybe_key_and_path =
             self.tree
-                .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
+                .encrypt_path(update_id, update_pk, &mut self.owner_sks, csprng)?;
         if let Some((pcs_key, new_path)) = maybe_key_and_path {
             let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
             let op = CgkaOperation::Update {
-                id: self.owner_id,
+                id: update_id,
                 new_path: alloc::boxed::Box::new(new_path),
                 predecessors,
                 doc_id: self.doc_id,
@@ -454,10 +480,23 @@ impl Cgka {
     }
 
     /// Decrypt tree secret to derive [`PcsKey`].
-    fn pcs_key_from_tree_root(&mut self) -> Result<PcsKey, CgkaError> {
-        let key = self
+    pub fn pcs_key_from_tree_root(&mut self) -> Result<PcsKey, CgkaError> {
+        let key = match self
             .tree
-            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)?;
+            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)
+        {
+            Ok(k) => k,
+            Err(e) => {
+                // When deriving as the owner fails and Public is a member, read as
+                // Public instead.
+                let public = MemberId::public();
+                if self.owner_id != public && self.tree.contains_id(&public) {
+                    self.tree.decrypt_tree_secret(public, &mut self.owner_sks)?
+                } else {
+                    return Err(e);
+                }
+            }
+        };
         Ok(PcsKey::new(key))
     }
 
@@ -472,16 +511,16 @@ impl Cgka {
         update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
         if let Some(pcs_key) = self.pcs_keys.get(pcs_key_hash) {
-            Ok(*pcs_key.clone())
-        } else {
-            if self.has_pcs_key() {
-                let pcs_key = self.pcs_key_from_tree_root()?;
+            return Ok(*pcs_key.clone());
+        }
+        if self.has_pcs_key() {
+            if let Ok(pcs_key) = self.pcs_key_from_tree_root() {
                 if &Digest::hash(&pcs_key) == pcs_key_hash {
                     return Ok(pcs_key);
                 }
             }
-            self.derive_pcs_key_for_op(update_op_hash)
         }
+        self.derive_pcs_key_for_op(update_op_hash)
     }
 
     /// Derive [`PcsKey`] for this operation hash.
@@ -591,6 +630,7 @@ impl Merge for Cgka {
         self.owner_sks.merge(fork.owner_sks);
         self.ops_graph.merge(fork.ops_graph);
         self.pcs_keys.merge(fork.pcs_keys);
+        self.pcs_key_ops.extend(fork.pcs_key_ops.iter());
         self.replay_ops_graph()
             .expect("two valid graphs should always merge causal consistency");
     }

@@ -1,7 +1,11 @@
 use dupe::Dupe;
 use keyhive_core::{
     access::Access,
-    principal::{agent::Agent, identifier::Identifier, membered::Membered, peer::Peer},
+    event::static_event::StaticEvent,
+    principal::{
+        agent::Agent, document::id::DocumentId, identifier::Identifier, membered::Membered,
+        peer::Peer,
+    },
     test_utils::make_simple_keyhive,
 };
 use keyhive_crypto::{signer::memory::MemorySigner, verifiable::Verifiable};
@@ -1768,6 +1772,180 @@ async fn test_stuck_pending_events_dont_poison_new_events() -> TestResult {
         public_reachable.get(&doc_b_id).unwrap().can(),
         Access::Read,
         "Public should have Read access to doc_b on server"
+    );
+
+    Ok(())
+}
+
+/// A Document referenced as a delegate (member of another doc) before its own
+/// defining delegation arrives must be reified as a Document, not a Group.
+///
+/// When the cross-delegation `subject = Doc B, delegate = Doc A` is ingested
+/// before Doc A's defining (root) delegation, Doc A is an unknown delegate.
+/// The unknown-delegate recovery registers a placeholder Individual for Doc A's
+/// id. Earlier, when Doc A's defining delegation finally arrived, that
+/// placeholder was unconditionally promoted to a *Group*, dropping Doc A's
+/// content heads. It must instead become a Document because the defining
+/// delegation carries content heads for that id.
+#[tokio::test]
+async fn test_document_delegate_before_defining_event_reified_as_document() -> TestResult {
+    test_utils::init_logging();
+
+    let alice = make_simple_keyhive().await?;
+
+    // Alice owns Doc A and Doc B, and adds Doc A as a Read member of Doc B.
+    let doc_a = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    let doc_a_id = { doc_a.lock().await.doc_id() };
+    let doc_b = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+    let doc_b_id = { doc_b.lock().await.doc_id() };
+
+    alice
+        .add_member(
+            Agent::Document(doc_a_id, doc_a.dupe()),
+            &Membered::Document(doc_b_id, doc_b.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+
+    // Collect all of Alice's events, then split out Doc A's defining (root)
+    // delegation, i.e. the one issued by Doc A itself, so it is delivered last.
+    let alice_agent: Agent<_, _, _, _> = alice.active().lock().await.clone().into();
+    let all_events = alice.static_events_for_agent(&alice_agent).await;
+
+    let doc_a_ident: Identifier = doc_a_id.into();
+    let mut defining: Vec<StaticEvent<[u8; 32]>> = vec![];
+    let mut rest: Vec<StaticEvent<[u8; 32]>> = vec![];
+    for event in all_events.into_values() {
+        match &event {
+            StaticEvent::Delegated(signed)
+                if Identifier(signed.issuer) == doc_a_ident && signed.payload.proof.is_none() =>
+            {
+                defining.push(event);
+            }
+            _ => rest.push(event),
+        }
+    }
+    assert_eq!(
+        defining.len(),
+        1,
+        "expected exactly one root delegation defining Doc A"
+    );
+
+    // Fresh peer receives everything except Doc A's defining delegation first.
+    let carol = make_simple_keyhive().await?;
+    let pending = carol.ingest_unsorted_static_events(rest).await;
+
+    // Before its defining delegation arrives, Doc A is unknown: the delegation
+    // that references it as a delegate stays pending rather than fabricating a
+    // stand-in for it.
+    assert!(
+        !pending.is_empty(),
+        "the delegation referencing Doc A should remain pending"
+    );
+    assert!(
+        carol.get_agent(doc_a_ident).await.is_none(),
+        "Doc A should be unknown before its defining delegation arrives"
+    );
+    assert!(
+        carol.get_document(doc_a_id).await.is_none(),
+        "Doc A should not yet be registered as a Document"
+    );
+
+    // Deliver Doc A's defining delegation (plus any pending events).
+    carol.ingest_unsorted_static_events(defining).await;
+
+    // Doc A must now be reified as a Document, not a Group.
+    assert!(
+        matches!(
+            carol.get_agent(doc_a_ident).await,
+            Some(Agent::Document(..))
+        ),
+        "Doc A must be reified as a Document, not a Group, after its defining delegation"
+    );
+    assert!(
+        carol.get_document(doc_a_id).await.is_some(),
+        "Doc A should be registered in the docs map"
+    );
+
+    Ok(())
+}
+
+/// Companion to the Document case: a Group referenced as a delegate before its
+/// defining delegation arrives must still be reified as a Group. Its defining
+/// delegation carries no content heads, so it must not become a Document.
+#[tokio::test]
+async fn test_group_delegate_before_defining_event_reified_as_group() -> TestResult {
+    test_utils::init_logging();
+
+    let alice = make_simple_keyhive().await?;
+
+    // Alice owns Group G and Doc B, and adds Group G as a Read member of Doc B.
+    let group = alice.generate_group(vec![]).await?;
+    let group_id = { group.lock().await.group_id() };
+    let doc_b = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+    let doc_b_id = { doc_b.lock().await.doc_id() };
+
+    alice
+        .add_member(
+            Agent::Group(group_id, group.dupe()),
+            &Membered::Document(doc_b_id, doc_b.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+
+    // Split out Group G's defining (root) delegation, issued by G itself.
+    let alice_agent: Agent<_, _, _, _> = alice.active().lock().await.clone().into();
+    let all_events = alice.static_events_for_agent(&alice_agent).await;
+
+    let group_ident: Identifier = group_id.into();
+    let mut defining: Vec<StaticEvent<[u8; 32]>> = vec![];
+    let mut rest: Vec<StaticEvent<[u8; 32]>> = vec![];
+    for event in all_events.into_values() {
+        match &event {
+            StaticEvent::Delegated(signed)
+                if Identifier(signed.issuer) == group_ident && signed.payload.proof.is_none() =>
+            {
+                defining.push(event);
+            }
+            _ => rest.push(event),
+        }
+    }
+    assert_eq!(
+        defining.len(),
+        1,
+        "expected exactly one root delegation defining Group G"
+    );
+
+    let carol = make_simple_keyhive().await?;
+    let pending = carol.ingest_unsorted_static_events(rest).await;
+
+    // Before its defining delegation arrives, Group G is unknown: the delegation
+    // that references it as a delegate stays pending rather than fabricating a
+    // stand-in for it.
+    assert!(
+        !pending.is_empty(),
+        "the delegation referencing Group G should remain pending"
+    );
+    assert!(
+        carol.get_agent(group_ident).await.is_none(),
+        "Group G should be unknown before its defining delegation arrives"
+    );
+
+    carol.ingest_unsorted_static_events(defining).await;
+
+    // Group G must be reified as a Group, and must not become a Document.
+    assert!(
+        matches!(carol.get_agent(group_ident).await, Some(Agent::Group(..))),
+        "Group G must be reified as a Group after its defining delegation"
+    );
+    assert!(
+        carol
+            .get_document(DocumentId::from(group_ident))
+            .await
+            .is_none(),
+        "Group G must not be modeled as a Document"
     );
 
     Ok(())

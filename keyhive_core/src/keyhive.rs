@@ -54,7 +54,9 @@ use crate::{
     },
     util::content_addressed_map::CaMap,
 };
-use beekem::{encrypted::EncryptedContent, error::CgkaError, operation::CgkaOperation};
+use beekem::{
+    encrypted::EncryptedContent, error::CgkaError, operation::CgkaOperation, pcs_key::PcsKey,
+};
 use derive_where::derive_where;
 use dupe::{Dupe, OptionDupedExt};
 use future_form::FutureForm;
@@ -62,9 +64,10 @@ use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
-    share_key::ShareKey,
+    share_key::{ShareKey, ShareSecretKey},
     signed::{Signed, SigningError, VerificationError},
     signer::async_signer::AsyncSigner,
+    symmetric_key::SymmetricKey,
     verifiable::Verifiable,
 };
 use nonempty::NonEmpty;
@@ -263,6 +266,7 @@ impl<
         Ok(g)
     }
 
+    /// Generate a document.
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn generate_doc(
@@ -483,7 +487,7 @@ impl<
         other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>], // TODO make this automatic
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
         let signer = { self.active.lock().await.signer.clone() };
-        match resource {
+        let update = match resource {
             Membered::Group(group_id, group) => {
                 let mut update = group
                     .lock()
@@ -528,15 +532,23 @@ impl<
                     }
                 }
 
-                Ok(update)
+                update
             }
             Membered::Document(_, doc) => {
                 let mut locked = doc.lock().await;
                 locked
                     .add_member(to_add, can, &signer, other_relevant_docs)
-                    .await
+                    .await?
             }
+        };
+
+        for cgka_op in &update.cgka_ops {
+            self.event_listener
+                .on_cgka_op(&Arc::new(cgka_op.clone()))
+                .await;
         }
+
+        Ok(update)
     }
 
     #[allow(clippy::type_complexity)]
@@ -621,9 +633,16 @@ impl<
             }
         }
 
+        for cgka_op in &update.cgka_ops {
+            self.event_listener
+                .on_cgka_op(&Arc::new(cgka_op.clone()))
+                .await;
+        }
+
         Ok(update)
     }
 
+    /// Encrypt content for a document.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content(
         &self,
@@ -632,12 +651,28 @@ impl<
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError> {
+        Ok(self
+            .try_encrypt_content_keyed(doc, content_ref, pred_refs, content)
+            .await?
+            .0)
+    }
+
+    /// Encrypt content, also returning the application secret key it was
+    /// encrypted under.
+    #[instrument(skip_all)]
+    pub async fn try_encrypt_content_keyed(
+        &self,
+        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        content_ref: &T,
+        pred_refs: &Vec<T>,
+        content: &[u8],
+    ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
         let signer = { self.active.lock().await.signer.clone() };
-        let result = {
+        let (result, application_secret_key) = {
             let mut locked_csprng = self.csprng.lock().await;
             doc.lock()
                 .await
-                .try_encrypt_content(
+                .try_encrypt_content_keyed(
                     content_ref,
                     content,
                     pred_refs,
@@ -649,7 +684,14 @@ impl<
         if let Some(op) = &result.update_op {
             self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
         }
-        Ok(result)
+        Ok((result, application_secret_key))
+    }
+
+    pub async fn try_pcs_key_hash(
+        &self,
+        doc: Arc<Mutex<Document<F, S, T, L>>>,
+    ) -> Option<Digest<PcsKey>> {
+        doc.lock().await.cgka_mut().ok()?.try_pcs_key_hash().ok()
     }
 
     pub async fn try_decrypt_content(
@@ -658,6 +700,15 @@ impl<
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
         doc.lock().await.try_decrypt_content(encrypted)
+    }
+
+    /// Decrypt content and also return the application secret key that was used.
+    pub async fn try_decrypt_content_keyed(
+        &self,
+        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        encrypted: &EncryptedContent<P, T>,
+    ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
+        doc.lock().await.try_decrypt_content_keyed(encrypted)
     }
 
     pub async fn try_causal_decrypt_content(
@@ -679,13 +730,16 @@ impl<
     pub async fn force_pcs_update(
         &self,
         doc: Arc<Mutex<Document<F, S, T, L>>>,
-    ) -> Result<Signed<CgkaOperation>, EncryptError> {
+    ) -> Result<(Signed<CgkaOperation>, ShareKey, ShareSecretKey), EncryptError> {
         let signer = { self.active.lock().await.signer.clone() };
         let mut locked_csprng = self.csprng.lock().await;
-        doc.lock()
+        let (op, new_share_key, new_share_secret_key) = doc
+            .lock()
             .await
             .pcs_update(&signer, &mut *locked_csprng)
-            .await
+            .await?;
+        self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
+        Ok((op, new_share_key, new_share_secret_key))
     }
 
     #[instrument(skip_all)]
@@ -1482,6 +1536,11 @@ impl<
     #[instrument(skip_all)]
     pub async fn receive_prekey_op(&self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
         let id = Identifier(*key_op.issuer());
+        // Drop any prekey op addressed to Public so its individual can never
+        // expand or rotate.
+        if id == Public.id() {
+            return Ok(());
+        }
         let agent = if let Some(agent) = self.get_agent(id).await {
             agent
         } else {
@@ -1756,11 +1815,11 @@ impl<
                 return Ok(());
             } else if Public.individual().id() == added_id {
                 let sk = Public.share_secret_key();
-                if doc
-                    .lock()
-                    .await
-                    .merge_cgka_invite_op(signed_op.clone(), &sk)?
-                {
+                let mut locked_doc = doc.lock().await;
+                let merged = locked_doc.merge_cgka_invite_op(signed_op.clone(), &sk)?;
+                locked_doc.reset_cgka_owner(active_id)?;
+                drop(locked_doc);
+                if merged {
                     self.event_listener.on_cgka_op(&signed_op).await;
                 }
                 return Ok(());
@@ -1853,8 +1912,17 @@ impl<
     }
 
     /// Import prekey secrets from a previously exported blob, extending the existing set.
-    pub async fn import_prekey_secrets(&self, bytes: &[u8]) -> Result<(), bincode::Error> {
-        self.active.lock().await.import_prekey_secrets(bytes).await
+    ///
+    /// After importing, any pending events that were stuck due to missing
+    /// prekey secrets are automatically retried.
+    pub async fn import_prekey_secrets(
+        &self,
+        bytes: &[u8],
+    ) -> Result<Vec<Arc<StaticEvent<T>>>, bincode::Error> {
+        let active = self.active.lock().await;
+        active.import_prekey_secrets(bytes).await?;
+        drop(active);
+        Ok(self.ingest_unsorted_static_events(vec![]).await)
     }
 
     #[instrument(skip_all)]
@@ -2073,6 +2141,17 @@ impl<
                     .ok_or(TryFromArchiveError::MissingDelegation(dlg_hash.coerce()))?
                     .dupe();
 
+                if actual_dlg.payload().proof.is_none()
+                    && actual_dlg.issuer != group.verifying_key()
+                {
+                    tracing::warn!(
+                        "try_from_archive: skipping delegation with mismatched root issuer (group={:?}, issuer={:?})",
+                        group.group_id(),
+                        Identifier::from(actual_dlg.issuer),
+                    );
+                    continue;
+                }
+
                 group.state.delegation_heads.insert(actual_dlg);
             }
 
@@ -2223,12 +2302,14 @@ impl<
     ) -> Vec<Arc<StaticEvent<T>>> {
         // FIXME: Some errors might not be recoverable on future attempts
         tracing::debug!("Keyhive::ingest_unsorted_static_events()");
+        use std::collections::{HashMap, HashSet};
+        let mut replayed_pending: HashSet<Digest<StaticEvent<T>>> = HashSet::new();
         for event in self.pending_events.as_ref().lock().await.iter() {
+            replayed_pending.insert(Digest::hash(event.as_ref()));
             events.push(event.as_ref().clone());
         }
 
         // Deduplicate events by hash
-        use std::collections::HashMap;
         let mut unique_events: HashMap<Digest<StaticEvent<T>>, StaticEvent<T>> = HashMap::new();
         for event in events {
             let hash = Digest::hash(&event);
@@ -2254,6 +2335,10 @@ impl<
 
             if next_epoch.is_empty() {
                 tracing::debug!("Finished ingesting static events");
+                self.pending_events
+                    .lock()
+                    .await
+                    .retain(|e| !replayed_pending.contains(&Digest::hash(e.as_ref())));
                 return Vec::new();
             }
 
@@ -2263,6 +2348,7 @@ impl<
                     epoch_len,
                     err
                 );
+
                 let new_pending: Vec<Arc<StaticEvent<T>>> =
                     next_epoch.clone().into_iter().map(Arc::new).collect();
                 drop(mem::replace(

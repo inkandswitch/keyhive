@@ -13,7 +13,17 @@ use keyhive_crypto::{
     signer::memory::MemorySigner,
     verifiable::Verifiable,
 };
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, LazyLock},
+};
+
+/// The `Public` identifier, derived once from the well-known signing key.
+static PUBLIC_ID: LazyLock<Identifier> = LazyLock::new(|| Public.verifying_key().into());
+
+/// The `Public` share key, derived once from the well-known secret.
+static PUBLIC_SHARE_KEY: LazyLock<ShareKey> =
+    LazyLock::new(|| Public.share_secret_key().share_key());
 
 /// A well-known agent that can be used by anyone. ⚠ USE WITH CAUTION ⚠
 ///
@@ -26,7 +36,7 @@ pub struct Public;
 
 impl Public {
     pub fn id(&self) -> Identifier {
-        self.verifying_key().into()
+        *PUBLIC_ID
     }
 
     pub fn signing_key(&self) -> ed25519_dalek::SigningKey {
@@ -42,7 +52,7 @@ impl Public {
     }
 
     pub fn share_key(&self) -> ShareKey {
-        self.share_secret_key().share_key()
+        *PUBLIC_SHARE_KEY
     }
 
     pub fn individual(&self) -> Individual {

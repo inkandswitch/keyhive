@@ -1,5 +1,6 @@
 use super::change_id::JsChangeId;
 use beekem::encrypted::EncryptedContent;
+use keyhive_crypto::symmetric_key::SymmetricKey;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -48,6 +49,18 @@ impl JsEncrypted {
     #[wasm_bindgen(getter)]
     pub fn pred_refs(&self) -> Vec<u8> {
         self.0.pred_refs.raw.as_bytes().to_vec()
+    }
+
+    /// Decrypt this content with an explicit 32-byte application secret key,
+    /// bypassing CGKA.
+    #[wasm_bindgen(js_name = decryptWithKey)]
+    pub fn decrypt_with_key(&self, key: &[u8]) -> Result<Vec<u8>, JsValue> {
+        let key_arr: [u8; 32] = key
+            .try_into()
+            .map_err(|_| JsValue::from_str("application secret key must be 32 bytes"))?;
+        self.0
+            .try_decrypt(SymmetricKey::from(key_arr))
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }
 

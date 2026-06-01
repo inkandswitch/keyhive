@@ -154,6 +154,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     #[instrument(skip_all)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
         parents: NonEmpty<Agent<F, S, T, L>>,
         initial_content_heads: NonEmpty<T>,
@@ -432,6 +433,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.merge_cgka_op(op)
     }
 
+    /// Reset the CGKA owner to `owner_id`, preserving `owner_sks`.
+    pub fn reset_cgka_owner(&mut self, owner_id: IndividualId) -> Result<(), CgkaError> {
+        let owner_sks = self.cgka()?.owner_sks().clone();
+        self.cgka = Some(self.cgka()?.with_new_owner(owner_id, owner_sks)?);
+        Ok(())
+    }
+
     pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
         self.cgka()?.ops()
     }
@@ -441,7 +449,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &mut self,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<Signed<CgkaOperation>, EncryptError> {
+    ) -> Result<(Signed<CgkaOperation>, ShareKey, ShareSecretKey), EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
         let (_, op) = self
@@ -450,18 +458,18 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             .update(new_share_key, new_share_secret_key, signer, csprng)
             .await
             .map_err(EncryptError::UnableToPcsUpdate)?;
-        Ok(op)
+        Ok((op, new_share_key, new_share_secret_key))
     }
 
     #[instrument(skip_all)]
-    pub async fn try_encrypt_content<R: rand::CryptoRng + rand::RngCore>(
+    pub async fn try_encrypt_content_keyed<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         content_ref: &T,
         content: &[u8],
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<EncryptedContentWithUpdate<T>, EncryptError> {
+    ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptError> {
         let (app_secret, maybe_update_op) = self
             .cgka_mut()
             .map_err(EncryptError::FailedToMakeAppSecret)?
@@ -469,15 +477,21 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             .await
             .map_err(EncryptError::FailedToMakeAppSecret)?;
 
+        let application_secret_key = app_secret.key();
         self.known_decryption_keys
-            .insert(content_ref.clone(), app_secret.key());
+            .insert(content_ref.clone(), application_secret_key);
 
-        Ok(EncryptedContentWithUpdate {
-            encrypted_content: app_secret
-                .try_encrypt(content)
-                .map_err(EncryptError::EncryptionFailed)?,
-            update_op: maybe_update_op,
-        })
+        let encrypted_content = app_secret
+            .try_encrypt(content)
+            .map_err(EncryptError::EncryptionFailed)?;
+
+        Ok((
+            EncryptedContentWithUpdate {
+                encrypted_content,
+                update_op: maybe_update_op,
+            },
+            application_secret_key,
+        ))
     }
 
     #[instrument(skip_all)]
@@ -485,6 +499,16 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
+        self.try_decrypt_content_keyed(encrypted_content)
+            .map(|(plaintext, _key)| plaintext)
+    }
+
+    /// Decrypt content and also return the application secret key that was used.
+    #[instrument(skip_all)]
+    pub fn try_decrypt_content_keyed<P: for<'de> Deserialize<'de>>(
+        &mut self,
+        encrypted_content: &EncryptedContent<P, T>,
+    ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
         let decrypt_key = self
             .cgka_mut()
             .map_err(|_| DecryptError::KeyNotFound)?
@@ -506,7 +530,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         // if expected_siv != encrypted_content.nonce {
         //     Err(DecryptError::SivMismatch)?;
         // }
-        Ok(plaintext)
+        Ok((plaintext, decrypt_key))
     }
 
     #[instrument(skip_all)]

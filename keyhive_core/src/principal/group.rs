@@ -247,8 +247,17 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         doc_id: DocumentId,
     ) -> HashMap<IndividualId, ShareKey> {
         let mut prekeys = HashMap::new();
-        for (agent, _access) in self.transitive_members().await.values() {
-            prekeys.extend(agent.pick_individual_prekeys(doc_id).await.iter());
+        let public_id = crate::principal::public::Public.id();
+        for (id, (agent, _access)) in self.transitive_members().await.iter() {
+            // Public must always be added with its single well-known key.
+            if *id == public_id {
+                prekeys.insert(
+                    IndividualId(public_id),
+                    crate::principal::public::Public.share_key(),
+                );
+            } else {
+                prekeys.extend(agent.pick_individual_prekeys(doc_id).await.iter());
+            }
         }
         prekeys
     }

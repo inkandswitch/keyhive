@@ -57,20 +57,27 @@ impl Hash for Cgka {
 }
 
 impl Cgka {
+    fn insert_public_sks(cgka: &mut beekem::cgka::Cgka) {
+        use crate::principal::public::Public;
+        cgka.owner_sks
+            .insert(Public.share_key(), Public.share_secret_key());
+    }
+
     pub async fn new<F: FutureForm, S: AsyncSigner<F>>(
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
         signer: &S,
     ) -> Result<Self, CgkaError> {
-        beekem::cgka::Cgka::new(
+        let mut inner = beekem::cgka::Cgka::new(
             TreeId(doc_id.verifying_key()),
             MemberId(owner_id.verifying_key()),
             owner_pk,
             signer,
         )
-        .await
-        .map(Cgka)
+        .await?;
+        Self::insert_public_sks(&mut inner);
+        Ok(Cgka(inner))
     }
 
     pub fn new_from_init_add(
@@ -79,13 +86,14 @@ impl Cgka {
         owner_pk: ShareKey,
         init_add_op: Signed<CgkaOperation>,
     ) -> Result<Self, CgkaError> {
-        beekem::cgka::Cgka::new_from_init_add(
+        let mut inner = beekem::cgka::Cgka::new_from_init_add(
             TreeId(doc_id.verifying_key()),
             MemberId(owner_id.verifying_key()),
             owner_pk,
             init_add_op,
-        )
-        .map(Cgka)
+        )?;
+        Self::insert_public_sks(&mut inner);
+        Ok(Cgka(inner))
     }
 
     pub fn with_new_owner(
@@ -93,9 +101,11 @@ impl Cgka {
         my_id: IndividualId,
         owner_sks: ShareKeyMap,
     ) -> Result<Self, CgkaError> {
-        self.0
-            .with_new_owner(MemberId(my_id.verifying_key()), owner_sks)
-            .map(Cgka)
+        let mut inner = self
+            .0
+            .with_new_owner(MemberId(my_id.verifying_key()), owner_sks)?;
+        Self::insert_public_sks(&mut inner);
+        Ok(Cgka(inner))
     }
 
     pub fn init_add_op(&self) -> Signed<CgkaOperation> {
@@ -104,6 +114,11 @@ impl Cgka {
 
     pub fn ops_count(&self) -> usize {
         self.0.ops_count()
+    }
+
+    pub fn try_pcs_key_hash(&mut self) -> Result<Digest<PcsKey>, CgkaError> {
+        let pcs_key = self.0.pcs_key_from_tree_root()?;
+        Ok(Digest::hash(&pcs_key))
     }
 
     pub fn owner_sks(&self) -> &ShareKeyMap {
