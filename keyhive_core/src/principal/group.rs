@@ -784,6 +784,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                             }
                         }
                     } else if d.issuer != self.verifying_key() {
+                        // Unreachable for validated state: both the live receive
+                        // path (`add_delegation`) and archive reification
+                        // (`try_from_archive`'s `reify_ops`) reject a root
+                        // delegation that is not self-signed by the group before
+                        // it reaches here.
                         debug_assert!(false, "Delegation without valid root proof");
                         continue;
                     }

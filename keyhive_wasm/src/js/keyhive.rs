@@ -304,6 +304,14 @@ impl JsKeyhive {
         Ok(())
     }
 
+    #[wasm_bindgen(js_name = tryPcsKeyHash)]
+    pub async fn try_pcs_key_hash(&self, doc: &JsDocument) -> Option<Vec<u8>> {
+        self.0
+            .try_pcs_key_hash(doc.inner.dupe())
+            .await
+            .map(|d| d.as_slice().to_vec())
+    }
+
     #[wasm_bindgen(js_name = rotatePrekey)]
     pub async fn rotate_prekey(&self, prekey: &JsShareKey) -> Result<JsShareKey, JsSigningError> {
         init_span!("JsKeyhive::rotate_prekey");
@@ -694,6 +702,7 @@ impl JsKeyhive {
         self.0
             .import_prekey_secrets(bytes)
             .await
+            .map(|_| ())
             .map_err(JsSerializationError::from)
     }
 

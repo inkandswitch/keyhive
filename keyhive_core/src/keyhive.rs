@@ -54,7 +54,9 @@ use crate::{
     },
     util::content_addressed_map::CaMap,
 };
-use beekem::{encrypted::EncryptedContent, error::CgkaError, operation::CgkaOperation};
+use beekem::{
+    encrypted::EncryptedContent, error::CgkaError, operation::CgkaOperation, pcs_key::PcsKey,
+};
 use derive_where::derive_where;
 use dupe::{Dupe, OptionDupedExt};
 use future_form::FutureForm;
@@ -483,7 +485,7 @@ impl<
         other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>], // TODO make this automatic
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
         let signer = { self.active.lock().await.signer.clone() };
-        match resource {
+        let update = match resource {
             Membered::Group(group_id, group) => {
                 let mut update = group
                     .lock()
@@ -528,15 +530,23 @@ impl<
                     }
                 }
 
-                Ok(update)
+                update
             }
             Membered::Document(_, doc) => {
                 let mut locked = doc.lock().await;
                 locked
                     .add_member(to_add, can, &signer, other_relevant_docs)
-                    .await
+                    .await?
             }
+        };
+
+        for cgka_op in &update.cgka_ops {
+            self.event_listener
+                .on_cgka_op(&Arc::new(cgka_op.clone()))
+                .await;
         }
+
+        Ok(update)
     }
 
     #[allow(clippy::type_complexity)]
@@ -621,6 +631,12 @@ impl<
             }
         }
 
+        for cgka_op in &update.cgka_ops {
+            self.event_listener
+                .on_cgka_op(&Arc::new(cgka_op.clone()))
+                .await;
+        }
+
         Ok(update)
     }
 
@@ -650,6 +666,13 @@ impl<
             self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
         }
         Ok(result)
+    }
+
+    pub async fn try_pcs_key_hash(
+        &self,
+        doc: Arc<Mutex<Document<F, S, T, L>>>,
+    ) -> Option<Digest<PcsKey>> {
+        doc.lock().await.cgka_mut().ok()?.try_pcs_key_hash().ok()
     }
 
     pub async fn try_decrypt_content(
@@ -682,10 +705,13 @@ impl<
     ) -> Result<Signed<CgkaOperation>, EncryptError> {
         let signer = { self.active.lock().await.signer.clone() };
         let mut locked_csprng = self.csprng.lock().await;
-        doc.lock()
+        let op = doc
+            .lock()
             .await
             .pcs_update(&signer, &mut *locked_csprng)
-            .await
+            .await?;
+        self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
+        Ok(op)
     }
 
     #[instrument(skip_all)]
@@ -1561,6 +1587,8 @@ impl<
         let subject_id = delegation.subject_id();
         let delegation = Arc::new(delegation);
         let mut found = false;
+        let mut promoted_doc: Option<(DocumentId, Arc<Mutex<Document<F, S, T, L>>>)> = None;
+        let mut promoted_group: Option<(GroupId, Arc<Mutex<Group<F, S, T, L>>>)> = None;
         {
             if let Some(group) = self.groups.lock().await.get(&GroupId(subject_id)) {
                 found = true;
@@ -1582,9 +1610,40 @@ impl<
                 .remove(&IndividualId(subject_id))
             {
                 found = true;
-                self.promote_individual_to_group(indie, delegation.clone())
-                    .await;
+                // A delegation whose subject is this id has arrived, so the
+                // placeholder Individual we held for it (e.g. from unknown-
+                // delegate recovery) is wrong: the id is really a Group or
+                // Document. If the delegation carries content heads for this
+                // subject, it is a Document, so reify it as one. Otherwise it
+                // would be mis-modeled as a group and lose its content heads.
+                if let Some(content_heads) = static_dlg
+                    .payload
+                    .after_content
+                    .get(&subject_id.into())
+                    .and_then(|content_heads| NonEmpty::collect(content_heads.iter().cloned()))
+                {
+                    let doc = self
+                        .promote_individual_to_document(indie, delegation.dupe(), content_heads)
+                        .await?;
+                    let doc_id = doc.lock().await.doc_id();
+                    promoted_doc = Some((doc_id, doc));
+                } else {
+                    let group = self
+                        .promote_individual_to_group(indie, delegation.dupe())
+                        .await;
+                    let group_id = group.lock().await.group_id();
+                    promoted_group = Some((group_id, group));
+                }
             }
+        }
+        // Register the reified group/document only after the lookup locks above
+        // are released, to avoid re-locking those maps while their guards are
+        // still held by the lookup block.
+        if let Some((doc_id, doc)) = promoted_doc {
+            self.docs.lock().await.insert(doc_id, doc);
+        }
+        if let Some((group_id, group)) = promoted_group {
+            self.groups.lock().await.insert(group_id, group);
         }
         if !found {
             let group = Group::new(
@@ -1790,12 +1849,61 @@ impl<
             .await,
         ));
 
-        let agent = Agent::Group(group.lock().await.group_id(), group.dupe());
+        let group_id = group.lock().await.group_id();
+        let agent = Agent::Group(group_id, group.dupe());
+        self.relink_promoted_agent(&agent).await;
+
+        group
+    }
+
+    /// Reify a placeholder [`Individual`] as the [`Document`] it actually is.
+    ///
+    /// This mirrors [`Self::promote_individual_to_group`] for the case where
+    /// the delegation that defines the subject carries content heads, which
+    /// marks the subject as a [`Document`] rather than a plain [`Group`].
+    /// Without this, a document referenced as a delegate before its defining
+    /// event arrives would be reified as a group and lose its content heads.
+    ///
+    /// The returned document is not yet registered in the docs map. Callers
+    /// register it after releasing any held lookup locks.
+    async fn promote_individual_to_document(
+        &self,
+        individual: Arc<Mutex<Individual>>,
+        head: Arc<Signed<Delegation<F, S, T, L>>>,
+        content_heads: NonEmpty<T>,
+    ) -> Result<Arc<Mutex<Document<F, S, T, L>>>, ReceiveStaticDelegationError<F, S, T, L>> {
+        let indie = individual.lock().await.clone();
+        let group = Group::from_individual(
+            indie,
+            head,
+            self.delegations.dupe(),
+            self.revocations.dupe(),
+            self.event_listener.clone(),
+        )
+        .await;
+
+        let doc = Document::from_group(group, content_heads).await?;
+        let doc_id = doc.doc_id();
+        let doc = Arc::new(Mutex::new(doc));
+
+        let agent = Agent::Document(doc_id, doc.dupe());
+        self.relink_promoted_agent(&agent).await;
+
+        Ok(doc)
+    }
+
+    /// Rewrite the membership ops that referenced a placeholder agent so they
+    /// point at its reified [`Group`]/[`Document`] identity.
+    ///
+    /// Delegations that delegate to this agent's id and revocations whose
+    /// subject is this agent's id are re-inserted with the resolved agent.
+    async fn relink_promoted_agent(&self, agent: &Agent<F, S, T, L>) {
+        let agent_id: Identifier = agent.id();
 
         {
             let mut locked_delegations = self.delegations.lock().await;
             for (_digest, dlg) in locked_delegations.clone().iter() {
-                if dlg.payload.delegate == agent {
+                if dlg.payload.delegate.id() == agent_id {
                     locked_delegations.insert(Arc::new(Signed::new(
                         Delegation {
                             delegate: agent.dupe(),
@@ -1812,10 +1920,9 @@ impl<
         }
 
         {
-            let group_id = group.lock().await.id();
             let mut locked_revocations = self.revocations.lock().await;
             for (_digest, rev) in locked_revocations.clone().iter() {
-                if rev.payload.subject_id() == group_id {
+                if rev.payload.subject_id() == agent_id {
                     locked_revocations.insert(Arc::new(Signed::new(
                         Revocation {
                             revoke: self
@@ -1838,8 +1945,6 @@ impl<
                 }
             }
         }
-
-        group
     }
 
     /// Export prekey secrets as an opaque blob for backup/migration.
@@ -1853,8 +1958,17 @@ impl<
     }
 
     /// Import prekey secrets from a previously exported blob, extending the existing set.
-    pub async fn import_prekey_secrets(&self, bytes: &[u8]) -> Result<(), bincode::Error> {
-        self.active.lock().await.import_prekey_secrets(bytes).await
+    ///
+    /// After importing, any pending events that were stuck due to missing
+    /// prekey secrets (e.g. `UnknownInvitePrekey`) are automatically retried.
+    pub async fn import_prekey_secrets(
+        &self,
+        bytes: &[u8],
+    ) -> Result<Vec<Arc<StaticEvent<T>>>, bincode::Error> {
+        let active = self.active.lock().await;
+        active.import_prekey_secrets(bytes).await?;
+        drop(active);
+        Ok(self.ingest_unsorted_static_events(vec![]).await)
     }
 
     #[instrument(skip_all)]
@@ -2073,6 +2187,23 @@ impl<
                     .ok_or(TryFromArchiveError::MissingDelegation(dlg_hash.coerce()))?
                     .dupe();
 
+                // Same invariant `add_delegation` enforces on the live receive
+                // path: a root delegation (no proof) must be self-signed by the
+                // group. Archive reification bypasses `add_delegation`, so we
+                // re-check it here at the trust boundary and skip anything
+                // malformed rather than letting it reach `rebuild` (where it
+                // would otherwise be silently dropped).
+                if actual_dlg.payload().proof.is_none()
+                    && actual_dlg.issuer != group.verifying_key()
+                {
+                    tracing::warn!(
+                        "try_from_archive: skipping delegation with mismatched root issuer (group={:?}, issuer={:?})",
+                        group.group_id(),
+                        Identifier::from(actual_dlg.issuer),
+                    );
+                    continue;
+                }
+
                 group.state.delegation_heads.insert(actual_dlg);
             }
 
@@ -2254,6 +2385,7 @@ impl<
 
             if next_epoch.is_empty() {
                 tracing::debug!("Finished ingesting static events");
+                self.pending_events.lock().await.clear();
                 return Vec::new();
             }
 
@@ -2263,6 +2395,34 @@ impl<
                     epoch_len,
                     err
                 );
+
+                // Recovery: register placeholder individuals for unknown agents
+                // referenced as delegates in stuck delegations. At this point,
+                // all Groups/Documents that could be created from other events
+                // have been created, so any remaining UnknownAgent is genuinely
+                // an Individual whose prekey events are missing from this batch.
+                let mut recovered = false;
+                for stuck_event in &next_epoch {
+                    if let StaticEvent::Delegated(d) = stuck_event {
+                        let delegate_id = d.payload.delegate;
+                        if self.get_agent(delegate_id).await.is_none() {
+                            tracing::info!(
+                                "Auto-registering unknown delegate {:?} as placeholder individual",
+                                delegate_id
+                            );
+                            let indie =
+                                Arc::new(Mutex::new(Individual::from_id(delegate_id.into())));
+                            self.register_individual(indie).await;
+                            recovered = true;
+                        }
+                    }
+                }
+
+                if recovered {
+                    epoch = next_epoch;
+                    continue;
+                }
+
                 let new_pending: Vec<Arc<StaticEvent<T>>> =
                     next_epoch.clone().into_iter().map(Arc::new).collect();
                 drop(mem::replace(

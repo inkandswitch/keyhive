@@ -204,7 +204,11 @@ impl BeeKem {
         owner_id: MemberId,
         owner_sks: &mut ShareKeyMap,
     ) -> Result<ShareSecretKey, CgkaError> {
-        let leaf_idx = *self.leaf_index_for_id(owner_id)?;
+        let leaf_idx = match self.leaf_index_for_id(owner_id) {
+            Ok(idx) => *idx,
+            Err(CgkaError::IdentifierNotFound) => *self.leaf_index_for_id(MemberId::public())?,
+            Err(e) => return Err(e),
+        };
         if !self.has_root_key() {
             return Err(CgkaError::NoRootKey);
         }

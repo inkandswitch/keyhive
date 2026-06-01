@@ -251,6 +251,7 @@ mod tests {
             hash1,
             [1u8; 32],
             [1u8; 32].into(),
+            None,
         ));
 
         let ciphertext2 = Arc::new(EncryptedContent::new(
@@ -264,6 +265,7 @@ mod tests {
             hash2,
             [2u8; 32],
             [2u8; 32].into(),
+            None,
         ));
 
         let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
@@ -283,6 +285,7 @@ mod tests {
                 hash3,
                 [3u8; 32],
                 [3u8; 32].into(),
+                None,
             )))
             .await;
 

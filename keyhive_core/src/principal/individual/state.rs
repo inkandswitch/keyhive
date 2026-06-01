@@ -31,11 +31,17 @@ pub struct PrekeyState {
 }
 
 impl PrekeyState {
-    /// Create a new, empty [`PrekeyState`].
+    /// Create a new [`PrekeyState`] with an initial operation.
     pub fn new(initial_op: KeyOp) -> Self {
         let mut ops = CaMap::new();
         ops.insert(Arc::new(initial_op));
         Self { ops }
+    }
+
+    /// Create a [`PrekeyState`] with no operations.
+    /// Used for placeholder individuals whose prekey events haven't arrived yet.
+    pub fn empty() -> Self {
+        Self { ops: CaMap::new() }
     }
 
     /// Extend a [`PrekeyState`] with elements of an iterator of [`Signed<KeyOp>`]s.

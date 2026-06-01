@@ -414,12 +414,11 @@ mod tests {
             Arc::new(EncryptedContent::<String, [u8; 32]>::new(
                 nonce,
                 bytes,
-                //
                 pcs_key_hash,
                 pcs_update_op_hash,
-                //
                 cref,
                 Digest::hash(&vec![]),
+                None,
             )),
             key,
         )

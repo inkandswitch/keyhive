@@ -462,7 +462,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         signer: &S,
         csprng: &mut R,
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptError> {
-        let (app_secret, maybe_update_op) = self
+        let (app_secret, maybe_update_op, encrypted_pred_keys) = self
             .cgka_mut()
             .map_err(EncryptError::FailedToMakeAppSecret)?
             .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
@@ -474,7 +474,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
         Ok(EncryptedContentWithUpdate {
             encrypted_content: app_secret
-                .try_encrypt(content)
+                .try_encrypt(content, encrypted_pred_keys)
                 .map_err(EncryptError::EncryptionFailed)?,
             update_op: maybe_update_op,
         })

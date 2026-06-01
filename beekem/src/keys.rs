@@ -47,6 +47,16 @@ impl ShareKeyMap {
         Ok(buf)
     }
 
+    /// The number of share keys in the map.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the map contains no share keys.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn extend(&mut self, other: &ShareKeyMap) {
         self.0.extend(other.0.iter());
     }
