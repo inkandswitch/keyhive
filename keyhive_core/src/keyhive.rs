@@ -128,6 +128,27 @@ pub struct Keyhive<
     _plaintext_phantom: PhantomData<P>,
 }
 
+/// Cloning a [`Keyhive`] is `O(1)` in the size of the op-graph, not a copy of
+/// it: every field is `Arc`-backed (a refcount bump), `PhantomData`, a
+/// fixed-size `Copy` value (the verifying key), or itself [`Dupe`]
+/// (`ciphertext_store`, `event_listener`). The clones share live internal state,
+/// so a duped handle observes ongoing mutations rather than a frozen snapshot.
+impl<F, S, T, P, C, L, R> Dupe for Keyhive<F, S, T, P, C, L, R>
+where
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone + Dupe,
+    L: MembershipListener<F, S, T> + Dupe,
+    R: rand::CryptoRng,
+    Self: Clone,
+{
+    fn dupe(&self) -> Self {
+        self.clone()
+    }
+}
+
 impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
@@ -2716,6 +2737,13 @@ mod tests {
         Arc<Mutex<MemoryCiphertextStore<[u8; 32], Vec<u8>>>>,
         NoListener,
     >;
+
+    // Contract check: the default `Keyhive` (in-memory store, no listener,
+    // `OsRng`) must stay a cheap `Dupe` (O(1) refcount clone). This fails to
+    // compile if a field or the default store/listener stops being `Dupe`,
+    // catching the regression here rather than at a downstream `.dupe()` call.
+    const fn assert_dupe<T: Dupe>() {}
+    const _: () = assert_dupe::<Keyhive<Sendable, MemorySigner>>();
 
     async fn make_keyhive() -> TestKeyhive {
         let sk = MemorySigner::generate(&mut rand::rngs::OsRng);

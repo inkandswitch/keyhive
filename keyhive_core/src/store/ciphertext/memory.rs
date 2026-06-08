@@ -9,10 +9,19 @@ use std::{
 };
 use tracing::instrument;
 
-#[derive(Debug, Clone, Dupe)]
+#[derive(Debug, Clone)]
 pub struct MemoryCiphertextStore<Cr: ContentRef, P>(
     pub(crate) Arc<Mutex<MemoryCiphertextStoreInner<Cr, P>>>,
 );
+
+impl<Cr: ContentRef, P> Dupe for MemoryCiphertextStore<Cr, P>
+where
+    Self: Clone,
+{
+    fn dupe(&self) -> Self {
+        self.clone()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MemoryCiphertextStoreInner<Cr: ContentRef, P> {
