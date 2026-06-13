@@ -1857,6 +1857,24 @@ impl<
         self.active.lock().await.import_prekey_secrets(bytes).await
     }
 
+    /// Export active prekey state as an opaque blob for backup/migration.
+    ///
+    /// Unlike `export_prekey_secrets`, this includes the public prekey operation
+    /// state used by the existing contact card in addition to the secret pairs.
+    ///
+    /// # Security
+    ///
+    /// The returned bytes contain unencrypted secret key material.
+    /// Callers are responsible for protecting this data at rest and in transit.
+    pub async fn export_active_prekey_archive(&self) -> Result<Vec<u8>, bincode::Error> {
+        self.active.lock().await.export_prekey_archive().await
+    }
+
+    /// Import active prekey state from a previously exported archive.
+    pub async fn import_active_prekey_archive(&self, bytes: &[u8]) -> Result<(), bincode::Error> {
+        self.active.lock().await.import_prekey_archive(bytes).await
+    }
+
     #[instrument(skip_all)]
     pub async fn into_archive(&self) -> Archive<T> {
         let topsorted_ops = {
