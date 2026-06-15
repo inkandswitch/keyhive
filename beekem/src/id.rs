@@ -21,8 +21,7 @@ impl MemberId {
     /// This is the verifying key derived from the all-zeros signing key, the
     /// shared identity used to grant access to anyone. Its secret key is
     /// public knowledge by design, so it provides no confidentiality on its
-    /// own; it only marks content as readable by any peer that has the
-    /// document's membership events.
+    /// own.
     pub fn public() -> Self {
         MemberId(ed25519_dalek::VerifyingKey::from(
             &ed25519_dalek::SigningKey::from([0u8; 32]),

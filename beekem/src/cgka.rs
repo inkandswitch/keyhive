@@ -189,10 +189,7 @@ impl Cgka {
             let pcs_key = self.pcs_key_from_tree_root()?;
             let pcs_hash = Digest::hash(&pcs_key);
             if !self.pcs_keys.contains_key(&pcs_hash) {
-                // `has_pcs_key()` above guarantees a single head, so this is the
-                // unique op that established the current root/PCS key. The
-                // predecessor walk in `encrypt_predecessor_pcs_keys` relies on
-                // this association being deterministic across peers.
+                // `has_pcs_key()` above guarantees a single head.
                 debug_assert!(self.ops_graph.has_single_head());
                 if let Some(head) = self.ops_graph.cgka_op_heads.iter().next() {
                     self.insert_pcs_key(&pcs_key, *head);
@@ -201,16 +198,14 @@ impl Cgka {
             pcs_key
         };
         let pcs_key_hash = Digest::hash(&current_pcs_key);
-        let op_hash_for_blob = self
+        let op_hash_for_content = self
             .pcs_key_ops
             .get(&pcs_key_hash)
             .expect("PcsKey hash should be present because we derived it above");
 
         // Collect immediate predecessor PCS keys for key chaining.
-        // These are PCS keys whose op_hash is a direct predecessor of the
-        // current encryption op in the CGKA ops graph.
         let encrypted_pred_keys =
-            self.encrypt_predecessor_pcs_keys(&current_pcs_key, op_hash_for_blob);
+            self.encrypt_predecessor_pcs_keys(&current_pcs_key, op_hash_for_content);
 
         let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id.as_bytes());
         Ok((
@@ -218,7 +213,7 @@ impl Cgka {
                 &nonce,
                 content_ref,
                 &Digest::hash(pred_refs),
-                op_hash_for_blob,
+                op_hash_for_content,
             ),
             op,
             encrypted_pred_keys,
@@ -229,13 +224,6 @@ impl Cgka {
     ///
     /// We must first derive a [`PcsKey`] for the encrypted data's associated
     /// hashes. Then we use that [`PcsKey`] to derive an [`ApplicationSecret`].
-    ///
-    /// If direct key derivation fails but the blob carries encrypted predecessor
-    /// keys, we cannot use them here (we'd need the current blob's PCS key to
-    /// decrypt them, which is what we're trying to find). Predecessor keys are
-    /// useful when decrypting OTHER (older) blobs after successfully decrypting
-    /// a newer blob. Use [`ingest_predecessor_keys`] after a successful decrypt
-    /// to populate the cache.
     #[instrument(skip_all)]
     pub fn decryption_key_for<T, Cr: ContentRef>(
         &mut self,
@@ -248,7 +236,7 @@ impl Cgka {
         }
 
         // After successfully deriving the PCS key, extract and cache predecessor
-        // keys so older blobs become decryptable.
+        // keys so older content becomes decryptable.
         if let Some(ref epk) = encrypted.encrypted_pred_pcs_keys {
             let symmetric_key: SymmetricKey = pcs_key.into();
             match epk.decrypt(symmetric_key) {
@@ -260,9 +248,7 @@ impl Cgka {
                         }
                     }
                 }
-                // Best-effort: a predecessor blob we can't decrypt should not
-                // fail the main decryption, but log it so chaining gaps are
-                // diagnosable.
+                // Predecessor content we can't decrypt should not fail the main decryption.
                 Err(e) => tracing::debug!("failed to decrypt predecessor PCS keys: {e}"),
             }
         }
@@ -549,11 +535,8 @@ impl Cgka {
             Ok(*pcs_key.clone())
         } else {
             if self.has_pcs_key() {
-                // Try deriving from the current tree root. If the tree walk
-                // fails (e.g. this peer was added after the last PCS update
-                // and has no encrypted path secrets), fall through to
-                // derive_pcs_key_for_op which rebuilds at the encryption
-                // epoch and can use a different leaf (like Public's).
+                // Try deriving from the current tree root. If this fails,
+                // fall through to derive_pcs_key_for_op in case Public is a member.
                 if let Ok(pcs_key) = self.pcs_key_from_tree_root() {
                     if &Digest::hash(&pcs_key) == pcs_key_hash {
                         return Ok(pcs_key);
@@ -636,18 +619,7 @@ impl Cgka {
 
     /// Collect and encrypt the immediate predecessor PCS keys for key chaining.
     ///
-    /// Walks back from `current_op_hash` through the CGKA ops graph to the
-    /// nearest ancestor ops that produced a PCS key we hold. Ops that do not
-    /// produce a stored PCS key (such as `Add`/`Remove`) are skipped over so
-    /// the walk lands on the previous epoch's key rather than stopping at an
-    /// intervening membership change.
-    ///
-    /// Only that one step back is attached. A receiver who can decrypt this
-    /// blob recovers the previous epoch's key, then reaches still-older epochs
-    /// transitively, because each older blob carries its own predecessor keys.
-    /// Attaching the full history instead would let anyone who decrypts a
-    /// single blob recover every earlier epoch's key, defeating the
-    /// confidentiality boundary that epoch rotation creates.
+    /// Ops that do not produce a PCS key (such as `Add`/`Remove`) are skipped over.
     fn encrypt_predecessor_pcs_keys(
         &self,
         current_pcs_key: &PcsKey,
@@ -655,7 +627,7 @@ impl Cgka {
     ) -> Option<EncryptedPredecessorKeys> {
         // Reverse index (op_hash -> pcs_key_hash) so the walk below resolves
         // each op's PCS key with a direct lookup instead of scanning
-        // `pcs_key_ops`, which is keyed the other way.
+        // `pcs_key_ops`.
         let op_to_pcs: Map<Digest<Signed<CgkaOperation>>, Digest<PcsKey>> = self
             .pcs_key_ops
             .iter()
@@ -675,7 +647,7 @@ impl Cgka {
                 continue;
             }
             if let Some(pcs_key) = op_to_pcs.get(&op_hash).and_then(|h| self.pcs_keys.get(h)) {
-                // Nearest PCS key on this path; record it and stop descending.
+                // Nearest PCS key on this path. Record it and stop descending.
                 predecessors.push(PredecessorPcsKey {
                     op_hash,
                     pcs_key: *pcs_key.clone(),

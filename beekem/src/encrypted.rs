@@ -14,7 +14,8 @@ use keyhive_crypto::{
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-/// A predecessor PCS key entry: the op hash that produced the key, plus the key itself.
+/// A predecessor PCS key entry. Includes the op hash that produced the key
+/// plus the key itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PredecessorPcsKey {
     /// The hash of the CGKA operation that produced [`Self::pcs_key`].
@@ -24,8 +25,7 @@ pub struct PredecessorPcsKey {
 }
 
 /// Predecessor PCS keys encrypted under the current PCS key.
-/// Enables key chaining: receivers who can decrypt the current blob
-/// can extract predecessor keys to decrypt earlier blobs.
+/// Enables key chaining.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct EncryptedPredecessorKeys {
     /// The synthetic IV used to encrypt the predecessor entries.
@@ -35,7 +35,7 @@ pub struct EncryptedPredecessorKeys {
 }
 
 impl EncryptedPredecessorKeys {
-    /// Each entry is 64 bytes: 32 for op_hash + 32 for PcsKey (ShareSecretKey).
+    /// Each entry is 64 bytes: 32 for op_hash and 32 for PcsKey (ShareSecretKey).
     const ENTRY_SIZE: usize = 32 + 32;
 
     /// Serialize and encrypt the `predecessors` under `key` (the current PCS
@@ -60,9 +60,6 @@ impl EncryptedPredecessorKeys {
 
     /// Decrypt and deserialize the predecessor entries using `key` (the
     /// current PCS key as a [`SymmetricKey`]).
-    ///
-    /// Returns [`CgkaError::Decryption`] if `key` does not match, or if the
-    /// decrypted length is not a whole number of [`Self::ENTRY_SIZE`] entries.
     pub fn decrypt(&self, key: SymmetricKey) -> Result<Vec<PredecessorPcsKey>, CgkaError> {
         use alloc::format;
         let mut buf = self.ciphertext.clone();
@@ -109,9 +106,7 @@ pub struct EncryptedContent<T, Cr: ContentRef> {
     /// The predecessor content ref hashes used to derive the application secret
     /// for encrypting.
     pub pred_refs: Digest<Vec<Cr>>,
-    /// Predecessor PCS keys encrypted under the current PCS key.
-    /// Enables receivers who can decrypt this blob to also decrypt
-    /// blobs encrypted at earlier epochs (key chaining).
+    /// Predecessor PCS keys encrypted under the current PCS key. Enables key chaining.
     #[serde(default)]
     pub encrypted_pred_pcs_keys: Option<EncryptedPredecessorKeys>,
     /// The type of the data that was encrypted.
