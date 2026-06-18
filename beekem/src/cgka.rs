@@ -68,6 +68,24 @@ pub struct Cgka {
 
     original_member: (MemberId, ShareKey),
     init_add_op: Signed<CgkaOperation>,
+
+    /// Whether this document provides forward secrecy.
+    ///
+    /// When `true` (the default for a forward-secret group), a member added at
+    /// a later epoch cannot derive the keys for content encrypted before they
+    /// joined. When `false`, every `Update` operation carries the encrypted PCS
+    /// keys of its immediate predecessors (the predecessor key chain), so any
+    /// member who can read the current epoch can follow the chain backwards and
+    /// read the document's entire prior history. The flag only governs what a
+    /// writer emits: a reader always follows whatever chain is present.
+    #[serde(default = "default_forward_secrecy")]
+    forward_secrecy: bool,
+}
+
+/// Forward secrecy defaults to enabled so that documents deserialized from
+/// before this field existed keep their original (forward-secret) semantics.
+fn default_forward_secrecy() -> bool {
+    true
 }
 
 impl Hash for Cgka {
@@ -86,6 +104,7 @@ impl Hash for Cgka {
             .hash(state);
         self.original_member.hash(state);
         self.init_add_op.hash(state);
+        self.forward_secrecy.hash(state);
     }
 }
 
@@ -94,11 +113,12 @@ impl Cgka {
         doc_id: TreeId,
         owner_id: MemberId,
         owner_pk: ShareKey,
+        forward_secrecy: bool,
         signer: &S,
     ) -> Result<Self, CgkaError> {
         let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk);
         let signed_op = async_signer::try_sign_async::<F, _, _>(signer, init_add_op).await?;
-        Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op)
+        Self::new_from_init_add(doc_id, owner_id, owner_pk, forward_secrecy, signed_op)
     }
 
     #[instrument(skip_all)]
@@ -106,6 +126,7 @@ impl Cgka {
         doc_id: TreeId,
         owner_id: MemberId,
         owner_pk: ShareKey,
+        forward_secrecy: bool,
         init_add_op: Signed<CgkaOperation>,
     ) -> Result<Self, CgkaError> {
         let tree = BeeKem::new(doc_id, owner_id, owner_pk)?;
@@ -120,6 +141,7 @@ impl Cgka {
             pcs_key_ops: Map::new(),
             original_member: (owner_id, owner_pk),
             init_add_op: init_add_op.clone(),
+            forward_secrecy,
         };
         cgka.ops_graph.add_local_op(&init_add_op);
         Ok(cgka)
@@ -167,14 +189,7 @@ impl Cgka {
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<
-        (
-            ApplicationSecret<T>,
-            Option<Signed<CgkaOperation>>,
-            Option<EncryptedPredecessorKeys>,
-        ),
-        CgkaError,
-    > {
+    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
         let mut op = None;
         let current_pcs_key = if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
@@ -203,10 +218,6 @@ impl Cgka {
             .get(&pcs_key_hash)
             .expect("PcsKey hash should be present because we derived it above");
 
-        // Collect immediate predecessor PCS keys for key chaining.
-        let encrypted_pred_keys =
-            self.encrypt_predecessor_pcs_keys(&current_pcs_key, op_hash_for_content);
-
         let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id.as_bytes());
         Ok((
             current_pcs_key.derive_application_secret(
@@ -216,7 +227,6 @@ impl Cgka {
                 op_hash_for_content,
             ),
             op,
-            encrypted_pred_keys,
         ))
     }
 
@@ -233,24 +243,6 @@ impl Cgka {
             self.pcs_key_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)?;
         if !self.pcs_keys.contains_key(&encrypted.pcs_key_hash) {
             self.insert_pcs_key(&pcs_key, encrypted.pcs_update_op_hash);
-        }
-
-        // After successfully deriving the PCS key, extract and cache predecessor
-        // keys so older content becomes decryptable.
-        if let Some(ref epk) = encrypted.encrypted_pred_pcs_keys {
-            let symmetric_key: SymmetricKey = pcs_key.into();
-            match epk.decrypt(symmetric_key) {
-                Ok(pred_keys) => {
-                    for pred in pred_keys {
-                        let pred_hash = Digest::hash(&pred.pcs_key);
-                        if !self.pcs_keys.contains_key(&pred_hash) {
-                            self.insert_pcs_key(&pred.pcs_key, pred.op_hash);
-                        }
-                    }
-                }
-                // Predecessor content we can't decrypt should not fail the main decryption.
-                Err(e) => tracing::debug!("failed to decrypt predecessor PCS keys: {e}"),
-            }
         }
 
         let app_secret = pcs_key.derive_application_secret(
@@ -357,6 +349,12 @@ impl Cgka {
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
+        // When forward secrecy is disabled, cache the current epoch's PCS key and
+        // all of its ancestors before we rotate, so the new operation's
+        // predecessor chain can reference them.
+        if !self.forward_secrecy {
+            self.cache_current_epoch_chain();
+        }
         let (update_id, use_pk, use_sk) = if self.tree.contains_id(&self.owner_id) {
             (self.owner_id, new_pk, new_sk)
         } else {
@@ -377,11 +375,22 @@ impl Cgka {
                 .encrypt_path(update_id, use_pk, &mut self.owner_sks, csprng)?;
         if let Some((pcs_key, new_path)) = maybe_key_and_path {
             let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
+            // Build the predecessor key chain unless forward secrecy is enabled.
+            // The new operation's predecessors are the current heads, so we walk
+            // from them to the nearest PCS-bearing ancestors and encrypt those
+            // keys under this operation's own (new) PCS key.
+            let encrypted_pred_pcs_keys = if self.forward_secrecy {
+                None
+            } else {
+                let heads = self.ops_graph.cgka_op_heads.clone();
+                self.collect_predecessor_pcs_keys(&heads, &pcs_key)
+            };
             let op = CgkaOperation::Update {
                 id: update_id,
                 new_path: alloc::boxed::Box::new(new_path),
                 predecessors,
                 doc_id: self.doc_id,
+                encrypted_pred_pcs_keys,
             };
 
             let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
@@ -532,19 +541,31 @@ impl Cgka {
         update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
         if let Some(pcs_key) = self.pcs_keys.get(pcs_key_hash) {
-            Ok(*pcs_key.clone())
-        } else {
-            if self.has_pcs_key() {
-                // Try deriving from the current tree root. If this fails,
-                // fall through to derive_pcs_key_for_op in case Public is a member.
-                if let Ok(pcs_key) = self.pcs_key_from_tree_root() {
-                    if &Digest::hash(&pcs_key) == pcs_key_hash {
-                        return Ok(pcs_key);
+            return Ok(*pcs_key.clone());
+        }
+        if self.has_pcs_key() {
+            // Derive the current epoch's key from the tree root. If this fails,
+            // fall through to derive_pcs_key_for_op in case Public is a member.
+            if let Ok(pcs_key) = self.pcs_key_from_tree_root() {
+                // When the document is not forward-secret, the current epoch's
+                // operation carries the encrypted keys of its predecessors. Follow
+                // that chain to recover every ancestor epoch's key, including the
+                // target, without rebuilding the tree as a non-member.
+                if let Some(head) = self.ops_graph.cgka_op_heads.iter().next().copied() {
+                    if !self.pcs_keys.contains_key(&Digest::hash(&pcs_key)) {
+                        self.insert_pcs_key(&pcs_key, head);
                     }
+                    self.follow_predecessor_chain(head, &pcs_key);
+                }
+                if &Digest::hash(&pcs_key) == pcs_key_hash {
+                    return Ok(pcs_key);
+                }
+                if let Some(pcs_key) = self.pcs_keys.get(pcs_key_hash) {
+                    return Ok(*pcs_key.clone());
                 }
             }
-            self.derive_pcs_key_for_op(update_op_hash)
         }
+        self.derive_pcs_key_for_op(update_op_hash)
     }
 
     /// Derive [`PcsKey`] for this operation hash.
@@ -585,6 +606,7 @@ impl Cgka {
             self.doc_id,
             self.original_member.0,
             self.original_member.1,
+            self.forward_secrecy,
             self.init_add_op.clone(),
         )?
         .with_new_owner(self.owner_id, self.owner_sks.clone())?;
@@ -608,6 +630,7 @@ impl Cgka {
             self.doc_id,
             self.original_member.0,
             self.original_member.1,
+            self.forward_secrecy,
             self.init_add_op.clone(),
         )?
         .with_new_owner(self.owner_id, self.owner_sks.clone())?;
@@ -617,13 +640,19 @@ impl Cgka {
         Ok(pcs_key)
     }
 
-    /// Collect and encrypt the immediate predecessor PCS keys for key chaining.
+    /// Collect and encrypt the nearest PCS-bearing ancestor keys reachable from
+    /// `frontier_heads`, encrypting them under `current_pcs_key`.
     ///
-    /// Ops that do not produce a PCS key (such as `Add`/`Remove`) are skipped over.
-    fn encrypt_predecessor_pcs_keys(
+    /// `frontier_heads` are the immediate predecessors of the operation being
+    /// built (its parent heads). Ops that do not produce a PCS key (such as
+    /// `Add`/`Remove`) are skipped over so the walk lands on the nearest update
+    /// operation on each path. The result is the predecessor key chain link for
+    /// a single operation: following it recovers the immediate predecessor
+    /// epochs, each of which carries its own link.
+    fn collect_predecessor_pcs_keys(
         &self,
+        frontier_heads: &Set<Digest<Signed<CgkaOperation>>>,
         current_pcs_key: &PcsKey,
-        current_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Option<EncryptedPredecessorKeys> {
         // Reverse index (op_hash -> pcs_key_hash) so the walk below resolves
         // each op's PCS key with a direct lookup instead of scanning
@@ -636,11 +665,8 @@ impl Cgka {
 
         let mut predecessors = Vec::new();
         let mut visited = Set::new();
-        let mut frontier: Vec<Digest<Signed<CgkaOperation>>> = self
-            .ops_graph
-            .predecessors_for(current_op_hash)
-            .map(|preds| preds.iter().cloned().collect())
-            .unwrap_or_default();
+        let mut frontier: Vec<Digest<Signed<CgkaOperation>>> =
+            frontier_heads.iter().cloned().collect();
 
         while let Some(op_hash) = frontier.pop() {
             if !visited.insert(op_hash) {
@@ -663,6 +689,77 @@ impl Cgka {
 
         let symmetric_key: SymmetricKey = (*current_pcs_key).into();
         EncryptedPredecessorKeys::encrypt(&predecessors, symmetric_key, self.doc_id.as_bytes()).ok()
+    }
+
+    /// Cache the current epoch's PCS key and follow its predecessor chain so
+    /// every reachable ancestor key is cached.
+    ///
+    /// This is a no-op when there is no single current PCS key (for example
+    /// during unmerged concurrency) or when the owner cannot derive it.
+    fn cache_current_epoch_chain(&mut self) {
+        if !self.has_pcs_key() {
+            return;
+        }
+        let Ok(head_key) = self.pcs_key_from_tree_root() else {
+            return;
+        };
+        let Some(head) = self.ops_graph.cgka_op_heads.iter().next().copied() else {
+            return;
+        };
+        if !self.pcs_keys.contains_key(&Digest::hash(&head_key)) {
+            self.insert_pcs_key(&head_key, head);
+        }
+        self.follow_predecessor_chain(head, &head_key);
+    }
+
+    /// Follow the predecessor key chain starting from `start_op` (whose PCS key
+    /// is `start_key`), caching every ancestor epoch's key it can recover.
+    ///
+    /// Each update operation's `encrypted_pred_pcs_keys` is encrypted under that
+    /// operation's own PCS key, so decrypting it with `start_key` yields the
+    /// predecessor keys, which in turn unlock their own predecessors. This is
+    /// how a member that can read the current epoch recovers the keys for all
+    /// earlier content without rebuilding the tree (which is impossible for an
+    /// epoch the member did not belong to). For a forward-secret document the
+    /// chain is absent, so this is a no-op.
+    fn follow_predecessor_chain(
+        &mut self,
+        start_op: Digest<Signed<CgkaOperation>>,
+        start_key: &PcsKey,
+    ) {
+        let mut visited = Set::new();
+        let mut stack: Vec<(Digest<Signed<CgkaOperation>>, PcsKey)> =
+            alloc::vec![(start_op, *start_key)];
+        while let Some((op_hash, key)) = stack.pop() {
+            if !visited.insert(op_hash) {
+                continue;
+            }
+            // Clone the chain link out so the immutable borrow of the ops graph
+            // ends before we mutate the PCS key cache below.
+            let epk = match self.ops_graph.cgka_ops.get(&op_hash).map(|op| &op.payload) {
+                Some(CgkaOperation::Update {
+                    encrypted_pred_pcs_keys: Some(epk),
+                    ..
+                }) => epk.clone(),
+                _ => continue,
+            };
+            let symmetric_key: SymmetricKey = key.into();
+            let preds = match epk.decrypt(symmetric_key) {
+                Ok(preds) => preds,
+                // A link we cannot decrypt should not abort the rest of the walk.
+                Err(e) => {
+                    tracing::debug!("failed to decrypt predecessor PCS keys: {e}");
+                    continue;
+                }
+            };
+            for pred in preds {
+                let pred_hash = Digest::hash(&pred.pcs_key);
+                if !self.pcs_keys.contains_key(&pred_hash) {
+                    self.insert_pcs_key(&pred.pcs_key, pred.op_hash);
+                }
+                stack.push((pred.op_hash, pred.pcs_key));
+            }
+        }
     }
 
     #[instrument(skip_all)]

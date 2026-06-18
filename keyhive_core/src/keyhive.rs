@@ -64,7 +64,7 @@ use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
-    share_key::ShareKey,
+    share_key::{ShareKey, ShareSecretKey},
     signed::{Signed, SigningError, VerificationError},
     signer::async_signer::AsyncSigner,
     verifiable::Verifiable,
@@ -127,6 +127,14 @@ pub struct Keyhive<
     /// Cryptographically secure (pseudo)random number generator.
     csprng: Arc<Mutex<R>>,
 
+    /// Whether documents created or received by this peer provide forward
+    /// secrecy. This is a peer-wide policy: when `false`, documents carry a CGKA
+    /// predecessor key chain (a member added later reads the whole prior
+    /// history) and adding a reader auto-rekeys. When `true`, a member added
+    /// later cannot read content from before they joined. Every document this
+    /// peer creates or materializes inherits this setting.
+    forward_secrecy: bool,
+
     _plaintext_phantom: PhantomData<P>,
 }
 
@@ -176,7 +184,23 @@ impl<
         signer: S,
         ciphertext_store: C,
         event_listener: L,
+        csprng: R,
+    ) -> Result<Self, SigningError> {
+        Self::generate_with_forward_secrecy(signer, ciphertext_store, event_listener, csprng, true)
+            .await
+    }
+
+    /// Generate a new peer, choosing whether its documents provide forward
+    /// secrecy. See [`Self::forward_secrecy`]. `generate` defaults this to
+    /// `true`; pass `false` for the post-compromise-without-forward-secrecy
+    /// model (e.g. TPW), where a member added later reads the whole prior
+    /// history.
+    pub async fn generate_with_forward_secrecy(
+        signer: S,
+        ciphertext_store: C,
+        event_listener: L,
         mut csprng: R,
+        forward_secrecy: bool,
     ) -> Result<Self, SigningError> {
         let verifying_key = signer.verifying_key();
         let inner_active = Active::generate(signer, event_listener.clone(), &mut csprng).await?;
@@ -200,6 +224,7 @@ impl<
             ciphertext_store,
             event_listener,
             csprng: Arc::new(Mutex::new(csprng)),
+            forward_secrecy,
             _plaintext_phantom: PhantomData,
         })
     }
@@ -265,6 +290,8 @@ impl<
         Ok(g)
     }
 
+    /// Generate a document. Whether it provides forward secrecy is determined by
+    /// this peer's [`Self::forward_secrecy`] policy.
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn generate_doc(
@@ -293,6 +320,7 @@ impl<
             self.delegations.dupe(),
             self.revocations.dupe(),
             self.event_listener.clone(),
+            self.forward_secrecy,
             &signer,
             self.csprng.dupe(),
         )
@@ -527,6 +555,17 @@ impl<
                             .add_cgka_members_from_prekeys(&prekeys, &signer)
                             .await?;
                         update.cgka_ops.extend(ops);
+                        // Auto-rekey non-forward-secret docs so the new reader
+                        // gets a starting key reaching the document's history.
+                        if let Some((op, pk, sk)) = {
+                            let mut csprng = self.csprng.lock().await;
+                            locked_doc
+                                .rekey_if_not_forward_secret(&signer, &mut *csprng)
+                                .await?
+                        } {
+                            update.cgka_ops.push(op);
+                            update.rekey_leaf_secrets.push((pk, sk));
+                        }
                     }
                 }
 
@@ -534,9 +573,25 @@ impl<
             }
             Membered::Document(_, doc) => {
                 let mut locked = doc.lock().await;
-                locked
+                let mut update = locked
                     .add_member(to_add, can, &signer, other_relevant_docs)
-                    .await?
+                    .await?;
+                // Auto-rekey a non-forward-secret document so the newly added
+                // reader obtains a current key whose predecessor chain reaches
+                // the document's prior history. The new leaf secret is surfaced
+                // so a sibling instance of this identity can install it.
+                if can.is_reader() {
+                    if let Some((op, pk, sk)) = {
+                        let mut csprng = self.csprng.lock().await;
+                        locked
+                            .rekey_if_not_forward_secret(&signer, &mut *csprng)
+                            .await?
+                    } {
+                        update.cgka_ops.push(op);
+                        update.rekey_leaf_secrets.push((pk, sk));
+                    }
+                }
+                update
             }
         };
 
@@ -702,16 +757,16 @@ impl<
     pub async fn force_pcs_update(
         &self,
         doc: Arc<Mutex<Document<F, S, T, L>>>,
-    ) -> Result<Signed<CgkaOperation>, EncryptError> {
+    ) -> Result<(Signed<CgkaOperation>, ShareKey, ShareSecretKey), EncryptError> {
         let signer = { self.active.lock().await.signer.clone() };
         let mut locked_csprng = self.csprng.lock().await;
-        let op = doc
+        let (op, new_share_key, new_share_secret_key) = doc
             .lock()
             .await
             .pcs_update(&signer, &mut *locked_csprng)
             .await?;
         self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
-        Ok(op)
+        Ok((op, new_share_key, new_share_secret_key))
     }
 
     #[instrument(skip_all)]
@@ -1587,8 +1642,6 @@ impl<
         let subject_id = delegation.subject_id();
         let delegation = Arc::new(delegation);
         let mut found = false;
-        let mut promoted_doc: Option<(DocumentId, Arc<Mutex<Document<F, S, T, L>>>)> = None;
-        let mut promoted_group: Option<(GroupId, Arc<Mutex<Group<F, S, T, L>>>)> = None;
         {
             if let Some(group) = self.groups.lock().await.get(&GroupId(subject_id)) {
                 found = true;
@@ -1610,40 +1663,9 @@ impl<
                 .remove(&IndividualId(subject_id))
             {
                 found = true;
-                // A delegation whose subject is this id has arrived, so the
-                // placeholder Individual we held for it (e.g. from unknown-
-                // delegate recovery) is wrong: the id is really a Group or
-                // Document. If the delegation carries content heads for this
-                // subject, it is a Document, so reify it as one. Otherwise it
-                // would be mis-modeled as a group and lose its content heads.
-                if let Some(content_heads) = static_dlg
-                    .payload
-                    .after_content
-                    .get(&subject_id.into())
-                    .and_then(|content_heads| NonEmpty::collect(content_heads.iter().cloned()))
-                {
-                    let doc = self
-                        .promote_individual_to_document(indie, delegation.dupe(), content_heads)
-                        .await?;
-                    let doc_id = doc.lock().await.doc_id();
-                    promoted_doc = Some((doc_id, doc));
-                } else {
-                    let group = self
-                        .promote_individual_to_group(indie, delegation.dupe())
-                        .await;
-                    let group_id = group.lock().await.group_id();
-                    promoted_group = Some((group_id, group));
-                }
+                self.promote_individual_to_group(indie, delegation.clone())
+                    .await;
             }
-        }
-        // Register the reified group/document only after the lookup locks above
-        // are released, to avoid re-locking those maps while their guards are
-        // still held by the lookup block.
-        if let Some((doc_id, doc)) = promoted_doc {
-            self.docs.lock().await.insert(doc_id, doc);
-        }
-        if let Some((group_id, group)) = promoted_group {
-            self.groups.lock().await.insert(group_id, group);
         }
         if !found {
             let group = Group::new(
@@ -1661,7 +1683,10 @@ impl<
                 .get(&subject_id.into())
                 .and_then(|content_heads| NonEmpty::collect(content_heads.iter().cloned()))
             {
-                let doc = Document::from_group(group, content_heads).await?;
+                // The document inherits this peer's forward-secrecy policy. (A
+                // reader follows whatever chain is present regardless; this
+                // governs the update operations this peer itself emits.)
+                let doc = Document::from_group(group, content_heads, self.forward_secrecy).await?;
                 let mut locked_docs = self.docs.lock().await;
                 locked_docs.insert(doc.doc_id(), Arc::new(Mutex::new(doc)));
             } else {
@@ -1849,61 +1874,12 @@ impl<
             .await,
         ));
 
-        let group_id = group.lock().await.group_id();
-        let agent = Agent::Group(group_id, group.dupe());
-        self.relink_promoted_agent(&agent).await;
-
-        group
-    }
-
-    /// Reify a placeholder [`Individual`] as the [`Document`] it actually is.
-    ///
-    /// This mirrors [`Self::promote_individual_to_group`] for the case where
-    /// the delegation that defines the subject carries content heads, which
-    /// marks the subject as a [`Document`] rather than a plain [`Group`].
-    /// Without this, a document referenced as a delegate before its defining
-    /// event arrives would be reified as a group and lose its content heads.
-    ///
-    /// The returned document is not yet registered in the docs map. Callers
-    /// register it after releasing any held lookup locks.
-    async fn promote_individual_to_document(
-        &self,
-        individual: Arc<Mutex<Individual>>,
-        head: Arc<Signed<Delegation<F, S, T, L>>>,
-        content_heads: NonEmpty<T>,
-    ) -> Result<Arc<Mutex<Document<F, S, T, L>>>, ReceiveStaticDelegationError<F, S, T, L>> {
-        let indie = individual.lock().await.clone();
-        let group = Group::from_individual(
-            indie,
-            head,
-            self.delegations.dupe(),
-            self.revocations.dupe(),
-            self.event_listener.clone(),
-        )
-        .await;
-
-        let doc = Document::from_group(group, content_heads).await?;
-        let doc_id = doc.doc_id();
-        let doc = Arc::new(Mutex::new(doc));
-
-        let agent = Agent::Document(doc_id, doc.dupe());
-        self.relink_promoted_agent(&agent).await;
-
-        Ok(doc)
-    }
-
-    /// Rewrite the membership ops that referenced a placeholder agent so they
-    /// point at its reified [`Group`]/[`Document`] identity.
-    ///
-    /// Delegations that delegate to this agent's id and revocations whose
-    /// subject is this agent's id are re-inserted with the resolved agent.
-    async fn relink_promoted_agent(&self, agent: &Agent<F, S, T, L>) {
-        let agent_id: Identifier = agent.id();
+        let agent = Agent::Group(group.lock().await.group_id(), group.dupe());
 
         {
             let mut locked_delegations = self.delegations.lock().await;
             for (_digest, dlg) in locked_delegations.clone().iter() {
-                if dlg.payload.delegate.id() == agent_id {
+                if dlg.payload.delegate == agent {
                     locked_delegations.insert(Arc::new(Signed::new(
                         Delegation {
                             delegate: agent.dupe(),
@@ -1920,9 +1896,10 @@ impl<
         }
 
         {
+            let group_id = group.lock().await.id();
             let mut locked_revocations = self.revocations.lock().await;
             for (_digest, rev) in locked_revocations.clone().iter() {
-                if rev.payload.subject_id() == agent_id {
+                if rev.payload.subject_id() == group_id {
                     locked_revocations.insert(Arc::new(Signed::new(
                         Revocation {
                             revoke: self
@@ -1945,6 +1922,8 @@ impl<
                 }
             }
         }
+
+        group
     }
 
     /// Export prekey secrets as an opaque blob for backup/migration.
@@ -2027,6 +2006,7 @@ impl<
             groups,
             docs,
             pending_events,
+            forward_secrecy: self.forward_secrecy,
         }
     }
 
@@ -2073,6 +2053,7 @@ impl<
                     delegations.dupe(),
                     revocations.dupe(),
                     listener.clone(),
+                    archive.forward_secrecy,
                 )?)),
             );
         }
@@ -2294,6 +2275,7 @@ impl<
             csprng,
             ciphertext_store,
             event_listener: listener,
+            forward_secrecy: archive.forward_secrecy,
             _plaintext_phantom: PhantomData,
         })
     }
@@ -2396,33 +2378,10 @@ impl<
                     err
                 );
 
-                // Recovery: register placeholder individuals for unknown agents
-                // referenced as delegates in stuck delegations. At this point,
-                // all Groups/Documents that could be created from other events
-                // have been created, so any remaining UnknownAgent is genuinely
-                // an Individual whose prekey events are missing from this batch.
-                let mut recovered = false;
-                for stuck_event in &next_epoch {
-                    if let StaticEvent::Delegated(d) = stuck_event {
-                        let delegate_id = d.payload.delegate;
-                        if self.get_agent(delegate_id).await.is_none() {
-                            tracing::info!(
-                                "Auto-registering unknown delegate {:?} as placeholder individual",
-                                delegate_id
-                            );
-                            let indie =
-                                Arc::new(Mutex::new(Individual::from_id(delegate_id.into())));
-                            self.register_individual(indie).await;
-                            recovered = true;
-                        }
-                    }
-                }
-
-                if recovered {
-                    epoch = next_epoch;
-                    continue;
-                }
-
+                // Events whose dependencies have not yet arrived (for example a
+                // delegation to an agent whose defining events we have not seen)
+                // remain pending. They are replayed on each ingest and resolve
+                // once the missing events arrive.
                 let new_pending: Vec<Arc<StaticEvent<T>>> =
                     next_epoch.clone().into_iter().map(Arc::new).collect();
                 drop(mem::replace(

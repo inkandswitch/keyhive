@@ -1,5 +1,6 @@
 pub mod access;
 pub mod add_member_error;
+pub mod add_member_update;
 pub mod agent;
 pub mod all_agent_events;
 pub mod archive;

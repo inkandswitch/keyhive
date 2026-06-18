@@ -3,6 +3,7 @@
 use crate::{
     collections::{Map, Set},
     content_addressed_map::CaMap,
+    encrypted::EncryptedPredecessorKeys,
     error::CgkaError,
     id::{MemberId, TreeId},
     topsort::TopologicalSort,
@@ -73,6 +74,16 @@ pub enum CgkaOperation {
         new_path: alloc::boxed::Box<PathChange>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
+        /// The PCS keys of this operation's immediate predecessor update
+        /// operations, encrypted under this operation's own PCS key.
+        ///
+        /// This is the predecessor key chain. It is populated only when forward
+        /// secrecy is disabled for the document. When present, a member who can
+        /// decrypt this operation's PCS key can follow the chain backwards to
+        /// recover every ancestor epoch's key, and so read all earlier content.
+        /// When forward secrecy is enabled this is always `None`.
+        #[serde(default)]
+        encrypted_pred_pcs_keys: Option<EncryptedPredecessorKeys>,
     },
 }
 

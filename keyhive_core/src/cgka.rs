@@ -8,7 +8,7 @@ use crate::{
     transact::{fork::Fork, merge::Merge},
 };
 use beekem::{
-    encrypted::{EncryptedContent, EncryptedPredecessorKeys},
+    encrypted::EncryptedContent,
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::ShareKeyMap,
@@ -68,12 +68,14 @@ impl Cgka {
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
+        forward_secrecy: bool,
         signer: &S,
     ) -> Result<Self, CgkaError> {
         let mut inner = beekem::cgka::Cgka::new(
             TreeId(doc_id.verifying_key()),
             MemberId(owner_id.verifying_key()),
             owner_pk,
+            forward_secrecy,
             signer,
         )
         .await?;
@@ -85,12 +87,14 @@ impl Cgka {
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
+        forward_secrecy: bool,
         init_add_op: Signed<CgkaOperation>,
     ) -> Result<Self, CgkaError> {
         let mut inner = beekem::cgka::Cgka::new_from_init_add(
             TreeId(doc_id.verifying_key()),
             MemberId(owner_id.verifying_key()),
             owner_pk,
+            forward_secrecy,
             init_add_op,
         )?;
         Self::insert_public_sks(&mut inner);
@@ -142,14 +146,7 @@ impl Cgka {
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<
-        (
-            ApplicationSecret<T>,
-            Option<Signed<CgkaOperation>>,
-            Option<EncryptedPredecessorKeys>,
-        ),
-        CgkaError,
-    > {
+    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
         self.0
             .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
             .await
