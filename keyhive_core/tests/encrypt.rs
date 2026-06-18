@@ -32,14 +32,22 @@ struct NewKeyhive {
 }
 
 async fn make_keyhive() -> NewKeyhive {
+    make_keyhive_fs(true).await
+}
+
+/// Like `make_keyhive`, but choosing the peer's forward-secrecy policy. With
+/// `forward_secrecy = false`, documents this peer creates carry the CGKA
+/// predecessor key chain and auto-rekey on add.
+async fn make_keyhive_fs(forward_secrecy: bool) -> NewKeyhive {
     let sk = MemorySigner::generate(&mut rand::thread_rng());
     let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
     let log = Log::<Local, _, _>::new();
-    let keyhive = Keyhive::<Local, _, _, _, _, _, _>::generate(
+    let keyhive = Keyhive::<Local, _, _, _, _, _, _>::generate_with_forward_secrecy(
         sk.clone(),
         store,
         log.clone(),
         rand::thread_rng(),
+        forward_secrecy,
     )
     .await
     .unwrap();
@@ -108,11 +116,11 @@ async fn test_encrypt_to_added_member() -> TestResult {
 /// CGKA: a member added at epoch N cannot compute group secrets from
 /// epochs before N.
 ///
-/// Bob can read content encrypted after he joins, and via the predecessor
-/// key chain (`encrypted_pred_pcs_keys`) he can read older content once he
-/// can decrypt some blob from an epoch he is part of. With no such blob,
-/// pre-join content stays unreadable. See `test_encrypt_to_added_member`
-/// for the working case where encryption happens after the add.
+/// This document is forward-secret (the default), so there is no predecessor
+/// key chain: a member added later cannot read content from before they joined,
+/// even after a rekey. See `test_encrypt_to_added_member` for the working case
+/// where encryption happens after the add, and the forward-secrecy-disabled
+/// tests below for the model where later members can read prior history.
 #[tokio::test]
 async fn test_cannot_decrypt_content_from_before_joining() -> TestResult {
     test_utils::init_logging();
@@ -533,11 +541,33 @@ async fn make_keyhive_with_signer(
     Log<Local, MemorySigner>,
     rand::rngs::ThreadRng,
 > {
+    make_keyhive_with_signer_fs(sk, true).await
+}
+
+#[allow(clippy::type_complexity)]
+async fn make_keyhive_with_signer_fs(
+    sk: MemorySigner,
+    forward_secrecy: bool,
+) -> Keyhive<
+    Local,
+    MemorySigner,
+    [u8; 32],
+    Vec<u8>,
+    MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+    Log<Local, MemorySigner>,
+    rand::rngs::ThreadRng,
+> {
     let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
     let log = Log::<Local, _, _>::new();
-    Keyhive::<Local, _, _, _, _, _, _>::generate(sk, store, log, rand::thread_rng())
-        .await
-        .unwrap()
+    Keyhive::<Local, _, _, _, _, _, _>::generate_with_forward_secrecy(
+        sk,
+        store,
+        log,
+        rand::thread_rng(),
+        forward_secrecy,
+    )
+    .await
+    .unwrap()
 }
 
 /// Reproduces Issue 6: Tab creates doc with a fresh group coparent (no
@@ -1494,343 +1524,6 @@ async fn test_dual_instance_receiver_unknown_invite_prekey() -> TestResult {
     Ok(())
 }
 
-/// Reproduces the exact TPW scenario for verifying PCS key chaining:
-///
-/// 1. Alice (Tab) creates doc, SW encrypts content at epoch N.
-/// 2. Alice (Tab) adds Public + forcePcsUpdate. PCS key advances to epoch N+1.
-/// 3. SW encrypts NEW content with the new PCS key (epoch N+1).
-/// 4. Bob (via Public) receives all events and tries to decrypt BOTH blobs.
-///
-/// If key chaining exists, the second blob would carry predecessor key material
-/// allowing Bob to decrypt the first blob too. If not, only the second blob
-/// (encrypted after Public was added) will decrypt.
-#[tokio::test]
-async fn test_pcs_key_chaining_after_membership_change() -> TestResult {
-    test_utils::init_logging();
-
-    let alice_signer = MemorySigner::generate(&mut rand::thread_rng());
-    let tab = make_keyhive_with_signer(alice_signer.clone()).await;
-    let sw = make_keyhive_with_signer(alice_signer.clone()).await;
-
-    let prekey_bytes = tab.export_prekey_secrets().await?;
-    sw.import_prekey_secrets(&prekey_bytes).await?;
-
-    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
-
-    let public_individual = keyhive_core::principal::public::Public.individual();
-    let public_agent: Agent<_, _, _, _> = Agent::Individual(
-        public_individual.id(),
-        Arc::new(Mutex::new(public_individual)),
-    );
-
-    let content_v1 = b"content before Public was added".to_vec();
-    let hash_v1: [u8; 32] = *blake3::hash(&content_v1).as_bytes();
-    let content_v2 = b"content after Public + forcePcsUpdate".to_vec();
-    let hash_v2: [u8; 32] = *blake3::hash(&content_v2).as_bytes();
-
-    // Step 1: Tab creates doc (no Public yet)
-    let doc = tab.generate_doc(vec![], nonempty![hash_v1]).await?;
-    let doc_id = { doc.lock().await.doc_id() };
-
-    // Sync Tab to SW so SW can encrypt
-    let tab_active_agent: Agent<_, _, _, _> = tab.active().lock().await.clone().into();
-    let tab_events = tab.static_events_for_agent(&tab_active_agent).await;
-    let sw_pending = sw
-        .ingest_unsorted_static_events(tab_events.into_values().collect())
-        .await;
-    assert!(sw_pending.is_empty(), "SW pending: {}", sw_pending.len());
-
-    // Step 2: SW encrypts content_v1 (PCS key at epoch N, tree has only doc_id + Alice)
-    let sw_doc = sw.get_document(doc_id).await.expect("SW should have doc");
-    let encrypted_v1 = sw
-        .try_encrypt_content(sw_doc.clone(), &hash_v1, &vec![], &content_v1)
-        .await?;
-
-    // Step 3: Tab adds Public + forcePcsUpdate (PCS key advances to epoch N+1)
-    tab.add_member(
-        public_agent.dupe(),
-        &Membered::Document(doc_id, doc.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
-    tab.force_pcs_update(doc.dupe()).await?;
-
-    // Sync the new Tab events (Add(Public) + PCS Update) to SW
-    let tab_events_round2 = tab.static_events_for_agent(&tab_active_agent).await;
-    let sw_pending2 = sw
-        .ingest_unsorted_static_events(tab_events_round2.into_values().collect())
-        .await;
-    assert!(
-        sw_pending2.is_empty(),
-        "SW pending round 2: {}",
-        sw_pending2.len()
-    );
-
-    // Step 4: SW encrypts content_v2 with the new PCS key (epoch N+1, Public is in tree)
-    let encrypted_v2 = sw
-        .try_encrypt_content(sw_doc.clone(), &hash_v2, &vec![], &content_v2)
-        .await?;
-
-    // Verify the two blobs use different PCS keys
-    assert_ne!(
-        encrypted_v1.encrypted_content().pcs_key_hash,
-        encrypted_v2.encrypted_content().pcs_key_hash,
-        "The two blobs should use different PCS keys (different epochs)"
-    );
-
-    // Step 5: Bob receives all events from both Tab and SW (via Public)
-    let tab_events_for_bob = tab.static_events_for_agent(&public_agent).await;
-    let sw_events_for_bob = sw.static_events_for_agent(&public_agent).await;
-
-    let mut all_events: HashMap<Digest<StaticEvent<[u8; 32]>>, StaticEvent<[u8; 32]>> =
-        HashMap::new();
-    all_events.extend(tab_events_for_bob);
-    all_events.extend(sw_events_for_bob);
-
-    let bob_pending = bob
-        .ingest_unsorted_static_events(all_events.into_values().collect())
-        .await;
-    assert!(
-        bob_pending.is_empty(),
-        "Bob should ingest all events. {} stuck",
-        bob_pending.len()
-    );
-
-    // Step 6: Bob decrypts content_v2 (encrypted AFTER Public was added).
-    // v2's blob should carry v1's PCS key as an encrypted predecessor.
-    let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
-    let decrypted_v2 = bob
-        .try_decrypt_content(doc_on_bob.clone(), encrypted_v2.encrypted_content())
-        .await?;
-    assert_eq!(decrypted_v2, content_v2, "v2 (post-Public) should decrypt");
-
-    // Step 7: Bob decrypts content_v1 (encrypted BEFORE Public was added).
-    // Key chaining: decrypting v2 cached v1's predecessor key, so v1 should
-    // now succeed.
-    let decrypted_v1 = bob
-        .try_decrypt_content(doc_on_bob.clone(), encrypted_v1.encrypted_content())
-        .await?;
-    assert_eq!(
-        decrypted_v1, content_v1,
-        "v1 should decrypt via key chaining from v2"
-    );
-
-    Ok(())
-}
-
-/// Variant: same scenario but Bob decrypts v2 FIRST (which might populate
-/// internal caches), then tries v1. Tests whether decrypting a newer blob
-/// somehow makes older blobs accessible via cached state.
-#[tokio::test]
-async fn test_pcs_key_chaining_order_dependent() -> TestResult {
-    test_utils::init_logging();
-
-    let alice_signer = MemorySigner::generate(&mut rand::thread_rng());
-    let tab = make_keyhive_with_signer(alice_signer.clone()).await;
-    let sw = make_keyhive_with_signer(alice_signer.clone()).await;
-
-    let prekey_bytes = tab.export_prekey_secrets().await?;
-    sw.import_prekey_secrets(&prekey_bytes).await?;
-
-    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
-
-    let public_individual = keyhive_core::principal::public::Public.individual();
-    let public_agent: Agent<_, _, _, _> = Agent::Individual(
-        public_individual.id(),
-        Arc::new(Mutex::new(public_individual)),
-    );
-
-    let content_v1 = b"order test: content before Public".to_vec();
-    let hash_v1: [u8; 32] = *blake3::hash(&content_v1).as_bytes();
-    let content_v2 = b"order test: content after Public".to_vec();
-    let hash_v2: [u8; 32] = *blake3::hash(&content_v2).as_bytes();
-
-    // Tab creates doc, sync to SW, SW encrypts v1
-    let doc = tab.generate_doc(vec![], nonempty![hash_v1]).await?;
-    let doc_id = { doc.lock().await.doc_id() };
-
-    let tab_active_agent: Agent<_, _, _, _> = tab.active().lock().await.clone().into();
-    let tab_events = tab.static_events_for_agent(&tab_active_agent).await;
-    sw.ingest_unsorted_static_events(tab_events.into_values().collect())
-        .await;
-
-    let sw_doc = sw.get_document(doc_id).await.unwrap();
-    let encrypted_v1 = sw
-        .try_encrypt_content(sw_doc.clone(), &hash_v1, &vec![], &content_v1)
-        .await?;
-
-    // Tab adds Public + forcePcsUpdate, sync to SW
-    tab.add_member(
-        public_agent.dupe(),
-        &Membered::Document(doc_id, doc.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
-    tab.force_pcs_update(doc.dupe()).await?;
-
-    let tab_events_r2 = tab.static_events_for_agent(&tab_active_agent).await;
-    sw.ingest_unsorted_static_events(tab_events_r2.into_values().collect())
-        .await;
-
-    // SW encrypts v2 with new PCS key
-    let encrypted_v2 = sw
-        .try_encrypt_content(sw_doc.clone(), &hash_v2, &vec![], &content_v2)
-        .await?;
-
-    // Bob receives all events
-    let tab_events_for_bob = tab.static_events_for_agent(&public_agent).await;
-    let sw_events_for_bob = sw.static_events_for_agent(&public_agent).await;
-    let mut all_events: HashMap<Digest<StaticEvent<[u8; 32]>>, StaticEvent<[u8; 32]>> =
-        HashMap::new();
-    all_events.extend(tab_events_for_bob);
-    all_events.extend(sw_events_for_bob);
-    let bob_pending = bob
-        .ingest_unsorted_static_events(all_events.into_values().collect())
-        .await;
-    assert!(bob_pending.is_empty(), "Bob pending: {}", bob_pending.len());
-
-    let doc_on_bob = bob.get_document(doc_id).await.unwrap();
-
-    // Decrypt v2 FIRST (should succeed, and cache v1's predecessor key)
-    let decrypted_v2 = bob
-        .try_decrypt_content(doc_on_bob.clone(), encrypted_v2.encrypted_content())
-        .await?;
-    assert_eq!(decrypted_v2, content_v2);
-
-    // Now try v1. Key chaining: v2's decryption cached v1's PCS key.
-    let decrypted_v1 = bob
-        .try_decrypt_content(doc_on_bob.clone(), encrypted_v1.encrypted_content())
-        .await?;
-    assert_eq!(
-        decrypted_v1, content_v1,
-        "v1 should decrypt via key chaining"
-    );
-
-    Ok(())
-}
-
-/// Issue 9: SW encrypts with an intermediate PCS key created between
-/// Add(Bob) and Update(Tab_forcePcs). The receiver (Bob) has all ops
-/// but derive_pcs_key_for_op fails because the rebuilt CGKA can't
-/// derive the intermediate PCS key.
-///
-/// Timeline:
-/// 1. Tab creates doc. CGKA: [InitAdd, Add(Alice), Update(Tab)].
-/// 2. Tab adds Bob + forcePcsUpdate -> Add(Bob), Update(Tab_forcePcs).
-/// 3. SW receives Tab events up to Add(Bob) but NOT Update(Tab_forcePcs).
-/// 4. SW encrypts. has_pcs_key()=false -> generates Update(SW) -> PCS key B.
-/// 5. SW receives Update(Tab_forcePcs) -> PCS key C.
-/// 6. Bob receives ALL events from Tab and SW.
-/// 7. Bob decrypts blob encrypted with key B -> should succeed.
-#[tokio::test]
-async fn test_intermediate_pcs_key_after_add() -> TestResult {
-    test_utils::init_logging();
-
-    let alice_signer = MemorySigner::generate(&mut rand::thread_rng());
-    let tab = make_keyhive_with_signer(alice_signer.clone()).await;
-    let sw = make_keyhive_with_signer(alice_signer.clone()).await;
-
-    let prekey_bytes = tab.export_prekey_secrets().await?;
-    sw.import_prekey_secrets(&prekey_bytes).await?;
-
-    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
-
-    let content = b"encrypted between Add(Bob) and Update(Tab_forcePcs)".to_vec();
-    let content_hash: [u8; 32] = *blake3::hash(&content).as_bytes();
-
-    // Step 1: Tab creates doc
-    let doc = tab.generate_doc(vec![], nonempty![content_hash]).await?;
-    let doc_id = { doc.lock().await.doc_id() };
-
-    // Step 2: Tab adds Bob (no forcePcsUpdate yet, we'll do that after
-    // syncing Add(Bob) to SW)
-    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
-    tab.add_member(
-        Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
-        &Membered::Document(doc_id, doc.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
-
-    // Step 3: Sync ALL current Tab events to SW (includes Add(Bob),
-    // but forcePcsUpdate hasn't happened yet)
-    let tab_active_agent: Agent<_, _, _, _> = tab.active().lock().await.clone().into();
-    let tab_events_batch1 = tab.static_events_for_agent(&tab_active_agent).await;
-
-    let sw_pending = sw
-        .ingest_unsorted_static_events(tab_events_batch1.into_values().collect())
-        .await;
-    assert!(
-        sw_pending.is_empty(),
-        "SW should ingest batch1. {} stuck",
-        sw_pending.len()
-    );
-
-    // Step 4: SW encrypts. has_pcs_key()=false after Add(Bob) blanked root,
-    // so new_app_secret_for generates an intermediate Update(SW) -> PCS key B.
-    let sw_doc = sw
-        .get_document(doc_id)
-        .await
-        .expect("SW should have doc after batch1");
-    {
-        let locked = sw_doc.lock().await;
-        let cgka = locked.cgka().expect("SW doc should have CGKA");
-        assert!(
-            !cgka.has_pcs_key(),
-            "SW should NOT have PCS key after Add(Bob) blanked root"
-        );
-    }
-    let encrypted = sw
-        .try_encrypt_content(sw_doc.clone(), &content_hash, &vec![], &content)
-        .await?;
-
-    // Now Tab calls forcePcsUpdate (this happens after SW already encrypted)
-    tab.force_pcs_update(doc.dupe()).await?;
-
-    // Step 5: Sync the new Tab events (forcePcsUpdate) to SW -> PCS key C
-    let tab_events_batch2 = tab.static_events_for_agent(&tab_active_agent).await;
-
-    let sw_pending2 = sw
-        .ingest_unsorted_static_events(tab_events_batch2.into_values().collect())
-        .await;
-    assert!(
-        sw_pending2.is_empty(),
-        "SW should ingest batch2. {} stuck",
-        sw_pending2.len()
-    );
-
-    // Step 6: Bob receives ALL events from both Tab and SW
-    let bob_agent: Agent<_, _, _, _> = bob.active().lock().await.clone().into();
-    let tab_events_for_bob = tab.static_events_for_agent(&bob_agent).await;
-    let sw_events_for_bob = sw.static_events_for_agent(&bob_agent).await;
-
-    let mut all_events: HashMap<Digest<StaticEvent<[u8; 32]>>, StaticEvent<[u8; 32]>> =
-        HashMap::new();
-    all_events.extend(tab_events_for_bob);
-    all_events.extend(sw_events_for_bob);
-
-    let bob_pending = bob
-        .ingest_unsorted_static_events(all_events.into_values().collect())
-        .await;
-    assert!(
-        bob_pending.is_empty(),
-        "Bob should ingest all events. {} stuck",
-        bob_pending.len()
-    );
-
-    // Step 7: Bob decrypts the blob encrypted with intermediate PCS key B
-    let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
-    let decrypted = bob
-        .try_decrypt_content(doc_on_bob, encrypted.encrypted_content())
-        .await?;
-    assert_eq!(decrypted, content);
-
-    Ok(())
-}
-
 /// Reproduces Bug 3: after a public delegation (setPublicAccess) with a
 /// server relay present, the receiver's CGKA owner_id may be set to the
 /// receiver's own identity instead of Public.
@@ -2175,28 +1868,20 @@ async fn test_dual_instance_public_via_server_relay_decrypt() -> TestResult {
     Ok(())
 }
 
-/// Multi-hop key chaining across three epochs A -> B -> C.
+/// With forward secrecy disabled, a member added at the latest epoch can read
+/// the document's entire prior history.
 ///
-/// Bob is added at epoch C only (he is in the CGKA tree for C, but not for
-/// A or B, so he cannot derive keys A or B directly from the tree). Each
-/// blob carries ONLY its immediate predecessor epoch's key:
-///   - blob C carries key B
-///   - blob B carries key A
-///   - blob A carries nothing
-///
-/// This proves the immediate-predecessor design: chaining works only when
-/// every intervening link is present.
-///   - Have only blob A  -> cannot decrypt A (no key A, no chain).
-///   - Have blobs A + C   -> decrypting C yields key B, but key A is never
-///                           reached (blob B, which carries key A, is missing),
-///                           so A stays locked. (If blobs carried the FULL
-///                           history this would wrongly succeed.)
-///   - Have blobs A + B + C -> C yields key B, B yields key A, A decrypts.
+/// Alice writes three blobs across three epochs (rotating between each), then
+/// adds Bob and rekeys so Bob has a starting key. Following the predecessor key
+/// chain on the CGKA update operations, Bob recovers every earlier epoch's key
+/// and decrypts all three blobs. This is the core "any way into a doc gives you
+/// the whole history before that point" property.
 #[tokio::test]
-async fn test_pcs_key_chaining_requires_every_link() -> TestResult {
+async fn test_fs_disabled_later_member_reads_full_history() -> TestResult {
     test_utils::init_logging();
 
-    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+    // Forward secrecy disabled at the peer level.
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive_fs(false).await;
 
     let content_a = b"epoch A content".to_vec();
     let hash_a: [u8; 32] = *blake3::hash(&content_a).as_bytes();
@@ -2208,302 +1893,353 @@ async fn test_pcs_key_chaining_requires_every_link() -> TestResult {
     let doc = alice.generate_doc(vec![], nonempty![hash_a]).await?;
     let doc_id = { doc.lock().await.doc_id() };
 
-    // Epoch A: encrypt with the doc's initial PCS key.
+    // Three epochs, each under its own PCS key, with a rotation between them.
     let blob_a = alice
         .try_encrypt_content(doc.clone(), &hash_a, &vec![], &content_a)
         .await?;
-
-    // Epoch B: rotate the PCS key, then encrypt. blob B chains back to key A.
     alice.force_pcs_update(doc.dupe()).await?;
     let blob_b = alice
         .try_encrypt_content(doc.clone(), &hash_b, &vec![], &content_b)
-        .await?;
-
-    // Epoch C: add Public (Bob joins here) and rotate, then encrypt.
-    // blob C chains back to key B.
-    let public_individual = keyhive_core::principal::public::Public.individual();
-    let public_agent: Agent<_, _, _, _> = Agent::Individual(
-        public_individual.id(),
-        Arc::new(Mutex::new(public_individual)),
-    );
-    alice
-        .add_member(
-            public_agent.dupe(),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Read,
-            &[],
-        )
         .await?;
     alice.force_pcs_update(doc.dupe()).await?;
     let blob_c = alice
         .try_encrypt_content(doc.clone(), &hash_c, &vec![], &content_c)
         .await?;
 
-    // The three blobs must use three distinct PCS keys.
+    // The three blobs use three distinct PCS keys.
     let k_a = blob_a.encrypted_content().pcs_key_hash;
     let k_b = blob_b.encrypted_content().pcs_key_hash;
     let k_c = blob_c.encrypted_content().pcs_key_hash;
-    assert_ne!(k_a, k_b, "A and B should use different PCS keys");
-    assert_ne!(k_b, k_c, "B and C should use different PCS keys");
-    assert_ne!(k_a, k_c, "A and C should use different PCS keys");
+    assert_ne!(k_a, k_b);
+    assert_ne!(k_b, k_c);
+    assert_ne!(k_a, k_c);
 
-    // C must chain back exactly one epoch (to B), not to the whole history.
-    assert!(
-        blob_c.encrypted_content().encrypted_pred_pcs_keys.is_some(),
-        "blob C should carry its immediate predecessor (key B)"
-    );
-    assert!(
-        blob_a.encrypted_content().encrypted_pred_pcs_keys.is_none(),
-        "blob A is the oldest epoch and should carry no predecessor keys"
-    );
-
-    // Bob joins as Public and receives all events.
-    let events = alice.static_events_for_agent(&public_agent).await;
-    let events: Vec<_> = events.into_values().collect();
-
-    // Helper: a fresh Bob (clean CGKA cache) with all events ingested.
-    async fn fresh_bob(
-        events: &[StaticEvent<[u8; 32]>],
-        doc_id: keyhive_core::principal::document::id::DocumentId,
-    ) -> (
-        Keyhive<
-            Local,
-            MemorySigner,
-            [u8; 32],
-            Vec<u8>,
-            MemoryCiphertextStore<[u8; 32], Vec<u8>>,
-            Log<Local, MemorySigner>,
-            rand::rngs::ThreadRng,
-        >,
-        Arc<
-            Mutex<
-                keyhive_core::principal::document::Document<
-                    Local,
-                    MemorySigner,
-                    [u8; 32],
-                    Log<Local, MemorySigner>,
-                >,
-            >,
-        >,
-    ) {
-        let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
-        let pending = bob.ingest_unsorted_static_events(events.to_vec()).await;
-        assert!(
-            pending.is_empty(),
-            "Bob should ingest all events. {} stuck",
-            pending.len()
-        );
-        let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
-        (bob, doc_on_bob)
-    }
-
-    // Case 1: only blob A. No way to reach key A -> stays locked.
-    {
-        let (bob, doc_on_bob) = fresh_bob(&events, doc_id).await;
-        let res = bob
-            .try_decrypt_content(doc_on_bob, blob_a.encrypted_content())
-            .await;
-        assert!(
-            res.is_err(),
-            "blob A alone must not decrypt (Bob joined at epoch C)"
-        );
-    }
-
-    // Case 2: blobs A and C. Decrypting C yields key B, but key A is never
-    // reached without blob B -> A stays locked.
-    {
-        let (bob, doc_on_bob) = fresh_bob(&events, doc_id).await;
-        let dec_c = bob
-            .try_decrypt_content(doc_on_bob.clone(), blob_c.encrypted_content())
-            .await?;
-        assert_eq!(
-            dec_c, content_c,
-            "C should decrypt directly (Bob is in tree at C)"
-        );
-        let res_a = bob
-            .try_decrypt_content(doc_on_bob, blob_a.encrypted_content())
-            .await;
-        assert!(
-            res_a.is_err(),
-            "blob A must stay locked with only A and C (the B link is missing)"
-        );
-    }
-
-    // Case 3: blobs A, B, and C. The full chain unlocks everything.
-    {
-        let (bob, doc_on_bob) = fresh_bob(&events, doc_id).await;
-        let dec_c = bob
-            .try_decrypt_content(doc_on_bob.clone(), blob_c.encrypted_content())
-            .await?;
-        assert_eq!(dec_c, content_c);
-        let dec_b = bob
-            .try_decrypt_content(doc_on_bob.clone(), blob_b.encrypted_content())
-            .await?;
-        assert_eq!(
-            dec_b, content_b,
-            "B should decrypt via key B chained from C"
-        );
-        let dec_a = bob
-            .try_decrypt_content(doc_on_bob, blob_a.encrypted_content())
-            .await?;
-        assert_eq!(
-            dec_a, content_a,
-            "A should decrypt via key A chained from B"
-        );
-    }
-
-    Ok(())
-}
-
-/// Concurrent-branch key chaining: two members (Alice, Bob) advance the PCS
-/// key concurrently from the same base epoch, producing sibling epochs A and
-/// B. A later epoch C merges both, so C's blob must carry BOTH concurrent
-/// predecessor keys (exercising the multi-predecessor frontier of the
-/// predecessor walk, where `frontier.extend` fans out over more than one
-/// parent). A receiver added at C must then chain back to content from EITHER
-/// branch.
-#[tokio::test]
-async fn test_pcs_key_chaining_concurrent_predecessors() -> TestResult {
-    test_utils::init_logging();
-
-    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+    // Add Bob at the latest epoch, then rekey so Bob has a current key whose
+    // chain reaches back through the whole history.
     let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
-    let NewKeyhive { keyhive: carol, .. } = make_keyhive().await;
-
-    let content_a = b"alice-branch content".to_vec();
-    let hash_a: [u8; 32] = *blake3::hash(&content_a).as_bytes();
-    let content_b = b"bob-branch content".to_vec();
-    let hash_b: [u8; 32] = *blake3::hash(&content_b).as_bytes();
-    let content_c = b"merge-epoch content".to_vec();
-    let hash_c: [u8; 32] = *blake3::hash(&content_c).as_bytes();
-
-    // Alice creates the doc and adds Bob (Edit) so Bob can also encrypt.
-    let doc = alice.generate_doc(vec![], nonempty![hash_a]).await?;
-    let doc_id = { doc.lock().await.doc_id() };
     let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
     alice
         .add_member(
             Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
             &Membered::Document(doc_id, doc.dupe()),
-            Access::Edit,
+            Access::Read,
             &[],
         )
         .await?;
+    alice.force_pcs_update(doc.dupe()).await?;
 
-    // Sync the doc + CGKA to Bob so both peers share the same base epoch.
+    // Sync every CGKA op to Bob.
     let bob_agent: Agent<_, _, _, _> = bob.active().lock().await.clone().into();
-    let base_events = alice.static_events_for_agent(&bob_agent).await;
+    let events = alice.static_events_for_agent(&bob_agent).await;
     let pending = bob
-        .ingest_unsorted_static_events(base_events.into_values().collect())
+        .ingest_unsorted_static_events(events.into_values().collect())
         .await;
     assert!(
         pending.is_empty(),
-        "Bob should ingest the base epoch. {} stuck",
+        "Bob should ingest all. {} stuck",
         pending.len()
     );
     let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
 
-    // Concurrent fork: Alice encrypts (epoch A) and Bob encrypts (epoch B),
-    // each from the shared base, neither having seen the other's update.
+    // Bob reads all three epochs, oldest included.
+    let dec_a = bob
+        .try_decrypt_content(doc_on_bob.clone(), blob_a.encrypted_content())
+        .await?;
+    let dec_b = bob
+        .try_decrypt_content(doc_on_bob.clone(), blob_b.encrypted_content())
+        .await?;
+    let dec_c = bob
+        .try_decrypt_content(doc_on_bob, blob_c.encrypted_content())
+        .await?;
+    assert_eq!(dec_a, content_a, "Bob should read the oldest epoch");
+    assert_eq!(dec_b, content_b);
+    assert_eq!(dec_c, content_c);
+
+    Ok(())
+}
+
+/// Content-less rotations must not break the predecessor key chain.
+///
+/// This is the regression case for the original bug: rotations that carry no
+/// content used to break a content-anchored chain. With the chain on the CGKA
+/// update operations, every rotation is itself a link, so a member added after
+/// a run of content-less rotations still recovers the original epoch's key.
+#[tokio::test]
+async fn test_fs_disabled_content_less_rotations_dont_break_chain() -> TestResult {
+    test_utils::init_logging();
+
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive_fs(false).await;
+
+    let content_a = b"the only content, written at epoch 0".to_vec();
+    let hash_a: [u8; 32] = *blake3::hash(&content_a).as_bytes();
+
+    let doc = alice.generate_doc(vec![], nonempty![hash_a]).await?;
+    let doc_id = { doc.lock().await.doc_id() };
+
     let blob_a = alice
         .try_encrypt_content(doc.clone(), &hash_a, &vec![], &content_a)
         .await?;
-    let blob_b = bob
-        .try_encrypt_content(doc_on_bob.clone(), &hash_b, &vec![], &content_b)
-        .await?;
-    assert_ne!(
-        blob_a.encrypted_content().pcs_key_hash,
-        blob_b.encrypted_content().pcs_key_hash,
-        "concurrent branches should use different PCS keys"
-    );
 
-    // Cross-sync the two concurrent updates so both peers hold both heads.
-    let alice_agent: Agent<_, _, _, _> = alice.active().lock().await.clone().into();
-    let a_to_b = alice.static_events_for_agent(&bob_agent).await;
-    bob.ingest_unsorted_static_events(a_to_b.into_values().collect())
-        .await;
-    let b_to_a = bob.static_events_for_agent(&alice_agent).await;
-    alice
-        .ingest_unsorted_static_events(b_to_a.into_values().collect())
-        .await;
+    // A run of content-less rotations between the content and the new member.
+    for _ in 0..3 {
+        alice.force_pcs_update(doc.dupe()).await?;
+    }
 
-    // Alice decrypts Bob's branch so she actually holds key B; otherwise she
-    // could not attach it as a predecessor when she encrypts at C.
-    let alice_dec_b = alice
-        .try_decrypt_content(doc.clone(), blob_b.encrypted_content())
-        .await?;
-    assert_eq!(alice_dec_b, content_b);
-
-    // Alice adds Carol (Read) and rotates: epoch C merges the two concurrent
-    // heads A and B. Carol is in the tree only at C.
-    let indie_carol = {
-        carol
-            .active()
-            .lock()
-            .await
-            .individual()
-            .lock()
-            .await
-            .clone()
-    };
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
     alice
         .add_member(
-            Agent::Individual(indie_carol.id(), Arc::new(Mutex::new(indie_carol))),
+            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
             &Membered::Document(doc_id, doc.dupe()),
             Access::Read,
             &[],
         )
         .await?;
     alice.force_pcs_update(doc.dupe()).await?;
-    let blob_c = alice
-        .try_encrypt_content(doc.clone(), &hash_c, &vec![], &content_c)
-        .await?;
-    assert!(
-        blob_c.encrypted_content().encrypted_pred_pcs_keys.is_some(),
-        "merge epoch C should carry predecessor keys"
-    );
 
-    // Carol receives every event from both Alice and Bob.
-    let carol_agent: Agent<_, _, _, _> = carol.active().lock().await.clone().into();
-    let a_events = alice.static_events_for_agent(&carol_agent).await;
-    let b_events = bob.static_events_for_agent(&carol_agent).await;
-    let mut all: HashMap<Digest<StaticEvent<[u8; 32]>>, StaticEvent<[u8; 32]>> = HashMap::new();
-    all.extend(a_events);
-    all.extend(b_events);
-    let carol_pending = carol
-        .ingest_unsorted_static_events(all.into_values().collect())
+    let bob_agent: Agent<_, _, _, _> = bob.active().lock().await.clone().into();
+    let events = alice.static_events_for_agent(&bob_agent).await;
+    let pending = bob
+        .ingest_unsorted_static_events(events.into_values().collect())
         .await;
     assert!(
-        carol_pending.is_empty(),
-        "Carol should ingest all events. {} stuck",
-        carol_pending.len()
+        pending.is_empty(),
+        "Bob should ingest all. {} stuck",
+        pending.len()
     );
-    let doc_on_carol = carol
-        .get_document(doc_id)
-        .await
-        .expect("Carol should have doc");
+    let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
 
-    // Carol decrypts C directly (she is in the tree at C), caching BOTH
-    // concurrent predecessor keys.
-    let dec_c = carol
-        .try_decrypt_content(doc_on_carol.clone(), blob_c.encrypted_content())
-        .await?;
-    assert_eq!(dec_c, content_c, "C should decrypt directly");
-
-    // Both concurrent branches must now decrypt via the cached predecessors.
-    let dec_a = carol
-        .try_decrypt_content(doc_on_carol.clone(), blob_a.encrypted_content())
+    let dec_a = bob
+        .try_decrypt_content(doc_on_bob, blob_a.encrypted_content())
         .await?;
     assert_eq!(
         dec_a, content_a,
-        "Alice's branch (A) should decrypt via a chained predecessor"
+        "Bob should read epoch 0 across a run of content-less rotations"
     );
-    let dec_b = carol
-        .try_decrypt_content(doc_on_carol.clone(), blob_b.encrypted_content())
+
+    Ok(())
+}
+
+/// The forward-secrecy flag is a real toggle: with it enabled (the default),
+/// the same flow as `test_fs_disabled_later_member_reads_full_history` leaves
+/// the prior history unreadable to a later member.
+#[tokio::test]
+async fn test_fs_enabled_later_member_cannot_read_history() -> TestResult {
+    test_utils::init_logging();
+
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+
+    let content_a = b"epoch A content".to_vec();
+    let hash_a: [u8; 32] = *blake3::hash(&content_a).as_bytes();
+    let content_b = b"epoch B content".to_vec();
+    let hash_b: [u8; 32] = *blake3::hash(&content_b).as_bytes();
+
+    // Forward secrecy enabled (the default).
+    let doc = alice.generate_doc(vec![], nonempty![hash_a]).await?;
+    let doc_id = { doc.lock().await.doc_id() };
+
+    let blob_a = alice
+        .try_encrypt_content(doc.clone(), &hash_a, &vec![], &content_a)
+        .await?;
+    alice.force_pcs_update(doc.dupe()).await?;
+    let blob_b = alice
+        .try_encrypt_content(doc.clone(), &hash_b, &vec![], &content_b)
+        .await?;
+
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
+    let update = alice
+        .add_member(
+            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+    // A forward-secret document does not auto-rekey on add.
+    assert!(
+        update.rekey_leaf_secrets.is_empty(),
+        "forward-secret doc should not auto-rekey on add"
+    );
+    alice.force_pcs_update(doc.dupe()).await?;
+
+    let bob_agent: Agent<_, _, _, _> = bob.active().lock().await.clone().into();
+    let events = alice.static_events_for_agent(&bob_agent).await;
+    let pending = bob
+        .ingest_unsorted_static_events(events.into_values().collect())
+        .await;
+    assert!(
+        pending.is_empty(),
+        "Bob should ingest all. {} stuck",
+        pending.len()
+    );
+    let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
+
+    // No predecessor chain exists, so neither pre-join epoch is readable.
+    assert!(
+        bob.try_decrypt_content(doc_on_bob.clone(), blob_a.encrypted_content())
+            .await
+            .is_err(),
+        "forward-secret doc: epoch A must stay unreadable to a later member"
+    );
+    assert!(
+        bob.try_decrypt_content(doc_on_bob, blob_b.encrypted_content())
+            .await
+            .is_err(),
+        "forward-secret doc: epoch B must stay unreadable to a later member"
+    );
+
+    Ok(())
+}
+
+/// With forward secrecy disabled, two instances of the same identity (e.g. a
+/// browser tab and its SharedWorker) and a later member all read content
+/// written across rotations.
+///
+/// The tab creates the doc, the SharedWorker (same identity) writes the first
+/// blob, the tab rotates and writes a second blob, then Bob is added and reads
+/// both. This mirrors the TPW dual-instance flow but for the no-forward-secrecy
+/// model.
+#[tokio::test]
+async fn test_fs_disabled_dual_instance_reads_across_rotations() -> TestResult {
+    test_utils::init_logging();
+
+    // Both instances of this identity are forward-secrecy-disabled peers.
+    let alice_signer = MemorySigner::generate(&mut rand::thread_rng());
+    let tab = make_keyhive_with_signer_fs(alice_signer.clone(), false).await;
+    let sw = make_keyhive_with_signer_fs(alice_signer.clone(), false).await;
+    let prekey_bytes = tab.export_prekey_secrets().await?;
+    sw.import_prekey_secrets(&prekey_bytes).await?;
+
+    let content_a = b"written by the shared worker".to_vec();
+    let hash_a: [u8; 32] = *blake3::hash(&content_a).as_bytes();
+    let content_b = b"written by the tab after a rotation".to_vec();
+    let hash_b: [u8; 32] = *blake3::hash(&content_b).as_bytes();
+
+    let group = tab.generate_group(vec![]).await?;
+    let group_id = { group.lock().await.group_id() };
+    let doc = tab
+        .generate_doc(vec![Peer::Group(group_id, group.dupe())], nonempty![hash_a])
+        .await?;
+    let doc_id = { doc.lock().await.doc_id() };
+
+    // The shared worker writes the first blob after syncing the tab's ops.
+    let tab_self: Agent<_, _, _, _> = tab.active().lock().await.clone().into();
+    let tab_events = tab.static_events_for_agent(&tab_self).await;
+    let sw_pending = sw
+        .ingest_unsorted_static_events(tab_events.into_values().collect())
+        .await;
+    assert!(sw_pending.is_empty(), "SW stuck: {}", sw_pending.len());
+    let sw_doc = sw.get_document(doc_id).await.expect("SW should have doc");
+    let blob_a = sw
+        .try_encrypt_content(sw_doc.clone(), &hash_a, &vec![], &content_a)
+        .await?;
+
+    // The tab syncs the SW's update, rotates, and writes the second blob.
+    let sw_events_for_tab = sw.static_events_for_agent(&tab_self).await;
+    let tab_pending = tab
+        .ingest_unsorted_static_events(sw_events_for_tab.into_values().collect())
+        .await;
+    assert!(tab_pending.is_empty(), "Tab stuck: {}", tab_pending.len());
+    tab.force_pcs_update(doc.dupe()).await?;
+    let blob_b = tab
+        .try_encrypt_content(doc.clone(), &hash_b, &vec![], &content_b)
+        .await?;
+
+    // Add Bob at the latest epoch and rekey.
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
+    tab.add_member(
+        Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
+        &Membered::Document(doc_id, doc.dupe()),
+        Access::Read,
+        &[],
+    )
+    .await?;
+    tab.force_pcs_update(doc.dupe()).await?;
+
+    // Bob ingests everything from both instances.
+    let bob_agent: Agent<_, _, _, _> = bob.active().lock().await.clone().into();
+    let mut all_events: HashMap<Digest<StaticEvent<[u8; 32]>>, StaticEvent<[u8; 32]>> =
+        HashMap::new();
+    all_events.extend(tab.static_events_for_agent(&bob_agent).await);
+    all_events.extend(sw.static_events_for_agent(&bob_agent).await);
+    let bob_pending = bob
+        .ingest_unsorted_static_events(all_events.into_values().collect())
+        .await;
+    assert!(bob_pending.is_empty(), "Bob stuck: {}", bob_pending.len());
+    let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
+
+    let dec_a = bob
+        .try_decrypt_content(doc_on_bob.clone(), blob_a.encrypted_content())
+        .await?;
+    let dec_b = bob
+        .try_decrypt_content(doc_on_bob, blob_b.encrypted_content())
+        .await?;
+    assert_eq!(dec_a, content_a, "Bob should read the SW-written epoch");
+    assert_eq!(dec_b, content_b, "Bob should read the tab-written epoch");
+
+    Ok(())
+}
+
+/// Adding a reader to a non-forward-secret document automatically rekeys, so
+/// the caller does not need to remember to rotate afterwards. Bob reads the
+/// prior history without any explicit `force_pcs_update`.
+#[tokio::test]
+async fn test_fs_disabled_add_member_auto_rekeys() -> TestResult {
+    test_utils::init_logging();
+
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive_fs(false).await;
+
+    let content_a = b"history written before Bob joins".to_vec();
+    let hash_a: [u8; 32] = *blake3::hash(&content_a).as_bytes();
+
+    let doc = alice.generate_doc(vec![], nonempty![hash_a]).await?;
+    let doc_id = { doc.lock().await.doc_id() };
+
+    let blob_a = alice
+        .try_encrypt_content(doc.clone(), &hash_a, &vec![], &content_a)
+        .await?;
+
+    // Add Bob, with no explicit rekey afterwards.
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
+    let update = alice
+        .add_member(
+            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+
+    // The auto-rekey surfaces its new leaf secret so a sibling instance of this
+    // identity can install it.
+    assert_eq!(
+        update.rekey_leaf_secrets.len(),
+        1,
+        "adding a reader to a non-forward-secret doc should auto-rekey and \
+         return the rotated leaf secret"
+    );
+
+    let bob_agent: Agent<_, _, _, _> = bob.active().lock().await.clone().into();
+    let events = alice.static_events_for_agent(&bob_agent).await;
+    let pending = bob
+        .ingest_unsorted_static_events(events.into_values().collect())
+        .await;
+    assert!(
+        pending.is_empty(),
+        "Bob should ingest all. {} stuck",
+        pending.len()
+    );
+    let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
+
+    let dec_a = bob
+        .try_decrypt_content(doc_on_bob, blob_a.encrypted_content())
         .await?;
     assert_eq!(
-        dec_b, content_b,
-        "Bob's branch (B) should decrypt via a chained predecessor"
+        dec_a, content_a,
+        "auto-rekey on add should let Bob read pre-join history"
     );
 
     Ok(())

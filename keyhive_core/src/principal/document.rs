@@ -74,6 +74,13 @@ pub struct Document<
 
     known_decryption_keys: HashMap<T, SymmetricKey>,
     cgka: Option<Cgka>,
+
+    /// Whether this document provides forward secrecy. See
+    /// [`beekem::cgka::Cgka`]. When `false`, CGKA update operations carry a
+    /// predecessor key chain so that a member added later can read the
+    /// document's entire prior history. Used when lazily constructing the
+    /// [`Cgka`] for a member that receives the document's ops.
+    forward_secrecy: bool,
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
@@ -86,6 +93,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub async fn from_group(
         group: Group<F, S, T, L>,
         content_heads: NonEmpty<T>,
+        forward_secrecy: bool,
     ) -> Result<Self, CgkaError> {
         let mut doc = Document {
             cgka: None,
@@ -93,6 +101,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             content_heads: content_heads.iter().cloned().collect(),
             content_state: Default::default(),
             known_decryption_keys: HashMap::new(),
+            forward_secrecy,
         };
         doc.rebuild().await;
         Ok(doc)
@@ -154,12 +163,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     #[instrument(skip_all)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
         parents: NonEmpty<Agent<F, S, T, L>>,
         initial_content_heads: NonEmpty<T>,
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         listener: L,
+        forward_secrecy: bool,
         signer: &S,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Self, GenerateDocError> {
@@ -193,7 +204,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             .collect();
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_share_key, owner_share_secret_key);
-        let mut cgka = Cgka::new(doc_id, owner_id, owner_share_key, signer)
+        let mut cgka = Cgka::new(doc_id, owner_id, owner_share_key, forward_secrecy, signer)
             .await?
             .with_new_owner(owner_id, owner_sks)?;
         let mut ops: Vec<Signed<CgkaOperation>> = Vec::new();
@@ -221,6 +232,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             content_heads: initial_content_heads.iter().cloned().collect(),
             known_decryption_keys: HashMap::new(),
             cgka: Some(cgka),
+            forward_secrecy,
         })
     }
 
@@ -391,6 +403,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                         self.doc_id(),
                         IndividualId::from(added_id),
                         pk,
+                        self.forward_secrecy,
                         (*op).clone(),
                     )?)
                 }
@@ -436,12 +449,47 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.cgka()?.ops()
     }
 
+    /// Whether this document provides forward secrecy.
+    pub fn forward_secrecy(&self) -> bool {
+        self.forward_secrecy
+    }
+
+    /// When this document is not forward-secret, rotate the PCS key so that a
+    /// newly added reader obtains a current key whose predecessor chain reaches
+    /// the document's prior history. Returns the resulting CGKA operation along
+    /// with the rotation's new leaf keypair, or `None` when the document is
+    /// forward-secret (in which case a later member is intentionally unable to
+    /// read earlier content).
+    ///
+    /// The new leaf secret is returned so that a sibling instance of this
+    /// identity (e.g. a tab and its SharedWorker) can install it and derive the
+    /// rotated key, exactly as with [`Self::pcs_update`]. This removes the need
+    /// for the caller to remember to rekey after adding a reader to a
+    /// non-forward-secret document.
+    #[instrument(skip_all)]
+    pub(crate) async fn rekey_if_not_forward_secret<R: rand::RngCore + rand::CryptoRng>(
+        &mut self,
+        signer: &S,
+        csprng: &mut R,
+    ) -> Result<Option<(Signed<CgkaOperation>, ShareKey, ShareSecretKey)>, CgkaError> {
+        if self.forward_secrecy {
+            return Ok(None);
+        }
+        let new_share_secret_key = ShareSecretKey::generate(csprng);
+        let new_share_key = new_share_secret_key.share_key();
+        let (_, op) = self
+            .cgka_mut()?
+            .update(new_share_key, new_share_secret_key, signer, csprng)
+            .await?;
+        Ok(Some((op, new_share_key, new_share_secret_key)))
+    }
+
     #[instrument(skip_all)]
     pub async fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<Signed<CgkaOperation>, EncryptError> {
+    ) -> Result<(Signed<CgkaOperation>, ShareKey, ShareSecretKey), EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
         let (_, op) = self
@@ -450,7 +498,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             .update(new_share_key, new_share_secret_key, signer, csprng)
             .await
             .map_err(EncryptError::UnableToPcsUpdate)?;
-        Ok(op)
+        // Return the rotation's new leaf secret so a sibling instance of this
+        // identity (e.g. tab vs SharedWorker) can install it and derive the key.
+        Ok((op, new_share_key, new_share_secret_key))
     }
 
     #[instrument(skip_all)]
@@ -462,7 +512,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         signer: &S,
         csprng: &mut R,
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptError> {
-        let (app_secret, maybe_update_op, encrypted_pred_keys) = self
+        let (app_secret, maybe_update_op) = self
             .cgka_mut()
             .map_err(EncryptError::FailedToMakeAppSecret)?
             .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
@@ -474,7 +524,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
         Ok(EncryptedContentWithUpdate {
             encrypted_content: app_secret
-                .try_encrypt(content, encrypted_pred_keys)
+                .try_encrypt(content)
                 .map_err(EncryptError::EncryptionFailed)?,
             update_op: maybe_update_op,
         })
@@ -567,6 +617,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         listener: L,
+        forward_secrecy: bool,
     ) -> Result<Self, MissingIndividualError> {
         Ok(Document {
             group: Group::<F, S, T, L>::dummy_from_archive(
@@ -579,6 +630,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             content_state: archive.content_state,
             known_decryption_keys: HashMap::new(),
             cgka: archive.cgka,
+            forward_secrecy,
         })
     }
 }
@@ -611,6 +663,11 @@ pub struct AddMemberUpdate<
 > {
     pub delegation: Arc<Signed<Delegation<F, S, T, L>>>,
     pub cgka_ops: Vec<Signed<CgkaOperation>>,
+    /// New leaf keypairs produced by auto-rekeying non-forward-secret documents
+    /// when this reader was added. A sibling instance of this identity must
+    /// install these (as with [`Document::pcs_update`]) to derive the rotated
+    /// keys. Empty for forward-secret documents.
+    pub rekey_leaf_secrets: Vec<(ShareKey, ShareSecretKey)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

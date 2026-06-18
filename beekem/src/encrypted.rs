@@ -26,7 +26,8 @@ pub struct PredecessorPcsKey {
 
 /// Predecessor PCS keys encrypted under the current PCS key.
 /// Enables key chaining.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct EncryptedPredecessorKeys {
     /// The synthetic IV used to encrypt the predecessor entries.
     pub nonce: Siv,
@@ -106,9 +107,6 @@ pub struct EncryptedContent<T, Cr: ContentRef> {
     /// The predecessor content ref hashes used to derive the application secret
     /// for encrypting.
     pub pred_refs: Digest<Vec<Cr>>,
-    /// Predecessor PCS keys encrypted under the current PCS key. Enables key chaining.
-    #[serde(default)]
-    pub encrypted_pred_pcs_keys: Option<EncryptedPredecessorKeys>,
     /// The type of the data that was encrypted.
     _plaintext_tag: PhantomData<T>,
 }
@@ -122,7 +120,6 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
         content_ref: Cr,
         pred_refs: Digest<Vec<Cr>>,
-        encrypted_pred_pcs_keys: Option<EncryptedPredecessorKeys>,
     ) -> EncryptedContent<T, Cr> {
         EncryptedContent {
             nonce,
@@ -131,7 +128,6 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
             pcs_update_op_hash,
             content_ref,
             pred_refs,
-            encrypted_pred_pcs_keys,
             _plaintext_tag: PhantomData,
         }
     }
@@ -197,7 +193,6 @@ impl<T: core::hash::Hash, Cr: ContentRef> core::hash::Hash for EncryptedContent<
             pcs_update_op_hash,
             content_ref,
             pred_refs,
-            encrypted_pred_pcs_keys,
             _plaintext_tag,
         } = self;
 
@@ -207,10 +202,6 @@ impl<T: core::hash::Hash, Cr: ContentRef> core::hash::Hash for EncryptedContent<
         pcs_update_op_hash.hash(state);
         content_ref.hash(state);
         pred_refs.hash(state);
-        if let Some(epk) = encrypted_pred_pcs_keys {
-            epk.nonce.hash(state);
-            epk.ciphertext.hash(state);
-        }
     }
 }
 

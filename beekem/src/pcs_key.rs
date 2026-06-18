@@ -1,9 +1,6 @@
 //! PCS keys and application secrets for content encryption.
 
-use crate::{
-    encrypted::{EncryptedContent, EncryptedPredecessorKeys},
-    operation::CgkaOperation,
-};
+use crate::{encrypted::EncryptedContent, operation::CgkaOperation};
 use alloc::{format, vec::Vec};
 use keyhive_crypto::{
     content::reference::ContentRef, digest::Digest, separable::Separable,
@@ -54,7 +51,6 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
     pub fn try_encrypt<T>(
         &self,
         plaintext: &[u8],
-        encrypted_pred_pcs_keys: Option<EncryptedPredecessorKeys>,
     ) -> Result<EncryptedContent<T, Cr>, chacha20poly1305::Error> {
         let mut ciphertext = plaintext.to_vec();
         self.key.try_encrypt(self.nonce, &mut ciphertext)?;
@@ -65,7 +61,6 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
             self.pcs_update_op_hash,
             self.content_ref.clone(),
             self.pred_refs,
-            encrypted_pred_pcs_keys,
         ))
     }
 }

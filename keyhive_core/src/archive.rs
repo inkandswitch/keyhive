@@ -25,6 +25,14 @@ pub struct Archive<T: ContentRef> {
     pub(crate) groups: HashMap<GroupId, GroupArchive<T>>,
     pub(crate) docs: HashMap<DocumentId, DocumentArchive<T>>,
     pub(crate) pending_events: Vec<StaticEvent<T>>,
+    /// This peer's forward-secrecy policy. Defaults to `true` so archives
+    /// written before this field existed restore as forward-secret.
+    #[serde(default = "crate::archive::default_forward_secrecy")]
+    pub(crate) forward_secrecy: bool,
+}
+
+pub(crate) fn default_forward_secrecy() -> bool {
+    true
 }
 
 impl<T: ContentRef> Archive<T> {
