@@ -75,14 +75,6 @@ impl Individual {
         }
     }
 
-    pub fn from_id(id: IndividualId) -> Self {
-        Self {
-            id,
-            prekeys: HashSet::new(),
-            prekey_state: PrekeyState::empty(),
-        }
-    }
-
     #[cfg(any(feature = "test_utils", test))]
     #[instrument(skip_all)]
     pub async fn generate<F: FutureForm, R: rand::CryptoRng + rand::RngCore, S: AsyncSigner<F>>(

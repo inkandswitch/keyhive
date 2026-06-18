@@ -418,7 +418,6 @@ mod tests {
                 pcs_update_op_hash,
                 cref,
                 Digest::hash(&vec![]),
-                None,
             )),
             key,
         )

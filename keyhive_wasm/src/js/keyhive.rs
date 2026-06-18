@@ -13,6 +13,7 @@ use crate::{
 use super::{
     access::JsAccess,
     add_member_error::JsAddMemberError,
+    add_member_update::JsAddMemberUpdate,
     agent::JsAgent,
     all_agent_events::JsAllAgentEvents,
     archive::JsArchive,
@@ -32,7 +33,6 @@ use super::{
     revoke_member_error::JsRevokeMemberError,
     share_key::JsShareKey,
     signed::JsSigned,
-    signed_delegation::JsSignedDelegation,
     signed_revocation::JsSignedRevocation,
     signer::JsSigner,
     signing_error::JsSigningError,
@@ -62,20 +62,29 @@ pub struct JsKeyhive(pub(crate) InnerKeyhive);
 
 #[wasm_bindgen(js_class = Keyhive)]
 impl JsKeyhive {
+    /// Initialize a peer.
+    ///
+    /// `forward_secrecy` is this peer's policy for all documents it creates or
+    /// receives. When `false`, documents carry the CGKA predecessor key chain
+    /// (a member added later reads the whole prior history) and adding a reader
+    /// auto-rekeys (see `addMember`'s `leafSecrets`). When `true`, a member
+    /// added later cannot read content from before they joined.
     #[wasm_bindgen]
     pub async fn init(
         signer: &JsSigner,
         ciphertext_store: &JsCiphertextStore,
         event_handler: &js_sys::Function,
+        forward_secrecy: bool,
     ) -> Result<JsKeyhive, JsSigningError> {
         init_span!("JsKeyhive::init");
         tracing::info!("JsKeyhive::init");
         Ok(JsKeyhive(
-            Keyhive::generate(
+            Keyhive::generate_with_forward_secrecy(
                 signer.clone(),
                 ciphertext_store.clone(),
                 JsEventHandler(event_handler.clone()),
                 OsRng,
+                forward_secrecy,
             )
             .await?,
         ))
@@ -133,6 +142,8 @@ impl JsKeyhive {
         })
     }
 
+    /// Generate a document. Whether it provides forward secrecy is determined by
+    /// this peer's forward-secrecy policy (chosen at `Keyhive.init`).
     #[wasm_bindgen(js_name = generateDocument)]
     pub async fn generate_doc(
         &self,
@@ -234,7 +245,7 @@ impl JsKeyhive {
         membered: &JsMembered,
         access: &JsAccess,
         other_relevant_docs: Vec<JsDocumentRef>,
-    ) -> Result<JsSignedDelegation, JsAddMemberError> {
+    ) -> Result<JsAddMemberUpdate, JsAddMemberError> {
         init_span!("JsKeyhive::add_member");
         let other_docs_refs: Vec<_> = other_relevant_docs
             .iter()
@@ -253,7 +264,23 @@ impl JsKeyhive {
             )
             .await?;
 
-        Ok(res.delegation.into())
+        // Auto-rekeying a non-forward-secret document on add produces new leaf
+        // secrets. Serialize them as a `BTreeMap<ShareKey, ShareSecretKey>` (the
+        // exact format `importPrekeySecrets` accepts) so a sibling instance of
+        // this identity can install them and derive the rotated key. `None` for
+        // forward-secret documents (no rotation occurred).
+        let leaf_secrets = if res.rekey_leaf_secrets.is_empty() {
+            None
+        } else {
+            let map: std::collections::BTreeMap<_, _> =
+                res.rekey_leaf_secrets.iter().cloned().collect();
+            Some(bincode::serialize(&map).expect("leaf secret keypairs are serializable"))
+        };
+
+        Ok(JsAddMemberUpdate {
+            delegation: res.delegation.into(),
+            leaf_secrets,
+        })
     }
 
     #[wasm_bindgen(js_name = revokeMember)]
@@ -294,14 +321,23 @@ impl JsKeyhive {
         acc
     }
 
+    /// Force a PCS key rotation and return the new leaf secret, serialized as a
+    /// one-entry `BTreeMap<ShareKey, ShareSecretKey>` (the exact format
+    /// `importPrekeySecrets` accepts). A sibling instance of this identity can
+    /// install it to derive the rotated key without re-importing the whole bundle.
     #[wasm_bindgen(js_name = forcePcsUpdate)]
-    pub async fn force_pcs_update(&self, doc: &JsDocument) -> Result<(), JsEncryptError> {
+    pub async fn force_pcs_update(&self, doc: &JsDocument) -> Result<Box<[u8]>, JsValue> {
         init_span!("JsKeyhive::force_pcs_update");
-        self.0
+        let (_op, new_share_key, new_share_secret_key) = self
+            .0
             .force_pcs_update(doc.inner.dupe())
             .await
-            .map_err(EncryptContentError::from)?;
-        Ok(())
+            .map_err(EncryptContentError::from)
+            .map_err(JsEncryptError::from)?;
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(new_share_key, new_share_secret_key);
+        let bytes = bincode::serialize(&map).map_err(JsSerializationError::from)?;
+        Ok(bytes.into_boxed_slice())
     }
 
     #[wasm_bindgen(js_name = tryPcsKeyHash)]

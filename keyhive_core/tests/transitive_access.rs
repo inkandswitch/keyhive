@@ -1834,15 +1834,18 @@ async fn test_document_delegate_before_defining_event_reified_as_document() -> T
 
     // Fresh peer receives everything EXCEPT Doc A's defining delegation first.
     let carol = make_simple_keyhive().await?;
-    carol.ingest_unsorted_static_events(rest).await;
+    let pending = carol.ingest_unsorted_static_events(rest).await;
 
-    // Doc A is only known as a placeholder Individual at this point.
+    // Before its defining delegation arrives, Doc A is unknown: the delegation
+    // that references it as a delegate stays pending rather than fabricating a
+    // stand-in for it.
     assert!(
-        matches!(
-            carol.get_agent(doc_a_ident).await,
-            Some(Agent::Individual(..))
-        ),
-        "Doc A should be a placeholder Individual before its defining delegation"
+        !pending.is_empty(),
+        "the delegation referencing Doc A should remain pending"
+    );
+    assert!(
+        carol.get_agent(doc_a_ident).await.is_none(),
+        "Doc A should be unknown before its defining delegation arrives"
     );
     assert!(
         carol.get_document(doc_a_id).await.is_none(),
@@ -1916,15 +1919,18 @@ async fn test_group_delegate_before_defining_event_reified_as_group() -> TestRes
     );
 
     let carol = make_simple_keyhive().await?;
-    carol.ingest_unsorted_static_events(rest).await;
+    let pending = carol.ingest_unsorted_static_events(rest).await;
 
-    // Group G is only known as a placeholder Individual at this point.
+    // Before its defining delegation arrives, Group G is unknown: the delegation
+    // that references it as a delegate stays pending rather than fabricating a
+    // stand-in for it.
     assert!(
-        matches!(
-            carol.get_agent(group_ident).await,
-            Some(Agent::Individual(..))
-        ),
-        "Group G should be a placeholder Individual before its defining delegation"
+        !pending.is_empty(),
+        "the delegation referencing Group G should remain pending"
+    );
+    assert!(
+        carol.get_agent(group_ident).await.is_none(),
+        "Group G should be unknown before its defining delegation arrives"
     );
 
     carol.ingest_unsorted_static_events(defining).await;
