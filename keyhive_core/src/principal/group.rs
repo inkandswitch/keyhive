@@ -534,7 +534,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         Ok(AddMemberUpdate {
             cgka_ops: Vec::new(),
             delegation: rc,
-            rekey_leaf_secrets: Vec::new(),
         })
     }
 

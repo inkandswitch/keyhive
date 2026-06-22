@@ -63,28 +63,20 @@ pub struct JsKeyhive(pub(crate) InnerKeyhive);
 #[wasm_bindgen(js_class = Keyhive)]
 impl JsKeyhive {
     /// Initialize a peer.
-    ///
-    /// `forward_secrecy` is this peer's policy for all documents it creates or
-    /// receives. When `false`, documents carry the CGKA predecessor key chain
-    /// (a member added later reads the whole prior history) and adding a reader
-    /// auto-rekeys (see `addMember`'s `leafSecrets`). When `true`, a member
-    /// added later cannot read content from before they joined.
     #[wasm_bindgen]
     pub async fn init(
         signer: &JsSigner,
         ciphertext_store: &JsCiphertextStore,
         event_handler: &js_sys::Function,
-        forward_secrecy: bool,
     ) -> Result<JsKeyhive, JsSigningError> {
         init_span!("JsKeyhive::init");
         tracing::info!("JsKeyhive::init");
         Ok(JsKeyhive(
-            Keyhive::generate_with_forward_secrecy(
+            Keyhive::generate(
                 signer.clone(),
                 ciphertext_store.clone(),
                 JsEventHandler(event_handler.clone()),
                 OsRng,
-                forward_secrecy,
             )
             .await?,
         ))
@@ -264,22 +256,8 @@ impl JsKeyhive {
             )
             .await?;
 
-        // Auto-rekeying a non-forward-secret document on add produces new leaf
-        // secrets. Serialize them as a `BTreeMap<ShareKey, ShareSecretKey>` (the
-        // exact format `importPrekeySecrets` accepts) so a sibling instance of
-        // this identity can install them and derive the rotated key. `None` for
-        // forward-secret documents (no rotation occurred).
-        let leaf_secrets = if res.rekey_leaf_secrets.is_empty() {
-            None
-        } else {
-            let map: std::collections::BTreeMap<_, _> =
-                res.rekey_leaf_secrets.iter().cloned().collect();
-            Some(bincode::serialize(&map).expect("leaf secret keypairs are serializable"))
-        };
-
         Ok(JsAddMemberUpdate {
             delegation: res.delegation.into(),
-            leaf_secrets,
         })
     }
 

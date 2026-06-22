@@ -127,14 +127,6 @@ pub struct Keyhive<
     /// Cryptographically secure (pseudo)random number generator.
     csprng: Arc<Mutex<R>>,
 
-    /// Whether documents created or received by this peer provide forward
-    /// secrecy. This is a peer-wide policy: when `false`, documents carry a CGKA
-    /// predecessor key chain (a member added later reads the whole prior
-    /// history) and adding a reader auto-rekeys. When `true`, a member added
-    /// later cannot read content from before they joined. Every document this
-    /// peer creates or materializes inherits this setting.
-    forward_secrecy: bool,
-
     _plaintext_phantom: PhantomData<P>,
 }
 
@@ -184,23 +176,7 @@ impl<
         signer: S,
         ciphertext_store: C,
         event_listener: L,
-        csprng: R,
-    ) -> Result<Self, SigningError> {
-        Self::generate_with_forward_secrecy(signer, ciphertext_store, event_listener, csprng, true)
-            .await
-    }
-
-    /// Generate a new peer, choosing whether its documents provide forward
-    /// secrecy. See [`Self::forward_secrecy`]. `generate` defaults this to
-    /// `true`; pass `false` for the post-compromise-without-forward-secrecy
-    /// model (e.g. TPW), where a member added later reads the whole prior
-    /// history.
-    pub async fn generate_with_forward_secrecy(
-        signer: S,
-        ciphertext_store: C,
-        event_listener: L,
         mut csprng: R,
-        forward_secrecy: bool,
     ) -> Result<Self, SigningError> {
         let verifying_key = signer.verifying_key();
         let inner_active = Active::generate(signer, event_listener.clone(), &mut csprng).await?;
@@ -224,7 +200,6 @@ impl<
             ciphertext_store,
             event_listener,
             csprng: Arc::new(Mutex::new(csprng)),
-            forward_secrecy,
             _plaintext_phantom: PhantomData,
         })
     }
@@ -290,8 +265,7 @@ impl<
         Ok(g)
     }
 
-    /// Generate a document. Whether it provides forward secrecy is determined by
-    /// this peer's [`Self::forward_secrecy`] policy.
+    /// Generate a document.
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn generate_doc(
@@ -320,7 +294,6 @@ impl<
             self.delegations.dupe(),
             self.revocations.dupe(),
             self.event_listener.clone(),
-            self.forward_secrecy,
             &signer,
             self.csprng.dupe(),
         )
@@ -555,17 +528,6 @@ impl<
                             .add_cgka_members_from_prekeys(&prekeys, &signer)
                             .await?;
                         update.cgka_ops.extend(ops);
-                        // Auto-rekey non-forward-secret docs so the new reader
-                        // gets a starting key reaching the document's history.
-                        if let Some((op, pk, sk)) = {
-                            let mut csprng = self.csprng.lock().await;
-                            locked_doc
-                                .rekey_if_not_forward_secret(&signer, &mut *csprng)
-                                .await?
-                        } {
-                            update.cgka_ops.push(op);
-                            update.rekey_leaf_secrets.push((pk, sk));
-                        }
                     }
                 }
 
@@ -573,25 +535,9 @@ impl<
             }
             Membered::Document(_, doc) => {
                 let mut locked = doc.lock().await;
-                let mut update = locked
+                locked
                     .add_member(to_add, can, &signer, other_relevant_docs)
-                    .await?;
-                // Auto-rekey a non-forward-secret document so the newly added
-                // reader obtains a current key whose predecessor chain reaches
-                // the document's prior history. The new leaf secret is surfaced
-                // so a sibling instance of this identity can install it.
-                if can.is_reader() {
-                    if let Some((op, pk, sk)) = {
-                        let mut csprng = self.csprng.lock().await;
-                        locked
-                            .rekey_if_not_forward_secret(&signer, &mut *csprng)
-                            .await?
-                    } {
-                        update.cgka_ops.push(op);
-                        update.rekey_leaf_secrets.push((pk, sk));
-                    }
-                }
-                update
+                    .await?
             }
         };
 
@@ -1683,10 +1629,7 @@ impl<
                 .get(&subject_id.into())
                 .and_then(|content_heads| NonEmpty::collect(content_heads.iter().cloned()))
             {
-                // The document inherits this peer's forward-secrecy policy. (A
-                // reader follows whatever chain is present regardless; this
-                // governs the update operations this peer itself emits.)
-                let doc = Document::from_group(group, content_heads, self.forward_secrecy).await?;
+                let doc = Document::from_group(group, content_heads).await?;
                 let mut locked_docs = self.docs.lock().await;
                 locked_docs.insert(doc.doc_id(), Arc::new(Mutex::new(doc)));
             } else {
@@ -2006,7 +1949,6 @@ impl<
             groups,
             docs,
             pending_events,
-            forward_secrecy: self.forward_secrecy,
         }
     }
 
@@ -2053,7 +1995,6 @@ impl<
                     delegations.dupe(),
                     revocations.dupe(),
                     listener.clone(),
-                    archive.forward_secrecy,
                 )?)),
             );
         }
@@ -2275,7 +2216,6 @@ impl<
             csprng,
             ciphertext_store,
             event_listener: listener,
-            forward_secrecy: archive.forward_secrecy,
             _plaintext_phantom: PhantomData,
         })
     }

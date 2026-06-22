@@ -68,14 +68,12 @@ impl Cgka {
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
-        forward_secrecy: bool,
         signer: &S,
     ) -> Result<Self, CgkaError> {
         let mut inner = beekem::cgka::Cgka::new(
             TreeId(doc_id.verifying_key()),
             MemberId(owner_id.verifying_key()),
             owner_pk,
-            forward_secrecy,
             signer,
         )
         .await?;
@@ -87,14 +85,12 @@ impl Cgka {
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
-        forward_secrecy: bool,
         init_add_op: Signed<CgkaOperation>,
     ) -> Result<Self, CgkaError> {
         let mut inner = beekem::cgka::Cgka::new_from_init_add(
             TreeId(doc_id.verifying_key()),
             MemberId(owner_id.verifying_key()),
             owner_pk,
-            forward_secrecy,
             init_add_op,
         )?;
         Self::insert_public_sks(&mut inner);
