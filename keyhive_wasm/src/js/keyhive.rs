@@ -877,7 +877,6 @@ mod tests {
             &JsSigner::generate().await,
             &JsCiphertextStore::new_in_memory(),
             &js_sys::Function::new_with_args("event", "console.log(event)"),
-            false,
         )
         .await
         .unwrap()
