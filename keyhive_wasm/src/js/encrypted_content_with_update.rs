@@ -18,4 +18,13 @@ impl JsEncryptedContentWithUpdate {
     pub fn update_op(&self) -> Option<JsSignedCgkaOperation> {
         self.0.update_op().map(|op| op.clone().into())
     }
+
+    /// The 32-byte application secret key used to encrypt this content.
+    ///
+    /// Lets the consumer build the external predecessor-secret chain and chain
+    /// further encryptions onto this blob.
+    #[wasm_bindgen(getter, js_name = applicationSecret)]
+    pub fn application_secret(&self) -> Vec<u8> {
+        self.0.application_secret_key().as_slice().to_vec()
+    }
 }

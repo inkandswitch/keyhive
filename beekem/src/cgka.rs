@@ -485,9 +485,26 @@ impl Cgka {
 
     /// Decrypt tree secret to derive [`PcsKey`].
     pub fn pcs_key_from_tree_root(&mut self) -> Result<PcsKey, CgkaError> {
-        let key = self
+        let key = match self
             .tree
-            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)?;
+            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)
+        {
+            Ok(k) => k,
+            // A reader with public access holds the well-known Public secret but
+            // may be unable to decrypt its own member leaf. When deriving as the
+            // owner fails and Public is a member, read as Public instead.
+            // `decrypt_tree_secret` already falls back to Public when the owner
+            // is not a leaf at all; this also covers the
+            // owner-is-a-leaf-but-undecryptable case.
+            Err(_)
+                if self.owner_id != MemberId::public()
+                    && self.tree.contains_id(&MemberId::public()) =>
+            {
+                self.tree
+                    .decrypt_tree_secret(MemberId::public(), &mut self.owner_sks)?
+            }
+            Err(e) => return Err(e),
+        };
         Ok(PcsKey::new(key))
     }
 

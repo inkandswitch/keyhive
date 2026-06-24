@@ -9,6 +9,7 @@ pub mod cgka_operation;
 pub mod change_id;
 pub mod ciphertext_store;
 pub mod contact_card;
+pub mod decrypted_with_key;
 pub mod delegation;
 pub mod doc_content_refs;
 pub mod document;
@@ -41,5 +42,6 @@ pub mod signer;
 pub mod signing_error;
 pub mod stats;
 pub mod summary;
+pub mod symmetric;
 
 pub(crate) mod base64;

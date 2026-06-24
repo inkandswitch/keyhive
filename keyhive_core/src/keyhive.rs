@@ -67,6 +67,7 @@ use keyhive_crypto::{
     share_key::{ShareKey, ShareSecretKey},
     signed::{Signed, SigningError, VerificationError},
     signer::async_signer::AsyncSigner,
+    symmetric_key::SymmetricKey,
     verifiable::Verifiable,
 };
 use nonempty::NonEmpty;
@@ -682,6 +683,18 @@ impl<
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
         doc.lock().await.try_decrypt_content(encrypted)
+    }
+
+    /// Decrypt content and also return the application secret key that was used.
+    ///
+    /// The key lets the consumer recover this blob's external predecessor-secret
+    /// chain and chain further encryptions onto it, without re-entering CGKA.
+    pub async fn try_decrypt_content_with_key(
+        &self,
+        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        encrypted: &EncryptedContent<P, T>,
+    ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
+        doc.lock().await.try_decrypt_content_with_key(encrypted)
     }
 
     pub async fn try_causal_decrypt_content(
@@ -1509,6 +1522,13 @@ impl<
     #[instrument(skip_all)]
     pub async fn receive_prekey_op(&self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
         let id = Identifier(*key_op.issuer());
+        // Public's prekey set is fixed to its single well-known key. Drop any
+        // prekey op addressed to Public so its individual can never expand or
+        // rotate; its signing key is publicly known, so these ops are untrusted
+        // anyway.
+        if id == Public.id() {
+            return Ok(());
+        }
         let agent = if let Some(agent) = self.get_agent(id).await {
             agent
         } else {
@@ -1783,11 +1803,15 @@ impl<
                 return Ok(());
             } else if Public.individual().id() == added_id {
                 let sk = Public.share_secret_key();
-                if doc
-                    .lock()
-                    .await
-                    .merge_cgka_invite_op(signed_op.clone(), &sk)?
-                {
+                let mut locked_doc = doc.lock().await;
+                let merged = locked_doc.merge_cgka_invite_op(signed_op.clone(), &sk)?;
+                // merge_cgka_invite_op set owner = Public; the owner must always
+                // be our Active, so re-point it. reset_cgka_owner re-seeds the
+                // well-known Public secret, so a non-member public reader still
+                // reads via the Public fallback.
+                locked_doc.reset_cgka_owner(active_id)?;
+                drop(locked_doc);
+                if merged {
                     self.event_listener.on_cgka_op(&signed_op).await;
                 }
                 return Ok(());

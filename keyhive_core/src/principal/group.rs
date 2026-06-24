@@ -247,8 +247,17 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         doc_id: DocumentId,
     ) -> HashMap<IndividualId, ShareKey> {
         let mut prekeys = HashMap::new();
-        for (agent, _access) in self.transitive_members().await.values() {
-            prekeys.extend(agent.pick_individual_prekeys(doc_id).await.iter());
+        for (id, (agent, _access)) in self.transitive_members().await.iter() {
+            // Public must always be added to a CGKA with its single well-known
+            // key, never a picked/expanded prekey. A public reader only ever
+            // holds the well-known secret, so adding Public under any other key
+            // strands every such reader (it can never derive that leaf secret).
+            if *id == crate::principal::public::Public.id() {
+                let public = crate::principal::public::Public;
+                prekeys.insert(IndividualId(public.id()), public.share_key());
+            } else {
+                prekeys.extend(agent.pick_individual_prekeys(doc_id).await.iter());
+            }
         }
         prekeys
     }

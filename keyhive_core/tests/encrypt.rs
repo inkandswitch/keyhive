@@ -98,6 +98,61 @@ async fn test_encrypt_to_added_member() -> TestResult {
     Ok(())
 }
 
+/// The application secret key surfaced on encrypt round-trips: it equals the
+/// key the reader derives, and it decrypts the envelope directly.
+#[tokio::test]
+async fn test_application_secret_key_round_trips() -> TestResult {
+    test_utils::init_logging();
+
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+
+    let init_content = "hello world".as_bytes().to_vec();
+    let init_hash = blake3::hash(&init_content);
+
+    let doc = alice
+        .generate_doc(vec![], nonempty![init_hash.into()])
+        .await?;
+    let doc_id = { doc.lock().await.doc_id() };
+
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
+    alice
+        .add_member(
+            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+
+    // Encrypt after adding Bob so Bob can reach the key via CGKA.
+    let encrypted = alice
+        .try_encrypt_content(doc.clone(), &init_hash.into(), &vec![], &init_content)
+        .await?;
+    let encrypt_key = encrypted.application_secret_key();
+
+    // The surfaced key decrypts the envelope directly, with no CGKA.
+    let direct = encrypted.encrypted_content().try_decrypt(encrypt_key)?;
+    assert_eq!(direct, init_content);
+
+    // Sync to Bob.
+    let alice_events = alice
+        .static_events_for_agent(&bob.active().lock().await.clone().into())
+        .await;
+    bob.ingest_unsorted_static_events(alice_events.into_values().collect())
+        .await;
+
+    // Bob's CGKA-derived key matches Alice's encrypt key, and decrypts.
+    let doc_on_bob = bob.get_document(doc_id).await.unwrap();
+    let (decrypted, decrypt_key) = bob
+        .try_decrypt_content_with_key(doc_on_bob.clone(), encrypted.encrypted_content())
+        .await?;
+    assert_eq!(decrypted, init_content);
+    assert_eq!(decrypt_key, encrypt_key);
+
+    Ok(())
+}
+
 /// Encrypt BEFORE adding Bob, with no re-key or re-encryption afterwards.
 ///
 /// Bob must NOT be able to decrypt that content. The content was encrypted
@@ -517,6 +572,58 @@ async fn test_encrypt_decrypt_as_public() -> TestResult {
         .try_decrypt_content(doc_on_b.clone(), encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
+
+    Ok(())
+}
+
+// A member (alice) encrypts content after adding Public and force_pcs_update,
+// and a fresh non-member peer decrypts it as Public.
+#[tokio::test]
+async fn test_member_encrypt_public_reader_decrypt() -> TestResult {
+    test_utils::init_logging();
+
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+
+    let init_content = "init".as_bytes().to_vec();
+    let init_hash = blake3::hash(&init_content);
+
+    let doc = alice
+        .generate_doc(vec![], nonempty![init_hash.into()])
+        .await?;
+    let doc_id = { doc.lock().await.doc_id() };
+
+    let public_individual = keyhive_core::principal::public::Public.individual();
+    let public_agent: Agent<_, _, _, _> = Agent::Individual(
+        public_individual.id(),
+        Arc::new(Mutex::new(public_individual)),
+    );
+    alice
+        .add_member(
+            public_agent.dupe(),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+    alice.force_pcs_update(doc.dupe()).await?;
+
+    // ALICE (a member) encrypts the content under her own leaf's PCS key.
+    let content = "member-encrypted public message".as_bytes().to_vec();
+    let content_hash = blake3::hash(&content);
+    let encrypted = alice
+        .try_encrypt_content(doc.dupe(), &content_hash.into(), &vec![], &content)
+        .await?;
+
+    // Bob (non-member) ingests the public events and decrypts as Public.
+    let public_events = alice.static_events_for_agent(&public_agent).await;
+    bob.ingest_unsorted_static_events(public_events.into_values().collect())
+        .await;
+    let doc_on_b = bob.get_document(doc_id).await.unwrap();
+    let decrypted = bob
+        .try_decrypt_content(doc_on_b.clone(), encrypted.encrypted_content())
+        .await?;
+    assert_eq!(decrypted, content);
 
     Ok(())
 }

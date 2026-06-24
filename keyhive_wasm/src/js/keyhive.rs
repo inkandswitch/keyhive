@@ -20,6 +20,7 @@ use super::{
     change_id::{JsChangeId, JsChangeIdRef},
     ciphertext_store::JsCiphertextStore,
     contact_card::JsContactCard,
+    decrypted_with_key::JsDecryptedWithKey,
     document::{JsDocument, JsDocumentRef},
     encrypted::JsEncrypted,
     encrypted_content_with_update::JsEncryptedContentWithUpdate,
@@ -110,7 +111,9 @@ impl JsKeyhive {
             .as_slice()
             .iter()
             .fold("0x".to_string(), |mut acc, byte| {
-                acc.push_str(&format!("{:x}", byte));
+                // Zero-pad each byte to two hex digits so bytes < 0x10 keep
+                // their leading zero.
+                acc.push_str(&format!("{:02x}", byte));
                 acc
             })
     }
@@ -228,6 +231,24 @@ impl JsKeyhive {
             .0
             .try_decrypt_content(doc.inner.dupe(), &encrypted.0)
             .await?)
+    }
+
+    /// Decrypt content and also return the 32-byte application secret key used.
+    ///
+    /// The consumer follows the external predecessor-secret chain from this key
+    /// with `Encrypted.decryptWithKey`, avoiding further CGKA dives.
+    #[wasm_bindgen(js_name = tryDecryptWithKey)]
+    pub async fn try_decrypt_with_key(
+        &self,
+        doc: &JsDocument,
+        encrypted: &JsEncrypted,
+    ) -> Result<JsDecryptedWithKey, JsDecryptError> {
+        init_span!("JsKeyhive::try_decrypt_with_key");
+        let (plaintext, key) = self
+            .0
+            .try_decrypt_content_with_key(doc.inner.dupe(), &encrypted.0)
+            .await?;
+        Ok(JsDecryptedWithKey::new(plaintext, key.as_slice().to_vec()))
     }
 
     #[wasm_bindgen(js_name = addMember)]

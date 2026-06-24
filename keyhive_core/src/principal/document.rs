@@ -433,6 +433,19 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.merge_cgka_op(op)
     }
 
+    /// Reset the CGKA owner to `owner_id`, preserving `owner_sks`.
+    ///
+    /// The CGKA owner must always be our own Active. The Public invite path
+    /// reuses `merge_cgka_invite_op`, which transiently sets the owner to
+    /// `Public`; callers re-point the owner at the Active id afterward.
+    /// `with_new_owner` re-seeds the well-known Public secret, so a non-member
+    /// public reader still reads via the Public fallback.
+    pub fn reset_cgka_owner(&mut self, owner_id: IndividualId) -> Result<(), CgkaError> {
+        let owner_sks = self.cgka()?.owner_sks().clone();
+        self.cgka = Some(self.cgka()?.with_new_owner(owner_id, owner_sks)?);
+        Ok(())
+    }
+
     pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
         self.cgka()?.ops()
     }
@@ -476,6 +489,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             .insert(content_ref.clone(), app_secret.key());
 
         Ok(EncryptedContentWithUpdate {
+            application_secret_key: app_secret.key(),
             encrypted_content: app_secret
                 .try_encrypt(content)
                 .map_err(EncryptError::EncryptionFailed)?,
@@ -488,6 +502,19 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
+        self.try_decrypt_content_with_key(encrypted_content)
+            .map(|(plaintext, _key)| plaintext)
+    }
+
+    /// Decrypt content and also return the application secret key that was used.
+    ///
+    /// The key lets the consumer recover the blob's external predecessor-secret
+    /// chain and chain further encryptions onto this blob.
+    #[instrument(skip_all)]
+    pub fn try_decrypt_content_with_key<P: for<'de> Deserialize<'de>>(
+        &mut self,
+        encrypted_content: &EncryptedContent<P, T>,
+    ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
         let decrypt_key = self
             .cgka_mut()
             .map_err(|_| DecryptError::KeyNotFound)?
@@ -509,7 +536,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         // if expected_siv != encrypted_content.nonce {
         //     Err(DecryptError::SivMismatch)?;
         // }
-        Ok(plaintext)
+        Ok((plaintext, decrypt_key))
     }
 
     #[instrument(skip_all)]
@@ -712,6 +739,11 @@ pub enum DocCausalDecryptionError<F: FutureForm, T: ContentRef, P, C: Ciphertext
 pub struct EncryptedContentWithUpdate<T: ContentRef> {
     pub(crate) encrypted_content: EncryptedContent<Vec<u8>, T>,
     pub(crate) update_op: Option<Signed<CgkaOperation>>,
+    /// The application secret key used to encrypt this content.
+    ///
+    /// Surfaced so the consumer can build the external predecessor-secret chain
+    /// and chain further encryptions onto this blob.
+    pub(crate) application_secret_key: SymmetricKey,
 }
 
 impl<T: ContentRef> EncryptedContentWithUpdate<T> {
@@ -721,6 +753,11 @@ impl<T: ContentRef> EncryptedContentWithUpdate<T> {
 
     pub fn update_op(&self) -> Option<&Signed<CgkaOperation>> {
         self.update_op.as_ref()
+    }
+
+    /// The application secret key used to encrypt this content.
+    pub fn application_secret_key(&self) -> SymmetricKey {
+        self.application_secret_key
     }
 }
 
