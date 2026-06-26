@@ -1,7 +1,7 @@
 [package]
 
 name = "keyhive_core"
-version = "0.4.1"
+version = "0.5.0"
 description = "Core Keyhive types and functions"
 
 authors.workspace = true
@@ -13,8 +13,8 @@ rust-version.workspace = true
 [dependencies]
 
 # Keyhive
-beekem = { version = "0.2.0", path = "../beekem" }
-keyhive_crypto = { version = "0.2.0", path = "../keyhive_crypto" }
+beekem = { version = "0.3.0", path = "../beekem" }
+keyhive_crypto = { version = "0.2.1", path = "../keyhive_crypto" }
 
 # Docs
 aquamarine = { version = "0.6", optional = true }
@@ -51,9 +51,9 @@ arbitrary = { workspace = true, optional = true }
 prettytable-rs = { version = "0.10.0", optional = true }
 
 [dev-dependencies]
-beekem = { version = "0.2.0", path = "../beekem", features = ["arbitrary"] }
+beekem = { version = "0.3.0", path = "../beekem", features = ["arbitrary"] }
 keyhive_core = { path = ".", features = ["test_utils", "debug_events"] }
-keyhive_crypto = { version = "0.2.0", path = "../keyhive_crypto", features = ["arbitrary"] }
+keyhive_crypto = { version = "0.2.1", path = "../keyhive_crypto", features = ["arbitrary"] }
 test-utils = { path = "../test-utils" }
 
 arbitrary.workspace = true
