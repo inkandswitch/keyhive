@@ -342,6 +342,7 @@ impl JsKeyhive {
     /// Force a PCS key rotation and return the new leaf secret, serialized as a
     /// one-entry `BTreeMap<ShareKey, ShareSecretKey>` (the exact format
     /// `importPrekeySecrets` accepts).
+    /// The returned bytes are secret key material: do not log or persist unencrypted.
     #[wasm_bindgen(js_name = forcePcsUpdate)]
     pub async fn force_pcs_update(&self, doc: &JsDocument) -> Result<Box<[u8]>, JsValue> {
         init_span!("JsKeyhive::force_pcs_update");

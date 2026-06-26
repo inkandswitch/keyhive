@@ -23,6 +23,7 @@ impl JsEncryptedKeyed {
     }
 
     /// The 32-byte application secret key used to encrypt this content.
+    /// Treat as secret: do not log or persist unencrypted.
     #[wasm_bindgen(getter, js_name = applicationSecret)]
     pub fn application_secret(&self) -> Vec<u8> {
         self.application_secret.clone()
