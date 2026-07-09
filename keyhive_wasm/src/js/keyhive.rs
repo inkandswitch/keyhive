@@ -48,7 +48,9 @@ use keyhive_core::{
     crypto::digest::Digest,
     event::{static_event::StaticEvent, Event},
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
-    principal::{agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError},
+    principal::{
+        agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError, public::Public,
+    },
 };
 use nonempty::NonEmpty;
 use rand::rngs::OsRng;
@@ -737,6 +739,28 @@ impl JsKeyhive {
         let doc = self.0.get_document(doc_id.0).await?;
         let mems = { doc.lock().await.transitive_members().await };
         mems.get(&id.0).map(|(_, access)| JsAccess(*access))
+    }
+
+    /// The most permissive of `id`'s direct access and the document's
+    /// public access. Returns undefined if neither grants access (or the
+    /// document is unknown).
+    #[wasm_bindgen(js_name = bestAccessForDoc)]
+    pub async fn best_access_for_doc(
+        &self,
+        id: &JsIdentifier,
+        doc_id: &JsDocumentId,
+    ) -> Option<JsAccess> {
+        init_span!("JsKeyhive::best_access_for_doc");
+        let doc = self.0.get_document(doc_id.0).await?;
+        let members = { doc.lock().await.transitive_members().await };
+        let direct = members.get(&id.0).map(|(_, access)| *access);
+        let public = members.get(&Public.id()).map(|(_, access)| *access);
+        match (direct, public) {
+            (Some(d), Some(p)) => Some(JsAccess(d.max(p))),
+            (Some(d), None) => Some(JsAccess(d)),
+            (None, Some(p)) => Some(JsAccess(p)),
+            (None, None) => None,
+        }
     }
 
     #[wasm_bindgen(js_name = exportPrekeySecrets)]
