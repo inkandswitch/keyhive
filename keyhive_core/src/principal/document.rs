@@ -226,28 +226,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     #[allow(clippy::type_complexity)]
-    #[instrument(skip_all)]
-    pub async fn add_member(
+    pub(crate) async fn add_member_with_manual_content(
         &mut self,
         member_to_add: Agent<F, S, T, L>,
         can: Access,
         signer: &S,
-        other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>],
+        after_content: BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
-        let mut after_content: BTreeMap<_, _> =
-            join_all(other_relevant_docs.iter().map(|doc| async {
-                let locked = doc.lock().await;
-                (
-                    locked.doc_id(),
-                    locked.content_heads.iter().cloned().collect::<Vec<T>>(),
-                )
-            }))
-            .await
-            .into_iter()
-            .collect();
-
-        after_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
-
         let mut update = self
             .group
             .add_member_with_manual_content(member_to_add.dupe(), can, signer, after_content)
@@ -269,6 +254,31 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             update.cgka_ops.extend(cgka_ops_for_this_doc);
         }
         Ok(update)
+    }
+
+    #[allow(clippy::type_complexity)]
+    #[instrument(skip_all)]
+    pub async fn add_member(
+        &mut self,
+        member_to_add: Agent<F, S, T, L>,
+        can: Access,
+        signer: &S,
+        other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>],
+    ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
+        let mut after_content: BTreeMap<_, _> =
+            join_all(other_relevant_docs.iter().map(|doc| async {
+                let locked = doc.lock().await;
+                (
+                    locked.doc_id(),
+                    locked.content_heads.iter().cloned().collect::<Vec<T>>(),
+                )
+            }))
+            .await
+            .into_iter()
+            .collect();
+        after_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
+        self.add_member_with_manual_content(member_to_add, can, signer, after_content)
+            .await
     }
 
     /// Add individuals to this document's [`Cgka`] from pre-computed prekeys.
@@ -492,6 +502,16 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             },
             application_secret_key,
         ))
+    }
+
+    /// Return application keys recovered or generated for causal content.
+    pub fn known_decryption_keys(&self) -> &HashMap<T, SymmetricKey> {
+        &self.known_decryption_keys
+    }
+
+    /// Remember an application key recovered while decrypting causal content.
+    pub fn remember_decryption_key(&mut self, content_ref: T, key: SymmetricKey) {
+        self.known_decryption_keys.insert(content_ref, key);
     }
 
     #[instrument(skip_all)]

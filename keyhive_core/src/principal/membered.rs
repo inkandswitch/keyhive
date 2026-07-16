@@ -106,6 +106,30 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     #[allow(clippy::type_complexity)]
+    pub(crate) async fn add_member_with_manual_content(
+        &self,
+        member_to_add: Agent<F, S, T, L>,
+        can: Access,
+        signer: &S,
+        after_content: BTreeMap<DocumentId, Vec<T>>,
+    ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
+        match self {
+            Membered::Group(_, group) => Ok(group
+                .lock()
+                .await
+                .add_member_with_manual_content(member_to_add, can, signer, after_content)
+                .await?),
+            Membered::Document(_, document) => {
+                document
+                    .lock()
+                    .await
+                    .add_member_with_manual_content(member_to_add, can, signer, after_content)
+                    .await
+            }
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &self,
         member_to_add: Agent<F, S, T, L>,

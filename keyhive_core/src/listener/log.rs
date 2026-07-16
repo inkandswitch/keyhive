@@ -3,6 +3,7 @@ use crate::{
     event::Event,
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
+        identifier::Identifier,
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
 };
@@ -113,6 +114,7 @@ where
 {
     fn on_delegation<'a>(
         &'a self,
+        _target: Identifier,
         data: &'a Arc<Signed<Delegation<F, S, T, Self>>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::Delegated(data.dupe())).await })
@@ -120,6 +122,7 @@ where
 
     fn on_revocation<'a>(
         &'a self,
+        _target: Identifier,
         data: &'a Arc<Signed<Revocation<F, S, T, Self>>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::Revoked(data.dupe())).await })
