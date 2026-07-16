@@ -73,7 +73,7 @@ use keyhive_crypto::{
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::{Debug, Formatter},
     marker::PhantomData,
     mem,
@@ -479,66 +479,48 @@ impl<
     }
 
     #[allow(clippy::type_complexity)]
-    pub async fn add_member(
+    pub async fn add_member_with_manual_content(
         &self,
         to_add: Agent<F, S, T, L>,
         resource: &Membered<F, S, T, L>,
         can: Access,
-        other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>], // TODO make this automatic
+        after_content: BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
         let signer = { self.active.lock().await.signer.clone() };
-        let update = match resource {
-            Membered::Group(group_id, group) => {
-                let mut update = group
-                    .lock()
-                    .await
-                    .add_member(to_add, can, &signer, other_relevant_docs)
-                    .await?;
+        let mut update = resource
+            .add_member_with_manual_content(to_add, can, &signer, after_content)
+            .await?;
 
-                // Propagate CGKA adds to docs that contain this group.
-                // TODO: O(# of docs x `transitive_members()`). We should replace this approach
-                // (possibly with a reverse index lookup).
-                if can.is_reader() {
-                    let group_identifier: Identifier = (*group_id).into();
-                    let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
-                    for doc in &docs {
-                        let (contains_group, doc_id) = {
-                            let locked = doc.lock().await;
-                            (
-                                locked
-                                    .transitive_members()
-                                    .await
-                                    .contains_key(&group_identifier),
-                                locked.doc_id(),
-                            )
-                        };
-                        if !contains_group {
-                            continue;
-                        }
-                        // Document lock is intentionally dropped before `pick_individual_prekeys`,
-                        // which may lock groups (walking group members to find
-                        // individuals).
-                        let prekeys = update
-                            .delegation
-                            .payload
-                            .delegate
-                            .pick_individual_prekeys(doc_id)
-                            .await;
-                        let mut locked_doc = doc.lock().await;
-                        let ops = locked_doc
-                            .add_cgka_members_from_prekeys(&prekeys, &signer)
-                            .await?;
-                        update.cgka_ops.extend(ops);
+        if can.is_reader() {
+            if let Membered::Group(group_id, _) = resource {
+                let group_identifier: Identifier = (*group_id).into();
+                let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
+                for doc in &docs {
+                    let (contains_group, doc_id) = {
+                        let locked = doc.lock().await;
+                        (
+                            locked
+                                .transitive_members()
+                                .await
+                                .contains_key(&group_identifier),
+                            locked.doc_id(),
+                        )
+                    };
+                    if !contains_group {
+                        continue;
                     }
+                    let prekeys = update
+                        .delegation
+                        .payload
+                        .delegate
+                        .pick_individual_prekeys(doc_id)
+                        .await;
+                    let mut locked_doc = doc.lock().await;
+                    let ops = locked_doc
+                        .add_cgka_members_from_prekeys(&prekeys, &signer)
+                        .await?;
+                    update.cgka_ops.extend(ops);
                 }
-
-                update
-            }
-            Membered::Document(_, doc) => {
-                let mut locked = doc.lock().await;
-                locked
-                    .add_member(to_add, can, &signer, other_relevant_docs)
-                    .await?
             }
         };
 
@@ -547,8 +529,35 @@ impl<
                 .on_cgka_op(&Arc::new(cgka_op.clone()))
                 .await;
         }
-
         Ok(update)
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub async fn add_member(
+        &self,
+        to_add: Agent<F, S, T, L>,
+        resource: &Membered<F, S, T, L>,
+        can: Access,
+        other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>],
+    ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
+        let mut after_content = BTreeMap::new();
+        match resource {
+            Membered::Group(_, _) => {
+                for doc in other_relevant_docs {
+                    let locked = doc.lock().await;
+                    after_content.insert(
+                        locked.doc_id(),
+                        locked.content_heads.iter().cloned().collect(),
+                    );
+                }
+            }
+            Membered::Document(doc_id, doc) => {
+                let locked = doc.lock().await;
+                after_content.insert(*doc_id, locked.content_state.iter().cloned().collect());
+            }
+        }
+        self.add_member_with_manual_content(to_add, resource, can, after_content)
+            .await
     }
 
     #[allow(clippy::type_complexity)]
@@ -564,7 +573,24 @@ impl<
             let locked = doc.lock().await;
             relevant_docs.insert(doc_id, locked.content_heads.iter().cloned().collect());
         }
+        self.revoke_member_with_manual_content(
+            to_revoke,
+            retain_all_other_members,
+            resource,
+            relevant_docs,
+        )
+        .await
+    }
 
+    #[allow(clippy::type_complexity)]
+    #[instrument(skip_all)]
+    pub async fn revoke_member_with_manual_content(
+        &self,
+        to_revoke: Identifier,
+        retain_all_other_members: bool,
+        resource: &Membered<F, S, T, L>,
+        mut relevant_docs: BTreeMap<DocumentId, Vec<T>>,
+    ) -> Result<RevokeMemberUpdate<F, S, T, L>, RevokeMemberError> {
         let signer = { self.active.lock().await.signer.clone() };
 
         // When revoking from a group, collect the revoked member's individual
@@ -748,6 +774,27 @@ impl<
         let locked_active = self.active.lock().await;
         self.docs_reachable_by_agent(&Agent::Active(locked_active.id(), active))
             .await
+    }
+
+    /// Return documents whose authority graph contains the given group.
+    ///
+    /// This is a planning query: it does not mutate membership or CGKA state.
+    #[instrument(skip_all)]
+    pub async fn document_ids_containing_group(&self, group_id: GroupId) -> BTreeSet<DocumentId> {
+        let group_identifier: Identifier = group_id.into();
+        let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
+        let mut result = BTreeSet::new();
+        for doc in docs {
+            let locked = doc.lock().await;
+            if locked
+                .transitive_members()
+                .await
+                .contains_key(&group_identifier)
+            {
+                result.insert(locked.doc_id());
+            }
+        }
+        result
     }
 
     #[instrument(skip_all)]
@@ -2298,8 +2345,18 @@ impl<
     #[instrument(level = "trace", skip_all)]
     pub async fn ingest_unsorted_static_events(
         &self,
-        mut events: Vec<StaticEvent<T>>,
+        events: Vec<StaticEvent<T>>,
     ) -> Vec<Arc<StaticEvent<T>>> {
+        self.ingest_unsorted_static_events_with_pending_progress(events)
+            .await
+            .0
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    pub async fn ingest_unsorted_static_events_with_pending_progress(
+        &self,
+        mut events: Vec<StaticEvent<T>>,
+    ) -> (Vec<Arc<StaticEvent<T>>>, bool) {
         // FIXME: Some errors might not be recoverable on future attempts
         tracing::debug!("Keyhive::ingest_unsorted_static_events()");
         use std::collections::{HashMap, HashSet};
@@ -2339,7 +2396,7 @@ impl<
                     .lock()
                     .await
                     .retain(|e| !replayed_pending.contains(&Digest::hash(e.as_ref())));
-                return Vec::new();
+                return (Vec::new(), !replayed_pending.is_empty());
             }
 
             if next_epoch.len() == epoch_len {
@@ -2349,13 +2406,18 @@ impl<
                     err
                 );
 
+                let remaining_hashes: HashSet<_> =
+                    next_epoch.iter().map(Digest::hash).collect();
+                let resolved_pending = replayed_pending
+                    .iter()
+                    .any(|hash| !remaining_hashes.contains(hash));
                 let new_pending: Vec<Arc<StaticEvent<T>>> =
-                    next_epoch.clone().into_iter().map(Arc::new).collect();
+                    next_epoch.into_iter().map(Arc::new).collect();
                 drop(mem::replace(
                     &mut *self.pending_events.lock().await,
                     new_pending.clone(),
                 ));
-                return new_pending;
+                return (new_pending, resolved_pending);
             }
 
             epoch = next_epoch

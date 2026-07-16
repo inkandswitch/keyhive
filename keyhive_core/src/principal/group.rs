@@ -96,7 +96,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         listener: L,
     ) -> Self {
-        listener.on_delegation(&head).await;
+        listener.on_delegation(group_id.into(), &head).await;
         let mut group = Self {
             id_or_indie: IdOrIndividual::GroupId(group_id),
             members: HashMap::new(),
@@ -117,7 +117,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         listener: L,
     ) -> Self {
-        listener.on_delegation(&head).await;
+        listener.on_delegation(individual.id().into(), &head).await;
         let mut group = Self {
             id_or_indie: IdOrIndividual::Individual(individual),
             members: HashMap::new(),
@@ -190,8 +190,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 delegation_heads.insert(rc.dupe());
 
                 let listen = async_listener.dupe();
+                let target = id;
                 futs.push(async move {
-                    listen.on_delegation(&rc).await;
+                    listen.on_delegation(target, &rc).await;
                     Ok::<(), SigningError>(())
                 });
             }
@@ -276,72 +277,88 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             M: MembershipListener<G, Z, U>,
         > {
             agent: Agent<G, Z, U, M>,
-            agent_access: Access,
-            parent_access: Access,
+            access: Access,
         }
 
         let mut explore: Vec<GroupAccess<F, S, T, L>> = vec![];
-        let mut seen: HashSet<([u8; 64], Access)> = HashSet::new();
+        let mut expanded: HashMap<Identifier, Access> = HashMap::new();
+        let mut caps: HashMap<Identifier, (Agent<F, S, T, L>, Access)> = HashMap::new();
+        let self_id = self.id();
+
+        let enqueue = |agent: Agent<F, S, T, L>,
+                       access: Access,
+                       caps: &mut HashMap<Identifier, (Agent<F, S, T, L>, Access)>,
+                       expanded: &mut HashMap<Identifier, Access>,
+                       explore: &mut Vec<GroupAccess<F, S, T, L>>| {
+            let id = agent.id();
+            if id == self_id {
+                return;
+            }
+            if caps
+                .get(&id)
+                .is_none_or(|(_, existing_access)| *existing_access < access)
+            {
+                caps.insert(id, (agent.dupe(), access));
+            }
+            if let Some(membered) = agent.as_membered() {
+                if expanded
+                    .get(&id)
+                    .is_none_or(|existing_access| *existing_access < access)
+                {
+                    expanded.insert(id, access);
+                    explore.push(GroupAccess {
+                        agent: membered.into(),
+                        access,
+                    });
+                }
+            }
+        };
 
         for member in self.members.keys() {
             let dlg = self
                 .get_capability(member)
-                .expect("members have capabilities by defintion");
-
-            seen.insert((dlg.signature.to_bytes(), Access::Admin));
-
-            explore.push(GroupAccess {
-                agent: dlg.payload.delegate.clone(),
-                agent_access: dlg.payload.can,
-                parent_access: Access::Admin,
-            });
+                .expect("members have capabilities by definition");
+            enqueue(
+                dlg.payload.delegate.dupe(),
+                dlg.payload.can,
+                &mut caps,
+                &mut expanded,
+                &mut explore,
+            );
         }
-
-        let mut caps: HashMap<Identifier, (Agent<F, S, T, L>, Access)> = HashMap::new();
 
         while let Some(GroupAccess {
             agent: member,
-            agent_access: access,
-            parent_access,
+            access,
         }) = explore.pop()
         {
-            let id = member.id();
-            if id == self.id() {
-                continue;
-            }
-
-            let best_access = *caps
-                .get(&id)
-                .map(|(_, existing_access)| existing_access.max(&access))
-                .unwrap_or(&access);
-
-            let current_path_access = access.min(parent_access);
-            caps.insert(member.id(), (member.dupe(), current_path_access));
-
-            if let Some(membered) = match member {
+            let Some(membered) = (match member {
                 Agent::Group(id, inner_group) => Some(Membered::Group(id, inner_group.dupe())),
                 Agent::Document(id, doc) => Some(Membered::Document(id, doc.dupe())),
                 _ => None,
-            } {
-                for (mem_id, dlgs) in membered.members().await.iter() {
-                    let dlg = membered
-                        .get_capability(mem_id)
-                        .await
-                        .expect("members have capabilities by defintion");
-
-                    caps.insert(*mem_id, (dlg.payload.delegate.dupe(), best_access));
-
-                    'inner: for sub_dlg in dlgs.iter() {
-                        if !seen.insert((sub_dlg.signature.to_bytes(), dlg.payload.can)) {
-                            continue 'inner;
-                        }
-
-                        explore.push(GroupAccess {
-                            agent: sub_dlg.payload.delegate.dupe(),
-                            agent_access: sub_dlg.payload.can,
-                            parent_access: best_access,
-                        });
-                    }
+            }) else {
+                continue;
+            };
+            for (mem_id, dlgs) in membered.members().await.iter() {
+                let dlg = membered
+                    .get_capability(mem_id)
+                    .await
+                    .expect("members have capabilities by definition");
+                let member_access = access.min(dlg.payload.can);
+                if caps
+                    .get(mem_id)
+                    .is_none_or(|(_, existing_access)| *existing_access < member_access)
+                {
+                    caps.insert(*mem_id, (dlg.payload.delegate.dupe(), member_access));
+                }
+                for sub_dlg in dlgs.iter() {
+                    enqueue(
+                        sub_dlg.payload.delegate.dupe(),
+                        access.min(sub_dlg.payload.can),
+                        &mut caps,
+                        &mut expanded,
+                        &mut explore,
+                    );
                 }
             }
         }
@@ -419,9 +436,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &mut self,
         delegation: Arc<Signed<Delegation<F, S, T, L>>>,
     ) -> Result<Digest<Signed<Delegation<F, S, T, L>>>, error::AddError> {
-        let digest = self.state.add_delegation(delegation).await?;
+        let digest = self.state.add_delegation(delegation.clone()).await?;
         tracing::info!("{:x?}", &digest);
         self.rebuild().await;
+        self.listener.on_delegation(self.id(), &delegation).await;
         Ok(digest)
     }
 
@@ -431,9 +449,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &mut self,
         revocation: Arc<Signed<Revocation<F, S, T, L>>>,
     ) -> Result<Digest<Signed<Revocation<F, S, T, L>>>, error::AddError> {
-        self.listener.on_revocation(&revocation).await;
-        let digest = self.state.add_revocation(revocation).await?;
+        let digest = self.state.add_revocation(revocation.clone()).await?;
         self.rebuild().await;
+        self.listener.on_revocation(self.id(), &revocation).await;
         Ok(digest)
     }
 
@@ -538,8 +556,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
         let rc = Arc::new(delegation);
         let _digest = self.receive_delegation(rc.dupe()).await?;
-        self.listener.on_delegation(&rc).await;
-
         Ok(AddMemberUpdate {
             cgka_ops: Vec::new(),
             delegation: rc,
@@ -686,10 +702,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             }
         }
 
-        for r in revocations.iter() {
-            self.listener.on_revocation(r).await
-        }
-
         let mut cgka_ops = Vec::new();
 
         let mut redelegations = vec![];
@@ -793,7 +805,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                             }
                         }
                     } else if d.issuer != self.verifying_key() {
-                        debug_assert!(false, "Delegation without valid root proof");
+                        // A delegation can arrive before its causal root proof
+                        // during network sync. Keep it pending; a later
+                        // rebuild will reconsider it once the dependency is
+                        // present instead of panicking in debug builds.
+                        tracing::debug!(
+                            issuer = ?d.issuer,
+                            group = ?self.group_id(),
+                            "deferring delegation without a valid root proof"
+                        );
                         continue;
                     }
 
@@ -825,7 +845,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                             }
                         }
                     } else if r.issuer != self.verifying_key() {
-                        debug_assert!(false, "Revocation without valid root proof");
+                        // As with delegations, a revocation may be observed
+                        // before its causal root proof. Leave it pending for
+                        // the next rebuild rather than panicking.
+                        tracing::debug!(
+                            issuer = ?r.issuer,
+                            group = ?self.group_id(),
+                            "deferring revocation without a valid root proof"
+                        );
                         continue;
                     }
 
