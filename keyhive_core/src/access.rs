@@ -40,6 +40,12 @@ pub enum Access {
 }
 
 impl Access {
+    /// Whether this access level permits fetching encrypted document bytes.
+    pub fn is_fetcher(self) -> bool {
+        self >= Access::Relay
+    }
+
+    /// Whether this access level permits decrypting document content.
     pub fn is_reader(self) -> bool {
         self >= Access::Read
     }
