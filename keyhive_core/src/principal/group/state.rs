@@ -260,12 +260,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         // A causally later delegation may already have been applied by
         // unsorted ingestion. In that case this revocation is historical, not
         // a head; inserting it would make head state depend on arrival order.
-        let superseded = self.delegation_heads.values().any(|delegation| {
-            delegation
-                .payload()
-                .after_revocations
-                .contains(&revocation)
-        });
+        let superseded = self
+            .delegation_heads
+            .values()
+            .any(|delegation| delegation.payload().after_revocations.contains(&revocation));
         if !superseded {
             self.revocation_heads.insert(revocation.dupe());
         }
