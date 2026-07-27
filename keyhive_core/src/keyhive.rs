@@ -2406,8 +2406,7 @@ impl<
                     err
                 );
 
-                let remaining_hashes: HashSet<_> =
-                    next_epoch.iter().map(Digest::hash).collect();
+                let remaining_hashes: HashSet<_> = next_epoch.iter().map(Digest::hash).collect();
                 let resolved_pending = replayed_pending
                     .iter()
                     .any(|hash| !remaining_hashes.contains(hash));

@@ -332,12 +332,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             access,
         }) = explore.pop()
         {
-            let Some(membered) = (match member {
-                Agent::Group(id, inner_group) => Some(Membered::Group(id, inner_group.dupe())),
-                Agent::Document(id, doc) => Some(Membered::Document(id, doc.dupe())),
-                _ => None,
-            }) else {
-                continue;
+            let membered = match member {
+                Agent::Group(id, inner_group) => Membered::Group(id, inner_group.dupe()),
+                Agent::Document(id, doc) => Membered::Document(id, doc.dupe()),
+                _ => continue,
             };
             for (mem_id, dlgs) in membered.members().await.iter() {
                 let dlg = membered
@@ -1431,6 +1429,185 @@ mod tests {
         assert!(g0_mems.contains_key(&g7.lock().await.id()));
         assert!(g0_mems.contains_key(&g8.lock().await.id()));
         assert!(g0_mems.contains_key(&g9.lock().await.id()));
+    }
+
+    #[tokio::test]
+    async fn test_transitive_access_cannot_exceed_parent() {
+        test_utils::init_logging();
+        let csprng = Arc::new(Mutex::new(OsRng));
+        let delegations = Arc::new(Mutex::new(DelegationStore::new()));
+        let revocations = Arc::new(Mutex::new(RevocationStore::new()));
+
+        let root_owner = Arc::new(Mutex::new(setup_user::<String, _>(&mut OsRng).await));
+        let leaf = Arc::new(Mutex::new(setup_user::<String, _>(&mut OsRng).await));
+        let leaf_id = leaf.lock().await.id();
+        let leaf_agent = Agent::Active(leaf_id, leaf.dupe());
+
+        let leaf_group = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![leaf_agent],
+                delegations.dupe(),
+                revocations.dupe(),
+                NoListener,
+                csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+        let leaf_group_id = leaf_group.lock().await.group_id();
+
+        let nested_group = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![Agent::Group(leaf_group_id, leaf_group.dupe())],
+                delegations.dupe(),
+                revocations.dupe(),
+                NoListener,
+                csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+        let nested_group_id = nested_group.lock().await.group_id();
+
+        let root_owner_id = root_owner.lock().await.id();
+        let root = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![Agent::Active(root_owner_id, root_owner.dupe())],
+                delegations.dupe(),
+                revocations.dupe(),
+                NoListener,
+                csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+        let root_owner_signer = root_owner.lock().await.signer.clone();
+
+        root.lock()
+            .await
+            .add_member(
+                Agent::Group(nested_group_id, nested_group.dupe()),
+                Access::Read,
+                &root_owner_signer,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let members = root.lock().await.transitive_members().await;
+        assert_eq!(
+            members
+                .get(&nested_group_id.into())
+                .map(|(_, access)| *access),
+            Some(Access::Read)
+        );
+        assert_eq!(
+            members
+                .get(&leaf_group_id.into())
+                .map(|(_, access)| *access),
+            Some(Access::Read)
+        );
+        assert_eq!(
+            members.get(&leaf_id.into()).map(|(_, access)| *access),
+            Some(Access::Read)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_transitive_access_uses_best_effective_path() {
+        test_utils::init_logging();
+        let csprng = Arc::new(Mutex::new(OsRng));
+        let delegations = Arc::new(Mutex::new(DelegationStore::new()));
+        let revocations = Arc::new(Mutex::new(RevocationStore::new()));
+
+        let root_owner = Arc::new(Mutex::new(setup_user::<String, _>(&mut OsRng).await));
+        let read_owner = Arc::new(Mutex::new(setup_user::<String, _>(&mut OsRng).await));
+        let edit_owner = Arc::new(Mutex::new(setup_user::<String, _>(&mut OsRng).await));
+        let target = Arc::new(Mutex::new(setup_user::<String, _>(&mut OsRng).await));
+
+        let target_id = target.lock().await.id();
+        let target_agent = Agent::Active(target_id, target.dupe());
+
+        let read_owner_id = read_owner.lock().await.id();
+        let read_group = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![Agent::Active(read_owner_id, read_owner.dupe())],
+                delegations.dupe(),
+                revocations.dupe(),
+                NoListener,
+                csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+        let read_owner_signer = read_owner.lock().await.signer.clone();
+        read_group
+            .lock()
+            .await
+            .add_member(target_agent.dupe(), Access::Read, &read_owner_signer, &[])
+            .await
+            .unwrap();
+
+        let edit_owner_id = edit_owner.lock().await.id();
+        let edit_group = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![Agent::Active(edit_owner_id, edit_owner.dupe())],
+                delegations.dupe(),
+                revocations.dupe(),
+                NoListener,
+                csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+        let edit_owner_signer = edit_owner.lock().await.signer.clone();
+        edit_group
+            .lock()
+            .await
+            .add_member(target_agent, Access::Edit, &edit_owner_signer, &[])
+            .await
+            .unwrap();
+
+        let root_owner_id = root_owner.lock().await.id();
+        let root = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![Agent::Active(root_owner_id, root_owner.dupe())],
+                delegations.dupe(),
+                revocations.dupe(),
+                NoListener,
+                csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+        let root_owner_signer = root_owner.lock().await.signer.clone();
+
+        root.lock()
+            .await
+            .add_member(
+                Agent::Group(read_group.lock().await.group_id(), read_group.dupe()),
+                Access::Admin,
+                &root_owner_signer,
+                &[],
+            )
+            .await
+            .unwrap();
+        root.lock()
+            .await
+            .add_member(
+                Agent::Group(edit_group.lock().await.group_id(), edit_group.dupe()),
+                Access::Admin,
+                &root_owner_signer,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let members = root.lock().await.transitive_members().await;
+        assert_eq!(
+            members.get(&target_id.into()).map(|(_, access)| *access),
+            Some(Access::Edit)
+        );
     }
 
     #[tokio::test]
