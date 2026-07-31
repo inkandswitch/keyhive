@@ -127,8 +127,12 @@ async fn the_instance_that_lost_the_leaf_reads_again_once_it_has_the_winning_sec
         .is_ok();
     // The merge keeps the lower of the two keys, so the instance that sampled it is the
     // one holding the secret bob's path encrypted to.
-    let (alice_key, _) = from_original_alice.expect("asserted above");
-    let (replica_key, _) = from_alice_replica.expect("asserted above");
+    let alice_key = from_original_alice
+        .expect("asserted above")
+        .share_key();
+    let replica_key = from_alice_replica
+        .expect("asserted above")
+        .share_key();
     assert_eq!(
         alice_can_decrypt,
         alice_key < replica_key,
