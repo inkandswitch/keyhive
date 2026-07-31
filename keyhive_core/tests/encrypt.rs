@@ -113,6 +113,111 @@ async fn test_encrypt_to_added_member() -> TestResult {
     Ok(())
 }
 
+/// A complete PCS rotation by another authorized member must leave the original
+/// member able to derive the new root and encrypt immediately.
+#[tokio::test]
+async fn test_authorized_remote_rotation_preserves_local_encryption() -> TestResult {
+    test_utils::init_logging();
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+
+    let initial = b"before-rotation".to_vec();
+    let initial_hash = blake3::hash(&initial);
+    let doc = alice
+        .generate_doc(vec![], nonempty![initial_hash.into()])
+        .await?;
+    let doc_id = { doc.lock().await.doc_id() };
+    let bob_individual = { bob.active().lock().await.individual().lock().await.clone() };
+    alice
+        .add_member(
+            Agent::Individual(bob_individual.id(), Arc::new(Mutex::new(bob_individual))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+
+    let bob_agent: Agent<_, _, _, _> = bob.active().lock().await.clone().into();
+    let alice_events = alice.static_events_for_agent(&bob_agent).await;
+    let pending = bob
+        .ingest_unsorted_static_events(alice_events.into_values().collect())
+        .await;
+    assert!(pending.is_empty());
+    let bob_doc = bob.get_document(doc_id).await.unwrap();
+    bob.force_pcs_update(bob_doc).await?;
+
+    let alice_agent: Agent<_, _, _, _> = alice.active().lock().await.clone().into();
+    let bob_events = bob.static_events_for_agent(&alice_agent).await;
+    let pending = alice
+        .ingest_unsorted_static_events(bob_events.into_values().collect())
+        .await;
+    assert!(pending.is_empty());
+
+    let after = b"after-remote-rotation".to_vec();
+    let after_hash = blake3::hash(&after);
+    alice
+        .try_encrypt_content(doc, &after_hash.into(), &vec![], &after)
+        .await?;
+
+    Ok(())
+}
+
+/// Concurrent PCS rotations by authorized members must merge into a state from
+/// which both members can derive a current key for subsequent encryption.
+#[tokio::test]
+async fn test_concurrent_authorized_rotations_preserve_encryption() -> TestResult {
+    test_utils::init_logging();
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+
+    let initial = b"before-concurrent-rotations".to_vec();
+    let initial_hash = blake3::hash(&initial);
+    let alice_doc = alice
+        .generate_doc(vec![], nonempty![initial_hash.into()])
+        .await?;
+    let doc_id = { alice_doc.lock().await.doc_id() };
+    let bob_individual = { bob.active().lock().await.individual().lock().await.clone() };
+    alice
+        .add_member(
+            Agent::Individual(bob_individual.id(), Arc::new(Mutex::new(bob_individual))),
+            &Membered::Document(doc_id, alice_doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+
+    let bob_agent: Agent<_, _, _, _> = bob.active().lock().await.clone().into();
+    let alice_events = alice.static_events_for_agent(&bob_agent).await;
+    assert!(bob
+        .ingest_unsorted_static_events(alice_events.into_values().collect())
+        .await
+        .is_empty());
+    let bob_doc = bob.get_document(doc_id).await.unwrap();
+
+    alice.force_pcs_update(alice_doc.dupe()).await?;
+    bob.force_pcs_update(bob_doc).await?;
+
+    let alice_agent: Agent<_, _, _, _> = alice.active().lock().await.clone().into();
+    let bob_events = bob.static_events_for_agent(&alice_agent).await;
+    let alice_events = alice.static_events_for_agent(&bob_agent).await;
+    assert!(alice
+        .ingest_unsorted_static_events(bob_events.into_values().collect())
+        .await
+        .is_empty());
+    assert!(bob
+        .ingest_unsorted_static_events(alice_events.into_values().collect())
+        .await
+        .is_empty());
+
+    let after = b"after-concurrent-rotations".to_vec();
+    let after_hash = blake3::hash(&after);
+    alice
+        .try_encrypt_content(alice_doc, &after_hash.into(), &vec![], &after)
+        .await?;
+
+    Ok(())
+}
+
 /// The application secret key surfaced on encrypt round-trips: it equals the
 /// key the reader derives, and it decrypts the envelope directly.
 #[tokio::test]
@@ -144,6 +249,7 @@ async fn test_application_secret_key_round_trips() -> TestResult {
     let (encrypted, encrypt_key) = alice
         .try_encrypt_content_keyed(doc.clone(), &init_hash.into(), &vec![], &init_content)
         .await?;
+    assert!(encrypted.local_cgka_secret().is_some());
 
     // The surfaced key decrypts the envelope directly, with no CGKA.
     let direct = encrypted.encrypted_content().try_decrypt(encrypt_key)?;
@@ -297,8 +403,115 @@ async fn test_decrypt_after_to_from_archive() {
         .unwrap();
 
     assert_eq!(decrypted, init_content);
+
+    let next_content = b"write after archive plus event replay".to_vec();
+    let next_hash = blake3::hash(&next_content);
+    alice
+        .try_encrypt_content(
+            doc,
+            &next_hash.into(),
+            &vec![init_hash.into()],
+            &next_content,
+        )
+        .await
+        .expect("replaying a local PCS update must restore its private share key");
 }
 
+#[tokio::test]
+async fn test_encrypt_after_membership_archive_plus_update_replay() -> TestResult {
+    test_utils::init_logging();
+    let NewKeyhive {
+        keyhive: alice,
+        signer,
+        log,
+    } = make_keyhive().await;
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+
+    let initial = b"initial".to_vec();
+    let initial_hash = blake3::hash(&initial);
+    let doc = alice
+        .generate_doc(vec![], nonempty![initial_hash.into()])
+        .await?;
+    let doc_id = { doc.lock().await.doc_id() };
+    let initial_encrypted = alice
+        .try_encrypt_content(doc.dupe(), &initial_hash.into(), &vec![], &initial)
+        .await?;
+    assert!(initial_encrypted.local_cgka_secret().is_none());
+
+    alice
+        .receive_contact_card(&bob.contact_card().await?)
+        .await?;
+    let bob_individual = { bob.active().lock().await.individual().lock().await.clone() };
+    alice
+        .add_member(
+            Agent::Individual(bob_individual.id(), Arc::new(Mutex::new(bob_individual))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+    let archive = alice.into_archive().await;
+    while log.pop().await.is_some() {}
+
+    let checkpoint = b"membership-checkpoint".to_vec();
+    let checkpoint_hash = blake3::hash(&checkpoint);
+    let checkpoint_encrypted = alice
+        .try_encrypt_content(
+            doc,
+            &checkpoint_hash.into(),
+            &vec![initial_hash.into()],
+            &checkpoint,
+        )
+        .await?;
+    let local_secret = *checkpoint_encrypted
+        .local_cgka_secret()
+        .expect("the PCS update must expose its locally generated private leaf key");
+    assert_eq!(
+        local_secret.share_key(),
+        local_secret.share_secret_key().share_key()
+    );
+    assert_eq!(
+        keyhive_core::principal::document::id::DocumentId::from(local_secret.tree_id()),
+        doc_id
+    );
+    let local_secret = bincode::deserialize(&bincode::serialize(&local_secret)?)?;
+
+    let mut events = Vec::new();
+    while let Some(event) = log.pop().await {
+        events.push(StaticEvent::from(event));
+    }
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, StaticEvent::CgkaOperation(_))),
+        "the first post-membership write must emit a PCS update"
+    );
+
+    let restored = Keyhive::<Local, _, _, _, _, _, _>::try_from_archive(
+        &archive,
+        signer,
+        MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
+        NoListener,
+        Arc::new(Mutex::new(OsRng)),
+    )
+    .await?;
+    restored.import_local_cgka_secret(local_secret).await?;
+    let pending = restored.ingest_unsorted_static_events(events).await;
+    assert!(pending.is_empty());
+    let restored_doc = restored.get_document(doc_id).await.unwrap();
+    let after = b"after-replay".to_vec();
+    let after_hash = blake3::hash(&after);
+    restored
+        .try_encrypt_content(
+            restored_doc,
+            &after_hash.into(),
+            &vec![checkpoint_hash.into()],
+            &after,
+        )
+        .await?;
+
+    Ok(())
+}
 #[tokio::test]
 async fn test_decrypt_after_fork_and_merge() {
     test_utils::init_logging();

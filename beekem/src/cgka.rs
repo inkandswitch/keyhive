@@ -37,6 +37,40 @@ use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 
+/// A private leaf key generated locally while creating an application secret.
+///
+/// This must be persisted separately from the public [`CgkaOperation`] emitted
+/// by the same update. Replaying that operation reconstructs the public tree,
+/// but cannot reconstruct this private key.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalCgkaSecret {
+    tree_id: TreeId,
+    share_key: ShareKey,
+    share_secret_key: ShareSecretKey,
+}
+
+impl LocalCgkaSecret {
+    pub fn from_secret(tree_id: TreeId, share_secret_key: ShareSecretKey) -> Self {
+        Self {
+            tree_id,
+            share_key: share_secret_key.share_key(),
+            share_secret_key,
+        }
+    }
+
+    pub fn tree_id(&self) -> TreeId {
+        self.tree_id
+    }
+
+    pub fn share_key(&self) -> ShareKey {
+        self.share_key
+    }
+
+    pub fn share_secret_key(&self) -> ShareSecretKey {
+        self.share_secret_key
+    }
+}
+
 /// Exposes CGKA (Continuous Group Key Agreement) operations like deriving
 /// a new application secret, rotating keys, and adding and removing members
 /// from the group.
@@ -167,8 +201,16 @@ impl Cgka {
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
+    ) -> Result<
+        (
+            ApplicationSecret<T>,
+            Option<Signed<CgkaOperation>>,
+            Option<LocalCgkaSecret>,
+        ),
+        CgkaError,
+    > {
         let mut op = None;
+        let mut local_secret = None;
         let current_pcs_key = if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
@@ -176,7 +218,18 @@ impl Cgka {
                 .update::<F, S, R>(new_share_key, new_share_secret_key, signer, csprng)
                 .await?;
             self.insert_pcs_key(&pcs_key, Digest::hash(&update_op));
+            let updates_owner_leaf = matches!(
+                &update_op.payload,
+                CgkaOperation::Update { id, .. } if *id == self.owner_id
+            );
             op = Some(update_op);
+            if updates_owner_leaf {
+                local_secret = Some(LocalCgkaSecret {
+                    tree_id: self.doc_id,
+                    share_key: new_share_key,
+                    share_secret_key: new_share_secret_key,
+                });
+            }
             pcs_key
         } else {
             let pcs_key = self.pcs_key_from_tree_root()?;
@@ -202,6 +255,7 @@ impl Cgka {
                     .expect("PcsKey hash should be present because we derived it above"),
             ),
             op,
+            local_secret,
         ))
     }
 
