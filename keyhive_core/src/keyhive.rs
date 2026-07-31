@@ -4,47 +4,46 @@ use crate::{
     access::Access,
     all_agent_events::{AllAgentEvents, EventDigest},
     archive::Archive,
-    cgka::AllCgkaOps,
+    cgka::{AllCgkaOps, LocalCgkaSecret},
     contact_card::ContactCard,
     crypto::signed_ext::{SignedId, SignedSubjectId},
     error::{missing_dependency::MissingDependency, not_found::NotFound},
-    event::{static_event::StaticEvent, Event},
+    event::{Event, static_event::StaticEvent},
     listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
-        agent::{id::AgentId, Agent},
+        agent::{Agent, id::AgentId},
         document::{
-            id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError,
-            DocCausalDecryptionError, Document, EncryptError, EncryptInEnvelopeError,
-            EncryptedContentWithUpdate, GenerateDocError, MissingIndividualError,
-            RevokeMemberUpdate,
+            AddMemberError, AddMemberUpdate, DecryptError, DocCausalDecryptionError, Document,
+            EncryptError, EncryptInEnvelopeError, EncryptedContentWithUpdate, GenerateDocError,
+            MissingIndividualError, RevokeMemberUpdate, id::DocumentId,
         },
         group::{
+            Group, IdOrIndividual, RevokeMemberError,
             delegation::{Delegation, StaticDelegation},
             error::AddError,
             id::GroupId,
             membership_operation::{
-                bfs_extend_from_revocation, bfs_membership_ops, collect_membership_heads,
                 AllMembershipOps, MembershipOpMap, MembershipOperation, StaticMembershipOperation,
+                bfs_extend_from_revocation, bfs_membership_ops, collect_membership_heads,
             },
             revocation::{Revocation, StaticRevocation},
-            Group, IdOrIndividual, RevokeMemberError,
         },
         identifier::Identifier,
         individual::{
-            id::IndividualId,
-            op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, AllReachablePrekeyOps, KeyOp},
             Individual, ReceivePrekeyOpError,
+            id::IndividualId,
+            op::{AllReachablePrekeyOps, KeyOp, add_key::AddKeyOp, rotate_key::RotateKeyOp},
         },
-        membered::{id::MemberedId, Membered},
+        membered::{Membered, id::MemberedId},
         peer::Peer,
         public::Public,
     },
     stats::Stats,
     store::{
         ciphertext::{
-            memory::MemoryCiphertextStore, CausalDecryptionState, CiphertextStore,
-            CiphertextStoreExt,
+            CausalDecryptionState, CiphertextStore, CiphertextStoreExt,
+            memory::MemoryCiphertextStore,
         },
         delegation::DelegationStore,
         revocation::RevocationStore,
@@ -79,7 +78,7 @@ use keyhive_crypto::{
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry},
     fmt::{Debug, Formatter},
     marker::PhantomData,
     mem,
@@ -167,14 +166,14 @@ where
 }
 
 impl<
-        F: FutureForm,
-        S: AsyncSigner<F> + Clone,
-        T: ContentRef,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-        L: MembershipListener<F, S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > Keyhive<F, S, T, P, C, L, R>
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> Keyhive<F, S, T, P, C, L, R>
 {
     #[instrument(skip_all)]
     pub fn id(&self) -> IndividualId {
@@ -678,6 +677,31 @@ impl<
         Ok(update)
     }
 
+    /// Import private CGKA leaf material produced by local content encryption.
+    ///
+    /// Call this after restoring the document and before replaying the matching
+    /// public CGKA update operation.
+    pub async fn import_local_cgka_secret(
+        &self,
+        secret: LocalCgkaSecret,
+    ) -> Result<(), ImportLocalCgkaSecretError> {
+        if secret.share_secret_key().share_key() != secret.share_key() {
+            return Err(ImportLocalCgkaSecretError::MismatchedShareKey);
+        }
+
+        let doc_id = DocumentId::from(secret.tree_id());
+        let doc = self
+            .get_document(doc_id)
+            .await
+            .ok_or(ImportLocalCgkaSecretError::UnknownDocument(doc_id))?;
+        doc.lock()
+            .await
+            .cgka_mut()?
+            .owner_sks_mut()
+            .insert(secret.share_key(), secret.share_secret_key());
+        Ok(())
+    }
+
     /// Encrypt `content` into `doc`.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content(
@@ -745,7 +769,7 @@ impl<
     ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
         let doc = self.document_by_id(doc).await?;
         let signer = { self.active.lock().await.signer.clone() };
-        let (result, application_secret_key, new_key_pair) = {
+        let (result, application_secret_key) = {
             let mut locked_csprng = self.csprng.lock().await;
             doc.lock()
                 .await
@@ -759,7 +783,12 @@ impl<
                 .await
                 .map_err(EncryptContentError::from)?
         };
-        self.insert_rotated_secret(new_key_pair).await;
+        self.insert_rotated_secret(
+            result
+                .local_cgka_secret()
+                .map(|secret| (secret.share_key(), secret.share_secret_key())),
+        )
+        .await;
         if let Some(op) = &result.update_op {
             self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
         }
@@ -877,7 +906,7 @@ impl<
         let out = {
             let mut locked = doc.lock().await;
             locked
-                .try_causal_decrypt_content(encrypted, self.ciphertext_store.clone())
+                .try_causal_decrypt_content(encrypted, &self.ciphertext_store)
                 .await
         };
         Ok(out?)
@@ -887,7 +916,7 @@ impl<
     pub async fn force_pcs_update(
         &self,
         doc: DocumentId,
-    ) -> Result<(Signed<CgkaOperation>, Option<LeafKeyPair>), EncryptError> {
+    ) -> Result<(Signed<CgkaOperation>, Option<LocalCgkaSecret>), EncryptError> {
         let handle = self.document_by_id(doc).await?;
         let signer = { self.active.lock().await.signer.clone() };
         let (op, new_key_pair) = {
@@ -898,9 +927,14 @@ impl<
                 .pcs_update(&signer, &mut *locked_csprng)
                 .await?
         };
+        // `pcs_update` reports the sampled pair only when it rotated our own leaf;
+        // rotating `Public`'s leaf leaves no local secret to persist.
+        let local_secret = new_key_pair.map(|(_share_key, share_secret_key)| {
+            LocalCgkaSecret::from_secret(doc.verifying_key().into(), share_secret_key)
+        });
         self.insert_rotated_secret(new_key_pair).await;
         self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
-        Ok((op, new_key_pair))
+        Ok((op, local_secret))
     }
 
     /// Every document the active agent reaches and at what access level.
@@ -3133,14 +3167,14 @@ impl<
 }
 
 impl<
-        F: FutureForm,
-        S: AsyncSigner<F> + Clone,
-        T: ContentRef + Debug,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-        L: MembershipListener<F, S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > Debug for Keyhive<F, S, T, P, C, L, R>
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef + Debug,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> Debug for Keyhive<F, S, T, P, C, L, R>
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.debug_struct("Keyhive")
@@ -3157,14 +3191,14 @@ impl<
 }
 
 impl<
-        F: FutureForm,
-        S: AsyncSigner<F> + Clone,
-        T: ContentRef + Clone,
-        P: for<'de> Deserialize<'de> + Clone,
-        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-        L: MembershipListener<F, S, T>,
-        R: rand::CryptoRng + rand::RngCore + Clone,
-    > ForkAsync for Keyhive<F, S, T, P, C, L, R>
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef + Clone,
+    P: for<'de> Deserialize<'de> + Clone,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
+    R: rand::CryptoRng + rand::RngCore + Clone,
+> ForkAsync for Keyhive<F, S, T, P, C, L, R>
 where
     Log<F, S, T>: MembershipListener<F, S, T>,
 {
@@ -3186,14 +3220,14 @@ where
 }
 
 impl<
-        F: FutureForm,
-        S: AsyncSigner<F> + Clone,
-        T: ContentRef + Clone,
-        P: for<'de> Deserialize<'de> + Clone,
-        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-        L: MembershipListener<F, S, T>,
-        R: rand::CryptoRng + rand::RngCore + Clone,
-    > MergeAsync for Arc<Mutex<Keyhive<F, S, T, P, C, L, R>>>
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef + Clone,
+    P: for<'de> Deserialize<'de> + Clone,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
+    R: rand::CryptoRng + rand::RngCore + Clone,
+> MergeAsync for Arc<Mutex<Keyhive<F, S, T, P, C, L, R>>>
 where
     Log<F, S, T>: MembershipListener<F, S, T>,
 {
@@ -3238,14 +3272,14 @@ where
 }
 
 impl<
-        F: FutureForm,
-        S: AsyncSigner<F> + Clone,
-        T: ContentRef,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-        L: MembershipListener<F, S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > Verifiable for Keyhive<F, S, T, P, C, L, R>
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> Verifiable for Keyhive<F, S, T, P, C, L, R>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.verifying_key
@@ -3489,6 +3523,18 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     fn from(e: MissingIndividualError) -> Self {
         TryFromArchiveError::MissingIndividual(e.0)
     }
+}
+
+#[derive(Debug, Error)]
+pub enum ImportLocalCgkaSecretError {
+    #[error("Unknown document: {0}")]
+    UnknownDocument(DocumentId),
+
+    #[error("Local CGKA share key does not match its secret key")]
+    MismatchedShareKey,
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
 }
 
 #[derive(Debug, Error)]
@@ -3782,11 +3828,12 @@ mod tests {
         assert_eq!(left.revocations.lock().await.len(), 0);
 
         assert_eq!(left.individuals.lock().await.len(), 2);
-        assert!(left
-            .individuals
-            .lock()
-            .await
-            .contains_key(&IndividualId(Public.id())));
+        assert!(
+            left.individuals
+                .lock()
+                .await
+                .contains_key(&IndividualId(Public.id()))
+        );
 
         assert_eq!(left.groups.lock().await.len(), 1);
         assert_eq!(left.docs.lock().await.len(), 1);
