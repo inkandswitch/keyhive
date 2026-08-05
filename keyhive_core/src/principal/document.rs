@@ -15,7 +15,7 @@ use crate::{
             delegation::{Delegation, DelegationError},
             error::AddError,
             revocation::Revocation,
-            Group, RevokeMemberError,
+            Group, RevokeMemberError, SignerAuthority,
         },
         identifier::Identifier,
     },
@@ -130,7 +130,17 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
-        self.group.transitive_members().await
+        super::group::transitive_members_walk(
+            self.doc_id().into(),
+            self.direct_members_with_caps(),
+        )
+        .await
+    }
+
+    /// The document's direct members and their capabilities (sync read;
+    /// callers hold the document's lock).
+    pub(crate) fn direct_members_with_caps(&self) -> Vec<(Agent<F, S, T, L>, Access)> {
+        self.group.direct_members_with_caps()
     }
 
     pub fn revoked_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
@@ -232,10 +242,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         can: Access,
         signer: &S,
         after_content: BTreeMap<DocumentId, Vec<T>>,
+        proof: Option<Arc<Signed<Delegation<F, S, T, L>>>>,
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
         let mut update = self
             .group
-            .add_member_with_manual_content(member_to_add.dupe(), can, signer, after_content)
+            .add_member_with_manual_content(member_to_add.dupe(), can, signer, after_content, proof)
             .await?;
 
         if can.is_reader() {
@@ -264,6 +275,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         can: Access,
         signer: &S,
         other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>],
+        proof: Option<Arc<Signed<Delegation<F, S, T, L>>>>,
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
         let mut after_content: BTreeMap<_, _> =
             join_all(other_relevant_docs.iter().map(|doc| async {
@@ -277,7 +289,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             .into_iter()
             .collect();
         after_content.insert(self.doc_id(), self.content_state.iter().cloned().collect());
-        self.add_member_with_manual_content(member_to_add, can, signer, after_content)
+        self.add_member_with_manual_content(member_to_add, can, signer, after_content, proof)
             .await
     }
 
@@ -307,6 +319,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         retain_all_other_members: bool,
         signer: &S,
         after_other_doc_content: &mut BTreeMap<DocumentId, Vec<T>>,
+        signer_authority: &SignerAuthority<F, S, T, L>,
+        re_add_authority: &SignerAuthority<F, S, T, L>,
     ) -> Result<RevokeMemberUpdate<F, S, T, L>, RevokeMemberError> {
         // Collect individual IDs from the member being revoked before the
         // group revocation removes them from the members map.
@@ -326,6 +340,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 retain_all_other_members,
                 signer,
                 after_other_doc_content,
+                signer_authority,
+                re_add_authority,
             )
             .await?;
 

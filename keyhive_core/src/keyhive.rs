@@ -496,17 +496,14 @@ impl<
                 let group_identifier: Identifier = (*group_id).into();
                 let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
                 for doc in &docs {
-                    let (contains_group, doc_id) = {
-                        let locked = doc.lock().await;
-                        (
-                            locked
-                                .transitive_members()
-                                .await
-                                .contains_key(&group_identifier),
-                            locked.doc_id(),
-                        )
-                    };
-                    if !contains_group {
+                    // Membership check via the lock-free `Membered` walk: the
+                    // transitive walk must not run while the doc's lock is held.
+                    let doc_id = doc.lock().await.doc_id();
+                    if !Membered::Document(doc_id, doc.dupe())
+                        .transitive_members()
+                        .await
+                        .contains_key(&group_identifier)
+                    {
                         continue;
                     }
                     let prekeys = update
@@ -632,10 +629,12 @@ impl<
                 let group_identifier: Identifier = (*group_id).into();
                 let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
                 for doc in &docs {
-                    let transitive = {
-                        let locked = doc.lock().await;
-                        locked.transitive_members().await
-                    };
+                    // Membership check via the lock-free `Membered` walk (the
+                    // transitive walk must not run while the doc's lock is held).
+                    let doc_id = doc.lock().await.doc_id();
+                    let transitive = Membered::Document(doc_id, doc.dupe())
+                        .transitive_members()
+                        .await;
                     if !transitive.contains_key(&group_identifier) {
                         continue;
                     }
@@ -812,13 +811,13 @@ impl<
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         let mut result = BTreeSet::new();
         for doc in docs {
-            let locked = doc.lock().await;
-            if locked
+            let doc_id = doc.lock().await.doc_id();
+            if Membered::Document(doc_id, doc.dupe())
                 .transitive_members()
                 .await
                 .contains_key(&group_identifier)
             {
-                result.insert(locked.doc_id());
+                result.insert(doc_id);
             }
         }
         result
@@ -830,10 +829,9 @@ impl<
         &self,
         membered: Membered<F, S, T, L>,
     ) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
-        match membered {
-            Membered::Group(_, group) => group.lock().await.transitive_members().await,
-            Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
-        }
+        // The `Membered` wrapper snapshots under a short lock and walks
+        // lock-free (never holds a lock across the transitive walk).
+        membered.transitive_members().await
     }
 
     #[instrument(skip_all)]
@@ -846,10 +844,14 @@ impl<
         // TODO will be very slow on large hives. Old code here: https://github.com/inkandswitch/keyhive/pull/111/files:
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in docs {
-            let locked = doc.lock().await;
-            if let Some((_, cap)) = locked.transitive_members().await.get(&agent.id()) {
+            let doc_id = doc.lock().await.doc_id();
+            if let Some((_, cap)) = Membered::Document(doc_id, doc.dupe())
+                .transitive_members()
+                .await
+                .get(&agent.id())
+            {
                 caps.insert(
-                    locked.doc_id(),
+                    doc_id,
                     Ability {
                         doc: doc.dupe(),
                         can: *cap,
@@ -878,19 +880,27 @@ impl<
                 .collect::<Vec<_>>()
         };
         for group in groups {
-            let locked = group.lock().await;
-            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
-                let membered = Membered::Group(locked.group_id(), group.dupe());
-                caps.insert(locked.group_id().into(), (membered, *can));
+            let group_id = group.lock().await.group_id();
+            if let Some((_, can)) = Membered::Group(group_id, group.dupe())
+                .transitive_members()
+                .await
+                .get(&agent.id())
+            {
+                let membered = Membered::Group(group_id, group.dupe());
+                caps.insert(group_id.into(), (membered, *can));
             }
         }
 
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in docs {
-            let locked = doc.lock().await;
-            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
-                let membered = Membered::Document(locked.doc_id(), doc.dupe());
-                caps.insert(locked.doc_id().into(), (membered, *can));
+            let doc_id = doc.lock().await.doc_id();
+            if let Some((_, can)) = Membered::Document(doc_id, doc.dupe())
+                .transitive_members()
+                .await
+                .get(&agent.id())
+            {
+                let membered = Membered::Document(doc_id, doc.dupe());
+                caps.insert(doc_id.into(), (membered, *can));
             }
         }
 
@@ -1090,14 +1100,17 @@ impl<
                 .collect::<Vec<_>>()
         };
         for group in &groups {
-            let (group_id, heads, transitive) = {
+            let (group_id, heads) = {
                 let locked = group.lock().await;
                 (
                     locked.group_id(),
                     collect_membership_heads(locked.delegation_heads(), locked.revocation_heads()),
-                    locked.transitive_members().await,
                 )
             };
+            // Lock-free transitive walk (never run a walk under a lock).
+            let transitive = Membered::Group(group_id, group.dupe())
+                .transitive_members()
+                .await;
             let source_id: Identifier = group_id.into();
             ops.insert(source_id, bfs_membership_ops(heads).await);
 
@@ -1109,14 +1122,17 @@ impl<
         // Phase 2: Same for docs
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in &docs {
-            let (doc_id, heads, transitive) = {
+            let (doc_id, heads) = {
                 let locked = doc.lock().await;
                 (
                     locked.doc_id(),
                     collect_membership_heads(locked.delegation_heads(), locked.revocation_heads()),
-                    locked.transitive_members().await,
                 )
             };
+            // Lock-free transitive walk (never run a walk under a lock).
+            let transitive = Membered::Document(doc_id, doc.dupe())
+                .transitive_members()
+                .await;
             let source_id: Identifier = doc_id.into();
             ops.insert(source_id, bfs_membership_ops(heads).await);
 
@@ -1188,10 +1204,11 @@ impl<
                 .collect::<Vec<_>>()
         };
         for group in groups {
-            let (group_id, transitive) = {
-                let locked = group.lock().await;
-                (locked.group_id(), locked.transitive_members().await)
-            };
+            let group_id = group.lock().await.group_id();
+            // Lock-free transitive walk (never run a walk under a lock).
+            let transitive = Membered::Group(group_id, group.dupe())
+                .transitive_members()
+                .await;
             if transitive.contains_key(&agent.id()) {
                 add_many_keys(
                     &mut map,
@@ -1209,10 +1226,11 @@ impl<
 
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in docs {
-            let (doc_id, transitive) = {
-                let locked = doc.lock().await;
-                (locked.doc_id(), locked.transitive_members().await)
-            };
+            let doc_id = doc.lock().await.doc_id();
+            // Lock-free transitive walk (never run a walk under a lock).
+            let transitive = Membered::Document(doc_id, doc.dupe())
+                .transitive_members()
+                .await;
             if transitive.contains_key(&agent.id()) {
                 add_many_keys(
                     &mut map,
@@ -1271,10 +1289,11 @@ impl<
             TransitiveMembers<F, S, T, L>,
         )> = Vec::with_capacity(groups.len());
         for group in groups {
-            let (group_id, transitive) = {
-                let locked = group.lock().await;
-                (locked.group_id(), locked.transitive_members().await)
-            };
+            let group_id = group.lock().await.group_id();
+            // Lock-free transitive walk (never run a walk under a lock).
+            let transitive = Membered::Group(group_id, group.dupe())
+                .transitive_members()
+                .await;
             group_data.push((group_id, group, transitive));
         }
 
@@ -1286,10 +1305,11 @@ impl<
             TransitiveMembers<F, S, T, L>,
         )> = Vec::with_capacity(docs.len());
         for doc in docs {
-            let (doc_id, transitive) = {
-                let locked = doc.lock().await;
-                (locked.doc_id(), locked.transitive_members().await)
-            };
+            let doc_id = doc.lock().await.doc_id();
+            // Lock-free transitive walk (never run a walk under a lock).
+            let transitive = Membered::Document(doc_id, doc.dupe())
+                .transitive_members()
+                .await;
             doc_data.push((doc_id, doc, transitive));
         }
 
@@ -1386,9 +1406,9 @@ impl<
 
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in &docs {
-            let (doc_id, doc_ops, transitive) = {
+            let doc_id = doc.lock().await.doc_id();
+            let doc_ops = {
                 let locked = doc.lock().await;
-                let doc_id = locked.doc_id();
 
                 let epochs = match locked.cgka_ops() {
                     Ok(epochs) => epochs,
@@ -1404,9 +1424,12 @@ impl<
                 if doc_ops.is_empty() {
                     continue;
                 }
-
-                (doc_id, doc_ops, locked.transitive_members().await)
+                doc_ops
             };
+            // Lock-free transitive walk (never run a walk under a lock).
+            let transitive = Membered::Document(doc_id, doc.dupe())
+                .transitive_members()
+                .await;
 
             let source_id: Identifier = doc_id.into();
             for agent_id in transitive.keys() {

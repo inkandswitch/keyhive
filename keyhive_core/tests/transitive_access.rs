@@ -341,8 +341,7 @@ async fn test_transitive_admin_can_delegate() -> TestResult {
     // KEY TEST: Bob (via his signer) adds Carol as Edit member of Doc B.
     // This exercises the transitive proof path in add_member_with_manual_content.
     {
-        let mut locked = doc_b.lock().await;
-        locked
+        Membered::Document(doc_b_id, doc_b.dupe())
             .add_member(
                 Agent::Individual(carol_id, carol_on_alice.dupe()),
                 Access::Edit,
@@ -440,8 +439,7 @@ async fn test_transitive_read_cannot_delegate_admin() -> TestResult {
 
     // Bob tries to add Carol as Admin of Doc B — should fail
     let result = {
-        let mut locked = doc_b.lock().await;
-        locked
+        Membered::Document(doc_b_id, doc_b.dupe())
             .add_member(
                 Agent::Individual(carol_id, carol_on_alice.dupe()),
                 Access::Admin,
@@ -464,8 +462,7 @@ async fn test_transitive_read_cannot_delegate_admin() -> TestResult {
 
     // Bob should still be able to add Carol as Read (within his access level)
     {
-        let mut locked = doc_b.lock().await;
-        locked
+        Membered::Document(doc_b_id, doc_b.dupe())
             .add_member(
                 Agent::Individual(carol_id, carol_on_alice.dupe()),
                 Access::Read,
@@ -567,8 +564,7 @@ async fn test_transitive_admin_can_delegate_via_group() -> TestResult {
 
     // KEY TEST: Bob adds Carol as Edit member of Doc B via transitive access.
     {
-        let mut locked = doc_b.lock().await;
-        locked
+        Membered::Document(doc_b_id, doc_b.dupe())
             .add_member(
                 Agent::Individual(carol_id, carol_on_alice.dupe()),
                 Access::Edit,
@@ -644,8 +640,7 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
 
     // Bob adds Carol to Doc B
     {
-        let mut locked = doc_b.lock().await;
-        locked
+        Membered::Document(doc_b_id, doc_b.dupe())
             .add_member(
                 Agent::Individual(carol_id, carol_on_alice.dupe()),
                 Access::Edit,
@@ -668,8 +663,7 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
     // Bob revokes Carol from Doc B
     {
         let carol_identifier: Identifier = carol_id.into();
-        let mut locked = doc_b.lock().await;
-        locked
+        Membered::Document(doc_b_id, doc_b.dupe())
             .revoke_member(
                 carol_identifier,
                 true,
@@ -743,8 +737,7 @@ async fn test_transitive_admin_can_revoke_via_group() -> TestResult {
 
     // Bob adds Carol to Doc B
     {
-        let mut locked = doc_b.lock().await;
-        locked
+        Membered::Document(doc_b_id, doc_b.dupe())
             .add_member(
                 Agent::Individual(carol_id, carol_on_alice.dupe()),
                 Access::Edit,
@@ -757,8 +750,7 @@ async fn test_transitive_admin_can_revoke_via_group() -> TestResult {
     // Bob revokes Carol from Doc B
     {
         let carol_identifier: Identifier = carol_id.into();
-        let mut locked = doc_b.lock().await;
-        locked
+        Membered::Document(doc_b_id, doc_b.dupe())
             .revoke_member(
                 carol_identifier,
                 true,
@@ -879,8 +871,7 @@ async fn test_deep_chain_revocation() -> TestResult {
         .await?;
 
     {
-        let mut locked = group.lock().await;
-        locked
+        Membered::Group(group_id, group.dupe())
             .add_member(
                 Agent::Individual(carol_id, carol_on_alice.dupe()),
                 Access::Admin,
@@ -891,8 +882,7 @@ async fn test_deep_chain_revocation() -> TestResult {
     }
 
     {
-        let mut locked = group.lock().await;
-        locked
+        Membered::Group(group_id, group.dupe())
             .add_member(
                 Agent::Individual(dave_id, dave_on_alice.dupe()),
                 Access::Admin,
@@ -903,8 +893,7 @@ async fn test_deep_chain_revocation() -> TestResult {
     }
 
     {
-        let mut locked = group.lock().await;
-        locked
+        Membered::Group(group_id, group.dupe())
             .add_member(
                 Agent::Individual(eve_id, eve_on_alice.dupe()),
                 Access::Edit,
@@ -918,13 +907,12 @@ async fn test_deep_chain_revocation() -> TestResult {
     // The old buggy fold would reject this at the second lineage hop.
     {
         let eve_identifier: Identifier = eve_id.into();
-        let mut locked = group.lock().await;
-        locked
+        Membered::Group(group_id, group.dupe())
             .revoke_member(
                 eve_identifier,
                 true,
                 &carol_signer,
-                &std::collections::BTreeMap::new(),
+                &mut std::collections::BTreeMap::new(),
             )
             .await?;
     }
