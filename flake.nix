@@ -3,11 +3,10 @@
 
   inputs = {
     flake-utils.url = "github:numtide/flake-utils";
-    nixpkgs.url = "nixpkgs/nixos-25.11";
-    nixpkgs-unstable.url = "nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "nixpkgs/nixos-26.05";
 
     command-utils = {
-      url = "git+https://codeberg.org/expede/nix-command-utils";
+      url = "git+https://tangled.sh/@expede.wtf/nix-command-utils";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -21,7 +20,6 @@
     self,
     flake-utils,
     nixpkgs,
-    nixpkgs-unstable,
     rust-overlay,
     command-utils
   } @ inputs:
@@ -32,11 +30,6 @@
         ];
 
         pkgs = import nixpkgs {
-          inherit system overlays;
-          config.allowUnfree = true;
-        };
-
-        unstable = import nixpkgs-unstable {
           inherit system overlays;
           config.allowUnfree = true;
         };
@@ -96,7 +89,7 @@
             hash = "sha256-dUlcAmhX1b87cvzv0+fLjVy+vnWR48FwjjrePl0KMfc=";
           };
           cargoHash = "sha256-CHZ5gzn1PczucqahQi+k9QjVdrTweK1TqNSrDXMRYUE=";
-          nativeBuildInputs = [ unstable.cargo-auditable ];
+          nativeBuildInputs = [ pkgs.cargo-auditable ];
           doCheck = false; # tests require npm/puppeteer infrastructure
         };
 
@@ -276,8 +269,8 @@
           name = "keyhive";
 
           nativeBuildInputs =
-            [
-              command_menu
+            command_menu
+            ++ [
               rust-toolchain
               nightly-rustfmt
 
@@ -286,8 +279,8 @@
               pkgs.esbuild
               pkgs.http-server
               pkgs.irust
-              pkgs.nodePackages.pnpm
-              pkgs.nodePackages_latest.webpack-cli
+              pkgs.pnpm
+              pkgs.webpack-cli
               pkgs.nodejs_22
               pkgs.playwright
               pkgs.playwright-driver
