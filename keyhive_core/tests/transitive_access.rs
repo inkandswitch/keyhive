@@ -1325,6 +1325,53 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
         "Bob should still see Public on the doc"
     );
 
+    // Concurrent Adds leave the merged tree without a current group secret.
+    // The first encryption must create one post-merge Update; after that the
+    // epoch is settled and another encryption must reuse it rather than
+    // rotating again.
+    let first_content = b"first post-merge content".to_vec();
+    let first_ref = *blake3::hash(&first_content).as_bytes();
+    let first = alice
+        .try_encrypt_content(doc.dupe(), &first_ref, &vec![], &first_content)
+        .await?;
+    assert!(
+        first.update_op().is_some(),
+        "first encryption after concurrent Adds must establish a post-merge epoch"
+    );
+    assert!(
+        doc.lock().await.cgka()?.has_pcs_key(),
+        "post-merge Update must leave a usable current PCS key"
+    );
+
+    let update_events_for_bob = alice
+        .events_for_agent(&Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()))
+        .await;
+    bob.ingest_event_table(update_events_for_bob).await?;
+    assert!(
+        doc_on_bob.lock().await.cgka()?.has_pcs_key(),
+        "processing a causally post-merge Update must settle the receiver's PCS key"
+    );
+
+    let second_content = b"second post-merge content".to_vec();
+    let second_ref = *blake3::hash(&second_content).as_bytes();
+    let second = alice
+        .try_encrypt_content(doc.dupe(), &second_ref, &vec![], &second_content)
+        .await?;
+    assert!(
+        second.update_op().is_none(),
+        "a settled post-merge epoch must be reused by later encryption"
+    );
+
+    let bob_content = b"receiver post-merge content".to_vec();
+    let bob_ref = *blake3::hash(&bob_content).as_bytes();
+    let bob_encrypted = bob
+        .try_encrypt_content(doc_on_bob, &bob_ref, &vec![], &bob_content)
+        .await?;
+    assert!(
+        bob_encrypted.update_op().is_none(),
+        "a receiver must reuse the causally post-merge epoch"
+    );
+
     Ok(())
 }
 

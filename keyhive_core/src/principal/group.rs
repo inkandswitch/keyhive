@@ -270,11 +270,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
     #[tracing::instrument(skip(self), fields(group_id = %self.group_id()))]
     pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
-        transitive_members_walk(
-            self.id().into(),
-            self.direct_members_with_caps(),
-        )
-        .await
+        transitive_members_walk(self.id().into(), self.direct_members_with_caps()).await
     }
 
     /// The group's direct members and their capabilities.
@@ -567,8 +563,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     // The transitive walk must not run under this group's lock:
                     // the signer's authority proofs are precomputed lock-free by
                     // the caller (see [`compute_add_proof`]).
-                    if let Some(Ok(Some(proof))) = signer_authority.get(&to_revoke.payload.can)
-                    {
+                    if let Some(Ok(Some(proof))) = signer_authority.get(&to_revoke.payload.can) {
                         let r = self
                             .build_revocation(
                                 signer,
@@ -932,7 +927,12 @@ mod tests {
     /// Compute the membership proof for a test signer, snapshotting first so
     /// the transitive walk never runs under a lock (mirrors the production
     /// `Membered` wrappers).
-    async fn proof_for_arc<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>(
+    async fn proof_for_arc<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, T>,
+    >(
         g: &Arc<Mutex<Group<F, S, T, L>>>,
         signer: &S,
         can: Access,
@@ -947,7 +947,12 @@ mod tests {
     }
 
     /// Same as [`proof_for_arc`] but for a directly-held (non-`Mutex`) group.
-    async fn proof_for<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>(
+    async fn proof_for<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, T>,
+    >(
         g: &Group<F, S, T, L>,
         signer: &S,
         can: Access,
@@ -960,7 +965,12 @@ mod tests {
     /// Signer authority proofs per access level, for the direct `revoke_member`
     /// calls in tests (the production wrappers compute this internally).
     /// Returns `(revocation_authority, re_add_authority)`.
-    async fn authority_for<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>(
+    async fn authority_for<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, T>,
+    >(
         g: &Group<F, S, T, L>,
         signer: &S,
     ) -> (SignerAuthority<F, S, T, L>, SignerAuthority<F, S, T, L>) {
@@ -1511,7 +1521,13 @@ mod tests {
         read_group
             .lock()
             .await
-            .add_member(target_agent.dupe(), Access::Read, &read_owner_signer, &[], proof)
+            .add_member(
+                target_agent.dupe(),
+                Access::Read,
+                &read_owner_signer,
+                &[],
+                proof,
+            )
             .await
             .unwrap();
 
@@ -2017,7 +2033,12 @@ mod tests {
 /// one lock is held at any instant. Concurrent walks rooted at different
 /// docs/groups therefore cannot ABBA-deadlock with each other or with
 /// materialization decrypts that briefly lock a single document.
-pub(crate) async fn transitive_members_walk<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>(
+pub(crate) async fn transitive_members_walk<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
     root_id: Identifier,
     direct: Vec<(Agent<F, S, T, L>, Access)>,
 ) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
@@ -2086,10 +2107,8 @@ pub(crate) async fn transitive_members_walk<F: FutureForm, S: AsyncSigner<F>, T:
 
 /// Signer-authority proofs per access level, precomputed by the caller
 /// (lock-free) and consumed by the group/document `revoke_member` paths.
-pub(crate) type SignerAuthority<F, S, T, L> = HashMap<
-    Access,
-    Result<Option<Arc<Signed<Delegation<F, S, T, L>>>>, AddGroupMemberError>,
->;
+pub(crate) type SignerAuthority<F, S, T, L> =
+    HashMap<Access, Result<Option<Arc<Signed<Delegation<F, S, T, L>>>>, AddGroupMemberError>>;
 
 /// Compute the membership proof for adding a member at access level `can`,
 /// without holding any document/group lock.
@@ -2100,7 +2119,12 @@ pub(crate) type SignerAuthority<F, S, T, L> = HashMap<
 /// must take their snapshot, drop the lock, and only then call this.
 ///
 /// Returns `Ok(None)` when the signer is the resource's own signing key.
-pub(crate) async fn compute_add_proof<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>(
+pub(crate) async fn compute_add_proof<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
     root_vk: ed25519_dalek::VerifyingKey,
     members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
     signer_vk: ed25519_dalek::VerifyingKey,
@@ -2135,7 +2159,12 @@ pub(crate) async fn compute_add_proof<F: FutureForm, S: AsyncSigner<F>, T: Conte
 /// delegate fails that check. So the direct-member shortcut is skipped and
 /// only the transitive (membered-intermediary) search is performed, matching
 /// the pre-lock-refactor behavior of `revoke_member`.
-pub(crate) async fn compute_revoke_proof<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>(
+pub(crate) async fn compute_revoke_proof<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
     root_vk: ed25519_dalek::VerifyingKey,
     members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
     signer_vk: ed25519_dalek::VerifyingKey,
@@ -2150,7 +2179,12 @@ pub(crate) async fn compute_revoke_proof<F: FutureForm, S: AsyncSigner<F>, T: Co
 /// Single-pass transitive search: find a membered (group/doc) direct member
 /// whose transitive members include `signer_id` at access >= `can`, and return
 /// that member's delegation as the proof.
-async fn compute_transitive_proof<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>(
+async fn compute_transitive_proof<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
     members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
     signer_id: Identifier,
     can: Access,
@@ -2188,4 +2222,3 @@ async fn compute_transitive_proof<F: FutureForm, S: AsyncSigner<F>, T: ContentRe
         Err(AddGroupMemberError::NoProof)
     }
 }
-
