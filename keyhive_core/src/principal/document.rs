@@ -130,11 +130,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
-        super::group::transitive_members_walk(
-            self.doc_id().into(),
-            self.direct_members_with_caps(),
-        )
-        .await
+        super::group::transitive_members_walk(self.doc_id().into(), self.direct_members_with_caps())
+            .await
     }
 
     /// The document's direct members and their capabilities (sync read;
