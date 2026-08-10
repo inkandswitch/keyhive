@@ -24,11 +24,19 @@ pub struct NoListener;
 
 #[future_form(Sendable, Local)]
 impl<F: FutureForm> PrekeyListener<F> for NoListener {
-    fn on_prekeys_expanded<'a>(&'a self, _e: &'a Arc<Signed<AddKeyOp>>) -> F::Future<'a, ()> {
+    fn on_prekeys_expanded<'a>(
+        &'a self,
+        _e: &'a Arc<Signed<AddKeyOp>>,
+        _secret: Option<&'a crate::principal::active::LocalPrekeySecret>,
+    ) -> F::Future<'a, ()> {
         F::ready(())
     }
 
-    fn on_prekey_rotated<'a>(&'a self, _e: &'a Arc<Signed<RotateKeyOp>>) -> F::Future<'a, ()> {
+    fn on_prekey_rotated<'a>(
+        &'a self,
+        _e: &'a Arc<Signed<RotateKeyOp>>,
+        _secret: Option<&'a crate::principal::active::LocalPrekeySecret>,
+    ) -> F::Future<'a, ()> {
         F::ready(())
     }
 }
