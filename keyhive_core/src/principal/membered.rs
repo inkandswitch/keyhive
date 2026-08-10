@@ -151,7 +151,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 document
                     .lock()
                     .await
-                    .add_member_with_manual_content(member_to_add, can, signer, after_content, proof)
+                    .add_member_with_manual_content(
+                        member_to_add,
+                        can,
+                        signer,
+                        after_content,
+                        proof,
+                    )
                     .await
             }
         }
@@ -235,15 +241,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let mut signer_authority = HashMap::new();
         let mut re_add_authority = HashMap::new();
         for can in needed {
-                signer_authority.insert(
+            signer_authority.insert(
                 can,
                 compute_revoke_proof(root_vk, &members, signer_vk, can).await,
             );
-                re_add_authority.insert(
+            re_add_authority.insert(
                 can,
                 compute_add_proof(root_vk, &members, signer_vk, can).await,
             );
-            }
+        }
         match self {
             Membered::Group(_, group) => {
                 group

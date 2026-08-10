@@ -12,38 +12,38 @@ use crate::{
     listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::Active,
-        agent::{Agent, id::AgentId},
+        agent::{id::AgentId, Agent},
         document::{
             AddMemberError, AddMemberUpdate, DecryptError, DocCausalDecryptionError, Document,
             EncryptError, EncryptInEnvelopeError, EncryptedContentWithUpdate, GenerateDocError,
             MissingIndividualError, RevokeMemberUpdate, id::DocumentId,
         },
         group::{
-            Group, IdOrIndividual, RevokeMemberError,
             delegation::{Delegation, StaticDelegation},
             error::AddError,
             id::GroupId,
             membership_operation::{
-                AllMembershipOps, MembershipOpMap, MembershipOperation, StaticMembershipOperation,
                 bfs_extend_from_revocation, bfs_membership_ops, collect_membership_heads,
+                AllMembershipOps, MembershipOpMap, MembershipOperation, StaticMembershipOperation,
             },
             revocation::{Revocation, StaticRevocation},
+            Group, IdOrIndividual, RevokeMemberError,
         },
         identifier::Identifier,
         individual::{
-            Individual, ReceivePrekeyOpError,
             id::IndividualId,
-            op::{AllReachablePrekeyOps, KeyOp, add_key::AddKeyOp, rotate_key::RotateKeyOp},
+            op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, AllReachablePrekeyOps, KeyOp},
+            Individual, ReceivePrekeyOpError,
         },
-        membered::{Membered, id::MemberedId},
+        membered::{id::MemberedId, Membered},
         peer::Peer,
         public::Public,
     },
     stats::Stats,
     store::{
         ciphertext::{
-            CausalDecryptionState, CiphertextStore, CiphertextStoreExt,
-            memory::MemoryCiphertextStore,
+            memory::MemoryCiphertextStore, CausalDecryptionState, CiphertextStore,
+            CiphertextStoreExt,
         },
         delegation::DelegationStore,
         revocation::RevocationStore,
@@ -74,7 +74,7 @@ use keyhive_crypto::{
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry},
+    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::{Debug, Formatter},
     marker::PhantomData,
     mem,
@@ -159,14 +159,14 @@ where
 }
 
 impl<
-    F: FutureForm,
-    S: AsyncSigner<F> + Clone,
-    T: ContentRef,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-    L: MembershipListener<F, S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> Keyhive<F, S, T, P, C, L, R>
+        F: FutureForm,
+        S: AsyncSigner<F> + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+        L: MembershipListener<F, S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > Keyhive<F, S, T, P, C, L, R>
 {
     #[instrument(skip_all)]
     pub fn id(&self) -> IndividualId {
@@ -366,10 +366,10 @@ impl<
 
         match contact_card.op() {
             KeyOp::Add(add_op) => {
-                self.event_listener.on_prekeys_expanded(add_op).await;
+                self.event_listener.on_prekeys_expanded(add_op, None).await;
             }
             KeyOp::Rotate(rot_op) => {
-                self.event_listener.on_prekey_rotated(rot_op).await;
+                self.event_listener.on_prekey_rotated(rot_op, None).await;
             }
         }
 
@@ -677,6 +677,26 @@ impl<
             .await
             .cgka_mut()?
             .owner_sks_mut()
+            .insert(secret.share_key(), secret.share_secret_key());
+        Ok(())
+    }
+
+    /// Import private prekey material produced by a local prekey operation.
+    pub async fn import_local_prekey_secret(
+        &self,
+        secret: crate::principal::active::LocalPrekeySecret,
+    ) -> Result<(), ImportLocalPrekeySecretError> {
+        if secret.share_secret_key().share_key() != secret.share_key() {
+            return Err(ImportLocalPrekeySecretError::MismatchedShareKey);
+        }
+        let active = self.active.lock().await;
+        if active.id() != secret.individual_id() {
+            return Err(ImportLocalPrekeySecretError::WrongIndividual);
+        }
+        active
+            .key_pairs
+            .lock()
+            .await
             .insert(secret.share_key(), secret.share_secret_key());
         Ok(())
     }
@@ -2935,14 +2955,14 @@ impl<
 }
 
 impl<
-    F: FutureForm,
-    S: AsyncSigner<F> + Clone,
-    T: ContentRef + Debug,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-    L: MembershipListener<F, S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> Debug for Keyhive<F, S, T, P, C, L, R>
+        F: FutureForm,
+        S: AsyncSigner<F> + Clone,
+        T: ContentRef + Debug,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+        L: MembershipListener<F, S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > Debug for Keyhive<F, S, T, P, C, L, R>
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.debug_struct("Keyhive")
@@ -2959,14 +2979,14 @@ impl<
 }
 
 impl<
-    F: FutureForm,
-    S: AsyncSigner<F> + Clone,
-    T: ContentRef + Clone,
-    P: for<'de> Deserialize<'de> + Clone,
-    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-    L: MembershipListener<F, S, T>,
-    R: rand::CryptoRng + rand::RngCore + Clone,
-> ForkAsync for Keyhive<F, S, T, P, C, L, R>
+        F: FutureForm,
+        S: AsyncSigner<F> + Clone,
+        T: ContentRef + Clone,
+        P: for<'de> Deserialize<'de> + Clone,
+        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+        L: MembershipListener<F, S, T>,
+        R: rand::CryptoRng + rand::RngCore + Clone,
+    > ForkAsync for Keyhive<F, S, T, P, C, L, R>
 where
     Log<F, S, T>: MembershipListener<F, S, T>,
 {
@@ -2988,14 +3008,14 @@ where
 }
 
 impl<
-    F: FutureForm,
-    S: AsyncSigner<F> + Clone,
-    T: ContentRef + Clone,
-    P: for<'de> Deserialize<'de> + Clone,
-    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-    L: MembershipListener<F, S, T>,
-    R: rand::CryptoRng + rand::RngCore + Clone,
-> MergeAsync for Arc<Mutex<Keyhive<F, S, T, P, C, L, R>>>
+        F: FutureForm,
+        S: AsyncSigner<F> + Clone,
+        T: ContentRef + Clone,
+        P: for<'de> Deserialize<'de> + Clone,
+        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+        L: MembershipListener<F, S, T>,
+        R: rand::CryptoRng + rand::RngCore + Clone,
+    > MergeAsync for Arc<Mutex<Keyhive<F, S, T, P, C, L, R>>>
 where
     Log<F, S, T>: MembershipListener<F, S, T>,
 {
@@ -3040,14 +3060,14 @@ where
 }
 
 impl<
-    F: FutureForm,
-    S: AsyncSigner<F> + Clone,
-    T: ContentRef,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-    L: MembershipListener<F, S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> Verifiable for Keyhive<F, S, T, P, C, L, R>
+        F: FutureForm,
+        S: AsyncSigner<F> + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+        L: MembershipListener<F, S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > Verifiable for Keyhive<F, S, T, P, C, L, R>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.verifying_key
@@ -3277,6 +3297,15 @@ pub enum ImportLocalCgkaSecretError {
 }
 
 #[derive(Debug, Error)]
+pub enum ImportLocalPrekeySecretError {
+    #[error("Local prekey belongs to another individual")]
+    WrongIndividual,
+
+    #[error("Local prekey share key does not match its secret key")]
+    MismatchedShareKey,
+}
+
+#[derive(Debug, Error)]
 pub enum EncryptContentError {
     #[error(transparent)]
     NotFound(#[from] NotFound),
@@ -3343,6 +3372,68 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn local_prekey_delta_restores_secret_missing_from_older_archive() {
+        let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
+        let keyhive: TestKeyhive = Keyhive::generate(
+            signer.clone(),
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await
+        .unwrap();
+        let archive = keyhive.into_archive().await;
+
+        let add_op = keyhive.expand_prekeys().await.unwrap();
+        let share_key = add_op.payload.share_key;
+        let secret_key = *keyhive
+            .active
+            .lock()
+            .await
+            .key_pairs
+            .lock()
+            .await
+            .get(&share_key)
+            .unwrap();
+        let local_secret =
+            crate::principal::active::LocalPrekeySecret::from_secret(keyhive.id(), secret_key);
+
+        let restored: TestKeyhive = Keyhive::try_from_archive(
+            &archive,
+            signer,
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+            NoListener,
+            Arc::new(Mutex::new(rand::rngs::OsRng)),
+        )
+        .await
+        .unwrap();
+        assert!(!restored
+            .active
+            .lock()
+            .await
+            .key_pairs
+            .lock()
+            .await
+            .contains_key(&share_key));
+
+        restored
+            .import_local_prekey_secret(local_secret)
+            .await
+            .unwrap();
+        assert_eq!(
+            restored
+                .active
+                .lock()
+                .await
+                .key_pairs
+                .lock()
+                .await
+                .get(&share_key),
+            Some(&secret_key)
+        );
     }
 
     /// Register a peer keyhive as an individual on `owner` and return its id.
@@ -3549,12 +3640,11 @@ mod tests {
         assert_eq!(left.revocations.lock().await.len(), 0);
 
         assert_eq!(left.individuals.lock().await.len(), 2);
-        assert!(
-            left.individuals
-                .lock()
-                .await
-                .contains_key(&IndividualId(Public.id()))
-        );
+        assert!(left
+            .individuals
+            .lock()
+            .await
+            .contains_key(&IndividualId(Public.id())));
 
         assert_eq!(left.groups.lock().await.len(), 1);
         assert_eq!(left.docs.lock().await.len(), 1);
@@ -3582,7 +3672,7 @@ mod tests {
 
         // Middle should now look the same
         assert!(middle.docs.lock().await.contains_key(&left_doc));
-        assert!(!middle.groups.lock().await.contains_key(&left_group_id)); // none of them
+        assert!(!middle.groups.lock().await.contains_key(&left_group_id)); // none of the
 
         assert_eq!(middle.individuals.lock().await.len(), 3); // NOTE: includes Left
         assert_eq!(middle.groups.lock().await.len(), 0);
@@ -3629,7 +3719,7 @@ mod tests {
 
         assert!(right.groups.lock().await.len() == 1 || right.docs.lock().await.len() == 1);
         assert!(right.docs.lock().await.contains_key(&left_doc));
-        assert!(!right.groups.lock().await.contains_key(&left_group_id)); // none of them
+        assert!(!right.groups.lock().await.contains_key(&left_group_id)); // none of the
 
         assert_eq!(right.individuals.lock().await.len(), 4);
         assert_eq!(right.groups.lock().await.len(), 0);

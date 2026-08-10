@@ -94,6 +94,7 @@ where
     fn on_prekeys_expanded<'a>(
         &'a self,
         new_prekey: &'a Arc<Signed<AddKeyOp>>,
+        _secret: Option<&'a crate::principal::active::LocalPrekeySecret>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::PrekeysExpanded(new_prekey.dupe())).await })
     }
@@ -101,6 +102,7 @@ where
     fn on_prekey_rotated<'a>(
         &'a self,
         rotate_key: &'a Arc<Signed<RotateKeyOp>>,
+        _secret: Option<&'a crate::principal::active::LocalPrekeySecret>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::PrekeyRotated(rotate_key.dupe())).await })
     }

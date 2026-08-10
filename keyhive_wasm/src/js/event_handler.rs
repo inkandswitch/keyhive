@@ -33,11 +33,19 @@ impl Dupe for JsEventHandler {
 }
 
 impl PrekeyListener<Local> for JsEventHandler {
-    fn on_prekeys_expanded<'a>(&'a self, e: &'a Arc<Signed<AddKeyOp>>) -> LocalBoxFuture<'a, ()> {
+    fn on_prekeys_expanded<'a>(
+        &'a self,
+        e: &'a Arc<Signed<AddKeyOp>>,
+        _secret: Option<&'a keyhive_core::principal::active::LocalPrekeySecret>,
+    ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::PrekeysExpanded(e.dupe()).into()) })
     }
 
-    fn on_prekey_rotated<'a>(&'a self, e: &'a Arc<Signed<RotateKeyOp>>) -> LocalBoxFuture<'a, ()> {
+    fn on_prekey_rotated<'a>(
+        &'a self,
+        e: &'a Arc<Signed<RotateKeyOp>>,
+        _secret: Option<&'a keyhive_core::principal::active::LocalPrekeySecret>,
+    ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::PrekeyRotated(e.dupe()).into()) })
     }
 }

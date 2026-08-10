@@ -211,13 +211,15 @@ impl CgkaOperationGraph {
         let op_hash = Digest::hash(op);
         let mut op_predecessors = Set::new();
         self.cgka_ops.insert(op.clone().into());
-        let is_add = self.is_add_op(&op_hash);
         if let Some(heads) = external_heads {
+            let observes_entire_graph = self.cgka_op_heads.iter().all(|head| heads.contains(head));
             for h in heads {
                 op_predecessors.insert(*h);
                 self.cgka_op_heads.remove(h);
             }
-            if let CgkaOperation::Add {
+            if observes_entire_graph {
+                self.add_heads.clear();
+            } else if let CgkaOperation::Add {
                 add_predecessors, ..
             } = &op.payload
             {
@@ -230,9 +232,10 @@ impl CgkaOperationGraph {
                 op_predecessors.insert(*h);
             }
             self.cgka_op_heads.clear();
-            if is_add {
-                self.add_heads.clear();
-            }
+            // A local operation causally observes the complete local graph.
+            // It therefore supersedes every unresolved Add frontier even when
+            // the operation itself is an Update or Remove.
+            self.add_heads.clear();
         };
         self.cgka_op_heads.insert(op_hash);
         if self.is_add_op(&op_hash) {
