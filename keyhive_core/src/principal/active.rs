@@ -279,13 +279,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         subject
             .get_capability(&self.id().into())
             .await
-            .and_then(|cap| {
-                if cap.payload().can >= min {
-                    Some(cap)
-                } else {
-                    None
-                }
-            })
+            .filter(|cap| cap.payload().can >= min)
     }
 
     /// Export prekey secrets as an opaque blob.
