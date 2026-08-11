@@ -493,7 +493,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             let mut best_proof = None;
             let mut best_access: Option<Access> = None;
 
-            for (member_id, _) in self.members.iter() {
+            for member_id in self.members.keys() {
                 let dlg = self
                     .get_capability(member_id)
                     .expect("members have capabilities by definition");
@@ -653,7 +653,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 if !found {
                     // Check transitive membership through the group graph.
                     let signer_id = Identifier::from(vk);
-                    for (mid, _) in self.members.iter() {
+                    for mid in self.members.keys() {
                         let dlg = self
                             .get_capability(mid)
                             .expect("members have capabilities by definition");
