@@ -376,28 +376,6 @@ pub(crate) fn direct_path(node_index: TreeNodeIndex, size: TreeSize) -> Vec<Inne
     d
 }
 
-/// Common ancestor of two leaf nodes, aka the node where their direct paths
-/// intersect.
-pub(super) fn lowest_common_ancestor(x: LeafNodeIndex, y: LeafNodeIndex) -> InnerNodeIndex {
-    let x = x.to_tree_index();
-    let y = y.to_tree_index();
-    let (lx, ly) = (level(x) + 1, level(y) + 1);
-    if (lx <= ly) && (x >> ly == y >> ly) {
-        return InnerNodeIndex::from_tree_index(y);
-    } else if (ly <= lx) && (x >> lx == y >> lx) {
-        return InnerNodeIndex::from_tree_index(x);
-    }
-
-    let (mut xn, mut yn) = (x, y);
-    let mut k = 0;
-    while xn != yn {
-        xn >>= 1;
-        yn >>= 1;
-        k += 1;
-    }
-    InnerNodeIndex::from_tree_index((xn << k) + (1 << (k - 1)) - 1)
-}
-
 #[allow(dead_code)]
 #[cfg(any(feature = "test_utils", test))]
 pub(crate) fn is_node_in_tree(node_index: TreeNodeIndex, size: TreeSize) -> bool {
