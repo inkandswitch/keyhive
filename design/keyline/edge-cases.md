@@ -205,8 +205,8 @@ The field did three jobs; each has a node-based replacement that is structurally
 | Job | Replacement | Why stronger |
 |---|---|---|
 | Venue (which admins can moderate the act) | `sub`-scoping: a membership-shaped cert (`sub: Role`) grounds every route at the role, so the role's admins always reach it | Venue coincides with subject; no separate field to get wrong |
-| Pinning (act dies with my standing in a jurisdiction, regardless of my other routes) | Sub-scoped intermediary (`M2`): route the grant through a node whose inbound is `sub`-pinned | The pin is topological — multi-hat leakage is inexpressible, not just forbidden |
-| Capacity filing ("what did Dan do as a mod") | Hat key (`D_m`): a capacity keypair whose only inbound is a pinned membership | Enumeration is `iss: D_m`; collective kill is one cut on the hat's inbound; leakage onto personal standing is topologically impossible |
+| Pinning (act dies with my standing in a jurisdiction, regardless of my other routes) | Sub-scoped intermediary (`M2`): route the grant through a node whose inbound is `sub`-pinned | The pin is topological — leakage onto the issuer's other standings is inexpressible, not just forbidden |
+| Capacity filing ("what did Dan do as a mod") | Capacity key (`D_m`): a dedicated keypair whose only inbound is a pinned membership | Enumeration is `iss: D_m`; collective kill is one cut on the capacity key's inbound; leakage onto personal standing is topologically impossible |
 
 The decisive argument against keeping `from`: rotation. Certificates anchored by a field die when the anchor rotates and must be enumerated and re-signed — the sweep exists *because* the field exists (the field creates the breakage, then sells the tool to fix it). With no anchor field, member grants ride whatever membership is live: rotation re-issues exactly the roster, and everything survivors issued re-grounds automatically. Rotation cost fell from $O(\text{certs at the node})$ to $O(\text{roster})$, and the spine pattern became unnecessary — every grant is spine-like natively.
 
@@ -226,7 +226,7 @@ Ed25519 is deterministic and certs are content-addressed: an identical re-issuan
 Option 3's block named its jurisdiction explicitly. Two refinements removed the field:
 
 1. *Node, not hash.* A `via` naming a specific delegation hash fails "edges are certificates": the drawn edge Members→Dan may be several certs plus future re-adds, and hash-via covers exactly one — whack-a-mole against ordinary roster churn. Blocks speak about *venues*, so `via` must be a node.
-2. *Any node I control, not one I name.* Scoping the effect to the issuer's whole *service record* — every node they were ever Admin-anchorable at — matches the actual intent ("out of everything I govern"), and dissolves option 3's residual cost: a surviving admin's record grows as they are re-rostered into successor nodes, so their old revocations cover the successors automatically. **The carry-over deny-list liturgy stopped existing.** A griefer's record froze at ejection, so their cuts stay pinned to dead nodes. Coverage drift exists but only grows — fail-closed. Narrow denial (ban in room A, not room B) is signing with the narrow hat key: the field became the identity slot.
+2. *Any node I control, not one I name.* Scoping the effect to the issuer's whole *service record* — every node they were ever Admin-anchorable at — matches the actual intent ("out of everything I govern"), and dissolves option 3's residual cost: a surviving admin's record grows as they are re-rostered into successor nodes, so their old revocations cover the successors automatically. **The carry-over deny-list liturgy stopped existing.** A griefer's record froze at ejection, so their cuts stay pinned to dead nodes. Coverage drift exists but only grows — fail-closed. Narrow denial (ban in room A, not room B) is signing with the narrow capacity key: the field became the identity slot.
 
 With the scope derivable from `iss`, the revocation is `{iss, revoke, sig}`.
 
@@ -253,11 +253,11 @@ Records computed on the raw graph preserve permanence, mutual invisibility, and 
 ### Final certificate shapes
 
 ```
-Delegation: {iss, to, sub, can, after?, sig}
+Delegation: {iss, aud, sub, can, after: Option<Hash>, sig}
 Revocation: {iss, revoke, sig}
 ```
 
-Every scoping mechanism is a key or a node — capacities are hats, jurisdictions are rosters, pinning is `sub`, denial scope is the signer's record. Each surviving field defeated an elimination attempt; each eliminated field's jobs moved into the graph.
+Every scoping mechanism is a key or a node — capacities are dedicated keys, jurisdictions are rosters, pinning is `sub`, denial scope is the signer's record. Each surviving field defeated an elimination attempt; each eliminated field's jobs moved into the graph.
 
 <!-- Links -->
 
