@@ -1,6 +1,6 @@
 # Keyline Edge Cases
 
-Companion to the [Keyline design][keyline]. These notes work one adversarial scenario end to end and record what it demonstrates about the revocation rule. They are analysis, not settled design: several findings below contradict claims in the main document, and the open fork between revocation semantics (see [Open Questions][keyline-open]) should be resolved against them.
+Companion to the [Keyline design][keyline]. These notes record the adversarial analysis that produced the current design, in two convergences: first the revocation rule (one scenario worked end to end, Findings 1–7 and the candidate repairs), then the certificate format itself (the field eliminations, at the end of this document). The findings are kept as the arguments-of-record; terminology mid-document reflects the generation under analysis (`from`/`via`-scoped blocks), which the [second convergence][the second convergence: field elimination] later collapsed into service-record scoping.
 
 ## The Running Scenario
 
@@ -34,10 +34,10 @@ Events, all concurrent or nearly so:
 
 Bob's cut of Eve and Mallory's cut of Frank are _structurally identical acts_: a member of an upstream jurisdiction tombstones a certificate anchored below their own jurisdiction — a _deep cut_ (transitive revocation). Any validity rule that accepts one deep cut accepts the other.
 
-| | Bob cuts Eve | Mallory cuts Frank |
-|---|---|---|
-| Upstream rule | valid — desired | valid — unbounded grief |
-| Anchor-scoped rule | invalid | invalid — contained |
+|                    | Bob cuts Eve    | Mallory cuts Frank      |
+|--------------------|-----------------|-------------------------|
+| Upstream rule      | valid — desired | valid — unbounded grief |
+| Anchor-scoped rule | invalid         | invalid — contained     |
 
 Under the _upstream rule_ (revoker must be upstream of the revoked edge, evaluated against the revocation-free graph), both revocations are valid, both are permanent, and both are immune to the concurrent rotation: stratum 1 sees `#s1` as a fact forever, so each issuer's justification holds regardless of merge order. This is the strata doing their job — and the grief doing its worst.
 
@@ -67,10 +67,10 @@ The retail/wholesale distinction collapses to a latency gap: an ejected admin's 
 
 When `#s4` re-supplies the existing `members1` node, revival is _wholesale, not selective_: every dormant `members1`-anchored certificate whose issuer still stands re-energizes at once by late binding. Nobody chooses. Deny-state survives by two different mechanisms depending on layer:
 
-| Layer | Mechanism | Property |
-|---|---|---|
-| At the rotated node (`mods1 → mods2`) | Fresh hashes; deny = selective omission from the sweep | Requires the sweeper to have synced the revocations — an unsynced tombstone means a faithful, wrong re-issue |
-| Below the rotation boundary (`members1` and down) | Hashes unchanged; existing tombstones keep biting | Automatic, zero action — but only _explicit_ tombstones. Implicit (cascade) deaths revive with the supply |
+| Layer                                             | Mechanism                                              | Property                                                                                                     |
+|---------------------------------------------------|--------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
+| At the rotated node (`mods1 → mods2`)             | Fresh hashes; deny = selective omission from the sweep | Requires the sweeper to have synced the revocations — an unsynced tombstone means a faithful, wrong re-issue |
+| Below the rotation boundary (`members1` and down) | Hashes unchanged; existing tombstones keep biting      | Automatic, zero action — but only _explicit_ tombstones. Implicit (cascade) deaths revive with the supply    |
 
 Corollary: a death that must survive re-supply must be tombstoned explicitly. Omission works only at a layer whose hashes are being regenerated.
 
@@ -78,10 +78,10 @@ Corollary: a death that must survive re-supply must be tombstoned explicitly. Om
 
 In every variant considered, tombstoning an admin removes what they have, never what they can deny:
 
-| | Removes access (grants die) | Removes denial power (grief ends) |
-|---|---|---|
-| Regular revocation | yes | no — ever |
-| Retraction / rotation | yes, collaterally | yes — the only thing that does |
+|                       | Removes access (grants die) | Removes denial power (grief ends) |
+|-----------------------|-----------------------------|-----------------------------------|
+| Regular revocation    | yes                         | no — ever                         |
+| Retraction / rotation | yes, collaterally           | yes — the only thing that does    |
 
 The reason is structural and shared: revocation validity must ignore tombstones (mutual invisibility) or concurrent revocations become merge-order dependent. So a booted admin's boot is invisible to the validity check on their subsequent revocations. Only removing the supply line they ride — retraction, hence rotation — ends denial power. Every removal of an admin is therefore incomplete until the follow-up rotation, in every design on the table.
 
@@ -192,12 +192,78 @@ Every path through the scenario arrives at the same choice about third-party den
 | Retract & rotate (Design B) | none | zero | no — via Dan or rotation | timeless, semipositive | coarse removal collectively punishes (Finding 7); peer-removal gap |
 | Jurisdiction-scoped blocks (option 3) | permanent in validity, scoped in effect | contained to her service record, by construction | yes — re-scoped per rotation | timeless, 2 strata | re-scope on rotation (moot, not void); apex block power; epoch grief until rotation |
 
-Unconditional denials buy durable removal and cost permanent grief. Conditional denials cost fail-open resurrection. Ordered denials cost the timeless core. No denials cost removal ergonomics. Option 1 is not a stable point — it decomposes into a mix of the first and last. Option 3 is the genuine fourth point, reached by scoping a denial's _effect_ rather than its _validity_: denials stay unconditional (monotone, permanent) while their reach is confined to the jurisdiction named in their `from` field. It preserves the timeless core, deep cuts, healing-with-provenance, and spatial containment as a theorem, at the price of re-scoping blocks on rotation and retaining within-epoch grief. It is the current leading candidate.
+Unconditional denials buy durable removal and cost permanent grief. Conditional denials cost fail-open resurrection. Ordered denials cost the timeless core. No denials cost removal ergonomics. Option 1 is not a stable point — it decomposes into a mix of the first and last. Option 3 is the genuine fourth point, reached by scoping a denial's _effect_ rather than its _validity_: denials stay unconditional (monotone, permanent) while their reach is confined to a jurisdiction. It preserves the timeless core, deep cuts, healing-with-provenance, and spatial containment as a theorem. Option 3 was adopted — and then simplified further by the second convergence below, which eliminated the explicit jurisdiction field in favor of the issuer's service record and dissolved option 3's one residual cost (re-scoping blocks on rotation).
+
+## The Second Convergence: Field Elimination
+
+A second pass interrogated every certificate field. Each elimination follows the same move: where a certificate format wants a *mode*, the graph wants a *vertex*.
+
+### `from` on delegations — eliminated
+
+The field did three jobs; each has a node-based replacement that is structurally stronger:
+
+| Job | Replacement | Why stronger |
+|---|---|---|
+| Venue (which admins can moderate the act) | `sub`-scoping: a membership-shaped cert (`sub: Role`) grounds every route at the role, so the role's admins always reach it | Venue coincides with subject; no separate field to get wrong |
+| Pinning (act dies with my standing in a jurisdiction, regardless of my other routes) | Sub-scoped intermediary (`M2`): route the grant through a node whose inbound is `sub`-pinned | The pin is topological — multi-hat leakage is inexpressible, not just forbidden |
+| Capacity filing ("what did Dan do as a mod") | Hat key (`D_m`): a capacity keypair whose only inbound is a pinned membership | Enumeration is `iss: D_m`; collective kill is one cut on the hat's inbound; leakage onto personal standing is topologically impossible |
+
+The decisive argument against keeping `from`: rotation. Certificates anchored by a field die when the anchor rotates and must be enumerated and re-signed — the sweep exists *because* the field exists (the field creates the breakage, then sells the tool to fix it). With no anchor field, member grants ride whatever membership is live: rotation re-issues exactly the roster, and everything survivors issued re-grounds automatically. Rotation cost fell from $O(\text{certs at the node})$ to $O(\text{roster})$, and the spine pattern became unnecessary — every grant is spine-like natively.
+
+What was checked before cutting: the total-kill guarantee (a block on an unpinned cert is per-route and future-open — the issuer gaining a new route revives the target silently; answered by pinning-via-`sub` for certs that want total killability), and the multi-hatted issuer case (Dan with a personal route: his `sub`-pinned acts still die with the pinned standing). An *optional* `from` (pin bit) was considered and rejected: required or cut, period.
+
+### `nonce` vs `after` — `after` won on fail-direction
+
+Ed25519 is deterministic and certs are content-addressed: an identical re-issuance is byte-identical — the *same certificate*, still covered by any revocation naming it. Healing a mistaken removal on the same terms by the same issuer is impossible without a freshness field. The candidates:
+
+- *Nonce:* unconditional freshness. Failure mode: accidental duplicates are independently live certs, each needing separate coverage at removal — a missed one is a lingering live grant. **Fails open.**
+- *`after: Hash<Delegation>`* (optional; omitted on first issuance): freshness on demand, dedup by default, and the heal is an accountable act ("re-granted, knowing of the revocation"). Failure mode: an issuer unaware of a revoked twin re-mints the same hash and the grant silently doesn't take — visible on sync, fixed by re-chaining. **Fails closed.**
+
+"Ambiguity resolves toward less authority" decides it. Constraints: optional, where absence means "no predecessor claimed" — the anti-optionality rule bans absence *aliasing* a present value (the `{from: None} ≡ {from: iss}` bug), and with no sentinel, `after`'s absence has no present-value twin: one meaning, one encoding; zero semantics (not supersession, not ordering — issuer-supplied predecessors must never carry trust, or backdating-by-omission returns); bogus values harmless.
+
+### `via` on revocations — collapsed into the issuer
+
+Option 3's block named its jurisdiction explicitly. Two refinements removed the field:
+
+1. *Node, not hash.* A `via` naming a specific delegation hash fails "edges are certificates": the drawn edge Members→Dan may be several certs plus future re-adds, and hash-via covers exactly one — whack-a-mole against ordinary roster churn. Blocks speak about *venues*, so `via` must be a node.
+2. *Any node I control, not one I name.* Scoping the effect to the issuer's whole *service record* — every node they were ever Admin-anchorable at — matches the actual intent ("out of everything I govern"), and dissolves option 3's residual cost: a surviving admin's record grows as they are re-rostered into successor nodes, so their old revocations cover the successors automatically. **The carry-over deny-list liturgy stopped existing.** A griefer's record froze at ejection, so their cuts stay pinned to dead nodes. Coverage drift exists but only grows — fail-closed. Narrow denial (ban in room A, not room B) is signing with the narrow hat key: the field became the identity slot.
+
+With the scope derivable from `iss`, the revocation is `{iss, revoke, sig}`.
+
+### The self-axiom — tombstones become corollaries
+
+Add `record(K) ⊇ {K}` (every key governs its own node) and note that a cert's endpoints are on all of its routes. Then a revocation by the target's issuer or recipient is automatically *total* — retraction and renunciation stop being special cases with their own validity rule; one rule covers everything. Granted in passing: any intermediate, at any level, can refuse to let their own standing carry a third party's cert — deny-only, hop-confined, and strictly weaker than renouncing, which anyone could already do.
+
+### Probed and kept: the Admin gate
+
+"Should Edit members revoke others at ≤ their level?" was tested and rejected. Delegating ≤ your level is constructive and self-scoped; revoking a third party's cert is an act on the graph — governance, categorically. Level-relative revocation would have destroyed the headline containment theorem (*inviting a thousand editors adds zero grief surface*), created editor-tier MAD among a large unvetted population, and made every conveyance level a governance level. The tier structure stands: anyone over their own hop, signers over their own certs, ever-admins over their estates.
+
+### The evaluator
+
+The final semantics stratify as one engine run twice:
+
+```
+stratum 0: all certs
+stratum 1: liveness fixpoint IGNORING ALL REVOCATIONS → record(K) → covered(cert, node)
+stratum 2: liveness with per-cert node exclusions      (the only negation)
+```
+
+Records computed on the raw graph preserve permanence, mutual invisibility, and kill the resurrection lever in one stroke: every stratum is monotone, every arrow points fail-closed, and the set digest remains a perfect cache key.
+
+### Final certificate shapes
+
+```
+Delegation: {iss, to, sub, can, after?, sig}
+Revocation: {iss, revoke, sig}
+```
+
+Every scoping mechanism is a key or a node — capacities are hats, jurisdictions are rosters, pinning is `sub`, denial scope is the signer's record. Each surviving field defeated an elimination attempt; each eliminated field's jobs moved into the graph.
 
 <!-- Links -->
 
 [keyline]: README.md
 [keyline-flat]: README.md#constitutional-flatness
-[keyline-memberships]: README.md#memberships-not-grants
+[keyline-memberships]: README.md#memberships-as-the-only-shape
 [keyline-open]: README.md#open-questions
 [keyline-renounce]: README.md#renunciation
+[the second convergence: field elimination]: #the-second-convergence-field-elimination
