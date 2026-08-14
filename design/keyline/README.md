@@ -34,6 +34,10 @@ A couple intuitions carry most of the design:
 
 One ocap property is deliberately absent: delegator-independence. Dropping your reference in ocap leaves the copies you introduced intact. In Keyline, liveness is issuer-recursive, so your grants live and die with your standing. That trade buys healing — a partitioned graph reconnects with every certificate's provenance intact — at the price of [zombies][resurrection].
 
+### An Assembly Langauge for Authority
+
+There's main insights versus prior versions of Keyhive is that once we have a directed authority graph, we can express all scenarios that are otherwise special cased. This does mean relying more on patterns than baking concepts in to the core semantics. However, earlier iterations of this design _already admitted these patterns_, they were merely ignored.
+
 ## Nodes
 
 All nodes in the graph are Ed25519 verifying keys. At this level there is _no distinction_ between individuals, groups, and documents; they are all merely keys that can appear as the issuer, subject, or recipient of a delegation. This uniformity is deliberate. Higher layers of Keyhive assign meaning to particular keys (this one is a person, that one is a document), but the authority graph itself doesn't care. A delegation from a "document" to a "group" and a delegation from one "person" to another are the same kind of edge, checked the same way.
@@ -70,15 +74,15 @@ Ed25519 is deterministic and certificates are content-addressed, so re-issuing a
 
 `after` essentially a nonce but set up to be harder to miuse: a re-issuance points at the certificate it supersedes-in-intent, changing the hash and documenting the heal ("re-granted, knowing of the revocation"). First issuances omit the field.
 
-- *Optional, absence = first issuance.* Absent means "no predecessor claimed," with a single canonical encoding (the key is omitted); present means one named predecessor. No sentinel exists, so absence aliases nothing — the one-meaning-one-encoding invariant holds.
-- *No semantics, ever.* Evaluation ignores `after` entirely. It is not supersession (issuing `after: #d1` does **not** retract `#d1` — retract explicitly), not ordering, not a causal claim anyone verifies. This line is load-bearing: issuer-supplied predecessors must never carry trust, or backdating-by-omission returns.
-- *Anything goes.* A bogus or unseen `after` value is harmless; it only perturbs the hash.
+1. *Optional, absence = first issuance.* Absent means "no predecessor claimed," with a single canonical encoding (the key is omitted); present means one named predecessor. No sentinel exists, so absence aliases nothing — the one-meaning-one-encoding invariant holds.
+2. *No semantics, ever.* Evaluation ignores `after` entirely. It is not supersession (issuing `after: #d1` does **not** retract `#d1` — retract explicitly), not ordering, not a causal claim anyone verifies. This line is load-bearing: issuer-supplied predecessors must never carry trust, or backdating-by-omission returns.
+3. *Anything goes.* A bogus or unseen `after` value is harmless; it only perturbs the hash.
 
 A nonce was considered and rejected on fail-direction. Nonces turn accidental duplicate issuance into independently live certificates, each needing separate coverage at removal time; a missed duplicate is a lingering live grant. That fails open. With `after`, identical re-issuance deduplicates, and an unaware re-issue is a grant that silently doesn't take: fail-closed, and detectable by tooling. Ambiguity resolves toward less authority.
 
 ### Access Levels
 
-`Can` is a totally ordered ladder:
+`Can` is (currently) a totally ordered ladder:
 
 ```
 Relay < Read < Edit < Admin
@@ -99,12 +103,11 @@ A revocation breaks a previously issued delegation, identified by hash:
 
 | Field     | Type                    | Notes                              |
 |-----------|-------------------------|------------------------------------|
-| Magic     | bytes                   | Magic bytes / schema identifier    |
 | Issuer    | Ed25519 verifying key   | The key that signs                 |
 | Revoke    | `Hash<Delegation>`      | The delegation being revoked       |
 | Signature | Ed25519 signature       | Over all of the above              |
 
-Revocations don't undo history — the revoked delegation remains in the set — they add a denial the authority check takes into account. Both certificate species are add-only; merging is set union.
+Revocations annihilate delegations _on paths controlled by (admin or direct) the revoker_. Both certificate species are add-only; merging is set union.
 
 There is exactly one revocation rule, and it has no case analysis:
 
@@ -119,11 +122,11 @@ Because a certificate's endpoints are on every one of its routes, two total kill
 
 The full tier structure, each tier matched to its trust basis:
 
-| Who | Breaks the edge on… | Trust basis |
-|---|---|---|
-| Anyone | routes through their own node | it's your own conveyance |
-| Issuer / recipient of the target | all routes (total) | your signature, your act |
-| Ever-admins | routes through their service record | governance, granted explicitly |
+| Who                              | Breaks the edge on…                 | Trust basis                    |
+|----------------------------------|-------------------------------------|--------------------------------|
+| Anyone                           | routes through their own node       | it's your own conveyance       |
+| Issuer / recipient of the target | all routes (total)                  | your signature, your act       |
+| Ever-admins                      | routes through their service record | governance, granted explicitly |
 
 The first row means even a Read-level intermediate can refuse to let their standing carry someone else's grant — deny-only, confined to their own hop, and strictly weaker than renouncing (which anyone can do and which kills the same routes plus their own access).
 
@@ -131,47 +134,35 @@ The first row means even a Read-level intermediate can refuse to let their stand
 
 Delegations form a directed graph: each one is an edge carrying an access level. Authorization is a *reachability* question over that graph.
 
-### No Proof Field
+### Late Binding Paths
 
-There is no "proof" field on delegations or revocations. A delegation doesn't name the chain that justifies it — it merely asserts an edge, and justification is computed at check time. `to` gains access to `sub` as long as *some* unbroken route exists from the subject to `to`, where every hop is validly signed and every issuer along the route themselves has sufficient standing.
+There is no "proof" field on delegations or revocations. A delegation doesn't name the chain that justifies it — it merely asserts an edge, and justification is computed at verification-time. `to` gains access to `sub` as long as *some* unbroken route exists from the subject to `to`, where every hop is validly signed and every issuer along the route themselves has sufficient standing.
 
 Consequences:
 
-- *Late binding.* A delegation issued before its issuer had authority becomes effective the moment the issuer gains it, and stops being effective if the issuer loses it. Edges are facts; authority is derived.
-- *Redundant routes are a feature.* If access arrives via two chains and one is cut, the other keeps working. There is no single brittle proof to invalidate by accident.
-- *Order independence.* Justification is recomputed from the full set, so it doesn't matter in what order a replica learned the edges — the CRDT property.
-- *Healing with provenance.* When a severed subgraph is re-supplied, everything not explicitly revoked re-energizes *as the same certificates*: same hashes, same issuers, same audit trail. Heal wholesale, deny retail.
+| Property                | Meaning                                                                                                                                                                                        |
+|-------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Late binding            | A delegation issued before its issuer had authority becomes effective the moment the issuer gains it, and stops being effective if the issuer loses it. Edges are facts; authority is derived. |
+| Redundant routes        | If access arrives via two chains and one is cut, the other keeps working. There is no single brittle proof to invalidate by accident.                                                          |
+| Order independence      | Justification is recomputed from the full set, so it doesn't matter in what order a replica learned the edges — the CRDT property.                                                             |
+| Healing with provenance | When a severed subgraph is re-supplied, everything not explicitly revoked re-energizes *as the same certificates*: same hashes, same issuers, same audit trail. Heal wholesale, deny retail.   |
 
-### Edges are Certificates
-
-A drawn edge underdetermines the graph. Two delegations with identical `to`, `sub`, and `can` but different issuers — or the same issuer and different `after` values — are distinct certificates with distinct hashes and distinct fates. Each delegation's liveness hangs on *its own issuer's* standing, so "the edge from Members to Carol" may denote several certificates, some live and some dead, at the same moment.
+Two delegations with identical `to`, `sub`, and `can` but different hashes due to different `iss` or `after` are distinct edges.
 
 ### Liveness
 
-A delegation is *live* iff some route grounds it:
-
-> its issuer reaches the subject with sufficient authority, through live delegations, along a route avoiding every node its [revocations][revocation semantics] cover.
+A delegation is *live* iff some route grounds it: its issuer reaches the subject with sufficient authority, through live delegations, along a route avoiding every node its [revocations][revocation semantics] cover.
 
 The recursion is grounded at root edges — delegations signed by the subject itself — and derived monotonically outward. Revocation coverage is computed separately, against the *revocation-free* graph (see [Computation]); the liveness recursion treats it as fixed.
 
 Because the check happens at evaluation time, liveness is *late-bound*: a delegation dies implicitly the moment its issuer loses standing, and springs back to life if the issuer regains it. Nothing about an individual certificate records whether it is live — liveness is a property of the certificate *in the context of the full set*.
 
-```
-        ┌─────────┐
-        │ Subject │ (e.g. a document key)
-        └────┬────┘
-             │ Admin                • Alice reaches Subject with Admin
-        ┌────▼────┐                 • Bob reaches Subject via Alice,
-        │  Alice  │                   attenuated to Edit
-        └────┬────┘                 • Carol reaches Subject via Bob,
-             │ Edit                   attenuated to Read
-        ┌────▼────┐
-        │   Bob   │
-        └────┬────┘
-             │ Read
-        ┌────▼────┐
-        │  Carol  │
-        └─────────┘
+```mermaid
+flowchart TD
+    Subject(["Subject — e.g. a document key"])
+    Subject -- "Admin" --> Alice["Alice · effective: Admin"]
+    Alice -- "Edit" --> Bob["Bob · effective: Edit"]
+    Bob -- "Read" --> Carol["Carol · effective: Read"]
 ```
 
 ### Attenuation
@@ -396,26 +387,6 @@ A "role" is just a node: mint a key, grant authority *to* it (supplies), and gra
 
 The role's signing key is ephemeral: create the key, sign any ceremony edges, discard it. The role never signs again — authority flows *into* it via supplies (signed by whoever holds the supplied authority) and *through* it via memberships. Members at Admin manage the roster; members at Edit or Read merely transit ([`sub` is a scope][sub is a scope, not an endpoint]). "Invite at a level" is just a membership with a `can` ceiling — attenuation does the rest.
 
-### Hats: Acting in a Capacity
-
-A member with multiple standings who wants an act to belong to *one* of them mints a capacity key — a hat:
-
-```
-Dan holds a personal Doc grant AND a Members membership.
-For acts-as-member, he mints D_m and keeps its key:
-
-  #h1 = {iss: Dan, to: D_m, sub: Members, can: Edit}     the hat's ONLY inbound
-  ...  = {iss: D_m, ...}                                  mod-acts, signed as D_m
-```
-
-What the hat buys, each property structural rather than conventional:
-
-- *Filing:* "Dan's acts as a member" = certificates with `iss: D_m`. Syntactic query.
-- *Lifecycle:* `#h1` is `sub`-pinned to Members, so it — and everything `D_m` issued — dies with Dan's standing there, untouched by his personal grant.
-- *A pre-installed kill switch:* one cut on `#h1` (total: its routes all ground at Members) ends the whole capacity.
-- *No leakage:* `D_m` has no other inbound, so its acts can never ride Dan's personal standing. Topological, not disciplinary.
-- *Narrow denial:* a revocation signed by `D_m` carries `record(D_m)` — the hat's small estate, not Dan's whole career. Jurisdiction-narrow denial is signing with the narrow key.
-
 ### Pinning: Sub-Scoped Intermediaries
 
 To grant while *submitting the grant to a jurisdiction's oversight* — dies with your standing there, killable by its admins — route it through a node pinned by `sub`:
@@ -439,6 +410,7 @@ The ocap caretaker — interpose a cuttable proxy between grantor and grantee �
 │ Members │────────►│ C │────────►│ Carol │
 └─────────┘         └───┘         └───────┘
                       ▲ Admin
+                      |
                    ┌──────┐
                    │ Dave │
                    └──────┘
@@ -471,25 +443,21 @@ An earlier draft paid $O(\text{certificates anchored at the node})$ and needed a
 
 Revocation kills certificates, not futures: a cut supply can never return, but a *fresh* grant to the abandoned node is a new hash. And the abandoned node is not empty — its constitution is self-grounded and never died. If anyone with live authority re-supplies the old node, every dormant membership re-energizes at once, and the re-energized jurisdiction is again grief-able by its ever-admins. "Dead" means "dead while everyone remembers not to reconnect" — institutional memory as a security control. Three tiers, cheapest first:
 
-| Tier | Mechanism | Protects against |
-|---|---|---|
-| Boot + move (standard) | Retract supplies, mint successor, re-roster | All current authority; the ex-admin can never follow |
-| Burned-node detection (tooling) | The supply retraction is a permanent signed record that the node was cut; warn loudly on grants *to* such nodes | Accidental reconnection — the realistic vector |
-| Sealing (hardening) | Explicitly revoke every constitutional edge: seniors cut peers, then renounce their own ([renunciation] covers the last one out) | Even deliberate reconnection revives nothing |
+| Tier                            | Mechanism                                                                                                                        | Protects against                                     |
+|---------------------------------|----------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------|
+| Boot + move (standard)          | Retract supplies, mint successor, re-roster                                                                                      | All current authority; the ex-admin can never follow |
+| Burned-node detection (tooling) | The supply retraction is a permanent signed record that the node was cut; warn loudly on grants *to* such nodes                  | Accidental reconnection — the realistic vector       |
+| Sealing (hardening)             | Explicitly revoke every constitutional edge: seniors cut peers, then renounce their own ([renunciation] covers the last one out) | Even deliberate reconnection revives nothing         |
 
 ### Constitutional Flatness
 
 Whether ever-admin power *cascades* is a topology choice, made when roles are wired together:
 
-```
-NESTED (contaminating)                    FLAT (contained)
-
-TeamX is an Admin-level member of Mod1's   TeamX receives supply {to: TeamX,
-portfolio via {to: Mod1, sub: TeamX}:      sub: Doc} or a ≤Edit membership;
-every Mod1 admin reaches TeamX-as-         TeamX's constitution names
-subject with Admin → TeamX enters          individuals (Dave, Erin) — never
-their records, forever                     an upstream role
-```
+| | Nested (contaminating) | Flat (contained) |
+|---|---|---|
+| Wiring | `{to: Mod1, sub: TeamX, can: Admin}` — an upstream role in TeamX's constitution | `{to: TeamX, sub: Doc}` supply, or a ≤Edit membership |
+| TeamX's constitution | Names Mod1 | Names individuals (Dave, Erin) — never an upstream role |
+| Consequence | Every Mod1 admin ever holds Admin over TeamX — permanent revocation coverage over everything TeamX-grounded | Upstream admins never hold Admin over TeamX; their control is the supply line: total, coarse, and cleanly severable |
 
 A record contains every node its holder ever reached *as a subject* with Admin. Granting an upstream role Admin over a child role puts the child in every upstream admin's record — permanently, since records never shrink — and rotating the parent does not escape it. The rule:
 
