@@ -111,7 +111,7 @@ A revocation breaks a previously issued delegation, identified by hash:
 
 Revocations annihilate delegations _on paths controlled by (admin or direct) the revoker_. Both certificate species are add-only; merging is set union.
 
-There is exactly one revocation rule, and it has no case analysis: a revocation breaks the target delegation on every route transiting the issuer's *service record* — the set of nodes the issuer was **ever** Admin-anchorable at, plus the issuer's own node.
+There is exactly one revocation rule, and it has no case analysis: a revocation breaks the target delegation on every route that passes through the issuer's *service record* — the nodes the issuer ever held Admin over, plus the issuer's own node ([Service Records][service records]).
 
 Where the record doesn't touch the target's routes, the revocation is *inert*: a no-op, not an error. Validity is unconditional; any well-signed revocation is admissible. Authority appears only as reach. A revocation that breaks a certificate far below the issuer's jurisdiction is a *deep cut*.
 
@@ -173,15 +173,22 @@ Routes attenuate to the *lowest* power along them. If Alice holds `Admin`, deleg
 
 #### Service Records
 
-> `record(K)` = every node K was **ever** Admin-anchorable at — ever reached as a subject with `Admin`, evaluated against the revocation-free graph — plus K itself.
+A revocation signed by K breaks its target on routes that pass through:
 
-"Ever" is [permanence]; "plus K itself" is the self-axiom that makes retraction and renunciation corollaries. The record is computed on the *raw* delegation set, ignoring all revocations — even tombstones. Three reasons, which are the same reason:
+1. any node K ever held Admin over, and
+2. K's own node.
 
-- *Permanence* — a retracted or blocked membership still counts toward the record it built.
-- *Mutual invisibility* — if revocations could shrink records, revocations would affect each other's scope, and concurrent revocations would become merge-order dependent.
-- *No resurrection lever* — if retracting your own membership shrank your record, retraction would void your old revocations' coverage: a deny-only primitive acquiring an access-restoring side effect, triggerable by the ejected.
+This set is K's *service record*. "Ever" means exactly that: we compute it from the delegations alone, as if no revocations existed. A role K was kicked out of still counts. A role K resigned from still counts. The record only grows; nothing that happens later shrinks it.
 
-Records only grow. A revocation's coverage can therefore *expand* over time (the issuer joins a new role; their old revocations now cover its routes) but never shrink — drift exists, and it drifts fail-closed.
+Computing it while ignoring revocations looks strange at first. There are three reasons, and they are one reason from three angles:
+
+- *Removal has to stick.* If booting an admin shrank their record, it would also cancel every revocation they signed while in office — remove the moderator, and everyone the moderator banned walks back in.
+- *Revocations must not judge each other.* If one revocation could shrink the record another depends on, the result would depend on arrival order, and two replicas with the same certificates would disagree. Records built from delegations alone give every replica the same answer, in any order.
+- *Quitting must not un-ban anyone.* If resigning shrank your record, resigning would cancel your own past revocations — leaving a role would become a way to let banned people back in.
+
+The growth direction is safe: when K joins a new role, K's old revocations now also cover routes through it. Coverage can only ever expand, and expanding coverage only ever removes access — the surprise, if any, is in the fail-closed direction.
+
+Point 2 — your own node always counts — is what makes retraction and renunciation work with no extra rules: a certificate's issuer and audience sit on every one of its routes, so their revocations always cover it completely.
 
 #### The Effect is Scoped; the Validity is Not
 
@@ -274,7 +281,7 @@ You cannot un-know someone; you can only move to where they have never been. Und
 
 - *The boundary is frozen, by construction.* A fresh node post-dates the ex-admin on every graph; no fact will ever put it in his record. Rotation is permanent escape, and it costs one roster, not a subtree.
 - *Visibility does not matter.* He can sync every certificate ever minted; cuts covering only dead routes are inert. (An earlier draft leaned on hash-visibility to bound griefing; that bound is fiction under set-reconciliation sync, which enumerates missing hashes to any peer. Record scoping replaces it with something that holds.)
-- *The subject is out of reach, for everyone.* Every admin who ever served has ever-*reached* the subject; that is what supply chains do. The subject is also the one node that cannot rotate. This is why records are built from Admin-*anchorability* rather than reach: nobody was ever anchorable at the subject, so no record can name it. Keyed on reach instead, every ever-admin would hold a permanent whole-document kill.
+- *The subject is out of reach, for everyone.* Every admin who ever served could *reach* the subject — that is what supply chains are for. The subject is also the one node that cannot rotate. This is why records are built from holding Admin *over* a node, not from reaching it *through* the graph: nobody ever held Admin over the subject itself, so no record can name it. Built on reach instead, every ever-admin would hold a permanent whole-document kill.
 - *Legitimate denials need no maintenance.* Because records grow with their holders' careers, a surviving admin's old revocations automatically cover the successor nodes they are re-rostered into. Wanted denials follow the living through every rotation; the griefer's stay pinned to dead nodes. There is no carry-over deny-list to re-sign.
 
 One correction to the tempting intuition that rotation leaves the old node harmlessly dead: it leaves it *dormant*. See [Reconnection and Sealing][sealing].
@@ -556,6 +563,7 @@ Resolved in this draft: concurrent mutual revocation (both stand; the parent adj
 [roles]: #roles
 [rotating a role]: #rotating-a-role
 [sealing]: #reconnection-and-sealing
+[service records]: #service-records
 [sub is a scope, not an endpoint]: #sub-is-a-scope-not-an-endpoint
 [ocap]: http://erights.org/elib/capability/index.html
 [revocations]: #revocations
