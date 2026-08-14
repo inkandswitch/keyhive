@@ -1,6 +1,6 @@
 # Keyline Edge Cases
 
-Companion to the [Keyline design][keyline]. These notes record the adversarial analysis that produced the current design, in two convergences: first the revocation rule (one scenario worked end to end, Findings 1–7 and the candidate repairs), then the certificate format itself (the field eliminations, at the end of this document). The findings are kept as the arguments-of-record; terminology mid-document reflects the generation under analysis (`from`/`via`-scoped blocks), which the [second convergence][the second convergence: field elimination] later collapsed into service-record scoping.
+Companion to the [Keyline design][keyline]. These notes record the adversarial analysis that produced the current design, in two convergences: first the revocation rule (one scenario worked end to end, Findings 1–7 and the candidate repairs), then the certificate format itself (the field eliminations, at the end of this document). The findings are kept as the arguments-of-record, and terminology mid-document reflects whichever superseded generation is under analysis: "blocks" carrying an explicit jurisdiction field (called `from`, then `via`) that the [second convergence][the second convergence: field elimination] eliminated. In the final design there is one revocation type, no jurisdiction field, and scope is derived from the issuer's service record — see the [README](README.md).
 
 ## The Running Scenario
 
@@ -85,9 +85,9 @@ In every variant considered, tombstoning an admin removes what they have, never 
 
 The reason is structural and shared: revocation validity must ignore tombstones (mutual invisibility) or concurrent revocations become merge-order dependent. So a booted admin's boot is invisible to the validity check on their subsequent revocations. Only removing the supply line they ride — retraction, hence rotation — ends denial power. Every removal of an admin is therefore incomplete until the follow-up rotation, in every design on the table.
 
-## Finding 6: MAD at Every Flat Role
+## Finding 6: Mutual Assured Destruction at Every Flat Role
 
-Peer admins of `mods1` can tombstone each other's memberships, and mutual invisibility guarantees the _second strike_: a tombstoned Bob's revocation of Mallory still validates against the tombstone-free graph. Symmetric capability plus assured retaliation is mutual assured destruction — the equilibrium, not merely the possibility of a duel. A first strike gains nothing durable.
+Peer admins of `mods1` can tombstone each other's memberships, and mutual invisibility guarantees the _second strike_: a tombstoned Bob's revocation of Mallory still validates against the tombstone-free graph. Symmetric capability plus assured retaliation is Mutual Assured Destruction (MAD) — the equilibrium, not merely the possibility of a duel. A first strike gains nothing durable.
 
 But below the apex, MAD is _adjudicated_: destruction is survivable by rotation, and the senior decides the re-roster. This changes the game in three ways:
 
@@ -212,14 +212,16 @@ The decisive argument against keeping `from`: rotation. Certificates anchored by
 
 What was checked before cutting: the total-kill guarantee (a block on an unpinned cert is per-route and future-open — the issuer gaining a new route revives the target silently; answered by pinning-via-`sub` for certs that want total killability), and the multi-hatted issuer case (Dan with a personal route: his `sub`-pinned acts still die with the pinned standing). An *optional* `from` (pin bit) was considered and rejected: required or cut, period.
 
-### `nonce` vs `after` — `after` won on fail-direction
+### `nonce` vs `seen` — `seen` won on fail-direction
+
+(This field was called `after` when the argument was first made; it was later renamed `seen` to shed the temporal implication — the field is an awareness claim, not an ordering claim.)
 
 Ed25519 is deterministic and certs are content-addressed: an identical re-issuance is byte-identical — the *same certificate*, still covered by any revocation naming it. Healing a mistaken removal on the same terms by the same issuer is impossible without a freshness field. The candidates:
 
 - *Nonce:* unconditional freshness. Failure mode: accidental duplicates are independently live certs, each needing separate coverage at removal — a missed one is a lingering live grant. **Fails open.**
-- *`after: Hash<Delegation>`* (optional; omitted on first issuance): freshness on demand, dedup by default, and the heal is an accountable act ("re-granted, knowing of the revocation"). Failure mode: an issuer unaware of a revoked twin re-mints the same hash and the grant silently doesn't take — visible on sync, fixed by re-chaining. **Fails closed.**
+- *`seen: Hash<Delegation>`* (optional; omitted on first issuance): freshness on demand, dedup by default, and the heal is an accountable act ("re-granted, knowing of the revocation"). Failure mode: an issuer unaware of a revoked twin re-mints the same hash and the grant silently doesn't take — visible on sync, fixed by re-chaining. **Fails closed.**
 
-"Ambiguity resolves toward less authority" decides it. Constraints: optional, where absence means "no predecessor claimed" — the anti-optionality rule bans absence *aliasing* a present value (the `{from: None} ≡ {from: iss}` bug), and with no sentinel, `after`'s absence has no present-value twin: one meaning, one encoding; zero semantics (not supersession, not ordering — issuer-supplied predecessors must never carry trust, or backdating-by-omission returns); bogus values harmless.
+"Ambiguity resolves toward less authority" decides it. Constraints: optional, where absence means "no predecessor claimed" — the anti-optionality rule bans absence *aliasing* a present value (the `{from: None} ≡ {from: iss}` bug), and with no sentinel, `seen`'s absence has no present-value twin: one meaning, one encoding; zero semantics (not supersession, not ordering — issuer-supplied predecessors must never carry trust, or backdating-by-omission returns); bogus values harmless.
 
 ### `via` on revocations — collapsed into the issuer
 
@@ -253,7 +255,7 @@ Records computed on the raw graph preserve permanence, mutual invisibility, and 
 ### Final certificate shapes
 
 ```
-Delegation: {iss, aud, sub, can, after: Option<Hash>, sig}
+Delegation: {iss, aud, sub, can, seen: Option<Hash>, sig}
 Revocation: {iss, revoke, sig}
 ```
 

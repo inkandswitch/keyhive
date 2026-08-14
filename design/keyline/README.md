@@ -54,13 +54,13 @@ A delegation is a signed statement extending the issuer's own authority over a s
 | Audience  | Ed25519 verifying key            | The recipient (`aud`)                                      |
 | Subject   | Ed25519 verifying key            | The *scope*: which routes this edge may participate in     |
 | Can       | `Relay \| Read \| Edit \| Admin` | Access level                                               |
-| After     | `Option<Hash<Delegation>>`       | Freshness + heal provenance; zero semantics (see below)    |
+| Seen      | `Option<Hash<Delegation>>`       | Freshness + heal provenance; zero semantics (see below)    |
 | Signature | Ed25519 signature                | Over all of the above                                      |
 
 - A delegation reads: *Issuer asserts that the Audience may exercise Can over Subject.*
 - When `iss = sub`: a *root edge* — the subject bootstrapping its own authority (see [Root Edges and the Apex][apex]).
 
-All fields are required; `After` has type `Option`, and `None` is encoded by omitting the key. The rule against optionality is precise: a field may not be optional when its *absence aliases a present value* — an earlier draft's optional anchor field defaulted to the issuer, so `{from: None}` and `{from: issuer}` meant the same act with two encodings, two hashes, and a revocation that kills one twin and misses the other. `After`'s absence aliases nothing: "no predecessor claimed" has no expressible present-value twin (there is no sentinel), so it is one meaning with one canonical encoding — the key simply does not appear in the serialized form. Every meaning in Keyline has exactly one encoding; that, not "no optional fields," is the actual invariant.
+All fields are required; `Seen` has type `Option`, and `None` is encoded by omitting the key. The rule against optionality is precise: a field may not be optional when its *absence aliases a present value* — an earlier draft's optional anchor field defaulted to the issuer, so `{from: None}` and `{from: issuer}` meant the same act with two encodings, two hashes, and a revocation that kills one twin and misses the other. `Seen`'s absence aliases nothing: "no predecessor claimed" has no expressible present-value twin (there is no sentinel), so it is one meaning with one canonical encoding — the key simply does not appear in the serialized form. Every meaning in Keyline has exactly one encoding; that, not "no optional fields," is the actual invariant.
 
 An earlier draft carried a `from` field naming the jurisdiction a delegation was exercised in. It was removed: every job it did is an arrangement of nodes instead — scoping is `sub`, acting in a capacity is a dedicated key per capacity, pinning is a [sub-scoped intermediary][pinning], jurisdiction-narrow denial is signing with the narrow key. Where a certificate format wants a *mode*, the graph wants a *vertex*. The elimination arguments are recorded in [edge-cases](edge-cases.md).
 
@@ -70,17 +70,17 @@ The edge itself runs `iss → aud`. `sub` says what the edge is *about*, and tha
 
 Membership edges are also *self-certifying*: their routes chain to the role's own root edge and never leave the node. A role's roster survives anything that happens upstream — the fact that makes [rotation][rotating a role] cheap and rosters untouchable by outsiders.
 
-### The `after` Field
+### The `seen` Field
 
 Ed25519 is deterministic and certificates are content-addressed, so re-issuing an identical delegation produces the *same certificate* — the same hash, still covered by any revocation that named it. Without a freshness field, healing a mistaken removal on the same terms by the same issuer is literally impossible.
 
-`after` is essentially a nonce, but set up to be harder to misuse: a re-issuance points at the certificate it supersedes-in-intent, changing the hash and documenting the heal ("re-granted, knowing of the revocation"). First issuances omit the field.
+`seen` is essentially a nonce, but set up to be harder to misuse: a re-issuance points at a certificate the issuer has seen — typically the revoked one it is re-issuing past — changing the hash and documenting the heal ("re-granted, knowing of the revocation"). First issuances omit the field.
 
 1. *Optional, absence = first issuance.* Absent means "no predecessor claimed," with a single canonical encoding (the key is omitted); present means one named predecessor. No sentinel exists, so absence aliases nothing — the one-meaning-one-encoding invariant holds.
-2. *No semantics, ever.* Evaluation ignores `after` entirely. It is not supersession (issuing `after: #d1` does **not** retract `#d1` — retract explicitly), not ordering, not a causal claim anyone verifies. This line is load-bearing: issuer-supplied predecessors must never carry trust, or backdating-by-omission returns.
-3. *Anything goes.* A bogus or unseen `after` value is harmless; it only perturbs the hash.
+2. *No semantics, ever.* Evaluation ignores `seen` entirely. It is not supersession (issuing `seen: #d1` does **not** retract `#d1` — retract explicitly), not ordering, not a causal claim anyone verifies. This line is load-bearing: issuer-supplied predecessors must never carry trust, or backdating-by-omission returns.
+3. *Anything goes.* A bogus `seen` value, or one naming a certificate the replica doesn't hold, is harmless; it only perturbs the hash.
 
-A nonce was considered and rejected on fail-direction. Nonces turn accidental duplicate issuance into independently live certificates, each needing separate coverage at removal time; a missed duplicate is a lingering live grant. That fails open. With `after`, identical re-issuance deduplicates, and an unaware re-issue is a grant that silently doesn't take: fail-closed, and detectable by tooling. Ambiguity resolves toward less authority.
+A nonce was considered and rejected on fail-direction. Nonces turn accidental duplicate issuance into independently live certificates, each needing separate coverage at removal time; a missed duplicate is a lingering live grant. That fails open. With `seen`, identical re-issuance deduplicates, and an unaware re-issue is a grant that silently doesn't take: fail-closed, and detectable by tooling. Ambiguity resolves toward less authority.
 
 ### Access Levels
 
@@ -147,7 +147,7 @@ Consequences:
 | Order independence      | Justification is recomputed from the full set, so it doesn't matter in what order a replica learned the edges — the CRDT property.                                                             |
 | Healing with provenance | When a severed subgraph is re-supplied, everything not explicitly revoked re-energizes *as the same certificates*: same hashes, same issuers, same audit trail. Heal wholesale, deny retail.   |
 
-Two delegations with identical `aud`, `sub`, and `can` but different hashes due to different `iss` or `after` are distinct edges.
+Two delegations with identical `aud`, `sub`, and `can` but different hashes due to different `iss` or `seen` are distinct edges.
 
 ### Liveness
 
@@ -234,7 +234,7 @@ What is *chosen* is the scoped effect. Reach is confined to a record that froze 
 
 #### Transitive Effect
 
-Revocation cascades, but *implicitly*: cutting Alice's membership does not enumerate or tombstone anything she issued. Every delegation she issued fails the [liveness] check on next evaluation, and everything downstream fails in turn. An explicit cascade would make a revocation's meaning depend on its issuer's sync state — two replicas producing "the same" revocation with different effects, destroying order independence. Implicit cascade keeps revocations self-contained: one hash, one signature, same meaning everywhere.
+Revocation cascades, but *implicitly*: cutting Alice's membership does not enumerate or revoke anything she issued. Every delegation she issued fails the [liveness] check on next evaluation, and everything downstream fails in turn. An explicit cascade would make a revocation's meaning depend on its issuer's sync state — two replicas producing "the same" revocation with different effects, destroying order independence. Implicit cascade keeps revocations self-contained: one hash, one signature, same meaning everywhere.
 
 Redundant routes interact correctly for the same reason: each certificate's liveness is evaluated on its own, so cutting one of Carol's two grants leaves the other untouched.
 
@@ -247,7 +247,7 @@ A delegation can be dead without being revoked. If Alice is booted from Members,
 
 This follows from late-bound liveness, and it is two-faced by design:
 
-- *As the healing mechanism:* boot by mistake, re-add (a fresh certificate via [`after`][the after field]), and everything the person issued revives with provenance intact. Implicit removal is *fully reversible* — the mistake costs one certificate. Selective revival composes: re-add plus explicit revocations on the unwanted branch heads ("everyone comes back except Eve" is one re-add and one cut per branch).
+- *As the healing mechanism:* boot by mistake, re-add (a fresh certificate via [`seen`][the seen field]), and everything the person issued revives with provenance intact. Implicit removal is *fully reversible* — the mistake costs one certificate. Selective revival composes: re-add plus explicit revocations on the unwanted branch heads ("everyone comes back except Eve" is one re-add and one cut per branch).
 - *As the zombie hazard:* an unintended re-grant revives certificates everyone forgot. Two practices blunt it: *fresh-key discipline* (after a compromise, re-adding MUST use a new verifying key; the old key's certificates stay dead) and *explicit revocation on boot* (RECOMMENDED for removals that must survive any future re-add — the explicit cut is permanent, and deep certificates keep their hashes, so it keeps biting).
 
 The removal tiers, by what you believe about the removal:
@@ -326,7 +326,7 @@ The [no-proof design][no proof field] pushes route information out of the certif
 
 #### Partial Visibility
 
-The honest cost of graph-global evaluation is possession, not computation. A replica cannot confirm a revocation's coverage without the issuer's constitutional history, and cannot mint a *working* re-issue of a certificate it has never seen revoked (the [`after`][the after field] collision is silent and fail-closed; tooling SHOULD surface it). Provisionally honoring unconfirmed revocations is RECOMMENDED: over-applying a denial fails closed, and fuller sync confirms or retires it.
+The honest cost of graph-global evaluation is possession, not computation. A replica cannot confirm a revocation's coverage without the issuer's constitutional history, and cannot mint a *working* re-issue of a certificate it has never seen revoked (the [`seen`][the seen field] collision is silent and fail-closed; tooling SHOULD surface it). Provisionally honoring unconfirmed revocations is RECOMMENDED: over-applying a denial fails closed, and fuller sync confirms or retires it.
 
 ## Root Edges and the Apex
 
@@ -402,7 +402,7 @@ Setup as in [Roles]: Brooke roots Doc, supplies Members, and administers it; Ali
 
 *2. Brooke boots Alice.* Brooke issues `{iss: Brooke, revoke: #m_Alice}`. Members is in Brooke's record, and the membership's only route grounds there: total. By liveness recomputation alone: Alice loses Admin over Members; `Alice → M2` dies (pinned to her standing); Carol's Edit dies transitively, though nothing named `#d1`. All three certificates remain in the set: dead, not revoked.
 
-*3a. It was a mistake.* Brooke re-adds Alice: `{iss: Brooke, aud: Alice, sub: Members, can: Admin, after: #m_Alice}` — a fresh hash pointing at the certificate it heals past. Everything revives by late binding: `M2`, `#d1`, Carol's access — same hashes, same provenance. The mistake cost one certificate.
+*3a. It was a mistake.* Brooke re-adds Alice: `{iss: Brooke, aud: Alice, sub: Members, can: Admin, seen: #m_Alice}` — a fresh hash pointing at the certificate it heals past. Everything revives by late binding: `M2`, `#d1`, Carol's access — same hashes, same provenance. The mistake cost one certificate.
 
 *3b. It was not, and Carol should stay.* Brooke instead re-grants Carol directly (membership in another role, or her own caretaker). `#d1` stays dead with Alice; Carol's new access hangs on Brooke's standing.
 
@@ -413,7 +413,7 @@ Setup as in [Roles]: Brooke roots Doc, supplies Members, and administers it; Ali
 - *Whiteout.* Carol wrote content while validly authorized; after the cascade her authorization is gone. Whether her past writes remain materialized is a content-layer question (see causal encryption), but Keyline should expose enough to answer "was this issuer live at the time of this write?" — which, absent causal metadata, it cannot. If whiteout ever forces causal metadata into the system, the per-(issuer, capacity) stream design in [edge-cases](edge-cases.md) is the fallback shape.
 - *Relay and revocation.* Cutting a `Relay` edge stops future authorization but not decryption by parties holding key material. Effective removal requires the revocation to trigger key rotation (BeeKEM) at the layer above; the coupling point needs specifying.
 - *Delegation below Admin.* The [attenuation] example implies any grantee can extend the chain, clamped by min; the access-level table reserves invitation for Admin (a membership is a constitutional edge). The revocation side is settled — estate-scoped denial is Admin-only, self-scoped denial is universal — but the grant side needs the same decision made explicitly.
-- *Silent collision UX.* An issuer who re-mints a grant identical to one that was revoked — unaware, because the revocation never synced (device restore, partial visibility) — produces the same hash: the grant silently doesn't take. Fail-closed, but tooling must surface it ("matches a revoked certificate; re-issue with `after`?").
+- *Silent collision UX.* An issuer who re-mints a grant identical to one that was revoked — unaware, because the revocation never synced (device restore, partial visibility) — produces the same hash: the grant silently doesn't take. Fail-closed, but tooling must surface it ("matches a revoked certificate; re-issue with `seen`?").
 
 Resolved in this draft: concurrent mutual revocation (both stand; the parent adjudicates by rotation), grantee survival of grantor removal (no — unless a jurisdictionally disjoint route exists), deny-list carry-over across rotation (dissolved: survivors' records grow to cover successors), and the `from`/`via` fields (eliminated; see [edge-cases](edge-cases.md)).
 
@@ -442,7 +442,7 @@ Resolved in this draft: concurrent mutual revocation (both stand; the parent adj
 [spki]: https://www.rfc-editor.org/rfc/rfc2693.html
 [subduction]: https://github.com/inkandswitch/subduction
 [ucan]: https://github.com/ucan-wg/spec
-[the after field]: #the-after-field
+[the seen field]: #the-seen-field
 [the ex-admin sharp edge]: #the-ex-admin-sharp-edge
 [the root edge protects itself]: #the-root-edge-protects-itself
 [subject]: #nodes

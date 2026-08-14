@@ -102,7 +102,7 @@ A record contains every node its holder ever reached *as a subject* with Admin. 
 
 > Never grant Admin over a child role to an upstream role. Parents govern children by controlling their supplies (total, coarse: cut and re-grant to a successor), not by entering their constitutions. Constitutional membership is permanent contamination; supply control is not.
 
-Transit-level nesting (a child role holding an Edit-level membership in a parent) is safe: Edit-anchorability enters no records. With flat constitutions, ever-Admin is non-transitive by construction, and an ex-admin's record is exactly the rosters they sat on. No topology mistake can reach the subject itself ([the root edge protects itself][the root edge protects itself]).
+Transit-level nesting (a child role holding an Edit-level membership in a parent) is safe: only holding Admin over a node enters records, so an Edit membership adds nothing. With flat constitutions, ever-Admin is non-transitive by construction, and an ex-admin's record is exactly the rosters they sat on. No topology mistake can reach the subject itself ([the root edge protects itself][the root edge protects itself]).
 
 ## Memberships as the Only Shape
 
@@ -124,7 +124,7 @@ With no anchor field, the schema itself enforces what an earlier draft could onl
 
 What the shape buys:
 
-- *Griefing containment.* Records are built from Admin-anchorability, so Read- and Edit-level members acquire no ever-power. Inviting a thousand editors adds zero grief surface.
+- *Griefing containment.* Records are built from holding Admin over a node, so Read- and Edit-level members acquire no ever-power. Inviting a thousand editors adds zero grief surface.
 - *Rotation is exactly the roster* — see [Rotating a Role].
 - *One membership, N documents.* A role's portfolio covers many subjects; future supplies propagate by late binding without touching a single membership certificate.
 - *Offboarding is one revocation.* Cutting a membership severs the whole portfolio; orphaned per-resource grants cannot occur, because per-resource grants on humans do not exist.
