@@ -14,7 +14,7 @@
 
 ## Key Management
 
-Storing and transmitting all keys for an arbitrarily-sized store is possible, but fragile and unwieldly. Under the assumption that granting an entry point to the document at a point in history should reveal the entire history, our strategy is to include the keys for direct causal ancestors in each block.
+Storing and transmitting all keys for an arbitrarily-sized store is possible, but fragile and unwieldy. Under the assumption that granting an entry point to the document at a point in history should reveal the entire history, our strategy is to include the keys for direct causal ancestors in each block.
 
 While it would be ideal to prevent break-ins from reading prior messages (forward secrecy), doing so imposes a high burden to manage many keys. In the naive scenario, missing any keys from the history prevents (complete) document materialization.
 

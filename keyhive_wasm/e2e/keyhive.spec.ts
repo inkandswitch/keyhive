@@ -58,7 +58,7 @@ test.describe("Keyhive", async () => {
       return { idString: keyhive.idString, vKey };
     };
 
-    test("is >= 66 charecters", async ({ page }) => {
+    test("is >= 66 characters", async ({ page }) => {
       const out = await page.evaluate(scenario);
       expect(out.idString.length).toBeLessThanOrEqual(66);
     });
@@ -98,7 +98,7 @@ test.describe("Keyhive", async () => {
       expect(out.groupId).toBeDefined();
     });
 
-    test("group has exacty one member", async ({ page }) => {
+    test("group has exactly one member", async ({ page }) => {
       const out = await page.evaluate(scenario);
       expect(out.members).toHaveLength(1);
     });
