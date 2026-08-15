@@ -18,7 +18,7 @@ There are several diagrams below. We use the following graphical conventions:
 flowchart
     subgraph Legend
         direction RL
-        successor["Successor Op Author<br>--------------------------<br>Successor Op Payload"] -->|after| predecessor["Predessor Op Author<br>-----------------------------<br>Predecessor Op Payload"]
+        successor["Successor Op Author<br>--------------------------<br>Successor Op Payload"] -->|after| predecessor["Predecessor Op Author<br>-----------------------------<br>Predecessor Op Payload"]
     end
 ```
 
@@ -465,7 +465,7 @@ sequenceDiagram
 
     Note over Doc,Mallory: Mallory Revoked
     PvH -->> Ink & Switch: 💔 Revoke Mallory (authorized by ➊→➍)
-    Mallory --x Doc: 🚫 Edit Op3 (REJECTED becuase ➑)
+    Mallory --x Doc: 🚫 Edit Op3 (REJECTED because ➑)
 ```
 
 ### Cycles

@@ -1,0 +1,9 @@
+[default.extend-words]
+# Deliberate spelling, used throughout the BeeKEM API surface
+encrypter = "encrypter"
+# "Pet Names", in design/edge_names.md
+pn = "pn"
+
+[default.extend-identifiers]
+edge_strat = "edge_strat"
+r_ba = "r_ba"
