@@ -312,6 +312,14 @@ The tempting shortcut — subtract revoked edges, then compute reachability — 
 - *Coverage is monotone-stable.* Stratum 1 consults only delegations, and the positive graph only grows. Coverage can activate or expand as delegations arrive, never retract. Once applied anywhere, applied everywhere, forever.
 - *Denials are mutually invisible.* Revocations target delegations, never other revocations, so mutual invisibility is structural. Cutting the cutter does not undo their cuts; that is [permanence] again, seen from the evaluation side.
 
+#### Revocations Cannot Be Revoked
+
+The `revoke` field's type is `Hash<Delegation>`. A revocation naming another revocation is not invalid — it is unwritable. The classic regress ("who may revoke the revocation? and who may revoke *that*?") never starts, because the question cannot be spelled in the format.
+
+Nothing is lost by this. A mistaken revocation is repaired by granting again, not by un-denying: issue a fresh delegation, with [`seen`][the seen field] pointing at the dead certificate. The old denial stays in the set forever, a dead letter naming a dead hash. This is the [permanence] invariant doing its job — access comes back because someone with live authority signed something new, never because a denial was un-applied.
+
+The evaluator is simpler for it. Denials are terminal facts: there is no "is this revocation itself revoked?" check, stratum 1 never recurses over revocations, and applied coverage never switches off. Compare what un-revocation would require: an authority rule for the un-revoker, another for revoking the un-revocation, and an ordering to settle revoke/un-revoke/re-revoke races — causal metadata or merge-order dependence, all the way up the tower. Declining the feature costs one workflow (re-grant instead of un-deny) and deletes the tower.
+
 #### Cost
 
 - *Per-subject scoping.* Every query ranges over one subject's certificate set.
