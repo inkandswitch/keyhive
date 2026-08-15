@@ -38,7 +38,7 @@ One ocap property is deliberately absent: delegator-independence. Dropping your 
 
 The main insight versus prior versions of Keyhive is that once we have a directed authority graph, we can express all scenarios that are otherwise special cased. This does mean relying more on patterns than baking concepts into the core semantics. However, earlier iterations of this design _already admitted these patterns_; they were merely ignored.
 
-This insight has some non-obvious consequences for the semantics. For example, giving admins transitive revocation powers _permanently_ (and thus revocations not relative to a causal ordering) means that even if an admin is unable to update a document they can always revoke anyone downsteam from the node that they _used to_ have the ability to, say, write through. We can still express the desired semantics avoiding griefing by a misbehaving admin by revoking the group they're connected transitively by, and creating a new one connecting the other admins and healing the downstream graph.
+This insight has some non-obvious consequences for the semantics. For example, giving admins transitive revocation powers _permanently_ (and thus revocations not relative to a causal ordering) means that even if an admin is unable to update a document they can always revoke anyone downstream from the node that they _used to_ have the ability to, say, write through. We can still express the desired semantics avoiding griefing by a misbehaving admin by revoking the group they're connected transitively by, and creating a new one connecting the other admins and healing the downstream graph.
 
 ## Nodes
 
