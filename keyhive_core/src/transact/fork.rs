@@ -37,7 +37,7 @@ pub trait ForkAsync {
     /// or to unwrap from containers like `Arc<Mutex<T>>`.
     type AsyncForked;
 
-    /// Asynchonously fork the data structure.
+    /// Asynchronously fork the data structure.
     fn fork_async(&self) -> impl Future<Output = Self::AsyncForked>;
 }
 

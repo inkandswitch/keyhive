@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Note that ChaCha having a very different foundation, this is not the well-known SIV mode from AES.
 ///
 /// XChaCha uses a 24-byte nonce which is considered safe to use when
-/// a nonce-collions could result during random generation.
+/// a nonce-collisions could result during random generation.
 /// However, this doesn't commit the key, and is thus left open to [Invisible Salamanders]
 /// and there are some cases where the key could be phished.
 ///
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// The [`Siv`] here deterministically generates a nonce from the key, content, document ID, and library.
 /// No novel cryptographic techniques are used; this is "merely" a way to ensure a unique key per ciphertext.
-/// Malliciously constructing such a nonce would require prior knowledge of the key and content, at which point
+/// Maliciously constructing such a nonce would require prior knowledge of the key and content, at which point
 /// an attacker doesn't need to forge a nonce. Additionally, the nonce can be reconstructed deterministically
 /// to check the integrity of the plaintext and key.
 ///

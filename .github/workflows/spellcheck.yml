@@ -1,16 +1,22 @@
 name: "spellcheck"
+
+permissions:
+  contents: read
+
 on:
   push:
     branches:
       - main
   pull_request:
 
+env:
+  CLICOLOR: 1
+
 jobs:
   spellcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: matheus23/md-spellcheck-action@v4.2.2
+      - uses: actions/checkout@v5
         with:
-          files-to-check: "**/*.md"
-          words-to-ignore-file: ".github/workflows/dictionary.txt"
+          persist-credentials: false
+      - uses: crate-ci/typos@v1

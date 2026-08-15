@@ -69,7 +69,7 @@ use std::{
 ///     pointer3_1 --> block1
 ///     pointer3_2 --> block2
 ///
-///     subgraph head[Read Capabilty]
+///     subgraph head[Read Capability]
 ///       pointer_head["Pointer #️⃣"]
 ///       key_head["Key 🔑"]
 ///     end
