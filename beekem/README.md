@@ -6,7 +6,7 @@ A dynamic group of peers needs to maintain shared encryption keys over time, sup
 
 ## Tree Structure
 
-BeeKEM uses a binary ratchet tree:
+BeeKEM uses a binary tree:
 * Each leaf hold a member's identity and DH public key
 * The root holds the group's shared encryption key (encrypted)
 * Each inner node holds a DH public key and encrypted secrets (which effectively function as the shared key for its subtree/subgroup)
@@ -73,7 +73,7 @@ When a member rotates their leaf key, they encrypt a new secret at every ancesto
 
 2. **Walk up the path from the leaf toward the root.** At each parent node:
 
-   a. **Derive a new parent secret** by applying a one-way ratchet (BLAKE3-based KDF) to the child secret. The child secret at the first step is the leaf's secret key; at subsequent steps, it is the secret just derived for the previous parent. This means each ancestor's secret is deterministically derived from the leaf secret by ratcheting forward once per level.
+   a. **Sample a new parent secret** from the CSPRNG. Every ancestor's secret is sampled independently, so learning one secret on the path reveals nothing about the secrets above it. The encrypter keeps each sampled secret in its own key map so that it can derive the root secret later without decrypting its own path.
 
    b. **Compute the new parent public key** from the new parent secret.
 
@@ -97,11 +97,7 @@ When a member rotates their leaf key, they encrypt a new secret at every ancesto
 
 Any group member can derive the current root secret by traversing from their leaf up to the root, decrypting at each step.
 
-1. **Shortcut for the encrypter.** If the member performing decryption is the same member who last encrypted the path, they already know their leaf secret. They simply ratchet it forward by the length of the path (one ratchet per ancestor) to directly derive the root secret. No DH or decryption is needed.
-
-2. **Find the lowest common ancestor (LCA)** of your leaf and the encrypter's leaf. This is the point where your path intersects the encrypter's path. You only need to decrypt up to the LCA. From there, you can ratchet forward to derive the root.
-
-3. **Walk up your path from your leaf.** Keep track of every index you visit (a "seen indices" list). At each parent:
+1. **Walk up your path from your leaf.** Keep track of every index you visit (a "seen indices" list). At each parent:
 
    a. **Skip blank and conflict parents.** If a parent is blank or has conflict keys, skip it and move up to the next ancestor. You must hold onto the last secret you decrypted.
 
@@ -111,7 +107,7 @@ Any group member can derive the current root secret by traversing from their lea
 
    d. **Store the decrypted secret** in your key map (mapping the parent's public key to the decrypted secret). This is reusable for future decryptions.
 
-4. **Once you reach the LCA**, ratchet the decrypted secret forward by the number of remaining ancestors between the LCA and the root. Return this as the root secret.
+2. **Once you reach the root**, the last secret you decrypted is the root secret. Return it.
 
 ## Adding a Member
 
@@ -191,4 +187,4 @@ A secret store "has a conflict" when it has more than one version.
 
 **An adversary needs all historical leaf secrets from at least one leaf to exploit conflict merges.** Because conflict keys are retained (rather than picking a winner), an adversary who compromises one branch of a fork cannot read the other branch without also knowing its leaf secrets.
 
-**A root secret always corresponds to a specific update at a specific leaf.** It is never a "merged" root secret. Instead, it is always the product of one member's path encryption. Other members decrypt it by traversing up to their lowest common ancestor with the encrypter and ratcheting from there.
+**A root secret always corresponds to a specific update at a specific leaf.** It is never a "merged" root secret. Instead, it is always the product of one member's path encryption. Other members decrypt it by traversing all the way from their leaf to the root.

@@ -17,6 +17,7 @@ ChaCha's
 Cohn-Gordon
 Crypto
 Cryptree
+CSPRNG
 Diffie-Hellman
 DCGKA
 DCGKA's

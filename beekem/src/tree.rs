@@ -69,10 +69,6 @@ pub struct BeeKem {
     inner_nodes: Vec<Option<InnerNode>>,
     tree_size: TreeSize,
     id_to_leaf_idx: BTreeMap<MemberId, LeafNodeIndex>,
-    /// The leaf node that was the source of the last path encryption, or [`None`]
-    /// if there is currently no root key. This is used to determine when a
-    /// decrypter has intersected with the encrypter's path.
-    current_secret_encrypter_leaf_idx: Option<LeafNodeIndex>,
 }
 
 impl BeeKem {
@@ -88,7 +84,6 @@ impl BeeKem {
             inner_nodes: Vec::new(),
             tree_size: TreeSize::from_leaf_count(1),
             id_to_leaf_idx: BTreeMap::new(),
-            current_secret_encrypter_leaf_idx: None,
         };
         tree.grow_tree_to_size();
         tree.push_leaf(initial_member_id, initial_member_pk.into());
@@ -216,19 +211,6 @@ impl BeeKem {
             .leaf(leaf_idx)
             .as_ref()
             .expect("Leaf should not be blank");
-        if Some(leaf_idx) == self.current_secret_encrypter_leaf_idx {
-            let NodeKey::ShareKey(pk) = leaf.pk else {
-                return Err(CgkaError::ShareKeyNotFound);
-            };
-            let secret = owner_sks.get(&pk).ok_or(CgkaError::ShareKeyNotFound)?;
-            return Ok(secret
-                .ratchet_n_forward(treemath::direct_path(leaf_idx.into(), self.tree_size).len()));
-        }
-        let lca_with_encrypter = treemath::lowest_common_ancestor(
-            leaf_idx,
-            self.current_secret_encrypter_leaf_idx
-                .expect("A tree with a root key should have a current encrypter"),
-        );
         let mut child_idx: TreeNodeIndex = leaf_idx.into();
         let mut seen_idxs = vec![child_idx];
         // We will return this at the end once we've decrypted the root secret.
@@ -244,15 +226,8 @@ impl BeeKem {
             debug_assert!(!self.is_root(child_idx));
             maybe_last_secret_decrypted =
                 self.maybe_decrypt_parent_key(child_idx, &child_node_key, &seen_idxs, owner_sks)?;
-            let Some(ref secret) = maybe_last_secret_decrypted else {
+            if maybe_last_secret_decrypted.is_none() {
                 panic!("Non-blank, non-conflict parent should have a secret we can decrypt");
-            };
-            // If we have reached the intersection of our path with the encrypter's
-            // path, then we can ratchet this parent secret forward for each of the
-            // remaining nodes in the path and return early.
-            if parent_idx == TreeNodeIndex::Inner(lca_with_encrypter) {
-                return Ok(secret
-                    .ratchet_n_forward(treemath::direct_path(parent_idx, self.tree_size).len()));
             }
             seen_idxs.push(parent_idx);
             child_idx = parent_idx;
@@ -305,8 +280,11 @@ impl BeeKem {
             if let Some(store) = self.inner_node(parent_idx) {
                 new_path.removed_keys.append(&mut store.node_key().keys());
             }
-            let new_parent_sk = child_sk.ratchet_forward();
+            let new_parent_sk = ShareSecretKey::generate(csprng);
             let new_parent_pk = new_parent_sk.share_key();
+            // Hold on to the secret so we can derive the root key later without
+            // having to decrypt our own path.
+            sks.insert(new_parent_pk, new_parent_sk);
             self.encrypt_key_for_parent(
                 child_idx,
                 child_pk,
@@ -327,7 +305,6 @@ impl BeeKem {
             child_sk = new_parent_sk;
             parent_idx = treemath::parent(child_idx);
         }
-        self.current_secret_encrypter_leaf_idx = Some(leaf_idx);
         Ok(Some((child_sk.into(), new_path)))
     }
 
@@ -370,12 +347,6 @@ impl BeeKem {
             } else {
                 self.insert_inner_node_at(current_idx, node.clone());
             }
-        }
-
-        if self.has_root_key() {
-            self.current_secret_encrypter_leaf_idx = Some(leaf_idx);
-        } else {
-            self.current_secret_encrypter_leaf_idx = None;
         }
     }
 
@@ -587,7 +558,6 @@ impl BeeKem {
             idx = treemath::parent(idx.into());
         }
         self.blank_inner_node(idx);
-        self.current_secret_encrypter_leaf_idx = None;
     }
 
     fn blank_inner_node(&mut self, idx: InnerNodeIndex) {
