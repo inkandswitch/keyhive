@@ -280,6 +280,27 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             parent_access: Access,
         }
 
+        /// Record `access` for `id`, keeping the best seen so far.
+        fn raise_to_best<
+            G: FutureForm,
+            Z: AsyncSigner<G>,
+            U: ContentRef,
+            M: MembershipListener<G, Z, U>,
+        >(
+            caps: &mut HashMap<Identifier, (Agent<G, Z, U, M>, Access)>,
+            id: Identifier,
+            agent: &Agent<G, Z, U, M>,
+            access: Access,
+        ) {
+            caps.entry(id)
+                .and_modify(|(_, existing)| {
+                    if access > *existing {
+                        *existing = access;
+                    }
+                })
+                .or_insert_with(|| (agent.dupe(), access));
+        }
+
         let mut explore: Vec<GroupAccess<F, S, T, L>> = vec![];
         let mut seen: HashSet<([u8; 64], Access)> = HashSet::new();
 
@@ -316,7 +337,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 .unwrap_or(&access);
 
             let current_path_access = access.min(parent_access);
-            caps.insert(member.id(), (member.dupe(), current_path_access));
+            // Reaching someone again by a weaker route does not take away what
+            // a stronger one already gave them. An admin who also sits in a
+            // group with read access is still an admin, and which route the
+            // traversal happens to walk last is not their access level.
+            raise_to_best(&mut caps, member.id(), &member, current_path_access);
 
             if let Some(membered) = match member {
                 Agent::Group(id, inner_group) => Some(Membered::Group(id, inner_group.dupe())),
@@ -329,8 +354,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                         .await
                         .expect("members have capabilities by defintion");
 
-                    caps.insert(*mem_id, (dlg.payload.delegate.dupe(), best_access));
-
+                    // Nothing is recorded for this member here: what they can
+                    // do depends on their own delegation as much as on this
+                    // group's, and that is settled when they are popped, capped
+                    // by the route that reached them.
                     'inner: for sub_dlg in dlgs.iter() {
                         if !seen.insert((sub_dlg.signature.to_bytes(), dlg.payload.can)) {
                             continue 'inner;
@@ -1277,6 +1304,75 @@ mod tests {
         )]);
 
         assert_eq!(g0_mems, expected);
+    }
+
+    /// Reaching someone twice, once as an admin and once through a group that
+    /// only has read access, must not demote them to a reader. Which order the
+    /// traversal happens to walk the two routes in is not their access level.
+    #[tokio::test]
+    async fn test_transitive_keeps_the_strongest_route() {
+        test_utils::init_logging();
+        let mut csprng = OsRng;
+
+        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let (alice_id, alice_signer) = {
+            let locked = alice.lock().await;
+            (locked.id(), locked.signer.clone())
+        };
+        let alice_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(alice_id, alice.dupe());
+
+        let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+        let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
+        let arc_csprng = Arc::new(Mutex::new(csprng));
+
+        // Alice is an admin of both groups, because generating one delegates
+        // admin to its parents.
+        let inner = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![alice_agent.dupe()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                NoListener,
+                arc_csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+
+        let outer = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![alice_agent.dupe()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                NoListener,
+                arc_csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+
+        // Now Alice also reaches the outer group the long way round, as a
+        // reader, through a group she administers.
+        let inner_gid = { inner.lock().await.group_id() };
+        outer
+            .lock()
+            .await
+            .add_member(
+                Agent::Group(inner_gid, inner.dupe()),
+                Access::Read,
+                &alice_signer,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let members = outer.lock().await.transitive_members().await;
+        assert_eq!(
+            members.get(&alice_id.into()).map(|(_, access)| *access),
+            Some(Access::Admin),
+            "an admin who is also in a reader group is still an admin"
+        );
     }
 
     #[tokio::test]
