@@ -53,6 +53,26 @@ impl JsDocument {
         JsMembered(Membered::Document(self.doc_id, self.inner.dupe()))
     }
 
+    /// The individuals in this document's CGKA tree, i.e., those that
+    /// can derive its current secret.
+    ///
+    /// This is the set to watch when deciding whether a new reader needs a key
+    /// rotation. `members()` reports the document's own delegations, which do
+    /// not change when a group that already holds access gains a member.
+    ///
+    /// Empty if the document has no initialized CGKA.
+    #[wasm_bindgen(js_name = cgkaMembers)]
+    pub async fn cgka_members(&self) -> Vec<JsIdentifier> {
+        self.inner
+            .lock()
+            .await
+            .cgka_members()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|id| JsIdentifier(id.into()))
+            .collect()
+    }
+
     #[wasm_bindgen]
     pub async fn members(&self) -> Vec<Capability> {
         self.inner

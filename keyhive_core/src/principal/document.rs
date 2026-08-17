@@ -129,6 +129,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.group.members()
     }
 
+    /// The individuals in this document's CGKA tree.
+    pub fn cgka_members(&self) -> Result<Vec<IndividualId>, CgkaError> {
+        Ok(self.cgka()?.member_ids().collect())
+    }
+
     pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
         self.group.transitive_members().await
     }
