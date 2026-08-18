@@ -1656,6 +1656,112 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_revocation_beyond_the_weakest_link_is_refused() {
+        test_utils::init_logging();
+        let mut csprng = OsRng;
+
+        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let (alice_id, alice_signer) = {
+            let locked = alice.lock().await;
+            (locked.id(), locked.signer.clone())
+        };
+        let alice_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(alice_id, alice.dupe());
+
+        let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let carol_signer = { carol.lock().await.signer.clone() };
+        let carol_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active({ carol.lock().await.id() }, carol.dupe());
+
+        let erin = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let erin_id = { erin.lock().await.id() };
+        let erin_agent: Agent<Sendable, MemorySigner, String> = Agent::Active(erin_id, erin.dupe());
+
+        let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+        let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
+        let arc_csprng = Arc::new(Mutex::new(csprng));
+
+        let mut make = || {
+            let parents = nonempty![alice_agent.dupe()];
+            let dlg = dlg_store.dupe();
+            let rev = rev_store.dupe();
+            let rng = arc_csprng.dupe();
+            async move {
+                Arc::new(Mutex::new(
+                    Group::generate(parents, dlg, rev, NoListener, rng)
+                        .await
+                        .unwrap(),
+                ))
+            }
+        };
+
+        // outer --Admin--> middle --Read--> a --Admin--> b --Admin--> carol,
+        // and erin is an admin of the outer group in her own right.
+        let outer = make().await;
+        let middle = make().await;
+        let a = make().await;
+        let b = make().await;
+
+        let group_agent = |g: &Arc<Mutex<Group<Sendable, MemorySigner, String>>>| {
+            let g = g.dupe();
+            async move {
+                let gid = { g.lock().await.group_id() };
+                Agent::Group(gid, g)
+            }
+        };
+
+        outer
+            .lock()
+            .await
+            .add_member(
+                group_agent(&middle).await,
+                Access::Admin,
+                &alice_signer,
+                &[],
+            )
+            .await
+            .unwrap();
+        outer
+            .lock()
+            .await
+            .add_member(erin_agent, Access::Admin, &alice_signer, &[])
+            .await
+            .unwrap();
+        middle
+            .lock()
+            .await
+            .add_member(group_agent(&a).await, Access::Read, &alice_signer, &[])
+            .await
+            .unwrap();
+        a.lock()
+            .await
+            .add_member(group_agent(&b).await, Access::Admin, &alice_signer, &[])
+            .await
+            .unwrap();
+        b.lock()
+            .await
+            .add_member(carol_agent, Access::Admin, &alice_signer, &[])
+            .await
+            .unwrap();
+
+        let result = outer
+            .lock()
+            .await
+            .revoke_member(erin_id.into(), true, &carol_signer, &BTreeMap::new())
+            .await;
+
+        assert!(
+            result.is_err(),
+            "a reader revoked an admin: {:?}",
+            result.map(|update| update.revocations.len())
+        );
+        assert!(
+            outer.lock().await.members().contains_key(&erin_id.into()),
+            "erin is still an admin of the group"
+        );
+    }
+
     /// Accepting a delegation asks whether its signer really holds the access
     /// they are passing on, and asks it of `transitive_members`. A chain that
     /// was not limited to its weakest link would let someone sign delegations at a
