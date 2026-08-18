@@ -4759,6 +4759,65 @@ mod tests {
         Ok(())
     }
 
+    /// Bob reads Doc D through Group G and separately has relay access to D directly.
+    /// Revoke G from D. Bob should lose his cgka access.
+    #[tokio::test]
+    async fn test_revoke_leaves_no_key_with_a_direct_relay_member() -> TestResult {
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let bob_kh = make_keyhive().await;
+        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+
+        // G with Bob as a reader
+        let g = alice.generate_group(vec![]).await?;
+        let g_id = g.lock().await.group_id();
+        alice
+            .add_member(
+                Agent::Individual(bob_id, bob_indie.dupe()),
+                &Membered::Group(g_id, g.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await?;
+
+        // Doc D, which G reads and Bob may also relay in his own right
+        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        let doc_id = doc.lock().await.doc_id();
+        alice
+            .add_member(
+                Agent::Group(g_id, g.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await?;
+        alice
+            .add_member(
+                Agent::Individual(bob_id, bob_indie.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Relay,
+                &[],
+            )
+            .await?;
+
+        assert!(
+            { doc.lock().await.cgka_members()?.contains(&bob_id) },
+            "Bob should hold a key while he reads the document through G"
+        );
+
+        alice
+            .revoke_member(g_id.into(), true, &Membered::Document(doc_id, doc.dupe()))
+            .await?;
+
+        assert!(
+            !{ doc.lock().await.cgka_members()?.contains(&bob_id) },
+            "Bob kept his key on a document he may now only relay"
+        );
+
+        Ok(())
+    }
+
     /// G in G1 in D1, and G in G2 in D2. Bob in G.
     /// Revoke G from G1 → Bob loses D1, keeps D2.
     #[tokio::test]

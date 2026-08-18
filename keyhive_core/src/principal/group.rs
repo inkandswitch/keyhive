@@ -233,9 +233,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.group_id().into()
     }
 
+    /// The individuals reachable from this group by delegations of
+    /// [`Access::Read`] or better.
     pub async fn individual_ids(&self) -> HashSet<IndividualId> {
         let mut ids = HashSet::new();
         for delegations in self.members.values() {
+            if !delegations.iter().any(|d| d.payload().can.is_reader()) {
+                continue;
+            }
             let more_ids = delegations[0].payload().delegate.individual_ids().await;
             ids.extend(more_ids.iter());
         }
