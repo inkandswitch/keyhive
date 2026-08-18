@@ -1375,6 +1375,107 @@ mod tests {
         );
     }
 
+    /// A group's member's access level is capped by their own delegation and
+    /// by the group's access here, whichever is weaker, no matter how strong anyone else in
+    /// the chain is.
+    #[tokio::test]
+    async fn test_transitive_caps_a_member_by_their_own_delegations() {
+        test_utils::init_logging();
+        let mut csprng = OsRng;
+
+        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let (alice_id, alice_signer) = {
+            let locked = alice.lock().await;
+            (locked.id(), locked.signer.clone())
+        };
+        let alice_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(alice_id, alice.dupe());
+
+        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let bob_id = { bob.lock().await.id() };
+        let bob_agent: Agent<Sendable, MemorySigner, String> = Agent::Active(bob_id, bob.dupe());
+
+        let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let carol_id = { carol.lock().await.id() };
+        let carol_agent: Agent<Sendable, MemorySigner, String> = Agent::Active(carol_id, carol.dupe());
+
+        let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+        let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
+        let arc_csprng = Arc::new(Mutex::new(csprng));
+
+        let inner = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![alice_agent.dupe()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                NoListener,
+                arc_csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+
+        let outer = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![alice_agent.dupe()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                NoListener,
+                arc_csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+
+        // The inner group reads the outer one. Alice, who administers both,
+        // has the highest access level.
+        let inner_gid = { inner.lock().await.group_id() };
+        outer
+            .lock()
+            .await
+            .add_member(
+                Agent::Group(inner_gid, inner.dupe()),
+                Access::Edit,
+                &alice_signer,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Bob is admin for the inner group, which only has edit for the outer one.
+        inner
+            .lock()
+            .await
+            .add_member(bob_agent, Access::Admin, &alice_signer, &[])
+            .await
+            .unwrap();
+
+        // Carol has read for the inner group, which has edit for the outer one.
+        inner
+            .lock()
+            .await
+            .add_member(carol_agent, Access::Read, &alice_signer, &[])
+            .await
+            .unwrap();
+
+        let members = outer.lock().await.transitive_members().await;
+        assert_eq!(
+            members.get(&alice_id.into()).map(|(_, access)| *access),
+            Some(Access::Admin),
+            "alice is admin the outer group directly"
+        );
+        assert_eq!(
+            members.get(&bob_id.into()).map(|(_, access)| *access),
+            Some(Access::Edit),
+            "bob administers the inner group, which can only edit this one"
+        );
+        assert_eq!(
+            members.get(&carol_id.into()).map(|(_, access)| *access),
+            Some(Access::Read),
+            "carol has only read for the inner group, so she only has read for this one"
+        );
+    }
+
     #[tokio::test]
     async fn test_transitive_one() {
         test_utils::init_logging();
