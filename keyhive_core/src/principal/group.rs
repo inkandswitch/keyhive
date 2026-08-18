@@ -292,25 +292,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             parent_access: Access,
         }
 
-        /// Record `access` for `id`, keeping the best seen so far
-        fn raise_to_best<
-            G: FutureForm,
-            Z: AsyncSigner<G>,
-            U: ContentRef,
-            M: MembershipListener<G, Z, U>,
-        >(
-            caps: &mut HashMap<Identifier, (Agent<G, Z, U, M>, Access)>,
-            id: Identifier,
-            agent: &Agent<G, Z, U, M>,
-            access: Access,
-        ) -> Access {
-            let entry = caps.entry(id).or_insert_with(|| (agent.dupe(), access));
-            if access > entry.1 {
-                entry.1 = access;
-            }
-            entry.1
-        }
-
         let mut explore: Vec<GroupAccess<F, S, T, L>> = vec![];
         let mut seen: HashSet<([u8; 64], Access)> = HashSet::new();
 
@@ -346,8 +327,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             // group with read access is still an admin, and which route the
             // traversal happens to walk last is not their access level.
             let current_path_access = access.min(parent_access);
-            let effective_access =
-                raise_to_best(&mut caps, member.id(), &member, current_path_access);
+            let effective_access = caps
+                .entry(id)
+                .and_modify(|(_, existing)| {
+                    if current_path_access > *existing {
+                        *existing = current_path_access;
+                    }
+                })
+                .or_insert_with(|| (member.dupe(), current_path_access))
+                .1;
 
             if let Some(membered) = match member {
                 Agent::Group(id, inner_group) => Some(Membered::Group(id, inner_group.dupe())),
