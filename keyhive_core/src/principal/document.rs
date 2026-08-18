@@ -34,7 +34,6 @@ use beekem::{
     keys::ShareKeyMap,
     operation::{CgkaEpoch, CgkaOperation},
 };
-use derivative::Derivative;
 use derive_where::derive_where;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
@@ -60,7 +59,7 @@ use std::{
 use thiserror::Error;
 use tracing::instrument;
 
-#[derive(Clone, Derivative)]
+#[derive(Clone)]
 #[derive_where(Debug; T)]
 pub struct Document<
     F: FutureForm,
