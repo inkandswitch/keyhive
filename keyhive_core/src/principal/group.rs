@@ -253,20 +253,22 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     ) -> HashMap<IndividualId, ShareKey> {
         let mut prekeys = HashMap::new();
         let public_id = crate::principal::public::Public.id();
-        for (id, (agent, access)) in self.transitive_members().await.iter() {
+        for (id, (agent, access)) in self.transitive_members().await {
             // Anyone whose access here is below `Read` is not entitled to decrypt.
             if !access.is_reader() {
                 continue;
             }
 
             // Public must always be added with its single well-known key.
-            if *id == public_id {
+            if id == public_id {
                 prekeys.insert(
                     IndividualId(public_id),
                     crate::principal::public::Public.share_key(),
                 );
-            } else {
-                prekeys.extend(agent.pick_individual_prekeys(doc_id).await.iter());
+            } else if matches!(agent, Agent::Individual(_, _) | Agent::Active(_, _)) {
+                // Nested groups and documents are already flattened into
+                // `transitive_members` so we only look up individuals.
+                prekeys.extend(agent.pick_individual_prekeys(doc_id).await);
             }
         }
         prekeys
