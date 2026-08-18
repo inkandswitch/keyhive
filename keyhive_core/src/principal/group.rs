@@ -347,14 +347,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 Agent::Document(id, doc) => Some(Membered::Document(id, doc.dupe())),
                 _ => None,
             } {
-                for (mem_id, dlgs) in membered.members().await.iter() {
-                    let dlg = membered
-                        .get_capability(mem_id)
-                        .await
-                        .expect("members have capabilities by defintion");
-
+                for dlgs in membered.members().await.into_values() {
                     'inner: for sub_dlg in dlgs.iter() {
-                        if !seen.insert((sub_dlg.signature.to_bytes(), dlg.payload.can)) {
+                        if !seen.insert((sub_dlg.signature.to_bytes(), effective_access)) {
                             continue 'inner;
                         }
 
@@ -1368,6 +1363,111 @@ mod tests {
             Some(Access::Admin),
             "an admin who is also in a reader group is still an admin"
         );
+    }
+
+    #[tokio::test]
+    async fn test_transitive_keeps_the_best_route_through_a_nested_group() {
+        test_utils::init_logging();
+        let mut csprng = OsRng;
+
+        for _ in 0..10 {
+            let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+            let (alice_id, alice_signer) = {
+                let locked = alice.lock().await;
+                (locked.id(), locked.signer.clone())
+            };
+            let alice_agent: Agent<Sendable, MemorySigner, String> =
+                Agent::Active(alice_id, alice.dupe());
+
+            let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+            let carol_id = { carol.lock().await.id() };
+            let carol_agent: Agent<Sendable, MemorySigner, String> =
+                Agent::Active(carol_id, carol.dupe());
+
+            let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+            let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
+            let arc_csprng = Arc::new(Mutex::new(csprng));
+
+            let make = || async {
+                Arc::new(Mutex::new(
+                    Group::generate(
+                        nonempty![alice_agent.dupe()],
+                        dlg_store.dupe(),
+                        rev_store.dupe(),
+                        NoListener,
+                        arc_csprng.dupe(),
+                    )
+                    .await
+                    .unwrap(),
+                ))
+            };
+
+            let inner = make().await;
+            let admin_route = make().await;
+            let read_route = make().await;
+            let outer = make().await;
+
+            let group_agent = |g: &Arc<Mutex<Group<Sendable, MemorySigner, String>>>,
+                               gid: GroupId| Agent::Group(gid, g.dupe());
+
+            let inner_gid = { inner.lock().await.group_id() };
+            let admin_gid = { admin_route.lock().await.group_id() };
+            let read_gid = { read_route.lock().await.group_id() };
+
+            // Both middle groups administer the inner one.
+            for middle in [&admin_route, &read_route] {
+                middle
+                    .lock()
+                    .await
+                    .add_member(
+                        group_agent(&inner, inner_gid),
+                        Access::Admin,
+                        &alice_signer,
+                        &[],
+                    )
+                    .await
+                    .unwrap();
+            }
+
+            // The outer group reaches one of them as an admin and the other as
+            // a reader, so the inner group is reachable both ways.
+            outer
+                .lock()
+                .await
+                .add_member(
+                    group_agent(&admin_route, admin_gid),
+                    Access::Admin,
+                    &alice_signer,
+                    &[],
+                )
+                .await
+                .unwrap();
+            outer
+                .lock()
+                .await
+                .add_member(
+                    group_agent(&read_route, read_gid),
+                    Access::Read,
+                    &alice_signer,
+                    &[],
+                )
+                .await
+                .unwrap();
+
+            inner
+                .lock()
+                .await
+                .add_member(carol_agent.dupe(), Access::Admin, &alice_signer, &[])
+                .await
+                .unwrap();
+
+            let members = outer.lock().await.transitive_members().await;
+            assert_eq!(
+                members.get(&carol_id.into()).map(|(_, access)| *access),
+                Some(Access::Admin),
+                "the admin route to the inner group is the one that counts"
+            );
+        }
     }
 
     /// A group's member's access level is capped by their own delegation and
