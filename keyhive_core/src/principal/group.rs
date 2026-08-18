@@ -280,7 +280,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             parent_access: Access,
         }
 
-        /// Record `access` for `id`, keeping the best seen so far.
+        /// Record `access` for `id`, keeping the best seen so far
         fn raise_to_best<
             G: FutureForm,
             Z: AsyncSigner<G>,
@@ -291,14 +291,12 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             id: Identifier,
             agent: &Agent<G, Z, U, M>,
             access: Access,
-        ) {
-            caps.entry(id)
-                .and_modify(|(_, existing)| {
-                    if access > *existing {
-                        *existing = access;
-                    }
-                })
-                .or_insert_with(|| (agent.dupe(), access));
+        ) -> Access {
+            let entry = caps.entry(id).or_insert_with(|| (agent.dupe(), access));
+            if access > entry.1 {
+                entry.1 = access;
+            }
+            entry.1
         }
 
         let mut explore: Vec<GroupAccess<F, S, T, L>> = vec![];
@@ -331,17 +329,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 continue;
             }
 
-            let best_access = *caps
-                .get(&id)
-                .map(|(_, existing_access)| existing_access.max(&access))
-                .unwrap_or(&access);
-
-            let current_path_access = access.min(parent_access);
             // Reaching someone again by a weaker route does not take away what
             // a stronger one already gave them. An admin who also sits in a
             // group with read access is still an admin, and which route the
             // traversal happens to walk last is not their access level.
-            raise_to_best(&mut caps, member.id(), &member, current_path_access);
+            let current_path_access = access.min(parent_access);
+            let effective_access =
+                raise_to_best(&mut caps, member.id(), &member, current_path_access);
 
             if let Some(membered) = match member {
                 Agent::Group(id, inner_group) => Some(Membered::Group(id, inner_group.dupe())),
@@ -354,10 +348,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                         .await
                         .expect("members have capabilities by defintion");
 
-                    // Nothing is recorded for this member here: what they can
-                    // do depends on their own delegation as much as on this
-                    // group's, and that is settled when they are popped, capped
-                    // by the route that reached them.
                     'inner: for sub_dlg in dlgs.iter() {
                         if !seen.insert((sub_dlg.signature.to_bytes(), dlg.payload.can)) {
                             continue 'inner;
@@ -366,7 +356,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                         explore.push(GroupAccess {
                             agent: sub_dlg.payload.delegate.dupe(),
                             agent_access: sub_dlg.payload.can,
-                            parent_access: best_access,
+                            parent_access: effective_access,
                         });
                     }
                 }
@@ -1307,10 +1297,10 @@ mod tests {
     }
 
     /// Reaching someone twice, once as an admin and once through a group that
-    /// only has read access, must not demote them to a reader. Which order the
-    /// traversal happens to walk the two routes in is not their access level.
+    /// only has read access, must not demote them to a reader. The order of
+    /// traversal shouldn't matter.
     #[tokio::test]
-    async fn test_transitive_keeps_the_strongest_route() {
+    async fn test_transitive_keeps_the_best_route() {
         test_utils::init_logging();
         let mut csprng = OsRng;
 
@@ -1397,7 +1387,8 @@ mod tests {
 
         let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let carol_id = { carol.lock().await.id() };
-        let carol_agent: Agent<Sendable, MemorySigner, String> = Agent::Active(carol_id, carol.dupe());
+        let carol_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(carol_id, carol.dupe());
 
         let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
         let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
@@ -1473,6 +1464,90 @@ mod tests {
             members.get(&carol_id.into()).map(|(_, access)| *access),
             Some(Access::Read),
             "carol has only read for the inner group, so she only has read for this one"
+        );
+    }
+
+    /// A three-link chain whose weakest link is the first one. Carol
+    /// administers a group that administers a group that can only *read* the
+    /// outer group, so Carol reads it and no more.
+    #[tokio::test]
+    async fn test_transitive_weakest_link_is_the_first_one() {
+        test_utils::init_logging();
+        let mut csprng = OsRng;
+
+        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let (alice_id, alice_signer) = {
+            let locked = alice.lock().await;
+            (locked.id(), locked.signer.clone())
+        };
+        let alice_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(alice_id, alice.dupe());
+
+        let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let carol_id = { carol.lock().await.id() };
+        let carol_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(carol_id, carol.dupe());
+
+        let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+        let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
+        let arc_csprng = Arc::new(Mutex::new(csprng));
+
+        let make = |parents: NonEmpty<Agent<Sendable, MemorySigner, String>>| {
+            let dlg = dlg_store.dupe();
+            let rev = rev_store.dupe();
+            let rng = arc_csprng.dupe();
+            async move {
+                Arc::new(Mutex::new(
+                    Group::generate(parents, dlg, rev, NoListener, rng)
+                        .await
+                        .unwrap(),
+                ))
+            }
+        };
+
+        let outer = make(nonempty![alice_agent.dupe()]).await;
+        let middle = make(nonempty![alice_agent.dupe()]).await;
+        let inner = make(nonempty![alice_agent.dupe()]).await;
+
+        // outer --Read--> middle --Admin--> inner --Admin--> carol
+        let middle_gid = { middle.lock().await.group_id() };
+        outer
+            .lock()
+            .await
+            .add_member(
+                Agent::Group(middle_gid, middle.dupe()),
+                Access::Read,
+                &alice_signer,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let inner_gid = { inner.lock().await.group_id() };
+        middle
+            .lock()
+            .await
+            .add_member(
+                Agent::Group(inner_gid, inner.dupe()),
+                Access::Admin,
+                &alice_signer,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        inner
+            .lock()
+            .await
+            .add_member(carol_agent, Access::Admin, &alice_signer, &[])
+            .await
+            .unwrap();
+
+        let members = outer.lock().await.transitive_members().await;
+        assert_eq!(
+            members.get(&carol_id.into()).map(|(_, access)| *access),
+            Some(Access::Read),
+            "the chain is only as strong as the read delegation at its head"
         );
     }
 
