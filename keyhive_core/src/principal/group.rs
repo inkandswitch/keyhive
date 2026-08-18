@@ -1574,13 +1574,13 @@ mod tests {
 
         let dan = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let dan_agent: Agent<Sendable, MemorySigner, String> =
-            Agent::Active({ dan.lock().await.id() }, dan.dupe());
+            Agent::Active(dan.lock().await.id(), dan.dupe());
 
         let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
         let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
         let arc_csprng = Arc::new(Mutex::new(csprng));
 
-        let mut make = || {
+        let make = || {
             let parents = nonempty![alice_agent.dupe()];
             let dlg = dlg_store.dupe();
             let rev = rev_store.dupe();
@@ -1672,7 +1672,7 @@ mod tests {
         let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let carol_signer = { carol.lock().await.signer.clone() };
         let carol_agent: Agent<Sendable, MemorySigner, String> =
-            Agent::Active({ carol.lock().await.id() }, carol.dupe());
+            Agent::Active(carol.lock().await.id(), carol.dupe());
 
         let erin = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let erin_id = { erin.lock().await.id() };
@@ -1682,7 +1682,7 @@ mod tests {
         let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
         let arc_csprng = Arc::new(Mutex::new(csprng));
 
-        let mut make = || {
+        let make = || {
             let parents = nonempty![alice_agent.dupe()];
             let dlg = dlg_store.dupe();
             let rev = rev_store.dupe();
@@ -1789,13 +1789,13 @@ mod tests {
 
         let dan = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let dan_agent: Agent<Sendable, MemorySigner, String> =
-            Agent::Active({ dan.lock().await.id() }, dan.dupe());
+            Agent::Active(dan.lock().await.id(), dan.dupe());
 
         let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
         let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
         let arc_csprng = Arc::new(Mutex::new(csprng));
 
-        let mut make = || {
+        let make = || {
             let parents = nonempty![alice_agent.dupe()];
             let dlg = dlg_store.dupe();
             let rev = rev_store.dupe();
