@@ -5457,6 +5457,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_group_member_below_read_gets_no_key() -> TestResult {
+        test_utils::init_logging();
+
+        let mut csprng = rand::rngs::OsRng;
+        let sk = MemorySigner::generate(&mut csprng);
+        let hive: Keyhive<Sendable, MemorySigner, [u8; 32], String, _, NoListener, _> =
+            Keyhive::generate(
+                sk,
+                Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+                NoListener,
+                rand::rngs::OsRng,
+            )
+            .await?;
+
+        // Carol may only relay the group, which is below read.
+        let carol_sk = MemorySigner::generate(&mut csprng);
+        let carol = Arc::new(Mutex::new(
+            Individual::generate::<Sendable, _, _>(&carol_sk, &mut csprng).await?,
+        ));
+        hive.register_individual(carol.dupe()).await;
+        let carol_id = { carol.lock().await.id() };
+        let carol_agent = Agent::Individual(carol_id, carol.dupe());
+
+        let group = hive.generate_group(vec![]).await?;
+        let group_id = { group.lock().await.group_id() };
+        let membered_group = Membered::Group(group_id, group.dupe());
+        hive.add_member(carol_agent, &membered_group, Access::Relay, &[])
+            .await?;
+
+        // The group edits the document.
+        let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        let doc_id = DocumentId(doc.lock().await.id());
+        let membered_doc = Membered::Document(doc_id, doc.dupe());
+        let group_agent = Agent::Group(group_id, group.dupe());
+        hive.add_member(group_agent, &membered_doc, Access::Edit, &[])
+            .await?;
+
+        let transitive = { doc.lock().await.transitive_members().await };
+        assert_eq!(
+            transitive.get(&carol_id.into()).map(|(_, access)| *access),
+            Some(Access::Relay),
+            "carol relays the group, so she relays the document"
+        );
+
+        let cgka_members = { doc.lock().await.cgka_members()? };
+        assert!(
+            !cgka_members.contains(&carol_id),
+            "carol cannot read the document, yet holds a key to it"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_async_transaction() -> TestResult {
         test_utils::init_logging();
 
