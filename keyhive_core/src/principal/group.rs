@@ -323,9 +323,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             }
 
             // Reaching someone again by a weaker route does not take away what
-            // a stronger one already gave them. An admin who also sits in a
-            // group with read access is still an admin, and which route the
-            // traversal happens to walk last is not their access level.
+            // a stronger one already gave them.
             let current_path_access = access.min(parent_access);
             let effective_access = caps
                 .entry(id)
@@ -1016,7 +1014,7 @@ mod tests {
     ///
     /// Carol may only read the outer group, but has admin to every link below
     /// the read delegation into `a`. Alice generated all four groups, so
-    /// she administers each of them directly.
+    /// she is admin of each of them directly.
     struct WeakestLinkChain {
         outer: TestGroup,
         middle: TestGroup,
@@ -1435,7 +1433,7 @@ mod tests {
         ));
 
         // Now Alice also reaches the outer group the long way round, as a
-        // reader, through a group she administers.
+        // reader, through a group where she is admin.
         let inner_gid = { inner.lock().await.group_id() };
         outer
             .lock()
@@ -1617,7 +1615,7 @@ mod tests {
             .unwrap(),
         ));
 
-        // The inner group edits the outer one. Alice, who administers both,
+        // The inner group edits the outer one. Alice, who is admin of both,
         // has the highest access level.
         let inner_gid = { inner.lock().await.group_id() };
         outer
@@ -1632,7 +1630,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Bob is admin for the inner group, which only has edit for the outer one.
+        // Bob is admin of the inner group, which only has edit for the outer one.
         inner
             .lock()
             .await
@@ -1657,7 +1655,7 @@ mod tests {
         assert_eq!(
             members.get(&bob_id.into()).map(|(_, access)| *access),
             Some(Access::Edit),
-            "bob administers the inner group, which can only edit this one"
+            "bob is admin of the inner group, which can only edit this one"
         );
         assert_eq!(
             members.get(&carol_id.into()).map(|(_, access)| *access),
@@ -1667,7 +1665,7 @@ mod tests {
     }
 
     /// A three-link chain whose weakest link is the first one. Carol
-    /// administers a group that administers a group that can only read the
+    /// is admin of a group that is admin of a group that can only read the
     /// outer group, so Carol reads it and no more.
     #[tokio::test]
     async fn test_transitive_weakest_link_is_the_first_one() {

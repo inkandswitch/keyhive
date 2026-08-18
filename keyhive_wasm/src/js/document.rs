@@ -54,12 +54,11 @@ impl JsDocument {
         JsMembered(Membered::Document(self.doc_id, self.inner.dupe()))
     }
 
-    /// The individuals in this document's CGKA tree, i.e., those that
-    /// can derive its current secret.
+    /// The individuals in this document's CGKA tree.
     ///
     /// This is the set to watch when deciding whether a new reader needs a key
     /// rotation. `members()` reports the document's own delegations, which do
-    /// not change when a group that already holds access gains a member.
+    /// not change when a group that already has access gains a member.
     ///
     /// Empty if the document has no initialized CGKA.
     #[wasm_bindgen(js_name = cgkaMembers)]
