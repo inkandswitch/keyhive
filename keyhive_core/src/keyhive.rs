@@ -502,17 +502,23 @@ impl<
                     let group_identifier: Identifier = (*group_id).into();
                     let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
                     for doc in &docs {
-                        let (contains_group, doc_id) = {
+                        let (group_access, doc_id) = {
                             let locked = doc.lock().await;
                             (
                                 locked
                                     .transitive_members()
                                     .await
-                                    .contains_key(&group_identifier),
+                                    .get(&group_identifier)
+                                    .map(|(_, access)| *access),
                                 locked.doc_id(),
                             )
                         };
-                        if !contains_group {
+                        let Some(group_access) = group_access else {
+                            continue;
+                        };
+                        // The new member cannot read this document through a
+                        // group that may not read it either.
+                        if !can.min(group_access).is_reader() {
                             continue;
                         }
                         // Document lock is intentionally dropped before `pick_individual_prekeys`,
@@ -5511,7 +5517,7 @@ mod tests {
             .await?;
             assert!(
                 !{ doc.lock().await.cgka_members()?.contains(&id) },
-                "a relay member of the document holds a key to it"
+                "a relay member of the document has cgka access to it"
             );
         }
 
@@ -5539,7 +5545,7 @@ mod tests {
             .await?;
             assert!(
                 !{ doc.lock().await.cgka_members()?.contains(&id) },
-                "someone who may only relay the group holds a key to a document it edits"
+                "someone who may only relay the group has cgka access to a document it edits"
             );
         }
 
@@ -5567,7 +5573,7 @@ mod tests {
             .await?;
             assert!(
                 !{ doc.lock().await.cgka_members()?.contains(&id) },
-                "a relay member added to a group that already holds the document holds a key"
+                "a relay member added to a group that already holds the document has cgka access"
             );
 
             // d) then promote that member to read within the group
@@ -5581,7 +5587,7 @@ mod tests {
             .await?;
             assert!(
                 !{ doc.lock().await.cgka_members()?.contains(&id2) },
-                "a relay member holds a key before being promoted"
+                "a relay member has cgka access before being promoted"
             );
             hive.add_member(
                 agent2,
@@ -5592,7 +5598,36 @@ mod tests {
             .await?;
             assert!(
                 { doc.lock().await.cgka_members()?.contains(&id2) },
-                "promoting to read within the group did not hand over a key"
+                "promoting to read within the group did not grant cgka access"
+            );
+        }
+
+        // e) the opposite of b): the group only has relay for the document and a reader
+        //    is added to the group
+        {
+            let hive = mk_hive().await?;
+            let (id, agent) = mk_person(&hive).await;
+            let group = hive.generate_group(vec![]).await?;
+            let group_id = { group.lock().await.group_id() };
+            let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+            let doc_id = DocumentId(doc.lock().await.id());
+            hive.add_member(
+                Agent::Group(group_id, group.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Relay,
+                &[],
+            )
+            .await?;
+            hive.add_member(
+                agent,
+                &Membered::Group(group_id, group.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await?;
+            assert!(
+                !{ doc.lock().await.cgka_members()?.contains(&id) },
+                "a reader in a group that may only relay the document has cgka access"
             );
         }
 
@@ -5647,7 +5682,7 @@ mod tests {
         let cgka_members = { doc.lock().await.cgka_members()? };
         assert!(
             !cgka_members.contains(&carol_id),
-            "carol cannot read the document, yet holds a key to it"
+            "carol cannot read the document, yet has cgka access to it"
         );
 
         Ok(())
