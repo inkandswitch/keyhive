@@ -4,8 +4,13 @@ use keyhive_core::principal::identifier::Identifier;
 
 use crate::{
     js::{
-        archive::JsSerializationError, document_id::JsDocumentId, event::JsEvent,
-        group_id::JsGroupId, individual::JsIndividual, membership::Membership, stats::JsStats,
+        archive::JsSerializationError,
+        document_id::JsDocumentId,
+        event::JsEvent,
+        group_id::JsGroupId,
+        individual::JsIndividual,
+        membership::{individual_memberships, Membership},
+        stats::JsStats,
     },
     macros::init_span,
 };
@@ -688,20 +693,7 @@ impl JsKeyhive {
         init_span!("JsKeyhive::doc_member_capabilities");
         if let Some(doc) = self.0.get_document(doc_id.0).await {
             let transitive_members = { doc.lock().await.transitive_members().await };
-            transitive_members
-                .into_iter()
-                // Skip the document itself
-                .filter(|(id, _)| *id != doc_id.0.into())
-                .filter_map(|(_, (agent, access))| {
-                    // Currently we only return Individuals and the Agent
-                    matches!(agent, Agent::Individual(_, _) | Agent::Active(_, _)).then(|| {
-                        Membership {
-                            who: agent,
-                            can: access,
-                        }
-                    })
-                })
-                .collect()
+            individual_memberships(transitive_members, doc_id.0.into())
         } else {
             Vec::new()
         }

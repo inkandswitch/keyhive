@@ -1,8 +1,14 @@
 use crate::js::membered::JsMembered;
 
 use super::{
-    agent::JsAgent, capability::Capability, change_id::JsChangeId, event_handler::JsEventHandler,
-    group_id::JsGroupId, identifier::JsIdentifier, membership::Membership, peer::JsPeer,
+    agent::JsAgent,
+    capability::Capability,
+    change_id::JsChangeId,
+    event_handler::JsEventHandler,
+    group_id::JsGroupId,
+    identifier::JsIdentifier,
+    membership::{individual_memberships, Membership},
+    peer::JsPeer,
     signer::JsSigner,
 };
 use derive_more::{From, Into};
@@ -40,29 +46,11 @@ impl JsGroup {
     }
 
     /// Everyone who reaches this group, following nested groups all the way
-    /// down, with the access each one ends up holding.
-    ///
-    /// [`JsGroup::members`] is the group's own delegations, which is the wrong
-    /// question to ask when working out whether a particular person can act
-    /// here: someone in a group that is a member of this one holds real access
-    /// and appears in no delegation of ours. Documents have
-    /// [`JsKeyhive::doc_member_capabilities`] for this; groups had nothing.
+    /// down, with the access for each one.
     #[wasm_bindgen(js_name = transitiveMembers)]
     pub async fn transitive_members(&self) -> Vec<Membership> {
         let transitive = { self.inner.lock().await.transitive_members().await };
-        transitive
-            .into_iter()
-            // Skip the group itself.
-            .filter(|(id, _)| *id != self.group_id.into())
-            .filter_map(|(_, (agent, access))| {
-                // Individuals and the local identity, matching
-                // `doc_member_capabilities`.
-                matches!(agent, Agent::Individual(_, _) | Agent::Active(_, _)).then(|| Membership {
-                    who: agent,
-                    can: access,
-                })
-            })
-            .collect()
+        individual_memberships(transitive, self.group_id.into())
     }
 
     #[wasm_bindgen]
