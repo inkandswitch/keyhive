@@ -4,6 +4,7 @@ use super::{
     agent::JsAgent, capability::Capability, change_id::JsChangeId, event_handler::JsEventHandler,
     identifier::JsIdentifier, peer::JsPeer, signer::JsSigner,
 };
+use beekem::error::CgkaError;
 use dupe::Dupe;
 use future_form::Local;
 use futures::lock::Mutex;
@@ -51,6 +52,25 @@ impl JsDocument {
     #[wasm_bindgen(js_name = toMembered)]
     pub fn to_membered(&self) -> JsMembered {
         JsMembered(Membered::Document(self.doc_id, self.inner.dupe()))
+    }
+
+    /// The individuals in this document's CGKA tree.
+    ///
+    /// This is the set to watch when deciding whether a new reader needs a key
+    /// rotation. `members()` reports the document's own delegations, which do
+    /// not change when a group that already has access gains a member.
+    ///
+    /// Empty if the document has no initialized CGKA.
+    #[wasm_bindgen(js_name = cgkaMembers)]
+    pub async fn cgka_members(&self) -> Vec<JsIdentifier> {
+        match self.inner.lock().await.cgka_members() {
+            Ok(ids) => ids.map(|id| JsIdentifier(id.into())).collect(),
+            Err(CgkaError::NotInitialized) => vec![],
+            Err(e) => {
+                tracing::warn!("JsDocument::cgka_members: {e}");
+                vec![]
+            }
+        }
     }
 
     #[wasm_bindgen]

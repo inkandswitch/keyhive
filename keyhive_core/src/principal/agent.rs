@@ -10,6 +10,7 @@ use super::{
 };
 use crate::{
     listener::{membership::MembershipListener, no_listener::NoListener},
+    principal::group::delegation::Delegation,
     util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
@@ -20,9 +21,10 @@ use ed25519_dalek::VerifyingKey;
 use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_crypto::{
-    content::reference::ContentRef, share_key::ShareKey, signer::async_signer::AsyncSigner,
-    verifiable::Verifiable,
+    content::reference::ContentRef, share_key::ShareKey, signed::Signed,
+    signer::async_signer::AsyncSigner, verifiable::Verifiable,
 };
+use nonempty::NonEmpty;
 use std::{
     collections::{HashMap, HashSet},
     fmt::{Display, Formatter},
@@ -81,6 +83,24 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         }
     }
 
+    /// Queue everyone a group or document delegates to at
+    /// [`Access::Read`](crate::access::Access::Read) or better, once each.
+    #[allow(clippy::type_complexity)]
+    fn push_readers(
+        stack: &mut Vec<Self>,
+        members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
+    ) {
+        for dlgs in members.values() {
+            if dlgs.iter().any(|d| d.payload.can.is_reader()) {
+                stack.push(dlgs[0].payload.delegate.dupe());
+            }
+        }
+    }
+
+    /// The individuals reachable from this agent by delegations of
+    /// [`Access::Read`](crate::access::Access::Read) or better.
+    ///
+    /// Someone reachable only by relay is not entitled to decrypt anything.
     pub async fn individual_ids(&self) -> HashSet<IndividualId> {
         let mut ids = HashSet::new();
         let mut seen = HashSet::new();
@@ -98,20 +118,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     ids.insert(i_id);
                 }
                 Agent::Group(_, g) => {
-                    let locked_group = g.lock().await;
-                    for ms in locked_group.members().values() {
-                        for m in ms {
-                            stack.push(m.payload.delegate.dupe());
-                        }
-                    }
+                    Self::push_readers(&mut stack, g.lock().await.members());
                 }
                 Agent::Document(_, d) => {
-                    let locked_doc = d.lock().await;
-                    for ms in locked_doc.members().values() {
-                        for m in ms {
-                            stack.push(m.payload.delegate.dupe());
-                        }
-                    }
+                    Self::push_readers(&mut stack, d.lock().await.members());
                 }
             }
         }
@@ -119,6 +129,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         ids
     }
 
+    /// A prekey for each individual reachable from this agent by delegations
+    /// of [`Access::Read`](crate::access::Access::Read) or better.
     pub async fn pick_individual_prekeys(
         &self,
         doc_id: DocumentId,
@@ -149,20 +161,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     result.insert(id, prekey);
                 }
                 Agent::Group(_, g) => {
-                    let locked_group = g.lock().await;
-                    for ms in locked_group.members().values() {
-                        for m in ms {
-                            stack.push(m.payload.delegate.dupe());
-                        }
-                    }
+                    Self::push_readers(&mut stack, g.lock().await.members());
                 }
                 Agent::Document(_, d) => {
-                    let locked_doc = d.lock().await;
-                    for ms in locked_doc.members().values() {
-                        for m in ms {
-                            stack.push(m.payload.delegate.dupe());
-                        }
-                    }
+                    Self::push_readers(&mut stack, d.lock().await.members());
                 }
             }
         }

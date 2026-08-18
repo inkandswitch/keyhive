@@ -502,17 +502,23 @@ impl<
                     let group_identifier: Identifier = (*group_id).into();
                     let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
                     for doc in &docs {
-                        let (contains_group, doc_id) = {
+                        let (group_access, doc_id) = {
                             let locked = doc.lock().await;
                             (
                                 locked
                                     .transitive_members()
                                     .await
-                                    .contains_key(&group_identifier),
+                                    .get(&group_identifier)
+                                    .map(|(_, access)| *access),
                                 locked.doc_id(),
                             )
                         };
-                        if !contains_group {
+                        let Some(group_access) = group_access else {
+                            continue;
+                        };
+                        // The new member cannot read this document through a
+                        // group that may not read it either.
+                        if !can.min(group_access).is_reader() {
                             continue;
                         }
                         // Document lock is intentionally dropped before `pick_individual_prekeys`,
@@ -4753,6 +4759,65 @@ mod tests {
         Ok(())
     }
 
+    /// Bob reads Doc D through Group G and separately has relay access to D directly.
+    /// Revoke G from D. Bob should lose his cgka access.
+    #[tokio::test]
+    async fn test_revoke_leaves_no_key_with_a_direct_relay_member() -> TestResult {
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let bob_kh = make_keyhive().await;
+        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+
+        // G with Bob as a reader
+        let g = alice.generate_group(vec![]).await?;
+        let g_id = g.lock().await.group_id();
+        alice
+            .add_member(
+                Agent::Individual(bob_id, bob_indie.dupe()),
+                &Membered::Group(g_id, g.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await?;
+
+        // Doc D, which G reads and Bob may also relay in his own right
+        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        let doc_id = doc.lock().await.doc_id();
+        alice
+            .add_member(
+                Agent::Group(g_id, g.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await?;
+        alice
+            .add_member(
+                Agent::Individual(bob_id, bob_indie.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Relay,
+                &[],
+            )
+            .await?;
+
+        assert!(
+            { doc.lock().await.cgka_members()?.any(|m| m == bob_id) },
+            "Bob should hold a key while he reads the document through G"
+        );
+
+        alice
+            .revoke_member(g_id.into(), true, &Membered::Document(doc_id, doc.dupe()))
+            .await?;
+
+        assert!(
+            !{ doc.lock().await.cgka_members()?.any(|m| m == bob_id) },
+            "Bob kept his key on a document he may now only relay"
+        );
+
+        Ok(())
+    }
+
     /// G in G1 in D1, and G in G2 in D2. Bob in G.
     /// Revoke G from G1 → Bob loses D1, keeps D2.
     #[tokio::test]
@@ -5451,6 +5516,231 @@ mod tests {
             doc.lock().await.cgka()?.group_size(),
             size_before,
             "CGKA size should be unchanged"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_relay_does_not_get_into_cgka_tree() -> TestResult {
+        test_utils::init_logging();
+
+        let mk_hive = || async {
+            let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
+            Keyhive::<Sendable, MemorySigner, [u8; 32], String, _, NoListener, _>::generate(
+                sk,
+                Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+                NoListener,
+                rand::rngs::OsRng,
+            )
+            .await
+        };
+
+        async fn mk_person(
+            hive: &Keyhive<
+                Sendable,
+                MemorySigner,
+                [u8; 32],
+                String,
+                Arc<Mutex<MemoryCiphertextStore<[u8; 32], String>>>,
+                NoListener,
+                rand::rngs::OsRng,
+            >,
+        ) -> (
+            IndividualId,
+            Agent<Sendable, MemorySigner, [u8; 32], NoListener>,
+        ) {
+            let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
+            let indie = Arc::new(Mutex::new(
+                Individual::generate::<Sendable, _, _>(&sk, &mut rand::rngs::OsRng)
+                    .await
+                    .unwrap(),
+            ));
+            hive.register_individual(indie.dupe()).await;
+            let id = { indie.lock().await.id() };
+            (id, Agent::Individual(id, indie))
+        }
+
+        // a) relay directly on the document
+        {
+            let hive = mk_hive().await?;
+            let (id, agent) = mk_person(&hive).await;
+            let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+            let doc_id = DocumentId(doc.lock().await.id());
+            hive.add_member(
+                agent,
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Relay,
+                &[],
+            )
+            .await?;
+            assert!(
+                !{ doc.lock().await.cgka_members()?.any(|m| m == id) },
+                "a relay member of the document has cgka access to it"
+            );
+        }
+
+        // b) relay in a group, then the group is given edit on the document
+        {
+            let hive = mk_hive().await?;
+            let (id, agent) = mk_person(&hive).await;
+            let group = hive.generate_group(vec![]).await?;
+            let group_id = { group.lock().await.group_id() };
+            hive.add_member(
+                agent,
+                &Membered::Group(group_id, group.dupe()),
+                Access::Relay,
+                &[],
+            )
+            .await?;
+            let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+            let doc_id = DocumentId(doc.lock().await.id());
+            hive.add_member(
+                Agent::Group(group_id, group.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Edit,
+                &[],
+            )
+            .await?;
+            assert!(
+                !{ doc.lock().await.cgka_members()?.any(|m| m == id) },
+                "someone who may only relay the group has cgka access to a document it edits"
+            );
+        }
+
+        // c) the same, in the other order
+        {
+            let hive = mk_hive().await?;
+            let (id, agent) = mk_person(&hive).await;
+            let group = hive.generate_group(vec![]).await?;
+            let group_id = { group.lock().await.group_id() };
+            let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+            let doc_id = DocumentId(doc.lock().await.id());
+            hive.add_member(
+                Agent::Group(group_id, group.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Edit,
+                &[],
+            )
+            .await?;
+            hive.add_member(
+                agent,
+                &Membered::Group(group_id, group.dupe()),
+                Access::Relay,
+                &[],
+            )
+            .await?;
+            assert!(
+                !{ doc.lock().await.cgka_members()?.any(|m| m == id) },
+                "a relay member added to a group that already holds the document has cgka access"
+            );
+
+            // d) then promote that member to read within the group
+            let (id2, agent2) = mk_person(&hive).await;
+            hive.add_member(
+                agent2.dupe(),
+                &Membered::Group(group_id, group.dupe()),
+                Access::Relay,
+                &[],
+            )
+            .await?;
+            assert!(
+                !{ doc.lock().await.cgka_members()?.any(|m| m == id2) },
+                "a relay member has cgka access before being promoted"
+            );
+            hive.add_member(
+                agent2,
+                &Membered::Group(group_id, group.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await?;
+            assert!(
+                { doc.lock().await.cgka_members()?.any(|m| m == id2) },
+                "promoting to read within the group did not grant cgka access"
+            );
+        }
+
+        // e) the opposite of b): the group only has relay for the document and a reader
+        //    is added to the group
+        {
+            let hive = mk_hive().await?;
+            let (id, agent) = mk_person(&hive).await;
+            let group = hive.generate_group(vec![]).await?;
+            let group_id = { group.lock().await.group_id() };
+            let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+            let doc_id = DocumentId(doc.lock().await.id());
+            hive.add_member(
+                Agent::Group(group_id, group.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Relay,
+                &[],
+            )
+            .await?;
+            hive.add_member(
+                agent,
+                &Membered::Group(group_id, group.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await?;
+            assert!(
+                !{ doc.lock().await.cgka_members()?.any(|m| m == id) },
+                "a reader in a group that may only relay the document has cgka access"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_group_member_below_read_gets_no_key() -> TestResult {
+        test_utils::init_logging();
+
+        let mut csprng = rand::rngs::OsRng;
+        let sk = MemorySigner::generate(&mut csprng);
+        let hive: Keyhive<Sendable, MemorySigner, [u8; 32], String, _, NoListener, _> =
+            Keyhive::generate(
+                sk,
+                Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+                NoListener,
+                rand::rngs::OsRng,
+            )
+            .await?;
+
+        // Carol may only relay the group, which is below read.
+        let carol_sk = MemorySigner::generate(&mut csprng);
+        let carol = Arc::new(Mutex::new(
+            Individual::generate::<Sendable, _, _>(&carol_sk, &mut csprng).await?,
+        ));
+        hive.register_individual(carol.dupe()).await;
+        let carol_id = { carol.lock().await.id() };
+        let carol_agent = Agent::Individual(carol_id, carol.dupe());
+
+        let group = hive.generate_group(vec![]).await?;
+        let group_id = { group.lock().await.group_id() };
+        let membered_group = Membered::Group(group_id, group.dupe());
+        hive.add_member(carol_agent, &membered_group, Access::Relay, &[])
+            .await?;
+
+        // The group edits the document.
+        let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        let doc_id = DocumentId(doc.lock().await.id());
+        let membered_doc = Membered::Document(doc_id, doc.dupe());
+        let group_agent = Agent::Group(group_id, group.dupe());
+        hive.add_member(group_agent, &membered_doc, Access::Edit, &[])
+            .await?;
+
+        let transitive = { doc.lock().await.transitive_members().await };
+        assert_eq!(
+            transitive.get(&carol_id.into()).map(|(_, access)| *access),
+            Some(Access::Relay),
+            "carol relays the group, so she relays the document"
+        );
+
+        assert!(
+            !{ doc.lock().await.cgka_members()?.any(|m| m == carol_id) },
+            "carol cannot read the document, yet has cgka access to it"
         );
 
         Ok(())

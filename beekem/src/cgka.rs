@@ -364,6 +364,11 @@ impl Cgka {
         self.tree.member_count()
     }
 
+    /// The members currently in the tree.
+    pub fn member_ids(&self) -> impl Iterator<Item = MemberId> + '_ {
+        self.tree.member_ids()
+    }
+
     /// Merges concurrent [`CgkaOperation`]. Returns `Ok(true)` if merge is successful.
     ///
     /// If we receive a concurrent membership change (i.e., add or remove), then
