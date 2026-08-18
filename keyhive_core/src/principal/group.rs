@@ -1415,7 +1415,9 @@ mod tests {
             let outer = make().await;
 
             let group_agent = |g: &Arc<Mutex<Group<Sendable, MemorySigner, String>>>,
-                               gid: GroupId| Agent::Group(gid, g.dupe());
+                               gid: GroupId| {
+                Agent::Group(gid, g.dupe())
+            };
 
             let inner_gid = { inner.lock().await.group_id() };
             let admin_gid = { admin_route.lock().await.group_id() };

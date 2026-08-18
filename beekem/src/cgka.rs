@@ -365,7 +365,7 @@ impl Cgka {
     }
 
     /// The members currently in the tree.
-    pub fn member_ids(&self) -> impl Iterator<Item = &MemberId> {
+    pub fn member_ids(&self) -> impl Iterator<Item = MemberId> + '_ {
         self.tree.member_ids()
     }
 

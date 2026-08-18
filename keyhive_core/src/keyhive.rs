@@ -4802,7 +4802,7 @@ mod tests {
             .await?;
 
         assert!(
-            { doc.lock().await.cgka_members()?.contains(&bob_id) },
+            { doc.lock().await.cgka_members()?.any(|m| m == bob_id) },
             "Bob should hold a key while he reads the document through G"
         );
 
@@ -4811,7 +4811,7 @@ mod tests {
             .await?;
 
         assert!(
-            !{ doc.lock().await.cgka_members()?.contains(&bob_id) },
+            !{ doc.lock().await.cgka_members()?.any(|m| m == bob_id) },
             "Bob kept his key on a document he may now only relay"
         );
 
@@ -5575,7 +5575,7 @@ mod tests {
             )
             .await?;
             assert!(
-                !{ doc.lock().await.cgka_members()?.contains(&id) },
+                !{ doc.lock().await.cgka_members()?.any(|m| m == id) },
                 "a relay member of the document has cgka access to it"
             );
         }
@@ -5603,7 +5603,7 @@ mod tests {
             )
             .await?;
             assert!(
-                !{ doc.lock().await.cgka_members()?.contains(&id) },
+                !{ doc.lock().await.cgka_members()?.any(|m| m == id) },
                 "someone who may only relay the group has cgka access to a document it edits"
             );
         }
@@ -5631,7 +5631,7 @@ mod tests {
             )
             .await?;
             assert!(
-                !{ doc.lock().await.cgka_members()?.contains(&id) },
+                !{ doc.lock().await.cgka_members()?.any(|m| m == id) },
                 "a relay member added to a group that already holds the document has cgka access"
             );
 
@@ -5645,7 +5645,7 @@ mod tests {
             )
             .await?;
             assert!(
-                !{ doc.lock().await.cgka_members()?.contains(&id2) },
+                !{ doc.lock().await.cgka_members()?.any(|m| m == id2) },
                 "a relay member has cgka access before being promoted"
             );
             hive.add_member(
@@ -5656,7 +5656,7 @@ mod tests {
             )
             .await?;
             assert!(
-                { doc.lock().await.cgka_members()?.contains(&id2) },
+                { doc.lock().await.cgka_members()?.any(|m| m == id2) },
                 "promoting to read within the group did not grant cgka access"
             );
         }
@@ -5685,7 +5685,7 @@ mod tests {
             )
             .await?;
             assert!(
-                !{ doc.lock().await.cgka_members()?.contains(&id) },
+                !{ doc.lock().await.cgka_members()?.any(|m| m == id) },
                 "a reader in a group that may only relay the document has cgka access"
             );
         }
@@ -5738,9 +5738,8 @@ mod tests {
             "carol relays the group, so she relays the document"
         );
 
-        let cgka_members = { doc.lock().await.cgka_members()? };
         assert!(
-            !cgka_members.contains(&carol_id),
+            !{ doc.lock().await.cgka_members()?.any(|m| m == carol_id) },
             "carol cannot read the document, yet has cgka access to it"
         );
 
