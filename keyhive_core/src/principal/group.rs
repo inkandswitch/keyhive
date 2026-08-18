@@ -248,7 +248,12 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     ) -> HashMap<IndividualId, ShareKey> {
         let mut prekeys = HashMap::new();
         let public_id = crate::principal::public::Public.id();
-        for (id, (agent, _access)) in self.transitive_members().await.iter() {
+        for (id, (agent, access)) in self.transitive_members().await.iter() {
+            // Anyone whose access here is below `Read` is not entitled to decrypt.
+            if !access.is_reader() {
+                continue;
+            }
+
             // Public must always be added with its single well-known key.
             if *id == public_id {
                 prekeys.insert(

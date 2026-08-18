@@ -5457,6 +5457,149 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_relay_does_not_get_into_cgka_tree() -> TestResult {
+        test_utils::init_logging();
+
+        let mk_hive = || async {
+            let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
+            Keyhive::<Sendable, MemorySigner, [u8; 32], String, _, NoListener, _>::generate(
+                sk,
+                Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+                NoListener,
+                rand::rngs::OsRng,
+            )
+            .await
+        };
+
+        async fn mk_person(
+            hive: &Keyhive<
+                Sendable,
+                MemorySigner,
+                [u8; 32],
+                String,
+                Arc<Mutex<MemoryCiphertextStore<[u8; 32], String>>>,
+                NoListener,
+                rand::rngs::OsRng,
+            >,
+        ) -> (
+            IndividualId,
+            Agent<Sendable, MemorySigner, [u8; 32], NoListener>,
+        ) {
+            let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
+            let indie = Arc::new(Mutex::new(
+                Individual::generate::<Sendable, _, _>(&sk, &mut rand::rngs::OsRng)
+                    .await
+                    .unwrap(),
+            ));
+            hive.register_individual(indie.dupe()).await;
+            let id = { indie.lock().await.id() };
+            (id, Agent::Individual(id, indie))
+        }
+
+        // a) relay directly on the document
+        {
+            let hive = mk_hive().await?;
+            let (id, agent) = mk_person(&hive).await;
+            let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+            let doc_id = DocumentId(doc.lock().await.id());
+            hive.add_member(
+                agent,
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Relay,
+                &[],
+            )
+            .await?;
+            assert!(
+                !{ doc.lock().await.cgka_members()?.contains(&id) },
+                "a relay member of the document holds a key to it"
+            );
+        }
+
+        // b) relay in a group, then the group is given edit on the document
+        {
+            let hive = mk_hive().await?;
+            let (id, agent) = mk_person(&hive).await;
+            let group = hive.generate_group(vec![]).await?;
+            let group_id = { group.lock().await.group_id() };
+            hive.add_member(
+                agent,
+                &Membered::Group(group_id, group.dupe()),
+                Access::Relay,
+                &[],
+            )
+            .await?;
+            let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+            let doc_id = DocumentId(doc.lock().await.id());
+            hive.add_member(
+                Agent::Group(group_id, group.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Edit,
+                &[],
+            )
+            .await?;
+            assert!(
+                !{ doc.lock().await.cgka_members()?.contains(&id) },
+                "someone who may only relay the group holds a key to a document it edits"
+            );
+        }
+
+        // c) the same, in the other order
+        {
+            let hive = mk_hive().await?;
+            let (id, agent) = mk_person(&hive).await;
+            let group = hive.generate_group(vec![]).await?;
+            let group_id = { group.lock().await.group_id() };
+            let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+            let doc_id = DocumentId(doc.lock().await.id());
+            hive.add_member(
+                Agent::Group(group_id, group.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Edit,
+                &[],
+            )
+            .await?;
+            hive.add_member(
+                agent,
+                &Membered::Group(group_id, group.dupe()),
+                Access::Relay,
+                &[],
+            )
+            .await?;
+            assert!(
+                !{ doc.lock().await.cgka_members()?.contains(&id) },
+                "a relay member added to a group that already holds the document holds a key"
+            );
+
+            // d) then promote that member to read within the group
+            let (id2, agent2) = mk_person(&hive).await;
+            hive.add_member(
+                agent2.dupe(),
+                &Membered::Group(group_id, group.dupe()),
+                Access::Relay,
+                &[],
+            )
+            .await?;
+            assert!(
+                !{ doc.lock().await.cgka_members()?.contains(&id2) },
+                "a relay member holds a key before being promoted"
+            );
+            hive.add_member(
+                agent2,
+                &Membered::Group(group_id, group.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await?;
+            assert!(
+                { doc.lock().await.cgka_members()?.contains(&id2) },
+                "promoting to read within the group did not hand over a key"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_group_member_below_read_gets_no_key() -> TestResult {
         test_utils::init_logging();
 

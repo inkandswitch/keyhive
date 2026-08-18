@@ -97,11 +97,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 Agent::Individual(i_id, _) => {
                     ids.insert(i_id);
                 }
+                // Only members who are at least read are followed.
                 Agent::Group(_, g) => {
                     let locked_group = g.lock().await;
                     for ms in locked_group.members().values() {
                         for m in ms {
-                            stack.push(m.payload.delegate.dupe());
+                            if m.payload.can.is_reader() {
+                                stack.push(m.payload.delegate.dupe());
+                            }
                         }
                     }
                 }
@@ -109,7 +112,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     let locked_doc = d.lock().await;
                     for ms in locked_doc.members().values() {
                         for m in ms {
-                            stack.push(m.payload.delegate.dupe());
+                            if m.payload.can.is_reader() {
+                                stack.push(m.payload.delegate.dupe());
+                            }
                         }
                     }
                 }
@@ -148,11 +153,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     };
                     result.insert(id, prekey);
                 }
+                // Only members who are at least read are followed.
                 Agent::Group(_, g) => {
                     let locked_group = g.lock().await;
                     for ms in locked_group.members().values() {
                         for m in ms {
-                            stack.push(m.payload.delegate.dupe());
+                            if m.payload.can.is_reader() {
+                                stack.push(m.payload.delegate.dupe());
+                            }
                         }
                     }
                 }
@@ -160,7 +168,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     let locked_doc = d.lock().await;
                     for ms in locked_doc.members().values() {
                         for m in ms {
-                            stack.push(m.payload.delegate.dupe());
+                            if m.payload.can.is_reader() {
+                                stack.push(m.payload.delegate.dupe());
+                            }
                         }
                     }
                 }
