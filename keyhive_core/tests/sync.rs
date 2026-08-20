@@ -185,7 +185,7 @@ async fn withholding_key_agreement_leaves_a_member_who_cannot_read() -> Result<(
     ctx.sync(&alice, &bob).await?;
     assert!(
         ctx.can_decrypt(&bob, &ct).await?,
-        "the key material completes the grant"
+        "the key material allows him to decrypt"
     );
     Ok(())
 }

@@ -36,7 +36,7 @@ async fn certificates_differing_in_any_field_are_distinct() -> Result<()> {
     let all = [&to_bob, &to_carol, &other_doc, &other_level];
     for (i, a) in all.iter().enumerate() {
         for b in &all[i + 1..] {
-            assert_ne!(a, b, "two grants collided: {a:?} and {b:?}");
+            assert_ne!(a, b, "two delegations collided: {a:?} and {b:?}");
         }
     }
     Ok(())

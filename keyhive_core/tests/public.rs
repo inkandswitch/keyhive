@@ -4,7 +4,7 @@ use facade::{Result, TestContext};
 use keyhive_core::access::Access::{Admin, Edit, Read};
 
 #[tokio::test]
-async fn granting_to_public_records_a_public_delegation() -> Result<()> {
+async fn delegating_to_public_records_a_public_delegation() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
@@ -26,7 +26,7 @@ async fn granting_to_public_records_a_public_delegation() -> Result<()> {
 }
 
 #[tokio::test]
-async fn a_public_grant_raises_best_access_and_not_effective_access() -> Result<()> {
+async fn a_public_delegation_raises_best_access_and_not_effective_access() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;

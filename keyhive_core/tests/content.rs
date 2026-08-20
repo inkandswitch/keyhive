@@ -33,7 +33,10 @@ async fn a_member_added_after_a_write_cannot_derive_its_key() -> Result<()> {
         ctx.can_decrypt(&alice, &ct).await?,
         "the author can still read"
     );
-    assert!(!ctx.can_decrypt(&bob, &ct).await?, "bob should not be able to derive the key");
+    assert!(
+        !ctx.can_decrypt(&bob, &ct).await?,
+        "bob should not be able to derive the key"
+    );
     Ok(())
 }
 

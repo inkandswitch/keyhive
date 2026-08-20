@@ -118,8 +118,6 @@ impl From<RevokeMemberError> for TestError {
     }
 }
 
-/// Everything else the facade calls reports as `Other`. None of it is a refusal that a
-/// test should be distinguishing.
 impl From<SigningError> for TestError {
     fn from(e: SigningError) -> Self {
         TestError::Other(e.to_string())
@@ -162,10 +160,15 @@ impl From<&str> for TestError {
     }
 }
 
-/// A keyhive identity with their own `Keyhive` instance and signing key.
+/// Identifies one `Keyhive`. A single keyhive identity can be running more than one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TestInstanceId(u32);
+
+/// A keyhive identity.
 #[derive(Clone, Debug)]
 pub struct TestIndividual {
-    id: IndividualId,
+    identity: IndividualId,
+    instance: TestInstanceId,
     name: Arc<str>,
 }
 
@@ -173,14 +176,14 @@ pub struct TestIndividual {
 pub struct TestGroup {
     id: GroupId,
     name: Arc<str>,
-    owner: IndividualId,
+    owner: TestInstanceId,
 }
 
 #[derive(Clone, Debug)]
 pub struct TestDocument {
     id: DocumentId,
     name: Arc<str>,
-    owner: IndividualId,
+    owner: TestInstanceId,
 }
 
 /// Encrypted content, with the id for the document it belongs to.
@@ -326,8 +329,9 @@ pub enum TestMemberedRef<'a> {
 }
 
 impl TestAgent for TestIndividual {
+    /// A keyhive identity's id.
     fn agent_id(&self) -> Identifier {
-        self.id.into()
+        self.identity.into()
     }
     fn name(&self) -> &str {
         &self.name
@@ -372,7 +376,11 @@ impl TestMembered for TestDocument {
 
 /// A set of individuals, groups and documents, with one `Keyhive` instance per individual.
 pub struct TestContext {
-    hives: BTreeMap<IndividualId, Hive>,
+    hives: BTreeMap<TestInstanceId, Hive>,
+    /// One signing key per identity. A second instance can be given the same one.
+    signers: BTreeMap<IndividualId, MemorySigner>,
+    handles: BTreeMap<TestInstanceId, TestIndividual>,
+    next_instance: u32,
     names: BTreeMap<Identifier, Arc<str>>,
     csprng: StdRng,
     seed: u64,
@@ -392,6 +400,9 @@ impl TestContext {
         names.insert(Public.id(), PUBLIC_NAME.into());
         TestContext {
             hives: BTreeMap::new(),
+            signers: BTreeMap::new(),
+            handles: BTreeMap::new(),
+            next_instance: 0,
             names,
             docs: Vec::new(),
             csprng: StdRng::seed_from_u64(seed),
@@ -414,26 +425,58 @@ impl TestContext {
     pub async fn individual(&mut self, name: &str) -> Result<TestIndividual> {
         let mut hive_rng = StdRng::seed_from_u64(self.csprng.gen());
         let signer = MemorySigner::generate(&mut hive_rng);
-        let hive = Keyhive::<future_form::Sendable, _, _, _, _, _, _>::generate(
-            signer,
-            MemoryCiphertextStore::new(),
-            NoListener,
-            hive_rng,
-        )
-        .await?;
+        let handle = self.add_instance(signer.clone(), hive_rng, name).await?;
+        self.signers.insert(handle.identity, signer);
+        self.names
+            .insert(handle.identity.into(), handle.name.clone());
+        Ok(handle)
+    }
 
-        let card = hive.contact_card().await?;
-        for other in self.hives.values() {
-            other.receive_contact_card(&card).await?;
-            hive.receive_contact_card(&other.contact_card().await?)
-                .await?;
+    /// A second `Keyhive` for an existing identity, sharing its signing key.
+    pub async fn second_instance(
+        &mut self,
+        of: &TestIndividual,
+        name: &str,
+    ) -> Result<TestIndividual> {
+        let signer = self
+            .signers
+            .get(&of.identity)
+            .ok_or_else(|| format!("{:?} was not created by this TestContext", of.name))?
+            .clone();
+        let hive_rng = StdRng::seed_from_u64(self.csprng.gen());
+        let handle = self.add_instance(signer, hive_rng, name).await?;
+        assert_eq!(handle.identity, of.identity);
+        Ok(handle)
+    }
+
+    /// Give one instance's prekey secrets to another instance of the same identity.
+    ///
+    /// An invitation is addressed to one specific prekey, so an instance can't open one
+    /// aimed at a sibling's prekey until it has that sibling's secrets. Returns how many
+    /// events `to` was holding that it could then apply.
+    pub async fn share_prekey_secrets(
+        &mut self,
+        from: &TestIndividual,
+        to: &TestIndividual,
+    ) -> Result<usize> {
+        if from.identity != to.identity {
+            return Err(format!(
+                "{:?} and {:?} are different people; prekey secrets are not transferable",
+                from.name, to.name
+            )
+            .into());
         }
-
-        let id = hive.id();
-        let name: Arc<str> = name.into();
-        self.names.insert(id.into(), name.clone());
-        self.hives.insert(id, hive);
-        Ok(TestIndividual { id, name })
+        let blob = self
+            .hive(from)?
+            .export_prekey_secrets()
+            .await
+            .map_err(|e| TestError::Other(e.to_string()))?;
+        let before = self.pending_events(to).await?;
+        self.hive(to)?
+            .import_prekey_secrets(&blob)
+            .await
+            .map_err(|e| TestError::Other(e.to_string()))?;
+        Ok(before.saturating_sub(self.pending_events(to).await?))
     }
 
     pub async fn group(&mut self, owner: &TestIndividual, name: &str) -> Result<TestGroup> {
@@ -444,7 +487,7 @@ impl TestContext {
         Ok(TestGroup {
             id,
             name,
-            owner: owner.id,
+            owner: owner.instance,
         })
     }
 
@@ -459,7 +502,7 @@ impl TestContext {
         let handle = TestDocument {
             id,
             name,
-            owner: owner.id,
+            owner: owner.instance,
         };
         self.docs.push(handle.clone());
         Ok(handle)
@@ -511,7 +554,7 @@ impl TestContext {
         who: &impl TestAgent,
         doc: &TestDocument,
     ) -> Result<Option<Access>> {
-        let observer = self.individual_by_id(doc.owner)?;
+        let observer = self.individual_by_instance(doc.owner)?;
         self.effective_access_seen_by(&observer, who, doc).await
     }
 
@@ -541,7 +584,7 @@ impl TestContext {
             TestMemberedRef::Group(g) => g.owner,
             TestMemberedRef::Doc(d) => d.owner,
         };
-        let observer = self.individual_by_id(owner)?;
+        let observer = self.individual_by_instance(owner)?;
         let handle = self.get_membered(&observer, membered).await?;
         let raw = self.hive(&observer)?.reachable_members(handle).await;
 
@@ -580,7 +623,7 @@ impl TestContext {
         who: &impl TestAgent,
         doc: &TestDocument,
     ) -> Result<Option<Access>> {
-        let observer = self.individual_by_id(doc.owner)?;
+        let observer = self.individual_by_instance(doc.owner)?;
         let handle = self.get_membered(&observer, doc).await?;
         let members = self.hive(&observer)?.reachable_members(handle).await;
         let direct = members.get(&who.agent_id()).map(|(_, a)| *a);
@@ -745,13 +788,13 @@ impl TestContext {
 
     /// Sends events between every pair of individuals.
     pub async fn sync_all(&mut self) -> Result<()> {
-        let ids: Vec<IndividualId> = self.hives.keys().copied().collect();
+        let ids: Vec<TestInstanceId> = self.hives.keys().copied().collect();
         for _ in 0..3 {
             for from in &ids {
                 for to in &ids {
                     if from != to {
-                        let a = self.individual_by_id(*from)?;
-                        let b = self.individual_by_id(*to)?;
+                        let a = self.individual_by_instance(*from)?;
+                        let b = self.individual_by_instance(*to)?;
                         self.sync(&a, &b).await?;
                     }
                 }
@@ -768,7 +811,7 @@ impl TestContext {
         from: &TestIndividual,
         to: &TestIndividual,
     ) -> Result<Vec<StaticEvent<[u8; 32]>>> {
-        let to_agent = self.get_agent(from, to.id.into(), &to.name).await?;
+        let to_agent = self.get_agent(from, to.identity.into(), &to.name).await?;
         Ok(self
             .hive(from)?
             .static_events_for_agent(&to_agent)
@@ -799,17 +842,49 @@ impl TestContext {
 
     fn hive(&self, who: &TestIndividual) -> Result<&Hive> {
         self.hives
-            .get(&who.id)
+            .get(&who.instance)
             .ok_or_else(|| format!("{:?} is not in this TestContext", who.name).into())
     }
 
-    fn individual_by_id(&self, id: IndividualId) -> Result<TestIndividual> {
-        let name = self
-            .names
-            .get(&id.into())
-            .ok_or("unknown actor id")?
-            .clone();
-        Ok(TestIndividual { id, name })
+    fn individual_by_instance(&self, instance: TestInstanceId) -> Result<TestIndividual> {
+        self.handles
+            .get(&instance)
+            .cloned()
+            .ok_or_else(|| "unknown instance".into())
+    }
+
+    async fn add_instance(
+        &mut self,
+        signer: MemorySigner,
+        rng: StdRng,
+        name: &str,
+    ) -> Result<TestIndividual> {
+        let hive = Keyhive::<future_form::Sendable, _, _, _, _, _, _>::generate(
+            signer,
+            MemoryCiphertextStore::new(),
+            NoListener,
+            rng,
+        )
+        .await?;
+
+        let card = hive.contact_card().await?;
+        for other in self.hives.values() {
+            other.receive_contact_card(&card).await?;
+            hive.receive_contact_card(&other.contact_card().await?)
+                .await?;
+        }
+
+        let identity = hive.id();
+        let instance = TestInstanceId(self.next_instance);
+        self.next_instance += 1;
+        self.hives.insert(instance, hive);
+        let handle = TestIndividual {
+            identity,
+            instance,
+            name: name.into(),
+        };
+        self.handles.insert(instance, handle.clone());
+        Ok(handle)
     }
 
     async fn get_agent(
