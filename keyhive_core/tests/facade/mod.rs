@@ -15,10 +15,13 @@ use keyhive_core::{
         identifier::Identifier,
         individual::{id::IndividualId, ReceivePrekeyOpError},
         membered::Membered,
+        public::Public,
     },
     store::ciphertext::memory::MemoryCiphertextStore,
 };
-use keyhive_crypto::{signed::SigningError, signer::memory::MemorySigner};
+use keyhive_crypto::{
+    signed::SigningError, signer::memory::MemorySigner, symmetric_key::SymmetricKey,
+};
 use nonempty::nonempty;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -179,9 +182,83 @@ pub struct TestDocument {
 }
 
 /// Encrypted content, with the id for the document it belongs to.
+#[derive(Clone)]
 pub struct TestEncryptedContent {
     doc: DocumentId,
     inner: beekem::encrypted::EncryptedContent<Vec<u8>, [u8; 32]>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TestPublic;
+
+const PUBLIC_NAME: &str = "public";
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TestSymmetricKey(SymmetricKey);
+
+impl std::fmt::Debug for TestSymmetricKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let b = self.0.as_slice();
+        write!(f, "TestSymmetricKey({:02x}{:02x}..)", b[0], b[1])
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TestDelegation {
+    digest: [u8; 32],
+    issuer: Arc<str>,
+    audience: Arc<str>,
+    subject: Arc<str>,
+    can: Access,
+}
+
+impl TestDelegation {
+    /// Who signed it.
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
+    /// Who received the access.
+    pub fn audience(&self) -> &str {
+        &self.audience
+    }
+
+    /// The group or document the access is over.
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
+
+    /// How much access it conveys before attenuation.
+    pub fn can(&self) -> Access {
+        self.can
+    }
+}
+
+impl std::fmt::Debug for TestDelegation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}-{:?}->{} over {} ({:02x}{:02x}{:02x}{:02x})",
+            self.issuer,
+            self.can,
+            self.audience,
+            self.subject,
+            self.digest[0],
+            self.digest[1],
+            self.digest[2],
+            self.digest[3],
+        )
+    }
+}
+
+impl TestEncryptedContent {
+    /// The same content with one bit of the ciphertext flipped.
+    pub fn with_a_flipped_bit(&self) -> Self {
+        let mut copy = self.clone();
+        let last = copy.inner.ciphertext.len() - 1;
+        copy.inner.ciphertext[last] ^= 1;
+        copy
+    }
 }
 
 impl TestIndividual {
@@ -241,6 +318,15 @@ impl TestAgent for TestDocument {
     }
 }
 
+impl TestAgent for TestPublic {
+    fn agent_id(&self) -> Identifier {
+        Public.id()
+    }
+    fn name(&self) -> &str {
+        PUBLIC_NAME
+    }
+}
+
 impl TestMembered for TestGroup {
     fn as_membered(&self) -> TestMemberedRef<'_> {
         TestMemberedRef::Group(self)
@@ -261,16 +347,22 @@ pub struct TestContext {
 
 impl TestContext {
     pub async fn new() -> Self {
+        let mut names = BTreeMap::new();
+        names.insert(Public.id(), PUBLIC_NAME.into());
         TestContext {
             hives: BTreeMap::new(),
-            names: BTreeMap::new(),
+            names,
             docs: Vec::new(),
         }
     }
 
-    /// Create a keyhive identity.
-    ///
-    /// Every individual learns every other individual's contact card.
+    pub fn public(&self) -> TestPublic {
+        TestPublic
+    }
+
+    // Create a keyhive identity.
+    //
+    // Every individual learns every other individual's contact card.
     pub async fn individual(&mut self, name: &str) -> Result<TestIndividual> {
         let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
         let hive = Keyhive::<future_form::Sendable, _, _, _, _, _, _>::generate(
@@ -333,15 +425,21 @@ impl TestContext {
         audience: &impl TestAgent,
         membered: &impl TestMembered,
         can: Access,
-    ) -> Result<()> {
+    ) -> Result<TestDelegation> {
         let hive = self.hive(issuer)?;
         let aud = self
             .get_agent(issuer, audience.agent_id(), audience.name())
             .await?;
         let res = self.get_membered(issuer, membered).await?;
         let relevant = self.other_relevant_docs(issuer, membered).await;
-        hive.add_member(aud, &res, can, &relevant).await?;
-        Ok(())
+        let update = hive.add_member(aud, &res, can, &relevant).await?;
+        Ok(TestDelegation {
+            digest: *update.delegation.digest().raw.as_bytes(),
+            issuer: issuer.name.clone(),
+            audience: self.name_of(audience.agent_id(), audience.name()),
+            subject: self.name_of(membered.agent_id(), membered.name()),
+            can,
+        })
     }
 
     /// `issuer` removes `audience`'s membership in `resource`.
@@ -427,6 +525,60 @@ impl TestContext {
             .is_ok())
     }
 
+    /// The higher of `who`'s own access and public's access.
+    pub async fn best_access(
+        &self,
+        who: &impl TestAgent,
+        doc: &TestDocument,
+    ) -> Result<Option<Access>> {
+        let observer = self.individual_by_id(doc.owner)?;
+        let handle = self.get_membered(&observer, doc).await?;
+        let members = self.hive(&observer)?.reachable_members(handle).await;
+        let direct = members.get(&who.agent_id()).map(|(_, a)| *a);
+        let public = members.get(&Public.id()).map(|(_, a)| *a);
+        Ok(match (direct, public) {
+            (Some(d), Some(p)) => Some(d.max(p)),
+            (Some(d), None) => Some(d),
+            (None, Some(p)) => Some(p),
+            (None, None) => None,
+        })
+    }
+
+    /// Whether `who` has received the events needed to learn about `what`.
+    ///
+    /// `effective_access` returns `None` both for no access and for never having heard of
+    /// the subject. This can distinguish those cases.
+    pub async fn has_received(&self, who: &TestIndividual, what: &impl TestAgent) -> Result<bool> {
+        Ok(self.hive(who)?.get_agent(what.agent_id()).await.is_some())
+    }
+
+    /// The application secret `who` derives for this content, or `None` if they cannot.
+    pub async fn derived_key(
+        &self,
+        who: &TestIndividual,
+        ct: &TestEncryptedContent,
+    ) -> Result<Option<TestSymmetricKey>> {
+        let Ok(handle) = self.get_document_by_id(who, ct.doc).await else {
+            return Ok(None);
+        };
+        Ok(self
+            .hive(who)?
+            .try_decrypt_content_keyed(handle, &ct.inner)
+            .await
+            .ok()
+            .map(|(_, key)| TestSymmetricKey(key)))
+    }
+
+    pub fn decrypt_with_key(
+        &self,
+        ct: &TestEncryptedContent,
+        key: &TestSymmetricKey,
+    ) -> Result<Vec<u8>> {
+        ct.inner
+            .try_decrypt(key.0)
+            .map_err(|e| TestError::Other(format!("decryption with the given key failed: {e}")))
+    }
+
     pub async fn encrypt(
         &mut self,
         who: &TestIndividual,
@@ -443,6 +595,28 @@ impl TestContext {
             doc: doc.id,
             inner: out.encrypted_content().clone(),
         })
+    }
+
+    /// Encrypt. Returns the application secret the content went under.
+    pub async fn encrypt_keyed(
+        &mut self,
+        who: &TestIndividual,
+        doc: &TestDocument,
+        content: &[u8],
+    ) -> Result<(TestEncryptedContent, TestSymmetricKey)> {
+        let handle = self.get_document(who, doc).await?;
+        let content_ref: [u8; 32] = blake3::hash(content).into();
+        let (out, key) = self
+            .hive(who)?
+            .try_encrypt_content_keyed(handle, &content_ref, &vec![], content)
+            .await?;
+        Ok((
+            TestEncryptedContent {
+                doc: doc.id,
+                inner: out.encrypted_content().clone(),
+            },
+            TestSymmetricKey(key),
+        ))
     }
 
     /// Sends `from`'s events to `to`. Returns how many events `to` could not yet apply.
@@ -476,6 +650,13 @@ impl TestContext {
     /////////////////////
     /// Internal details
     /////////////////////
+    fn name_of(&self, id: Identifier, fallback: &str) -> Arc<str> {
+        self.names
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| fallback.into())
+    }
+
     fn hive(&self, who: &TestIndividual) -> Result<&Hive> {
         self.hives
             .get(&who.id)
@@ -561,12 +742,7 @@ impl TestContext {
     }
 
     /// `add_member`'s `other_relevant_docs` argument: documents whose key state is
-    /// affected, **excluding the resource itself**.
-    ///
-    /// The exclusion is essential and not visible from the signature. `add_member` locks
-    /// the resource and then locks each document in this list; `futures::lock::Mutex` is
-    /// not reentrant, so passing the resource here makes the task hang, with no panic and
-    /// no timeout.
+    /// affected, excluding the resource itself.
     #[allow(clippy::type_complexity)]
     async fn other_relevant_docs(
         &self,
