@@ -5521,6 +5521,131 @@ mod tests {
         Ok(())
     }
 
+    /// A redundant direct membership must not put someone in the CGKA tree twice.
+    #[tokio::test]
+    async fn test_a_second_route_does_not_add_a_member_to_the_tree_twice() -> TestResult {
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let frank_kh = make_keyhive().await;
+        let (frank_id, frank_indie) = register_peer(&alice, &frank_kh).await;
+
+        let group = alice.generate_group(vec![]).await?;
+        let group_id = group.lock().await.group_id();
+        alice
+            .add_member(
+                Agent::Individual(frank_id, frank_indie.dupe()),
+                &Membered::Group(group_id, group.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await?;
+
+        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        let doc_id = doc.lock().await.doc_id();
+        alice
+            .add_member(
+                Agent::Group(group_id, group.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await?;
+
+        let with_one_route = doc.lock().await.cgka()?.group_size();
+        assert_eq!(
+            with_one_route, 3,
+            "the document's own key, alice and frank, so frank really is in the tree \
+             by way of the group rather than absent from it"
+        );
+
+        // Frank is already reachable through the group. Adding him directly is a second
+        // route to the same identity, not a second identity.
+        alice
+            .add_member(
+                Agent::Individual(frank_id, frank_indie.dupe()),
+                &Membered::Document(doc_id, doc.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await?;
+
+        assert_eq!(
+            doc.lock().await.cgka()?.group_size(),
+            with_one_route,
+            "a second route to frank should not put him in the tree a second time"
+        );
+
+        Ok(())
+    }
+
+    /// `add_member` must refuse when the document's CGKA state is missing rather
+    /// than proceed without it.
+    #[tokio::test]
+    async fn test_add_member_refuses_when_the_key_agreement_is_not_initialized() -> TestResult {
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let bob = make_keyhive().await;
+        let (bob_id, bob_indie) = register_peer(&alice, &bob).await;
+        register_peer(&bob, &alice).await;
+
+        let account = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        let account_id = account.lock().await.doc_id();
+        let project = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        let project_id = project.lock().await.doc_id();
+
+        alice
+            .add_member(
+                Agent::Document(account_id, account.dupe()),
+                &Membered::Document(project_id, project.dupe()),
+                Access::Admin,
+                &[],
+            )
+            .await?;
+        alice
+            .add_member(
+                Agent::Individual(bob_id, bob_indie.dupe()),
+                &Membered::Document(account_id, account.dupe()),
+                Access::Admin,
+                &[],
+            )
+            .await?;
+
+        // Bob receives the delegations that describe both documents and none of the CGKA
+        // operations that would let him rekey one.
+        let mut for_bob = alice
+            .events_for_agent(&Agent::Individual(bob_id, bob_indie.dupe()))
+            .await;
+        for_bob.retain(|_, event| !matches!(event, Event::CgkaOperation(_)));
+        bob.ingest_event_table(for_bob).await?;
+
+        let project_on_bob = bob
+            .get_document(project_id)
+            .await
+            .expect("bob has the document, because its delegations reached him");
+
+        let public = Public.individual();
+        let result = bob
+            .add_member(
+                Agent::Individual(public.id(), Arc::new(Mutex::new(public))),
+                &Membered::Document(project_id, project_on_bob.dupe()),
+                Access::Read,
+                &[],
+            )
+            .await;
+
+        assert!(
+            matches!(
+                result,
+                Err(AddMemberError::CgkaError(CgkaError::NotInitialized))
+            ),
+            "expected a non-initialized CGKA error, got {result:?}"
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_relay_does_not_get_into_cgka_tree() -> TestResult {
         test_utils::init_logging();
