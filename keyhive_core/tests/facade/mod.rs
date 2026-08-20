@@ -27,7 +27,10 @@ use keyhive_crypto::{
 };
 use nonempty::nonempty;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 type Hive = Keyhive<
     future_form::Sendable,
@@ -766,7 +769,18 @@ impl TestContext {
         Ok(TestShareKey(op.payload().new))
     }
 
-    /// Every prekey op `observer` holds for `of`.
+    /// The prekeys `observer` holds for `of`.
+    pub async fn prekeys(
+        &self,
+        observer: &TestIndividual,
+        of: &TestIndividual,
+    ) -> Result<BTreeSet<TestShareKey>> {
+        let indie = self.get_individual(observer, of).await?;
+        let locked = indie.lock().await;
+        Ok(locked.prekeys().iter().copied().map(TestShareKey).collect())
+    }
+
+    /// The prekey ops `observer` holds for `of`.
     pub async fn prekey_ops(
         &self,
         observer: &TestIndividual,

@@ -73,3 +73,71 @@ async fn a_prekey_rotation_reaches_a_peer() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn rotating_a_prekey_replacing_the_old_one() -> Result<()> {
+    let mut ctx = TestContext::with_seed(0x9e0).await;
+    let alice = ctx.individual("alice").await?;
+
+    let old = ctx.expand_prekeys(&alice).await?;
+    assert!(ctx.prekeys(&alice, &alice).await?.contains(&old));
+
+    let new = ctx.rotate_prekey(&alice, &old).await?;
+    let live = ctx.prekeys(&alice, &alice).await?;
+
+    assert!(live.contains(&new), "the replacement is live");
+    assert!(!live.contains(&old), "the replaced key is not");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_rotated_away_intermediate_prekey_does_not_survive() -> Result<()> {
+    let mut ctx = TestContext::with_seed(0x9e0).await;
+    let alice = ctx.individual("alice").await?;
+
+    let k1 = ctx.expand_prekeys(&alice).await?;
+    let k2 = ctx.rotate_prekey(&alice, &k1).await?;
+    let k3 = ctx.rotate_prekey(&alice, &k2).await?;
+
+    let live = ctx.prekeys(&alice, &alice).await?;
+    assert!(live.contains(&k3), "the last key is live");
+    assert!(!live.contains(&k2), "the intermediate is not");
+    assert!(!live.contains(&k1), "and neither is the original");
+    Ok(())
+}
+
+#[tokio::test]
+async fn two_concurrent_rotations_of_one_key_both_survive() -> Result<()> {
+    let mut ctx = TestContext::with_seed(0x9e0).await;
+    let alice = ctx.individual("alice").await?;
+    let alice_worker = ctx.second_instance(&alice, "alice-worker").await?;
+
+    let k1 = ctx.expand_prekeys(&alice).await?;
+    ctx.sync_all().await?;
+    assert!(
+        ctx.prekeys(&alice_worker, &alice).await?.contains(&k1),
+        "both instances start from the same key"
+    );
+
+    // Neither rotation has heard of the other.
+    let from_first = ctx.rotate_prekey(&alice, &k1).await?;
+    let from_worker = ctx.rotate_prekey(&alice_worker, &k1).await?;
+    assert_ne!(from_first, from_worker);
+
+    ctx.sync_all().await?;
+
+    for observer in [&alice, &alice_worker] {
+        let live = ctx.prekeys(observer, &alice).await?;
+        assert!(
+            live.contains(&from_first) && live.contains(&from_worker),
+            "{} lost one of the two concurrent replacements",
+            observer.name()
+        );
+        assert!(
+            !live.contains(&k1),
+            "{} kept the key both rotations replaced",
+            observer.name()
+        );
+    }
+    Ok(())
+}

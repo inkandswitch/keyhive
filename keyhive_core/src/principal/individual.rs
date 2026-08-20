@@ -130,6 +130,10 @@ impl Individual {
         self.prekey_state.ops()
     }
 
+    pub fn prekeys(&self) -> &HashSet<ShareKey> {
+        &self.prekeys
+    }
+
     #[instrument]
     pub fn rebuild(&mut self) {
         self.prekeys = self.prekey_state.build();
