@@ -6,6 +6,7 @@ use dupe::Dupe;
 use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
+    event::static_event::StaticEvent,
     keyhive::{EncryptContentError, Keyhive},
     listener::no_listener::NoListener,
     principal::{
@@ -23,6 +24,7 @@ use keyhive_crypto::{
     signed::SigningError, signer::memory::MemorySigner, symmetric_key::SymmetricKey,
 };
 use nonempty::nonempty;
+use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use std::{collections::BTreeMap, sync::Arc};
 
 type Hive = Keyhive<
@@ -32,7 +34,7 @@ type Hive = Keyhive<
     Vec<u8>,
     MemoryCiphertextStore<[u8; 32], Vec<u8>>,
     NoListener,
-    rand::rngs::OsRng,
+    StdRng,
 >;
 
 pub type Result<T> = std::result::Result<T, TestError>;
@@ -261,6 +263,36 @@ impl TestEncryptedContent {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct TestStaticEvent {
+    kind: TestEventKind,
+}
+
+impl TestStaticEvent {
+    pub fn kind(&self) -> TestEventKind {
+        self.kind
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TestEventKind {
+    PrekeysExpanded,
+    PrekeyRotated,
+    CgkaOperation,
+    Delegated,
+    Revoked,
+}
+
+fn kind_of(event: &StaticEvent<[u8; 32]>) -> TestEventKind {
+    match event {
+        StaticEvent::PrekeysExpanded(_) => TestEventKind::PrekeysExpanded,
+        StaticEvent::PrekeyRotated(_) => TestEventKind::PrekeyRotated,
+        StaticEvent::CgkaOperation(_) => TestEventKind::CgkaOperation,
+        StaticEvent::Delegated(_) => TestEventKind::Delegated,
+        StaticEvent::Revoked(_) => TestEventKind::Revoked,
+    }
+}
+
 impl TestIndividual {
     pub fn name(&self) -> &str {
         &self.name
@@ -342,18 +374,34 @@ impl TestMembered for TestDocument {
 pub struct TestContext {
     hives: BTreeMap<IndividualId, Hive>,
     names: BTreeMap<Identifier, Arc<str>>,
+    csprng: StdRng,
+    seed: u64,
     docs: Vec<TestDocument>,
 }
 
 impl TestContext {
+    /// A context, recording a seed for replayability
     pub async fn new() -> Self {
+        Self::with_seed(rand::rngs::OsRng.gen()).await
+    }
+
+    /// A context whose key material follows from `seed` so a failure can be
+    /// replayed.
+    pub async fn with_seed(seed: u64) -> Self {
         let mut names = BTreeMap::new();
         names.insert(Public.id(), PUBLIC_NAME.into());
         TestContext {
             hives: BTreeMap::new(),
             names,
             docs: Vec::new(),
+            csprng: StdRng::seed_from_u64(seed),
+            seed,
         }
+    }
+
+    /// The seed this context was built from. Report it when a test fails.
+    pub fn seed(&self) -> u64 {
+        self.seed
     }
 
     pub fn public(&self) -> TestPublic {
@@ -364,12 +412,13 @@ impl TestContext {
     //
     // Every individual learns every other individual's contact card.
     pub async fn individual(&mut self, name: &str) -> Result<TestIndividual> {
-        let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
+        let mut hive_rng = StdRng::seed_from_u64(self.csprng.gen());
+        let signer = MemorySigner::generate(&mut hive_rng);
         let hive = Keyhive::<future_form::Sendable, _, _, _, _, _, _>::generate(
             signer,
             MemoryCiphertextStore::new(),
             NoListener,
-            rand::rngs::OsRng,
+            hive_rng,
         )
         .await?;
 
@@ -621,13 +670,77 @@ impl TestContext {
 
     /// Sends `from`'s events to `to`. Returns how many events `to` could not yet apply.
     pub async fn sync(&mut self, from: &TestIndividual, to: &TestIndividual) -> Result<usize> {
-        let to_agent = self.get_agent(from, to.id.into(), &to.name).await?;
-        let events = self.hive(from)?.static_events_for_agent(&to_agent).await;
-        let pending = self
-            .hive(to)?
-            .ingest_unsorted_static_events(events.into_values().collect())
-            .await;
-        Ok(pending.len())
+        let events = self.static_events_for_agent(from, to).await?;
+        self.deliver(to, events).await
+    }
+
+    /// Sends everything except one kind of event, to make a dependency visible.
+    pub async fn sync_without(
+        &mut self,
+        from: &TestIndividual,
+        to: &TestIndividual,
+        kind: TestEventKind,
+    ) -> Result<usize> {
+        let events: Vec<_> = self
+            .static_events_for_agent(from, to)
+            .await?
+            .into_iter()
+            .filter(|e| kind_of(e) != kind)
+            .collect();
+        self.deliver(to, events).await
+    }
+
+    /// Sends everything `batch` events at a time, ingesting each batch before the next.
+    pub async fn sync_in_batches(
+        &mut self,
+        from: &TestIndividual,
+        to: &TestIndividual,
+        batch: usize,
+    ) -> Result<usize> {
+        assert!(batch > 0, "a batch of zero events would never terminate");
+        let events = self.static_events_for_agent(from, to).await?;
+        let mut pending = 0;
+        for chunk in events.chunks(batch) {
+            pending = self.deliver(to, chunk.to_vec()).await?;
+        }
+        Ok(pending)
+    }
+
+    /// Sends everything in an order decided by `seed`, so a failing order can be replayed.
+    pub async fn sync_shuffled(
+        &mut self,
+        from: &TestIndividual,
+        to: &TestIndividual,
+        seed: u64,
+    ) -> Result<usize> {
+        let mut events = self.static_events_for_agent(from, to).await?;
+        events.shuffle(&mut StdRng::seed_from_u64(seed));
+        self.deliver(to, events).await
+    }
+
+    /// What `from` would send `to`, without sending it. This is what `to`'s memberships
+    /// entitle it to hear about.
+    pub async fn static_events_for(
+        &self,
+        from: &TestIndividual,
+        to: &TestIndividual,
+    ) -> Result<Vec<TestStaticEvent>> {
+        Ok(self
+            .static_events_for_agent(from, to)
+            .await?
+            .iter()
+            .map(|e| TestStaticEvent { kind: kind_of(e) })
+            .collect())
+    }
+
+    /// How many events `who` has that it cannot yet apply.
+    pub async fn pending_events(&self, who: &TestIndividual) -> Result<usize> {
+        let s = self.hive(who)?.stats().await;
+        Ok((s.pending_prekeys_expanded
+            + s.pending_prekey_rotated
+            + s.pending_cgka_operation
+            + s.pending_delegated
+            + s.pending_revoked) as usize)
     }
 
     /// Sends events between every pair of individuals.
@@ -648,8 +761,35 @@ impl TestContext {
     }
 
     /////////////////////
-    /// Internal details
+    // Internal details
     /////////////////////
+    async fn static_events_for_agent(
+        &self,
+        from: &TestIndividual,
+        to: &TestIndividual,
+    ) -> Result<Vec<StaticEvent<[u8; 32]>>> {
+        let to_agent = self.get_agent(from, to.id.into(), &to.name).await?;
+        Ok(self
+            .hive(from)?
+            .static_events_for_agent(&to_agent)
+            .await
+            .into_values()
+            .collect())
+    }
+
+    /// Deliver events and return a count of how many are still waiting on a dependency.
+    async fn deliver(
+        &self,
+        to: &TestIndividual,
+        events: Vec<StaticEvent<[u8; 32]>>,
+    ) -> Result<usize> {
+        Ok(self
+            .hive(to)?
+            .ingest_unsorted_static_events(events)
+            .await
+            .len())
+    }
+
     fn name_of(&self, id: Identifier, fallback: &str) -> Arc<str> {
         self.names
             .get(&id)
