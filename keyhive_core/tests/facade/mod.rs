@@ -6,6 +6,7 @@ use dupe::Dupe;
 use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
+    archive::Archive,
     event::static_event::StaticEvent,
     keyhive::{EncryptContentError, Keyhive},
     listener::no_listener::NoListener,
@@ -14,14 +15,15 @@ use keyhive_core::{
         document::{id::DocumentId, AddMemberError, DecryptError, Document, GenerateDocError},
         group::{error::AddError, id::GroupId, AddGroupMemberError, RevokeMemberError},
         identifier::Identifier,
-        individual::{id::IndividualId, ReceivePrekeyOpError},
+        individual::{id::IndividualId, op::KeyOp, Individual, ReceivePrekeyOpError},
         membered::Membered,
         public::Public,
     },
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::{
-    signed::SigningError, signer::memory::MemorySigner, symmetric_key::SymmetricKey,
+    share_key::ShareKey, signed::SigningError, signer::memory::MemorySigner,
+    symmetric_key::SymmetricKey,
 };
 use nonempty::nonempty;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
@@ -264,6 +266,43 @@ impl TestEncryptedContent {
         copy.inner.ciphertext[last] ^= 1;
         copy
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TestShareKey(ShareKey);
+
+impl std::fmt::Debug for TestShareKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let b = self.0.to_bytes();
+        write!(f, "TestShareKey({:02x}{:02x}..)", b[0], b[1])
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestPrekeyOp {
+    Added {
+        new: TestShareKey,
+    },
+    Rotated {
+        old: TestShareKey,
+        new: TestShareKey,
+    },
+}
+
+impl TestPrekeyOp {
+    /// The key this op introduced.
+    pub fn new_key(&self) -> TestShareKey {
+        match self {
+            TestPrekeyOp::Added { new } | TestPrekeyOp::Rotated { new, .. } => *new,
+        }
+    }
+}
+
+/// A serialized `Keyhive`.
+#[derive(Clone)]
+pub struct TestArchive {
+    identity: IndividualId,
+    inner: Archive<[u8; 32]>,
 }
 
 #[derive(Clone, Debug)]
@@ -711,6 +750,110 @@ impl TestContext {
         ))
     }
 
+    /// Add a prekey. Returns the key that was added.
+    pub async fn expand_prekeys(&mut self, who: &TestIndividual) -> Result<TestShareKey> {
+        let op = self.hive(who)?.expand_prekeys().await?;
+        Ok(TestShareKey(op.payload().share_key))
+    }
+
+    /// Replace `old` with a fresh key. Returns the key that replaced it.
+    pub async fn rotate_prekey(
+        &mut self,
+        who: &TestIndividual,
+        old: &TestShareKey,
+    ) -> Result<TestShareKey> {
+        let op = self.hive(who)?.rotate_prekey(old.0).await?;
+        Ok(TestShareKey(op.payload().new))
+    }
+
+    /// Every prekey op `observer` holds for `of`.
+    pub async fn prekey_ops(
+        &self,
+        observer: &TestIndividual,
+        of: &TestIndividual,
+    ) -> Result<Vec<TestPrekeyOp>> {
+        let indie = self.get_individual(observer, of).await?;
+        let locked = indie.lock().await;
+        Ok(locked
+            .prekey_ops()
+            .values()
+            .map(|op| match op.as_ref() {
+                KeyOp::Add(add) => TestPrekeyOp::Added {
+                    new: TestShareKey(add.payload().share_key),
+                },
+                KeyOp::Rotate(rot) => TestPrekeyOp::Rotated {
+                    old: TestShareKey(rot.payload().old),
+                    new: TestShareKey(rot.payload().new),
+                },
+            })
+            .collect())
+    }
+
+    /// Serialize `who`'s instance.
+    pub async fn archive(&self, who: &TestIndividual) -> Result<TestArchive> {
+        Ok(TestArchive {
+            identity: who.identity,
+            inner: self.hive(who)?.into_archive().await,
+        })
+    }
+
+    /// Rebuild an instance from an archive, as a new instance of the same identity.
+    ///
+    /// The restored instance gets a fresh ciphertext store. It can compute keys but
+    /// holds no stored ciphertexts of its own.
+    pub async fn rebuild_from_archive(
+        &mut self,
+        archive: &TestArchive,
+        name: &str,
+    ) -> Result<TestIndividual> {
+        let signer = self
+            .signers
+            .get(&archive.identity)
+            .ok_or("that archive's identity was not created by this TestContext")?
+            .clone();
+        let hive = Keyhive::<future_form::Sendable, _, _, _, _, _, _>::try_from_archive(
+            &archive.inner,
+            signer,
+            MemoryCiphertextStore::new(),
+            NoListener,
+            Arc::new(Mutex::new(StdRng::seed_from_u64(self.csprng.gen()))),
+        )
+        .await
+        .map_err(|e| TestError::Other(e.to_string()))?;
+
+        let identity = hive.id();
+        let instance = TestInstanceId(self.next_instance);
+        self.next_instance += 1;
+        let card = hive.contact_card().await?;
+        for other in self.hives.values() {
+            other.receive_contact_card(&card).await?;
+            hive.receive_contact_card(&other.contact_card().await?)
+                .await?;
+        }
+        self.hives.insert(instance, hive);
+        let handle = TestIndividual {
+            identity,
+            instance,
+            name: name.into(),
+        };
+        self.handles.insert(instance, handle.clone());
+        Ok(handle)
+    }
+
+    /// Merge an archive into a live instance. Returns how many events remain pending.
+    pub async fn ingest_archive(
+        &mut self,
+        into: &TestIndividual,
+        archive: &TestArchive,
+    ) -> Result<usize> {
+        Ok(self
+            .hive(into)?
+            .ingest_archive(archive.inner.clone())
+            .await
+            .map_err(|e| TestError::Other(e.to_string()))?
+            .len())
+    }
+
     /// Sends `from`'s events to `to`. Returns how many events `to` could not yet apply.
     pub async fn sync(&mut self, from: &TestIndividual, to: &TestIndividual) -> Result<usize> {
         let events = self.static_events_for_agent(from, to).await?;
@@ -851,6 +994,21 @@ impl TestContext {
             .get(&instance)
             .cloned()
             .ok_or_else(|| "unknown instance".into())
+    }
+
+    /// `observer`'s copy of what it knows about the person `of`.
+    async fn get_individual(
+        &self,
+        observer: &TestIndividual,
+        of: &TestIndividual,
+    ) -> Result<Arc<Mutex<Individual>>> {
+        self.hive(observer)?
+            .get_individual(of.identity)
+            .await
+            .ok_or_else(|| TestError::NotSynced {
+                individual: observer.name.to_string(),
+                subject: of.name.to_string(),
+            })
     }
 
     async fn add_instance(
