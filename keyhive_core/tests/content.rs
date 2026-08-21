@@ -51,7 +51,7 @@ async fn predecessors_take_part_in_deriving_the_key() -> Result<()> {
     let bytes = b"the same bytes twice";
     let root = ctx.encrypt(&alice, &design_doc, bytes).await?;
     let after_root = ctx
-        .encrypt_after(&alice, &design_doc, &[root.clone()], bytes)
+        .encrypt_after(&alice, &design_doc, std::slice::from_ref(&root), bytes)
         .await?;
 
     let root_key = ctx
@@ -80,7 +80,12 @@ async fn a_predecessor_does_not_make_its_earlier_key_derivable() -> Result<()> {
     let before_bob = ctx.encrypt(&alice, &design_doc, b"before bob").await?;
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
     let after_bob = ctx
-        .encrypt_after(&alice, &design_doc, &[before_bob.clone()], b"after bob")
+        .encrypt_after(
+            &alice,
+            &design_doc,
+            std::slice::from_ref(&before_bob),
+            b"after bob",
+        )
         .await?;
     ctx.sync_all().await?;
 
@@ -159,7 +164,7 @@ async fn content_written_after_a_rotation_does_not_open_what_came_before() -> Re
         .encrypt_after(
             &alice,
             &design_doc,
-            &[history.clone()],
+            std::slice::from_ref(&history),
             b"written after bob",
         )
         .await?;
