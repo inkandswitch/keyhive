@@ -5,23 +5,25 @@ use keyhive_core::access::Access::{Admin, Edit, Read};
 
 #[tokio::test]
 async fn delegating_to_public_records_a_public_delegation() -> Result<()> {
-    let mut ctx = TestContext::new().await;
-    let alice = ctx.individual("alice").await?;
-    let design_doc = ctx.doc(&alice, "design_doc").await?;
-    let public = ctx.public();
+    for level in [Read, Edit, Admin] {
+        let mut ctx = TestContext::new().await;
+        let alice = ctx.individual("alice").await?;
+        let design_doc = ctx.doc(&alice, "design_doc").await?;
+        let public = ctx.public();
 
-    assert_eq!(ctx.effective_access(&public, &design_doc).await?, None);
-    ctx.delegate(&alice, &public, &design_doc, Read).await?;
+        assert_eq!(ctx.effective_access(&public, &design_doc).await?, None);
+        ctx.delegate(&alice, &public, &design_doc, level).await?;
 
-    assert_eq!(
-        ctx.effective_access(&public, &design_doc).await?,
-        Some(Read)
-    );
-    assert_eq!(
-        ctx.transitive_members_of(&design_doc).await?.get("public"),
-        Some(&Read),
-        "the public delegation should add public as a member"
-    );
+        assert_eq!(
+            ctx.effective_access(&public, &design_doc).await?,
+            Some(level)
+        );
+        assert_eq!(
+            ctx.transitive_members_of(&design_doc).await?.get("public"),
+            Some(&level),
+            "the public delegation should add public as a member"
+        );
+    }
     Ok(())
 }
 
@@ -69,21 +71,6 @@ async fn a_direct_delegation_and_a_public_delegation_take_the_higher() -> Result
         ctx.best_access(&carol, &design_doc).await?,
         Some(Read),
         "carol has only the public delegation"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn public_has_effective_access_if_delegated() -> Result<()> {
-    let mut ctx = TestContext::new().await;
-    let alice = ctx.individual("alice").await?;
-    let design_doc = ctx.doc(&alice, "design_doc").await?;
-
-    ctx.delegate(&alice, &ctx.public(), &design_doc, Edit)
-        .await?;
-    assert_eq!(
-        ctx.effective_access(&ctx.public(), &design_doc).await?,
-        Some(Edit)
     );
     Ok(())
 }

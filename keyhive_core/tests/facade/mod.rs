@@ -252,6 +252,7 @@ impl TestEncryptedContent {
     /// The same content with one bit of the ciphertext flipped.
     pub fn with_a_flipped_bit(&self) -> Self {
         let mut copy = self.clone();
+        assert!(!copy.inner.ciphertext.is_empty(), "nothing to flip");
         let last = copy.inner.ciphertext.len() - 1;
         copy.inner.ciphertext[last] ^= 1;
         copy
@@ -890,7 +891,7 @@ impl TestContext {
         to: &TestIndividual,
         batch: usize,
     ) -> Result<usize> {
-        assert!(batch > 0, "a batch of zero events would never terminate");
+        assert!(batch > 0, "a batch size of zero is not a valid chunk size");
         let events = self.static_events_for_agent(from, to).await?;
         let mut pending = 0;
         for chunk in events.chunks(batch) {
