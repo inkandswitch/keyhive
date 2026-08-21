@@ -415,6 +415,8 @@ pub struct TestContext {
     csprng: StdRng,
     seed: u64,
     docs: Vec<TestDocument>,
+    /// The digests each instance has already received, so `sync` sends a delta.
+    delivered: BTreeMap<TestInstanceId, BTreeSet<[u8; 32]>>,
 }
 
 impl TestContext {
@@ -435,6 +437,7 @@ impl TestContext {
             next_instance: 0,
             names,
             docs: Vec::new(),
+            delivered: BTreeMap::new(),
             csprng: StdRng::seed_from_u64(seed),
             seed,
         }
@@ -911,8 +914,16 @@ impl TestContext {
     }
 
     /// Sends `from`'s events to `to`. Returns how many events `to` could not yet apply.
+    ///
+    /// Events `to` has already received are not sent again.
     pub async fn sync(&mut self, from: &TestIndividual, to: &TestIndividual) -> Result<usize> {
-        let events = self.static_events_for_agent(from, to).await?;
+        let known = self.delivered.get(&to.instance);
+        let events: Vec<_> = self
+            .static_events_for_agent(from, to)
+            .await?
+            .into_iter()
+            .filter(|(digest, _)| known.is_none_or(|seen| !seen.contains(digest)))
+            .collect();
         self.deliver(to, events).await
     }
 
@@ -927,7 +938,7 @@ impl TestContext {
             .static_events_for_agent(from, to)
             .await?
             .into_iter()
-            .filter(|e| kind_of(e) != kind)
+            .filter(|(_, event)| kind_of(event) != kind)
             .collect();
         self.deliver(to, events).await
     }
@@ -971,7 +982,9 @@ impl TestContext {
             .static_events_for_agent(from, to)
             .await?
             .iter()
-            .map(|e| TestStaticEvent { kind: kind_of(e) })
+            .map(|(_, event)| TestStaticEvent {
+                kind: kind_of(event),
+            })
             .collect())
     }
 
@@ -1023,31 +1036,41 @@ impl TestContext {
         hasher.finish()
     }
 
+    /// Everything `to`'s memberships entitle it to hear about, each with its digest.
     async fn static_events_for_agent(
         &self,
         from: &TestIndividual,
         to: &TestIndividual,
-    ) -> Result<Vec<StaticEvent<[u8; 32]>>> {
+    ) -> Result<Vec<([u8; 32], StaticEvent<[u8; 32]>)>> {
         let to_agent = self.get_agent(from, to.identity.into(), &to.name).await?;
         Ok(self
             .hive(from)?
             .static_events_for_agent(&to_agent)
             .await
-            .into_values()
+            .into_iter()
+            .map(|(digest, event)| (*digest.raw.as_bytes(), event))
             .collect())
     }
 
     /// Deliver events and return a count of how many are still waiting on a dependency.
+    ///
+    /// Records what `to` received so `sync` does not send it again.
     async fn deliver(
-        &self,
+        &mut self,
         to: &TestIndividual,
-        events: Vec<StaticEvent<[u8; 32]>>,
+        events: Vec<([u8; 32], StaticEvent<[u8; 32]>)>,
     ) -> Result<usize> {
-        Ok(self
+        let (digests, events): (Vec<_>, Vec<_>) = events.into_iter().unzip();
+        let pending = self
             .hive(to)?
             .ingest_unsorted_static_events(events)
             .await
-            .len())
+            .len();
+        self.delivered
+            .entry(to.instance)
+            .or_default()
+            .extend(digests);
+        Ok(pending)
     }
 
     fn name_of(&self, id: Identifier, fallback: &str) -> Arc<str> {
