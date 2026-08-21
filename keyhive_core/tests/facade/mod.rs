@@ -644,6 +644,29 @@ impl TestContext {
             .collect())
     }
 
+    /// Every delegation `observer` holds for `membered`.
+    pub async fn delegations_for(
+        &self,
+        observer: &TestIndividual,
+        membered: &impl TestMembered,
+    ) -> Result<Vec<TestDelegation>> {
+        let handle = self.get_membered(observer, membered).await?;
+        let subject = self.name_of(membered.agent_id(), membered.name());
+        let mut out = vec![];
+        for signed in handle.members().await.values().flat_map(|d| d.iter()) {
+            let issuer = Identifier::from(signed.issuer());
+            let audience = signed.payload().delegate().id();
+            out.push(TestDelegation {
+                digest: *signed.digest().raw.as_bytes(),
+                issuer: self.name_of(issuer, &issuer.to_string()),
+                audience: self.name_of(audience, &audience.to_string()),
+                subject: subject.clone(),
+                can: signed.payload().can(),
+            });
+        }
+        Ok(out)
+    }
+
     /// Whether `who` can actually decrypt the encrypted content.
     pub async fn can_decrypt(
         &self,

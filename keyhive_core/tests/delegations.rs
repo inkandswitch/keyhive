@@ -3,24 +3,25 @@ mod facade;
 use facade::{Result, TestContext};
 use keyhive_core::access::Access::{Admin, Edit, Read};
 
+// Facade sanity check
 #[tokio::test]
-async fn a_certificate_reports_what_it_conveys() -> Result<()> {
+async fn a_delegation_reports_what_it_conveys() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    let cert = ctx.delegate(&alice, &bob, &design_doc, Read).await?;
+    let dlg = ctx.delegate(&alice, &bob, &design_doc, Read).await?;
 
-    assert_eq!(cert.issuer(), "alice");
-    assert_eq!(cert.audience(), "bob");
-    assert_eq!(cert.subject(), "design_doc");
-    assert_eq!(cert.can(), Read);
+    assert_eq!(dlg.issuer(), "alice");
+    assert_eq!(dlg.audience(), "bob");
+    assert_eq!(dlg.subject(), "design_doc");
+    assert_eq!(dlg.can(), Read);
     Ok(())
 }
 
 #[tokio::test]
-async fn certificates_differing_in_any_field_are_distinct() -> Result<()> {
+async fn delegations_differing_in_any_field_are_distinct() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -39,11 +40,22 @@ async fn certificates_differing_in_any_field_are_distinct() -> Result<()> {
             assert_ne!(a, b, "two delegations collided: {a:?} and {b:?}");
         }
     }
+
+    let for_design_doc = ctx.delegations_for(&alice, &design_doc).await?;
+    let for_notes = ctx.delegations_for(&alice, &notes).await?;
+    for (dlg, sub) in [
+        (&to_bob, &for_design_doc),
+        (&to_carol, &for_design_doc),
+        (&other_doc, &for_notes),
+        (&other_level, &for_notes),
+    ] {
+        assert!(sub.contains(dlg), "{dlg:?} is not in {sub:?}");
+    }
     Ok(())
 }
 
 #[tokio::test]
-async fn a_certificate_keeps_its_identity_as_the_graph_grows() -> Result<()> {
+async fn a_delegation_keeps_its_identity_as_the_graph_grows() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -51,13 +63,16 @@ async fn a_certificate_keeps_its_identity_as_the_graph_grows() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
     let to_bob = ctx.delegate(&alice, &bob, &design_doc, Edit).await?;
-    let before = to_bob.clone();
 
     ctx.delegate(&alice, &carol, &design_doc, Read).await?;
     ctx.encrypt(&alice, &design_doc, b"some content").await?;
     ctx.revoke(&alice, &carol, &design_doc).await?;
 
-    assert_eq!(to_bob, before);
+    let for_design_doc = ctx.delegations_for(&alice, &design_doc).await?;
+    assert!(
+        for_design_doc.contains(&to_bob),
+        "bob's delegation should be unchanged: {to_bob:?} is not in {for_design_doc:?}"
+    );
     assert_eq!(ctx.effective_access(&bob, &design_doc).await?, Some(Edit));
     Ok(())
 }
