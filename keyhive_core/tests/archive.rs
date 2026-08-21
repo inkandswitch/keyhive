@@ -122,7 +122,7 @@ async fn ingesting_an_archive_merges_into_a_live_instance() -> Result<()> {
     ctx.delegate(&bob, &alice, &notes, Read).await?;
 
     let from_bob = ctx.archive(&bob).await?;
-    let pending = ctx.ingest_archive(&alice, &from_bob).await?;
+    let pending = ctx.ingest_archive(&alice, from_bob).await?;
 
     assert_eq!(pending, 0, "nothing in bob's archive was unusable to alice");
     assert_eq!(

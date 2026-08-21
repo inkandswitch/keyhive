@@ -79,7 +79,7 @@ So does archiving:
 
 * `ctx.archive(who: &TestIndividual) -> TestArchive`: Serializes an instance.
 * `ctx.rebuild_from_archive(archive: &TestArchive, name) -> TestIndividual`: Rebuilds an archive as a new instance of the same identity with a fresh ciphertext store.
-* `ctx.ingest_archive(into: &TestIndividual, archive: &TestArchive) -> usize`: Merges an archive into a live instance. Returns how many events remain pending.
+* `ctx.ingest_archive(into: &TestIndividual, archive: TestArchive) -> usize`: Merges an archive into a live instance. Returns how many events remain pending.
 
 If you forget to do this, the test will probably fail with `TestError::NotSynced { individual, subject }`.
 

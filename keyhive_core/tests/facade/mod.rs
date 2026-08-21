@@ -44,6 +44,10 @@ type Hive = Keyhive<
     StdRng,
 >;
 
+type AgentHandle = Agent<future_form::Sendable, MemorySigner, [u8; 32], NoListener>;
+type MemberedHandle = Membered<future_form::Sendable, MemorySigner, [u8; 32], NoListener>;
+type DocHandle = Arc<Mutex<Document<future_form::Sendable, MemorySigner, [u8; 32], NoListener>>>;
+
 pub type Result<T> = std::result::Result<T, TestError>;
 
 /// Why an operation was refused.
@@ -663,14 +667,7 @@ impl TestContext {
         who: &TestIndividual,
         ct: &TestEncryptedContent,
     ) -> Result<bool> {
-        let Ok(handle) = self.get_document_by_id(who, ct.doc).await else {
-            return Ok(false);
-        };
-        Ok(self
-            .hive(who)?
-            .try_decrypt_content(handle, &ct.inner)
-            .await
-            .is_ok())
+        Ok(self.derived_key(who, ct).await?.is_some())
     }
 
     /// The higher of `who`'s own access and public's access.
@@ -684,12 +681,8 @@ impl TestContext {
         let members = self.hive(&observer)?.reachable_members(handle).await;
         let direct = members.get(&who.agent_id()).map(|(_, a)| *a);
         let public = members.get(&Public.id()).map(|(_, a)| *a);
-        Ok(match (direct, public) {
-            (Some(d), Some(p)) => Some(d.max(p)),
-            (Some(d), None) => Some(d),
-            (None, Some(p)) => Some(p),
-            (None, None) => None,
-        })
+        // None sorts below every Some, so this is "the better of the two, if either".
+        Ok(direct.max(public))
     }
 
     /// Whether `who` has received the events needed to learn about `what`.
@@ -706,7 +699,7 @@ impl TestContext {
         who: &TestIndividual,
         ct: &TestEncryptedContent,
     ) -> Result<Option<TestSymmetricKey>> {
-        let Ok(handle) = self.get_document_by_id(who, ct.doc).await else {
+        let Ok(handle) = self.get_document_by_id(who, ct.doc, "that document").await else {
             return Ok(None);
         };
         Ok(self
@@ -733,16 +726,7 @@ impl TestContext {
         doc: &TestDocument,
         content: &[u8],
     ) -> Result<TestEncryptedContent> {
-        let handle = self.get_document(who, doc).await?;
-        let content_ref: [u8; 32] = blake3::hash(content).into();
-        let out = self
-            .hive(who)?
-            .try_encrypt_content(handle, &content_ref, &vec![], content)
-            .await?;
-        Ok(TestEncryptedContent {
-            doc: doc.id,
-            inner: out.encrypted_content().clone(),
-        })
+        Ok(self.encrypt_keyed(who, doc, content).await?.0)
     }
 
     /// Encrypt content that follows `after` in the document's content DAG.
@@ -903,11 +887,11 @@ impl TestContext {
     pub async fn ingest_archive(
         &mut self,
         into: &TestIndividual,
-        archive: &TestArchive,
+        archive: TestArchive,
     ) -> Result<usize> {
         Ok(self
             .hive(into)?
-            .ingest_archive(archive.inner.clone())
+            .ingest_archive(archive.inner)
             .await
             .map_err(|e| TestError::Other(e.to_string()))?
             .len())
@@ -1003,15 +987,13 @@ impl TestContext {
     /// Events that no instance can apply are left pending.
     pub async fn sync_all(&mut self) -> Result<()> {
         const MAX_ROUNDS: usize = 8;
-        let ids: Vec<TestInstanceId> = self.hives.keys().copied().collect();
+        let everyone: Vec<TestIndividual> = self.handles.values().cloned().collect();
         for _ in 0..MAX_ROUNDS {
             let before = self.state_signature().await;
-            for from in &ids {
-                for to in &ids {
-                    if from != to {
-                        let a = self.individual_by_instance(*from)?;
-                        let b = self.individual_by_instance(*to)?;
-                        self.sync(&a, &b).await?;
+            for from in &everyone {
+                for to in &everyone {
+                    if from.instance != to.instance {
+                        self.sync(from, to).await?;
                     }
                 }
             }
@@ -1152,7 +1134,7 @@ impl TestContext {
         observer: &TestIndividual,
         id: Identifier,
         name: &str,
-    ) -> Result<Agent<future_form::Sendable, MemorySigner, [u8; 32], NoListener>> {
+    ) -> Result<AgentHandle> {
         self.hive(observer)?
             .get_agent(id)
             .await
@@ -1166,7 +1148,7 @@ impl TestContext {
         &self,
         observer: &TestIndividual,
         membered: &impl TestMembered,
-    ) -> Result<Membered<future_form::Sendable, MemorySigner, [u8; 32], NoListener>> {
+    ) -> Result<MemberedHandle> {
         match membered.as_membered() {
             TestMemberedRef::Doc(d) => {
                 let h = self.get_document(observer, d).await?;
@@ -1184,46 +1166,36 @@ impl TestContext {
         }
     }
 
-    #[allow(clippy::type_complexity)]
     async fn get_document(
         &self,
         observer: &TestIndividual,
         doc: &TestDocument,
-    ) -> Result<Arc<Mutex<Document<future_form::Sendable, MemorySigner, [u8; 32], NoListener>>>>
-    {
-        self.hive(observer)?
-            .get_document(doc.id)
-            .await
-            .ok_or_else(|| TestError::NotSynced {
-                individual: observer.name.to_string(),
-                subject: doc.name.to_string(),
-            })
+    ) -> Result<DocHandle> {
+        self.get_document_by_id(observer, doc.id, doc.name()).await
     }
 
-    #[allow(clippy::type_complexity)]
     async fn get_document_by_id(
         &self,
         observer: &TestIndividual,
         id: DocumentId,
-    ) -> Result<Arc<Mutex<Document<future_form::Sendable, MemorySigner, [u8; 32], NoListener>>>>
-    {
+        name: &str,
+    ) -> Result<DocHandle> {
         self.hive(observer)?
             .get_document(id)
             .await
             .ok_or_else(|| TestError::NotSynced {
                 individual: observer.name.to_string(),
-                subject: format!("{id}"),
+                subject: name.to_string(),
             })
     }
 
     /// `add_member`'s `other_relevant_docs` argument: every document the observer can open,
     /// excluding the resource itself.
-    #[allow(clippy::type_complexity)]
     async fn other_relevant_docs(
         &self,
         observer: &TestIndividual,
         membered: &impl TestMembered,
-    ) -> Vec<Arc<Mutex<Document<future_form::Sendable, MemorySigner, [u8; 32], NoListener>>>> {
+    ) -> Vec<DocHandle> {
         let exclude = match membered.as_membered() {
             TestMemberedRef::Doc(d) => Some(d.id),
             TestMemberedRef::Group(_) => None,
