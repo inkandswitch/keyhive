@@ -29,6 +29,7 @@ You can then delegate and revoke access:
 * `ctx.delegate(issuer: &TestIndividual, audience: &impl TestAgent, resource: &impl TestMembered, level)`:  `issuer` delegates `level` over `resource` to `audience`. Signed by the issuer's own instance. Returns an error if the issuer may not do this.
 * `ctx.revoke(issuer: &TestIndividual, audience: &impl TestAgent, resource: &impl TestMembered)`: `issuer` removes `audience`'s membership in `resource`. Members that `audience` had admitted keep their access, because their delegations are re-issued.
 * `ctx.revoke_cascading(issuer, audience, resource)`: Like `revoke`, but without keeping the members `audience` admitted.
+* `ctx.revoked_members_of(resource: &impl TestMembered) -> BTreeMap<String, Access>`: Everyone whose membership was revoked and not replaced, with the access their revoked delegation had conveyed. Someone revoked and then delegated again is excluded from this result.
 * `ctx.delegations_for(observer: &TestIndividual, resource: &impl TestMembered) -> Vec<TestDelegation>`: Every delegation `observer` holds for `resource`.
 
 You can also create content:

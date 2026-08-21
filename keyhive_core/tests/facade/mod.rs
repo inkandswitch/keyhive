@@ -688,6 +688,29 @@ impl TestContext {
             .collect())
     }
 
+    /// Everyone whose membership in `membered` was revoked and not replaced, with the
+    /// access their revoked delegation had conveyed.
+    ///
+    /// Someone who was revoked and then delegated again is excluded from this result.
+    pub async fn revoked_members_of(
+        &self,
+        membered: &impl TestMembered,
+    ) -> Result<BTreeMap<String, Access>> {
+        let owner = match membered.as_membered() {
+            TestMemberedRef::Group(g) => g.owner,
+            TestMemberedRef::Doc(d) => d.owner,
+        };
+        let observer = self.individual_by_instance(owner)?;
+        let raw = match self.get_membered(&observer, membered).await? {
+            Membered::Group(_, group) => group.lock().await.revoked_members(),
+            Membered::Document(_, doc) => doc.lock().await.revoked_members(),
+        };
+        Ok(raw
+            .into_iter()
+            .map(|(id, (_, access))| (self.name_of(id, &id.to_string()).to_string(), access))
+            .collect())
+    }
+
     /// Every delegation `observer` holds for `membered`.
     pub async fn delegations_for(
         &self,

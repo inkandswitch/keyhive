@@ -1,7 +1,7 @@
 mod facade;
 
 use facade::{Result, TestContext, TestDocument, TestIndividual};
-use keyhive_core::access::Access::{Admin, Read};
+use keyhive_core::access::Access::{Admin, Edit, Read};
 use std::collections::BTreeSet;
 
 /// Write new content and report which of `cast` can read it.
@@ -629,6 +629,110 @@ async fn a_cascading_revocation_removes_the_members_they_admitted() -> Result<()
         readers_after_writing(&mut ctx, &alice, &design_doc, b"after", &cast).await?,
         named(&["alice"]),
         "dan was only ever in the group because of carol's delegation"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_revoked_member_is_listed_with_what_they_lost() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let carol = ctx.individual("carol").await?;
+
+    let engineering = ctx.group(&alice, "engineering").await?;
+    ctx.delegate(&alice, &bob, &engineering, Edit).await?;
+    ctx.delegate(&alice, &carol, &engineering, Read).await?;
+
+    assert!(
+        ctx.revoked_members_of(&engineering).await?.is_empty(),
+        "nobody has been revoked yet"
+    );
+
+    ctx.revoke(&alice, &bob, &engineering).await?;
+
+    assert_eq!(
+        ctx.revoked_members_of(&engineering).await?.get("bob"),
+        Some(&Edit),
+        "bob is listed at the level his delegation had conveyed"
+    );
+    assert_eq!(
+        ctx.revoked_members_of(&engineering).await?.get("carol"),
+        None,
+        "and carol, who is still a member, is not listed"
+    );
+    assert_eq!(
+        ctx.transitive_members_of(&engineering).await?.get("bob"),
+        None,
+        "the two lists do not overlap"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_member_who_was_revoked_and_admitted_again_is_not_listed() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+
+    let engineering = ctx.group(&alice, "engineering").await?;
+    ctx.delegate(&alice, &bob, &engineering, Edit).await?;
+    ctx.revoke(&alice, &bob, &engineering).await?;
+    assert_eq!(
+        ctx.revoked_members_of(&engineering).await?.get("bob"),
+        Some(&Edit)
+    );
+
+    ctx.delegate(&alice, &bob, &engineering, Read).await?;
+
+    assert_eq!(
+        ctx.revoked_members_of(&engineering).await?.get("bob"),
+        None,
+        "he is a member again, so he is not a revoked member"
+    );
+    assert_eq!(
+        ctx.transitive_members_of(&engineering).await?.get("bob"),
+        Some(&Read),
+        "at the level he was admitted at the second time"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_revoked_member_is_listed_at_the_best_level_they_held() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+
+    // Two delegations to the same person, at different levels.
+    let engineering = ctx.group(&alice, "engineering").await?;
+    ctx.delegate(&alice, &bob, &engineering, Read).await?;
+    ctx.delegate(&alice, &bob, &engineering, Admin).await?;
+
+    ctx.revoke(&alice, &bob, &engineering).await?;
+
+    assert_eq!(
+        ctx.revoked_members_of(&engineering).await?.get("bob"),
+        Some(&Admin),
+        "the level reported is the best one he lost, not whichever revocation came first"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_revoked_member_of_a_document_is_listed_too() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    ctx.delegate(&alice, &bob, &design_doc, Edit).await?;
+    ctx.revoke(&alice, &bob, &design_doc).await?;
+
+    assert_eq!(
+        ctx.revoked_members_of(&design_doc).await?.get("bob"),
+        Some(&Edit),
+        "a document answers this the same way a group does"
     );
     Ok(())
 }
