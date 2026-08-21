@@ -1,6 +1,6 @@
 mod facade;
 
-use facade::{Result, TestContext, TestError};
+use facade::{Result, TestContext, TestError, TestEventKind};
 use keyhive_core::access::Access::{Admin, Read};
 
 #[tokio::test]
@@ -102,6 +102,12 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
     assert!(
         stuck > 0,
         "the sibling's key-agreement events should be waiting, not discarded"
+    );
+    assert_eq!(
+        ctx.pending_events_of_kind(sibling, TestEventKind::CgkaOperation)
+            .await?,
+        stuck,
+        "everything waiting on the sibling is key agreement, not something else"
     );
     assert_eq!(
         ctx.pending_events(invited).await?,

@@ -39,8 +39,9 @@ async fn an_archive_round_trip_preserves_members_access_and_decryption() -> Resu
             who.name()
         );
     }
-    assert!(
-        ctx.can_decrypt(&restored, &ct).await?,
+    assert_eq!(
+        ctx.read(&restored, &ct).await?,
+        b"before the archive".to_vec(),
         "and it can still read what it could read before"
     );
     Ok(())
@@ -166,6 +167,36 @@ async fn an_instance_caught_up_by_syncing_can_read_what_it_missed() -> Result<()
         ctx.read(&restored, &ct).await?,
         b"hello world".to_vec(),
         "but after sync, it reads content written while it did not exist"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_archive_merged_into_a_rebuild_reaches_a_readable_state() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+
+    let early = ctx.archive(&alice).await?;
+
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    let ct = ctx
+        .encrypt(&alice, &design_doc, b"written after the fork")
+        .await?;
+
+    let restored = ctx.rebuild_from_archive(&early, "alice-restored").await?;
+    let latest = ctx.archive(&alice).await?;
+    let pending = ctx.ingest_archive(&restored, latest).await?;
+    assert_eq!(pending, 0, "the later archive was ingested completely");
+
+    // The archive carries the membership graph and not the key state, which is what
+    // `ingesting_an_archive_carries_the_key_state_as_well_as_the_graph` covers.
+    // The events carry the key state, so the two together reach a readable state.
+    ctx.sync_all_unsent().await?;
+
+    assert_eq!(
+        ctx.read(&restored, &ct).await?,
+        b"written after the fork".to_vec(),
+        "rebuilt from the earlier archive, merged with the later one, caught up by events"
     );
     Ok(())
 }

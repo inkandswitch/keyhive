@@ -154,6 +154,165 @@ async fn an_ancestor_that_is_not_held_is_reported_rather_than_failing() -> Resul
 /// is told there is nothing outstanding when what it needs is exactly that list and the
 /// keys in it.
 #[tokio::test]
+async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    ctx.delegate(&alice, &bob, &design_doc, Read).await?;
+    ctx.sync_all_unsent().await?;
+
+    // One root, two heads over it, and a third head on no path from either.
+    let root = ctx
+        .encrypt_in_envelope(&alice, &design_doc, &[], b"root")
+        .await?;
+    let left_head = ctx
+        .encrypt_in_envelope(&alice, &design_doc, &[&root], b"left head")
+        .await?;
+    let right_head = ctx
+        .encrypt_in_envelope(&alice, &design_doc, &[&root], b"right head")
+        .await?;
+    let unrelated = ctx
+        .encrypt_in_envelope(&alice, &design_doc, &[], b"unrelated")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    for held in [&root, &left_head, &right_head, &unrelated] {
+        ctx.deliver_content(&bob, held).await?;
+    }
+    let walked = ctx
+        .causal_decrypt_from(&bob, &[&left_head, &right_head])
+        .await?;
+
+    // Walking from entrypoints rather than from a document includes the entrypoints
+    // themselves. `causal_decrypt` reports only what it walked back to.
+    assert_eq!(
+        walked.recovered(),
+        contents(&[b"left head", b"right head", b"root"]),
+        "both heads and their shared ancestor, and not the unrelated head"
+    );
+    assert_eq!(
+        walked.recovered_count(),
+        3,
+        "the shared ancestor is read once, not once per head"
+    );
+    assert_eq!(walked.missing(), 0, "bob holds everything the walk reaches");
+
+    let key = walked
+        .key_for_recovered(&root)
+        .ok_or("the walk did not report the key it read the root under")?;
+    assert!(
+        ctx.decrypt_with_key(&root, &key).is_ok(),
+        "and that key is the one that opens it"
+    );
+    assert!(
+        walked.key_for_recovered(&unrelated).is_none(),
+        "no key is reported for content the walk never reached"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn content_that_is_not_an_ancestor_is_not_captured_in_the_walk() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    ctx.delegate(&alice, &bob, &design_doc, Read).await?;
+    ctx.sync_all_unsent().await?;
+
+    let genesis = ctx
+        .encrypt_in_envelope(&alice, &design_doc, &[], b"genesis")
+        .await?;
+    let head = ctx
+        .encrypt_in_envelope(&alice, &design_doc, &[&genesis], b"head")
+        .await?;
+    // Held by bob, in the same document, and on no path from the head.
+    let unrelated = ctx
+        .encrypt_in_envelope(&alice, &design_doc, &[], b"unrelated")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    for held in [&head, &genesis, &unrelated] {
+        ctx.deliver_content(&bob, held).await?;
+    }
+    let walked = ctx.causal_decrypt(&bob, &head).await?;
+
+    assert_eq!(
+        walked.recovered(),
+        contents(&[b"genesis"]),
+        "the walk follows ancestry from the entrypoint rather than reading what is at hand"
+    );
+    assert_eq!(walked.missing(), 0, "nothing is outstanding");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn two_missing_ancestors_are_each_reported_with_their_own_key() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    ctx.delegate(&alice, &bob, &design_doc, Read).await?;
+    ctx.sync_all_unsent().await?;
+
+    // Two roots, each under its own branch, and a head that joins them.
+    let first_root = ctx
+        .encrypt_in_envelope(&alice, &design_doc, &[], b"first root")
+        .await?;
+    let second_root = ctx
+        .encrypt_in_envelope(&alice, &design_doc, &[], b"second root")
+        .await?;
+    let left = ctx
+        .encrypt_in_envelope(&alice, &design_doc, &[&first_root], b"left")
+        .await?;
+    let right = ctx
+        .encrypt_in_envelope(&alice, &design_doc, &[&second_root], b"right")
+        .await?;
+    let head = ctx
+        .encrypt_in_envelope(&alice, &design_doc, &[&left, &right], b"head")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    // Everything except the two roots.
+    for held in [&head, &left, &right] {
+        ctx.deliver_content(&bob, held).await?;
+    }
+    let walked = ctx.causal_decrypt(&bob, &head).await?;
+
+    assert_eq!(
+        walked.recovered(),
+        contents(&[b"left", b"right"]),
+        "both branches are walked, not just the first"
+    );
+    assert_eq!(
+        walked.missing(),
+        2,
+        "one root outstanding per branch, reported separately"
+    );
+
+    let first_key = walked
+        .key_for_missing(&first_root)
+        .ok_or("the walk did not report the first root")?;
+    let second_key = walked
+        .key_for_missing(&second_root)
+        .ok_or("the walk did not report the second root")?;
+    assert_ne!(
+        first_key, second_key,
+        "each outstanding root has its own key, not one key reported twice"
+    );
+    assert!(ctx.decrypt_with_key(&first_root, &first_key).is_ok());
+    assert!(
+        ctx.decrypt_with_key(&second_root, &second_key).is_ok(),
+        "and each key opens the content it was reported for"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "an ancestor the entrypoint lists is dropped from the report when it is missing. Fix this"]
 async fn an_ancestor_the_entrypoint_lists_is_reported_when_missing() -> Result<()> {
     let mut ctx = TestContext::new().await;

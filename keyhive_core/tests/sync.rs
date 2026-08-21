@@ -159,6 +159,63 @@ async fn the_resending_sync_methods_really_resend() -> Result<()> {
 }
 
 #[tokio::test]
+async fn a_backlog_that_cannot_apply_does_not_block_new_events() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let server = ctx.individual("server").await?;
+    let stranger = ctx.individual("stranger").await?;
+    let alice = ctx.individual("alice").await?;
+
+    // The server is a member of the stranger's document and is sent its key agreement
+    // without the delegations that would let it place them. Nothing later supplies those.
+    let stranger_doc = ctx.doc(&stranger, "stranger_doc").await?;
+    ctx.delegate(&stranger, &server, &stranger_doc, Read)
+        .await?;
+    let friend = ctx.individual("friend").await?;
+    ctx.delegate(&stranger, &friend, &stranger_doc, Read)
+        .await?;
+    // Rotations rather than more members, so the backlog grows without adding identities
+    // that alice would also have to tell the server about.
+    for _ in 0..4 {
+        ctx.force_pcs_update(&stranger, &stranger_doc).await?;
+    }
+    ctx.sync_without(&stranger, &server, TestEventKind::Delegated)
+        .await?;
+
+    let backlog = ctx.pending_events(&server).await?;
+    assert!(backlog > 0, "the server is holding events it cannot apply");
+
+    // Unrelated and entirely valid: alice's own document, which the server may have in full.
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    ctx.delegate(&alice, &server, &design_doc, Read).await?;
+    ctx.force_pcs_update(&alice, &design_doc).await?;
+    let ct = ctx
+        .encrypt(&alice, &design_doc, b"written despite the backlog")
+        .await?;
+
+    // Alice has to send something. If she sent nothing, every assertion below would pass
+    // on an empty delivery.
+    let fresh = ctx.static_events_for(&alice, &server).await?.len();
+    assert!(
+        fresh > 0,
+        "alice has events for the server, so the assertions below are not on an empty delivery"
+    );
+
+    ctx.sync(&alice, &server).await?;
+
+    assert_eq!(
+        ctx.pending_events(&server).await?,
+        backlog,
+        "alice's events applied, and none of them joined the backlog"
+    );
+    assert_eq!(
+        ctx.read(&server, &ct).await?,
+        b"written despite the backlog".to_vec(),
+        "and the server can use what it was sent"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn redelivering_known_events_changes_nothing() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;

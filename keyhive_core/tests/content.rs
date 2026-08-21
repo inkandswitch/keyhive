@@ -14,7 +14,7 @@ async fn a_member_added_before_a_write_can_derive_its_key() -> Result<()> {
     let ct = ctx.encrypt(&alice, &design_doc, b"hello world").await?;
     ctx.sync_all_unsent().await?;
 
-    assert!(ctx.can_decrypt(&bob, &ct).await?);
+    assert_eq!(ctx.read(&bob, &ct).await?, b"hello world".to_vec());
     Ok(())
 }
 
@@ -29,14 +29,15 @@ async fn a_member_added_after_a_write_cannot_derive_its_key() -> Result<()> {
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
 
-    assert!(
-        ctx.can_decrypt(&alice, &ct).await?,
+    assert_eq!(
+        ctx.read(&alice, &ct).await?,
+        b"before bob".to_vec(),
         "the author can still read"
     );
-    assert!(
-        !ctx.can_decrypt(&bob, &ct).await?,
-        "bob should not be able to derive the key"
-    );
+    match ctx.read(&bob, &ct).await {
+        Err(TestError::NoKey) => {}
+        other => panic!("bob should hold no key for a write from before he joined, got {other:?}"),
+    }
     Ok(())
 }
 
@@ -277,10 +278,12 @@ async fn a_ciphertext_is_refused_if_tampered_with() -> Result<()> {
         ctx.decrypt_with_key(&tampered, &key).is_err(),
         "the cipher is authenticated so one flipped bit causes an error"
     );
-    assert!(
-        !ctx.can_decrypt(&bob, &tampered).await?,
-        "a flipped bit means no one can decrypt it"
-    );
+    match ctx.read(&bob, &tampered).await {
+        Err(TestError::CiphertextRejected) => {}
+        other => {
+            panic!("a flipped bit should fail authentication, not lose the key, got {other:?}")
+        }
+    }
     Ok(())
 }
 

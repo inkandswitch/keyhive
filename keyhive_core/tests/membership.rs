@@ -229,7 +229,9 @@ async fn adding_a_member_deep_in_a_chain_reaches_the_document() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
-    let cast = [&alice, &bob];
+    // carol was not delegated anything, so use her to check access did not widen.
+    let carol = ctx.individual("carol").await?;
+    let cast = [&alice, &bob, &carol];
 
     let innermost = ctx.group(&alice, "innermost").await?;
     let middle = ctx.group(&alice, "middle").await?;
@@ -239,6 +241,12 @@ async fn adding_a_member_deep_in_a_chain_reaches_the_document() -> Result<()> {
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     ctx.delegate(&alice, &outermost, &design_doc, Read).await?;
+
+    assert_eq!(
+        readers_after_writing(&mut ctx, &alice, &design_doc, b"before", &cast).await?,
+        named(&["alice"]),
+        "bob is in none of the three groups yet"
+    );
 
     ctx.delegate(&alice, &bob, &innermost, Read).await?;
 
@@ -257,7 +265,9 @@ async fn adding_a_member_to_a_group_reaches_every_document_it_holds() -> Result<
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
-    let cast = [&alice, &bob];
+    // carol was not delegated anything, so use her to check access did not widen.
+    let carol = ctx.individual("carol").await?;
+    let cast = [&alice, &bob, &carol];
 
     let engineering = ctx.group(&alice, "engineering").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
@@ -265,6 +275,12 @@ async fn adding_a_member_to_a_group_reaches_every_document_it_holds() -> Result<
     ctx.delegate(&alice, &engineering, &design_doc, Read)
         .await?;
     ctx.delegate(&alice, &engineering, &notes, Read).await?;
+
+    assert_eq!(
+        readers_after_writing(&mut ctx, &alice, &design_doc, b"before", &cast).await?,
+        named(&["alice"]),
+        "bob is in the group holding neither document yet"
+    );
 
     ctx.delegate(&alice, &bob, &engineering, Read).await?;
 
@@ -288,7 +304,9 @@ async fn a_member_with_a_second_route_survives_a_revocation() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
-    let cast = [&alice, &bob];
+    // carol was not delegated anything, so use her to check access did not widen.
+    let carol = ctx.individual("carol").await?;
+    let cast = [&alice, &bob, &carol];
 
     let readers = ctx.group(&alice, "readers").await?;
     let left = ctx.group(&alice, "left").await?;
@@ -300,6 +318,12 @@ async fn a_member_with_a_second_route_survives_a_revocation() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     ctx.delegate(&alice, &left, &design_doc, Read).await?;
     ctx.delegate(&alice, &right, &design_doc, Read).await?;
+
+    assert_eq!(
+        readers_after_writing(&mut ctx, &alice, &design_doc, b"before", &cast).await?,
+        named(&["alice", "bob"]),
+        "bob reaches the document by both routes to begin with, and carol by neither"
+    );
 
     ctx.revoke(&alice, &readers, &left).await?;
     assert!(
@@ -406,7 +430,9 @@ async fn a_direct_membership_survives_a_revocation_further_up() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
-    let cast = [&alice, &bob];
+    // carol was not delegated anything, so use her to check access did not widen.
+    let carol = ctx.individual("carol").await?;
+    let cast = [&alice, &bob, &carol];
 
     let readers = ctx.group(&alice, "readers").await?;
     let engineering = ctx.group(&alice, "engineering").await?;
@@ -417,6 +443,12 @@ async fn a_direct_membership_survives_a_revocation_further_up() -> Result<()> {
     ctx.delegate(&alice, &engineering, &design_doc, Read)
         .await?;
     ctx.delegate(&alice, &readers, &design_doc, Read).await?;
+
+    assert_eq!(
+        readers_after_writing(&mut ctx, &alice, &design_doc, b"before", &cast).await?,
+        named(&["alice", "bob"]),
+        "bob reaches the document by both routes to begin with, and carol by neither"
+    );
 
     ctx.revoke(&alice, &readers, &engineering).await?;
     assert!(
@@ -477,7 +509,9 @@ async fn a_cycle_does_not_stop_an_addition_reaching_the_document() -> Result<()>
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
-    let cast = [&alice, &bob];
+    // carol was not delegated anything, so use her to check access did not widen.
+    let carol = ctx.individual("carol").await?;
+    let cast = [&alice, &bob, &carol];
 
     let first = ctx.group(&alice, "first").await?;
     let second = ctx.group(&alice, "second").await?;
@@ -486,6 +520,12 @@ async fn a_cycle_does_not_stop_an_addition_reaching_the_document() -> Result<()>
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     ctx.delegate(&alice, &first, &design_doc, Read).await?;
+
+    assert_eq!(
+        readers_after_writing(&mut ctx, &alice, &design_doc, b"before", &cast).await?,
+        named(&["alice"]),
+        "bob is in neither half of the cycle yet"
+    );
 
     ctx.delegate(&alice, &bob, &second, Read).await?;
 
@@ -617,7 +657,9 @@ async fn revoking_one_of_two_cyclic_groups_keeps_the_other_route() -> Result<()>
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
-    let cast = [&alice, &bob];
+    // carol was not delegated anything, so use her to check access did not widen.
+    let carol = ctx.individual("carol").await?;
+    let cast = [&alice, &bob, &carol];
 
     let first = ctx.group(&alice, "first").await?;
     let second = ctx.group(&alice, "second").await?;
@@ -628,6 +670,12 @@ async fn revoking_one_of_two_cyclic_groups_keeps_the_other_route() -> Result<()>
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let first_in_doc = ctx.delegate(&alice, &first, &design_doc, Read).await?;
     ctx.delegate(&alice, &second, &design_doc, Read).await?;
+
+    assert_eq!(
+        readers_after_writing(&mut ctx, &alice, &design_doc, b"before", &cast).await?,
+        named(&["alice", "bob"]),
+        "bob reaches the document to begin with, and carol does not"
+    );
 
     ctx.revoke(&alice, &first, &design_doc).await?;
     assert!(

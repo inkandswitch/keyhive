@@ -21,7 +21,7 @@ use keyhive_core::{
         membered::Membered,
         public::Public,
     },
-    store::ciphertext::memory::MemoryCiphertextStore,
+    store::ciphertext::{memory::MemoryCiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{
     share_key::ShareKey, signed::SigningError, signer::memory::MemorySigner,
@@ -79,6 +79,14 @@ pub enum TestError {
     /// Prekey secrets belong to one identity and cannot be given to another.
     #[error("{from:?} and {to:?} are different identities")]
     DifferentIdentity { from: String, to: String },
+
+    /// The reader holds no secret key that derives this content's key.
+    #[error("no secret key for that content")]
+    NoKey,
+
+    /// A key was derived but the ciphertext did not authenticate under it.
+    #[error("the ciphertext did not authenticate")]
+    CiphertextRejected,
 
     /// Anything else, wrapping the underlying error as a `String`.
     #[error("{0}")]
@@ -142,9 +150,20 @@ other_from!(
     SigningError,
     GenerateDocError,
     EncryptContentError,
-    DecryptError,
     ReceivePrekeyOpError,
 );
+
+impl From<DecryptError> for TestError {
+    fn from(e: DecryptError) -> Self {
+        match e {
+            DecryptError::KeyNotFound => TestError::NoKey,
+            DecryptError::DecryptionFailed(_) | DecryptError::SivMismatch => {
+                TestError::CiphertextRejected
+            }
+            other => TestError::Other(other.to_string()),
+        }
+    }
+}
 
 impl From<String> for TestError {
     fn from(m: String) -> Self {
@@ -311,6 +330,7 @@ impl TestPrekeyOp {
 #[derive(Clone, Debug)]
 pub struct TestCausalDecryption {
     recovered: Vec<Vec<u8>>,
+    recovered_keys: BTreeMap<[u8; 32], SymmetricKey>,
     missing: BTreeMap<[u8; 32], SymmetricKey>,
 }
 
@@ -337,6 +357,19 @@ impl TestCausalDecryption {
             .get(&ct.inner.content_ref)
             .copied()
             .map(TestSymmetricKey)
+    }
+
+    /// The key the walk used to read a piece of content, if it read it.
+    pub fn key_for_recovered(&self, ct: &TestEncryptedContent) -> Option<TestSymmetricKey> {
+        self.recovered_keys
+            .get(&ct.inner.content_ref)
+            .copied()
+            .map(TestSymmetricKey)
+    }
+
+    /// How many distinct pieces of content the walk holds a key for.
+    pub fn recovered_key_count(&self) -> usize {
+        self.recovered_keys.len()
     }
 }
 
@@ -921,6 +954,42 @@ impl TestContext {
             .map_err(|e| TestError::Other(e.to_string()))?;
         Ok(TestCausalDecryption {
             recovered: state.complete.into_iter().map(|(_, p)| p).collect(),
+            recovered_keys: state.keys.into_iter().collect(),
+            missing: state.next.into_iter().collect(),
+        })
+    }
+
+    /// Walk back from more than one entrypoint at once.
+    ///
+    /// `Keyhive::try_causal_decrypt_content` takes a single entrypoint. A reader holding
+    /// several heads walks from all of them together, and a shared ancestor should be read
+    /// once rather than once per head.
+    pub async fn causal_decrypt_from(
+        &self,
+        who: &TestIndividual,
+        entrypoints: &[&TestEncryptedContent],
+    ) -> Result<TestCausalDecryption> {
+        let mut to_walk = Vec::new();
+        for ct in entrypoints {
+            let key = self
+                .derived_key(who, ct)
+                .await?
+                .ok_or("the reader cannot derive the key for one of the entrypoints")?;
+            to_walk.push((Arc::new(ct.inner.clone()), key.0));
+        }
+        let store = self
+            .stores
+            .get(&who.instance)
+            .ok_or_else(|| format!("{:?} is not in this TestContext", who.name))?;
+        let state = CiphertextStoreExt::<future_form::Sendable, _, _>::try_causal_decrypt(
+            store,
+            &mut to_walk,
+        )
+        .await
+        .map_err(|e| TestError::Other(e.to_string()))?;
+        Ok(TestCausalDecryption {
+            recovered: state.complete.into_iter().map(|(_, p)| p).collect(),
+            recovered_keys: state.keys.into_iter().collect(),
             missing: state.next.into_iter().collect(),
         })
     }
@@ -1159,6 +1228,22 @@ impl TestContext {
     /// How many events the last `sync*` call delivered.
     pub fn events_last_delivered(&self) -> usize {
         self.last_delivery
+    }
+
+    /// How many events of one kind `who` has that it cannot yet apply.
+    pub async fn pending_events_of_kind(
+        &self,
+        who: &TestIndividual,
+        kind: TestEventKind,
+    ) -> Result<usize> {
+        let s = self.hive(who)?.stats().await;
+        Ok(match kind {
+            TestEventKind::PrekeysExpanded => s.pending_prekeys_expanded,
+            TestEventKind::PrekeyRotated => s.pending_prekey_rotated,
+            TestEventKind::CgkaOperation => s.pending_cgka_operation,
+            TestEventKind::Delegated => s.pending_delegated,
+            TestEventKind::Revoked => s.pending_revoked,
+        } as usize)
     }
 
     /// How many events `who` has that it cannot yet apply.

@@ -188,6 +188,16 @@ async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Resul
 
     // The events reach bob through the server.
     ctx.sync(&alice, &server).await?;
+    assert_eq!(
+        ctx.pending_events(&server).await?,
+        0,
+        "the server applied everything alice sent it"
+    );
+    assert!(
+        !ctx.static_events_for(&server, &bob).await?.is_empty(),
+        "the server has something to relay, so the assertions below are not on an empty delivery"
+    );
+
     let pending = ctx.sync_as_public(&server, &bob).await?;
 
     assert_eq!(pending, 0, "bob could apply everything the server relayed");

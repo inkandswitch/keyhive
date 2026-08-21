@@ -67,6 +67,17 @@ async fn a_group_member_reaches_the_groups_documents() -> Result<()> {
     ctx.delegate(&alice, &bob, &engineering, Read).await?;
 
     assert_eq!(ctx.effective_access(&bob, &design_doc).await?, Some(Read));
+
+    // The graph saying Read is not the same as the key agreement having reached him.
+    let ct = ctx
+        .encrypt(&alice, &design_doc, b"through the group")
+        .await?;
+    ctx.sync_all_unsent().await?;
+    assert_eq!(
+        ctx.read(&bob, &ct).await?,
+        b"through the group".to_vec(),
+        "bob reads it through the group, not only reaches it"
+    );
     Ok(())
 }
 
@@ -594,6 +605,27 @@ async fn a_transitive_reader_cannot_delegate_above_read() -> Result<()> {
         }
     }
     assert_eq!(ctx.effective_access(&carol, &project).await?, None);
+
+    // The refusal is about the level, not about the route being transitive: the same
+    // delegation at bob's own level goes through.
+    ctx.delegate(&bob, &carol, &project, Read).await?;
+    assert_eq!(
+        ctx.effective_access_seen_by(&bob, &carol, &project).await?,
+        Some(Read),
+        "bob delegated at the level he holds"
+    );
+
+    ctx.sync_all_unsent().await?;
+    assert_eq!(
+        ctx.effective_access(&carol, &project).await?,
+        Some(Read),
+        "and alice, who owns the document, honors it"
+    );
+    assert_eq!(
+        ctx.effective_access(&carol, &account).await?,
+        None,
+        "being let into project does not reach back up to the document that holds it"
+    );
     Ok(())
 }
 
