@@ -41,6 +41,80 @@ async fn a_member_added_after_a_write_cannot_derive_its_key() -> Result<()> {
 }
 
 #[tokio::test]
+async fn predecessors_take_part_in_deriving_the_key() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    // The same bytes, so the content hash is the same both times and only the position in
+    // the content DAG differs.
+    let bytes = b"the same bytes twice";
+    let root = ctx.encrypt(&alice, &design_doc, bytes).await?;
+    let after_root = ctx
+        .encrypt_after(&alice, &design_doc, &[root.clone()], bytes)
+        .await?;
+
+    let root_key = ctx
+        .derived_key(&alice, &root)
+        .await?
+        .ok_or("alice wrote the root and cannot derive its key")?;
+    let after_root_key = ctx
+        .derived_key(&alice, &after_root)
+        .await?
+        .ok_or("alice wrote the successor and cannot derive its key")?;
+
+    assert_ne!(
+        root_key, after_root_key,
+        "identical bytes at different points in the DAG went under one key"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_predecessor_does_not_make_its_earlier_key_derivable() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    let before_bob = ctx.encrypt(&alice, &design_doc, b"before bob").await?;
+    ctx.delegate(&alice, &bob, &design_doc, Read).await?;
+    let after_bob = ctx
+        .encrypt_after(&alice, &design_doc, &[before_bob.clone()], b"after bob")
+        .await?;
+    ctx.sync_all().await?;
+
+    assert!(
+        ctx.can_decrypt(&bob, &after_bob).await?,
+        "bob was a member when this was written"
+    );
+    assert!(
+        !ctx.can_decrypt(&bob, &before_bob).await?,
+        "a successor naming earlier content does not hand over the earlier key"
+    );
+    Ok(())
+}
+
+// This is a sanity check for the testing facade
+#[tokio::test]
+async fn a_predecessor_from_another_document_is_refused() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    let notes = ctx.doc(&alice, "notes").await?;
+
+    let in_design_doc = ctx.encrypt(&alice, &design_doc, b"a paragraph").await?;
+
+    assert!(
+        ctx.encrypt_after(&alice, &notes, &[in_design_doc], b"a note")
+            .await
+            .is_err(),
+        "content in one document cannot precede content in another"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn the_reader_derives_the_key_the_writer_used() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;

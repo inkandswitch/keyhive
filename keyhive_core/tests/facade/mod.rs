@@ -742,6 +742,37 @@ impl TestContext {
         })
     }
 
+    /// Encrypt content that follows `after` in the document's content DAG.
+    pub async fn encrypt_after(
+        &mut self,
+        who: &TestIndividual,
+        doc: &TestDocument,
+        after: &[TestEncryptedContent],
+        content: &[u8],
+    ) -> Result<TestEncryptedContent> {
+        let mut pred_refs = Vec::with_capacity(after.len());
+        for pred in after {
+            if pred.doc != doc.id {
+                return Err(format!(
+                    "a predecessor belongs to another document, not {:?}",
+                    doc.name
+                )
+                .into());
+            }
+            pred_refs.push(pred.inner.content_ref);
+        }
+        let handle = self.get_document(who, doc).await?;
+        let content_ref: [u8; 32] = blake3::hash(content).into();
+        let out = self
+            .hive(who)?
+            .try_encrypt_content(handle, &content_ref, &pred_refs, content)
+            .await?;
+        Ok(TestEncryptedContent {
+            doc: doc.id,
+            inner: out.encrypted_content().clone(),
+        })
+    }
+
     /// Encrypt. Returns the application secret the content went under.
     pub async fn encrypt_keyed(
         &mut self,
