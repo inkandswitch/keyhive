@@ -219,6 +219,11 @@ async fn a_transitive_admin_through_a_document_can_delegate() -> Result<()> {
         Some(Admin),
         "bob reaches project through account"
     );
+    assert_eq!(
+        ctx.effective_access(&bob, &account).await?,
+        Some(Admin),
+        "and account, which is where he holds it"
+    );
 
     ctx.delegate(&bob, &carol, &project, Edit).await?;
     assert_eq!(
@@ -232,6 +237,11 @@ async fn a_transitive_admin_through_a_document_can_delegate() -> Result<()> {
         ctx.effective_access(&carol, &project).await?,
         Some(Edit),
         "and alice, who owns the document, honors it"
+    );
+    assert_eq!(
+        ctx.effective_access(&carol, &account).await?,
+        None,
+        "carol was let into project, and that does not reach back up to account"
     );
     Ok(())
 }
@@ -249,6 +259,13 @@ async fn a_transitive_admin_through_a_group_can_delegate() -> Result<()> {
     ctx.delegate(&alice, &bob, &engineering, Admin).await?;
     ctx.sync_all().await?;
     assert_eq!(ctx.effective_access(&bob, &project).await?, Some(Admin));
+    let members_of_the_group = ctx.transitive_members_of(&engineering).await?;
+    assert_eq!(members_of_the_group.get("bob"), Some(&Admin));
+    assert_eq!(
+        members_of_the_group.get("carol"),
+        None,
+        "carol is not in the group to begin with"
+    );
 
     ctx.delegate(&bob, &carol, &project, Edit).await?;
     assert_eq!(
@@ -262,6 +279,11 @@ async fn a_transitive_admin_through_a_group_can_delegate() -> Result<()> {
         ctx.effective_access(&carol, &project).await?,
         Some(Edit),
         "bob delegated based on a route (through a group) he does not hold directly"
+    );
+    assert_eq!(
+        ctx.transitive_members_of(&engineering).await?.get("carol"),
+        None,
+        "and being let into project does not put her in the group that holds it"
     );
     Ok(())
 }

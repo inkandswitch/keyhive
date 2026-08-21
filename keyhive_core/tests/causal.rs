@@ -145,8 +145,16 @@ async fn an_ancestor_that_is_not_held_is_reported_rather_than_failing() -> Resul
     assert_eq!(
         walked.missing(),
         1,
-        "and says the root is outstanding rather than failing"
+        "and says something is outstanding rather than failing"
     );
+    let key = walked
+        .key_for_missing(&genesis)
+        .ok_or("the walk did not say which content is outstanding")?;
+    assert!(
+        ctx.decrypt_with_key(&genesis, &key).is_ok(),
+        "and the key it reported for it is the one that opens it, so fetching is enough"
+    );
+
     Ok(())
 }
 
@@ -186,6 +194,55 @@ async fn an_ancestor_the_entrypoint_lists_is_reported_when_missing() -> Result<(
         walked.missing(),
         1,
         "but bob needs to be told which content to go and fetch"
+    );
+    assert!(
+        walked.key_for_missing(&history).is_some(),
+        "with the key to open it once he has it"
+    );
+    Ok(())
+}
+
+/// `CiphertextStore` must stop serving content once it has been decrypted, whether by
+/// removing it or by tracking what has been read.
+///
+/// The consumed content is not reported as outstanding either because the entrypoint lists
+/// it directly. That's handled by `an_ancestor_the_entrypoint_lists_is_reported_when_missing`.
+#[tokio::test]
+async fn a_walk_consumes_the_content_it_reads() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    ctx.delegate(&alice, &bob, &design_doc, Read).await?;
+    ctx.sync_all().await?;
+
+    let genesis = ctx
+        .encrypt_in_envelope(&alice, &design_doc, &[], b"genesis")
+        .await?;
+    let head = ctx
+        .encrypt_in_envelope(&alice, &design_doc, std::slice::from_ref(&genesis), b"head")
+        .await?;
+    ctx.sync_all().await?;
+
+    ctx.deliver_content(&bob, &genesis).await?;
+    ctx.deliver_content(&bob, &head).await?;
+
+    let first = ctx.causal_decrypt(&bob, &head).await?;
+    assert_eq!(first.recovered(), contents(&[b"genesis"]));
+
+    let second = ctx.causal_decrypt(&bob, &head).await?;
+    assert_eq!(
+        second.recovered(),
+        contents(&[]),
+        "the first walk took it out of the store"
+    );
+
+    ctx.deliver_content(&bob, &genesis).await?;
+    let third = ctx.causal_decrypt(&bob, &head).await?;
+    assert_eq!(
+        third.recovered(),
+        contents(&[b"genesis"]),
+        "delivering it again is enough to read it again"
     );
     Ok(())
 }

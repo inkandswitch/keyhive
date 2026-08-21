@@ -63,6 +63,7 @@ Then you can check properties:
 * `ctx.effective_access_seen_by(observer: &TestIndividual, who: &impl TestAgent, doc: &TestDocument) -> Option<Access>`: Same as `effective_access()`, but from the point of view of `observer`'s `Keyhive`.
 * `ctx.transitive_members_of(membered: &impl TestMembered) -> BTreeMap<String, Access>`: Returns everyone who has access to `resource`, including through nested groups.
 * `ctx.can_decrypt(who: &TestIndividual, content: &TestEncryptedContent) -> bool`: Whether `who` can successfully decrypt content.
+* `ctx.read(who: &TestIndividual, content: &TestEncryptedContent) -> Vec<u8>`: What `who` reads back, or an error if they can't. Use this where the point is that the content survived the round trip, and `can_decrypt` where the point is who may read.
 * `ctx.best_access(who: &impl TestAgent, doc: &TestDocument) -> Option<Access>`: The higher of `who`'s own access and public's access.
 * `ctx.has_received(who: &TestIndividual, what: &impl TestAgent) -> bool`: Whether `who` has received the events needed to learn that `what` exists. `effective_access()` returns `None` both for no access and for never having heard of the subject. This can be used to distinguish those cases.
 

@@ -162,8 +162,9 @@ async fn an_instance_caught_up_by_syncing_can_read_what_it_missed() -> Result<()
 
     ctx.sync_all().await?;
 
-    assert!(
-        ctx.can_decrypt(&restored, &ct).await?,
+    assert_eq!(
+        ctx.read(&restored, &ct).await?,
+        b"hello world".to_vec(),
         "but after sync, it reads content written while it did not exist"
     );
     Ok(())

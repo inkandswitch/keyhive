@@ -171,10 +171,19 @@ async fn two_instances_creating_documents_independently_converge() -> Result<()>
     ctx.sync_as_public(&alice, &reader).await?;
     ctx.sync_as_public(&alice_worker, &reader).await?;
 
-    assert!(ctx.can_decrypt(&reader, &alice_wrote).await?);
-    assert!(
-        ctx.can_decrypt(&reader, &worker_wrote).await?,
+    assert_eq!(
+        ctx.read(&reader, &alice_wrote).await?,
+        b"from alice".to_vec()
+    );
+    assert_eq!(
+        ctx.read(&reader, &worker_wrote).await?,
+        b"from the worker".to_vec(),
         "one reader, two instances, both documents"
+    );
+    assert_eq!(
+        ctx.pending_events(&reader).await?,
+        0,
+        "and nothing it was sent is stuck"
     );
     Ok(())
 }
@@ -217,9 +226,15 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
     ctx.sync_as_public(&alice, &reader).await?;
     ctx.sync_as_public(&alice_worker, &reader).await?;
 
-    assert!(
-        ctx.can_decrypt(&reader, &worker_wrote).await?,
+    assert_eq!(
+        ctx.read(&reader, &worker_wrote).await?,
+        b"after the re-delegation".to_vec(),
         "the document is public again, so the reader reads what the worker wrote"
+    );
+    assert_eq!(
+        ctx.pending_events(&reader).await?,
+        0,
+        "and nothing it was sent is stuck"
     );
     Ok(())
 }
@@ -252,9 +267,15 @@ async fn a_peer_cannot_read_an_instance_it_has_not_heard_from() -> Result<()> {
     );
 
     ctx.sync(&alice_worker, &bob).await?;
-    assert!(
-        ctx.can_decrypt(&bob, &worker_wrote).await?,
+    assert_eq!(
+        ctx.read(&bob, &worker_wrote).await?,
+        b"written on the worker".to_vec(),
         "the second round completes it"
+    );
+    assert_eq!(
+        ctx.pending_events(&bob).await?,
+        0,
+        "with nothing left over from the first round"
     );
     Ok(())
 }

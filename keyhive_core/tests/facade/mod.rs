@@ -299,7 +299,7 @@ impl TestPrekeyOp {
 #[derive(Clone, Debug)]
 pub struct TestCausalDecryption {
     recovered: Vec<Vec<u8>>,
-    missing: usize,
+    missing: BTreeMap<[u8; 32], SymmetricKey>,
 }
 
 impl TestCausalDecryption {
@@ -311,7 +311,15 @@ impl TestCausalDecryption {
     /// How many ancestors were listed but not held. Their keys are known, so they can be
     /// decrypted as soon as they arrive.
     pub fn missing(&self) -> usize {
+        self.missing.len()
+    }
+
+    /// The key the walk reported for an ancestor it could not find, if it reported one.
+    pub fn key_for_missing(&self, ct: &TestEncryptedContent) -> Option<TestSymmetricKey> {
         self.missing
+            .get(&ct.inner.content_ref)
+            .copied()
+            .map(TestSymmetricKey)
     }
 }
 
@@ -720,13 +728,27 @@ impl TestContext {
         Ok(out)
     }
 
+    /// The content `who` reads back, or an error if they cannot read it.
+    ///
+    /// For content written with `encrypt_in_envelope` this is the envelope rather than the
+    /// payload since unwrapping it is `causal_decrypt`'s role.
+    pub async fn read(&self, who: &TestIndividual, ct: &TestEncryptedContent) -> Result<Vec<u8>> {
+        let handle = self
+            .get_document_by_id(who, ct.doc, "that document")
+            .await?;
+        Ok(self
+            .hive(who)?
+            .try_decrypt_content(handle, &ct.inner)
+            .await?)
+    }
+
     /// Whether `who` can actually decrypt the encrypted content.
     pub async fn can_decrypt(
         &self,
         who: &TestIndividual,
         ct: &TestEncryptedContent,
     ) -> Result<bool> {
-        Ok(self.derived_key(who, ct).await?.is_some())
+        Ok(self.read(who, ct).await.is_ok())
     }
 
     /// The higher of `who`'s own access and public's access.
@@ -882,7 +904,7 @@ impl TestContext {
             .map_err(|e| TestError::Other(e.to_string()))?;
         Ok(TestCausalDecryption {
             recovered: state.complete.into_iter().map(|(_, p)| p).collect(),
-            missing: state.next.len(),
+            missing: state.next.into_iter().collect(),
         })
     }
 

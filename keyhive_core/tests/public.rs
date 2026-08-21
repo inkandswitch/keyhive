@@ -94,8 +94,9 @@ async fn a_public_reader_reads_what_a_member_wrote() -> Result<()> {
         None,
         "bob is not a member and never becomes one"
     );
-    assert!(
-        ctx.can_decrypt(&bob, &ct).await?,
+    assert_eq!(
+        ctx.read(&bob, &ct).await?,
+        b"announcement".to_vec(),
         "he reads it through the public delegation"
     );
     Ok(())
@@ -118,8 +119,9 @@ async fn two_public_readers_meet_through_the_document() -> Result<()> {
     // Neither of them is a member. Both write and read as public.
     let from_bob = ctx.encrypt(&bob, &design_doc, b"from bob").await?;
 
-    assert!(
-        ctx.can_decrypt(&carol, &from_bob).await?,
+    assert_eq!(
+        ctx.read(&carol, &from_bob).await?,
+        b"from bob".to_vec(),
         "carol reads what bob wrote, with neither of them a member"
     );
     Ok(())
@@ -142,8 +144,9 @@ async fn another_member_does_not_displace_the_public_reader() -> Result<()> {
     let pending = ctx.sync_as_public(&alice, &bob).await?;
 
     assert_eq!(pending, 0, "bob could apply every event he was sent");
-    assert!(
-        ctx.can_decrypt(&bob, &ct).await?,
+    assert_eq!(
+        ctx.read(&bob, &ct).await?,
+        b"relayed".to_vec(),
         "the document is public whether or not it has other members"
     );
     Ok(())
@@ -180,7 +183,11 @@ async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Resul
         Some(Read),
         "asking about public does"
     );
-    assert!(ctx.can_decrypt(&bob, &ct).await?, "and he can read it");
+    assert_eq!(
+        ctx.read(&bob, &ct).await?,
+        b"announcement".to_vec(),
+        "and he can read it"
+    );
     Ok(())
 }
 
