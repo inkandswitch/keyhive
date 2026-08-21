@@ -60,7 +60,7 @@ And sync state between keyhive identities:
 
 Then you can check properties:
 
-* `ctx.effective_access(who: &impl TestAgent, doc: &TestDocument) -> Option<Access>`: Check `who`'s access level for `doc`. `None` for no access. |
+* `ctx.effective_access(who: &impl TestAgent, doc: &TestDocument) -> Option<Access>`: Check `who`'s access level for `doc`. `None` for no access.
 * `ctx.effective_access_seen_by(observer: &TestIndividual, who: &impl TestAgent, doc: &TestDocument) -> Option<Access>`: Same as `effective_access()`, but from the point of view of `observer`'s `Keyhive`.
 * `ctx.transitive_members_of(membered: &impl TestMembered) -> BTreeMap<String, Access>`: Returns everyone who has access to `resource`, including through nested groups.
 * `ctx.can_decrypt(who: &TestIndividual, content: &TestEncryptedContent) -> bool`: Whether `who` can successfully decrypt content.
@@ -76,6 +76,8 @@ You need to call `sync_all_unsent()` before:
 * checking `effective_access_seen_by` about an identity other than the resource owner,
 * having an individual issue a delegation for a resource they did not create. They need to know that resource exists first.
 
+If you forget, the test will probably fail with `TestError::NotSynced { individual, subject }`.
+
 Prekeys have their own methods:
 
 * `ctx.expand_prekeys(who: &TestIndividual) -> TestShareKey`: Adds a prekey and returns the key added.
@@ -89,7 +91,6 @@ So does archiving:
 * `ctx.rebuild_from_archive(archive: &TestArchive, name) -> TestIndividual`: Rebuilds an archive as a new instance of the same identity with a fresh ciphertext store.
 * `ctx.ingest_archive(into: &TestIndividual, archive: TestArchive) -> usize`: Merges an archive into a live instance. Returns how many events remain pending.
 
-If you forget to do this, the test will probably fail with `TestError::NotSynced { individual, subject }`.
 
 ### Test errors for checking properties
 

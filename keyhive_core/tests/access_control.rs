@@ -100,6 +100,7 @@ async fn relay_never_permits_decryption() -> Result<()> {
 #[tokio::test]
 #[ignore = "fails on main; fixed by jtfm/cgka-authority; un-ignore when that lands"]
 async fn multi_route_resolution_is_deterministic() -> Result<()> {
+    // 8 distinct instances. The results differ between runs in the presence of a bug.
     let mut answers: std::collections::BTreeMap<Option<Access>, usize> = Default::default();
     for round in 0..8 {
         let mut ctx = TestContext::new().await;
@@ -338,6 +339,7 @@ async fn a_membership_cycle_still_resolves() -> Result<()> {
 #[tokio::test]
 #[ignore = "a member's level comes from the last route explored, not the best one. Fix this."]
 async fn an_attenuated_second_route_does_not_lower_reported_access() -> Result<()> {
+    // 5 distinct instances. The results differ between runs in the presence of a bug.
     for _ in 0..5 {
         let mut ctx = TestContext::new().await;
         let alice = ctx.individual("alice").await?;

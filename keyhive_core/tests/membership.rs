@@ -684,13 +684,14 @@ async fn a_revoked_member_is_listed_with_what_they_lost() -> Result<()> {
 
     ctx.revoke(&alice, &bob, &engineering).await?;
 
+    let revoked = ctx.revoked_members_of(&engineering).await?;
     assert_eq!(
-        ctx.revoked_members_of(&engineering).await?.get("bob"),
+        revoked.get("bob"),
         Some(&Edit),
         "bob is listed at the level his delegation had conveyed"
     );
     assert_eq!(
-        ctx.revoked_members_of(&engineering).await?.get("carol"),
+        revoked.get("carol"),
         None,
         "and carol, who is still a member, is not listed"
     );

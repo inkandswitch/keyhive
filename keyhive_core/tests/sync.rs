@@ -177,8 +177,14 @@ async fn redelivering_known_events_changes_nothing() -> Result<()> {
 
     // Bob has all of this already. The point of the test is that it is sent to him
     // anyway.
-    let to_resend = ctx.static_events_for(&alice, &bob).await?.len();
-    assert!(to_resend > 0, "there is nothing to redeliver");
+    let to_resend = ctx.static_events_for(&alice, &bob).await?;
+    assert!(!to_resend.is_empty(), "there is nothing to redeliver");
+    assert!(
+        to_resend
+            .iter()
+            .any(|e| e.kind() == TestEventKind::Delegated),
+        "including the delegations that put bob in the group"
+    );
 
     let pending = ctx.sync_shuffled(&alice, &bob, 0).await?;
 

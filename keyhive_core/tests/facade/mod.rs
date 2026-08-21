@@ -605,7 +605,7 @@ impl TestContext {
     ///
     /// Signed by the issuer. Returns an error if the issuer may not do this.
     pub async fn delegate(
-        &mut self,
+        &self,
         issuer: &TestIndividual,
         audience: &impl TestAgent,
         membered: &impl TestMembered,
@@ -632,7 +632,7 @@ impl TestContext {
     /// Members `audience` had admitted keep their access, because their delegations are
     /// re-issued under the issuer.
     pub async fn revoke(
-        &mut self,
+        &self,
         issuer: &TestIndividual,
         audience: &impl TestAgent,
         membered: &impl TestMembered,
@@ -642,7 +642,7 @@ impl TestContext {
 
     /// `issuer` removes `audience`, and everyone whose only way in was through them.
     pub async fn revoke_cascading(
-        &mut self,
+        &self,
         issuer: &TestIndividual,
         audience: &impl TestAgent,
         membered: &impl TestMembered,
@@ -651,7 +651,7 @@ impl TestContext {
     }
 
     async fn revoke_inner(
-        &mut self,
+        &self,
         issuer: &TestIndividual,
         audience: &impl TestAgent,
         membered: &impl TestMembered,
@@ -707,14 +707,7 @@ impl TestContext {
 
         Ok(raw
             .into_iter()
-            .map(|(id, (_, access))| {
-                let name = self
-                    .names
-                    .get(&id)
-                    .map(|n| n.to_string())
-                    .unwrap_or_else(|| format!("<{id}>"));
-                (name, access)
-            })
+            .map(|(id, (_, access))| (self.name_of(id, &id.to_string()).to_string(), access))
             .collect())
     }
 
@@ -838,7 +831,7 @@ impl TestContext {
     }
 
     pub async fn encrypt(
-        &mut self,
+        &self,
         who: &TestIndividual,
         doc: &TestDocument,
         content: &[u8],
@@ -848,7 +841,7 @@ impl TestContext {
 
     /// Encrypt content that follows `after` in the document's content DAG.
     pub async fn encrypt_after(
-        &mut self,
+        &self,
         who: &TestIndividual,
         doc: &TestDocument,
         after: &[TestEncryptedContent],
@@ -879,9 +872,9 @@ impl TestContext {
     }
 
     /// Write `content` in an envelope listing the ancestors and carrying the keys to open
-    /// them. Simulates what an application would do.
+    /// them. Simulates what an application would do. Returns the encrypted content.
     pub async fn encrypt_in_envelope(
-        &mut self,
+        &self,
         who: &TestIndividual,
         doc: &TestDocument,
         after: &[TestEncryptedContent],
@@ -911,7 +904,7 @@ impl TestContext {
 
     /// Give `to` a copy of the content, simulating how an application would behave.
     pub async fn deliver_content(
-        &mut self,
+        &self,
         to: &TestIndividual,
         ct: &TestEncryptedContent,
     ) -> Result<()> {
@@ -947,7 +940,7 @@ impl TestContext {
 
     /// Encrypt. Returns the application secret the content went under.
     pub async fn encrypt_keyed(
-        &mut self,
+        &self,
         who: &TestIndividual,
         doc: &TestDocument,
         content: &[u8],
@@ -971,7 +964,7 @@ impl TestContext {
     ///
     /// Returns the share key the rotation introduced.
     pub async fn force_pcs_update(
-        &mut self,
+        &self,
         who: &TestIndividual,
         doc: &TestDocument,
     ) -> Result<TestShareKey> {
@@ -985,14 +978,14 @@ impl TestContext {
     }
 
     /// Add a prekey. Returns the key that was added.
-    pub async fn expand_prekeys(&mut self, who: &TestIndividual) -> Result<TestShareKey> {
+    pub async fn expand_prekeys(&self, who: &TestIndividual) -> Result<TestShareKey> {
         let op = self.hive(who)?.expand_prekeys().await?;
         Ok(TestShareKey(op.payload().share_key))
     }
 
     /// Replace `old` with a fresh key. Returns the key that replaced it.
     pub async fn rotate_prekey(
-        &mut self,
+        &self,
         who: &TestIndividual,
         old: &TestShareKey,
     ) -> Result<TestShareKey> {
