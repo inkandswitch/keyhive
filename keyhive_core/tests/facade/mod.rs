@@ -69,6 +69,10 @@ pub enum TestError {
     #[error("{individual:?} does not know about {subject:?}. Sync first.")]
     NotSynced { individual: String, subject: String },
 
+    /// Two things in one context cannot share a name.
+    #[error("{name:?} is already the name of something in this TestContext")]
+    NameTaken { name: String },
+
     /// A predecessor was named that belongs to a different document.
     #[error("that content is in {holds:?}, not in {doc:?}")]
     WrongDocument { holds: String, doc: String },
@@ -509,6 +513,7 @@ impl TestContext {
     ///
     /// Every individual learns every other individual's contact card.
     pub async fn individual(&mut self, name: &str) -> Result<TestIndividual> {
+        self.claim_name(name)?;
         let mut hive_rng = StdRng::seed_from_u64(self.csprng.gen());
         let signer = MemorySigner::generate(&mut hive_rng);
         let handle = self.add_instance(signer.clone(), hive_rng, name).await?;
@@ -524,6 +529,7 @@ impl TestContext {
         of: &TestIndividual,
         name: &str,
     ) -> Result<TestIndividual> {
+        self.claim_name(name)?;
         let signer = self
             .signers
             .get(&of.identity)
@@ -565,6 +571,7 @@ impl TestContext {
     }
 
     pub async fn group(&mut self, owner: &TestIndividual, name: &str) -> Result<TestGroup> {
+        self.claim_name(name)?;
         let g = self.hive(owner)?.generate_group(vec![]).await?;
         let id = { g.lock().await.group_id() };
         let name: Arc<str> = name.into();
@@ -577,6 +584,7 @@ impl TestContext {
     }
 
     pub async fn doc(&mut self, owner: &TestIndividual, name: &str) -> Result<TestDocument> {
+        self.claim_name(name)?;
         let d = self
             .hive(owner)?
             .generate_doc(vec![], nonempty![[0u8; 32]])
@@ -1265,6 +1273,18 @@ impl TestContext {
             .or_default()
             .extend(digests);
         Ok(pending)
+    }
+
+    /// Refuse a name that is already in use.
+    fn claim_name(&self, name: &str) -> Result<()> {
+        let taken = self.names.values().any(|n| &**n == name)
+            || self.handles.values().any(|h| &*h.name == name);
+        if taken {
+            return Err(TestError::NameTaken {
+                name: name.to_string(),
+            });
+        }
+        Ok(())
     }
 
     fn name_of(&self, id: Identifier, fallback: &str) -> Arc<str> {

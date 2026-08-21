@@ -98,6 +98,7 @@ Every method returns `Result<T, TestError>`, with variants representing reasons 
 * `TestError::Escalation { wanted: Access, held: Access }`: The issuer holds some access over the resource, but less than they tried to delegate.
 * `TestError::NoAuthority`: The issuer has no access to the resource.
 * `TestError::NotSynced { individual: String, subject: String }`: The individual has not yet received the required events.
+* `TestError::NameTaken { name }`: Two things in one context cannot share a name since the member maps are keyed by name.
 * `TestError::WrongDocument { holds, doc }`: A predecessor was named that belongs to a different document.
 * `TestError::DifferentIdentity { from, to }`: Prekey secrets belong to one identity and cannot be given to another.
 * `TestError::Other(String)`: Anything else, wrapping the underlying error as a `String`.

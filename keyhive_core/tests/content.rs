@@ -183,6 +183,23 @@ async fn content_written_after_a_rotation_does_not_open_what_came_before() -> Re
 
 // This is a sanity check for the testing facade
 #[tokio::test]
+async fn two_things_cannot_share_a_name() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    ctx.doc(&alice, "design_doc").await?;
+
+    // The members maps are keyed by name. A collision would drop one of them silently.
+    for taken in ["alice", "design_doc", "public"] {
+        match ctx.group(&alice, taken).await {
+            Err(TestError::NameTaken { name }) => assert_eq!(name, taken),
+            other => panic!("{taken:?} is taken, got {other:?}"),
+        }
+    }
+    Ok(())
+}
+
+// This is a sanity check for the testing facade
+#[tokio::test]
 async fn a_predecessor_from_another_document_is_refused() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
