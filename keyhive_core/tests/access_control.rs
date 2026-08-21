@@ -1,5 +1,3 @@
-//! Tests for three access-control rules, written against the facade in `facade/`.
-
 mod facade;
 
 use facade::{Result, TestContext, TestError};
@@ -220,6 +218,36 @@ async fn a_reader_cannot_delegate_above_read() -> Result<()> {
         }
     }
     assert_eq!(ctx.effective_access(&carol, &design_doc).await?, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_revoked_member_cannot_delegate_or_revoke() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let mallory = ctx.individual("mallory").await?;
+    let carol = ctx.individual("carol").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    ctx.delegate(&alice, &mallory, &design_doc, Read).await?;
+    ctx.sync_all().await?;
+    ctx.revoke(&alice, &mallory, &design_doc).await?;
+    ctx.sync_all().await?;
+
+    assert!(
+        matches!(
+            ctx.delegate(&mallory, &carol, &design_doc, Read).await,
+            Err(TestError::NoAuthority)
+        ),
+        "a revoked member may not issue a delegation"
+    );
+    assert!(
+        matches!(
+            ctx.revoke(&mallory, &alice, &design_doc).await,
+            Err(TestError::NoAuthority)
+        ),
+        "or a revocation"
+    );
     Ok(())
 }
 
