@@ -16,7 +16,7 @@ async fn readers_after_writing(
     cast: &[&TestIndividual],
 ) -> Result<BTreeSet<String>> {
     let ct = ctx.encrypt(author, doc, content).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
     let mut readers = BTreeSet::new();
     for who in cast {
         if ctx.can_decrypt(who, &ct).await? {
@@ -585,10 +585,10 @@ async fn revoking_a_member_keeps_the_members_they_admitted() -> Result<()> {
     ctx.delegate(&alice, &engineering, &design_doc, Read)
         .await?;
     ctx.delegate(&alice, &carol, &engineering, Admin).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
     // Dan is in the group because carol put him there.
     ctx.delegate(&carol, &dan, &engineering, Read).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, &design_doc, b"before", &cast).await?,
@@ -619,9 +619,9 @@ async fn a_cascading_revocation_removes_the_members_they_admitted() -> Result<()
     ctx.delegate(&alice, &engineering, &design_doc, Read)
         .await?;
     ctx.delegate(&alice, &carol, &engineering, Admin).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
     ctx.delegate(&carol, &dan, &engineering, Read).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     ctx.revoke_cascading(&alice, &carol, &engineering).await?;
 

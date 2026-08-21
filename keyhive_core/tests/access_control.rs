@@ -86,7 +86,7 @@ async fn relay_never_permits_decryption() -> Result<()> {
 
         let may_read = doc_to_group.min(group_to_bob) >= Read;
         let ct = ctx.encrypt(&alice, &design_doc, b"top secret").await?;
-        ctx.sync_all().await?;
+        ctx.sync_all_unsent().await?;
 
         assert_eq!(
             ctx.can_decrypt(&bob, &ct).await?,
@@ -140,7 +140,7 @@ async fn a_revoked_member_cannot_read_new_content() -> Result<()> {
 
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
     let before = ctx.encrypt(&alice, &design_doc, b"first").await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
     assert!(
         ctx.can_decrypt(&bob, &before).await?,
         "bob could read before"
@@ -148,7 +148,7 @@ async fn a_revoked_member_cannot_read_new_content() -> Result<()> {
 
     ctx.revoke(&alice, &bob, &design_doc).await?;
     let after = ctx.encrypt(&alice, &design_doc, b"second").await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert_eq!(ctx.effective_access(&bob, &design_doc).await?, None);
     assert!(
@@ -171,7 +171,7 @@ async fn two_replicas_agree_on_effective_access() -> Result<()> {
         .await?;
     ctx.delegate(&alice, &bob, &engineering, Read).await?;
     ctx.delegate(&alice, &carol, &engineering, Admin).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     for observer in [&alice, &bob, &carol] {
         assert_eq!(
@@ -213,7 +213,7 @@ async fn a_transitive_admin_through_a_document_can_delegate() -> Result<()> {
 
     ctx.delegate(&alice, &account, &project, Admin).await?;
     ctx.delegate(&alice, &bob, &account, Admin).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
     assert_eq!(
         ctx.effective_access(&bob, &project).await?,
         Some(Admin),
@@ -232,7 +232,7 @@ async fn a_transitive_admin_through_a_document_can_delegate() -> Result<()> {
         "bob delegated based on a route (through a doc) he does not hold directly"
     );
 
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
     assert_eq!(
         ctx.effective_access(&carol, &project).await?,
         Some(Edit),
@@ -257,7 +257,7 @@ async fn a_transitive_admin_through_a_group_can_delegate() -> Result<()> {
 
     ctx.delegate(&alice, &engineering, &project, Admin).await?;
     ctx.delegate(&alice, &bob, &engineering, Admin).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
     assert_eq!(ctx.effective_access(&bob, &project).await?, Some(Admin));
     let members_of_the_group = ctx.transitive_members_of(&engineering).await?;
     assert_eq!(members_of_the_group.get("bob"), Some(&Admin));
@@ -274,7 +274,7 @@ async fn a_transitive_admin_through_a_group_can_delegate() -> Result<()> {
         "bob delegated on the strength of a route he does not hold directly"
     );
 
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
     assert_eq!(
         ctx.effective_access(&carol, &project).await?,
         Some(Edit),
@@ -371,7 +371,7 @@ async fn a_reader_cannot_delegate_above_read() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     for access in [Edit, Admin] {
         match ctx.delegate(&bob, &carol, &design_doc, access).await {
@@ -395,9 +395,9 @@ async fn a_revoked_member_cannot_delegate_or_revoke() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
     ctx.delegate(&alice, &mallory, &design_doc, Read).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
     ctx.revoke(&alice, &mallory, &design_doc).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert!(
         matches!(
@@ -441,7 +441,7 @@ async fn revoking_a_group_removes_only_those_who_needed_it() -> Result<()> {
     ctx.revoke(&alice, &engineering, &design_doc).await?;
 
     let after = ctx.encrypt(&alice, &design_doc, b"post-revocation").await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert_eq!(ctx.effective_access(&bob, &design_doc).await?, None);
     assert!(

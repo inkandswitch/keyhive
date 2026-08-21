@@ -19,7 +19,7 @@ async fn an_archive_round_trip_preserves_members_access_and_decryption() -> Resu
     let ct = ctx
         .encrypt(&alice, &design_doc, b"before the archive")
         .await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     let members_before = ctx.transitive_members_of(&design_doc).await?;
     let archive = ctx.archive(&alice).await?;
@@ -52,13 +52,13 @@ async fn a_restored_instance_can_still_issue_delegations() -> Result<()> {
     let alice = ctx.individual("alice").await?;
     let dave = ctx.individual("dave").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     let archive = ctx.archive(&alice).await?;
     let restored = ctx.rebuild_from_archive(&archive, "alice-restored").await?;
 
     ctx.delegate(&restored, &dave, &design_doc, Edit).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert_eq!(
         ctx.effective_access_seen_by(&alice, &dave, &design_doc)
@@ -94,7 +94,7 @@ async fn an_old_archive_merged_with_later_events_converges() -> Result<()> {
         "the archive predates carol's delegation"
     );
 
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert_eq!(
         ctx.effective_access_seen_by(&restored, &carol, &design_doc)
@@ -160,7 +160,7 @@ async fn an_instance_caught_up_by_syncing_can_read_what_it_missed() -> Result<()
         "and it can't yet read content written while it did not exist"
     );
 
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert_eq!(
         ctx.read(&restored, &ct).await?,

@@ -1,5 +1,7 @@
 //! A testing facade for `Keyhive`.
 
+// Each integration test binary compiles the whole facade and uses a subset of it, so
+// without this every binary warns about the methods it does not happen to call.
 #![allow(dead_code)]
 
 use dupe::Dupe;
@@ -308,6 +310,11 @@ impl TestCausalDecryption {
         self.recovered.iter().cloned().collect()
     }
 
+    /// How many pieces of content the walk decrypted, counting repeats.
+    pub fn recovered_count(&self) -> usize {
+        self.recovered.len()
+    }
+
     /// How many ancestors were listed but not held. Their keys are known, so they can be
     /// decrypted as soon as they arrive.
     pub fn missing(&self) -> usize {
@@ -448,8 +455,10 @@ pub struct TestContext {
     names: BTreeMap<Identifier, Arc<str>>,
     csprng: StdRng,
     docs: Vec<TestDocument>,
-    /// The digests each instance has already received, so `sync` sends a delta.
+    /// The digests each instance has already received, so `sync_all_unsent` sends a delta.
     delivered: BTreeMap<TestInstanceId, BTreeSet<[u8; 32]>>,
+    /// How many events were last delivered.
+    last_delivery: usize,
     /// Each instance's ciphertext store. Storing what you wrote or received is the
     /// application's role, and causal decryption reads back out of it.
     stores: BTreeMap<TestInstanceId, ContentStore>,
@@ -467,6 +476,7 @@ impl TestContext {
             names,
             docs: Vec::new(),
             delivered: BTreeMap::new(),
+            last_delivery: 0,
             stores: BTreeMap::new(),
             csprng: StdRng::from_rng(rand::rngs::OsRng).expect("OsRng cannot fail"),
         }
@@ -1050,6 +1060,12 @@ impl TestContext {
     ///
     /// Events `to` has already received are not sent again.
     pub async fn sync(&mut self, from: &TestIndividual, to: &TestIndividual) -> Result<usize> {
+        let events = self.static_events_for_agent(from, to).await?;
+        self.deliver(to, events).await
+    }
+
+    /// Sends `from`'s events to `to`, skipping any this context has already delivered.
+    async fn sync_unsent(&mut self, from: &TestIndividual, to: &TestIndividual) -> Result<usize> {
         let known = self.delivered.get(&to.instance);
         let events: Vec<_> = self
             .static_events_for_agent(from, to)
@@ -1133,6 +1149,11 @@ impl TestContext {
             .collect())
     }
 
+    /// How many events the last `sync*` call delivered.
+    pub fn events_last_delivered(&self) -> usize {
+        self.last_delivery
+    }
+
     /// How many events `who` has that it cannot yet apply.
     pub async fn pending_events(&self, who: &TestIndividual) -> Result<usize> {
         let s = self.hive(who)?.stats().await;
@@ -1143,10 +1164,9 @@ impl TestContext {
             + s.pending_revoked) as usize)
     }
 
-    /// Sends events between every pair of individuals, until a round changes nothing.
-    ///
-    /// Events that no instance can apply are left pending.
-    pub async fn sync_all(&mut self) -> Result<()> {
+    /// Sends every pair of individuals the events they have not been sent until a round
+    /// changes nothing.
+    pub async fn sync_all_unsent(&mut self) -> Result<()> {
         const MAX_ROUNDS: usize = 8;
         let everyone: Vec<TestIndividual> = self.handles.values().cloned().collect();
         for _ in 0..MAX_ROUNDS {
@@ -1154,7 +1174,7 @@ impl TestContext {
             for from in &everyone {
                 for to in &everyone {
                     if from.instance != to.instance {
-                        self.sync(from, to).await?;
+                        self.sync_unsent(from, to).await?;
                     }
                 }
             }
@@ -1162,7 +1182,7 @@ impl TestContext {
                 return Ok(());
             }
         }
-        Err(format!("sync_all did not settle in {MAX_ROUNDS} rounds").into())
+        Err(format!("sync_all_unsent did not settle in {MAX_ROUNDS} rounds").into())
     }
 
     /////////////////////
@@ -1215,6 +1235,7 @@ impl TestContext {
         events: Vec<([u8; 32], StaticEvent<[u8; 32]>)>,
     ) -> Result<usize> {
         let (digests, events): (Vec<_>, Vec<_>) = events.into_iter().unzip();
+        self.last_delivery = events.len();
         let pending = self
             .hive(to)?
             .ingest_unsorted_static_events(events)

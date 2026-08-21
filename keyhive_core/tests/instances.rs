@@ -35,7 +35,7 @@ async fn either_instance_signs_as_the_identity() -> Result<()> {
     let alice_worker = ctx.second_instance(&alice, "alice-worker").await?;
     let carol = ctx.individual("carol").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     ctx.delegate(&alice_worker, &carol, &design_doc, Admin)
         .await?;
@@ -54,7 +54,7 @@ async fn either_instance_signs_as_the_identity() -> Result<()> {
         None,
         "the first instance doesn't know about the delegation yet"
     );
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
     assert_eq!(
         ctx.effective_access_seen_by(&alice, &carol, &design_doc)
             .await?,
@@ -76,7 +76,7 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
     let ct = ctx
         .encrypt(&bob, &design_doc, b"invitation content")
         .await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     // Both instances know the document and both are members.
     assert!(ctx.has_received(&alice_worker, &design_doc).await?);

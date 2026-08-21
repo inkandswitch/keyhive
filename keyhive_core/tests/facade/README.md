@@ -49,11 +49,12 @@ You can also create content:
 And sync state between keyhive identities:
 
 * `ctx.sync(from: &TestIndividual, to: &TestIndividual) -> usize`: Sends `from`'s events to `to`. The return value is how many events `to` could not yet apply.
-* `ctx.sync_all()`: Sends events between every pair of individuals.
+* `ctx.sync_all_unsent()`: Sends events between every pair of individuals, until a round changes nothing. This method skips events it has already sent over.
+* `ctx.sync_as_public(from, to) -> usize`: Sends `to` everything the public agent may see.
 * `ctx.sync_without(from, to, kind: TestEventKind) -> usize`: Sends everything except one kind of event. For example, exclude sending CGKA ops.
 * `ctx.sync_in_batches(from, to, batch: usize) -> usize`: Sends everything `batch` events at a time, ingesting each batch before sending the next.
-* `ctx.sync_shuffled(from, to, seed: u64) -> usize`: Sends everything in an order decided by `seed`, so a failing order can be replayed.
-* `ctx.static_events_for(from, to) -> Vec<TestStaticEvent>`: What `from` would send `to`, without sending it.
+* `ctx.sync_shuffled(from, to, seed: u64) -> usize`: Sends everything in an order decided by `seed` so a failing order can be replayed.
+* `ctx.static_events_for(from, to) -> Vec<TestStaticEvent>`: Returns what `from` would send `to`, without sending it.
 * `ctx.pending_events(who: &TestIndividual) -> usize`: How many events `who` holds but can't yet apply.
 * `ctx.share_prekey_secrets(from: &TestIndividual, to: &TestIndividual) -> usize`: Gives one `Keyhive` instance's prekey secrets to another instance of the same identity. Returns how many held events `to` could apply after receiving the prekeys.
 
@@ -69,7 +70,7 @@ Then you can check properties:
 
 Note that `effective_access()` and `can_decrypt()` are checking different properties. `effective_access()` tells you what the Keyhive graph says someone may do. `can_decrypt()` tells you whether decryption actually succeeds. They need to be checked independently since they can come apart if there's a bug. This has happened before.
 
-You need to call `sync_all()` before:
+You need to call `sync_all_unsent()` before:
 
 * checking `can_decrypt` for anyone other than the identity who called `encrypt`,
 * checking `effective_access_seen_by` about an identity other than the resource owner,
@@ -131,7 +132,7 @@ async fn a_revoked_member_cannot_read_new_content() -> Result<()> {
 
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
     let before = ctx.encrypt(&alice, &design_doc, b"first").await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
     assert!(
         ctx.can_decrypt(&bob, &before).await?,
         "bob could read before"
@@ -139,7 +140,7 @@ async fn a_revoked_member_cannot_read_new_content() -> Result<()> {
 
     ctx.revoke(&alice, &bob, &design_doc).await?;
     let after = ctx.encrypt(&alice, &design_doc, b"second").await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert_eq!(ctx.effective_access(&bob, &design_doc).await?, None);
     assert!(

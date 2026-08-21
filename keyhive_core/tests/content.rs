@@ -12,7 +12,7 @@ async fn a_member_added_before_a_write_can_derive_its_key() -> Result<()> {
 
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
     let ct = ctx.encrypt(&alice, &design_doc, b"hello world").await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert!(ctx.can_decrypt(&bob, &ct).await?);
     Ok(())
@@ -27,7 +27,7 @@ async fn a_member_added_after_a_write_cannot_derive_its_key() -> Result<()> {
 
     let ct = ctx.encrypt(&alice, &design_doc, b"before bob").await?;
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert!(
         ctx.can_decrypt(&alice, &ct).await?,
@@ -87,7 +87,7 @@ async fn a_predecessor_does_not_make_its_earlier_key_derivable() -> Result<()> {
             b"after bob",
         )
         .await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert!(
         ctx.can_decrypt(&bob, &after_bob).await?,
@@ -132,13 +132,13 @@ async fn a_key_rotation_does_not_lock_out_a_current_member() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     ctx.force_pcs_update(&alice, &design_doc).await?;
     let ct = ctx
         .encrypt(&alice, &design_doc, b"after the rotation")
         .await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert!(
         ctx.can_decrypt(&bob, &ct).await?,
@@ -158,7 +158,7 @@ async fn content_written_after_a_rotation_does_not_open_what_came_before() -> Re
         .encrypt(&alice, &design_doc, b"written before bob")
         .await?;
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
     ctx.force_pcs_update(&alice, &design_doc).await?;
     let successor = ctx
         .encrypt_after(
@@ -168,7 +168,7 @@ async fn content_written_after_a_rotation_does_not_open_what_came_before() -> Re
             b"written after bob",
         )
         .await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert!(
         ctx.can_decrypt(&bob, &successor).await?,
@@ -209,7 +209,7 @@ async fn the_reader_derives_the_key_the_writer_used() -> Result<()> {
 
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
     let (ct, written_under) = ctx.encrypt_keyed(&alice, &design_doc, b"hello").await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert_eq!(
         ctx.derived_key(&bob, &ct).await?,
@@ -227,7 +227,7 @@ async fn a_non_member_derives_no_key() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
     let (ct, _) = ctx.encrypt_keyed(&alice, &design_doc, b"secret").await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert_eq!(ctx.derived_key(&mallory, &ct).await?, None);
     Ok(())
@@ -259,7 +259,7 @@ async fn a_ciphertext_is_refused_if_tampered_with() -> Result<()> {
 
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
     let (ct, key) = ctx.encrypt_keyed(&alice, &design_doc, b"authentic").await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     let tampered = ct.with_a_flipped_bit();
     assert!(
@@ -283,7 +283,7 @@ async fn a_reader_can_read_what_an_editor_wrote() -> Result<()> {
     ctx.delegate(&alice, &bob, &design_doc, Edit).await?;
     let msg = b"Design Doc";
     let (ct, key) = ctx.encrypt_keyed(&alice, &design_doc, msg).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert!(ctx.can_decrypt(&bob, &ct).await?);
     assert_eq!(ctx.decrypt_with_key(&ct, &key)?, msg.to_vec());

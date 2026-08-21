@@ -202,7 +202,7 @@ async fn a_public_delegation_does_not_deliver_the_document() -> Result<()> {
     ctx.delegate(&alice, &ctx.public(), &design_doc, Read)
         .await?;
     let ct = ctx.encrypt(&alice, &design_doc, b"announcement").await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert!(
         !ctx.has_received(&bob, &design_doc).await?,

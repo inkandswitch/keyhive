@@ -52,7 +52,7 @@ async fn a_prekey_rotation_reaches_a_peer() -> Result<()> {
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     let old = ctx.expand_prekeys(&alice).await?;
     let new = ctx.rotate_prekey(&alice, &old).await?;
@@ -63,7 +63,7 @@ async fn a_prekey_rotation_reaches_a_peer() -> Result<()> {
         "bob hasn't seen alice's rotation yet"
     );
 
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert!(
         ctx.prekey_ops(&bob, &alice)
@@ -113,7 +113,7 @@ async fn two_concurrent_rotations_of_one_key_both_survive() -> Result<()> {
     let alice_worker = ctx.second_instance(&alice, "alice-worker").await?;
 
     let k1 = ctx.expand_prekeys(&alice).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
     assert!(
         ctx.prekeys(&alice_worker, &alice).await?.contains(&k1),
         "both instances start from the same key"
@@ -124,7 +124,7 @@ async fn two_concurrent_rotations_of_one_key_both_survive() -> Result<()> {
     let from_worker = ctx.rotate_prekey(&alice_worker, &k1).await?;
     assert_ne!(from_first, from_worker);
 
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     for observer in [&alice, &alice_worker] {
         let live = ctx.prekeys(observer, &alice).await?;

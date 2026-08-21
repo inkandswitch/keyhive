@@ -78,7 +78,7 @@ async fn a_revocation_inside_a_group_reaches_a_peer_of_the_parent() -> Result<()
     ctx.delegate(&alice, &bob, &engineering, Read).await?;
     ctx.delegate(&alice, &dave, &design_doc, Read).await?;
     ctx.revoke(&alice, &bob, &engineering).await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert_eq!(
         ctx.effective_access(&bob, &design_doc).await?,
@@ -129,6 +129,35 @@ async fn partial_delivery_leaves_events_pending_and_they_apply_later() -> Result
     Ok(())
 }
 
+// This is a sanity check for the testing facade.
+#[tokio::test]
+async fn the_resending_sync_methods_really_resend() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    ctx.delegate(&alice, &bob, &design_doc, Read).await?;
+    ctx.sync_all_unsent().await?;
+
+    let entitled = ctx.static_events_for(&alice, &bob).await?.len();
+    assert!(entitled > 0, "bob is entitled to something to begin with");
+
+    ctx.sync(&alice, &bob).await?;
+    assert_eq!(
+        ctx.events_last_delivered(),
+        entitled,
+        "sync sends everything bob is entitled to, not what he has yet to see"
+    );
+
+    ctx.sync_shuffled(&alice, &bob, 0).await?;
+    assert_eq!(
+        ctx.events_last_delivered(),
+        entitled,
+        "and so does sync_shuffled, which is what the redelivery tests call"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn redelivering_known_events_changes_nothing() -> Result<()> {
     let mut ctx = TestContext::new().await;
@@ -141,10 +170,15 @@ async fn redelivering_known_events_changes_nothing() -> Result<()> {
         .await?;
     ctx.delegate(&alice, &bob, &engineering, Read).await?;
     let ct = ctx.encrypt(&alice, &design_doc, b"written once").await?;
-    ctx.sync_all().await?;
+    ctx.sync_all_unsent().await?;
 
     assert_eq!(ctx.pending_events(&bob).await?, 0);
     assert!(ctx.can_decrypt(&bob, &ct).await?);
+
+    // Bob has all of this already. The point of the test is that it is sent to him
+    // anyway.
+    let to_resend = ctx.static_events_for(&alice, &bob).await?.len();
+    assert!(to_resend > 0, "there is nothing to redeliver");
 
     let pending = ctx.sync_shuffled(&alice, &bob, 0).await?;
 
