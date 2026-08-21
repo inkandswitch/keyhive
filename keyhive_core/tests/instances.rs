@@ -125,6 +125,142 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
 }
 
 #[tokio::test]
+async fn two_instances_creating_documents_independently_converge() -> Result<()> {
+    let mut ctx = TestContext::with_seed(0xa11ce).await;
+    let alice = ctx.individual("alice").await?;
+    let alice_worker = ctx.second_instance(&alice, "alice-worker").await?;
+    let reader = ctx.individual("reader").await?;
+
+    // Each instance holds the other's prekey secrets, like two clients sharing storage.
+    ctx.share_prekey_secrets(&alice, &alice_worker).await?;
+    ctx.share_prekey_secrets(&alice_worker, &alice).await?;
+
+    // Neither instance knows about the other's document when it makes it.
+    let from_alice = ctx.doc(&alice, "notes").await?;
+    ctx.delegate(&alice, &ctx.public(), &from_alice, Read)
+        .await?;
+    ctx.force_pcs_update(&alice, &from_alice).await?;
+
+    let from_worker = ctx.doc(&alice_worker, "design_doc").await?;
+    ctx.delegate(&alice_worker, &ctx.public(), &from_worker, Read)
+        .await?;
+    ctx.force_pcs_update(&alice_worker, &from_worker).await?;
+
+    ctx.sync(&alice, &alice_worker).await?;
+    ctx.sync(&alice_worker, &alice).await?;
+
+    assert!(
+        ctx.has_received(&alice, &from_worker).await?,
+        "alice learned about the document the worker made"
+    );
+    assert!(
+        ctx.has_received(&alice_worker, &from_alice).await?,
+        "and the worker about alice's"
+    );
+    assert_eq!(ctx.pending_events(&alice).await?, 0);
+    assert_eq!(
+        ctx.pending_events(&alice_worker).await?,
+        0,
+        "neither instance was left holding an event it could not place"
+    );
+
+    let alice_wrote = ctx.encrypt(&alice, &from_alice, b"from alice").await?;
+    let worker_wrote = ctx
+        .encrypt(&alice_worker, &from_worker, b"from the worker")
+        .await?;
+
+    ctx.sync_as_public(&alice, &reader).await?;
+    ctx.sync_as_public(&alice_worker, &reader).await?;
+
+    assert!(ctx.can_decrypt(&reader, &alice_wrote).await?);
+    assert!(
+        ctx.can_decrypt(&reader, &worker_wrote).await?,
+        "one reader, two instances, both documents"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()> {
+    let mut ctx = TestContext::with_seed(0xa11ce).await;
+    let alice = ctx.individual("alice").await?;
+    let alice_worker = ctx.second_instance(&alice, "alice-worker").await?;
+    let reader = ctx.individual("reader").await?;
+    ctx.share_prekey_secrets(&alice, &alice_worker).await?;
+
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    // When revoking and re-delegating, the second delegation cannot be applied until the
+    // revocation has been.
+    ctx.delegate(&alice, &ctx.public(), &design_doc, Read)
+        .await?;
+    ctx.revoke(&alice, &ctx.public(), &design_doc).await?;
+    ctx.delegate(&alice, &ctx.public(), &design_doc, Read)
+        .await?;
+    ctx.force_pcs_update(&alice, &design_doc).await?;
+
+    ctx.sync(&alice, &alice_worker).await?;
+    assert_eq!(
+        ctx.pending_events(&alice_worker).await?,
+        0,
+        "the worker applied the revocation and the delegation that followed it"
+    );
+    assert_eq!(
+        ctx.effective_access_seen_by(&alice_worker, &ctx.public(), &design_doc)
+            .await?,
+        Some(Read),
+        "and ended on the re-delegation rather than the revocation"
+    );
+
+    let worker_wrote = ctx
+        .encrypt(&alice_worker, &design_doc, b"after the re-delegation")
+        .await?;
+    ctx.sync_as_public(&alice, &reader).await?;
+    ctx.sync_as_public(&alice_worker, &reader).await?;
+
+    assert!(
+        ctx.can_decrypt(&reader, &worker_wrote).await?,
+        "the document is public again, so the reader reads what the worker wrote"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_peer_cannot_read_an_instance_it_has_not_heard_from() -> Result<()> {
+    let mut ctx = TestContext::with_seed(0xa11ce).await;
+    let alice = ctx.individual("alice").await?;
+    let alice_worker = ctx.second_instance(&alice, "alice-worker").await?;
+    let bob = ctx.individual("bob").await?;
+    ctx.share_prekey_secrets(&alice, &alice_worker).await?;
+
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    ctx.delegate(&alice, &bob, &design_doc, Read).await?;
+    ctx.sync(&alice, &alice_worker).await?;
+
+    let worker_wrote = ctx
+        .encrypt(&alice_worker, &design_doc, b"written on the worker")
+        .await?;
+
+    // Everything alice has, which is everything except the worker's write.
+    ctx.sync(&alice, &bob).await?;
+    assert!(
+        ctx.has_received(&bob, &design_doc).await?,
+        "bob has the document itself"
+    );
+    assert!(
+        !ctx.can_decrypt(&bob, &worker_wrote).await?,
+        "but not the key agreement the worker's write went under"
+    );
+
+    ctx.sync(&alice_worker, &bob).await?;
+    assert!(
+        ctx.can_decrypt(&bob, &worker_wrote).await?,
+        "the second round completes it"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn prekey_secrets_do_not_cross_between_identities() -> Result<()> {
     let mut ctx = TestContext::with_seed(0xa11ce).await;
     let alice = ctx.individual("alice").await?;
