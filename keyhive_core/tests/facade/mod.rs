@@ -795,6 +795,23 @@ impl TestContext {
         ))
     }
 
+    /// Force PCS update on `doc`.
+    ///
+    /// Returns the share key the rotation introduced.
+    pub async fn force_pcs_update(
+        &mut self,
+        who: &TestIndividual,
+        doc: &TestDocument,
+    ) -> Result<TestShareKey> {
+        let handle = self.get_document(who, doc).await?;
+        let (_op, new_key, _secret) = self
+            .hive(who)?
+            .force_pcs_update(handle)
+            .await
+            .map_err(|e| TestError::Other(e.to_string()))?;
+        Ok(TestShareKey(new_key))
+    }
+
     /// Add a prekey. Returns the key that was added.
     pub async fn expand_prekeys(&mut self, who: &TestIndividual) -> Result<TestShareKey> {
         let op = self.hive(who)?.expand_prekeys().await?;

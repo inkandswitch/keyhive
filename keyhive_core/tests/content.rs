@@ -95,6 +95,87 @@ async fn a_predecessor_does_not_make_its_earlier_key_derivable() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn a_key_rotation_changes_the_key_the_same_content_goes_under() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    // The same bytes, so only the document's key material differs between the two writes.
+    let bytes = b"the same bytes twice";
+    let before = ctx.encrypt(&alice, &design_doc, bytes).await?;
+    ctx.force_pcs_update(&alice, &design_doc).await?;
+    let after = ctx.encrypt(&alice, &design_doc, bytes).await?;
+
+    assert_ne!(
+        ctx.derived_key(&alice, &before).await?,
+        ctx.derived_key(&alice, &after).await?,
+        "the rotation left the same content under the same key"
+    );
+    assert!(
+        ctx.can_decrypt(&alice, &before).await?,
+        "and alice can still read what she wrote before it"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_key_rotation_does_not_lock_out_a_current_member() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    ctx.delegate(&alice, &bob, &design_doc, Read).await?;
+    ctx.sync_all().await?;
+
+    ctx.force_pcs_update(&alice, &design_doc).await?;
+    let ct = ctx
+        .encrypt(&alice, &design_doc, b"after the rotation")
+        .await?;
+    ctx.sync_all().await?;
+
+    assert!(
+        ctx.can_decrypt(&bob, &ct).await?,
+        "bob was a member across the rotation"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn content_written_after_a_rotation_does_not_open_what_came_before() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    let history = ctx
+        .encrypt(&alice, &design_doc, b"written before bob")
+        .await?;
+    ctx.delegate(&alice, &bob, &design_doc, Read).await?;
+    ctx.sync_all().await?;
+    ctx.force_pcs_update(&alice, &design_doc).await?;
+    let successor = ctx
+        .encrypt_after(
+            &alice,
+            &design_doc,
+            &[history.clone()],
+            b"written after bob",
+        )
+        .await?;
+    ctx.sync_all().await?;
+
+    assert!(
+        ctx.can_decrypt(&bob, &successor).await?,
+        "bob reads content written under the key he was given"
+    );
+    assert!(
+        !ctx.can_decrypt(&bob, &history).await?,
+        "the presence of a predecessor does not provide access to its key"
+    );
+    Ok(())
+}
+
 // This is a sanity check for the testing facade
 #[tokio::test]
 async fn a_predecessor_from_another_document_is_refused() -> Result<()> {
