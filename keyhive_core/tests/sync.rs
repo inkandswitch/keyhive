@@ -158,6 +158,43 @@ async fn partial_delivery_leaves_events_pending_and_they_apply_later() -> Result
 }
 
 #[tokio::test]
+async fn redelivering_known_events_changes_nothing() -> Result<()> {
+    let mut ctx = TestContext::with_seed(0xd11d0).await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+
+    ctx.delegate(&alice, &engineering, &design_doc, Edit)
+        .await?;
+    ctx.delegate(&alice, &bob, &engineering, Read).await?;
+    let ct = ctx.encrypt(&alice, &design_doc, b"written once").await?;
+    ctx.sync_all().await?;
+
+    assert_eq!(ctx.pending_events(&bob).await?, 0);
+    assert!(ctx.can_decrypt(&bob, &ct).await?);
+
+    let pending = ctx.sync_shuffled(&alice, &bob, 0).await?;
+
+    assert_eq!(
+        pending, 0,
+        "an event bob already held would not apply again"
+    );
+    assert_eq!(ctx.pending_events(&bob).await?, 0);
+    assert_eq!(
+        ctx.effective_access_seen_by(&bob, &bob, &design_doc)
+            .await?,
+        Some(Read),
+        "the second delivery changed what bob believes"
+    );
+    assert!(
+        ctx.can_decrypt(&bob, &ct).await?,
+        "the second delivery caused bob to lose the ability to decrypt"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn withholding_key_agreement_leaves_a_member_who_cannot_read() -> Result<()> {
     let mut ctx = TestContext::with_seed(0xcafe).await;
     let alice = ctx.individual("alice").await?;
