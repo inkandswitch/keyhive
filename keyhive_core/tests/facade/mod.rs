@@ -165,7 +165,8 @@ impl From<&str> for TestError {
     }
 }
 
-/// Identifies one `Keyhive`. A single keyhive identity can be running more than one.
+/// Identifies one `Keyhive` instance. A single keyhive identity can be
+/// running more than one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TestInstanceId(u32);
 
@@ -191,7 +192,7 @@ pub struct TestDocument {
     owner: TestInstanceId,
 }
 
-/// Encrypted content, with the id for the document it belongs to.
+/// Encrypted content with the id for the document it belongs to.
 #[derive(Clone)]
 pub struct TestEncryptedContent {
     doc: DocumentId,
@@ -430,7 +431,7 @@ pub struct TestContext {
 }
 
 impl TestContext {
-    /// A context, recording a seed for replayability
+    /// A context, recording a seed for replayability.
     pub async fn new() -> Self {
         Self::with_seed(rand::rngs::OsRng.gen()).await
     }
@@ -681,7 +682,7 @@ impl TestContext {
     /// Whether `who` has received the events needed to learn about `what`.
     ///
     /// `effective_access` returns `None` both for no access and for never having heard of
-    /// the subject. This can distinguish those cases.
+    /// the subject. This method can distinguish those cases.
     pub async fn has_received(&self, who: &TestIndividual, what: &impl TestAgent) -> Result<bool> {
         Ok(self.hive(who)?.get_agent(what.agent_id()).await.is_some())
     }
@@ -813,8 +814,7 @@ impl TestContext {
 
     /// Rebuild an instance from an archive, as a new instance of the same identity.
     ///
-    /// The restored instance gets a fresh ciphertext store. It can compute keys but
-    /// holds no stored ciphertexts of its own.
+    /// The restored instance gets a fresh ciphertext store.
     pub async fn rebuild_from_archive(
         &mut self,
         archive: &TestArchive,
