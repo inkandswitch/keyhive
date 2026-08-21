@@ -121,7 +121,7 @@ async fn multi_route_resolution_is_deterministic() -> Result<()> {
     assert_eq!(
         answers.len(),
         1,
-        "the answer depends on key material, one seed each: {answers:x?}"
+        "more than one answer across eight graphs, one seed each: {answers:x?}"
     );
     assert_eq!(
         answers.into_keys().next().unwrap(),
@@ -199,6 +199,144 @@ async fn admin_on_a_parent_doc_reaches_the_child_doc() -> Result<()> {
 
     assert_eq!(ctx.effective_access(&bob, &account).await?, Some(Admin));
     assert_eq!(ctx.effective_access(&bob, &project).await?, Some(Admin));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_transitive_admin_through_a_document_can_delegate() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let carol = ctx.individual("carol").await?;
+    let account = ctx.doc(&alice, "account").await?;
+    let project = ctx.doc(&alice, "project").await?;
+
+    ctx.delegate(&alice, &account, &project, Admin).await?;
+    ctx.delegate(&alice, &bob, &account, Admin).await?;
+    ctx.sync_all().await?;
+    assert_eq!(
+        ctx.effective_access(&bob, &project).await?,
+        Some(Admin),
+        "bob reaches project through account"
+    );
+
+    ctx.delegate(&bob, &carol, &project, Edit).await?;
+    assert_eq!(
+        ctx.effective_access_seen_by(&bob, &carol, &project).await?,
+        Some(Edit),
+        "bob delegated based on a route (through a doc) he does not hold directly"
+    );
+
+    ctx.sync_all().await?;
+    assert_eq!(
+        ctx.effective_access(&carol, &project).await?,
+        Some(Edit),
+        "and alice, who owns the document, honors it"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_transitive_admin_through_a_group_can_delegate() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let carol = ctx.individual("carol").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let project = ctx.doc(&alice, "project").await?;
+
+    ctx.delegate(&alice, &engineering, &project, Admin).await?;
+    ctx.delegate(&alice, &bob, &engineering, Admin).await?;
+    ctx.sync_all().await?;
+    assert_eq!(ctx.effective_access(&bob, &project).await?, Some(Admin));
+
+    ctx.delegate(&bob, &carol, &project, Edit).await?;
+    assert_eq!(
+        ctx.effective_access_seen_by(&bob, &carol, &project).await?,
+        Some(Edit),
+        "bob delegated on the strength of a route he does not hold directly"
+    );
+
+    ctx.sync_all().await?;
+    assert_eq!(
+        ctx.effective_access(&carol, &project).await?,
+        Some(Edit),
+        "bob delegated based on a route (through a group) he does not hold directly"
+    );
+    Ok(())
+}
+
+/// A group holds a document and the document holds the group. Reachability has to
+/// terminate from either end and neither membership may be lost.
+#[tokio::test]
+async fn a_membership_cycle_still_resolves() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    ctx.delegate(&alice, &bob, &engineering, Read).await?;
+    ctx.delegate(&alice, &engineering, &design_doc, Read)
+        .await?;
+    ctx.delegate(&alice, &design_doc, &engineering, Read)
+        .await?;
+
+    assert_eq!(ctx.effective_access(&bob, &design_doc).await?, Some(Read));
+
+    let of_the_document = ctx.transitive_members_of(&design_doc).await?;
+    assert_eq!(
+        of_the_document.get("bob"),
+        Some(&Read),
+        "bob reaches the document through the group, even when there's a cycle"
+    );
+    assert_eq!(
+        of_the_document.get("engineering"),
+        Some(&Read),
+        "and the group is still a member of the document"
+    );
+
+    let of_the_group = ctx.transitive_members_of(&engineering).await?;
+    assert_eq!(
+        of_the_group.get("bob"),
+        Some(&Read),
+        "the walk terminates from the other end too"
+    );
+    assert_eq!(
+        of_the_group.get("design_doc"),
+        Some(&Read),
+        "and the reverse edge is what makes it a cycle"
+    );
+    Ok(())
+}
+
+/// Alice creates a group, so she is its admin. Giving a document she owns a `Read`
+/// membership in that group hands her a second, weaker route to it. Her own access must not
+/// drop because of a route she gained.
+#[tokio::test]
+#[ignore = "a member's level comes from the last route explored, not the best one. Fix this."]
+async fn an_attenuated_second_route_does_not_lower_reported_access() -> Result<()> {
+    for _ in 0..5 {
+        let mut ctx = TestContext::new().await;
+        let alice = ctx.individual("alice").await?;
+        let engineering = ctx.group(&alice, "engineering").await?;
+        let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+        assert_eq!(
+            ctx.transitive_members_of(&engineering).await?.get("alice"),
+            Some(&Admin),
+            "alice created the group"
+        );
+
+        ctx.delegate(&alice, &design_doc, &engineering, Read)
+            .await?;
+
+        assert_eq!(
+            ctx.transitive_members_of(&engineering).await?.get("alice"),
+            Some(&Admin),
+            "the weaker route took precedence over her own"
+        );
+    }
     Ok(())
 }
 
