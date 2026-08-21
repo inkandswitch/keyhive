@@ -5,14 +5,14 @@ use keyhive_core::access::Access::{self, Edit, Read};
 
 // Sanity check for seeding tests
 #[tokio::test]
-async fn the_same_seed_produces_the_same_certificates() -> Result<()> {
+async fn the_same_seed_produces_the_same_delegations() -> Result<()> {
     async fn build(seed: u64) -> Result<String> {
         let mut ctx = TestContext::with_seed(seed).await;
         let alice = ctx.individual("alice").await?;
         let bob = ctx.individual("bob").await?;
         let design_doc = ctx.doc(&alice, "design_doc").await?;
-        let cert = ctx.delegate(&alice, &bob, &design_doc, Read).await?;
-        Ok(format!("{cert:?}"))
+        let dlg = ctx.delegate(&alice, &bob, &design_doc, Read).await?;
+        Ok(format!("{dlg:?}"))
     }
 
     assert_eq!(build(1234).await?, build(1234).await?, "seed 1234 twice");
