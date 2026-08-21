@@ -31,6 +31,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
+use thiserror::Error;
 
 type Hive = Keyhive<
     future_form::Sendable,
@@ -45,40 +46,24 @@ type Hive = Keyhive<
 pub type Result<T> = std::result::Result<T, TestError>;
 
 /// Why an operation was refused.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum TestError {
     /// The issuer holds some access over the resource, but less than they tried to delegate.
+    #[error("escalation: wanted {wanted}, holds {held}")]
     Escalation { wanted: Access, held: Access },
+
     /// The issuer has no access to the resource.
+    #[error("no authority over that resource")]
     NoAuthority,
+
     /// The individual has not yet received the required events.
+    #[error("{individual:?} does not know about {subject:?}. Sync first.")]
     NotSynced { individual: String, subject: String },
+
     /// Anything else, wrapping the underlying error as a `String`.
+    #[error("{0}")]
     Other(String),
 }
-
-impl std::fmt::Display for TestError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TestError::Escalation { wanted, held } => {
-                write!(f, "escalation: wanted {wanted}, holds {held}")
-            }
-            TestError::NoAuthority => write!(f, "no authority over that resource"),
-            TestError::NotSynced {
-                individual,
-                subject,
-            } => {
-                write!(
-                    f,
-                    "{individual:?} does not know about {subject:?}. Sync first."
-                )
-            }
-            TestError::Other(m) => write!(f, "{m}"),
-        }
-    }
-}
-
-impl std::error::Error for TestError {}
 
 impl From<AddMemberError> for TestError {
     fn from(e: AddMemberError) -> Self {
