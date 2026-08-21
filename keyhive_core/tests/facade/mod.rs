@@ -7,6 +7,7 @@ use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
     archive::Archive,
+    crypto::envelope::Envelope,
     event::static_event::StaticEvent,
     keyhive::{EncryptContentError, Keyhive},
     listener::no_listener::NoListener,
@@ -47,6 +48,7 @@ type Hive = Keyhive<
 type AgentHandle = Agent<future_form::Sendable, MemorySigner, [u8; 32], NoListener>;
 type MemberedHandle = Membered<future_form::Sendable, MemorySigner, [u8; 32], NoListener>;
 type DocHandle = Arc<Mutex<Document<future_form::Sendable, MemorySigner, [u8; 32], NoListener>>>;
+type ContentStore = MemoryCiphertextStore<[u8; 32], Vec<u8>>;
 
 pub type Result<T> = std::result::Result<T, TestError>;
 
@@ -293,6 +295,26 @@ impl TestPrekeyOp {
     }
 }
 
+/// What was recovered by walking back through an envelope's ancestors.
+#[derive(Clone, Debug)]
+pub struct TestCausalDecryption {
+    recovered: Vec<Vec<u8>>,
+    missing: usize,
+}
+
+impl TestCausalDecryption {
+    /// The content recovered by the walk, in no order.
+    pub fn recovered(&self) -> BTreeSet<Vec<u8>> {
+        self.recovered.iter().cloned().collect()
+    }
+
+    /// How many ancestors were named but not held. Their keys are known, so they can be
+    /// decrypted as soon as they arrive.
+    pub fn missing(&self) -> usize {
+        self.missing
+    }
+}
+
 /// A serialized `Keyhive`.
 #[derive(Clone)]
 pub struct TestArchive {
@@ -421,6 +443,9 @@ pub struct TestContext {
     docs: Vec<TestDocument>,
     /// The digests each instance has already received, so `sync` sends a delta.
     delivered: BTreeMap<TestInstanceId, BTreeSet<[u8; 32]>>,
+    /// Each instance's ciphertext store. Storing what you wrote or received is the
+    /// application's role, and causal decryption reads back out of it.
+    stores: BTreeMap<TestInstanceId, ContentStore>,
 }
 
 impl TestContext {
@@ -442,6 +467,7 @@ impl TestContext {
             names,
             docs: Vec::new(),
             delivered: BTreeMap::new(),
+            stores: BTreeMap::new(),
             csprng: StdRng::seed_from_u64(seed),
             seed,
         }
@@ -760,6 +786,73 @@ impl TestContext {
         })
     }
 
+    /// Write `content` in an envelope listing the ancestors and carrying the keys to open
+    /// them. Simulates what an application would do.
+    pub async fn encrypt_in_envelope(
+        &mut self,
+        who: &TestIndividual,
+        doc: &TestDocument,
+        after: &[TestEncryptedContent],
+        content: &[u8],
+    ) -> Result<TestEncryptedContent> {
+        let mut ancestors = std::collections::HashMap::new();
+        for pred in after {
+            let key = self.derived_key(who, pred).await?.ok_or_else(|| {
+                format!(
+                    "{:?} cannot derive the key for an ancestor, so cannot name it",
+                    who.name
+                )
+            })?;
+            ancestors.insert(pred.inner.content_ref, key.0);
+        }
+        let envelope = Envelope {
+            plaintext: content.to_vec(),
+            ancestors,
+        };
+        let bytes = bincode::serialize(&envelope)
+            .map_err(|e| TestError::Other(format!("could not serialize an envelope: {e}")))?;
+
+        let out = self.encrypt_after(who, doc, after, &bytes).await?;
+        self.deliver_content(who, &out).await?;
+        Ok(out)
+    }
+
+    /// Give `to` a copy of the content, simulating how an application would behave.
+    pub async fn deliver_content(
+        &mut self,
+        to: &TestIndividual,
+        ct: &TestEncryptedContent,
+    ) -> Result<()> {
+        self.stores
+            .get(&to.instance)
+            .ok_or_else(|| format!("{:?} is not in this TestContext", to.name))?
+            .insert(Arc::new(ct.inner.clone()))
+            .await;
+        Ok(())
+    }
+
+    /// Walk back from `ct` through the ancestors it lists, decrypting what `who` holds.
+    ///
+    /// Reports what it recovered and what it could not find.
+    pub async fn causal_decrypt(
+        &self,
+        who: &TestIndividual,
+        ct: &TestEncryptedContent,
+    ) -> Result<TestCausalDecryption> {
+        let handle = self
+            .get_document_by_id(who, ct.doc, "that document")
+            .await?;
+        let state = self
+            .hive(who)?
+            .try_causal_decrypt_content(handle, &ct.inner)
+            .await
+            .map_err(|e| TestError::Other(e.to_string()))?;
+        Ok(TestCausalDecryption {
+            recovered: state.complete.into_iter().map(|(_, p)| p).collect(),
+            missing: state.next.len(),
+        })
+    }
+
     /// Encrypt. Returns the application secret the content went under.
     pub async fn encrypt_keyed(
         &mut self,
@@ -870,17 +963,18 @@ impl TestContext {
             .get(&archive.identity)
             .ok_or("that archive's identity was not created by this TestContext")?
             .clone();
+        let store = ContentStore::new();
         let hive = Keyhive::<future_form::Sendable, _, _, _, _, _, _>::try_from_archive(
             &archive.inner,
             signer,
-            MemoryCiphertextStore::new(),
+            store.clone(),
             NoListener,
             Arc::new(Mutex::new(StdRng::seed_from_u64(self.csprng.gen()))),
         )
         .await
         .map_err(|e| TestError::Other(e.to_string()))?;
 
-        self.register_instance(hive, name).await
+        self.register_instance(hive, store, name).await
     }
 
     /// Merge an archive into a live instance. Returns how many events remain pending.
@@ -1119,19 +1213,25 @@ impl TestContext {
         rng: StdRng,
         name: &str,
     ) -> Result<TestIndividual> {
+        let store = ContentStore::new();
         let hive = Keyhive::<future_form::Sendable, _, _, _, _, _, _>::generate(
             signer,
-            MemoryCiphertextStore::new(),
+            store.clone(),
             NoListener,
             rng,
         )
         .await?;
 
-        self.register_instance(hive, name).await
+        self.register_instance(hive, store, name).await
     }
 
     /// Register a new instance and swap contact cards with every other instance.
-    async fn register_instance(&mut self, hive: Hive, name: &str) -> Result<TestIndividual> {
+    async fn register_instance(
+        &mut self,
+        hive: Hive,
+        store: ContentStore,
+        name: &str,
+    ) -> Result<TestIndividual> {
         let card = hive.contact_card().await?;
         for other in self.hives.values() {
             other.receive_contact_card(&card).await?;
@@ -1143,6 +1243,7 @@ impl TestContext {
         let instance = TestInstanceId(self.next_instance);
         self.next_instance += 1;
         self.hives.insert(instance, hive);
+        self.stores.insert(instance, store);
         let handle = TestIndividual {
             identity,
             instance,

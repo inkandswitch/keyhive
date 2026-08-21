@@ -37,6 +37,10 @@ You can also create content:
 * `ctx.encrypt_after(who, doc, after: &[TestEncryptedContent], bytes) -> TestEncryptedContent`: Writes content that follows `after` in the document's content DAG.
 * `ctx.derived_key(who: &TestIndividual, content: &TestEncryptedContent) -> Option<TestSymmetricKey>`: The application secret `who` derives for this content or `None` if they can't derive one.
 * `ctx.decrypt_with_key(content: &TestEncryptedContent, key: &TestSymmetricKey) -> Vec<u8>`: Decrypts with a key the test obtained some other way, rather than with one derived through the graph.
+
+* `ctx.encrypt_in_envelope(who, doc, after: &[TestEncryptedContent], bytes) -> TestEncryptedContent`: Writes content with an envelope listing the ancestors and carrying the keys to open them. This simulates the application layer.
+* `ctx.deliver_content(to: &TestIndividual, content: &TestEncryptedContent)`: Gives `to` a copy of the content. Sync sends CGKA and membership ops, not content.
+* `ctx.causal_decrypt(who: &TestIndividual, content: &TestEncryptedContent) -> TestCausalDecryption`: Walks back from `content` through the ancestors it lists. Returns what it `recovered()` and how many ancestors are `missing()`.
 * `ctx.force_pcs_update(who: &TestIndividual, doc: &TestDocument) -> TestShareKey`: Forces a PCS key update for the document. Returns the share key the rotation introduced.
 * `content.with_a_flipped_bit() -> TestEncryptedContent`: The same content with one bit of the ciphertext changed.
 
