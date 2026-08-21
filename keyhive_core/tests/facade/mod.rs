@@ -129,35 +129,23 @@ impl From<RevokeMemberError> for TestError {
     }
 }
 
-impl From<SigningError> for TestError {
-    fn from(e: SigningError) -> Self {
-        TestError::Other(e.to_string())
-    }
+macro_rules! other_from {
+    ($($t:ty),+ $(,)?) => {$(
+        impl From<$t> for TestError {
+            fn from(e: $t) -> Self {
+                TestError::Other(e.to_string())
+            }
+        }
+    )+};
 }
 
-impl From<GenerateDocError> for TestError {
-    fn from(e: GenerateDocError) -> Self {
-        TestError::Other(e.to_string())
-    }
-}
-
-impl From<EncryptContentError> for TestError {
-    fn from(e: EncryptContentError) -> Self {
-        TestError::Other(e.to_string())
-    }
-}
-
-impl From<DecryptError> for TestError {
-    fn from(e: DecryptError) -> Self {
-        TestError::Other(e.to_string())
-    }
-}
-
-impl From<ReceivePrekeyOpError> for TestError {
-    fn from(e: ReceivePrekeyOpError) -> Self {
-        TestError::Other(e.to_string())
-    }
-}
+other_from!(
+    SigningError,
+    GenerateDocError,
+    EncryptContentError,
+    DecryptError,
+    ReceivePrekeyOpError,
+);
 
 impl From<String> for TestError {
     fn from(m: String) -> Self {
@@ -414,6 +402,10 @@ pub trait TestAgent {
 pub trait TestMembered: TestAgent {
     #[doc(hidden)]
     fn as_membered(&self) -> TestMemberedRef<'_>;
+
+    /// The instance that created it, which is the one whose view is authoritative.
+    #[doc(hidden)]
+    fn owner(&self) -> TestInstanceId;
 }
 
 #[doc(hidden)]
@@ -461,10 +453,16 @@ impl TestMembered for TestGroup {
     fn as_membered(&self) -> TestMemberedRef<'_> {
         TestMemberedRef::Group(self)
     }
+    fn owner(&self) -> TestInstanceId {
+        self.owner
+    }
 }
 impl TestMembered for TestDocument {
     fn as_membered(&self) -> TestMemberedRef<'_> {
         TestMemberedRef::Doc(self)
+    }
+    fn owner(&self) -> TestInstanceId {
+        self.owner
     }
 }
 
@@ -621,8 +619,8 @@ impl TestContext {
         Ok(TestDelegation {
             digest: *update.delegation.digest().raw.as_bytes(),
             issuer: issuer.name.clone(),
-            audience: self.name_of(audience.agent_id(), audience.name()),
-            subject: self.name_of(membered.agent_id(), membered.name()),
+            audience: self.name_of(audience.agent_id()),
+            subject: self.name_of(membered.agent_id()),
             can,
         })
     }
@@ -697,17 +695,13 @@ impl TestContext {
         &self,
         membered: &impl TestMembered,
     ) -> Result<BTreeMap<String, Access>> {
-        let owner = match membered.as_membered() {
-            TestMemberedRef::Group(g) => g.owner,
-            TestMemberedRef::Doc(d) => d.owner,
-        };
-        let observer = self.individual_by_instance(owner)?;
+        let observer = self.individual_by_instance(membered.owner())?;
         let handle = self.get_membered(&observer, membered).await?;
         let raw = self.hive(&observer)?.reachable_members(handle).await;
 
         Ok(raw
             .into_iter()
-            .map(|(id, (_, access))| (self.name_of(id, &id.to_string()).to_string(), access))
+            .map(|(id, (_, access))| (self.name_of(id).to_string(), access))
             .collect())
     }
 
@@ -719,18 +713,14 @@ impl TestContext {
         &self,
         membered: &impl TestMembered,
     ) -> Result<BTreeMap<String, Access>> {
-        let owner = match membered.as_membered() {
-            TestMemberedRef::Group(g) => g.owner,
-            TestMemberedRef::Doc(d) => d.owner,
-        };
-        let observer = self.individual_by_instance(owner)?;
+        let observer = self.individual_by_instance(membered.owner())?;
         let raw = match self.get_membered(&observer, membered).await? {
             Membered::Group(_, group) => group.lock().await.revoked_members(),
             Membered::Document(_, doc) => doc.lock().await.revoked_members(),
         };
         Ok(raw
             .into_iter()
-            .map(|(id, (_, access))| (self.name_of(id, &id.to_string()).to_string(), access))
+            .map(|(id, (_, access))| (self.name_of(id).to_string(), access))
             .collect())
     }
 
@@ -741,15 +731,15 @@ impl TestContext {
         membered: &impl TestMembered,
     ) -> Result<Vec<TestDelegation>> {
         let handle = self.get_membered(observer, membered).await?;
-        let subject = self.name_of(membered.agent_id(), membered.name());
+        let subject = self.name_of(membered.agent_id());
         let mut out = vec![];
         for signed in handle.members().await.values().flat_map(|d| d.iter()) {
             let issuer = Identifier::from(signed.issuer());
             let audience = signed.payload().delegate().id();
             out.push(TestDelegation {
                 digest: *signed.digest().raw.as_bytes(),
-                issuer: self.name_of(issuer, &issuer.to_string()),
-                audience: self.name_of(audience, &audience.to_string()),
+                issuer: self.name_of(issuer),
+                audience: self.name_of(audience),
                 subject: subject.clone(),
                 can: signed.payload().can(),
             });
@@ -851,9 +841,7 @@ impl TestContext {
         for pred in after {
             if pred.doc != doc.id {
                 return Err(TestError::WrongDocument {
-                    holds: self
-                        .name_of(pred.doc.into(), "another document")
-                        .to_string(),
+                    holds: self.name_of(pred.doc.into()).to_string(),
                     doc: doc.name.to_string(),
                 });
             }
@@ -880,7 +868,7 @@ impl TestContext {
         after: &[TestEncryptedContent],
         content: &[u8],
     ) -> Result<TestEncryptedContent> {
-        let mut ancestors = std::collections::HashMap::new();
+        let mut ancestors = std::collections::HashMap::with_capacity(after.len());
         for pred in after {
             let key = self.derived_key(who, pred).await?.ok_or_else(|| {
                 format!(
@@ -1189,8 +1177,8 @@ impl TestContext {
     pub async fn sync_all_unsent(&mut self) -> Result<()> {
         const MAX_ROUNDS: usize = 8;
         let everyone: Vec<TestIndividual> = self.handles.values().cloned().collect();
+        let mut before = self.state_signature().await;
         for _ in 0..MAX_ROUNDS {
-            let before = self.state_signature().await;
             for from in &everyone {
                 for to in &everyone {
                     if from.instance != to.instance {
@@ -1198,9 +1186,11 @@ impl TestContext {
                     }
                 }
             }
-            if self.state_signature().await == before {
+            let after = self.state_signature().await;
+            if after == before {
                 return Ok(());
             }
+            before = after;
         }
         Err(format!("sync_all_unsent did not settle in {MAX_ROUNDS} rounds").into())
     }
@@ -1280,11 +1270,12 @@ impl TestContext {
         Ok(())
     }
 
-    fn name_of(&self, id: Identifier, fallback: &str) -> Arc<str> {
+    /// The name this context knows `id` by, or the id itself if it knows none.
+    fn name_of(&self, id: Identifier) -> Arc<str> {
         self.names
             .get(&id)
             .cloned()
-            .unwrap_or_else(|| fallback.into())
+            .unwrap_or_else(|| id.to_string().into())
     }
 
     fn hive(&self, who: &TestIndividual) -> Result<&Hive> {
@@ -1438,7 +1429,7 @@ impl TestContext {
                 continue;
             }
             if let Ok(h) = self.get_document(observer, d).await {
-                out.push(h.dupe());
+                out.push(h);
             }
         }
         out
