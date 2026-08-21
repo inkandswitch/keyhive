@@ -462,9 +462,9 @@ impl TestContext {
         TestPublic
     }
 
-    // Create a keyhive identity.
-    //
-    // Every individual learns every other individual's contact card.
+    /// Create a keyhive identity.
+    ///
+    /// Every individual learns every other individual's contact card.
     pub async fn individual(&mut self, name: &str) -> Result<TestIndividual> {
         let mut hive_rng = StdRng::seed_from_u64(self.csprng.gen());
         let signer = MemorySigner::generate(&mut hive_rng);
@@ -1151,8 +1151,8 @@ impl TestContext {
             })
     }
 
-    /// `add_member`'s `other_relevant_docs` argument: documents whose key state is
-    /// affected, excluding the resource itself.
+    /// `add_member`'s `other_relevant_docs` argument: every document the observer can open,
+    /// excluding the resource itself.
     #[allow(clippy::type_complexity)]
     async fn other_relevant_docs(
         &self,

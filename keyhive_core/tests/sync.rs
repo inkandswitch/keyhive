@@ -92,7 +92,7 @@ async fn delivery_order_does_not_change_the_authority_graph() -> Result<()> {
 /// is sent to Dave and does converge, so this is specific to a revocation one level up the
 /// membership chain.
 #[tokio::test]
-#[ignore = "fails on main and on jtfm/cgka-authority: a group revocation is not sent to a peer of the parent document"]
+#[ignore = "a revocation inside a group is not sent to a peer of the parent document. Needs to be fixed"]
 async fn a_revocation_inside_a_group_reaches_a_peer_of_the_parent() -> Result<()> {
     let mut ctx = TestContext::with_seed(0x5EED).await;
     let alice = ctx.individual("alice").await?;

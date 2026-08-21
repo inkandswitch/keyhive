@@ -19,6 +19,8 @@ Once you have a context, you can use it to create entities:
 * `ctx.individual(name) -> TestIndividual`: Creates a keyhive identity.
 * `ctx.group(creator: &TestIndividual, name) -> TestGroup`
 * `ctx.doc(creator: &TestIndividual, name) -> TestDocument`
+* `ctx.public() -> TestPublic`: The public agent.
+* `ctx.second_instance(of: &TestIndividual, name) -> TestIndividual`: Another `Keyhive` instance for an existing identity with the same signing key.
 
 These test objects have a `name()` method for use in assertion messages.
 
@@ -26,26 +28,56 @@ You can then delegate and revoke access:
 
 * `ctx.delegate(issuer: &TestIndividual, audience: &impl TestAgent, resource: &impl TestMembered, level)`:  `issuer` delegates `level` over `resource` to `audience`. Signed by the issuer's own instance. Returns an error if the issuer may not do this.
 * `ctx.revoke(issuer: &TestIndividual, audience: &impl TestAgent, resource: &impl TestMembered)`: `issuer` removes `audience`'s membership in `resource`.
+* `ctx.delegations_for(observer: &TestIndividual, resource: &impl TestMembered) -> Vec<TestDelegation>`: Every delegation `observer` holds for `resource`.
 
-You can also create content and sync state between keyhive identities:
+You can also create content:
 
 * `ctx.encrypt(who: &TestIndividual, doc: &TestDocument, bytes) -> TestEncryptedContent`. A `TestEncryptedContent` can be passed to `can_decrypt` to check if an individual can decrypt it.
+* `ctx.encrypt_keyed(who, doc, bytes) -> (TestEncryptedContent, TestSymmetricKey)`: Also returns the application secret the content was encrypted with.
+* `ctx.derived_key(who: &TestIndividual, content: &TestEncryptedContent) -> Option<TestSymmetricKey>`: The application secret `who` derives for this content or `None` if they can't derive one.
+* `ctx.decrypt_with_key(content: &TestEncryptedContent, key: &TestSymmetricKey) -> Vec<u8>`: Decrypts with a key the test obtained some other way, rather than with one derived through the graph.
+* `content.with_a_flipped_bit() -> TestEncryptedContent`: The same content with one bit of the ciphertext changed.
+
+And sync state between keyhive identities:
+
 * `ctx.sync(from: &TestIndividual, to: &TestIndividual) -> usize`: Sends `from`'s events to `to`. The return value is how many events `to` could not yet apply.
 * `ctx.sync_all()`: Sends events between every pair of individuals.
+* `ctx.sync_without(from, to, kind: TestEventKind) -> usize`: Sends everything except one kind of event. For example, exclude sending CGKA ops.
+* `ctx.sync_in_batches(from, to, batch: usize) -> usize`: Sends everything `batch` events at a time, ingesting each batch before sending the next.
+* `ctx.sync_shuffled(from, to, seed: u64) -> usize`: Sends everything in an order decided by `seed`, so a failing order can be replayed.
+* `ctx.static_events_for(from, to) -> Vec<TestStaticEvent>`: What `from` would send `to`, without sending it.
+* `ctx.pending_events(who: &TestIndividual) -> usize`: How many events `who` holds but can't yet apply.
+* `ctx.share_prekey_secrets(from: &TestIndividual, to: &TestIndividual) -> usize`: Gives one `Keyhive` instance's prekey secrets to another instance of the same identity. Returns how many held events `to` could apply after receiving the prekeys.
 
 Then you can check properties:
+
 * `ctx.effective_access(who: &impl TestAgent, doc: &TestDocument) -> Option<Access>`: Check `who`'s access level for `doc`. `None` for no access. |
 * `ctx.effective_access_seen_by(observer: &TestIndividual, who: &impl TestAgent, doc: &TestDocument) -> Option<Access>`: Same as `effective_access()`, but from the point of view of `observer`'s `Keyhive`.
 * `ctx.transitive_members_of(membered: &impl TestMembered) -> BTreeMap<String, Access>`: Returns everyone who has access to `resource`, including through nested groups.
 * `ctx.can_decrypt(who: &TestIndividual, content: &TestEncryptedContent) -> bool`: Whether `who` can successfully decrypt content.
+* `ctx.best_access(who: &impl TestAgent, doc: &TestDocument) -> Option<Access>`: The higher of `who`'s own access and public's access.
+* `ctx.has_received(who: &TestIndividual, what: &impl TestAgent) -> bool`: Whether `who` has received the events needed to learn that `what` exists. `effective_access()` returns `None` both for no access and for never having heard of the subject. This can be used to distinguish those cases.
 
-Note that `effective_access()` and `can_decrypt()` are checking different properties. `effective_access()` tells you what the Keyhive graph says someone may do. `can_decrypt()` tells you whether decryption actually succeeds. They need to be checked independently since they can come apart if there's a bug (this has happened before).
+Note that `effective_access()` and `can_decrypt()` are checking different properties. `effective_access()` tells you what the Keyhive graph says someone may do. `can_decrypt()` tells you whether decryption actually succeeds. They need to be checked independently since they can come apart if there's a bug. This has happened before.
 
 You need to call `sync_all()` before:
 
-* checking `can_decrypt` for anyone other than the person who called `encrypt`,
+* checking `can_decrypt` for anyone other than the identity who called `encrypt`,
 * checking `effective_access_seen_by` about an identity other than the resource owner,
-* having an individual issue a delegation over a resource they did not create, because they need to know that resource exists first.
+* having an individual issue a delegation for a resource they did not create. They need to know that resource exists first.
+
+Prekeys have their own methods:
+
+* `ctx.expand_prekeys(who: &TestIndividual) -> TestShareKey`: Adds a prekey and returns the key added.
+* `ctx.rotate_prekey(who: &TestIndividual, old: &TestShareKey) -> TestShareKey`: Replaces `old` with a fresh key and returns the replacement.
+* `ctx.prekeys(observer: &TestIndividual, of: &TestIndividual) -> BTreeSet<TestShareKey>`: The prekeys `observer` holds for `of`.
+* `ctx.prekey_ops(observer: &TestIndividual, of: &TestIndividual) -> Vec<TestPrekeyOp>`: The operations behind that set. Each is `Added` or `Rotated` and reports `new_key()`.
+
+So does archiving:
+
+* `ctx.archive(who: &TestIndividual) -> TestArchive`: Serializes an instance.
+* `ctx.rebuild_from_archive(archive: &TestArchive, name) -> TestIndividual`: Rebuilds an archive as a new instance of the same identity with a fresh ciphertext store.
+* `ctx.ingest_archive(into: &TestIndividual, archive: &TestArchive) -> usize`: Merges an archive into a live instance. Returns how many events remain pending.
 
 If you forget to do this, the test will probably fail with `TestError::NotSynced { individual, subject }`.
 
@@ -57,6 +89,8 @@ Every method returns `Result<T, TestError>`, with variants representing reasons 
 * `TestError::NoAuthority`: The issuer has no access to the resource.
 * `TestError::NotSynced { individual: String, subject: String }`: The individual has not yet received the required events.
 * `TestError::Other(String)`: Anything else, wrapping the underlying error as a `String`.
+
+`NotSynced` also covers the case where the individual has no access to the subject and was therefore never sent it, because the facade has to find the resource in their `Keyhive` before it can ask about authority. An individual who was never a member gets `NotSynced` rather than `NoAuthority`.
 
 Use these variants to check specific properties. For example:
 
@@ -77,24 +111,32 @@ Here is an example of a declarative test that involves only the minimal number o
 ```rust
 mod facade;
 use facade::{Result, TestContext};
-use keyhive_core::access::Access::{Edit, Read};
+use keyhive_core::access::Access::Read;
 
 #[tokio::test]
-async fn a_relay_cannot_decrypt() -> Result<()> {
+async fn a_revoked_member_cannot_read_new_content() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
-    let server = ctx.individual("server").await?;
+    let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    let relays = ctx.group(&alice, "relays").await?;
 
-    ctx.delegate(&alice, &relays, &design_doc, Relay).await?;
-    ctx.delegate(&alice, &server, &relays, Admin).await?;
+    ctx.delegate(&alice, &bob, &design_doc, Read).await?;
+    let before = ctx.encrypt(&alice, &design_doc, b"first").await?;
+    ctx.sync_all().await?;
+    assert!(
+        ctx.can_decrypt(&bob, &before).await?,
+        "bob could read before"
+    );
 
-    let ct = ctx.encrypt(&alice, &design_doc, b"secret").await?;
+    ctx.revoke(&alice, &bob, &design_doc).await?;
+    let after = ctx.encrypt(&alice, &design_doc, b"second").await?;
     ctx.sync_all().await?;
 
-    assert_eq!(ctx.effective_access(&server, &design_doc).await?, Some(Relay));
-    assert!(!ctx.can_decrypt(&server, &ct).await?, "a relay may not decrypt");
+    assert_eq!(ctx.effective_access(&bob, &design_doc).await?, None);
+    assert!(
+        !ctx.can_decrypt(&bob, &after).await?,
+        "cannot read new content"
+    );
     Ok(())
 }
 ```
@@ -112,8 +154,9 @@ async fn a_relay_cannot_decrypt() -> Result<()> {
 New methods should be phrased as actions or questions about entities. They must not return
 internal types (e.g., return `TestIndividual` instead of `Individual`). They should abstract away irrelevant lower-level details. And they may correspond to multiple actions at the lower level.
 
+One exception is if the `keyhive` type is a simple `enum` without type parameters or methods, such as `Access`.
+
 If you need a new entity, then prefix its name with `Test` and add a creation method to `TestContext`. Don't add methods to that entity for use in tests except for `name()`. Prefer passing the handle into `TestContext` methods so it can manage related lower-level plumbing and state.
 
 If a method can be refused for more than one reason, add a `TestError` variant rather than
 letting it fall into `Other`. Tests should be able to check why an operation failed.
-
