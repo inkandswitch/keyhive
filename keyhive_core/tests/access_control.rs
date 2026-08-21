@@ -5,6 +5,57 @@ use keyhive_core::access::Access::{self, Admin, Edit, Read, Relay};
 
 #[tokio::test]
 async fn a_group_member_reaches_the_groups_documents() -> Result<()> {
+    // Scenario:
+    // Alice and Bob are separate Keyhive agents
+    //
+    // 1. Alice registers Bob
+    // 2. Alice creates a new group that she owns
+    // 3. Alice adds Bob to the group
+    // 4. Alice creates a new document that the group controls
+    //
+    // Both Alice and Bob should be able to access the document
+    //
+    // ┌─────────────────────┐   ┌─────────────────────┐
+    // │                     │   │                     │
+    // │        Alice        │   │         Bob         │
+    // │                     │   │                     │
+    // └─────────────────────┘   └─────────────────────┘
+    //            ▲                         ▲
+    //            │                         │
+    //            │                         │
+    //            │ ┌─────────────────────┐ │
+    //            │ │                     │ │
+    //            └─│        Group        │─┘
+    //              │                     │
+    //              └─────────────────────┘
+    //                         ▲
+    //                         │
+    //                         │
+    //              ┌─────────────────────┐
+    //              │                     │
+    //              │         Doc         │
+    //              │                     │
+    //              └─────────────────────┘
+    //
+    // Scenario:
+    // Alice creates a doc and a group.
+    // Alice gives the group Edit access to the doc.
+    // Alice adds A and B with Edit access to the group.
+    // A encrypts content to the doc, B decrypts it.
+    //
+    // ┌─────────────────────┐
+    // │        Alice        │  (owner)
+    // └─────────────────────┘
+    //            │
+    //            ▼
+    // ┌─────────────────────┐
+    // │        Group        │  ← A and B are Edit members
+    // └─────────────────────┘
+    //            │ Edit
+    //            ▼
+    // ┌─────────────────────┐
+    // │         Doc         │  ← A encrypts, B decrypts
+    // └─────────────────────┘
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -189,6 +240,34 @@ async fn two_replicas_agree_on_effective_access() -> Result<()> {
 /// A document can be a member of another document and access propagates.
 #[tokio::test]
 async fn admin_on_a_parent_doc_reaches_the_child_doc() -> Result<()> {
+    // Scenario:
+    // Alice owns both Doc A and Doc B.
+    // Alice grants Bob Admin access on Doc A.
+    // Alice adds Doc A as an Admin member of Doc B.
+    //
+    // Question: Does Bob have Admin access to Doc B transitively?
+    //
+    // ┌─────────────────────┐
+    // │                     │
+    // │         Bob         │
+    // │                     │
+    // └─────────────────────┘
+    //            │
+    //            │ Admin
+    //            ▼
+    // ┌─────────────────────┐
+    // │                     │
+    // │       Doc A         │
+    // │                     │
+    // └─────────────────────┘
+    //            │
+    //            │ Admin
+    //            ▼
+    // ┌─────────────────────┐
+    // │                     │
+    // │       Doc B         │
+    // │                     │
+    // └─────────────────────┘
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -205,6 +284,29 @@ async fn admin_on_a_parent_doc_reaches_the_child_doc() -> Result<()> {
 
 #[tokio::test]
 async fn a_transitive_admin_through_a_document_can_delegate() -> Result<()> {
+    // Scenario:
+    // Alice owns Account Doc A and Doc B.
+    // Alice adds Account Doc A as Admin member of Doc B.
+    // Alice adds Bob as Admin member of Account Doc A.
+    //
+    // Bob has transitive Admin access to Doc B (through Account Doc A).
+    //
+    // Test: Bob should be able to call add_member on Doc B to add Carol.
+    //
+    // ┌─────────┐   ┌─────────┐   ┌─────────┐
+    // │  Alice  │   │   Bob   │   │  Carol  │
+    // └────┬────┘   └────┬────┘   └─────────┘
+    //      │             │              ▲
+    //      │ Admin       │ Admin        │ Edit (Bob adds)
+    //      ▼             ▼              │
+    // ┌─────────────────────┐           │
+    // │   Account Doc A     │           │
+    // └─────────┬───────────┘           │
+    //           │ Admin                 │
+    //           ▼                       │
+    // ┌─────────────────────┐           │
+    // │       Doc B         │ ──────────┘
+    // └─────────────────────┘
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -249,6 +351,22 @@ async fn a_transitive_admin_through_a_document_can_delegate() -> Result<()> {
 
 #[tokio::test]
 async fn a_transitive_admin_through_a_group_can_delegate() -> Result<()> {
+    // Same scenario but using a Group as the intermediary.
+    //
+    // ┌─────────┐   ┌─────────┐   ┌─────────┐
+    // │  Alice  │   │   Bob   │   │  Carol  │
+    // └────┬────┘   └────┬────┘   └─────────┘
+    //      │             │              ▲
+    //      │ Admin       │ Admin        │ Edit (Bob adds)
+    //      ▼             ▼              │
+    // ┌─────────────────────┐           │
+    // │      Group G        │           │
+    // └─────────┬───────────┘           │
+    //           │ Admin                 │
+    //           ▼                       │
+    // ┌─────────────────────┐           │
+    // │       Doc B         │ ──────────┘
+    // └─────────────────────┘
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -293,6 +411,40 @@ async fn a_transitive_admin_through_a_group_can_delegate() -> Result<()> {
 /// terminate from either end and neither membership may be lost.
 #[tokio::test]
 async fn a_membership_cycle_still_resolves() -> Result<()> {
+    // Scenario:
+    // Alice and Bob are separate Keyhive agents
+    //
+    // 1. Alice registers Bob
+    // 2. Alice creates a new group that she owns
+    // 3. Alice adds Bob to the group
+    // 4. Alice creates a new document that the group controls
+    // 5. Alice creates a cycle by adding the document to the group
+    //
+    // Both Alice and Bob should be able to access the document
+    //
+    //
+    //
+    // ┌─────────────────────┐   ┌─────────────────────┐
+    // │                     │   │                     │
+    // │        Alice        │   │         Bob         │
+    // │                     │   │                     │
+    // └─────────────────────┘   └─────────────────────┘
+    //            ▲                         ▲
+    //            │                         │
+    //            │                         │
+    //            │ ┌─────────────────────┐ │
+    //            │ │                     │ │
+    //            └─│        Group        │─┘
+    //              │                     │
+    //              └─────────────────────┘
+    //                      ▲     │
+    //                      │     │
+    //                      │     ▼
+    //              ┌─────────────────────┐
+    //              │                     │
+    //              │         Doc         │
+    //              │                     │
+    //              └─────────────────────┘
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;

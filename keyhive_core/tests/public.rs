@@ -105,6 +105,25 @@ async fn a_public_reader_reads_what_a_member_wrote() -> Result<()> {
 
 #[tokio::test]
 async fn two_public_readers_meet_through_the_document() -> Result<()> {
+    // Scenario:
+    // Alice creates a doc and adds Public as a Read member.
+    // A and B are not members of the doc.
+    // A and B receive the doc events via the Public agent (simulating
+    // the sync server checking Public access).
+    // A encrypts content as Public, B decrypts as Public.
+    //
+    // ┌─────────────────────┐
+    // │        Alice        │  (owner)
+    // └─────────────────────┘
+    //            │
+    //            │ Read
+    //            ▼
+    // ┌─────────────────────┐
+    // │       Public        │  (well-known identity)
+    // └─────────────────────┘
+    //
+    // A and B are not members. They receive doc events because Public
+    // has access, and encrypt/decrypt using Public's well-known keys.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;

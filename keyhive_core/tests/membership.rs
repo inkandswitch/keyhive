@@ -32,6 +32,25 @@ fn named(who: &[&str]) -> BTreeSet<String> {
 
 #[tokio::test]
 async fn revoking_a_group_from_a_document_removes_only_its_members() -> Result<()> {
+    // Revoking a group from a document removes the correct individuals from the
+    // document's key group, including nested group members, without removing
+    // individuals who are still reachable via other paths (direct membership).
+    //
+    // Setup:
+    //   design_doc has members:
+    //     - alice (owner/active)
+    //     - bob (direct individual member)
+    //     - Group outer:
+    //       - carol (individual)
+    //       - Group inner:
+    //         - dave (individual)
+    //         - eve (individual)
+    //     - frank (direct individual member AND also in inner)
+    //
+    // Revoke outer from design_doc -> carol, dave, and eve should be removed from
+    // design_doc's key group. bob and alice should remain (direct members). frank
+    // should remain because he is still a direct member of design_doc even though
+    // he was also in inner.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -41,7 +60,6 @@ async fn revoking_a_group_from_a_document_removes_only_its_members() -> Result<(
     let frank = ctx.individual("frank").await?;
     let cast = [&alice, &bob, &carol, &dave, &eve, &frank];
 
-    // inner = {dave, eve, frank}, outer = {carol, inner}
     let inner = ctx.group(&alice, "inner").await?;
     let outer = ctx.group(&alice, "outer").await?;
     for who in [&dave, &eve, &frank] {
@@ -50,7 +68,6 @@ async fn revoking_a_group_from_a_document_removes_only_its_members() -> Result<(
     ctx.delegate(&alice, &carol, &outer, Read).await?;
     ctx.delegate(&alice, &inner, &outer, Read).await?;
 
-    // The document holds bob directly, outer, and frank directly.
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
     ctx.delegate(&alice, &outer, &design_doc, Read).await?;
@@ -74,6 +91,28 @@ async fn revoking_a_group_from_a_document_removes_only_its_members() -> Result<(
 
 #[tokio::test]
 async fn revoking_a_subgroup_removes_only_the_members_it_brought() -> Result<()> {
+    // Revoking a sub-group from a parent group correctly removes the sub-group's
+    // individuals from the key groups of documents that contain the parent group,
+    // without removing individuals still reachable via other paths.
+    //
+    // Setup:
+    //   Group outer:
+    //     - alice (owner, auto-added by generate_group)
+    //     - carol (individual)
+    //     - Group inner:
+    //       - alice (owner, auto-added)
+    //       - dave (individual)
+    //       - eve (individual)
+    //       - frank (individual)
+    //
+    //   design_doc has members:
+    //     - alice (owner/active)
+    //     - bob (direct individual)
+    //     - outer
+    //     - frank (direct individual)
+    //
+    // Revoke inner from outer -> dave and eve should be removed from design_doc's
+    // key group. alice, bob, carol, and frank should remain.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -102,7 +141,6 @@ async fn revoking_a_subgroup_removes_only_the_members_it_brought() -> Result<()>
         "everyone reaches the document to begin with"
     );
 
-    // The same graph as above, revoked one level further in.
     ctx.revoke(&alice, &inner, &outer).await?;
 
     assert_eq!(
@@ -115,6 +153,10 @@ async fn revoking_a_subgroup_removes_only_the_members_it_brought() -> Result<()>
 
 #[tokio::test]
 async fn a_change_in_a_group_that_holds_a_document_leaves_the_document_alone() -> Result<()> {
+    // Revoking a sub-group from a group should not affect the key group of a doc
+    // that is a member of that group. Adding design_doc to engineering grants
+    // design_doc access to engineering, not engineering's members access to
+    // design_doc.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -124,8 +166,6 @@ async fn a_change_in_a_group_that_holds_a_document_leaves_the_document_alone() -
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
 
-    // The document is a member of engineering, so engineering reaches the document and not
-    // the other way round.
     let staff = ctx.group(&alice, "staff").await?;
     let engineering = ctx.group(&alice, "engineering").await?;
     ctx.delegate(&alice, &dave, &staff, Read).await?;
@@ -152,6 +192,10 @@ async fn a_change_in_a_group_that_holds_a_document_leaves_the_document_alone() -
 
 #[tokio::test]
 async fn adding_a_member_to_a_group_reaches_the_documents_it_holds() -> Result<()> {
+    // Adding an individual to a group should propagate key group adds to docs
+    // that contain the group as a member. If engineering is a member of
+    // design_doc, then adding bob to engineering should add bob to design_doc's
+    // key group.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -180,12 +224,13 @@ async fn adding_a_member_to_a_group_reaches_the_documents_it_holds() -> Result<(
 
 #[tokio::test]
 async fn adding_a_member_deep_in_a_chain_reaches_the_document() -> Result<()> {
+    // innermost in middle in outermost in design_doc. Adding bob to innermost
+    // should propagate to design_doc's key group.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let cast = [&alice, &bob];
 
-    // innermost in middle in outermost in the document.
     let innermost = ctx.group(&alice, "innermost").await?;
     let middle = ctx.group(&alice, "middle").await?;
     let outermost = ctx.group(&alice, "outermost").await?;
@@ -207,6 +252,8 @@ async fn adding_a_member_deep_in_a_chain_reaches_the_document() -> Result<()> {
 
 #[tokio::test]
 async fn adding_a_member_to_a_group_reaches_every_document_it_holds() -> Result<()> {
+    // engineering is a member of both design_doc and notes. Adding bob to
+    // engineering should add bob to both of their key groups.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -235,12 +282,14 @@ async fn adding_a_member_to_a_group_reaches_every_document_it_holds() -> Result<
 
 #[tokio::test]
 async fn a_member_with_a_second_route_survives_a_revocation() -> Result<()> {
+    // readers is a member of both left and right, both in design_doc. bob is in
+    // readers. Revoke readers from left -> bob should still be in design_doc's key
+    // group (reachable via right).
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let cast = [&alice, &bob];
 
-    // bob is in readers, which is in both left and right, both of which the document holds.
     let readers = ctx.group(&alice, "readers").await?;
     let left = ctx.group(&alice, "left").await?;
     let right = ctx.group(&alice, "right").await?;
@@ -270,6 +319,8 @@ async fn a_member_with_a_second_route_survives_a_revocation() -> Result<()> {
 
 #[tokio::test]
 async fn revoking_one_route_leaves_the_other_document_alone() -> Result<()> {
+    // readers in left in design_doc, and readers in right in notes. bob in readers.
+    // Revoke readers from left -> bob loses design_doc, keeps notes.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -311,6 +362,8 @@ async fn revoking_one_route_leaves_the_other_document_alone() -> Result<()> {
 
 #[tokio::test]
 async fn revoking_a_group_from_one_document_leaves_the_other() -> Result<()> {
+    // engineering in design_doc and notes. bob in engineering. Revoke engineering
+    // from design_doc -> bob loses design_doc, keeps notes.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -347,6 +400,9 @@ async fn revoking_a_group_from_one_document_leaves_the_other() -> Result<()> {
 
 #[tokio::test]
 async fn a_direct_membership_survives_a_revocation_further_up() -> Result<()> {
+    // readers in engineering in design_doc, and also readers directly in
+    // design_doc. bob in readers. Revoke readers from engineering -> bob still in
+    // design_doc's key group (readers is a direct member of design_doc).
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -357,7 +413,6 @@ async fn a_direct_membership_survives_a_revocation_further_up() -> Result<()> {
     ctx.delegate(&alice, &bob, &readers, Read).await?;
     let readers_in_engineering = ctx.delegate(&alice, &readers, &engineering, Read).await?;
 
-    // The document holds engineering, and readers as well.
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     ctx.delegate(&alice, &engineering, &design_doc, Read)
         .await?;
@@ -381,6 +436,9 @@ async fn a_direct_membership_survives_a_revocation_further_up() -> Result<()> {
 
 #[tokio::test]
 async fn revoking_a_link_removes_everyone_below_it() -> Result<()> {
+    // innermost in middle in outermost in design_doc. bob in innermost. Revoke
+    // middle from outermost -> bob (and middle, innermost's members) should be
+    // removed from design_doc's key group.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -401,7 +459,6 @@ async fn revoking_a_link_removes_everyone_below_it() -> Result<()> {
         named(&["alice", "bob"])
     );
 
-    // Cut the middle of the chain, two levels above bob.
     ctx.revoke(&alice, &middle, &outermost).await?;
 
     assert_eq!(
@@ -414,12 +471,14 @@ async fn revoking_a_link_removes_everyone_below_it() -> Result<()> {
 
 #[tokio::test]
 async fn a_cycle_does_not_stop_an_addition_reaching_the_document() -> Result<()> {
+    // first contains second, second contains first (direct cycle). first is in
+    // design_doc. bob in second -> bob should be in design_doc's key group
+    // (reachable via second -> first -> design_doc).
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let cast = [&alice, &bob];
 
-    // Each group holds the other.
     let first = ctx.group(&alice, "first").await?;
     let second = ctx.group(&alice, "second").await?;
     ctx.delegate(&alice, &second, &first, Read).await?;
@@ -440,6 +499,11 @@ async fn a_cycle_does_not_stop_an_addition_reaching_the_document() -> Result<()>
 
 #[tokio::test]
 async fn revoking_a_link_in_a_cycle_removes_access() -> Result<()> {
+    // first <-> second cycle, first in design_doc. bob in second. Revoke second
+    // from first -> bob should be removed. The doc reaches down through first, and
+    // first no longer contains second after revocation. second still containing
+    // first doesn't help: that means first's members can access second, not that
+    // second can access design_doc.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -471,12 +535,16 @@ async fn revoking_a_link_in_a_cycle_removes_access() -> Result<()> {
 
 #[tokio::test]
 async fn revoking_a_link_in_a_longer_cycle_removes_access() -> Result<()> {
+    // first -> second -> third -> first indirect cycle. first in design_doc. bob in
+    // third. Revoke second from first -> bob loses access. The doc reaches down
+    // through first, and first no longer contains second. The remaining cycle edges
+    // (second -> third -> first) don't help: the doc only reaches down through
+    // first.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let cast = [&alice, &bob];
 
-    // first holds second holds third holds first.
     let first = ctx.group(&alice, "first").await?;
     let second = ctx.group(&alice, "second").await?;
     let third = ctx.group(&alice, "third").await?;
@@ -505,6 +573,9 @@ async fn revoking_a_link_in_a_longer_cycle_removes_access() -> Result<()> {
 
 #[tokio::test]
 async fn breaking_a_cycle_from_both_sides_terminates() -> Result<()> {
+    // first -> second -> third -> first indirect cycle. first in design_doc. bob in
+    // third. Revoke second from first AND first from third -> cycle broken. Only
+    // first is still in design_doc directly. second and third lose access.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -526,7 +597,6 @@ async fn breaking_a_cycle_from_both_sides_terminates() -> Result<()> {
         named(&["alice", "bob"])
     );
 
-    // Two revocations, each removing one edge of the cycle.
     ctx.revoke(&alice, &second, &first).await?;
     ctx.revoke(&alice, &first, &third).await?;
 
@@ -540,6 +610,10 @@ async fn breaking_a_cycle_from_both_sides_terminates() -> Result<()> {
 
 #[tokio::test]
 async fn revoking_one_of_two_cyclic_groups_keeps_the_other_route() -> Result<()> {
+    // first <-> second cycle, both are direct members of design_doc. bob in first.
+    // Revoke first from design_doc -> second is still a direct member of
+    // design_doc, and second contains first, so bob is still reachable via
+    // design_doc -> second -> first. bob should stay in design_doc's key group.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -551,7 +625,6 @@ async fn revoking_one_of_two_cyclic_groups_keeps_the_other_route() -> Result<()>
     ctx.delegate(&alice, &first, &second, Read).await?;
     ctx.delegate(&alice, &bob, &first, Read).await?;
 
-    // The document holds both halves of the cycle.
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let first_in_doc = ctx.delegate(&alice, &first, &design_doc, Read).await?;
     ctx.delegate(&alice, &second, &design_doc, Read).await?;
