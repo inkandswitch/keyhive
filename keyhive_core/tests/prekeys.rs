@@ -36,7 +36,7 @@ async fn rotating_a_prekey_records_what_it_replaced() -> Result<()> {
     let ops = ctx.prekey_ops(&alice, &alice).await?;
     assert!(
         ops.contains(&TestPrekeyOp::Rotated { old, new }),
-        "the rotation names both keys"
+        "the rotation records the key it replaced and its replacement"
     );
     assert!(
         ops.contains(&TestPrekeyOp::Added { new: old }),

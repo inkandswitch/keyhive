@@ -308,7 +308,7 @@ impl TestCausalDecryption {
         self.recovered.iter().cloned().collect()
     }
 
-    /// How many ancestors were named but not held. Their keys are known, so they can be
+    /// How many ancestors were listed but not held. Their keys are known, so they can be
     /// decrypted as soon as they arrive.
     pub fn missing(&self) -> usize {
         self.missing

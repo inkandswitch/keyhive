@@ -1,7 +1,7 @@
-//! Reading a chain of content by walking back through the ancestors each write names.
+//! Reading a chain of content by walking back through the ancestors each write lists.
 //!
 //! Content written this way carries, inside its own ciphertext, the keys to the content it
-//! names. That is how someone who can open one write can open earlier ones they were never
+//! lists. That is how someone who can open one write can open earlier ones they were never
 //! given a key for. Keyhive defines the envelope and walks it; building one is the
 //! application's job, which `encrypt_in_envelope` stands in for.
 
@@ -24,7 +24,7 @@ async fn a_reader_walks_back_through_the_ancestors_it_holds() -> Result<()> {
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
     ctx.sync_all().await?;
 
-    // genesis, then two writes naming it, then one naming both of those.
+    // genesis, then two writes with it as their predecessor, then one with both of those.
     let genesis = ctx
         .encrypt_in_envelope(&alice, &design_doc, &[], b"genesis")
         .await?;
@@ -60,7 +60,7 @@ async fn a_reader_walks_back_through_the_ancestors_it_holds() -> Result<()> {
 
 /// A later member reads earlier content by walking back from a write made after they
 /// joined. This is the shape ARK uses to admit someone to a document that already has
-/// history: rotate, then write something that names what came before.
+/// history: rotate, then write something that lists what came before.
 #[tokio::test]
 async fn a_later_member_recovers_earlier_content_by_walking_back() -> Result<()> {
     let mut ctx = TestContext::new().await;
@@ -150,17 +150,14 @@ async fn an_ancestor_that_is_not_held_is_reported_rather_than_failing() -> Resul
     Ok(())
 }
 
-/// The same rule one step nearer: the ancestor that is missing is the one the entrypoint
-/// names, rather than one further back.
-///
 /// `Document::try_causal_decrypt_content` collects the entrypoint's missing ancestors into
-/// a local `CausalDecryptionState`, and then returns the store walk's own state instead,
-/// dropping what it collected. So a reader handed a write before the content it points at
-/// is told there is nothing outstanding, when what it needs is exactly that list and the
+/// a local `CausalDecryptionState` and then returns the store walk's own state instead,
+/// dropping what it collected. So a reader passed a write before the content it points at
+/// is told there is nothing outstanding when what it needs is exactly that list and the
 /// keys in it.
 #[tokio::test]
-#[ignore = "an ancestor named by the entrypoint is dropped from the report when it is missing"]
-async fn an_ancestor_named_by_the_entrypoint_is_reported_when_missing() -> Result<()> {
+#[ignore = "an ancestor the entrypoint lists is dropped from the report when it is missing. Fix this"]
+async fn an_ancestor_the_entrypoint_lists_is_reported_when_missing() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -176,7 +173,7 @@ async fn an_ancestor_named_by_the_entrypoint_is_reported_when_missing() -> Resul
         .await?;
     ctx.sync_all().await?;
 
-    // The entrypoint, and nothing it names.
+    // The entrypoint.
     ctx.deliver_content(&bob, &head).await?;
     let walked = ctx.causal_decrypt(&bob, &head).await?;
 

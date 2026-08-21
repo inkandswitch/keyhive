@@ -95,7 +95,7 @@ async fn a_predecessor_does_not_make_its_earlier_key_derivable() -> Result<()> {
     );
     assert!(
         !ctx.can_decrypt(&bob, &before_bob).await?,
-        "a successor naming earlier content does not let bob derive the earlier key"
+        "a successor with an earlier predecessor does not let bob derive the earlier key"
     );
     Ok(())
 }
