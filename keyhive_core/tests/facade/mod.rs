@@ -28,7 +28,8 @@ use keyhive_crypto::{
 use nonempty::nonempty;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet},
+    hash::{Hash, Hasher},
     sync::Arc,
 };
 use thiserror::Error;
@@ -935,10 +936,14 @@ impl TestContext {
             + s.pending_revoked) as usize)
     }
 
-    /// Sends events between every pair of individuals.
+    /// Sends events between every pair of individuals, until a round changes nothing.
+    ///
+    /// Events that no instance can apply are left pending.
     pub async fn sync_all(&mut self) -> Result<()> {
+        const MAX_ROUNDS: usize = 8;
         let ids: Vec<TestInstanceId> = self.hives.keys().copied().collect();
-        for _ in 0..3 {
+        for _ in 0..MAX_ROUNDS {
+            let before = self.state_signature().await;
             for from in &ids {
                 for to in &ids {
                     if from != to {
@@ -948,13 +953,27 @@ impl TestContext {
                     }
                 }
             }
+            if self.state_signature().await == before {
+                return Ok(());
+            }
         }
-        Ok(())
+        Err(format!("sync_all did not settle in {MAX_ROUNDS} rounds").into())
     }
 
     /////////////////////
     // Internal details
     /////////////////////
+
+    /// What every instance holds and what it is still waiting on. Two rounds of syncing
+    /// that leave this unchanged have moved nothing, and no further round can.
+    async fn state_signature(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        for hive in self.hives.values() {
+            hive.stats().await.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     async fn static_events_for_agent(
         &self,
         from: &TestIndividual,
