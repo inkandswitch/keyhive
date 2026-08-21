@@ -597,16 +597,40 @@ impl TestContext {
         })
     }
 
-    /// `issuer` removes `audience`'s membership in `resource`.
+    /// `issuer` removes `audience`'s membership in `resource`, keeping everyone else.
+    ///
+    /// Members `audience` had admitted keep their access, because their delegations are
+    /// re-issued under the issuer.
     pub async fn revoke(
         &mut self,
         issuer: &TestIndividual,
         audience: &impl TestAgent,
         membered: &impl TestMembered,
     ) -> Result<()> {
+        self.revoke_inner(issuer, audience, membered, true).await
+    }
+
+    /// `issuer` removes `audience`, and everyone whose only way in was through them.
+    pub async fn revoke_cascading(
+        &mut self,
+        issuer: &TestIndividual,
+        audience: &impl TestAgent,
+        membered: &impl TestMembered,
+    ) -> Result<()> {
+        self.revoke_inner(issuer, audience, membered, false).await
+    }
+
+    async fn revoke_inner(
+        &mut self,
+        issuer: &TestIndividual,
+        audience: &impl TestAgent,
+        membered: &impl TestMembered,
+        retain_all_other_members: bool,
+    ) -> Result<()> {
         let hive = self.hive(issuer)?;
         let res = self.get_membered(issuer, membered).await?;
-        hive.revoke_member(audience.agent_id(), true, &res).await?;
+        hive.revoke_member(audience.agent_id(), retain_all_other_members, &res)
+            .await?;
         Ok(())
     }
 

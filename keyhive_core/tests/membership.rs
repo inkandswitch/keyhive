@@ -1,7 +1,7 @@
 mod facade;
 
 use facade::{Result, TestContext, TestDocument, TestIndividual};
-use keyhive_core::access::Access::Read;
+use keyhive_core::access::Access::{Admin, Read};
 use std::collections::BTreeSet;
 
 /// Write new content and report which of `cast` can read it.
@@ -568,6 +568,67 @@ async fn revoking_one_of_two_cyclic_groups_keeps_the_other_route() -> Result<()>
         readers_after_writing(&mut ctx, &alice, &design_doc, b"after", &cast).await?,
         named(&["alice", "bob"]),
         "second is still a member and holds first, so bob comes back round"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn revoking_a_member_keeps_the_members_they_admitted() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let carol = ctx.individual("carol").await?;
+    let dan = ctx.individual("dan").await?;
+    let cast = [&alice, &carol, &dan];
+
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    ctx.delegate(&alice, &engineering, &design_doc, Read)
+        .await?;
+    ctx.delegate(&alice, &carol, &engineering, Admin).await?;
+    ctx.sync_all().await?;
+    // Dan is in the group because carol put him there.
+    ctx.delegate(&carol, &dan, &engineering, Read).await?;
+    ctx.sync_all().await?;
+
+    assert_eq!(
+        readers_after_writing(&mut ctx, &alice, &design_doc, b"before", &cast).await?,
+        named(&["alice", "carol", "dan"])
+    );
+
+    ctx.revoke(&alice, &carol, &engineering).await?;
+
+    assert_eq!(
+        readers_after_writing(&mut ctx, &alice, &design_doc, b"after", &cast).await?,
+        named(&["alice", "dan"]),
+        "dan's delegation is re-issued rather than dropped with carol's"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "a cascading revocation keeps members admitted by the one it removes"]
+async fn a_cascading_revocation_removes_the_members_they_admitted() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let carol = ctx.individual("carol").await?;
+    let dan = ctx.individual("dan").await?;
+    let cast = [&alice, &carol, &dan];
+
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    ctx.delegate(&alice, &engineering, &design_doc, Read)
+        .await?;
+    ctx.delegate(&alice, &carol, &engineering, Admin).await?;
+    ctx.sync_all().await?;
+    ctx.delegate(&carol, &dan, &engineering, Read).await?;
+    ctx.sync_all().await?;
+
+    ctx.revoke_cascading(&alice, &carol, &engineering).await?;
+
+    assert_eq!(
+        readers_after_writing(&mut ctx, &alice, &design_doc, b"after", &cast).await?,
+        named(&["alice"]),
+        "dan was only ever in the group because of carol's delegation"
     );
     Ok(())
 }
