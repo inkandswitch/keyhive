@@ -91,7 +91,7 @@ async fn an_old_archive_merged_with_later_events_converges() -> Result<()> {
         ctx.effective_access_seen_by(&restored, &carol, &design_doc)
             .await?,
         None,
-        "the archive predates carol's grant"
+        "the archive predates carol's delegation"
     );
 
     ctx.sync_all().await?;
@@ -135,6 +135,65 @@ async fn ingesting_an_archive_merges_into_a_live_instance() -> Result<()> {
             .await?,
         Some(Read),
         "and kept what she already knew"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_instance_caught_up_by_syncing_can_read_what_it_missed() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+
+    let early = ctx.archive(&alice).await?;
+
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    let ct = ctx.encrypt(&alice, &design_doc, b"hello world").await?;
+
+    let restored = ctx.rebuild_from_archive(&early, "alice-restored").await?;
+    assert!(
+        !ctx.has_received(&restored, &design_doc).await?,
+        "the archive predates the document"
+    );
+
+    assert!(
+        !ctx.can_decrypt(&restored, &ct).await?,
+        "and it can't yet read content written while it did not exist"
+    );
+
+    ctx.sync_all().await?;
+
+    assert!(
+        ctx.can_decrypt(&restored, &ct).await?,
+        "but after sync, it reads content written while it did not exist"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "ingesting an archive brings the membership graph but not the key state"]
+async fn ingesting_an_archive_carries_the_key_state_as_well_as_the_graph() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+
+    let early = ctx.archive(&alice).await?;
+
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    let ct = ctx.encrypt(&alice, &design_doc, b"hello world").await?;
+
+    let restored = ctx.rebuild_from_archive(&early, "alice-restored").await?;
+    let latest = ctx.archive(&alice).await?;
+    let pending = ctx.ingest_archive(&restored, latest).await?;
+
+    assert_eq!(pending, 0, "the archive was ingested completely");
+    assert_eq!(
+        ctx.effective_access_seen_by(&restored, &alice, &design_doc)
+            .await?,
+        Some(Admin),
+        "and it believes it is an admin of the document"
+    );
+    assert!(
+        ctx.can_decrypt(&restored, &ct).await?,
+        "so it should be able to read the document it is an admin of"
     );
     Ok(())
 }
