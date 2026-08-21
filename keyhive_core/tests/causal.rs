@@ -29,18 +29,13 @@ async fn a_reader_walks_back_through_the_ancestors_it_holds() -> Result<()> {
         .encrypt_in_envelope(&alice, &design_doc, &[], b"genesis")
         .await?;
     let left = ctx
-        .encrypt_in_envelope(&alice, &design_doc, std::slice::from_ref(&genesis), b"left")
+        .encrypt_in_envelope(&alice, &design_doc, &[&genesis], b"left")
         .await?;
     let right = ctx
-        .encrypt_in_envelope(
-            &alice,
-            &design_doc,
-            std::slice::from_ref(&genesis),
-            b"right",
-        )
+        .encrypt_in_envelope(&alice, &design_doc, &[&genesis], b"right")
         .await?;
     let head = ctx
-        .encrypt_in_envelope(&alice, &design_doc, &[left.clone(), right.clone()], b"head")
+        .encrypt_in_envelope(&alice, &design_doc, &[&left, &right], b"head")
         .await?;
     ctx.sync_all_unsent().await?;
 
@@ -82,12 +77,7 @@ async fn a_later_member_recovers_earlier_content_by_walking_back() -> Result<()>
     ctx.force_pcs_update(&alice, &design_doc).await?;
 
     let entry_point = ctx
-        .encrypt_in_envelope(
-            &alice,
-            &design_doc,
-            std::slice::from_ref(&history),
-            b"written after bob",
-        )
+        .encrypt_in_envelope(&alice, &design_doc, &[&history], b"written after bob")
         .await?;
     ctx.sync_all_unsent().await?;
 
@@ -125,15 +115,10 @@ async fn an_ancestor_that_is_not_held_is_reported_rather_than_failing() -> Resul
         .encrypt_in_envelope(&alice, &design_doc, &[], b"genesis")
         .await?;
     let middle = ctx
-        .encrypt_in_envelope(
-            &alice,
-            &design_doc,
-            std::slice::from_ref(&genesis),
-            b"middle",
-        )
+        .encrypt_in_envelope(&alice, &design_doc, &[&genesis], b"middle")
         .await?;
     let head = ctx
-        .encrypt_in_envelope(&alice, &design_doc, std::slice::from_ref(&middle), b"head")
+        .encrypt_in_envelope(&alice, &design_doc, &[&middle], b"head")
         .await?;
     ctx.sync_all_unsent().await?;
 
@@ -182,7 +167,7 @@ async fn an_ancestor_the_entrypoint_lists_is_reported_when_missing() -> Result<(
         .encrypt_in_envelope(&alice, &design_doc, &[], b"history")
         .await?;
     let head = ctx
-        .encrypt_in_envelope(&alice, &design_doc, std::slice::from_ref(&history), b"head")
+        .encrypt_in_envelope(&alice, &design_doc, &[&history], b"head")
         .await?;
     ctx.sync_all_unsent().await?;
 
@@ -225,7 +210,7 @@ async fn a_walk_consumes_the_content_it_reads() -> Result<()> {
         .encrypt_in_envelope(&alice, &design_doc, &[], b"genesis")
         .await?;
     let head = ctx
-        .encrypt_in_envelope(&alice, &design_doc, std::slice::from_ref(&genesis), b"head")
+        .encrypt_in_envelope(&alice, &design_doc, &[&genesis], b"head")
         .await?;
     ctx.sync_all_unsent().await?;
 

@@ -36,7 +36,7 @@ You can also create content:
 
 * `ctx.encrypt(who: &TestIndividual, doc: &TestDocument, bytes) -> TestEncryptedContent`. A `TestEncryptedContent` can be passed to `can_decrypt` to check if an individual can decrypt it.
 * `ctx.encrypt_keyed(who, doc, bytes) -> (TestEncryptedContent, TestSymmetricKey)`: Also returns the application secret the content was encrypted with.
-* `ctx.encrypt_after(who, doc, after: &[TestEncryptedContent], bytes) -> TestEncryptedContent`: Writes content that follows `after` in the document's content DAG.
+* `ctx.encrypt_after(who, doc, after: &[&TestEncryptedContent], bytes) -> TestEncryptedContent`: Writes content that follows `after` in the document's content DAG.
 * `ctx.derived_key(who: &TestIndividual, content: &TestEncryptedContent) -> Option<TestSymmetricKey>`: The application secret `who` derives for this content or `None` if they can't derive one.
 * `ctx.decrypt_with_key(content: &TestEncryptedContent, key: &TestSymmetricKey) -> Vec<u8>`: Decrypts with a key the test obtained some other way, rather than with one derived through the graph.
 

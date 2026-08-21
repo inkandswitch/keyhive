@@ -4,7 +4,6 @@
 // without this every binary warns about the methods it does not happen to call.
 #![allow(dead_code)]
 
-use dupe::Dupe;
 use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
@@ -834,7 +833,7 @@ impl TestContext {
         &self,
         who: &TestIndividual,
         doc: &TestDocument,
-        after: &[TestEncryptedContent],
+        after: &[&TestEncryptedContent],
         content: &[u8],
     ) -> Result<TestEncryptedContent> {
         let mut pred_refs = Vec::with_capacity(after.len());
@@ -865,7 +864,7 @@ impl TestContext {
         &self,
         who: &TestIndividual,
         doc: &TestDocument,
-        after: &[TestEncryptedContent],
+        after: &[&TestEncryptedContent],
         content: &[u8],
     ) -> Result<TestEncryptedContent> {
         let mut ancestors = std::collections::HashMap::with_capacity(after.len());

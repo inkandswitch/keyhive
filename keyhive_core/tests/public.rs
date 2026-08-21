@@ -4,12 +4,13 @@ use facade::{Result, TestContext};
 use keyhive_core::access::Access::{Admin, Edit, Read, Relay};
 
 #[tokio::test]
-async fn delegating_to_public_records_a_public_delegation() -> Result<()> {
+async fn delegating_to_public_creates_a_public_delegation() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let public = ctx.public();
+
     for level in [Read, Edit, Admin] {
-        let mut ctx = TestContext::new().await;
-        let alice = ctx.individual("alice").await?;
-        let design_doc = ctx.doc(&alice, "design_doc").await?;
-        let public = ctx.public();
+        let design_doc = ctx.doc(&alice, &format!("design_doc-{level:?}")).await?;
 
         assert_eq!(ctx.effective_access(&public, &design_doc).await?, None);
         ctx.delegate(&alice, &public, &design_doc, level).await?;

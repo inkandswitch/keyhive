@@ -51,7 +51,7 @@ async fn predecessors_take_part_in_deriving_the_key() -> Result<()> {
     let bytes = b"the same bytes twice";
     let root = ctx.encrypt(&alice, &design_doc, bytes).await?;
     let after_root = ctx
-        .encrypt_after(&alice, &design_doc, std::slice::from_ref(&root), bytes)
+        .encrypt_after(&alice, &design_doc, &[&root], bytes)
         .await?;
 
     let root_key = ctx
@@ -80,12 +80,7 @@ async fn a_predecessor_does_not_make_its_earlier_key_derivable() -> Result<()> {
     let before_bob = ctx.encrypt(&alice, &design_doc, b"before bob").await?;
     ctx.delegate(&alice, &bob, &design_doc, Read).await?;
     let after_bob = ctx
-        .encrypt_after(
-            &alice,
-            &design_doc,
-            std::slice::from_ref(&before_bob),
-            b"after bob",
-        )
+        .encrypt_after(&alice, &design_doc, &[&before_bob], b"after bob")
         .await?;
     ctx.sync_all_unsent().await?;
 
@@ -161,12 +156,7 @@ async fn content_written_after_a_rotation_does_not_open_what_came_before() -> Re
     ctx.sync_all_unsent().await?;
     ctx.force_pcs_update(&alice, &design_doc).await?;
     let successor = ctx
-        .encrypt_after(
-            &alice,
-            &design_doc,
-            std::slice::from_ref(&history),
-            b"written after bob",
-        )
+        .encrypt_after(&alice, &design_doc, &[&history], b"written after bob")
         .await?;
     ctx.sync_all_unsent().await?;
 
@@ -209,7 +199,7 @@ async fn a_predecessor_from_another_document_is_refused() -> Result<()> {
     let in_design_doc = ctx.encrypt(&alice, &design_doc, b"a paragraph").await?;
 
     match ctx
-        .encrypt_after(&alice, &notes, &[in_design_doc], b"a note")
+        .encrypt_after(&alice, &notes, &[&in_design_doc], b"a note")
         .await
     {
         Err(TestError::WrongDocument { holds, doc }) => {
