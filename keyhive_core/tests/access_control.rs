@@ -399,20 +399,14 @@ async fn a_revoked_member_cannot_delegate_or_revoke() -> Result<()> {
     ctx.revoke(&alice, &mallory, &design_doc).await?;
     ctx.sync_all_unsent().await?;
 
-    assert!(
-        matches!(
-            ctx.delegate(&mallory, &carol, &design_doc, Read).await,
-            Err(TestError::NoAuthority)
-        ),
-        "a revoked member may not issue a delegation"
-    );
-    assert!(
-        matches!(
-            ctx.revoke(&mallory, &alice, &design_doc).await,
-            Err(TestError::NoAuthority)
-        ),
-        "or a revocation"
-    );
+    match ctx.delegate(&mallory, &carol, &design_doc, Read).await {
+        Err(TestError::NoAuthority) => {}
+        other => panic!("a revoked member may not issue a delegation, got {other:?}"),
+    }
+    match ctx.revoke(&mallory, &alice, &design_doc).await {
+        Err(TestError::NoAuthority) => {}
+        other => panic!("nor a revocation, got {other:?}"),
+    }
     Ok(())
 }
 

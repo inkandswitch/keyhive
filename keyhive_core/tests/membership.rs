@@ -606,6 +606,39 @@ async fn revoking_a_member_keeps_the_members_they_admitted() -> Result<()> {
 }
 
 #[tokio::test]
+async fn a_cascading_revocation_removes_the_member_it_names() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let carol = ctx.individual("carol").await?;
+    let cast = [&alice, &carol];
+
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    ctx.delegate(&alice, &engineering, &design_doc, Read)
+        .await?;
+    ctx.delegate(&alice, &carol, &engineering, Admin).await?;
+
+    assert_eq!(
+        readers_after_writing(&mut ctx, &alice, &design_doc, b"before", &cast).await?,
+        named(&["alice", "carol"])
+    );
+
+    ctx.revoke_cascading(&alice, &carol, &engineering).await?;
+
+    assert_eq!(
+        ctx.transitive_members_of(&engineering).await?.get("carol"),
+        None,
+        "carol is out of the group"
+    );
+    assert_eq!(
+        readers_after_writing(&mut ctx, &alice, &design_doc, b"after", &cast).await?,
+        named(&["alice"]),
+        "and out of the document the group holds"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "a cascading revocation keeps members admitted by the one it removes"]
 async fn a_cascading_revocation_removes_the_members_they_admitted() -> Result<()> {
     let mut ctx = TestContext::new().await;

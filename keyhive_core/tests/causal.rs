@@ -52,7 +52,12 @@ async fn a_reader_walks_back_through_the_ancestors_it_holds() -> Result<()> {
     assert_eq!(
         walked.recovered(),
         contents(&[b"genesis", b"left", b"right"]),
-        "the diamond is walked once, not twice, and reaches the root"
+        "the walk reaches the root by both paths"
+    );
+    assert_eq!(
+        walked.recovered_count(),
+        3,
+        "and reads the shared ancestor once rather than once per path"
     );
     assert_eq!(walked.missing(), 0, "bob holds every ancestor");
     Ok(())
