@@ -439,7 +439,6 @@ pub struct TestContext {
     next_instance: u32,
     names: BTreeMap<Identifier, Arc<str>>,
     csprng: StdRng,
-    seed: u64,
     docs: Vec<TestDocument>,
     /// The digests each instance has already received, so `sync` sends a delta.
     delivered: BTreeMap<TestInstanceId, BTreeSet<[u8; 32]>>,
@@ -449,14 +448,7 @@ pub struct TestContext {
 }
 
 impl TestContext {
-    /// A context, recording a seed for replayability.
     pub async fn new() -> Self {
-        Self::with_seed(rand::rngs::OsRng.gen()).await
-    }
-
-    /// A context whose key material follows from `seed` so a failure can be
-    /// replayed.
-    pub async fn with_seed(seed: u64) -> Self {
         let mut names = BTreeMap::new();
         names.insert(Public.id(), PUBLIC_NAME.into());
         TestContext {
@@ -468,14 +460,8 @@ impl TestContext {
             docs: Vec::new(),
             delivered: BTreeMap::new(),
             stores: BTreeMap::new(),
-            csprng: StdRng::seed_from_u64(seed),
-            seed,
+            csprng: StdRng::from_rng(rand::rngs::OsRng).expect("OsRng cannot fail"),
         }
-    }
-
-    /// The seed this context was built from. Report it when a test fails.
-    pub fn seed(&self) -> u64 {
-        self.seed
     }
 
     pub fn public(&self) -> TestPublic {

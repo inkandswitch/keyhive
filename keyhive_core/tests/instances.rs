@@ -5,7 +5,7 @@ use keyhive_core::access::Access::{Admin, Read};
 
 #[tokio::test]
 async fn two_instances_of_one_identity_are_one_member() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0xa11ce).await;
+    let mut ctx = TestContext::new().await;
     let bob = ctx.individual("bob").await?;
     let alice = ctx.individual("alice").await?;
     let alice_worker = ctx.second_instance(&alice, "alice-worker").await?;
@@ -30,7 +30,7 @@ async fn two_instances_of_one_identity_are_one_member() -> Result<()> {
 
 #[tokio::test]
 async fn either_instance_signs_as_the_identity() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0xa11ce).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let alice_worker = ctx.second_instance(&alice, "alice-worker").await?;
     let carol = ctx.individual("carol").await?;
@@ -66,7 +66,7 @@ async fn either_instance_signs_as_the_identity() -> Result<()> {
 
 #[tokio::test]
 async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0xa11ce).await;
+    let mut ctx = TestContext::new().await;
     let bob = ctx.individual("bob").await?;
     let alice = ctx.individual("alice").await?;
     let alice_worker = ctx.second_instance(&alice, "alice-worker").await?;
@@ -90,8 +90,7 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
     let worker_can = ctx.can_decrypt(&alice_worker, &ct).await?;
     assert!(
         alice_can ^ worker_can,
-        "only one instance was invited, so only one can read (seed {:#x})",
-        ctx.seed()
+        "only one instance was invited, so only one can read"
     );
     let (invited, sibling) = if alice_can {
         (&alice, &alice_worker)
@@ -126,7 +125,7 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
 
 #[tokio::test]
 async fn two_instances_creating_documents_independently_converge() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0xa11ce).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let alice_worker = ctx.second_instance(&alice, "alice-worker").await?;
     let reader = ctx.individual("reader").await?;
@@ -182,7 +181,7 @@ async fn two_instances_creating_documents_independently_converge() -> Result<()>
 
 #[tokio::test]
 async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0xa11ce).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let alice_worker = ctx.second_instance(&alice, "alice-worker").await?;
     let reader = ctx.individual("reader").await?;
@@ -227,7 +226,7 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
 
 #[tokio::test]
 async fn a_peer_cannot_read_an_instance_it_has_not_heard_from() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0xa11ce).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let alice_worker = ctx.second_instance(&alice, "alice-worker").await?;
     let bob = ctx.individual("bob").await?;
@@ -262,7 +261,7 @@ async fn a_peer_cannot_read_an_instance_it_has_not_heard_from() -> Result<()> {
 
 #[tokio::test]
 async fn prekey_secrets_do_not_cross_between_identities() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0xa11ce).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
 

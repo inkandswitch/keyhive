@@ -180,10 +180,7 @@ async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Resul
         Some(Read),
         "asking about public does"
     );
-    assert!(
-        ctx.can_decrypt(&bob, &ct).await?,
-        "and he can read it"
-    );
+    assert!(ctx.can_decrypt(&bob, &ct).await?, "and he can read it");
     Ok(())
 }
 

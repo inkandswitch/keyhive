@@ -5,7 +5,7 @@ use keyhive_core::access::Access::{Admin, Edit, Read};
 
 #[tokio::test]
 async fn an_archive_round_trip_preserves_members_access_and_decryption() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0xa4c).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let carol = ctx.individual("carol").await?;
@@ -48,7 +48,7 @@ async fn an_archive_round_trip_preserves_members_access_and_decryption() -> Resu
 
 #[tokio::test]
 async fn a_restored_instance_can_still_issue_delegations() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0xa4c).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let dave = ctx.individual("dave").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
@@ -71,7 +71,7 @@ async fn a_restored_instance_can_still_issue_delegations() -> Result<()> {
 
 #[tokio::test]
 async fn an_old_archive_merged_with_later_events_converges() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0xa4c).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let carol = ctx.individual("carol").await?;
@@ -112,7 +112,7 @@ async fn an_old_archive_merged_with_later_events_converges() -> Result<()> {
 
 #[tokio::test]
 async fn ingesting_an_archive_merges_into_a_live_instance() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0xa4c).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;

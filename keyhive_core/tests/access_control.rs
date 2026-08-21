@@ -100,9 +100,9 @@ async fn relay_never_permits_decryption() -> Result<()> {
 #[tokio::test]
 #[ignore = "fails on main; fixed by jtfm/cgka-authority; un-ignore when that lands"]
 async fn multi_route_resolution_is_deterministic() -> Result<()> {
-    let mut answers: std::collections::BTreeMap<Option<Access>, u64> = Default::default();
-    for seed in [0x1, 0x2, 0x3, 0x5, 0x8, 0xd, 0x15, 0x22] {
-        let mut ctx = TestContext::with_seed(seed).await;
+    let mut answers: std::collections::BTreeMap<Option<Access>, usize> = Default::default();
+    for round in 0..8 {
+        let mut ctx = TestContext::new().await;
         let alice = ctx.individual("alice").await?;
         let bob = ctx.individual("bob").await?;
         let design_doc = ctx.doc(&alice, "design_doc").await?;
@@ -116,12 +116,12 @@ async fn multi_route_resolution_is_deterministic() -> Result<()> {
         ctx.delegate(&alice, &bob, &design_doc, Read).await?;
 
         let access = ctx.effective_access(&bob, &design_doc).await?;
-        answers.entry(access).or_insert(seed);
+        answers.entry(access).or_insert(round);
     }
     assert_eq!(
         answers.len(),
         1,
-        "more than one answer across eight graphs, one seed each: {answers:x?}"
+        "more than one answer across eight graphs, with the round that gave each: {answers:?}"
     );
     assert_eq!(
         answers.into_keys().next().unwrap(),

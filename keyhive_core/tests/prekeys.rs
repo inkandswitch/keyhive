@@ -5,7 +5,7 @@ use keyhive_core::access::Access::Read;
 
 #[tokio::test]
 async fn expanding_prekeys_adds_a_distinct_key() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0x9e0).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
 
     let before = ctx.prekey_ops(&alice, &alice).await?;
@@ -26,7 +26,7 @@ async fn expanding_prekeys_adds_a_distinct_key() -> Result<()> {
 
 #[tokio::test]
 async fn rotating_a_prekey_records_what_it_replaced() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0x9e0).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
 
     let old = ctx.expand_prekeys(&alice).await?;
@@ -47,7 +47,7 @@ async fn rotating_a_prekey_records_what_it_replaced() -> Result<()> {
 
 #[tokio::test]
 async fn a_prekey_rotation_reaches_a_peer() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0x9e0).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
@@ -76,7 +76,7 @@ async fn a_prekey_rotation_reaches_a_peer() -> Result<()> {
 
 #[tokio::test]
 async fn rotating_a_prekey_replacing_the_old_one() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0x9e0).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
 
     let old = ctx.expand_prekeys(&alice).await?;
@@ -92,7 +92,7 @@ async fn rotating_a_prekey_replacing_the_old_one() -> Result<()> {
 
 #[tokio::test]
 async fn a_rotated_away_intermediate_prekey_does_not_survive() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0x9e0).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
 
     let k1 = ctx.expand_prekeys(&alice).await?;
@@ -108,7 +108,7 @@ async fn a_rotated_away_intermediate_prekey_does_not_survive() -> Result<()> {
 
 #[tokio::test]
 async fn two_concurrent_rotations_of_one_key_both_survive() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0x9e0).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let alice_worker = ctx.second_instance(&alice, "alice-worker").await?;
 

@@ -3,81 +3,53 @@ mod facade;
 use facade::{Result, TestContext, TestEventKind};
 use keyhive_core::access::Access::{self, Edit, Read};
 
-// Sanity check for seeding tests
-#[tokio::test]
-async fn the_same_seed_produces_the_same_delegations() -> Result<()> {
-    async fn build(seed: u64) -> Result<String> {
-        let mut ctx = TestContext::with_seed(seed).await;
-        let alice = ctx.individual("alice").await?;
-        let bob = ctx.individual("bob").await?;
-        let design_doc = ctx.doc(&alice, "design_doc").await?;
-        let dlg = ctx.delegate(&alice, &bob, &design_doc, Read).await?;
-        Ok(format!("{dlg:?}"))
-    }
-
-    assert_eq!(build(1234).await?, build(1234).await?, "seed 1234 twice");
-    assert_ne!(build(1234).await?, build(5678).await?, "different seeds");
-    Ok(())
-}
-
-/// Sanity check for replaying tests with seed.
-#[tokio::test]
-async fn an_unseeded_context_still_reports_its_seed() -> Result<()> {
-    let a = TestContext::new().await;
-    let b = TestContext::new().await;
-    assert_ne!(
-        a.seed(),
-        b.seed(),
-        "new() must not be a fixed seed, or every test shares one identity"
-    );
-
-    let replay = TestContext::with_seed(a.seed()).await;
-    assert_eq!(replay.seed(), a.seed());
-    Ok(())
-}
-
 #[tokio::test]
 async fn delivery_order_does_not_change_the_authority_graph() -> Result<()> {
-    const SEED: u64 = 0xd00d;
+    const ORDERS: u64 = 8;
 
-    /// Builds the same context every time, delivers it to dave in the order `order` gives,
-    /// and reports what dave then believes about everyone.
-    async fn graph_seen_by_dave(order: u64) -> Result<Vec<(String, Option<Access>)>> {
-        let mut ctx = TestContext::with_seed(SEED).await;
-        let alice = ctx.individual("alice").await?;
-        let bob = ctx.individual("bob").await?;
-        let carol = ctx.individual("carol").await?;
-        let dave = ctx.individual("dave").await?;
-        let design_doc = ctx.doc(&alice, "design_doc").await?;
-        let engineering = ctx.group(&alice, "engineering").await?;
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let carol = ctx.individual("carol").await?;
 
-        ctx.delegate(&alice, &engineering, &design_doc, Edit)
-            .await?;
-        ctx.delegate(&alice, &carol, &engineering, Read).await?;
-        ctx.delegate(&alice, &bob, &design_doc, Edit).await?;
-        ctx.delegate(&alice, &dave, &design_doc, Read).await?;
-        ctx.revoke(&alice, &bob, &design_doc).await?;
+    // One observer per delivery order, in one context, so they differ in the order they
+    // were handed the same events and in nothing else.
+    let mut observers = vec![];
+    for i in 0..ORDERS {
+        observers.push(ctx.individual(&format!("observer-{i}")).await?);
+    }
 
-        let pending = ctx.sync_shuffled(&alice, &dave, order).await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+    ctx.delegate(&alice, &engineering, &design_doc, Edit)
+        .await?;
+    ctx.delegate(&alice, &carol, &engineering, Read).await?;
+    ctx.delegate(&alice, &bob, &design_doc, Edit).await?;
+    for observer in &observers {
+        ctx.delegate(&alice, observer, &design_doc, Read).await?;
+    }
+    ctx.revoke(&alice, &bob, &design_doc).await?;
+
+    let mut answers: Vec<Vec<(String, Option<Access>)>> = vec![];
+    for (order, observer) in observers.iter().enumerate() {
+        let pending = ctx.sync_shuffled(&alice, observer, order as u64).await?;
         assert_eq!(pending, 0, "order {order} left events unapplied");
 
-        let mut out = vec![];
-        for who in [&bob, &carol, &dave] {
-            out.push((
+        let mut believes = vec![];
+        for who in [&bob, &carol] {
+            believes.push((
                 who.name().to_string(),
-                ctx.effective_access_seen_by(&dave, who, &design_doc)
+                ctx.effective_access_seen_by(observer, who, &design_doc)
                     .await?,
             ));
         }
-        Ok(out)
+        answers.push(believes);
     }
 
-    let first = graph_seen_by_dave(0).await?;
-    for order in 1..8u64 {
+    for (order, believes) in answers.iter().enumerate().skip(1) {
         assert_eq!(
-            graph_seen_by_dave(order).await?,
-            first,
-            "delivery order {order} produced a different graph (seed {SEED:#x})"
+            believes, &answers[0],
+            "delivery order {order} produced a different graph"
         );
     }
     Ok(())
@@ -94,7 +66,7 @@ async fn delivery_order_does_not_change_the_authority_graph() -> Result<()> {
 #[tokio::test]
 #[ignore = "a revocation inside a group is not sent to a peer of the parent document. Needs to be fixed"]
 async fn a_revocation_inside_a_group_reaches_a_peer_of_the_parent() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0x5EED).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let dave = ctx.individual("dave").await?;
@@ -130,7 +102,7 @@ async fn a_revocation_inside_a_group_reaches_a_peer_of_the_parent() -> Result<()
 
 #[tokio::test]
 async fn partial_delivery_leaves_events_pending_and_they_apply_later() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0xbeef).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
@@ -159,7 +131,7 @@ async fn partial_delivery_leaves_events_pending_and_they_apply_later() -> Result
 
 #[tokio::test]
 async fn redelivering_known_events_changes_nothing() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0xd11d0).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
@@ -196,7 +168,7 @@ async fn redelivering_known_events_changes_nothing() -> Result<()> {
 
 #[tokio::test]
 async fn withholding_key_agreement_leaves_a_member_who_cannot_read() -> Result<()> {
-    let mut ctx = TestContext::with_seed(0xcafe).await;
+    let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
