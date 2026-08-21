@@ -149,6 +149,44 @@ async fn another_member_does_not_displace_the_public_reader() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let server = ctx.individual("server").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    ctx.delegate(&alice, &server, &design_doc, Relay).await?;
+    ctx.delegate(&alice, &ctx.public(), &design_doc, Read)
+        .await?;
+    ctx.force_pcs_update(&alice, &design_doc).await?;
+    let ct = ctx.encrypt(&alice, &design_doc, b"announcement").await?;
+
+    // The events reach bob through the server.
+    ctx.sync(&alice, &server).await?;
+    let pending = ctx.sync_as_public(&server, &bob).await?;
+
+    assert_eq!(pending, 0, "bob could apply everything the server relayed");
+    assert_eq!(
+        ctx.effective_access_seen_by(&bob, &bob, &design_doc)
+            .await?,
+        None,
+        "asking about himself does not find the document"
+    );
+    assert_eq!(
+        ctx.effective_access_seen_by(&bob, &ctx.public(), &design_doc)
+            .await?,
+        Some(Read),
+        "asking about public does"
+    );
+    assert!(
+        ctx.can_decrypt(&bob, &ct).await?,
+        "and he can read it"
+    );
+    Ok(())
+}
+
 // This is a sanity check for the testing facade
 #[tokio::test]
 async fn a_public_delegation_does_not_deliver_the_document() -> Result<()> {
