@@ -843,23 +843,7 @@ impl TestContext {
         .await
         .map_err(|e| TestError::Other(e.to_string()))?;
 
-        let identity = hive.id();
-        let instance = TestInstanceId(self.next_instance);
-        self.next_instance += 1;
-        let card = hive.contact_card().await?;
-        for other in self.hives.values() {
-            other.receive_contact_card(&card).await?;
-            hive.receive_contact_card(&other.contact_card().await?)
-                .await?;
-        }
-        self.hives.insert(instance, hive);
-        let handle = TestIndividual {
-            identity,
-            instance,
-            name: name.into(),
-        };
-        self.handles.insert(instance, handle.clone());
-        Ok(handle)
+        self.register_instance(hive, name).await
     }
 
     /// Merge an archive into a live instance. Returns how many events remain pending.
@@ -1047,6 +1031,11 @@ impl TestContext {
         )
         .await?;
 
+        self.register_instance(hive, name).await
+    }
+
+    /// Register a new instance and swap contact cards with every other instance.
+    async fn register_instance(&mut self, hive: Hive, name: &str) -> Result<TestIndividual> {
         let card = hive.contact_card().await?;
         for other in self.hives.values() {
             other.receive_contact_card(&card).await?;
