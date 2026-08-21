@@ -541,6 +541,63 @@ async fn a_reader_cannot_delegate_above_read() -> Result<()> {
 }
 
 #[tokio::test]
+async fn a_transitive_reader_cannot_delegate_above_read() -> Result<()> {
+    // Scenario:
+    // Alice owns Doc A and Doc B.
+    // Alice adds Doc A as Admin member of Doc B.
+    // Alice adds Bob as READ member of Doc A.
+    //
+    // Bob has transitive Read access to Doc B.
+    // Bob tries to add Carol as Admin of Doc B — should fail with AccessEscalation.
+    //
+    // ┌─────────┐   ┌─────────┐   ┌─────────┐
+    // │  Alice  │   │   Bob   │   │  Carol  │
+    // └────┬────┘   └────┬────┘   └─────────┘
+    //      │             │              ▲
+    //      │ Read        │ Read         │ Admin (Bob tries, should fail)
+    //      ▼             ▼              │
+    // ┌─────────────────────┐           │
+    // │       Doc A         │           │
+    // └─────────┬───────────┘           │
+    //           │ Admin                 │
+    //           ▼                       │
+    // ┌─────────────────────┐           │
+    // │       Doc B         │ ──────────┘
+    // └─────────────────────┘
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let carol = ctx.individual("carol").await?;
+    let account = ctx.doc(&alice, "account").await?;
+    let project = ctx.doc(&alice, "project").await?;
+
+    ctx.delegate(&alice, &account, &project, Admin).await?;
+    ctx.delegate(&alice, &bob, &account, Read).await?;
+    ctx.sync_all_unsent().await?;
+
+    assert_eq!(
+        ctx.effective_access(&bob, &project).await?,
+        Some(Read),
+        "bob holds Read on account, which attenuates his route to project"
+    );
+
+    for access in [Edit, Admin] {
+        match ctx.delegate(&bob, &carol, &project, access).await {
+            Err(TestError::Escalation { wanted, held }) => {
+                assert_eq!(wanted, access);
+                assert_eq!(
+                    held, Read,
+                    "attenuated along the route, not taken from account"
+                );
+            }
+            other => panic!("expected an escalation refusal, got {other:?}"),
+        }
+    }
+    assert_eq!(ctx.effective_access(&carol, &project).await?, None);
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_revoked_member_cannot_delegate_or_revoke() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
