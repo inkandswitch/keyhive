@@ -86,16 +86,18 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
     );
 
     // Exactly one of them holds the secret key.
-    let (invited, sibling) = if ctx.can_decrypt(&alice, &ct).await? {
+    let alice_can = ctx.can_decrypt(&alice, &ct).await?;
+    let worker_can = ctx.can_decrypt(&alice_worker, &ct).await?;
+    assert!(
+        alice_can ^ worker_can,
+        "only one instance was invited, so only one can read (seed {:#x})",
+        ctx.seed()
+    );
+    let (invited, sibling) = if alice_can {
         (&alice, &alice_worker)
     } else {
         (&alice_worker, &alice)
     };
-    assert!(
-        !ctx.can_decrypt(sibling, &ct).await?,
-        "only one instance was invited, so only one can read (seed {:#x})",
-        ctx.seed()
-    );
 
     let stuck = ctx.pending_events(sibling).await?;
     assert!(
