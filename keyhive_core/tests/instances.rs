@@ -1,6 +1,6 @@
 mod facade;
 
-use facade::{Result, TestContext};
+use facade::{Result, TestContext, TestError};
 use keyhive_core::access::Access::{Admin, Read};
 
 #[tokio::test]
@@ -286,9 +286,12 @@ async fn prekey_secrets_do_not_cross_between_identities() -> Result<()> {
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
 
-    assert!(
-        ctx.share_prekey_secrets(&alice, &bob).await.is_err(),
-        "alice and bob are different people"
-    );
+    match ctx.share_prekey_secrets(&alice, &bob).await {
+        Err(TestError::DifferentIdentity { from, to }) => {
+            assert_eq!(from, "alice");
+            assert_eq!(to, "bob");
+        }
+        other => panic!("prekey secrets are not transferable between identities, got {other:?}"),
+    }
     Ok(())
 }

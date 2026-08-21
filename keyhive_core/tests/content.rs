@@ -1,6 +1,6 @@
 mod facade;
 
-use facade::{Result, TestContext};
+use facade::{Result, TestContext, TestError};
 use keyhive_core::access::Access::{Edit, Read};
 
 #[tokio::test]
@@ -191,12 +191,16 @@ async fn a_predecessor_from_another_document_is_refused() -> Result<()> {
 
     let in_design_doc = ctx.encrypt(&alice, &design_doc, b"a paragraph").await?;
 
-    assert!(
-        ctx.encrypt_after(&alice, &notes, &[in_design_doc], b"a note")
-            .await
-            .is_err(),
-        "content in one document cannot precede content in another"
-    );
+    match ctx
+        .encrypt_after(&alice, &notes, &[in_design_doc], b"a note")
+        .await
+    {
+        Err(TestError::WrongDocument { holds, doc }) => {
+            assert_eq!(holds, "design_doc");
+            assert_eq!(doc, "notes");
+        }
+        other => panic!("content in one document cannot precede content in another, got {other:?}"),
+    }
     Ok(())
 }
 

@@ -69,6 +69,14 @@ pub enum TestError {
     #[error("{individual:?} does not know about {subject:?}. Sync first.")]
     NotSynced { individual: String, subject: String },
 
+    /// A predecessor was named that belongs to a different document.
+    #[error("that content is in {holds:?}, not in {doc:?}")]
+    WrongDocument { holds: String, doc: String },
+
+    /// Prekey secrets belong to one identity and cannot be given to another.
+    #[error("{from:?} and {to:?} are different identities")]
+    DifferentIdentity { from: String, to: String },
+
     /// Anything else, wrapping the underlying error as a `String`.
     #[error("{0}")]
     Other(String),
@@ -191,6 +199,17 @@ pub struct TestDocument {
 pub struct TestEncryptedContent {
     doc: DocumentId,
     inner: beekem::encrypted::EncryptedContent<Vec<u8>, [u8; 32]>,
+}
+
+impl std::fmt::Debug for TestEncryptedContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let r = self.inner.content_ref;
+        write!(
+            f,
+            "TestEncryptedContent({:02x}{:02x}.. in {})",
+            r[0], r[1], self.doc
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -527,11 +546,10 @@ impl TestContext {
         to: &TestIndividual,
     ) -> Result<usize> {
         if from.identity != to.identity {
-            return Err(format!(
-                "{:?} and {:?} are different people; prekey secrets are not transferable",
-                from.name, to.name
-            )
-            .into());
+            return Err(TestError::DifferentIdentity {
+                from: from.name.to_string(),
+                to: to.name.to_string(),
+            });
         }
         let blob = self
             .hive(from)?
@@ -831,11 +849,12 @@ impl TestContext {
         let mut pred_refs = Vec::with_capacity(after.len());
         for pred in after {
             if pred.doc != doc.id {
-                return Err(format!(
-                    "a predecessor belongs to another document, not {:?}",
-                    doc.name
-                )
-                .into());
+                return Err(TestError::WrongDocument {
+                    holds: self
+                        .name_of(pred.doc.into(), "another document")
+                        .to_string(),
+                    doc: doc.name.to_string(),
+                });
             }
             pred_refs.push(pred.inner.content_ref);
         }
