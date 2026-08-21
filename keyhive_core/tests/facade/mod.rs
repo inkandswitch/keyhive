@@ -911,6 +911,18 @@ impl TestContext {
         self.deliver(to, events).await
     }
 
+    /// Sends `to` everything the public agent may see, like a sync server.
+    pub async fn sync_as_public(
+        &mut self,
+        from: &TestIndividual,
+        to: &TestIndividual,
+    ) -> Result<usize> {
+        let individual = Public.individual();
+        let public = Agent::Individual(individual.id(), Arc::new(Mutex::new(individual)));
+        let events = self.events_for(from, &public).await?;
+        self.deliver(to, events).await
+    }
+
     /// Sends everything except one kind of event, to make a dependency visible.
     pub async fn sync_without(
         &mut self,
@@ -1025,9 +1037,20 @@ impl TestContext {
         to: &TestIndividual,
     ) -> Result<Vec<([u8; 32], StaticEvent<[u8; 32]>)>> {
         let to_agent = self.get_agent(from, to.identity.into(), &to.name).await?;
+        self.events_for(from, &to_agent).await
+    }
+
+    /// Everything `agent`'s memberships entitle it to hear about, each with its digest.
+    ///
+    /// Unlike `static_events_for_agent`, this can be an agent unknown to the `TestContext`.
+    async fn events_for(
+        &self,
+        from: &TestIndividual,
+        agent: &AgentHandle,
+    ) -> Result<Vec<([u8; 32], StaticEvent<[u8; 32]>)>> {
         Ok(self
             .hive(from)?
-            .static_events_for_agent(&to_agent)
+            .static_events_for_agent(agent)
             .await
             .into_iter()
             .map(|(digest, event)| (*digest.raw.as_bytes(), event))
