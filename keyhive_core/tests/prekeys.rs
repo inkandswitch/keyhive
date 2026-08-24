@@ -75,7 +75,7 @@ async fn a_prekey_rotation_reaches_a_peer() -> Result<()> {
 }
 
 #[tokio::test]
-async fn rotating_a_prekey_replacing_the_old_one() -> Result<()> {
+async fn rotating_a_prekey_replaces_the_old_one() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
 

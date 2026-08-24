@@ -3,7 +3,7 @@ mod facade;
 use facade::{Result, TestContext};
 use keyhive_core::access::Access::{Admin, Edit, Read};
 
-// Facade sanity check
+// This is a sanity check for the testing facade.
 #[tokio::test]
 async fn a_delegation_reports_what_it_conveys() -> Result<()> {
     let mut ctx = TestContext::new().await;

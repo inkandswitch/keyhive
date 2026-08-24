@@ -5490,7 +5490,7 @@ mod tests {
         let with_one_route = doc.lock().await.cgka()?.group_size();
         assert_eq!(
             with_one_route, 3,
-            "the document owner, alice and frank, so frank really is in the tree \
+            "the document's own key, alice and frank, so frank really is in the tree \
              by way of the group rather than absent from it"
         );
 
@@ -5549,14 +5549,11 @@ mod tests {
 
         // Bob receives the delegations that describe both documents and none of the CGKA
         // operations that would let him rekey one.
-        let for_bob = alice
+        let mut for_bob = alice
             .events_for_agent(&Agent::Individual(bob_id, bob_indie.dupe()))
             .await;
-        let without_key_agreement: HashMap<_, _> = for_bob
-            .into_iter()
-            .filter(|(_, event)| !matches!(event, Event::CgkaOperation(_)))
-            .collect();
-        bob.ingest_event_table(without_key_agreement).await?;
+        for_bob.retain(|_, event| !matches!(event, Event::CgkaOperation(_)));
+        bob.ingest_event_table(for_bob).await?;
 
         let project_on_bob = bob
             .get_document(project_id)
@@ -5578,7 +5575,7 @@ mod tests {
                 result,
                 Err(AddMemberError::CgkaError(CgkaError::NotInitialized))
             ),
-            "expected CGKA error for non-initialized CGKA"
+            "expected a non-initialized CGKA error, got {result:?}"
         );
 
         Ok(())

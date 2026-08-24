@@ -234,7 +234,7 @@ async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Resul
     Ok(())
 }
 
-// This is a sanity check for the testing facade
+// This is a sanity check for the testing facade.
 #[tokio::test]
 async fn a_public_delegation_does_not_deliver_the_document() -> Result<()> {
     let mut ctx = TestContext::new().await;

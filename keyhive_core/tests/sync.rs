@@ -55,16 +55,13 @@ async fn delivery_order_does_not_change_the_authority_graph() -> Result<()> {
     Ok(())
 }
 
-/// Dave holds Read on the document directly. He receives all five `Delegated` events that
-/// describe the group, including the one admitting Bob. He is not sent the `Revoked` event
-/// that cancels it. Nothing is left pending, no error is raised, and further syncing does
-/// not change it. Dave believes Bob is still a member, while Alice and Bob agree he is not.
+/// A revocation issued inside a group has to reach a peer who holds the parent document
+/// directly, not only the members of the group it was issued in.
 ///
-/// The same revocation issued directly on the document
-/// is sent to Dave and does converge, so this is specific to a revocation one level up the
-/// membership chain.
+/// The same revocation issued on the document itself does reach Dave, so the gap is
+/// specific to a revocation one level up the membership chain.
 #[tokio::test]
-#[ignore = "a revocation inside a group is not sent to a peer of the parent document. Needs to be fixed"]
+#[ignore = "a revocation inside a group is not sent to a peer of the parent document"]
 async fn a_revocation_inside_a_group_reaches_a_peer_of_the_parent() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
@@ -192,8 +189,6 @@ async fn a_backlog_that_cannot_apply_does_not_block_new_events() -> Result<()> {
         .encrypt(&alice, &design_doc, b"written despite the backlog")
         .await?;
 
-    // Alice has to send something. If she sent nothing, every assertion below would pass
-    // on an empty delivery.
     let fresh = ctx.static_events_for(&alice, &server).await?.len();
     assert!(
         fresh > 0,

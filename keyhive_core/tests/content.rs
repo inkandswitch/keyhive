@@ -172,7 +172,7 @@ async fn content_written_after_a_rotation_does_not_open_what_came_before() -> Re
     Ok(())
 }
 
-// This is a sanity check for the testing facade
+// This is a sanity check for the testing facade.
 #[tokio::test]
 async fn two_things_cannot_share_a_name() -> Result<()> {
     let mut ctx = TestContext::new().await;
@@ -189,7 +189,7 @@ async fn two_things_cannot_share_a_name() -> Result<()> {
     Ok(())
 }
 
-// This is a sanity check for the testing facade
+// This is a sanity check for the testing facade.
 #[tokio::test]
 async fn a_predecessor_from_another_document_is_refused() -> Result<()> {
     let mut ctx = TestContext::new().await;

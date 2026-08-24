@@ -2,7 +2,7 @@
 //!
 //! Content written this way carries, inside its own ciphertext, the keys to the content it
 //! lists. That is how someone who can open one write can open earlier ones they were never
-//! given a key for. Keyhive defines the envelope and walks it; building one is the
+//! given a key for. Keyhive defines the envelope and walks it. Building one is the
 //! application's job, which `encrypt_in_envelope` stands in for.
 
 mod facade;
@@ -148,11 +148,7 @@ async fn an_ancestor_that_is_not_held_is_reported_rather_than_failing() -> Resul
     Ok(())
 }
 
-/// `Document::try_causal_decrypt_content` collects the entrypoint's missing ancestors into
-/// a local `CausalDecryptionState` and then returns the store walk's own state instead,
-/// dropping what it collected. So a reader passed a write before the content it points at
-/// is told there is nothing outstanding when what it needs is exactly that list and the
-/// keys in it.
+/// Walking from two heads reads their shared ancestor once, not once per head.
 #[tokio::test]
 async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> {
     let mut ctx = TestContext::new().await;
@@ -184,8 +180,6 @@ async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> 
         .causal_decrypt_from(&bob, &[&left_head, &right_head])
         .await?;
 
-    // Walking from entrypoints rather than from a document includes the entrypoints
-    // themselves. `causal_decrypt` reports only what it walked back to.
     assert_eq!(
         walked.recovered(),
         contents(&[b"left head", b"right head", b"root"]),
@@ -312,8 +306,13 @@ async fn two_missing_ancestors_are_each_reported_with_their_own_key() -> Result<
     Ok(())
 }
 
+/// `Document::try_causal_decrypt_content` collects the entrypoint's missing ancestors into
+/// a local `CausalDecryptionState` and then returns the store walk's own state instead,
+/// dropping what it collected. So a reader passed a write before the content it points at
+/// is told there is nothing outstanding when what it needs is exactly that list and the
+/// keys in it.
 #[tokio::test]
-#[ignore = "an ancestor the entrypoint lists is dropped from the report when it is missing. Fix this"]
+#[ignore = "an ancestor the entrypoint lists is dropped from the report when it is missing"]
 async fn an_ancestor_the_entrypoint_lists_is_reported_when_missing() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
@@ -330,7 +329,7 @@ async fn an_ancestor_the_entrypoint_lists_is_reported_when_missing() -> Result<(
         .await?;
     ctx.sync_all_unsent().await?;
 
-    // The entrypoint.
+    // Only the entrypoint. Bob is not given the ancestor it lists.
     ctx.deliver_content(&bob, &head).await?;
     let walked = ctx.causal_decrypt(&bob, &head).await?;
 
@@ -354,8 +353,9 @@ async fn an_ancestor_the_entrypoint_lists_is_reported_when_missing() -> Result<(
 /// `CiphertextStore` must stop serving content once it has been decrypted, whether by
 /// removing it or by tracking what has been read.
 ///
-/// The consumed content is not reported as outstanding either because the entrypoint lists
-/// it directly. That's handled by `an_ancestor_the_entrypoint_lists_is_reported_when_missing`.
+/// The second walk does not report the consumed content as outstanding, because the
+/// entrypoint lists it directly.
+/// `an_ancestor_the_entrypoint_lists_is_reported_when_missing` covers that case.
 #[tokio::test]
 async fn a_walk_consumes_the_content_it_reads() -> Result<()> {
     let mut ctx = TestContext::new().await;

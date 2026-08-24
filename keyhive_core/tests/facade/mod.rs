@@ -30,7 +30,7 @@ use keyhive_crypto::{
 use nonempty::nonempty;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use std::{
-    collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet},
+    collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, HashMap},
     hash::{Hash, Hasher},
     sync::Arc,
 };
@@ -64,8 +64,9 @@ pub enum TestError {
     #[error("no authority over that resource")]
     NoAuthority,
 
-    /// The individual has not yet received the required events.
-    #[error("{individual:?} does not know about {subject:?}. Sync first.")]
+    /// The individual has not yet received the required events. Also returned when they
+    /// have no access to the subject and so were never sent it.
+    #[error("{individual:?} has not received {subject:?}. Sync first, or check they have access.")]
     NotSynced { individual: String, subject: String },
 
     /// Two things in one context cannot share a name.
@@ -421,11 +422,13 @@ impl TestDocument {
     }
 }
 
+/// Anything a delegation can be addressed to: an individual, a group, a document, or public.
 pub trait TestAgent {
     fn agent_id(&self) -> Identifier;
     fn name(&self) -> &str;
 }
 
+/// Anything that can have members: a group or a document.
 pub trait TestMembered: TestAgent {
     #[doc(hidden)]
     fn as_membered(&self) -> TestMemberedRef<'_>;
@@ -442,7 +445,6 @@ pub enum TestMemberedRef<'a> {
 }
 
 impl TestAgent for TestIndividual {
-    /// A keyhive identity's id.
     fn agent_id(&self) -> Identifier {
         self.identity.into()
     }
@@ -538,7 +540,6 @@ impl TestContext {
     ///
     /// Every individual learns every other individual's contact card.
     pub async fn individual(&mut self, name: &str) -> Result<TestIndividual> {
-        self.claim_name(name)?;
         let mut hive_rng = StdRng::seed_from_u64(self.csprng.gen());
         let signer = MemorySigner::generate(&mut hive_rng);
         let handle = self.add_instance(signer.clone(), hive_rng, name).await?;
@@ -554,7 +555,6 @@ impl TestContext {
         of: &TestIndividual,
         name: &str,
     ) -> Result<TestIndividual> {
-        self.claim_name(name)?;
         let signer = self
             .signers
             .get(&of.identity)
@@ -626,7 +626,7 @@ impl TestContext {
         Ok(handle)
     }
 
-    /// `issuer` delegates `can` over `resource` to `audience`.
+    /// `issuer` delegates `can` over `membered` to `audience`.
     ///
     /// Signed by the issuer. Returns an error if the issuer may not do this.
     pub async fn delegate(
@@ -645,14 +645,15 @@ impl TestContext {
         let update = hive.add_member(aud, &res, can, &relevant).await?;
         Ok(TestDelegation {
             digest: *update.delegation.digest().raw.as_bytes(),
-            issuer: issuer.name.clone(),
+            // The identity's name, not this instance's.
+            issuer: self.name_of(issuer.identity.into()),
             audience: self.name_of(audience.agent_id()),
             subject: self.name_of(membered.agent_id()),
             can,
         })
     }
 
-    /// `issuer` removes `audience`'s membership in `resource`, keeping everyone else.
+    /// `issuer` removes `audience`'s membership in `membered`, keeping everyone else.
     ///
     /// Members `audience` had admitted keep their access, because their delegations are
     /// re-issued under the issuer.
@@ -744,13 +745,10 @@ impl TestContext {
         who: &impl TestAgent,
     ) -> Result<BTreeMap<String, Access>> {
         let hive = self.hive(observer)?;
-        let raw = if observer.agent_id() == who.agent_id() {
-            hive.reachable_docs().await
-        } else {
-            let aud = self.get_agent(observer, who.agent_id(), who.name()).await?;
-            hive.docs_reachable_by_agent(&aud).await
-        };
-        Ok(raw
+        let aud = self.get_agent(observer, who.agent_id(), who.name()).await?;
+        Ok(hive
+            .docs_reachable_by_agent(&aud)
+            .await
             .into_iter()
             .map(|(id, ability)| (self.name_of(id.into()).to_string(), ability.can()))
             .collect())
@@ -876,6 +874,8 @@ impl TestContext {
             .map(|(_, key)| TestSymmetricKey(key)))
     }
 
+    /// Decrypt with a key the test obtained some other way, rather than with one derived
+    /// through the graph.
     pub fn decrypt_with_key(
         &self,
         ct: &TestEncryptedContent,
@@ -926,7 +926,7 @@ impl TestContext {
     }
 
     /// Write `content` in an envelope listing the ancestors and carrying the keys to open
-    /// them. Simulates what an application would do. Returns the encrypted content.
+    /// them. Simulates what an application would do.
     pub async fn encrypt_in_envelope(
         &self,
         who: &TestIndividual,
@@ -934,14 +934,9 @@ impl TestContext {
         after: &[&TestEncryptedContent],
         content: &[u8],
     ) -> Result<TestEncryptedContent> {
-        let mut ancestors = std::collections::HashMap::with_capacity(after.len());
+        let mut ancestors = HashMap::with_capacity(after.len());
         for pred in after {
-            let key = self.derived_key(who, pred).await?.ok_or_else(|| {
-                format!(
-                    "{:?} cannot derive the key for an ancestor, so cannot name it",
-                    who.name
-                )
-            })?;
+            let key = self.derived_key(who, pred).await?.ok_or(TestError::NoKey)?;
             ancestors.insert(pred.inner.content_ref, key.0);
         }
         let envelope = Envelope {
@@ -998,6 +993,8 @@ impl TestContext {
     /// `Keyhive::try_causal_decrypt_content` takes a single entrypoint. A reader holding
     /// several heads walks from all of them together, and a shared ancestor should be read
     /// once rather than once per head.
+    ///
+    /// The recovered set includes the entrypoints themselves, unlike `causal_decrypt`.
     pub async fn causal_decrypt_from(
         &self,
         who: &TestIndividual,
@@ -1005,10 +1002,7 @@ impl TestContext {
     ) -> Result<TestCausalDecryption> {
         let mut to_walk = Vec::new();
         for ct in entrypoints {
-            let key = self
-                .derived_key(who, ct)
-                .await?
-                .ok_or("the reader cannot derive the key for one of the entrypoints")?;
+            let key = self.derived_key(who, ct).await?.ok_or(TestError::NoKey)?;
             to_walk.push((Arc::new(ct.inner.clone()), key.0));
         }
         let store = self
@@ -1028,7 +1022,7 @@ impl TestContext {
         })
     }
 
-    /// Encrypt. Returns the application secret the content went under.
+    /// Encrypt content. Returns the content and the application secret it went under.
     pub async fn encrypt_keyed(
         &self,
         who: &TestIndividual,
@@ -1050,9 +1044,7 @@ impl TestContext {
         ))
     }
 
-    /// Force PCS update on `doc`.
-    ///
-    /// Returns the share key the rotation introduced.
+    /// Force PCS update on `doc`. Returns the share key the rotation introduced.
     pub async fn force_pcs_update(
         &self,
         who: &TestIndividual,
@@ -1168,7 +1160,7 @@ impl TestContext {
 
     /// Sends `from`'s events to `to`. Returns how many events `to` could not yet apply.
     ///
-    /// Events `to` has already received are not sent again.
+    /// Everything `to` is entitled to, including events it already holds.
     pub async fn sync(&mut self, from: &TestIndividual, to: &TestIndividual) -> Result<usize> {
         let events = self.static_events_for_agent(from, to).await?;
         self.deliver(to, events).await
@@ -1221,7 +1213,7 @@ impl TestContext {
         to: &TestIndividual,
         batch: usize,
     ) -> Result<usize> {
-        assert!(batch > 0, "a batch size of zero is not a valid chunk size");
+        assert!(batch > 0, "batch must be at least 1");
         let events = self.static_events_for_agent(from, to).await?;
         let mut pending = 0;
         for chunk in events.chunks(batch) {
@@ -1230,7 +1222,11 @@ impl TestContext {
         Ok(pending)
     }
 
-    /// Sends everything in an order decided by `seed`, so a failing order can be replayed.
+    /// Sends everything in an order decided by `seed`.
+    ///
+    /// The same seed permutes the same set of events the same way. It does not reproduce an
+    /// order across runs: `TestContext::new` seeds itself from `OsRng`, so the identities,
+    /// and therefore the digests sorted on here, differ every run.
     pub async fn sync_shuffled(
         &mut self,
         from: &TestIndividual,
@@ -1238,6 +1234,9 @@ impl TestContext {
         seed: u64,
     ) -> Result<usize> {
         let mut events = self.static_events_for_agent(from, to).await?;
+        // `static_events_for_agent` comes out of a `HashMap`, whose order varies per process.
+        // Without this the seed would permute a different starting order every run.
+        events.sort_unstable_by_key(|(digest, _)| *digest);
         events.shuffle(&mut StdRng::seed_from_u64(seed));
         self.deliver(to, events).await
     }
@@ -1259,7 +1258,10 @@ impl TestContext {
             .collect())
     }
 
-    /// How many events the last `sync*` call delivered.
+    /// How many events the last delivery carried.
+    ///
+    /// `sync_in_batches` and `sync_all_unsent` deliver more than once, so after those this
+    /// is the final batch or the final pair's delta rather than the call's total.
     pub fn events_last_delivered(&self) -> usize {
         self.last_delivery
     }
@@ -1290,8 +1292,10 @@ impl TestContext {
             + s.pending_revoked) as usize)
     }
 
-    /// Sends every pair of individuals the events they have not been sent until a round
-    /// changes nothing.
+    /// Sends every individual what every other has not yet sent them, repeating until a
+    /// round changes nothing.
+    ///
+    /// Returns an error if the state has not settled after eight rounds.
     pub async fn sync_all_unsent(&mut self) -> Result<()> {
         const MAX_ROUNDS: usize = 8;
         let everyone: Vec<TestIndividual> = self.handles.values().cloned().collect();
@@ -1449,6 +1453,7 @@ impl TestContext {
         store: ContentStore,
         name: &str,
     ) -> Result<TestIndividual> {
+        self.claim_name(name)?;
         let card = hive.contact_card().await?;
         for other in self.hives.values() {
             other.receive_contact_card(&card).await?;

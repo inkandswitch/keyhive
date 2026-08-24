@@ -16,7 +16,7 @@ You start a test by creating a `TestContext` via `TestContext::new()`. The conte
 
 Once you have a context, you can use it to create entities:
 
-* `ctx.individual(name) -> TestIndividual`: Creates a keyhive identity.
+* `ctx.individual(name) -> TestIndividual`: Creates a keyhive identity and exchanges contact cards with every other individual.
 * `ctx.group(creator: &TestIndividual, name) -> TestGroup`
 * `ctx.doc(creator: &TestIndividual, name) -> TestDocument`
 * `ctx.public() -> TestPublic`: The public agent.
@@ -26,11 +26,11 @@ These test objects have a `name()` method for use in assertion messages.
 
 You can then delegate and revoke access:
 
-* `ctx.delegate(issuer: &TestIndividual, audience: &impl TestAgent, resource: &impl TestMembered, level)`:  `issuer` delegates `level` over `resource` to `audience`. Signed by the issuer's own instance. Returns an error if the issuer may not do this.
-* `ctx.revoke(issuer: &TestIndividual, audience: &impl TestAgent, resource: &impl TestMembered)`: `issuer` removes `audience`'s membership in `resource`. Members that `audience` had admitted keep their access, because their delegations are re-issued.
-* `ctx.revoke_cascading(issuer, audience, resource)`: Like `revoke`, but without keeping the members `audience` admitted.
-* `ctx.revoked_members_of(resource: &impl TestMembered) -> BTreeMap<String, Access>`: Everyone whose membership was revoked and not replaced, with the access their revoked delegation had conveyed. Someone revoked and then delegated again is excluded from this result.
-* `ctx.delegations_for(observer: &TestIndividual, resource: &impl TestMembered) -> Vec<TestDelegation>`: Every delegation `observer` holds for `resource`.
+* `ctx.delegate(issuer: &TestIndividual, audience: &impl TestAgent, membered: &impl TestMembered, level)`:  `issuer` delegates `level` over `membered` to `audience`. Signed by the issuer's own instance. Returns an error if the issuer may not do this.
+* `ctx.revoke(issuer: &TestIndividual, audience: &impl TestAgent, membered: &impl TestMembered)`: `issuer` removes `audience`'s membership in `membered`. Members that `audience` had admitted keep their access, because their delegations are re-issued.
+* `ctx.revoke_cascading(issuer, audience, membered)`: Like `revoke`, but without keeping the members `audience` admitted.
+* `ctx.revoked_members_of(membered: &impl TestMembered) -> BTreeMap<String, Access>`: Everyone whose membership was revoked and not replaced, with the access their revoked delegation had conveyed. Someone revoked and then delegated again is excluded from this result.
+* `ctx.delegations_for(observer: &TestIndividual, membered: &impl TestMembered) -> Vec<TestDelegation>`: Every delegation `observer` holds for `membered`.
 
 You can also create content:
 
@@ -40,9 +40,10 @@ You can also create content:
 * `ctx.derived_key(who: &TestIndividual, content: &TestEncryptedContent) -> Option<TestSymmetricKey>`: The application secret `who` derives for this content or `None` if they can't derive one.
 * `ctx.decrypt_with_key(content: &TestEncryptedContent, key: &TestSymmetricKey) -> Vec<u8>`: Decrypts with a key the test obtained some other way, rather than with one derived through the graph.
 
-* `ctx.encrypt_in_envelope(who, doc, after: &[TestEncryptedContent], bytes) -> TestEncryptedContent`: Writes content with an envelope listing the ancestors and carrying the keys to open them. This simulates the application layer.
+* `ctx.encrypt_in_envelope(who, doc, after: &[&TestEncryptedContent], bytes) -> TestEncryptedContent`: Writes content with an envelope listing the ancestors and carrying the keys to open them. This simulates the application layer.
 * `ctx.deliver_content(to: &TestIndividual, content: &TestEncryptedContent)`: Gives `to` a copy of the content. Sync sends CGKA and membership ops, not content.
 * `ctx.causal_decrypt(who: &TestIndividual, content: &TestEncryptedContent) -> TestCausalDecryption`: Walks back from `content` through the ancestors it lists. Returns what it `recovered()` and how many ancestors are `missing()`.
+* `ctx.causal_decrypt_from(who: &TestIndividual, entrypoints: &[&TestEncryptedContent]) -> TestCausalDecryption`: Walks back from more than one head at once. The recovered set includes the entrypoints themselves, unlike `causal_decrypt`.
 * `ctx.force_pcs_update(who: &TestIndividual, doc: &TestDocument) -> TestShareKey`: Forces a PCS key update for the document. Returns the share key the rotation introduced.
 * `content.with_a_flipped_bit() -> TestEncryptedContent`: The same content with one bit of the ciphertext changed.
 
@@ -53,16 +54,18 @@ And sync state between keyhive identities:
 * `ctx.sync_as_public(from, to) -> usize`: Sends `to` everything the public agent may see.
 * `ctx.sync_without(from, to, kind: TestEventKind) -> usize`: Sends everything except one kind of event. For example, exclude sending CGKA ops.
 * `ctx.sync_in_batches(from, to, batch: usize) -> usize`: Sends everything `batch` events at a time, ingesting each batch before sending the next.
-* `ctx.sync_shuffled(from, to, seed: u64) -> usize`: Sends everything in an order decided by `seed` so a failing order can be replayed.
+* `ctx.sync_shuffled(from, to, seed: u64) -> usize`: Sends everything in an order decided by `seed`. The same seed permutes the same set of events the same way, but it does not reproduce an order across runs, because a context seeds itself freshly each time.
 * `ctx.static_events_for(from, to) -> Vec<TestStaticEvent>`: Returns what `from` would send `to`, without sending it.
 * `ctx.pending_events(who: &TestIndividual) -> usize`: How many events `who` holds but can't yet apply.
+* `ctx.pending_events_of_kind(who: &TestIndividual, kind: TestEventKind) -> usize`: Like `pending_events`, but for one kind of event.
+* `ctx.events_last_delivered() -> usize`: How many events the last delivery carried. `sync_in_batches` and `sync_all_unsent` deliver more than once, so after those this is the final batch or the final pair's delta rather than the call's total.
 * `ctx.share_prekey_secrets(from: &TestIndividual, to: &TestIndividual) -> usize`: Gives one `Keyhive` instance's prekey secrets to another instance of the same identity. Returns how many held events `to` could apply after receiving the prekeys.
 
 Then you can check properties:
 
 * `ctx.effective_access(who: &impl TestAgent, doc: &TestDocument) -> Option<Access>`: Check `who`'s access level for `doc`. `None` for no access.
 * `ctx.effective_access_seen_by(observer: &TestIndividual, who: &impl TestAgent, doc: &TestDocument) -> Option<Access>`: Same as `effective_access()`, but from the point of view of `observer`'s `Keyhive`.
-* `ctx.transitive_members_of(membered: &impl TestMembered) -> BTreeMap<String, Access>`: Returns everyone who has access to `resource`, including through nested groups.
+* `ctx.transitive_members_of(membered: &impl TestMembered) -> BTreeMap<String, Access>`: Returns everyone who has access to `membered`, including through nested groups.
 * `ctx.documents_reachable_by(observer: &TestIndividual, who: &impl TestAgent) -> BTreeMap<String, Access>`: The documents `who` reaches, as `observer` sees it. A document delegated to Public is not included unless it's passed as `who`.
 * `ctx.memberships_reachable_by(observer: &TestIndividual, who: &impl TestAgent) -> BTreeMap<String, Access>`: Like `documents_reachable_by`, but also includes groups.
 * `ctx.can_decrypt(who: &TestIndividual, content: &TestEncryptedContent) -> bool`: Whether `who` can successfully decrypt content.
@@ -70,7 +73,7 @@ Then you can check properties:
 * `ctx.best_access(who: &impl TestAgent, doc: &TestDocument) -> Option<Access>`: The higher of `who`'s own access and public's access.
 * `ctx.has_received(who: &TestIndividual, what: &impl TestAgent) -> bool`: Whether `who` has received the events needed to learn that `what` exists. `effective_access()` returns `None` both for no access and for never having heard of the subject. This can be used to distinguish those cases.
 
-Note that `effective_access()` and `can_decrypt()` are checking different properties. `effective_access()` tells you what the Keyhive graph says someone may do. `can_decrypt()` tells you whether decryption actually succeeds. They need to be checked independently since they can come apart if there's a bug. This has happened before.
+Note that `effective_access()` and `can_decrypt()` are checking different properties. `effective_access()` tells you what the Keyhive graph says someone may do. `can_decrypt()` tells you whether decryption actually succeeds. They can come apart when there is a bug, so check them independently.
 
 You need to call `sync_all_unsent()` before:
 
@@ -96,7 +99,7 @@ So does archiving:
 
 ### Test errors for checking properties
 
-Every method returns `Result<T, TestError>`, with variants representing reasons an operation would be refused:
+Most methods return `Result<T, TestError>`, with variants representing reasons an operation would be refused:
 
 * `TestError::Escalation { wanted: Access, held: Access }`: The issuer holds some access over the resource, but less than they tried to delegate.
 * `TestError::NoAuthority`: The issuer has no access to the resource.
@@ -124,7 +127,7 @@ match ctx.delegate(&bob, &carol, &design_doc, Admin).await {
 
 ## 3. An example test
 
-Here is an example of a declarative test that involves only the minimal number of higher level steps to check that a rule is satisfied:
+For example:
 
 ```rust
 mod facade;
@@ -161,11 +164,11 @@ async fn a_revoked_member_cannot_read_new_content() -> Result<()> {
 
 ### Guidelines
 
-**Focus on the high-level rules, behaviors, and properties we expect keyhive to respect.** For checking lower-level details, write unit tests in those modules.
+Focus on the high-level rules, behaviors, and properties we expect keyhive to respect. For checking lower-level details, write unit tests in those modules.
 
-**Check one rule per test.** If a test could fail for two unrelated reasons, split it.
+Check one rule per test. If a test could fail for two unrelated reasons, split it.
 
-**Name a test after the rule it's checking.** `a_reader_cannot_delegate_edit_or_above` rather than `test_add_member_3`.
+Name a test after the rule it's checking. `a_reader_cannot_delegate_edit_or_above` rather than `test_add_member_3`.
 
 ## 4. Adding methods and entities to the facade
 

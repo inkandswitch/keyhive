@@ -45,7 +45,7 @@ async fn revoking_a_group_from_a_document_removes_only_its_members() -> Result<(
     //       - Group inner:
     //         - dave (individual)
     //         - eve (individual)
-    //     - frank (direct individual member AND also in inner)
+    //     - frank, a direct member of design_doc and also a member of inner
     //
     // Revoke outer from design_doc -> carol, dave, and eve should be removed from
     // design_doc's key group. bob and alice should remain (direct members). frank
@@ -614,7 +614,7 @@ async fn revoking_a_link_in_a_longer_cycle_removes_access() -> Result<()> {
 #[tokio::test]
 async fn breaking_a_cycle_from_both_sides_terminates() -> Result<()> {
     // first -> second -> third -> first indirect cycle. first in design_doc. bob in
-    // third. Revoke second from first AND first from third -> cycle broken. Only
+    // third. Revoke second from first AND first from third, so the cycle breaks. Only
     // first is still in design_doc directly. second and third lose access.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;

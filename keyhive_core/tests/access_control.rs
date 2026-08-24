@@ -162,7 +162,7 @@ async fn relay_never_permits_decryption() -> Result<()> {
 #[tokio::test]
 #[ignore = "fails on main; fixed by jtfm/cgka-authority; un-ignore when that lands"]
 async fn multi_route_resolution_is_deterministic() -> Result<()> {
-    // 8 distinct instances. The results differ between runs in the presence of a bug.
+    // Eight separate runs. In the presence of a bug the answer differs between them.
     let mut answers: std::collections::BTreeMap<Option<Access>, usize> = Default::default();
     for round in 0..8 {
         let mut ctx = TestContext::new().await;
@@ -544,9 +544,9 @@ async fn a_membership_cycle_still_resolves() -> Result<()> {
 /// membership in that group hands her a second, weaker route to it. Her own access must not
 /// drop because of a route she gained.
 #[tokio::test]
-#[ignore = "a member's level comes from the last route explored, not the best one. Fix this."]
+#[ignore = "a member's level comes from the last route explored, not the best one"]
 async fn an_attenuated_second_route_does_not_lower_reported_access() -> Result<()> {
-    // 5 distinct instances. The results differ between runs in the presence of a bug.
+    // Five separate runs. In the presence of a bug the answer differs between them.
     for _ in 0..5 {
         let mut ctx = TestContext::new().await;
         let alice = ctx.individual("alice").await?;
@@ -600,10 +600,10 @@ async fn a_transitive_reader_cannot_delegate_above_read() -> Result<()> {
     // Scenario:
     // Alice owns Doc A and Doc B.
     // Alice adds Doc A as Admin member of Doc B.
-    // Alice adds Bob as READ member of Doc A.
+    // Alice adds Bob as a Read member of Doc A.
     //
     // Bob has transitive Read access to Doc B.
-    // Bob tries to add Carol as Admin of Doc B — should fail with AccessEscalation.
+    // Bob tries to add Carol as Admin of Doc B. It should fail with an access escalation.
     //
     // ┌─────────┐   ┌─────────┐   ┌─────────┐
     // │  Alice  │   │   Bob   │   │  Carol  │
