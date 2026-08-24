@@ -320,9 +320,11 @@ async fn what_an_agent_reaches_covers_groups_as_well_as_documents() -> Result<()
         "and the document it holds"
     );
     assert_eq!(
-        ctx.documents_reachable_by(&bob).await?.get("design_doc"),
+        ctx.documents_reachable_by(&bob, &bob)
+            .await?
+            .get("design_doc"),
         Some(&Read),
-        "the narrower question agrees with the wider one"
+        "and bob agrees"
     );
 
     assert_eq!(

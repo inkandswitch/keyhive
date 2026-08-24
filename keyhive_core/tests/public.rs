@@ -215,7 +215,7 @@ async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Resul
     );
     ctx.sync(&alice, &bob).await?;
     assert_eq!(
-        ctx.documents_reachable_by(&bob).await?,
+        ctx.documents_reachable_by(&bob, &bob).await?,
         BTreeMap::from([("notes".to_string(), Read)]),
         "the documents he reaches because of his personal access are notes and only \
         notes, so the public one is excluded rather than there being nothing to exclude it from"

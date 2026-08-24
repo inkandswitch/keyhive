@@ -735,14 +735,21 @@ impl TestContext {
             .collect())
     }
 
-    /// Which documents `who` reaches and at what level.
+    /// The documents `who` reaches, as `observer` sees it, and at what level.
     ///
-    /// A document delegated to Public is not included.
+    /// A document delegated to Public is not included unless it's passed as `who`.
     pub async fn documents_reachable_by(
         &self,
-        who: &TestIndividual,
+        observer: &TestIndividual,
+        who: &impl TestAgent,
     ) -> Result<BTreeMap<String, Access>> {
-        let raw = self.hive(who)?.reachable_docs().await;
+        let hive = self.hive(observer)?;
+        let raw = if observer.agent_id() == who.agent_id() {
+            hive.reachable_docs().await
+        } else {
+            let aud = self.get_agent(observer, who.agent_id(), who.name()).await?;
+            hive.docs_reachable_by_agent(&aud).await
+        };
         Ok(raw
             .into_iter()
             .map(|(id, ability)| (self.name_of(id.into()).to_string(), ability.can()))

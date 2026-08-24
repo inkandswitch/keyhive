@@ -63,6 +63,8 @@ Then you can check properties:
 * `ctx.effective_access(who: &impl TestAgent, doc: &TestDocument) -> Option<Access>`: Check `who`'s access level for `doc`. `None` for no access.
 * `ctx.effective_access_seen_by(observer: &TestIndividual, who: &impl TestAgent, doc: &TestDocument) -> Option<Access>`: Same as `effective_access()`, but from the point of view of `observer`'s `Keyhive`.
 * `ctx.transitive_members_of(membered: &impl TestMembered) -> BTreeMap<String, Access>`: Returns everyone who has access to `resource`, including through nested groups.
+* `ctx.documents_reachable_by(observer: &TestIndividual, who: &impl TestAgent) -> BTreeMap<String, Access>`: The documents `who` reaches, as `observer` sees it. A document delegated to Public is not included unless it's passed as `who`.
+* `ctx.memberships_reachable_by(observer: &TestIndividual, who: &impl TestAgent) -> BTreeMap<String, Access>`: Like `documents_reachable_by`, but also includes groups.
 * `ctx.can_decrypt(who: &TestIndividual, content: &TestEncryptedContent) -> bool`: Whether `who` can successfully decrypt content.
 * `ctx.read(who: &TestIndividual, content: &TestEncryptedContent) -> Vec<u8>`: What `who` reads back, or an error if they can't. Use this where the point is that the content survived the round trip, and `can_decrypt` where the point is who may read.
 * `ctx.best_access(who: &impl TestAgent, doc: &TestDocument) -> Option<Access>`: The higher of `who`'s own access and public's access.
@@ -102,6 +104,8 @@ Every method returns `Result<T, TestError>`, with variants representing reasons 
 * `TestError::NameTaken { name }`: Two things in one context cannot share a name since the member maps are keyed by name.
 * `TestError::WrongDocument { holds, doc }`: A predecessor was named that belongs to a different document.
 * `TestError::DifferentIdentity { from, to }`: Prekey secrets belong to one identity and cannot be given to another.
+* `TestError::NoKey`: The reader holds no secret key that could be used to derive this content's encryption key.
+* `TestError::CiphertextRejected`: A key was derived but the ciphertext did not authenticate under it.
 * `TestError::Other(String)`: Anything else, wrapping the underlying error as a `String`.
 
 `NotSynced` also covers the case where the individual has no access to the subject and was therefore never sent it, because the facade has to find the resource in their `Keyhive` before it can ask about authority. An individual who was never a member gets `NotSynced` rather than `NoAuthority`.
