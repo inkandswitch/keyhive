@@ -2,6 +2,7 @@ mod facade;
 
 use facade::{Result, TestContext};
 use keyhive_core::access::Access::{Admin, Edit, Read, Relay};
+use std::collections::BTreeMap;
 
 #[tokio::test]
 async fn delegating_to_public_creates_a_public_delegation() -> Result<()> {
@@ -180,6 +181,11 @@ async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Resul
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
+    // A document bob is a direct member of. The reachability assertion below
+    // distinguishes "the public document is excluded" from "bob reaches nothing".
+    let notes = ctx.doc(&alice, "notes").await?;
+    ctx.delegate(&alice, &bob, &notes, Read).await?;
+
     ctx.delegate(&alice, &server, &design_doc, Relay).await?;
     ctx.delegate(&alice, &ctx.public(), &design_doc, Read)
         .await?;
@@ -206,6 +212,13 @@ async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Resul
             .await?,
         None,
         "asking about himself does not find the document"
+    );
+    ctx.sync(&alice, &bob).await?;
+    assert_eq!(
+        ctx.documents_reachable_by(&bob).await?,
+        BTreeMap::from([("notes".to_string(), Read)]),
+        "the documents he reaches because of his personal access are notes and only \
+        notes, so the public one is excluded rather than there being nothing to exclude it from"
     );
     assert_eq!(
         ctx.effective_access_seen_by(&bob, &ctx.public(), &design_doc)

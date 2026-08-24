@@ -366,11 +366,6 @@ impl TestCausalDecryption {
             .copied()
             .map(TestSymmetricKey)
     }
-
-    /// How many distinct pieces of content the walk holds a key for.
-    pub fn recovered_key_count(&self) -> usize {
-        self.recovered_keys.len()
-    }
 }
 
 /// A serialized `Keyhive`.
@@ -720,6 +715,38 @@ impl TestContext {
             .await
             .get(&doc.id)
             .map(|a| a.can()))
+    }
+
+    /// The groups and documents `audience` reaches, as `observer` sees it, and at what level.
+    pub async fn memberships_reachable_by(
+        &self,
+        observer: &TestIndividual,
+        audience: &impl TestAgent,
+    ) -> Result<BTreeMap<String, Access>> {
+        let aud = self
+            .get_agent(observer, audience.agent_id(), audience.name())
+            .await?;
+        Ok(self
+            .hive(observer)?
+            .membered_reachable_by_agent(&aud)
+            .await
+            .into_iter()
+            .map(|(id, (_, access))| (self.name_of(id.into()).to_string(), access))
+            .collect())
+    }
+
+    /// Which documents `who` reaches and at what level.
+    ///
+    /// A document delegated to Public is not included.
+    pub async fn documents_reachable_by(
+        &self,
+        who: &TestIndividual,
+    ) -> Result<BTreeMap<String, Access>> {
+        let raw = self.hive(who)?.reachable_docs().await;
+        Ok(raw
+            .into_iter()
+            .map(|(id, ability)| (self.name_of(id.into()).to_string(), ability.can()))
+            .collect())
     }
 
     /// Everyone who can reach `membered`, including through nested groups.

@@ -294,6 +294,48 @@ async fn admin_on_a_parent_doc_reaches_the_child_doc() -> Result<()> {
 }
 
 #[tokio::test]
+async fn what_an_agent_reaches_covers_groups_as_well_as_documents() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let carol = ctx.individual("carol").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    ctx.delegate(&alice, &engineering, &design_doc, Read)
+        .await?;
+    ctx.delegate(&alice, &bob, &engineering, Read).await?;
+    ctx.delegate(&alice, &carol, &engineering, Admin).await?;
+    ctx.sync_all_unsent().await?;
+
+    let bob_reaches = ctx.memberships_reachable_by(&alice, &bob).await?;
+    assert_eq!(
+        bob_reaches.get("engineering"),
+        Some(&Read),
+        "the group he is a member of"
+    );
+    assert_eq!(
+        bob_reaches.get("design_doc"),
+        Some(&Read),
+        "and the document it holds"
+    );
+    assert_eq!(
+        ctx.documents_reachable_by(&bob).await?.get("design_doc"),
+        Some(&Read),
+        "the narrower question agrees with the wider one"
+    );
+
+    assert_eq!(
+        ctx.memberships_reachable_by(&alice, &carol)
+            .await?
+            .get("engineering"),
+        Some(&Admin),
+        "at the level each member was given, not one level for everyone"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_transitive_admin_through_a_document_can_delegate() -> Result<()> {
     // Scenario:
     // Alice owns Account Doc A and Doc B.
